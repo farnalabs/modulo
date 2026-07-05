@@ -4,8 +4,8 @@
     <div class="mx-auto max-w-6xl space-y-6 p-6">
     <header class="flex items-center justify-between">
       <div>
-        <h1 class="text-3xl font-bold tracking-tight">Audit Log</h1>
-        <p class="mt-1 text-muted-foreground">Tamper-evident event trail for your organisation</p>
+        <h1 class="text-3xl font-bold tracking-tight">{{ $t('views.AdminAuditView.audit_log') }}</h1>
+        <p class="mt-1 text-muted-foreground">{{ $t('views.AdminAuditView.tamper_evident_event_trail') }}</p>
       </div>
       <div class="flex items-center gap-2">
         <button
@@ -14,7 +14,7 @@
           data-testid="admin-audit-verify-chain"
           @click="verifyChain"
         >
-          {{ verifying ? 'Verifying...' : 'Verify Chain' }}
+          {{ verifying ? $t('views.AdminAuditView.verifying') : $t('views.AdminAuditView.verify_chain') }}
         </button>
         <button
           :disabled="exporting"
@@ -22,7 +22,7 @@
           data-testid="admin-audit-export-csv"
           @click="exportCsv"
         >
-          {{ exporting ? 'Exporting...' : 'Export CSV' }}
+          {{ exporting ? $t('views.AdminAuditView.exporting') : $t('views.AdminAuditView.export_csv') }}
         </button>
         <button
           :disabled="exportingJsonl"
@@ -30,93 +30,93 @@
           data-testid="admin-audit-export-jsonl"
           @click="exportJsonl"
         >
-          {{ exportingJsonl ? 'Exporting...' : 'Export JSONL' }}
+          {{ exportingJsonl ? $t('views.AdminAuditView.exporting') : $t('views.AdminAuditView.export_jsonl') }}
         </button>
       </div>
     </header>
     <div v-if="chainResult" class="rounded-lg border px-4 py-3 text-sm" :class="chainResult.valid ? 'border-green-500 bg-green-50 text-green-800' : 'border-red-500 bg-red-50 text-red-800'" data-testid="admin-audit-chain-result">
-      <strong>Chain Integrity: {{ chainResult.valid ? '✅ Valid' : '❌ Broken' }}</strong>
-      <span v-if="chainResult.event_count" class="ml-2">— {{ chainResult.event_count }} events verified</span>
+      <strong>{{ chainResult.valid ? $t('views.AdminAuditView.chain_valid') : $t('views.AdminAuditView.chain_broken') }}</strong>
+      <span v-if="chainResult.event_count" class="ml-2">— {{ $t('views.AdminAuditView.events_verified', { count: chainResult.event_count }) }}</span>
       <span v-if="chainResult.error" class="ml-2">— {{ chainResult.error }}</span>
     </div>
 
     <div class="card p-4">
       <div class="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-5">
         <div>
-          <label class="mb-1 block text-xs font-medium text-muted-foreground">Event Type</label>
+          <label class="mb-1 block text-xs font-medium text-muted-foreground">{{ $t('views.AdminAuditView.event_type') }}</label>
           <select
             v-model="filterEventType"
             class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring"
             data-testid="admin-audit-event-type"
           >
-            <option value="">All types</option>
-            <optgroup label="Pipeline">
-              <option value="pipeline.created">Created</option>
-              <option value="pipeline.updated">Updated</option>
-              <option value="pipeline.deleted">Deleted</option>
+            <option value="">{{ $t('views.AdminAuditView.all_types') }}</option>
+            <optgroup :label="$t('views.AdminAuditView.optgroup_pipeline')">
+              <option value="pipeline.created">{{ $t('views.AdminAuditView.opt_pipeline_created') }}</option>
+              <option value="pipeline.updated">{{ $t('views.AdminAuditView.opt_pipeline_updated') }}</option>
+              <option value="pipeline.deleted">{{ $t('views.AdminAuditView.opt_pipeline_deleted') }}</option>
             </optgroup>
-            <optgroup label="Run">
-              <option value="run.started">Started</option>
-              <option value="run.completed">Completed</option>
-              <option value="run.failed">Failed</option>
-              <option value="run.cancelled">Cancelled</option>
+            <optgroup :label="$t('views.AdminAuditView.optgroup_run')">
+              <option value="run.started">{{ $t('views.AdminAuditView.opt_run_started') }}</option>
+              <option value="run.completed">{{ $t('views.AdminAuditView.opt_run_completed') }}</option>
+              <option value="run.failed">{{ $t('views.AdminAuditView.opt_run_failed') }}</option>
+              <option value="run.cancelled">{{ $t('views.AdminAuditView.opt_run_cancelled') }}</option>
             </optgroup>
-            <optgroup label="User">
-              <option value="user.created">Created</option>
-              <option value="user.updated">Updated</option>
-              <option value="user.deactivated">Deactivated</option>
-              <option value="user.activated">Activated</option>
+            <optgroup :label="$t('views.AdminAuditView.optgroup_user')">
+              <option value="user.created">{{ $t('views.AdminAuditView.opt_user_created') }}</option>
+              <option value="user.updated">{{ $t('views.AdminAuditView.opt_user_updated') }}</option>
+              <option value="user.deactivated">{{ $t('views.AdminAuditView.opt_user_deactivated') }}</option>
+              <option value="user.activated">{{ $t('views.AdminAuditView.opt_user_activated') }}</option>
             </optgroup>
-            <optgroup label="Team">
-              <option value="team.created">Created</option>
-              <option value="team.updated">Updated</option>
-              <option value="team.deleted">Deleted</option>
+            <optgroup :label="$t('views.AdminAuditView.optgroup_team')">
+              <option value="team.created">{{ $t('views.AdminAuditView.opt_team_created') }}</option>
+              <option value="team.updated">{{ $t('views.AdminAuditView.opt_team_updated') }}</option>
+              <option value="team.deleted">{{ $t('views.AdminAuditView.opt_team_deleted') }}</option>
             </optgroup>
-            <optgroup label="Schema">
-              <option value="schema.created">Created</option>
-              <option value="schema.updated">Updated</option>
-              <option value="schema.deleted">Deleted</option>
+            <optgroup :label="$t('views.AdminAuditView.optgroup_schema')">
+              <option value="schema.created">{{ $t('views.AdminAuditView.opt_schema_created') }}</option>
+              <option value="schema.updated">{{ $t('views.AdminAuditView.opt_schema_updated') }}</option>
+              <option value="schema.deleted">{{ $t('views.AdminAuditView.opt_schema_deleted') }}</option>
             </optgroup>
-            <optgroup label="Connector">
-              <option value="connector.created">Created</option>
-              <option value="connector.updated">Updated</option>
-              <option value="connector.deleted">Deleted</option>
+            <optgroup :label="$t('views.AdminAuditView.optgroup_connector')">
+              <option value="connector.created">{{ $t('views.AdminAuditView.opt_connector_created') }}</option>
+              <option value="connector.updated">{{ $t('views.AdminAuditView.opt_connector_updated') }}</option>
+              <option value="connector.deleted">{{ $t('views.AdminAuditView.opt_connector_deleted') }}</option>
             </optgroup>
-            <optgroup label="Model Backend">
-              <option value="model_backend.created">Created</option>
-              <option value="model_backend.updated">Updated</option>
-              <option value="model_backend.deleted">Deleted</option>
+            <optgroup :label="$t('views.AdminAuditView.optgroup_model_backend')">
+              <option value="model_backend.created">{{ $t('views.AdminAuditView.opt_model_backend_created') }}</option>
+              <option value="model_backend.updated">{{ $t('views.AdminAuditView.opt_model_backend_updated') }}</option>
+              <option value="model_backend.deleted">{{ $t('views.AdminAuditView.opt_model_backend_deleted') }}</option>
             </optgroup>
-            <optgroup label="SSO Provider">
-              <option value="sso_provider.created">Created</option>
-              <option value="sso_provider.updated">Updated</option>
-              <option value="sso_provider.deleted">Deleted</option>
-              <option value="sso_provider.toggled">Toggled</option>
+            <optgroup :label="$t('views.AdminAuditView.optgroup_sso_provider')">
+              <option value="sso_provider.created">{{ $t('views.AdminAuditView.opt_sso_provider_created') }}</option>
+              <option value="sso_provider.updated">{{ $t('views.AdminAuditView.opt_sso_provider_updated') }}</option>
+              <option value="sso_provider.deleted">{{ $t('views.AdminAuditView.opt_sso_provider_deleted') }}</option>
+              <option value="sso_provider.toggled">{{ $t('views.AdminAuditView.opt_sso_provider_toggled') }}</option>
             </optgroup>
-            <optgroup label="Settings">
-              <option value="settings.updated">Updated</option>
+            <optgroup :label="$t('views.AdminAuditView.optgroup_settings')">
+              <option value="settings.updated">{{ $t('views.AdminAuditView.opt_settings_updated') }}</option>
             </optgroup>
-            <optgroup label="API Key">
-              <option value="api_key.created">Created</option>
-              <option value="api_key.deleted">Deleted</option>
+            <optgroup :label="$t('views.AdminAuditView.optgroup_api_key')">
+              <option value="api_key.created">{{ $t('views.AdminAuditView.opt_api_key_created') }}</option>
+              <option value="api_key.deleted">{{ $t('views.AdminAuditView.opt_api_key_deleted') }}</option>
             </optgroup>
-            <optgroup label="Export">
-              <option value="export.csv">CSV Export</option>
+            <optgroup :label="$t('views.AdminAuditView.optgroup_export')">
+              <option value="export.csv">{{ $t('views.AdminAuditView.opt_export_csv') }}</option>
             </optgroup>
           </select>
         </div>
         <div>
-          <label class="mb-1 block text-xs font-medium text-muted-foreground">Actor</label>
+          <label class="mb-1 block text-xs font-medium text-muted-foreground">{{ $t('views.AdminAuditView.actor') }}</label>
           <input
             v-model="filterActor"
             type="text"
-            placeholder="User ID..."
+            :placeholder="$t('views.AdminAuditView.actor_id')"
             class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring"
             data-testid="admin-audit-actor"
           />
         </div>
         <div>
-          <label class="mb-1 block text-xs font-medium text-muted-foreground">From</label>
+          <label class="mb-1 block text-xs font-medium text-muted-foreground">{{ $t('views.AdminAuditView.from') }}</label>
           <input
             v-model="filterDateFrom"
             type="date"
@@ -125,7 +125,7 @@
           />
         </div>
         <div>
-          <label class="mb-1 block text-xs font-medium text-muted-foreground">To</label>
+          <label class="mb-1 block text-xs font-medium text-muted-foreground">{{ $t('views.AdminAuditView.to') }}</label>
           <input
             v-model="filterDateTo"
             type="date"
@@ -134,21 +134,21 @@
           />
         </div>
         <div>
-          <label class="mb-1 block text-xs font-medium text-muted-foreground">Target Type</label>
+          <label class="mb-1 block text-xs font-medium text-muted-foreground">{{ $t('views.AdminAuditView.target_type') }}</label>
           <select
             v-model="filterTargetType"
             class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring"
             data-testid="admin-audit-target-type"
           >
-            <option value="">All targets</option>
-            <option value="pipeline">Pipeline</option>
-            <option value="run">Run</option>
-            <option value="user">User</option>
-            <option value="team">Team</option>
-            <option value="schema">Schema</option>
-            <option value="connector">Connector</option>
-            <option value="model_backend">Model Backend</option>
-            <option value="sso_provider">SSO Provider</option>
+            <option value="">{{ $t('views.AdminAuditView.all_targets') }}</option>
+            <option value="pipeline">{{ $t('views.AdminAuditView.optgroup_pipeline') }}</option>
+            <option value="run">{{ $t('views.AdminAuditView.optgroup_run') }}</option>
+            <option value="user">{{ $t('views.AdminAuditView.optgroup_user') }}</option>
+            <option value="team">{{ $t('views.AdminAuditView.optgroup_team') }}</option>
+            <option value="schema">{{ $t('views.AdminAuditView.optgroup_schema') }}</option>
+            <option value="connector">{{ $t('views.AdminAuditView.optgroup_connector') }}</option>
+            <option value="model_backend">{{ $t('views.AdminAuditView.optgroup_model_backend') }}</option>
+            <option value="sso_provider">{{ $t('views.AdminAuditView.optgroup_sso_provider') }}</option>
           </select>
         </div>
       </div>
@@ -158,17 +158,17 @@
           data-testid="admin-audit-apply-filters"
           @click="applyFilters"
         >
-          Apply Filters
+          {{ $t('views.AdminAuditView.apply_filters') }}
         </button>
         <button
           class="rounded-lg border border-input bg-background px-4 py-2 text-sm font-medium hover:bg-accent"
           data-testid="admin-audit-reset"
           @click="resetFilters"
         >
-          Reset
+          {{ $t('views.AdminAuditView.reset') }}
         </button>
         <span v-if="total > 0" class="ml-auto text-sm text-muted-foreground">
-          {{ total }} event{{ total === 1 ? '' : 's' }}
+          {{ $t('views.AdminAuditView.events_count', { count: total }, total) }}
         </span>
       </div>
     </div>
@@ -178,9 +178,9 @@
     <ErrorAlert v-else-if="error" :message="error" :on-retry="loadEvents" />
 
     <div v-else-if="events.length === 0" class="card p-8 text-center">
-      <p class="text-lg font-medium">No audit events found</p>
+      <p class="text-lg font-medium">{{ $t('views.AdminAuditView.no_audit_events_found') }}</p>
       <p class="mt-1 text-sm text-muted-foreground">
-        Try adjusting your filters or wait for activity to be recorded.
+        {{ $t('views.AdminAuditView.try_adjusting_filters') }}
       </p>
     </div>
 
@@ -189,11 +189,11 @@
         <table class="w-full">
           <thead>
             <tr class="border-b bg-muted/30 text-left text-xs font-medium uppercase text-muted-foreground">
-              <th class="px-4 py-3">Timestamp</th>
-              <th class="px-4 py-3">Event Type</th>
-              <th class="px-4 py-3">Actor</th>
-              <th class="px-4 py-3">Target</th>
-              <th class="px-4 py-3">Summary</th>
+              <th class="px-4 py-3">{{ $t('views.AdminAuditView.timestamp') }}</th>
+              <th class="px-4 py-3">{{ $t('views.AdminAuditView.event_type') }}</th>
+              <th class="px-4 py-3">{{ $t('views.AdminAuditView.actor') }}</th>
+              <th class="px-4 py-3">{{ $t('views.AdminAuditView.target') }}</th>
+              <th class="px-4 py-3">{{ $t('views.AdminAuditView.summary') }}</th>
               <th class="w-8 px-4 py-3" />
             </tr>
           </thead>
@@ -256,12 +256,12 @@
               <td colspan="6" class="border-t bg-muted p-4">
                 <div class="space-y-3">
                   <div v-if="expandedEvent?.payload_json && Object.keys(expandedEvent.payload_json).length > 0">
-                    <h4 class="mb-1 text-xs font-semibold uppercase text-muted-foreground">Details</h4>
+                    <h4 class="mb-1 text-xs font-semibold uppercase text-muted-foreground">{{ $t('views.AdminAuditView.details') }}</h4>
                     <pre class="overflow-x-auto rounded bg-background p-3 text-xs leading-relaxed">{{ JSON.stringify(expandedEvent?.payload_json, null, 2) }}</pre>
                   </div>
                   <div v-if="expandedEvent?.previous_hash" class="grid grid-cols-1 gap-2 sm:grid-cols-2">
                     <div>
-                      <h4 class="mb-1 text-xs font-semibold uppercase text-muted-foreground">Previous Hash</h4>
+                      <h4 class="mb-1 text-xs font-semibold uppercase text-muted-foreground">{{ $t('views.AdminAuditView.previous_hash') }}</h4>
                       <Tooltip :delay-duration="300">
                         <TooltipTrigger as-child>
                           <code class="block truncate rounded bg-background px-2 py-1 text-xs font-mono">{{ shortId(expandedEvent.previous_hash) }}</code>
@@ -272,7 +272,7 @@
                       </Tooltip>
                     </div>
                     <div>
-                      <h4 class="mb-1 text-xs font-semibold uppercase text-muted-foreground">Event ID</h4>
+                      <h4 class="mb-1 text-xs font-semibold uppercase text-muted-foreground">{{ $t('views.AdminAuditView.event_id') }}</h4>
                       <Tooltip :delay-duration="300">
                         <TooltipTrigger as-child>
                           <code class="block truncate rounded bg-background px-2 py-1 text-xs font-mono">{{ shortId(expandedEvent.id) }}</code>
@@ -284,7 +284,7 @@
                     </div>
                   </div>
                   <div v-if="expandedEvent?.request_id">
-                    <h4 class="mb-1 text-xs font-semibold uppercase text-muted-foreground">Request ID</h4>
+                    <h4 class="mb-1 text-xs font-semibold uppercase text-muted-foreground">{{ $t('views.AdminAuditView.request_id') }}</h4>
                     <code class="rounded bg-background px-2 py-1 text-xs font-mono">{{ shortId(expandedEvent.request_id) }}</code>
                   </div>
                 </div>
@@ -301,10 +301,10 @@
           data-testid="admin-audit-previous"
           @click="() => goToPage(prevCursor)"
         >
-          Previous
+          {{ $t('views.AdminAuditView.previous') }}
         </button>
         <span class="text-sm text-muted-foreground">
-          Page {{ currentPage }} &middot; {{ events.length }} of {{ total }} events
+          {{ $t('views.AdminAuditView.page_of_total', { page: currentPage, count: events.length, total: total }) }}
         </span>
         <button
           :disabled="!nextCursor"
@@ -312,7 +312,7 @@
           data-testid="admin-audit-next"
           @click="() => goToPage(nextCursor)"
         >
-          Next
+          {{ $t('views.AdminAuditView.next') }}
         </button>
       </div>
     </template>
@@ -322,6 +322,7 @@
 
 <script setup lang="ts">
 import { ref, onMounted } from 'vue'
+import { useI18n } from 'vue-i18n'
 import { api } from '../lib/api/client'
 import type { components } from '../lib/api/client'
 import LoadingSpinner from '../components/shared/LoadingSpinner.vue'
@@ -330,6 +331,8 @@ import { formatError } from '../lib/utils'
 import { usePlanStore } from '../stores/planStore'
 import FeatureGate from '../components/FeatureGate.vue'
 import { shortId } from '../utils/format'
+
+const { t } = useI18n()
 import {
   Tooltip,
   TooltipTrigger,
@@ -437,7 +440,7 @@ async function loadEvents(cursor?: string | null) {
       params: { query: buildQuery(cursor) as any },
     })
     if (err) {
-      error.value = `Failed to load audit events: ${formatError(err)}`
+      error.value = `${t('views.AdminAuditView.failed_to_load_audit_events')} ${formatError(err)}`
     } else if (data) {
       events.value = data.items
       total.value = data.total
@@ -447,7 +450,7 @@ async function loadEvents(cursor?: string | null) {
       expandedEvent.value = null
     }
   } catch (e: unknown) {
-    error.value = `Failed to load audit events: ${e instanceof Error ? e.message : String(e)}`
+    error.value = `${t('views.AdminAuditView.failed_to_load_audit_events')} ${e instanceof Error ? e.message : String(e)}`
   } finally {
     loading.value = false
   }
@@ -499,7 +502,7 @@ async function exportCsv() {
         },
       })
       if (err) {
-        error.value = `Export failed: ${formatError(err)}`
+        error.value = `${t('views.AdminAuditView.export_failed')} ${formatError(err)}`
         return
       }
       if (!data) break
@@ -532,7 +535,7 @@ async function exportCsv() {
     a.click()
     URL.revokeObjectURL(url)
   } catch (e: unknown) {
-    error.value = `Export failed: ${e instanceof Error ? e.message : String(e)}`
+    error.value = `${t('views.AdminAuditView.export_failed')} ${e instanceof Error ? e.message : String(e)}`
   } finally {
     exporting.value = false
   }
@@ -585,7 +588,7 @@ async function exportJsonl() {
         },
       })
       if (err) {
-        error.value = `Export failed: ${formatError(err)}`
+        error.value = `${t('views.AdminAuditView.export_failed')} ${formatError(err)}`
         return
       }
       if (!data) break
@@ -603,7 +606,7 @@ async function exportJsonl() {
     a.click()
     URL.revokeObjectURL(url)
   } catch (e: unknown) {
-    error.value = `Export failed: ${e instanceof Error ? e.message : String(e)}`
+    error.value = `${t('views.AdminAuditView.export_failed')} ${e instanceof Error ? e.message : String(e)}`
   } finally {
     exportingJsonl.value = false
   }
