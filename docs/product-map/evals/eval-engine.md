@@ -56,20 +56,35 @@ Core eval engine that evaluates node outputs against eval definitions. Supports 
 ### Error states
 - [x] Regex eval missing "pattern" in config — passed=false, detail describes issue
 - [x] Regex eval missing "field" in config — passed=false, detail describes issue
+- [x] Regex eval pattern exceeds max length (1000) — passed=false, detail describes issue
+- [x] Regex eval nested quantifier (ReDoS) pattern rejected — passed=false, detail describes issue
+- [x] Regex eval invalid pattern (regex compile error) — passed=false, detail describes issue
 - [x] LLM judge callable not provided — passed=false, score=0.0
 - [x] LLM judge callable raises exception — caught gracefully, passed=false
+- [x] LLM judge callable returns non-dict — caught gracefully, passed=false
 - [x] Custom function name not found in registry — passed=false, detail describes issue
 - [x] Custom function raises exception — caught gracefully, passed=false
-- [x] Unknown eval type — raises ValueError
+- [x] Custom function returns non-dict — caught gracefully, passed=false
+- [x] Custom function "functions" config is not a dict — handled gracefully, passed=false
+- [x] Custom function missing "functions" config key — handled gracefully, passed=false
+- [x] JSON Schema missing "schema" in config — passed=false, detail describes issue
+- [x] JSON Schema field configured but not in output — passed=false, detail describes issue
+- [x] JSON Schema malformed schema definition — caught SchemaError, passed=false
+- [x] Unknown eval type — raises UnknownEvalTypeError (inherits ValueError)
 - [x] Suite not found in DB — track_okr_progress raises ValueError
 - [x] EvalBlockedError includes eval name and detail message
-- [x] EvalSuiteBlockedError raised for suite-level threshold failure
+- [x] EvalSuiteBlockedError raised for suite-level threshold failure (in executor, not evaluate_suite)
 - [ ] Block failure written to AuditEvent with type eval_blocked — not wired to AuditEvent DB table
 
 ### Edge cases
 - [x] Suite with mixed pass/fail — correct counts and blocking_failures list
 - [x] Suite with pass_threshold exactly at aggregate boundary (equal passes)
 - [x] Regex eval with missing config — returns failed (graceful degradation)
+- [x] Regex eval with empty config — returns failed (missing pattern)
+- [x] Regex eval with None field value — coerced to empty string, match fails
+- [x] Regex eval with unknown flag character — ignored with warning, eval proceeds
+- [x] Regex eval with excessive pattern length (>1000) — rejected with detail
+- [x] Regex eval with nested quantifier pattern — ReDoS protection rejects
 - [x] Non-string output field coerced to string in regex eval
 - [x] Multiple evals on one node: first block failure stops remaining evals
 - [x] LLM judge block behaviour takes priority over HITL interrupt
