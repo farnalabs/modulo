@@ -6,6 +6,7 @@ prior event in the same org, forming a tamper-evident chain.
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import json
 import logging
@@ -20,6 +21,13 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from modulo.db.models.audit_event import AuditChainHead, AuditEvent
 
 _log = logging.getLogger(__name__)
+
+APPEND_MAX_RETRIES = 3
+VERIFY_MAX_EVENTS = 10000
+EXPORT_DEFAULT_PAGE_SIZE = 100
+LIST_MIN_LIMIT = 1
+LIST_MAX_LIMIT = 1000
+BATCH_MAX_SIZE = 100
 
 __all__ = [
     "append_audit_event",
@@ -97,8 +105,8 @@ def _apply_filters(
     event_type: str | None = None,
     actor_user_id: uuid.UUID | None = None,
     resource_type: str | None = None,
-    from_date: str | None = None,
-    to_date: str | None = None,
+    from_date: datetime | None = None,
+    to_date: datetime | None = None,
 ) -> Any:
     query = query.where(AuditEvent.organisation_id == org_id)
     if event_type:
@@ -136,12 +144,12 @@ async def append_audit_event(
     Uses SELECT ... FOR UPDATE on the chain head to prevent forks from
     concurrent appends within the same organisation.
 
-    Retries up to 3 times if a concurrent transaction creates the chain head
-    between our lock check and our insert (race on the first event for an org).
+    Retries up to APPEND_MAX_RETRIES times if a concurrent transaction creates
+    the chain head between our lock check and our insert (race on the first
+    event for an org), with exponential backoff between attempts.
     """
-    max_retries = 3
     resolved_payload = payload_json or {}
-    for attempt in range(max_retries):
+    for attempt in range(APPEND_MAX_RETRIES):
         try:
             async with session.begin_nested():
                 head = await _get_chain_head_locked(session, org_id)
@@ -178,7 +186,7 @@ async def append_audit_event(
                 if head:
                     head.last_event_hash = event_hash
                     head.last_event_id = event.id
-                    head.event_count += 1
+                    head.event_count = (head.event_count or 0) + 1
                 else:
                     head = AuditChainHead(
                         organisation_id=org_id,
@@ -191,9 +199,18 @@ async def append_audit_event(
                 await session.flush()
                 return event
         except IntegrityError:
-            if attempt == max_retries - 1:
+            _log.warning(
+                "append_audit_event: IntegrityError on attempt %d/%d for org=%s event_type=%s",
+                attempt + 1, APPEND_MAX_RETRIES, org_id, event_type,
+            )
+            if attempt == APPEND_MAX_RETRIES - 1:
+                _log.error(
+                    "append_audit_event: exhausted %d retries for org=%s event_type=%s",
+                    APPEND_MAX_RETRIES, org_id, event_type,
+                )
                 raise
-    raise RuntimeError("append_audit_event: unreachable")  # pragma: no cover
+            await asyncio.sleep(0.1 * (attempt + 1))
+    raise RuntimeError("append_audit_event: exhausted retries")
 
 
 async def _get_chain_head_locked(session: AsyncSession, org_id: uuid.UUID) -> AuditChainHead | None:
@@ -209,11 +226,35 @@ async def _get_chain_head_locked(session: AsyncSession, org_id: uuid.UUID) -> Au
     return result.scalar_one_or_none()
 
 
+def _make_verify_result(
+    *,
+    total_events: int,
+    checked_events: int,
+    truncated: bool,
+    valid: bool,
+    first_gap_index: int | None = None,
+    first_tampered_id: str | None = None,
+    chain_head_match: bool | None = None,
+    chain_count_mismatch: bool | None = None,
+    detail: str | None = None,
+) -> dict[str, Any]:
+    return {
+        "valid": valid,
+        "total_events": total_events,
+        "checked_events": checked_events,
+        "truncated": truncated,
+        "first_gap_index": first_gap_index,
+        "first_tampered_id": first_tampered_id,
+        "chain_head_match": chain_head_match,
+        "chain_count_mismatch": chain_count_mismatch,
+    }
+
+
 async def verify_chain(
     session: AsyncSession,
     org_id: uuid.UUID,
     *,
-    max_events: int = 10000,
+    max_events: int = VERIFY_MAX_EVENTS,
 ) -> dict[str, Any]:
     """Recompute the entire audit chain and report gaps or tampering.
 
@@ -225,8 +266,8 @@ async def verify_chain(
       - first_gap_index: int | None
       - first_tampered_id: str | None
       - chain_head_match: bool | None
+      - chain_count_mismatch: bool | None
     """
-    # Count total events first
     count_result = await session.execute(
         select(func.count(AuditEvent.id)).where(AuditEvent.organisation_id == org_id)
     )
@@ -241,18 +282,76 @@ async def verify_chain(
     events = list(result.scalars())
 
     if not events:
-        return {
-            "valid": True,
-            "total_events": 0,
-            "checked_events": 0,
-            "truncated": False,
-            "first_gap_index": None,
-            "first_tampered_id": None,
-            "chain_head_match": None,
-        }
+        return _make_verify_result(
+            total_events=0,
+            checked_events=0,
+            truncated=False,
+            valid=True,
+        )
 
     truncated = len(events) < total_events
 
+    gap_index, tampered_id = _recompute_chain(events)
+    if gap_index is not None:
+        return _make_verify_result(
+            total_events=total_events,
+            checked_events=gap_index + 1,
+            truncated=truncated,
+            valid=False,
+            first_gap_index=gap_index,
+            first_tampered_id=tampered_id,
+        )
+
+    expected_prev = _compute_event_hash(
+        event_type=events[-1].event_type,
+        actor_user_id=events[-1].account_id,
+        resource_type=events[-1].resource_type,
+        resource_id=events[-1].resource_id,
+        payload_json=events[-1].payload_json,
+        request_id=events[-1].request_id,
+        previous_hash=events[-1].previous_hash,
+        event_id=events[-1].id,
+        organisation_id=events[-1].organisation_id,
+        created_at=events[-1].created_at.isoformat() if events[-1].created_at else "",
+    ) if events else None
+    if expected_prev is None:
+        return _make_verify_result(
+            total_events=total_events,
+            checked_events=0,
+            truncated=truncated,
+            valid=True,
+        )
+
+    head = await get_chain_head(session, org_id)
+
+    if head:
+        chain_head_match = head.last_event_hash == expected_prev
+        count_mismatch = head.event_count is not None and head.event_count != total_events
+    elif total_events > 0:
+        chain_head_match = None
+        count_mismatch = None
+    else:
+        chain_head_match = None
+        count_mismatch = None
+
+    no_head_corruption = head is not None or total_events == 0
+    valid = not truncated and (chain_head_match is not False) and no_head_corruption and not (count_mismatch or False)
+
+    return _make_verify_result(
+        total_events=total_events,
+        checked_events=len(events),
+        truncated=truncated,
+        valid=valid,
+        chain_head_match=chain_head_match,
+        chain_count_mismatch=count_mismatch,
+    )
+
+
+def _recompute_chain(events: list[AuditEvent]) -> tuple[int | None, str | None]:
+    """Walk the event list and verify hash chain integrity.
+
+    Returns (first_gap_index, first_tampered_id) or (None, None) if intact.
+    """
     expected_prev: str | None = None
     for idx, event in enumerate(events):
         canonical_hash = _compute_event_hash(
@@ -268,40 +367,9 @@ async def verify_chain(
             created_at=event.created_at.isoformat() if event.created_at else "",
         )
         if event.previous_hash != expected_prev:
-            detail = (
-                f"Chain break at event {idx}: expected previous_hash {expected_prev!r}, got {event.previous_hash!r}"
-            )
-            return {
-                "valid": False,
-                "total_events": total_events,
-                "checked_events": idx + 1,
-                "truncated": truncated,
-                "first_gap_index": idx,
-                "first_tampered_id": str(event.id),
-                "chain_head_match": None,
-                "detail": detail,
-            }
+            return (idx, str(event.id))
         expected_prev = canonical_hash
-
-    # Validate against chain head
-    head = await get_chain_head(session, org_id)
-    if head:
-        chain_head_match = head.last_event_hash == expected_prev
-        count_mismatch = head.event_count != total_events if head.event_count is not None else False
-    else:
-        chain_head_match = None
-        count_mismatch = None
-
-    return {
-        "valid": not truncated and (chain_head_match is not False),
-        "total_events": total_events,
-        "checked_events": len(events),
-        "truncated": truncated,
-        "first_gap_index": None,
-        "first_tampered_id": None,
-        "chain_head_match": chain_head_match,
-        "chain_count_mismatch": count_mismatch,
-    }
+    return (None, None)
 
 
 async def export_chain(
@@ -309,17 +377,19 @@ async def export_chain(
     org_id: uuid.UUID,
     *,
     page: int = 1,
-    page_size: int = 100,
+    page_size: int = EXPORT_DEFAULT_PAGE_SIZE,
     event_type: str | None = None,
     actor_user_id: uuid.UUID | None = None,
     resource_type: str | None = None,
-    from_date: str | None = None,
-    to_date: str | None = None,
+    from_date: datetime | None = None,
+    to_date: datetime | None = None,
 ) -> dict[str, Any]:
     """Export audit events as paginated JSON lines with optional filters."""
-    query = select(AuditEvent)
+    safe_page = max(1, page)
+    safe_page_size = max(1, page_size)
+
     query = _apply_filters(
-        query, org_id,
+        select(AuditEvent), org_id,
         event_type=event_type,
         actor_user_id=actor_user_id,
         resource_type=resource_type,
@@ -327,14 +397,13 @@ async def export_chain(
         to_date=to_date,
     )
 
-    offset = (page - 1) * page_size
-    query = query.order_by(AuditEvent.created_at.asc(), AuditEvent.id.asc()).offset(offset).limit(page_size)
+    offset = (safe_page - 1) * safe_page_size
+    query = query.order_by(AuditEvent.created_at.asc(), AuditEvent.id.asc()).offset(offset).limit(safe_page_size)
     result = await session.execute(query)
     events = list(result.scalars())
 
-    count_query = select(func.count(AuditEvent.id))
     count_query = _apply_filters(
-        count_query, org_id,
+        select(func.count(AuditEvent.id)), org_id,
         event_type=event_type,
         actor_user_id=actor_user_id,
         resource_type=resource_type,
@@ -349,8 +418,8 @@ async def export_chain(
     return {
         "items": items,
         "total": total,
-        "page": page,
-        "page_size": page_size,
+        "page": safe_page,
+        "page_size": safe_page_size,
     }
 
 
@@ -363,8 +432,8 @@ async def list_audit_events(
     event_type: str | None = None,
     actor_user_id: uuid.UUID | None = None,
     resource_type: str | None = None,
-    from_date: str | None = None,
-    to_date: str | None = None,
+    from_date: datetime | None = None,
+    to_date: datetime | None = None,
 ) -> dict[str, Any]:
     """List audit events with cursor-based pagination and filtering.
 
@@ -376,7 +445,7 @@ async def list_audit_events(
     is not provided — this is a forward-only cursor pattern. Callers
     should reset cursor to None to go back to the first page.
     """
-    resolved_limit = max(1, min(limit, 1000))
+    resolved_limit = max(LIST_MIN_LIMIT, min(limit, LIST_MAX_LIMIT))
 
     query = _apply_filters(
         select(AuditEvent), org_id,
@@ -422,7 +491,7 @@ async def list_audit_events(
     last_event = events[-1] if events else None
     next_cursor = (
         json.dumps({"c": last_event.created_at.isoformat(), "i": str(last_event.id)}, separators=(",", ":"))
-        if last_event and has_more
+        if last_event and has_more and last_event.created_at is not None
         else None
     )
 
@@ -439,15 +508,16 @@ async def get_audit_events_batch(
     org_id: uuid.UUID,
     event_ids: list[str],
 ) -> list[dict[str, Any]]:
-    """Return full details for a batch of event IDs (max 100)."""
-    capped = event_ids[:100]
+    """Return full details for a batch of event IDs (max BATCH_MAX_SIZE)."""
+    if len(event_ids) > BATCH_MAX_SIZE:
+        _log.warning("get_audit_events_batch: truncating %d IDs to %d", len(event_ids), BATCH_MAX_SIZE)
+    capped = event_ids[:BATCH_MAX_SIZE]
     ids = []
     for eid in capped:
         try:
             ids.append(uuid.UUID(eid))
         except ValueError:
             _log.warning("get_audit_events_batch: received invalid UUID %r — skipping", eid)
-            continue
 
     if not ids:
         return []
