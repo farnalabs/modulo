@@ -11,7 +11,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "modulo"
-version = "0.3.129"
+version = "0.3.130"
 description = "Governed orchestration for your agentic SDLC"
 license = "MIT"
 authors = [
