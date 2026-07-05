@@ -33,6 +33,7 @@ from typing import Any
 
 from jose import ExpiredSignatureError, JWTError
 from sqlalchemy import func, select, update
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.auth.jwt import create_claim_token as _create_claim_jwt
@@ -53,6 +54,7 @@ __all__: list[str] = [
     "ClaimTokenInvalidError",
     "GateAlreadyDecidedError",
     "GateNotFoundError",
+    "GateVanishedError",
     "HITLError",
     "HITLManager",
     "NotTeamMemberError",
@@ -107,6 +109,13 @@ class NotTeamMemberError(HITLError, PermissionError):
         self.user_id = user_id
 
 
+class GateVanishedError(HITLError, RuntimeError):
+    """Claim acquired/decided but the gate row disappeared before we could read it."""
+
+    def __init__(self, run_id: uuid.UUID, gate_id: str, operation: str) -> None:
+        super().__init__(f"Gate {gate_id!r} on run {run_id} {operation} but row vanished")
+
+
 # ---------------------------------------------------------------------------
 # Service
 # ---------------------------------------------------------------------------
@@ -145,7 +154,9 @@ class HITLManager:
         required_team_id: uuid.UUID | None = None,
     ) -> HitlClaim:
         """Insert a new unclaimed gate row. Idempotent if called again for same key."""
-        # Check for existing row first (unique constraint: run_id + gate_id)
+        # Check for existing row first (unique constraint: run_id + gate_id).
+        # Race: a concurrent caller may insert between our check and flush.
+        # Handle IntegrityError gracefully by fetching the existing row.
         existing = await self._get(session, run_id=run_id, gate_id=gate_id, org_id=org_id)
         if existing is not None:
             return existing
@@ -157,7 +168,14 @@ class HITLManager:
             required_team_id=required_team_id,
         )
         session.add(gate)
-        await session.flush()
+        try:
+            await session.flush()
+        except IntegrityError:
+            await session.rollback()
+            existing = await self._get(session, run_id=run_id, gate_id=gate_id, org_id=org_id)
+            if existing is None:
+                raise RuntimeError(f"Concurrent gate creation lost race for run={run_id} gate={gate_id}")
+            return existing
         return gate
 
     # ------------------------------------------------------------------
@@ -184,7 +202,7 @@ class HITLManager:
         member of that team, otherwise ``NotTeamMemberError`` is raised.
         """
         if expiry_minutes <= 0:
-            raise ValueError(f"expiry_minutes must be positive, got {expiry_minutes}")
+            raise HITLError(f"expiry_minutes must be positive, got {expiry_minutes}")
 
         now = datetime.now(UTC)
 
@@ -198,6 +216,17 @@ class HITLManager:
         if gate_check.account_id is not None:
             raise AlreadyClaimedError(run_id, gate_id)
         if gate_check.required_team_id is not None:
+            # Lock the gate row so the team check is serialised with the UPDATE.
+            gate_check_locked = await session.execute(
+                select(HitlClaim).where(HitlClaim.id == gate_check.id).with_for_update()
+            )
+            gate_check_locked = gate_check_locked.scalar_one_or_none()
+            if gate_check_locked is None:
+                raise GateNotFoundError(run_id, gate_id)
+            if gate_check_locked.decision is not None:
+                raise GateAlreadyDecidedError(run_id, gate_id)
+            if gate_check_locked.account_id is not None:
+                raise AlreadyClaimedError(run_id, gate_id)
             tm_result = await session.execute(
                 select(TeamMembership).where(
                     TeamMembership.team_id == gate_check.required_team_id,
@@ -251,8 +280,7 @@ class HITLManager:
 
         gate = await session.get(HitlClaim, claimed_id, populate_existing=True)
         if gate is None:
-            msg = f"Claim acquired but gate row vanished: run={run_id} gate={gate_id}"
-            raise RuntimeError(msg)
+            raise GateVanishedError(run_id, gate_id, "claimed")
         return gate
 
     # ------------------------------------------------------------------
@@ -556,10 +584,10 @@ class HITLManager:
         if self._secret_key and self._looks_like_jwt(claim_token):
             try:
                 _decode_claim_jwt(claim_token, self._secret_key, run_id=str(run_id), gate_id=gate_id)
-            except ExpiredSignatureError:
-                raise ClaimTokenExpiredError() from None
-            except JWTError:
-                raise ClaimTokenInvalidError() from None
+            except ExpiredSignatureError as err:
+                raise ClaimTokenExpiredError() from err
+            except JWTError as err:
+                raise ClaimTokenInvalidError() from err
 
         stmt = (
             update(HitlClaim)
@@ -589,13 +617,14 @@ class HITLManager:
                 raise GateNotFoundError(run_id, gate_id)
             if existing.decision is not None:
                 raise GateAlreadyDecidedError(run_id, gate_id)
+            if existing.claim_token is None:
+                raise ClaimTokenExpiredError()
             if existing.claim_token != claim_token:
                 raise ClaimTokenInvalidError()
             raise ClaimTokenExpiredError()
         gate = await session.get(HitlClaim, claim_id, populate_existing=True)
         if gate is None:
-            msg = f"Decision recorded but gate row vanished: run={run_id} gate={gate_id}"
-            raise RuntimeError(msg)
+            raise GateVanishedError(run_id, gate_id, "decided")
         return gate
 
     @staticmethod
