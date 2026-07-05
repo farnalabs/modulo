@@ -5,7 +5,8 @@ from unittest.mock import patch
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from modulo.api.routes.changelog import router as changelog_router, _SEED_ENTRIES, ChangelogEntry
+from modulo.api.routes.changelog import _SEED_ENTRIES, ChangelogEntry
+from modulo.api.routes.changelog import router as changelog_router
 
 
 def _make_app() -> FastAPI:

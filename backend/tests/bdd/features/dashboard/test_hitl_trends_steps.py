@@ -1,12 +1,12 @@
 """Step definitions for HITL effort trends BDD scenarios."""
 
+import uuid
 from collections.abc import AsyncGenerator, Generator
 from unittest.mock import AsyncMock, MagicMock
-import uuid
 
 import pytest
-from pytest_bdd import given, scenarios, then, when
 from fastapi.testclient import TestClient
+from pytest_bdd import given, scenarios, then, when
 
 from modulo.api.dependencies import _get_engine, get_db_session
 from modulo.api.main import app

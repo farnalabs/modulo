@@ -14,8 +14,8 @@ from modulo.core.library_service import (
     ContributionInvalidTransitionError,
     ContributionNotFoundError,
     contribute_fixture,
-    list_contributions,
     list_contribution_versions,
+    list_contributions,
     publish_contribution,
     submit_contribution_for_review,
     submit_contribution_version,
@@ -250,19 +250,18 @@ class TestContributeFixture:
                 "modulo.core.library_service.update_library_primitive",
                 new_callable=AsyncMock,
                 return_value=None,
-            ),
+            ),pytest.raises(ContributionNotFoundError)
         ):
-            with pytest.raises(ContributionNotFoundError):
-                await contribute_fixture(
-                    session,
-                    org_id=org_id,
-                    created_by=created_by,
-                    name="X",
-                    slug="x",
-                    description=None,
-                    tags=[],
-                    fixture_map={"a": "b"},
-                )
+            await contribute_fixture(
+                session,
+                org_id=org_id,
+                created_by=created_by,
+                name="X",
+                slug="x",
+                description=None,
+                tags=[],
+                fixture_map={"a": "b"},
+            )
 
 
 class TestSubmitForReview:
@@ -305,10 +304,9 @@ class TestSubmitForReview:
                 "modulo.core.library_service.get_library_primitive",
                 new_callable=AsyncMock,
                 return_value=None,
-            ),
+            ),pytest.raises(ContributionNotFoundError, match=str(prim_id))
         ):
-            with pytest.raises(ContributionNotFoundError, match=str(prim_id)):
-                await submit_contribution_for_review(session, org_id, prim_id, created_by=uuid.uuid4())
+            await submit_contribution_for_review(session, org_id, prim_id, created_by=uuid.uuid4())
 
     async def test_submit_when_already_published_raises(self):
         session = _mock_session()
@@ -322,10 +320,9 @@ class TestSubmitForReview:
                 "modulo.core.library_service.get_library_primitive",
                 new_callable=AsyncMock,
                 return_value=prim,
-            ),
+            ),pytest.raises(ContributionInvalidTransitionError, match=str(prim_id))
         ):
-            with pytest.raises(ContributionInvalidTransitionError, match=str(prim_id)):
-                await submit_contribution_for_review(session, org_id, prim_id, created_by=uuid.uuid4())
+            await submit_contribution_for_review(session, org_id, prim_id, created_by=uuid.uuid4())
 
     async def test_submit_when_already_in_review_queue_raises(self):
         session = _mock_session()
@@ -339,10 +336,9 @@ class TestSubmitForReview:
                 "modulo.core.library_service.get_library_primitive",
                 new_callable=AsyncMock,
                 return_value=prim,
-            ),
+            ),pytest.raises(ContributionInvalidTransitionError)
         ):
-            with pytest.raises(ContributionInvalidTransitionError):
-                await submit_contribution_for_review(session, org_id, prim_id, created_by=uuid.uuid4())
+            await submit_contribution_for_review(session, org_id, prim_id, created_by=uuid.uuid4())
 
     async def test_submit_update_returns_none_raises_not_found(self):
         """If the update returns None (e.g. concurrent delete), raise."""
@@ -363,10 +359,9 @@ class TestSubmitForReview:
                 "modulo.core.library_service.update_library_primitive",
                 new_callable=AsyncMock,
                 return_value=None,
-            ),
+            ),pytest.raises(ContributionNotFoundError)
         ):
-            with pytest.raises(ContributionNotFoundError):
-                await submit_contribution_for_review(session, org_id, prim_id, created_by=created_by)
+            await submit_contribution_for_review(session, org_id, prim_id, created_by=created_by)
 
 
 class TestPublish:
@@ -426,10 +421,9 @@ class TestPublish:
                 "modulo.core.library_service.get_library_primitive",
                 new_callable=AsyncMock,
                 return_value=None,
-            ),
+            ),pytest.raises(ContributionNotFoundError, match=str(prim_id))
         ):
-            with pytest.raises(ContributionNotFoundError, match=str(prim_id)):
-                await publish_contribution(session, org_id, prim_id, approved_by=uuid.uuid4())
+            await publish_contribution(session, org_id, prim_id, approved_by=uuid.uuid4())
 
     async def test_publish_from_draft_succeeds(self):
         session = _mock_session()
@@ -468,10 +462,9 @@ class TestPublish:
                 "modulo.core.library_service.get_library_primitive",
                 new_callable=AsyncMock,
                 return_value=prim,
-            ),
+            ),pytest.raises(ContributionInvalidTransitionError)
         ):
-            with pytest.raises(ContributionInvalidTransitionError):
-                await publish_contribution(session, org_id, prim_id, approved_by=uuid.uuid4())
+            await publish_contribution(session, org_id, prim_id, approved_by=uuid.uuid4())
 
     async def test_publish_update_returns_none_raises_not_found(self):
         session = _mock_session()
@@ -490,10 +483,9 @@ class TestPublish:
                 "modulo.core.library_service.update_library_primitive",
                 new_callable=AsyncMock,
                 return_value=None,
-            ),
+            ),pytest.raises(ContributionNotFoundError)
         ):
-            with pytest.raises(ContributionNotFoundError):
-                await publish_contribution(session, org_id, prim_id, approved_by=uuid.uuid4())
+            await publish_contribution(session, org_id, prim_id, approved_by=uuid.uuid4())
 
 
 class TestListContributions:

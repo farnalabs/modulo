@@ -16,12 +16,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.api.dependencies import _get_engine, get_db_session, get_plan_context
 from modulo.api.routes.sso import router as sso_router
-from modulo.core.feature_flags import DbPlanContext, FeatureFlagRegistry
 from modulo.auth.sso import (
     parse_oidc_providers,
     sign_state,
     verify_state,
 )
+from modulo.core.feature_flags import DbPlanContext, FeatureFlagRegistry
 from modulo.settings import Settings, get_settings
 
 _VALID_32 = "a" * 32

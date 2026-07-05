@@ -4,7 +4,6 @@ import httpx
 import pytest
 import respx
 
-from modulo.connectors.base import ConnectorQuery
 from modulo.connectors.linear import LinearConnector
 
 API_KEY = "lin_api_key_xxxx"

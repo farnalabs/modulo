@@ -6,8 +6,8 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from modulo.core.cleanup_jobs.run_retention_cleanup import (
-    BATCH_SIZE,
     _TERMINAL_STATES,
+    BATCH_SIZE,
     cleanup_old_runs,
 )
 

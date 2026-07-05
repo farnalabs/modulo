@@ -37,9 +37,9 @@ def _make_stage(**overrides: object) -> MagicMock:
     s.id = overrides.get("id", _STAGE_ID)
     s.organisation_id = overrides.get("organisation_id", _ORG_ID)
     s.name = overrides.get("name", "Test Stage")
-    s.description = overrides.get("description", None)
+    s.description = overrides.get("description")
     s.position = overrides.get("position", 0)
-    s.owner_team_id = overrides.get("owner_team_id", None)
+    s.owner_team_id = overrides.get("owner_team_id")
     s.visibility = overrides.get("visibility", "org")
     s.created_by = overrides.get("created_by", _USER_ID)
     s.created_at = _NOW

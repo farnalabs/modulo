@@ -66,9 +66,9 @@ def _fake_lease(**overrides: Any) -> MagicMock:
     lease.run_id = overrides.get("run_id", uuid.uuid4())
     lease.provider_ref = overrides.get("provider_ref", "local-ws-001")
     lease.status = overrides.get("status", "pending")
-    lease.started_at = overrides.get("started_at", None)
-    lease.expires_at = overrides.get("expires_at", None)
-    lease.resource_usage_json = overrides.get("resource_usage", None)
+    lease.started_at = overrides.get("started_at")
+    lease.expires_at = overrides.get("expires_at")
+    lease.resource_usage_json = overrides.get("resource_usage")
     return lease
 
 

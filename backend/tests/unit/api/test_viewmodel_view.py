@@ -35,11 +35,11 @@ def _make_view(**overrides: object) -> MagicMock:
     v.id = overrides.get("id", _VIEW_ID)
     v.organisation_id = overrides.get("organisation_id", _ORG_ID)
     v.name = overrides.get("name", "Test View")
-    v.description = overrides.get("description", None)
+    v.description = overrides.get("description")
     v.view_type = overrides.get("view_type", "run_list")
     v.filters = overrides.get("filters", {})
-    v.columns = overrides.get("columns", None)
-    v.sort_by = overrides.get("sort_by", None)
+    v.columns = overrides.get("columns")
+    v.sort_by = overrides.get("sort_by")
     v.sort_order = overrides.get("sort_order", "desc")
     v.created_by = overrides.get("created_by", _USER_ID)
     v.created_at = _NOW
@@ -71,7 +71,7 @@ def _make_org(**overrides: object) -> MagicMock:
     org.id = overrides.get("id", _ORG_ID)
     org.name = overrides.get("name", "Test Org")
     org.settings_json = overrides.get("settings_json", {})
-    org.daily_spend_limit = overrides.get("daily_spend_limit", None)
+    org.daily_spend_limit = overrides.get("daily_spend_limit")
     return org
 
 

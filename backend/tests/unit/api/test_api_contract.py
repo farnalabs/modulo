@@ -59,7 +59,7 @@ def _make_mock_pipeline(**kwargs: Any) -> MagicMock:
     p.id = kwargs.get("id", uuid.uuid4())
     p.organisation_id = kwargs.get("org_id", _ORG_ID)
     p.name = kwargs.get("name", "Contract Test Pipeline")
-    p.description = kwargs.get("description", None)
+    p.description = kwargs.get("description")
     p.visibility = kwargs.get("visibility", "org")
     p.max_concurrent_runs = kwargs.get("max_concurrent_runs", 5)
     p.lock_wait_timeout_seconds = kwargs.get("lock_wait_timeout_seconds", 300)

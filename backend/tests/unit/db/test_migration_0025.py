@@ -65,9 +65,8 @@ class TestMigration0025Upgrade:
     def test_creates_policy_on_each_table(self, migration) -> None:
         mock_op = MagicMock()
 
-        with patch("alembic.op.execute", mock_op.execute):
-            with patch.object(migration, "op", mock_op, create=True):
-                migration.upgrade()
+        with patch("alembic.op.execute", mock_op.execute), patch.object(migration, "op", mock_op, create=True):
+            migration.upgrade()
 
         assert mock_op.execute.call_count == 5
 
@@ -87,9 +86,8 @@ class TestMigration0025Downgrade:
     def test_drops_policy_from_each_table(self, migration) -> None:
         mock_op = MagicMock()
 
-        with patch("alembic.op.execute", mock_op.execute):
-            with patch.object(migration, "op", mock_op, create=True):
-                migration.downgrade()
+        with patch("alembic.op.execute", mock_op.execute), patch.object(migration, "op", mock_op, create=True):
+            migration.downgrade()
 
         assert mock_op.execute.call_count == 5
 

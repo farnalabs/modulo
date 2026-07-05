@@ -96,7 +96,7 @@ def make_mock_pipeline(**kwargs: Any) -> MagicMock:
     p.id = kwargs.get("id", uuid.uuid4())
     p.organisation_id = kwargs.get("org_id", ORG_ID)
     p.name = kwargs.get("name", "Test Pipeline")
-    p.description = kwargs.get("description", None)
+    p.description = kwargs.get("description")
     p.visibility = kwargs.get("visibility", "org")
     p.max_concurrent_runs = kwargs.get("max_concurrent_runs", 5)
     p.lock_wait_timeout_seconds = kwargs.get("lock_wait_timeout_seconds", 300)
@@ -114,10 +114,10 @@ def make_mock_run(**kwargs: Any) -> MagicMock:
     r.pipeline_id = kwargs.get("pipeline_id", uuid.uuid4())
     r.status = kwargs.get("status", "pending")
     r.langgraph_thread_id = str(uuid.uuid4())
-    r.error_detail = kwargs.get("error_detail", None)
+    r.error_detail = kwargs.get("error_detail")
     r.input_hash = kwargs.get("input_hash", "0" * 64)
     r.trigger_type = kwargs.get("trigger_type", "manual")
-    r.final_state = kwargs.get("final_state", None)
+    r.final_state = kwargs.get("final_state")
     return r
 
 

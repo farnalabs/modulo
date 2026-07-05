@@ -4,7 +4,7 @@ import httpx
 import pytest
 import respx
 
-from modulo.connectors.base import ConnectorQuery, ConnectorType, HealthResult
+from modulo.connectors.base import ConnectorQuery
 from modulo.connectors.jira import JiraConnector
 
 _INSTANCE = "test-domain.atlassian.net"

@@ -7,9 +7,7 @@ from unittest.mock import MagicMock
 import pytest
 from pytest_bdd import given, parsers, scenarios, then, when
 
-from modulo.core.remy.config_service import RemyConfig
-from modulo.core.remy.context_source_service import RemyContextSourceService
-from modulo.core.documentation_indexer import DocumentationIndex, DocEntry
+from modulo.core.documentation_indexer import DocEntry, DocumentationIndex
 
 try:
     scenarios("../features/remy/remy_context_sources.feature")

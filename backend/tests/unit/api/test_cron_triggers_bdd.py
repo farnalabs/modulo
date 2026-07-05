@@ -34,11 +34,11 @@ def _make_mock_trigger(**overrides) -> MagicMock:
     t.trigger_type = overrides.get("trigger_type", "cron")
     t.active = overrides.get("active", True)
     t.max_concurrent_runs = overrides.get("max_concurrent_runs", 5)
-    t.daily_spend_limit = overrides.get("daily_spend_limit", None)
+    t.daily_spend_limit = overrides.get("daily_spend_limit")
     t.cron_expression = overrides.get("cron_expression", "0 6 * * *")
     t.cron_timezone = overrides.get("cron_timezone", "UTC")
     t.config_json = overrides.get("config_json", {})
-    t.last_fired_at = overrides.get("last_fired_at", None)
+    t.last_fired_at = overrides.get("last_fired_at")
     t.next_fire_at = overrides.get("next_fire_at", _NOW + datetime.timedelta(hours=1))
     t.created_by = _USER_ID
     t.created_at = _NOW
@@ -274,7 +274,7 @@ async def test_input_template_populates_run_input() -> None:
     trigger_result.scalar_one_or_none.return_value = trigger
 
     cost_result = MagicMock()
-    cost_result.scalar_one.return_value = Decimal("0")
+    cost_result.scalar_one.return_value = Decimal(0)
 
     session = AsyncMock()
     session.__aenter__ = AsyncMock(return_value=session)
@@ -330,7 +330,7 @@ async def test_trigger_event_logged_on_fire() -> None:
     trigger_result.scalar_one_or_none.return_value = trigger
 
     cost_result = MagicMock()
-    cost_result.scalar_one.return_value = Decimal("0")
+    cost_result.scalar_one.return_value = Decimal(0)
 
     session = AsyncMock()
     session.__aenter__ = AsyncMock(return_value=session)

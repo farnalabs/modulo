@@ -27,8 +27,8 @@ def _make_mock_event(**overrides: object) -> MagicMock:
     e.validation_result = overrides.get("validation_result", "accepted")
     e.received_at = overrides.get("received_at", _NOW)
     e.created_at = overrides.get("created_at", _NOW)
-    e.run_id = overrides.get("run_id", None)
-    e.error_detail = overrides.get("error_detail", None)
+    e.run_id = overrides.get("run_id")
+    e.error_detail = overrides.get("error_detail")
     return e
 
 

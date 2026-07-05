@@ -2,14 +2,13 @@
 
 import logging
 from typing import Any
-from unittest.mock import AsyncMock
 
 import pytest
 
 from modulo.core.pipeline_engine.decorator import (
     RunCancelledError,
-    set_cancellation_check,
     cancellable_node,
+    set_cancellation_check,
 )
 
 
