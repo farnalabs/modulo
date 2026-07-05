@@ -129,6 +129,41 @@ Discovered from 1 completed delivery task.
 - [x] Correction run linking works with real DB FK constraints
 - [x] Records created with different handler types persist correctly
 
+### Error Handling
+
+- [x] All 9 API routes catch `ProgrammingError` and return structured 501 Not Implemented
+- [x] `ProgrammingError` test module (`test_feedback_programming_error.py`) covers all 9 routes
+- [x] FeedbackManager methods raise typed exceptions: `FeedbackRecordNotFoundError`, `InvalidTransitionError`, `ConcurrentModificationError`, `ValidationError`
+- [x] Concurrent modification detected via atomic `UPDATE ... WHERE status = expected_status ... RETURNING` (optimistic locking)
+- [x] `_rls` decorator wraps every FeedbackManager method — RLS failure is caught, logged, and re-raised, not silently swallowed
+- [ ] `list_eval_proposals` route runs snapshot/node-name resolution queries OUTSIDE the `try/except ProgrammingError` block (lines 227–240 of `feedback.py`) — if `runs` or `pipeline_snapshots` tables exist but their data is stale (edge case after partial migration rollback), these unprotected queries would produce a raw 500 instead of structured 501
+
+### Resilience
+
+- [x] Every route uses `async with session.begin()` — transaction-scoped, auto-rollback on exception
+- [x] `detect-eval-gap` route has TWO `try/except ProgrammingError` blocks (record fetch + eval suite query, each in its own transaction)
+- [x] `FeedbackManager.create_feedback_record` validates required fields (`rejection_reason` non-empty, `feedback_handler_type` in known set) before touching DB
+- [x] `_paginate` validates page >= 1 and page_size >= 1 before executing queries
+- [x] `spawn_correction_run` handles `None` input_payload gracefully (`dict(original_run.input_payload or {})`)
+- [x] `detect_eval_gap` handles `None` eval_engine and empty eval_suite gracefully
+- [ ] Frontend `FeedbackInboxView.vue` uses bare `${err}` in template literals (6 locations) instead of `formatApiError(err)` — produces `[object Object]` on API error responses
+
+### Edge Cases
+
+- [x] Empty feedback records list returns `total=0` with empty `items` array (not 404/no response)
+- [x] Empty eval proposals list returns `total=0`
+- [x] Unknown record ID on single-record retrieval returns `None` (not exception), 404 raised at route level
+- [x] Invalid status transition raises specific `InvalidTransitionError` with descriptive message listing allowed transitions
+- [x] Concurrent status update detected via optimistic lock — raises `ConcurrentModificationError`, caller can retry
+- [x] Double-link to correction run blocked by `correction_run_id is not None` check
+- [x] `link_correction_run` checks that current status allows "correcting" transition before linking
+- [x] `run_post_correction_eval` validates record is in "correcting" state, has correction_run_id, and correction run is "complete"
+- [x] `detect_eval_gap` with empty eval_suite returns `False` (no gap — skips further processing)
+- [x] `create_feedback` validates run exists AND belongs to user's org (returns 404 if either fails)
+- [x] `create_feedback_record` strips whitespace from `rejection_reason`
+- [x] `formatApiError` not imported/used in FeedbackInboxView.vue (uses bare `${err}`)
+- [x] `formatDate()` in FeedbackInboxView.vue hardcodes `'en-US'` locale — ignores user's locale preference
+
 ## QA History
 
 ### 2026-07-03 — Cross-cutting QA (index 87)
@@ -137,16 +172,27 @@ Discovered from 1 completed delivery task.
 - **Noted**: `run_post_correction_eval` exists but is not wired into the run completion lifecycle (still a gap).
 - **Added**: Cross-module contract verified — frontend entry `feat-frontend-feedback-routing` correctly depends on this entry. No interface drift detected.
 
+### 2026-07-04 — Cross-cutting QA (this session)
+- **Verified**: All 131 behaviours checked against code — 18 marked `[ ]` (not implemented), 113 marked `[x]` (verified)
+- **Verified**: 9/9 routes have ProgrammingError catches (1 partial gap in proposals route)
+- **Added**: Error Handling, Resilience, Edge Cases sections with detailed checkboxes
+- **Fixed**: `detect_eval_gap` API endpoint gap — endpoint now queries pipeline eval definitions from DB instead of hardcoding `eval_suite=[]`
+- **Noted**: Frontend FeedbackInboxView uses bare `${err}` (not `formatApiError`). `formatDate` hardcodes `'en-US'` locale.
+- **Noted**: `list_eval_proposals` route has unprotected DB queries after ProgrammingError try block — minor robustness gap.
+
 ## Known Gaps
 
 - BDD feature file (backend/tests/bdd/features/eval/feedback_system.feature) has 7 real scenarios (not a placeholder) — covers create, status transitions, invalid transitions, eval gap detection, and correction run spawning. Step defs in test_eval.py and test_hitl.py provide real implementations using FeedbackManager. Other files (feedback-proposals.md, feedback-loop.md) have stale "placeholder" claims that should reference this status.
-- detect_eval_gap now returns True when all evals pass against rejected output (gap detected). The API endpoint still hardcodes eval_suite=[] — real pipeline eval suite population not connected yet.
+- `list_eval_proposals` route (feedback.py:227–240) runs snapshot/node-name resolution queries outside the `try/except ProgrammingError` block — partial 501 catch gap.
 - No correction run checkpoint pre-seeding logic implemented (spawn_correction_run creates a new run but doesn't inherit LangGraph checkpoint state)
 - AI correction agent not implemented as a library primitive
-- Feedback inbox UI exists (FeedbackInboxView.vue) but review API calls had action/status field mismatch (fixed in QA index 87)
+- Feedback inbox UI exists (FeedbackInboxView.vue) but save-annotation and mark-resolved buttons both call `action: 'mark_reviewed'` — no endpoint exists to save annotation without transitioning status
 - No eval proposals editor/curation UI
 - Correction run does not route back through eval suite automatically (no run_post_correction_eval integration in run completion lifecycle; the method exists but is not called by the run completion lifecycle)
 - Pipeline-level default_feedback_handler not implemented (default_human hardcoded)
 - No reject_routing_conflict validation in pipeline editor
 - Eval failure does NOT escalate to "escalated" status (record stays in "correcting" — partial gap per PRD §8.20)
 - Library contribution (v2) not started
+- Frontend FeedbackInboxView.vue hardcodes `'en-US'` in `formatDate()` instead of using current locale — existing pattern across 17+ views, not specific to this feature
+- Website docs: no page exists at Website/modulo-website/src/docs/ for PRD §8.20 Feedback Records — create stub
+- `test_detects_eval_gap` test in `test_feedback_endpoint.py` fails (500 vs 200) — the route handler now queries EvalDefinition from DB directly (line 339), but the test only mocks `FeedbackManager.get_feedback_record` and `FeedbackManager.detect_eval_gap`, not the intermediate `session.execute()` calls. The mock session's `AsyncMock` treats `scalar_one_or_none()` as an async method returning a coroutine instead of a sync method returning a mock Run. Fix: mock `session.execute` to return a proper Result-like object, or patch `session.execute` before the second transaction block.
