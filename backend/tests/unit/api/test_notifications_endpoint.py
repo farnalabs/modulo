@@ -37,7 +37,7 @@ def _make_mock_endpoint(**overrides: object) -> MagicMock:
     ep.id = overrides.get("id", _ENDPOINT_ID)
     ep.organisation_id = _ORG_ID
     ep.url = overrides.get("url", "https://hooks.example.com/notify")
-    ep.secret_ciphertext = overrides.get("secret_ciphertext", None)
+    ep.secret_ciphertext = overrides.get("secret_ciphertext")
     ep.events = overrides.get("events", '["hitl.review_required"]')
     ep.description = overrides.get("description", "Test endpoint")
     ep.auto_disabled = overrides.get("auto_disabled", False)

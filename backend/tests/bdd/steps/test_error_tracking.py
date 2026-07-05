@@ -37,7 +37,7 @@ def _make_group(**kw):
     g.first_seen = kw.get("first_seen", datetime.now(UTC))
     g.last_seen = kw.get("last_seen", datetime.now(UTC))
     g.sample_event_id = kw.get("sample_event_id", uuid.uuid4())
-    g.assigned_to = kw.get("assigned_to", None)
+    g.assigned_to = kw.get("assigned_to")
     return g
 
 
@@ -46,12 +46,12 @@ def _make_event(**kw):
     e.id = kw.get("id", uuid.uuid4())
     e.level = kw.get("level", "error")
     e.message = kw.get("message", "test error")
-    e.stacktrace = kw.get("stacktrace", None)
+    e.stacktrace = kw.get("stacktrace")
     e.context_json = kw.get("context_json", {})
     e.source = kw.get("source", "backend")
-    e.environment = kw.get("environment", None)
-    e.version = kw.get("version", None)
-    e.breadcrumbs = kw.get("breadcrumbs", None)
+    e.environment = kw.get("environment")
+    e.version = kw.get("version")
+    e.breadcrumbs = kw.get("breadcrumbs")
     e.created_at = kw.get("created_at", datetime.now(UTC))
     return e
 

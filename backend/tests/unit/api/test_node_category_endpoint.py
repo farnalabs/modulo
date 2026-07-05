@@ -35,9 +35,9 @@ def _make_category(**overrides: object) -> MagicMock:
     c.id = overrides.get("id", _CATEGORY_ID)
     c.organisation_id = overrides.get("organisation_id", _ORG_ID)
     c.name = overrides.get("name", "LLM Call")
-    c.description = overrides.get("description", None)
+    c.description = overrides.get("description")
     c.color = overrides.get("color", "#6366f1")
-    c.icon = overrides.get("icon", None)
+    c.icon = overrides.get("icon")
     c.sort_order = overrides.get("sort_order", 0)
     c.created_by = overrides.get("created_by", _USER_ID)
     c.created_at = _NOW

@@ -14,7 +14,7 @@ try:
 except (FileNotFoundError, OSError):
     pass
 
-from tests.bdd.conftest import make_mock_pipeline  # noqa: E402
+from tests.bdd.conftest import make_mock_pipeline
 
 
 @given(parsers.parse('org "{org}" has pipeline "{name}" with max_concurrent_runs {limit:d}'))

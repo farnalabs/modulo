@@ -179,24 +179,22 @@ class TestErrors:
         mock_group = MagicMock()
         mock_group.fingerprint = "test-fp"
         with patch("modulo.api.routes.errors.get_error_group",
-                   AsyncMock(return_value=mock_group)):
-            with patch("modulo.api.routes.errors.get_error_events_by_group",
-                       AsyncMock(side_effect=_PROGRAMMING_ERROR)):
-                client = TestClient(app)
-                resp = client.get(f"/api/v1/errors/{uuid.uuid4()}/events")
-                assert resp.status_code == 501
+                   AsyncMock(return_value=mock_group)), patch("modulo.api.routes.errors.get_error_events_by_group",
+                   AsyncMock(side_effect=_PROGRAMMING_ERROR)):
+            client = TestClient(app)
+            resp = client.get(f"/api/v1/errors/{uuid.uuid4()}/events")
+            assert resp.status_code == 501
 
     def test_list_events_sqlalchemy_error_returns_503(self):
         app = self._setup_app()
         mock_group = MagicMock()
         mock_group.fingerprint = "test-fp"
         with patch("modulo.api.routes.errors.get_error_group",
-                   AsyncMock(return_value=mock_group)):
-            with patch("modulo.api.routes.errors.get_error_events_by_group",
-                       AsyncMock(side_effect=_SQLALCHEMY_ERROR)):
-                client = TestClient(app)
-                resp = client.get(f"/api/v1/errors/{uuid.uuid4()}/events")
-                assert resp.status_code == 503
+                   AsyncMock(return_value=mock_group)), patch("modulo.api.routes.errors.get_error_events_by_group",
+                   AsyncMock(side_effect=_SQLALCHEMY_ERROR)):
+            client = TestClient(app)
+            resp = client.get(f"/api/v1/errors/{uuid.uuid4()}/events")
+            assert resp.status_code == 503
 
 
 # ===========================================================================

@@ -7,8 +7,6 @@ will fail and force an explicit decision.
 import ast
 import inspect
 
-import pytest
-
 from modulo.connectors.base import ConnectorBase
 from modulo.core.trigger_engine.polling import _build_polling_connector
 

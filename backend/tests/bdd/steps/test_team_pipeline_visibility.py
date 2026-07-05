@@ -118,9 +118,7 @@ def user_requests_pipeline_list(username: str, request, ctx) -> None:
 
     pipelines = []
     for pname, pdata in ctx["pipelines"].items():
-        if pdata.get("visibility") == "org":
-            pipelines.append(pdata)
-        elif is_member:
+        if pdata.get("visibility") == "org" or is_member:
             pipelines.append(pdata)
 
     with patch(

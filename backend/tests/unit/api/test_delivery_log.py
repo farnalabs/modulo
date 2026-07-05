@@ -38,14 +38,14 @@ def _make_mock_endpoint(**overrides: object) -> MagicMock:
     ep.id = overrides.get("id", _WEBHOOK_ID)
     ep.organisation_id = _ORG_ID
     ep.url = overrides.get("url", "https://hooks.example.com/notify")
-    ep.secret_ciphertext = overrides.get("secret_ciphertext", None)
+    ep.secret_ciphertext = overrides.get("secret_ciphertext")
     ep.events = overrides.get("events", '["hitl_awaiting"]')
-    ep.description = overrides.get("description", None)
+    ep.description = overrides.get("description")
     ep.auto_disabled = overrides.get("auto_disabled", False)
     ep.consecutive_dead_letter_count = overrides.get("consecutive_dead_letter_count", 0)
     ep.created_by = _USER_ID
     ep.created_at = overrides.get("created_at", datetime.now(UTC))
-    ep.disabled_at = overrides.get("disabled_at", None)
+    ep.disabled_at = overrides.get("disabled_at")
     return ep
 
 
@@ -58,8 +58,8 @@ def _make_mock_delivery(**overrides: object) -> MagicMock:
     dl.status = overrides.get("status", "delivered")
     dl.attempt_count = overrides.get("attempt_count", 1)
     dl.response_code = overrides.get("response_code", 200)
-    dl.last_error = overrides.get("last_error", None)
-    dl.response_body = overrides.get("response_body", None)
+    dl.last_error = overrides.get("last_error")
+    dl.response_body = overrides.get("response_body")
     dl.created_at = overrides.get("created_at", datetime.now(UTC))
     return dl
 

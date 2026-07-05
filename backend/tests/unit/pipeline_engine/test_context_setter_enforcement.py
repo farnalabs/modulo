@@ -148,9 +148,8 @@ class TestAuditWarning:
         async def bad_node(state: dict[str, Any]) -> dict[str, Any]:
             return {"run_context": {"secret": "data"}}
 
-        with caplog.at_level(logging.WARNING):
-            with pytest.raises(ContextSetterViolationError):
-                await bad_node(_LIVE_STATE)
+        with caplog.at_level(logging.WARNING), pytest.raises(ContextSetterViolationError):
+            await bad_node(_LIVE_STATE)
 
         # Check that a warning was logged about the violation
         warning_messages = [r.message for r in caplog.records if r.levelno == logging.WARNING]
@@ -177,9 +176,8 @@ class TestAuditWarning:
         async def runner_node(state: dict[str, Any]) -> dict[str, Any]:
             return {"run_context": {"confidential": True}}
 
-        with caplog.at_level(logging.WARNING):
-            with pytest.raises(ContextSetterViolationError):
-                await runner_node(_LIVE_STATE)
+        with caplog.at_level(logging.WARNING), pytest.raises(ContextSetterViolationError):
+            await runner_node(_LIVE_STATE)
 
         violation_records = [r for r in caplog.records if r.levelno == logging.WARNING and "violation" in r.message]
         assert len(violation_records) > 0  # At least one log entry

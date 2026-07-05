@@ -18,7 +18,7 @@ try:
 except (FileNotFoundError, OSError):
     pass
 
-from tests.bdd.conftest import make_mock_run  # noqa: E402
+from tests.bdd.conftest import make_mock_run
 
 
 @given(parsers.parse("a run that failed at node {failed:d} of {total:d}"))

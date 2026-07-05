@@ -31,7 +31,7 @@ def _make_org(**overrides: object) -> MagicMock:
     org.id = overrides.get("id", _ORG_ID)
     org.name = overrides.get("name", "Test Org")
     org.settings_json = overrides.get("settings_json", {})
-    org.daily_spend_limit = overrides.get("daily_spend_limit", None)
+    org.daily_spend_limit = overrides.get("daily_spend_limit")
     return org
 
 
@@ -90,9 +90,9 @@ def _fake_pipeline(**overrides: Any) -> MagicMock:
     p.id = overrides.get("id", uuid.uuid4())
     p.organisation_id = overrides.get("organisation_id", _ORG_ID)
     p.name = overrides.get("name", "test-pipeline")
-    p.description = overrides.get("description", None)
+    p.description = overrides.get("description")
     p.visibility = overrides.get("visibility", "org")
-    p.owner_team_id = overrides.get("owner_team_id", None)
+    p.owner_team_id = overrides.get("owner_team_id")
     p.max_concurrent_runs = overrides.get("max_concurrent_runs", 5)
     p.lock_wait_timeout_seconds = overrides.get("lock_wait_timeout_seconds", 300)
     p.node_timeout_seconds = overrides.get("node_timeout_seconds", 300)

@@ -28,7 +28,7 @@ def _make_group(**kw):
     g.first_seen = kw.get("first_seen", _NOW)
     g.last_seen = kw.get("last_seen", _NOW)
     g.sample_event_id = kw.get("sample_event_id", _EVENT_ID)
-    g.assigned_to = kw.get("assigned_to", None)
+    g.assigned_to = kw.get("assigned_to")
     return g
 
 

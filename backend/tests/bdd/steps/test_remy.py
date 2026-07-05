@@ -61,7 +61,7 @@ def _make_mock_session(**overrides: Any) -> MagicMock:
     s.provider = overrides.get("provider", "anthropic")
     s.model = overrides.get("model", "claude-sonnet-4-20250514")
     s.context_window_tokens = overrides.get("context_window_tokens", 200000)
-    s.system_prompt_hash = overrides.get("system_prompt_hash", None)
+    s.system_prompt_hash = overrides.get("system_prompt_hash")
     s.created_at = overrides.get("created_at", _NOW)
     s.updated_at = overrides.get("updated_at", _NOW)
     return s
@@ -74,10 +74,10 @@ def _make_mock_message(**overrides: Any) -> MagicMock:
     m.session_id = overrides.get("session_id", uuid.uuid4())
     m.role = overrides.get("role", "user")
     m.content = overrides.get("content", "Hello")
-    m.tool_calls_json = overrides.get("tool_calls_json", None)
-    m.tool_results_json = overrides.get("tool_results_json", None)
-    m.token_count = overrides.get("token_count", None)
-    m.parent_id = overrides.get("parent_id", None)
+    m.tool_calls_json = overrides.get("tool_calls_json")
+    m.tool_results_json = overrides.get("tool_results_json")
+    m.token_count = overrides.get("token_count")
+    m.parent_id = overrides.get("parent_id")
     m.created_at = _NOW
     return m
 
@@ -85,11 +85,11 @@ def _make_mock_message(**overrides: Any) -> MagicMock:
 def _make_mock_skill(**overrides: Any) -> MagicMock:
     s = MagicMock()
     s.id = overrides.get("id", uuid.uuid4())
-    s.organisation_id = overrides.get("organisation_id", None)
-    s.user_id = overrides.get("user_id", None)
+    s.organisation_id = overrides.get("organisation_id")
+    s.user_id = overrides.get("user_id")
     s.name = overrides.get("name", "test-skill")
-    s.description = overrides.get("description", None)
-    s.triggers = overrides.get("triggers", None)
+    s.description = overrides.get("description")
+    s.triggers = overrides.get("triggers")
     s.body = overrides.get("body", "Skill body text")
     s.active = overrides.get("active", True)
     s.created_at = _NOW
@@ -1365,11 +1365,8 @@ def llm_emits_tool_call(tool_name: str, request, ctx, selector: str = "", value:
     if path:
         args["path"] = path
 
-    from modulo.api.routes.remy import UI_TOOL_NAMES
-    from modulo.api.ui_tools import _UI_TOOLS
 
     # Simulate the permission check that happens in the streaming endpoint
-    from modulo.core.remy.config_service import RemyConfigService
 
     with (
         patch("modulo.api.routes.remy.set_rls_org", new_callable=AsyncMock),
@@ -1439,7 +1436,6 @@ def user_approves_action(request, ctx) -> None:
 
     from modulo.api.routes.remy import (
         _pending_permissions,
-        _permission_decisions,
     )
 
     event = asyncio.Event()
