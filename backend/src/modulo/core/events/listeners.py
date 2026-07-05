@@ -49,6 +49,28 @@ _ACTION_MAP: dict[str, str] = {
 
 _background_tasks: set[asyncio.Task[Any]] = set()
 _version_counters: dict[str, int] = defaultdict(int)
+_listeners_registered: bool = False
+
+
+def _safe_str_attr(target: Any, attr: str, resource_type: str, action_name: str) -> str | None:
+    """Safely extract a string attribute from *target*, logging on failure."""
+    try:
+        val = getattr(target, attr)
+    except AttributeError:
+        _log.warning(
+            "event_listener.no_%s",
+            attr.replace(".", "_"),
+            extra={"resource_type": resource_type, "action": action_name},
+        )
+        return None
+    if val is None:
+        _log.warning(
+            "event_listener.null_%s",
+            attr.replace(".", "_"),
+            extra={"resource_type": resource_type, "action": action_name},
+        )
+        return None
+    return str(val)
 
 
 def _make_listener(action: str) -> Callable[[Any, Any, Any], None]:
@@ -71,21 +93,9 @@ def _make_listener(action: str) -> Callable[[Any, Any, Any], None]:
             )
             return
 
-        try:
-            org_id_raw = target.organisation_id
-        except AttributeError:
-            _log.warning(
-                "event_listener.no_org_id",
-                extra={"resource_type": resource_type, "action": action_name},
-            )
+        org_id = _safe_str_attr(target, "organisation_id", resource_type, action_name)
+        if org_id is None:
             return
-        if org_id_raw is None:
-            _log.warning(
-                "event_listener.null_org_id",
-                extra={"resource_type": resource_type, "action": action_name},
-            )
-            return
-        org_id = str(org_id_raw)
 
         try:
             loop = asyncio.get_running_loop()
@@ -96,21 +106,9 @@ def _make_listener(action: str) -> Callable[[Any, Any, Any], None]:
             )
             return
 
-        try:
-            resource_id_raw = target.id
-        except AttributeError:
-            _log.warning(
-                "event_listener.no_id",
-                extra={"resource_type": resource_type, "action": action_name},
-            )
+        resource_id = _safe_str_attr(target, "id", resource_type, action_name)
+        if resource_id is None:
             return
-        if resource_id_raw is None:
-            _log.warning(
-                "event_listener.null_id",
-                extra={"resource_type": resource_type, "action": action_name},
-            )
-            return
-        resource_id = str(resource_id_raw)
 
         version = _version_counters[org_id] + 1
         _version_counters[org_id] = version
@@ -142,9 +140,14 @@ def _make_listener(action: str) -> Callable[[Any, Any, Any], None]:
 
 def register_listeners() -> None:
     """Register all model event listeners. Call once at startup."""
+    global _listeners_registered
+    if _listeners_registered:
+        _log.warning("event_listeners.already_registered")
+        return
     models = list(_RESOURCE_TYPES)
     for action in ("after_insert", "after_update", "after_delete"):
         listener_fn = _make_listener(action)
         for model in models:
             event.listen(model, action, listener_fn)
+    _listeners_registered = True
     _log.info("event_listeners.registered", extra={"model_count": len(models)})

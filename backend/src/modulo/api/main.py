@@ -502,7 +502,7 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
         from modulo.core.events.redis_broker import RedisEventBroker
 
         redis_broker = RedisEventBroker(settings.redis_url)
-        configure_event_bus(redis_broker=redis_broker)
+        await configure_event_bus(redis_broker=redis_broker)
         logger.info("startup.event_bus_redis_enabled")
 
     # Start the HITL claim expiry background job.
