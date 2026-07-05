@@ -4,17 +4,20 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 from typing import TYPE_CHECKING
 
 from cryptography.exceptions import InvalidSignature
-
-if TYPE_CHECKING:
-    from collections.abc import Mapping
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import (
     Ed25519PrivateKey,
     Ed25519PublicKey,
 )
+
+if TYPE_CHECKING:
+    from collections.abc import Mapping
+
+logger = logging.getLogger(__name__)
 
 __all__ = [
     "generate_keypair",
@@ -57,8 +60,11 @@ def sign_primitive(primitive_data: Mapping[str, object], private_key_hex: str) -
 
     Returns the hex-encoded Ed25519 signature.
     """
-    private_bytes = bytes.fromhex(private_key_hex)
-    private_key = Ed25519PrivateKey.from_private_bytes(private_bytes)
+    try:
+        private_bytes = bytes.fromhex(private_key_hex)
+        private_key = Ed25519PrivateKey.from_private_bytes(private_bytes)
+    except ValueError:
+        raise ValueError("invalid private key hex") from None
     canonical = _canonical_json(primitive_data)
     sig = private_key.sign(canonical)
     return sig.hex()
@@ -69,12 +75,12 @@ def verify_signature(primitive_data: Mapping[str, object], signature_hex: str, p
 
     Returns ``True`` if the signature is valid, ``False`` otherwise.
     """
-    public_bytes = bytes.fromhex(public_key_hex)
-    public_key = Ed25519PublicKey.from_public_bytes(public_bytes)
-    canonical = _canonical_json(primitive_data)
     try:
+        public_bytes = bytes.fromhex(public_key_hex)
+        public_key = Ed25519PublicKey.from_public_bytes(public_bytes)
+        canonical = _canonical_json(primitive_data)
         public_key.verify(bytes.fromhex(signature_hex), canonical)
-    except InvalidSignature:
+    except (InvalidSignature, ValueError):
         return False
     else:
         return True
