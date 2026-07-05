@@ -13,7 +13,6 @@ from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker
 
 pytestmark = [
     pytest.mark.integration,
-    pytest.mark.skip(reason="awaiting-implementation — team isolation test fixtures need schema alignment"),
 ]
 
 
@@ -38,9 +37,9 @@ async def _create_user(db_engine: AsyncEngine, org_id: uuid.UUID, email: str) ->
     async with db_engine.connect() as conn, conn.begin():
         await conn.execute(
             text(
-                "INSERT INTO users (id, organisation_id, email, display_name, "
-                "org_role, auth_provider, active) "
-                "VALUES (:id, :org_id, :email, :name, 'admin', 'local', true)",
+                "INSERT INTO accounts (id, organisation_id, email, display_name, "
+                "org_role, auth_provider, active, signup_json, is_service_account) "
+                "VALUES (:id, :org_id, :email, :name, 'admin', 'local', true, '{}'::json, false)",
             ),
             {
                 "id": str(user_id),
@@ -74,7 +73,7 @@ async def test_teams_isolated_between_orgs(db_engine: AsyncEngine) -> None:
             text("SELECT set_config('app.organisation_id', :oid, true)"),
             {"oid": str(org_a)},
         )
-        await create_team(session, org_id=org_a, name="Team A", created_by=user_a)
+        await create_team(session, org_id=org_a, name="Team A", account_id=user_a)
         await session.flush()
 
     async with factory() as session:
@@ -82,7 +81,7 @@ async def test_teams_isolated_between_orgs(db_engine: AsyncEngine) -> None:
             text("SELECT set_config('app.organisation_id', :oid, true)"),
             {"oid": str(org_b)},
         )
-        await create_team(session, org_id=org_b, name="Team B", created_by=user_b)
+        await create_team(session, org_id=org_b, name="Team B", account_id=user_b)
         await session.flush()
 
     async with factory() as session:
@@ -106,7 +105,6 @@ async def test_teams_isolated_between_orgs(db_engine: AsyncEngine) -> None:
         assert "Team A" not in names_b
 
 
-@pytest.mark.skip(reason="awaiting-implementation — DBAPIError not raised")
 async def test_team_name_unique_per_org(db_engine: AsyncEngine) -> None:
     """Two teams in the same org must not share a name."""
     org = await _create_org(db_engine, f"unique-{uuid.uuid4().hex[:8]}")
@@ -121,7 +119,7 @@ async def test_team_name_unique_per_org(db_engine: AsyncEngine) -> None:
             text("SELECT set_config('app.organisation_id', :oid, true)"),
             {"oid": str(org)},
         )
-        await create_team(session, org_id=org, name="Unique Name", created_by=user)
+        await create_team(session, org_id=org, name="Unique Name", account_id=user)
         await session.flush()
 
     async with factory() as session:
@@ -130,7 +128,7 @@ async def test_team_name_unique_per_org(db_engine: AsyncEngine) -> None:
             {"oid": str(org)},
         )
         with pytest.raises(DBAPIError):
-            await create_team(session, org_id=org, name="Unique Name", created_by=user)
+            await create_team(session, org_id=org, name="Unique Name", account_id=user)
             await session.flush()
 
     # Same name in a different org must succeed
@@ -146,7 +144,7 @@ async def test_team_name_unique_per_org(db_engine: AsyncEngine) -> None:
             session,
             org_id=other_org,
             name="Unique Name",
-            created_by=other_user,
+            account_id=other_user,
         )
         await session.flush()
         assert team.name == "Unique Name"
@@ -175,9 +173,9 @@ async def test_memberships_isolated_between_orgs(db_engine: AsyncEngine) -> None
             text("SELECT set_config('app.organisation_id', :oid, true)"),
             {"oid": str(org_a)},
         )
-        team_a = await create_team(session, org_id=org_a, name="Mem Team A", created_by=user_a1)
+        team_a = await create_team(session, org_id=org_a, name="Mem Team A", account_id=user_a1)
         await session.flush()
-        await add_team_member(session, org_id=org_a, team_id=team_a.id, user_id=user_a2, role="member")
+        await add_team_member(session, org_id=org_a, team_id=team_a.id, account_id=user_a2, role="viewer")
         await session.flush()
 
     async with factory() as session:
@@ -185,7 +183,7 @@ async def test_memberships_isolated_between_orgs(db_engine: AsyncEngine) -> None
             text("SELECT set_config('app.organisation_id', :oid, true)"),
             {"oid": str(org_b)},
         )
-        team_b = await create_team(session, org_id=org_b, name="Mem Team B", created_by=user_b)
+        team_b = await create_team(session, org_id=org_b, name="Mem Team B", account_id=user_b)
         await session.flush()
 
     async with factory() as session:
@@ -220,9 +218,9 @@ async def test_membership_unique_per_team_user(db_engine: AsyncEngine) -> None:
             text("SELECT set_config('app.organisation_id', :oid, true)"),
             {"oid": str(org)},
         )
-        team = await create_team(session, org_id=org, name="Dup Test Team", created_by=user)
+        team = await create_team(session, org_id=org, name="Dup Test Team", account_id=user)
         await session.flush()
-        await add_team_member(session, org_id=org, team_id=team.id, user_id=user, role="member")
+        await add_team_member(session, org_id=org, team_id=team.id, account_id=user, role="viewer")
         await session.flush()
 
     async with factory() as session:
@@ -231,7 +229,7 @@ async def test_membership_unique_per_team_user(db_engine: AsyncEngine) -> None:
             {"oid": str(org)},
         )
         with pytest.raises(DBAPIError):
-            await add_team_member(session, org_id=org, team_id=team.id, user_id=user, role="admin")
+            await add_team_member(session, org_id=org, team_id=team.id, account_id=user, role="operator")
             await session.flush()
 
 
@@ -260,7 +258,7 @@ async def test_crud_team_round_trip(db_engine: AsyncEngine) -> None:
             session,
             org_id=org,
             name="Round Trip Team",
-            created_by=user,
+            account_id=user,
             description="A team for round-trip testing",
         )
         await session.flush()
@@ -299,7 +297,7 @@ async def test_membership_round_trip(db_engine: AsyncEngine) -> None:
     from modulo.db.crud.team_membership import (
         add_team_member,
         get_membership,
-        get_membership_by_team_and_user,
+        get_membership_by_team_and_account,
         list_team_members,
         remove_team_member,
         update_member_role,
@@ -312,28 +310,28 @@ async def test_membership_round_trip(db_engine: AsyncEngine) -> None:
             text("SELECT set_config('app.organisation_id', :oid, true)"),
             {"oid": str(org)},
         )
-        team = await create_team(session, org_id=org, name="Mem CRUD Team", created_by=user_a)
+        team = await create_team(session, org_id=org, name="Mem CRUD Team", account_id=user_a)
         await session.flush()
 
-        membership = await add_team_member(session, org_id=org, team_id=team.id, user_id=user_b, role="member")
+        membership = await add_team_member(session, org_id=org, team_id=team.id, account_id=user_b, role="viewer")
         await session.flush()
         assert membership.team_id == team.id
-        assert membership.user_id == user_b
-        assert membership.role == "member"
+        assert membership.account_id == user_b
+        assert membership.role == "viewer"
 
         fetched = await get_membership(session, membership.id)
         assert fetched is not None
 
-        by_team_user = await get_membership_by_team_and_user(session, team.id, user_b)
+        by_team_user = await get_membership_by_team_and_account(session, team.id, user_b)
         assert by_team_user is not None
         assert by_team_user.id == membership.id
 
         members = await list_team_members(session, team_id=team.id, page=1, page_size=50)
         assert len(members.items) == 1
 
-        updated = await update_member_role(session, membership.id, "admin")
+        updated = await update_member_role(session, membership.id, "operator")
         assert updated is not None
-        assert updated.role == "admin"
+        assert updated.role == "operator"
 
         removed = await remove_team_member(session, membership.id)
         assert removed is True
