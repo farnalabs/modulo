@@ -1,5 +1,6 @@
 import { api } from './client'
 import type { components } from './client'
+import { formatApiError } from './formatError'
 
 export type ErrorGroupSummary = components['schemas']['ErrorGroupSummary']
 export type ErrorGroupDetail = components['schemas']['ErrorGroupDetail']
@@ -18,7 +19,7 @@ export interface FetchErrorGroupsParams {
 }
 
 function throwOnError<T>(result: { data?: T; error?: unknown }): T {
-  if (result.error) throw new Error(typeof result.error === 'string' ? result.error : JSON.stringify(result.error))
+  if (result.error) throw new Error(formatApiError(result.error))
   return result.data as T
 }
 
