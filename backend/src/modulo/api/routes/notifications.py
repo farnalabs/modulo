@@ -6,7 +6,9 @@ Secrets are Fernet-encrypted at rest and never exposed in responses.
 
 from __future__ import annotations
 
+import contextlib
 import json
+import logging
 import uuid
 
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -14,8 +16,6 @@ from pydantic import BaseModel, Field, field_validator
 from sqlalchemy import select
 from sqlalchemy.exc import ProgrammingError
 from sqlalchemy.ext.asyncio import AsyncSession
-
-import logging
 
 from modulo.api.dependencies import get_db_session
 from modulo.auth.dependencies import get_current_user
@@ -237,10 +237,8 @@ async def delete_endpoint(
 
 def _ep_to_response(ep: NotificationEndpoint) -> NotificationEndpointResponse:
     events: list[str] = []
-    try:
+    with contextlib.suppress(json.JSONDecodeError, TypeError):
         events = json.loads(ep.events) if ep.events else []
-    except (json.JSONDecodeError, TypeError):
-        pass
     return NotificationEndpointResponse(
         id=ep.id,
         url=ep.url,

@@ -11,7 +11,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "modulo"
-version = "0.3.69"
+version = "0.3.70"
 description = "Governed orchestration for your agentic SDLC"
 license = "MIT"
 authors = [
@@ -148,14 +148,20 @@ exclude = ["*.feature"]
 [tool.ruff.lint]
 select = [
     "E", "W",   # pycodestyle
-    "F",        # pyflakes
+    "F",        # pyflakes (dead code, unused imports — F841 catches uncovered vars, F811 catches redefs)
     "I",        # isort
     "N",        # pep8-naming
     "UP",       # pyupgrade
-    "B",        # flake8-bugbear (real bugs)
-    "S",        # flake8-bandit (security)
-    "ASYNC",    # flake8-async (sync calls in async context)
-    "RUF",      # ruff-specific rules
+    "B",        # flake8-bugbear (real bugs — B006 mutating defaults, B023 loop var in closure)
+    "S",        # flake8-bandit (security — S608 detects raw f-string SQL injection)
+    "ASYNC",    # flake8-async (ASYNC251 catches unclosed event loops, ASYNC109 sync in async)
+    "RUF",      # ruff-specific rules (RUF012 mutable class defaults)
+    "SIM",      # flake8-simplify (SIM115 `open()` without context manager, SIM222 bool expr)
+    "C4",       # flake8-comprehensions (C416 unnecessary list comprehension)
+    "T20",      # flake8-print (T201 bare print in production code)
+    "RET",      # flake8-return (RET503 missing explicit return)
+    "PYI",      # flake8-pyi (PYI041 redundant `Optional` on union)
+    "FURB",     # refurb (FURB125 `while` → `for` loop, FURB163 unnecessary `None` check)
 ]
 ignore = [
     "S101",     # assert allowed in tests

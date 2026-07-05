@@ -145,7 +145,7 @@ async def get_rating_aggregate(
     )
     thumbs_up_count = (await session.execute(thumbs_up_stmt)).scalar_one()
     ratio = Decimal(thumbs_up_count) / Decimal(total_count)
-    avg = ratio * Decimal("5")
+    avg = ratio * Decimal(5)
     return avg, total_count
 
 

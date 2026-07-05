@@ -161,105 +161,104 @@ async def fire_cron_trigger(
     engine = _get_engine()
     factory = async_sessionmaker(engine, expire_on_commit=False)
 
-    async with factory() as session:
-        async with session.begin():
-            await _set_rls_org(session, org_id)
+    async with factory() as session, session.begin():
+        await _set_rls_org(session, org_id)
 
-            # Re-read trigger with FOR UPDATE to serialise concurrent fires
-            result = await session.execute(
-                select(Trigger).where(Trigger.id == trigger_id, Trigger.organisation_id == org_id).with_for_update()
+        # Re-read trigger with FOR UPDATE to serialise concurrent fires
+        result = await session.execute(
+            select(Trigger).where(Trigger.id == trigger_id, Trigger.organisation_id == org_id).with_for_update()
+        )
+        trigger = result.scalar_one_or_none()
+        if trigger is None or not trigger.active:
+            return {"status": "skipped", "reason": "trigger_inactive_or_missing"}
+
+        # Concurrency check
+        active_count = await _count_active_runs(session, pipeline_id)
+        if active_count >= trigger.max_concurrent_runs:
+            await _log_event(
+                session,
+                trigger=trigger,
+                org_id=org_id,
+                result="concurrency_limit_reached",
+                error_detail=(f"Active runs: {active_count}, limit: {trigger.max_concurrent_runs}"),
             )
-            trigger = result.scalar_one_or_none()
-            if trigger is None or not trigger.active:
-                return {"status": "skipped", "reason": "trigger_inactive_or_missing"}
+            return {
+                "status": "skipped",
+                "reason": "concurrency_limit",
+                "active_runs": active_count,
+            }
 
-            # Concurrency check
-            active_count = await _count_active_runs(session, pipeline_id)
-            if active_count >= trigger.max_concurrent_runs:
+        # Daily spend limit check
+        spend_limit = trigger.daily_spend_limit
+        if spend_limit is not None:
+            today_start = datetime.datetime.now(datetime.UTC).replace(hour=0, minute=0, second=0, microsecond=0)
+            cost_result = await session.execute(
+                select(func.coalesce(func.sum(Run.total_cost_usd), 0)).where(
+                    Run.trigger_id == trigger_id,
+                    Run.organisation_id == org_id,
+                    Run.created_at >= today_start,
+                )
+            )
+            today_cost = cost_result.scalar_one()
+            if today_cost >= spend_limit:  # type: ignore[operator]
                 await _log_event(
                     session,
                     trigger=trigger,
                     org_id=org_id,
-                    result="concurrency_limit_reached",
-                    error_detail=(f"Active runs: {active_count}, limit: {trigger.max_concurrent_runs}"),
+                    result="spend_limit_reached",
+                    error_detail=(f"Daily spend limit {trigger.daily_spend_limit} reached (today: {today_cost})"),
                 )
                 return {
                     "status": "skipped",
-                    "reason": "concurrency_limit",
-                    "active_runs": active_count,
+                    "reason": "spend_limit",
+                    "daily_spend_limit": str(spend_limit),
+                    "today_cost": str(today_cost),
                 }
 
-            # Daily spend limit check
-            spend_limit = trigger.daily_spend_limit
-            if spend_limit is not None:
-                today_start = datetime.datetime.now(datetime.UTC).replace(hour=0, minute=0, second=0, microsecond=0)
-                cost_result = await session.execute(
-                    select(func.coalesce(func.sum(Run.total_cost_usd), 0)).where(
-                        Run.trigger_id == trigger_id,
-                        Run.organisation_id == org_id,
-                        Run.created_at >= today_start,
-                    )
-                )
-                today_cost = cost_result.scalar_one()
-                if today_cost >= spend_limit:  # type: ignore[operator]
-                    await _log_event(
-                        session,
-                        trigger=trigger,
-                        org_id=org_id,
-                        result="spend_limit_reached",
-                        error_detail=(f"Daily spend limit {trigger.daily_spend_limit} reached (today: {today_cost})"),
-                    )
-                    return {
-                        "status": "skipped",
-                        "reason": "spend_limit",
-                        "daily_spend_limit": str(spend_limit),
-                        "today_cost": str(today_cost),
-                    }
+        # Build input payload from config
+        config = trigger.config_json or {}
+        input_payload = config.get("input_template", {})
 
-            # Build input payload from config
-            config = trigger.config_json or {}
-            input_payload = config.get("input_template", {})
+        # Create the run
+        run = await create_run(
+            session,
+            org_id=org_id,
+            pipeline_id=pipeline_id,
+            snapshot_id=snapshot_id,
+            trigger_type="cron",
+            trigger_id=trigger_id,
+            input_payload=input_payload,
+        )
 
-            # Create the run
-            run = await create_run(
-                session,
-                org_id=org_id,
-                pipeline_id=pipeline_id,
-                snapshot_id=snapshot_id,
-                trigger_type="cron",
-                trigger_id=trigger_id,
-                input_payload=input_payload,
-            )
+        # Log TriggerEvent
+        event = await _log_event(
+            session,
+            trigger=trigger,
+            org_id=org_id,
+            result="accepted",
+            run_id=run.id,
+        )
 
-            # Log TriggerEvent
-            event = await _log_event(
-                session,
-                trigger=trigger,
-                org_id=org_id,
-                result="accepted",
-                run_id=run.id,
-            )
+        # Update last_fired_at and next_fire_at
+        now = datetime.datetime.now(datetime.UTC)
+        next_fire = compute_next_fire(cron_expression, after=now)
+        await session.execute(
+            update(Trigger).where(Trigger.id == trigger_id).values(last_fired_at=now, next_fire_at=next_fire)
+        )
 
-            # Update last_fired_at and next_fire_at
-            now = datetime.datetime.now(datetime.UTC)
-            next_fire = compute_next_fire(cron_expression, after=now)
-            await session.execute(
-                update(Trigger).where(Trigger.id == trigger_id).values(last_fired_at=now, next_fire_at=next_fire)
-            )
+        _log.info(
+            "Cron trigger %s fired → run %s (next fire: %s)",
+            trigger_id,
+            run.id,
+            next_fire.isoformat(),
+        )
 
-            _log.info(
-                "Cron trigger %s fired → run %s (next fire: %s)",
-                trigger_id,
-                run.id,
-                next_fire.isoformat(),
-            )
-
-            return {
-                "status": "fired",
-                "run_id": str(run.id),
-                "event_id": str(event.id),
-                "next_fire_at": next_fire.isoformat(),
-            }
+        return {
+            "status": "fired",
+            "run_id": str(run.id),
+            "event_id": str(event.id),
+            "next_fire_at": next_fire.isoformat(),
+        }
 
 
 # ---------------------------------------------------------------------------

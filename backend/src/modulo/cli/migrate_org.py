@@ -183,7 +183,6 @@ async def _export_organisation(session: Any, org_id: uuid.UUID) -> dict[str, Any
     org = await session.get(Organisation, org_id)
     if org is None:
         msg = f"Organisation {org_id} not found"
-        print(msg)
         raise SystemExit(msg)
     return _serialise_row(org)
 
@@ -390,8 +389,6 @@ def cmd_export(args: argparse.Namespace) -> None:
     _write_bundle(bundle, output)
 
     total = sum(len(v) for k, v in bundle.items() if isinstance(v, list))
-    print(f"Exported {total} records to {output}")
-    print(f"Export hash: {bundle['__meta__']['hash']}")
 
 
 def cmd_import(args: argparse.Namespace) -> None:
@@ -401,16 +398,8 @@ def cmd_import(args: argparse.Namespace) -> None:
 
     bundle = _load_bundle(input_path)
     total_loaded = sum(len(v) for k, v in bundle.items() if isinstance(v, list))
-    print(f"Loaded {total_loaded} records from {input_path}")
-    print(f"File hash: {bundle['__meta__'].get('hash', 'N/A')} (verified)")
 
     counts = asyncio.run(_do_import(bundle, org_id, strategy))
-    print(
-        f"Import complete: {counts['created']} created, "
-        f"{counts['overwritten']} overwritten, "
-        f"{counts['skipped']} skipped, "
-        f"{counts['errors']} errors"
-    )
 
 
 def main(argv: list[str] | None = None) -> None:

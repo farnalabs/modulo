@@ -43,10 +43,7 @@ def _duration_seconds(raw: dict[str, Any]) -> int | None:
             from datetime import datetime
 
             fmt = "%Y-%m-%dT%H:%M:%S.%fZ"
-            if "T" in started_at:
-                started = datetime.strptime(started_at, fmt)
-            else:
-                started = datetime.fromisoformat(started_at)
+            started = datetime.strptime(started_at, fmt) if "T" in started_at else datetime.fromisoformat(started_at)
             if "T" in finished_at:
                 finished = datetime.strptime(finished_at, fmt)
             else:

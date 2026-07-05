@@ -243,7 +243,7 @@ class ModuloPostgresSaver(AsyncPostgresSaver):
         result: dict[str, Any] = {}
         for blob in blobs:
             if len(blob) >= 3:
-                raw = blob[2] if blob[2] else None
+                raw = blob[2] or None
                 if raw is not None and self._fernet is not None:
                     try:
                         raw = self._decrypt_with_fallback(raw)

@@ -48,10 +48,7 @@ async def start_schedulers(
     """
     global _scheduler_engine
     settings = get_settings()
-    if engine is not None:
-        _scheduler_engine = engine
-    else:
-        _scheduler_engine = create_async_engine(settings.database_url)
+    _scheduler_engine = engine if engine is not None else create_async_engine(settings.database_url)
     factory = async_sessionmaker(_scheduler_engine, expire_on_commit=False)
 
     tasks = [

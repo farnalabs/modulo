@@ -211,7 +211,7 @@ async def delete_group(
         ) from None
     if not deleted:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Variant group not found")
-    return None
+    return
 
 
 @router.post("/{group_id}/run", response_model=RunVariantResponse)

@@ -2,11 +2,49 @@
 
 ## Lessons Learned
 
+### SQL: raw f-strings are SQL injection
+
+- `text(f"SELECT ... WHERE id = '{value}'")` creates SQL injection vectors even for internal use. Always use parameterized queries: `text("SELECT ... WHERE id = :val").bindparams(val=value)` or SQLAlchemy ORM expressions. This was the single most common critical finding across codebase QA — files across all layers (CRUD, routes, aggregations, analysis) used interpolated values in SQL text.
+
+### TOCTOU: check-then-act requires atomicity
+
+- Reading a value (e.g. "is this slot available?") then acting on it (e.g. "assign to slot") in separate queries creates a race window where another request can interleave. Use `SELECT ... FOR UPDATE` (Postgres row lock) or a single atomic `UPDATE ... WHERE ... RETURNING` to eliminate the window. Found in slot assignment, budget enforcement, and duplicate-prevention logic.
+
+### Cross-tenant: every multi-tenant query must include `organisation_id = :org_id`
+
+- Missing org scoping was found in audit routes, dashboard aggregations, and notification queries — not just entity CRUD. When adding a new query, grep for `organisation_id` in the WHERE clause as a pre-merge check. On non-Postgres backends (MariaDB, SQLite), the `_inject_tenant_filter` listener handles this automatically, but raw `text()` queries bypass it entirely.
+
+### Rollback: `session.rollback()` destroys in-progress data from other operations
+
+- Prefer `savepoint = await session.begin_nested()` for local rollback scopes. The outer `session.rollback()` discards ALL uncommitted writes, including those from other concurrent operations on the same session — not just the failed one.
+
+### Python 3.13: `Mapped["Type | None"]` forward reference syntax is broken
+
+- Python 3.13 changed PEP 604 union parsing in annotations. `Mapped["Type | None"]` raises `TypeError` at class body execution. Use `Mapped[Optional["Type"]]` or `Mapped[Union["Type", None]]` instead.
+
+### Test login: payload must use `email` field, not `username`
+
+- The login endpoint validates against `OAuth2PasswordRequestForm` which expects `{"email": "...", "password": "..."}` — not `{"username": "...", "password": "..."}`. Sending `username` produces a silent 422 validation error, causing all subsequent test assertions to fail with confusing messages. This was found in 3 separate test files across BDD, unit, and integration tests.
+
+### Event loops: `asyncio.new_event_loop()` must be closed
+
+- Test fixtures that create a new event loop must close it in `finally` or `addfinalizer`. Unclosed loops accumulate and eventually cause `RuntimeError: Event loop is closed` on unrelated async tests. BDD test files had 80+ instances of unclosed event loops.
+
+### WebSocket test fixtures: always close the connection
+
+- `async with client.websocket_connect("/ws") as ws:` must be wrapped in `try/finally ws.close()` — without an explicit close, the test hangs at teardown because the WS connection is never released.
+
+### Sensitive data: auth tokens must never appear in logs
+
+- Several test fixtures and a load-test scenario logged `Authorization: Bearer <token>` or API response bodies containing secrets. Use `logging.getLogger(...).setLevel(logging.WARNING)` on noisy loggers, or strip sensitive fields before logging. Also: never log raw API request/response bodies in production code — they may contain credentials.
+
 - Loop variable over module import name (`for status in ...` when `from fastapi import status`) → rename the import with an alias (`import status as http_status`). A loop variable shadows the module for its entire scope, so any reference like `status.HTTP_500_...` after the loop raises `AttributeError`. This is especially dangerous in exception handlers — the handler itself crashes trying to reference the shadowed module.
 
 - SQL aggregate functions (`SUM`, `COUNT`, `func.sum()`, etc.) return `None` when the result set is empty, not `0`. Always wrap `int(result.scalar_one())` in a null-safe helper like `_safe_int` that returns a default for `None`. Without this, `int(None)` raises `TypeError` which is NOT caught by `except SQLAlchemyError:`.
 
 - Every API endpoint that runs database queries needs BOTH `except SQLAlchemyError:` (for SQL failures) AND `except Exception:` (for Python-level errors like `TypeError`, `AttributeError`, `ValueError` from data processing). Without the generic catch, non-SQL errors propagate to the CatchAllMiddleware and produce an opaque 500 with no structured detail.
+
+- `model_validate()` error handlers must never use bare `raise` — always raise a structured `HTTPException` instead. A bare `raise` inside an `except Exception` block propagates the original exception to the CatchAllMiddleware, producing an opaque 500 with no structured detail. Pattern: `except Exception: raise HTTPException(status_code=500, detail="...") from None`.
 
 - PATCH endpoint `model_dump(exclude_none=True)` → use `exclude_unset=True`. `exclude_none=True` prevents clearing nullable fields because keys with `None` values are omitted from the dump, so setting a field to `None` becomes a no-op instead of a NULL update.
 

@@ -8,6 +8,7 @@ number is incremented. If a stale sequence is presented (token theft), the entir
 family is blacklisted. On logout, the family is explicitly invalidated.
 """
 
+import contextlib
 import logging
 import uuid
 from dataclasses import dataclass
@@ -131,10 +132,8 @@ def decode_principal(token: str, secret_key: str, allowed_purposes: list[str] | 
         raise JWTError("Token contains a malformed identity UUID") from exc
     parsed_org_id: uuid.UUID | None = None
     if isinstance(org_id, str) and org_id:
-        try:
+        with contextlib.suppress(ValueError):
             parsed_org_id = uuid.UUID(org_id)
-        except ValueError:
-            pass
     parsed_org_role: str | None = org_role if isinstance(org_role, str) and org_role else None
     if org_id is not None and parsed_org_id is None:
         _log.warning("jwt.malformed_org_id", extra={"org_id": str(org_id)})

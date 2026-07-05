@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import json
 import logging
 import uuid
@@ -961,10 +962,8 @@ async def retry_delivery(
 
 def _ep_to_response(ep: NotificationEndpoint) -> WebhookResponse:
     events: list[str] = []
-    try:
+    with contextlib.suppress(json.JSONDecodeError, TypeError):
         events = json.loads(ep.events) if ep.events else []
-    except (json.JSONDecodeError, TypeError):
-        pass
     return WebhookResponse(
         id=str(ep.id),
         url=ep.url,

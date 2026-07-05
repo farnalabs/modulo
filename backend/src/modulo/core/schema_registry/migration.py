@@ -111,7 +111,7 @@ def _detect_renames(
     renames: list[tuple[str, str]] = []
     for removed_name in removed_names:
         old_type = _extract_type(from_props[removed_name])
-        if old_type in ("unknown",):
+        if old_type == "unknown":
             continue
         for added_name in added_names:
             new_type = _extract_type(to_props[added_name])

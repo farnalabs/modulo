@@ -51,7 +51,7 @@ def _age_days(value: Any) -> float | None:
     if not isinstance(value, str):
         return None
     try:
-        dt = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        dt = datetime.fromisoformat(value)
         return (datetime.now(UTC) - dt).total_seconds() / 86400
     except (ValueError, TypeError):
         return None
