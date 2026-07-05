@@ -84,6 +84,12 @@
 
 - `pytest.raises(Exception)` in tests → narrow to the specific exception type the code is expected to raise (e.g. `ValueError`, `JWTError`). Bare `Exception` masks bugs where the code raises an unexpected exception (including `SystemExit`, `KeyboardInterrupt`) and the test passes.
 
+- `output.get(field, output)` when field is absent from the dict silently validates the entire dataset instead of the intended sub-field. If a specific field is requested (non-empty `field`), check `field in output` explicitly and fail with a clear error message — don't fall back to the parent dict.
+
+- Config values that are expected to be a `dict` (e.g. a callable registry) must be validated with `isinstance(val, dict)` before accessing `.get()` or `[]`. A non-empty list is truthy, so `config.get("key") or {}` does NOT fall back to `{}` for list values — `[1, 2].get(key)` raises `AttributeError`.
+
+- When accepting a user-supplied callable and parsing its return value with `.get()`, wrap the parsing in `try/except TypeError` or validate `isinstance(ret, dict)` first. A non-dict return (e.g. `None`, a list, a string) crashes the caller with `AttributeError: 'NoneType' object has no attribute 'get'`.
+
 ### Alembic / Entrypoint
 
 - **Deployed databases may have orphaned `alembic_version` entries from restructured migration branches.** When a branch migration is rebased onto the main chain, the old revision ID stays in the DB's `alembic_version` table. The entrypoint (`deploy/fly/entrypoint.sh`) runs `cleanup_orphan_migrations.py` before `alembic upgrade heads` to remove any `version_num` that doesn't match a known migration file. If the remaining chain diverges (because the DB migrated through old branch revisions whose schema changes are already present), the entrypoint falls back to `alembic stamp head`. This logic lives in `deploy/fly/cleanup_orphan_migrations.py` and must be kept in sync with the actual migration files — it reads `revision:` from every `.py` in `migrations/versions/`.
