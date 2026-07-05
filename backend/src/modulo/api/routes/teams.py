@@ -384,7 +384,7 @@ async def list_members_endpoint(
             MembershipResponse(
                 id=str(m.id),
                 team_id=str(m.team_id),
-                user_id=str(m.user_id),
+                user_id=str(m.account_id),
                 role=m.role,
                 created_at=m.created_at.isoformat(),
             )
