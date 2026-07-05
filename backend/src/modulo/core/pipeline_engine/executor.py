@@ -14,8 +14,6 @@ Does NOT handle WebSocket fan-out, HITL claim/approve/reject, or webhook trigger
 """
 
 import asyncio
-import hashlib
-import json
 import logging
 import uuid
 from collections.abc import AsyncIterator, Awaitable, Callable
@@ -87,11 +85,6 @@ class GraphValidationError(ValueError):
         self.issues = issues
 
 
-def _graph_json_hash(graph_json: dict[str, Any]) -> str:
-    serialised = json.dumps(graph_json, sort_keys=True, separators=(",", ":"))
-    return hashlib.sha256(serialised.encode()).hexdigest()
-
-
 def _seed_state(snapshot: PipelineSnapshot, input_payload: dict[str, Any]) -> dict[str, Any]:
     """Build the initial LangGraph state for a run.
 
@@ -100,15 +93,17 @@ def _seed_state(snapshot: PipelineSnapshot, input_payload: dict[str, Any]) -> di
     and removed from the input dict so the pipeline agents never see it
     as part of their normal input.
     """
+    # Copy input_payload to avoid mutating the caller's dict.
+    payload = dict(input_payload)
     run_context_defaults: dict[str, Any] = snapshot.run_context_defaults or {}
     run_context: dict[str, Any] = {
         **run_context_defaults,
         "cancelled": False,
-        "input": input_payload,
+        "input": payload,
     }
     # Promote feedback_correction from input_payload to run_context
     # so the entire graph can access rejection metadata.
-    feedback_correction = input_payload.pop("_feedback_correction", None)
+    feedback_correction = payload.pop("_feedback_correction", None)
     if feedback_correction:
         run_context["feedback_correction"] = feedback_correction
     # Seed autonomy from snapshot-level default so gate nodes can resolve it.
@@ -137,7 +132,8 @@ def _map_lg_event(
     if event_kind == "on_chain_end":
         return "node_completed", {"node_id": name}
     if event_kind == "on_chain_error":
-        error = lg_event.get("data", {}).get("error", "")
+        data = lg_event.get("data")
+        error = data.get("error", "") if isinstance(data, dict) else ""
         return "node_failed", {"node_id": name, "error": str(error)}
     return None
 
@@ -232,6 +228,7 @@ class PipelineExecutor:
 
         async with self._session_factory() as session, session.begin():
             await set_rls_org(session, org_id)
+            await session.execute(select(Pipeline).where(Pipeline.id == pipeline_id).with_for_update())
             await update_run_status(session, run_id, "failed", error_code="lock_timeout")
             run = await get_run(session, run_id)
             if run is None:
@@ -300,15 +297,16 @@ class PipelineExecutor:
         if not node_token_usage:
             return None, None, None
 
-        total_tokens = sum(n["total_tokens"] for n in node_token_usage.values())
+        total_tokens = sum(n.get("total_tokens", 0) for n in node_token_usage.values())
         total_cost = Decimal(0)
-        for n_data in node_token_usage.values():
+        result_usage: dict[str, dict[str, Any]] = {}
+        for node_id, n_data in node_token_usage.items():
             n_cost = Decimal(str(n_data.get("input_tokens", 0))) * input_rate
             n_cost += Decimal(str(n_data.get("output_tokens", 0))) * output_rate
-            n_data["cost_usd"] = float(n_cost)
+            result_usage[node_id] = {**n_data, "cost_usd": float(n_cost)}
             total_cost += n_cost
 
-        return total_tokens, total_cost, node_token_usage
+        return total_tokens, total_cost, result_usage
 
     async def resume(
         self,
@@ -577,7 +575,7 @@ class PipelineExecutor:
                     )
 
             # Fire agent_signal triggers for each completed node.
-            if final_status == "complete" and completed_node_outputs:
+            if completed_node_outputs:
                 async with self._session_factory() as session, session.begin():
                     await set_rls_org(session, org_id)
                     for node_id, node_output in completed_node_outputs.items():
