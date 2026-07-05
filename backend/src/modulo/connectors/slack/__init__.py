@@ -1,5 +1,7 @@
 """SlackConnector — async Slack Web API connector."""
 
+import asyncio
+import json
 from typing import Any
 
 import httpx
@@ -17,6 +19,21 @@ _SLACK_API = "https://slack.com/api"
 
 _RATE_LIMITED_STATUS = 429
 
+_RETRYABLE_STATUSES = frozenset({429})
+_MAX_RETRIES = 3
+_BASE_DELAY = 1.0
+_MAX_DELAY = 30.0
+
+
+def _parse_retry_after(response: httpx.Response) -> float | None:
+    value = response.headers.get("Retry-After") or response.headers.get("retry-after")
+    if value:
+        try:
+            return float(value)
+        except (ValueError, TypeError):
+            pass
+    return None
+
 
 class SlackConnector(ConnectorBase):
     def __init__(self, bot_token: str) -> None:
@@ -32,53 +49,99 @@ class SlackConnector(ConnectorBase):
     def _client(self) -> httpx.AsyncClient:
         return httpx.AsyncClient(base_url=_SLACK_API, headers=self._headers(), timeout=30)
 
+    async def _call_api(self, method: str, path: str, **kwargs: Any) -> httpx.Response:
+        last_exc: Exception | None = None
+        for attempt in range(_MAX_RETRIES + 1):
+            try:
+                async with self._client() as client:
+                    r = await client.request(method, path, **kwargs)
+                    if r.status_code == _RATE_LIMITED_STATUS and attempt < _MAX_RETRIES:
+                        retry_after = _parse_retry_after(r)
+                        delay = min(retry_after, _MAX_DELAY) if retry_after else min(_BASE_DELAY * (2 ** attempt), _MAX_DELAY)
+                        await asyncio.sleep(delay)
+                        continue
+                    r.raise_for_status()
+                    return r
+            except httpx.HTTPStatusError as exc:
+                if exc.response.status_code == _RATE_LIMITED_STATUS and attempt < _MAX_RETRIES:
+                    retry_after = _parse_retry_after(exc.response)
+                    delay = min(retry_after, _MAX_DELAY) if retry_after else min(_BASE_DELAY * (2 ** attempt), _MAX_DELAY)
+                    await asyncio.sleep(delay)
+                    continue
+                raise ValueError(f"Slack API HTTP {exc.response.status_code}: {exc.response.text[:200]}") from exc
+            except httpx.TimeoutException as exc:
+                if attempt < _MAX_RETRIES:
+                    delay = min(_BASE_DELAY * (2 ** attempt), _MAX_DELAY)
+                    await asyncio.sleep(delay)
+                    continue
+                raise ValueError("Slack API timeout") from exc
+            except httpx.ConnectError as exc:
+                if attempt < _MAX_RETRIES:
+                    delay = min(_BASE_DELAY * (2 ** attempt), _MAX_DELAY)
+                    await asyncio.sleep(delay)
+                    continue
+                raise ValueError("Slack API connection error") from exc
+        raise ValueError("Slack API request failed after retries") from last_exc
+
+    async def _parse_json(self, response: httpx.Response) -> Any:
+        try:
+            return response.json()
+        except json.JSONDecodeError as exc:
+            raise ValueError(f"Slack API returned invalid JSON: {response.text[:200]}") from exc
+
+    async def verify_scopes(self) -> dict[str, Any]:
+        r = await self._call_api("GET", "/auth.test")
+        body = await self._parse_json(r)
+        if not body.get("ok"):
+            raise ValueError(f"Token validation failed: {body.get('error', 'unknown')}")
+        return body
+
     async def health_check(self) -> HealthResult:
         try:
-            async with self._client() as c:
-                resp = await c.get("/api.test", timeout=10)
-                if resp.status_code == _RATE_LIMITED_STATUS:
-                    retry_after = resp.headers.get("Retry-After", "unknown")
-                    return HealthResult(ok=False, detail=f"Rate limited; retry after {retry_after}s")
-                resp.raise_for_status()
-                body = resp.json()
-                if body.get("ok"):
-                    return HealthResult(ok=True)
+            r = await self._call_api("GET", "/api.test", timeout=10)
+            body = await self._parse_json(r)
+            if not body.get("ok"):
                 return HealthResult(ok=False, detail=body.get("error", "unknown"))
-        except httpx.HTTPStatusError as e:
-            return HealthResult(ok=False, detail=f"HTTP {e.response.status_code}: {e.response.text[:200]}")
-        except Exception as e:
-            return HealthResult(ok=False, detail=str(e))
+            try:
+                await self.verify_scopes()
+            except ValueError as exc:
+                return HealthResult(ok=False, detail=f"Token is invalid or revoked: {exc}")
+            return HealthResult(ok=True)
+        except ValueError as exc:
+            return HealthResult(ok=False, detail=str(exc)[:200])
 
     async def query(self, q: ConnectorQuery) -> ConnectorResult:
-        async with self._client() as c:
-            match q.resource:
-                case "channels":
-                    return await self._list_channels(c, q)
-                case "messages":
-                    return await self._get_messages(c, q)
-                case "users":
-                    return await self._list_users(c, q)
-                case _:
-                    raise ValueError(f"Unsupported Slack resource: {q.resource!r}")
+        match q.resource:
+            case "channels":
+                return await self._list_channels(q)
+            case "messages":
+                return await self._get_messages(q)
+            case "users":
+                return await self._list_users(q)
+            case "channel_info":
+                return await self._get_channel_info(q)
+            case "channel_members":
+                return await self._get_channel_members(q)
+            case "thread_replies":
+                return await self._get_thread_replies(q)
+            case _:
+                raise ValueError(f"Unsupported Slack resource: {q.resource!r}")
 
     async def write(self, payload: ConnectorPayload) -> dict[str, Any]:
-        async with self._client() as c:
-            match payload.resource:
-                case "message":
-                    return await self._post_message(c, payload.data)
-                case _:
-                    raise ValueError(f"Unsupported Slack write resource: {payload.resource!r}")
+        match payload.resource:
+            case "message":
+                return await self._post_message(payload.data)
+            case "thread_reply":
+                return await self._post_thread_reply(payload.data)
+            case _:
+                raise ValueError(f"Unsupported Slack write resource: {payload.resource!r}")
 
-    async def _list_channels(self, c: httpx.AsyncClient, q: ConnectorQuery) -> ConnectorResult:
+    async def _list_channels(self, q: ConnectorQuery) -> ConnectorResult:
         params: dict[str, Any] = {"limit": q.limit, "types": "public_channel,private_channel"}
         if q.cursor:
             params["cursor"] = q.cursor
-        resp = await c.get("/conversations.list", params=params)
-        if resp.status_code == _RATE_LIMITED_STATUS:
-            retry_after = resp.headers.get("Retry-After", "unknown")
-            raise ValueError(f"Rate limited by Slack API; retry after {retry_after}s")
-        resp.raise_for_status()
-        body = resp.json()
+        r = await self._call_api("GET", "/conversations.list", params=params)
+        body = await self._parse_json(r)
         if not body.get("ok"):
             raise ValueError(f"Slack API error in conversations.list: {body.get('error', 'unknown')}")
         return ConnectorResult(
@@ -86,7 +149,7 @@ class SlackConnector(ConnectorBase):
             next_cursor=body.get("response_metadata", {}).get("next_cursor"),
         )
 
-    async def _get_messages(self, c: httpx.AsyncClient, q: ConnectorQuery) -> ConnectorResult:
+    async def _get_messages(self, q: ConnectorQuery) -> ConnectorResult:
         channel = q.filters.get("channel")
         if not channel:
             raise ValueError("Slack messages query requires 'channel' filter")
@@ -95,12 +158,8 @@ class SlackConnector(ConnectorBase):
             params["oldest"] = q.filters["oldest"]
         if q.filters.get("latest"):
             params["latest"] = q.filters["latest"]
-        resp = await c.get("/conversations.history", params=params)
-        if resp.status_code == _RATE_LIMITED_STATUS:
-            retry_after = resp.headers.get("Retry-After", "unknown")
-            raise ValueError(f"Rate limited by Slack API; retry after {retry_after}s")
-        resp.raise_for_status()
-        body = resp.json()
+        r = await self._call_api("GET", "/conversations.history", params=params)
+        body = await self._parse_json(r)
         if not body.get("ok"):
             raise ValueError(f"Slack API error in conversations.history: {body.get('error', 'unknown')}")
         return ConnectorResult(
@@ -108,16 +167,12 @@ class SlackConnector(ConnectorBase):
             next_cursor=body.get("response_metadata", {}).get("next_cursor"),
         )
 
-    async def _list_users(self, c: httpx.AsyncClient, q: ConnectorQuery) -> ConnectorResult:
+    async def _list_users(self, q: ConnectorQuery) -> ConnectorResult:
         params: dict[str, Any] = {"limit": q.limit}
         if q.cursor:
             params["cursor"] = q.cursor
-        resp = await c.get("/users.list", params=params)
-        if resp.status_code == _RATE_LIMITED_STATUS:
-            retry_after = resp.headers.get("Retry-After", "unknown")
-            raise ValueError(f"Rate limited by Slack API; retry after {retry_after}s")
-        resp.raise_for_status()
-        body = resp.json()
+        r = await self._call_api("GET", "/users.list", params=params)
+        body = await self._parse_json(r)
         if not body.get("ok"):
             raise ValueError(f"Slack API error in users.list: {body.get('error', 'unknown')}")
         return ConnectorResult(
@@ -125,17 +180,74 @@ class SlackConnector(ConnectorBase):
             next_cursor=body.get("response_metadata", {}).get("next_cursor"),
         )
 
-    async def _post_message(self, c: httpx.AsyncClient, data: dict[str, Any]) -> dict[str, Any]:
+    async def _post_message(self, data: dict[str, Any]) -> dict[str, Any]:
         channel = data.get("channel")
         if not channel:
             raise ValueError("Missing 'channel' in message payload")
         body_data = {k: v for k, v in data.items() if k != "channel"}
-        resp = await c.post("/chat.postMessage", json={"channel": channel, **body_data})
-        if resp.status_code == _RATE_LIMITED_STATUS:
-            retry_after = resp.headers.get("Retry-After", "unknown")
-            raise ValueError(f"Rate limited by Slack API; retry after {retry_after}s")
-        resp.raise_for_status()
-        body: dict[str, Any] = resp.json()
+        r = await self._call_api("POST", "/chat.postMessage", json={"channel": channel, **body_data})
+        body: dict[str, Any] = await self._parse_json(r)
+        if not body.get("ok"):
+            raise ValueError(f"Slack API error: {body.get('error', 'unknown')}")
+        return body
+
+    async def _get_channel_info(self, q: ConnectorQuery) -> ConnectorResult:
+        channel = q.filters.get("channel")
+        if not channel:
+            raise ValueError("Slack channel_info query requires 'channel' filter")
+        r = await self._call_api("GET", "/conversations.info", params={"channel": channel})
+        body = await self._parse_json(r)
+        if not body.get("ok"):
+            raise ValueError(f"Slack API error in conversations.info: {body.get('error', 'unknown')}")
+        return ConnectorResult(records=[body.get("channel", {})])
+
+    async def _get_channel_members(self, q: ConnectorQuery) -> ConnectorResult:
+        channel = q.filters.get("channel")
+        if not channel:
+            raise ValueError("Slack channel_members query requires 'channel' filter")
+        params: dict[str, Any] = {"channel": channel, "limit": q.limit}
+        if q.cursor:
+            params["cursor"] = q.cursor
+        r = await self._call_api("GET", "/conversations.members", params=params)
+        body = await self._parse_json(r)
+        if not body.get("ok"):
+            raise ValueError(f"Slack API error in conversations.members: {body.get('error', 'unknown')}")
+        return ConnectorResult(
+            records=[{"user_id": uid} for uid in body.get("members", [])],
+            next_cursor=body.get("response_metadata", {}).get("next_cursor"),
+        )
+
+    async def _get_thread_replies(self, q: ConnectorQuery) -> ConnectorResult:
+        channel = q.filters.get("channel")
+        if not channel:
+            raise ValueError("Slack thread_replies query requires 'channel' filter")
+        thread_ts = q.filters.get("thread_ts")
+        if not thread_ts:
+            raise ValueError("Slack thread_replies query requires 'thread_ts' filter")
+        params: dict[str, Any] = {"channel": channel, "ts": thread_ts, "limit": q.limit}
+        if q.filters.get("oldest"):
+            params["oldest"] = q.filters["oldest"]
+        if q.filters.get("latest"):
+            params["latest"] = q.filters["latest"]
+        r = await self._call_api("GET", "/conversations.replies", params=params)
+        body = await self._parse_json(r)
+        if not body.get("ok"):
+            raise ValueError(f"Slack API error in conversations.replies: {body.get('error', 'unknown')}")
+        return ConnectorResult(
+            records=body.get("messages", []),
+            next_cursor=body.get("response_metadata", {}).get("next_cursor"),
+        )
+
+    async def _post_thread_reply(self, data: dict[str, Any]) -> dict[str, Any]:
+        channel = data.get("channel")
+        if not channel:
+            raise ValueError("Missing 'channel' in thread_reply payload")
+        thread_ts = data.get("thread_ts")
+        if not thread_ts:
+            raise ValueError("Missing 'thread_ts' in thread_reply payload")
+        body_data = {k: v for k, v in data.items() if k not in ("channel", "thread_ts")}
+        r = await self._call_api("POST", "/chat.postMessage", json={"channel": channel, "thread_ts": thread_ts, **body_data})
+        body: dict[str, Any] = await self._parse_json(r)
         if not body.get("ok"):
             raise ValueError(f"Slack API error: {body.get('error', 'unknown')}")
         return body

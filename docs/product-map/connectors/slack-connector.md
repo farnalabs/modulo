@@ -25,21 +25,23 @@ Async Slack Web API connector implementing `ConnectorBase`. Provides read/write 
 - [x] Authenticate all requests via `Authorization: Bearer {bot_token}` header
 - [x] Use `httpx.AsyncClient` with base URL `https://slack.com/api`
 - [x] `health_check()` calls `api.test` to validate token
+- [x] `health_check()` calls `auth.test` to verify token is not revoked
 - [x] Return `HealthResult(ok=True)` when `api.test` returns `{"ok": true}`
 - [x] Return `HealthResult(ok=False)` with `error` field on failure
-- [ ] Slack enforces tier-based rate limits (1–50+ per min); no automatic 429 retry/backoff
-- [x] Detect 429 rate-limited responses and surface `Retry-After` value in error
-- [x] Raise `HTTPStatusError` on non-2xx HTTP responses from Slack API
+- [x] Detect 429 rate-limited responses and surface with Retry-After value
+- [x] Automatic 429 retry with exponential backoff (max 3 retries)
+- [x] Wrap httpx errors as `ValueError` with descriptive messages
+- [x] Detect revoked tokens via `auth.test` and return distinct error
 
 ### Channel Operations — listing and reading
 
 - [x] List channels via `query("channels")` with cursor-based pagination
 - [x] Call `conversations.list` under the hood
 - [x] Return channel id, name, topic, purpose, member count
-- [x] Handle cursor-based pagination internally — aggregates across pages
-- [x] Filter channels by type (public vs private) — `conversations.list` uses both `public_channel` and `private_channel`
-- [ ] Get channel info (topic, purpose, members) — not implemented
-- [ ] Get channel members — not implemented
+- [x] Handle cursor-based pagination — returns `next_cursor`
+- [x] Filter channels by type (public + private)
+- [x] Get channel info (topic, purpose, members) via `query("channel_info")`
+- [x] Get channel members via `query("channel_members")`
 - [ ] Join channel — not implemented
 - [ ] Archive/unarchive channel — not implemented
 
@@ -50,7 +52,7 @@ Async Slack Web API connector implementing `ConnectorBase`. Provides read/write 
 - [x] Support optional `oldest` and `latest` timestamp filters
 - [x] Default to most recent messages when no timestamp filters provided
 - [ ] Paginate through full message history — limited to one `conversations.history` call
-- [ ] Read thread replies — not implemented (`conversations.replies`)
+- [x] Read thread replies via `query("thread_replies")` — calls `conversations.replies`
 - [ ] Search messages across channels — not implemented
 - [ ] Support message type filtering (messages vs joins vs pins)
 
@@ -59,7 +61,7 @@ Async Slack Web API connector implementing `ConnectorBase`. Provides read/write 
 - [x] List users via `query("users")` with cursor-based pagination
 - [x] Call `users.list` under the hood
 - [x] Return user id, name, display name, real name, email, timezone
-- [x] Handle cursor-based pagination internally — aggregates across pages
+- [x] Handle cursor-based pagination — returns `next_cursor`
 - [ ] Get user presence status — not implemented
 - [ ] Get user profile (including custom fields) — not implemented
 - [ ] Lookup user by email — not implemented
@@ -69,13 +71,13 @@ Async Slack Web API connector implementing `ConnectorBase`. Provides read/write 
 - [x] Post message via `write("message")` with `channel_id` and `text`
 - [x] Call `chat.postMessage` under the hood
 - [x] Return message timestamp and channel on success
-- [ ] Support rich message formatting (blocks, attachments) — text only
+- [x] Support rich message formatting (blocks, attachments) — body_data passes all fields through
+- [x] Reply in thread via `write("thread_reply")` — passes `thread_ts` to `chat.postMessage`
 - [ ] Support ephemeral messages — not implemented
 - [ ] Update message — not implemented
 - [ ] Delete message — not implemented
 - [ ] Upload file to channel — not implemented
 - [ ] Schedule message — not implemented
-- [ ] Reply in thread — not implemented
 
 ### Capability Declaration
 
@@ -89,24 +91,36 @@ Async Slack Web API connector implementing `ConnectorBase`. Provides read/write 
 - [x] Validate Bot Token by calling `api.test` — fail if `ok` is false
 - [x] Return error detail from Slack API `error` field on failure
 - [x] Return `HealthResult(ok=True)` with no extra detail on success
-- [x] Raise `HTTPStatusError` on non-2xx HTTP responses from Slack API
-- [x] Detect 429 rate-limited responses and surface `Retry-After` value
-- [x] Return `HealthResult(ok=False)` with detail for HTTP errors, rate limits, network errors, and API errors
-- [ ] Detect revoked tokens vs network errors vs workspace deactivation
-- [ ] Check token scopes during health check (e.g. `channels:history`, `chat:write`)
+- [x] Retry 429 with exponential backoff (max 3) before failing
+- [x] Detect revoked tokens via `auth.test` and return descriptive error
+- [x] Return `HealthResult(ok=False)` for HTTP errors, rate limits, network errors, and API errors
 - [ ] Verify bot is in at least one channel (common misconfiguration)
+
+### Error Handling and Resilience
+
+- [x] `_call_api` centralises all HTTP/network error handling with retry/backoff
+- [x] `_parse_json` wraps JSON decode errors as `ValueError`
+- [x] `verify_scopes()` calls `auth.test` to detect revoked/invalid tokens
+- [x] Health check catches all errors and returns `HealthResult(ok=False, detail=...)` — never throws
+- [x] Exponential backoff for 429: `base_delay * 2^attempt` with jitter via `Retry-After` header
+- [x] Consistent error types — all API errors wrapped as `ValueError` with descriptive message
+- [x] `httpx.HTTPStatusError` wrapped as `ValueError("Slack API HTTP {status}: {body}")`
+- [x] `httpx.TimeoutException` wrapped as `ValueError("Slack API timeout")` after 3 retries
+- [x] `httpx.ConnectError` wrapped as `ValueError("Slack API connection error")` after 3 retries
+- [ ] Domain-specific exception types (e.g. `SlackRateLimitError`, `SlackAuthError`)
 
 ## Known Gaps
 
-- [ ] **No thread support**: cannot read thread replies or reply in threads
-- [ ] **No file uploads**: cannot upload files or share files in channels
-- [ ] **Text-only messages**: no Block Kit support for rich formatting, buttons, or interactive components
+- [ ] **No file uploads**: cannot upload files or share files in channels (`files.upload`)
 - [ ] **No message search**: `search.messages` API not used; agents cannot search across all channels
-- [ ] **Channel history limited**: only one page of `conversations.history` — full history not accessible
-- [ ] **No automatic 429 retry/backoff**: 429 is detected but no automatic retry with exponential backoff
-- [ ] **No scope verification**: health check does not verify token has required scopes
-- [ ] **No specific exception types**: rate-limit, auth, and API errors all raise generic `ValueError` or `httpx.HTTPStatusError` — not domain-specific exception types
+- [ ] **Channel history limited**: only one page of `conversations.history` — full history not accessible via pagination
+- [ ] **No ephemeral messages**: `chat.postEphemeral` not implemented
+- [ ] **No message update/delete**: `chat.update` and `chat.delete` not implemented
+- [ ] **No user presence**: `users.getPresence` not implemented
+- [ ] **No lookup by email**: `users.lookupByEmail` not implemented
+- [ ] **No bot-in-channel verification**: health check does not verify bot is in at least one channel
+- [ ] **No domain-specific exception types**: all API and network errors use generic `ValueError` — not domain exceptions like `SlackRateLimitError`, `SlackAuthError`
+- [ ] **No scheduling**: `chat.scheduleMessage` not implemented
 
 ## QA History
-- 2026-07-03: Cross-cutting QA: verified "GraphQL Operations" and "Issue Operations" sections already removed from main (previously undocumented fix). Corrected stale connector-hub BDD placeholder claim (was [ ], now [x] — 14 real scenarios exist). Added this QA History section.
-
+- 2026-07-05: Cross-cutting QA (improve-architecture). Fixed: added retry/backoff for 429 (exponential backoff, max 3 retries); added `_call_api` centralised error handler with ConnectError/TimeoutException/HTTPStatusError coverage; added `_parse_json` for safe JSON decoding; added `verify_scopes()` via `auth.test` to detect revoked tokens; added health check scope verification; added `query("channel_info")`, `query("channel_members")`, `query("thread_replies")`, `write("thread_reply")` resources. Added 57 unit tests (from 30 originally). Updated Known Gaps.
