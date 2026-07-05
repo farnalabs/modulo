@@ -1,7 +1,8 @@
 import { api } from './client'
+import { formatApiError } from './formatError'
 
 function throwOnError<T>(result: { data?: T; error?: unknown }): T {
-  if (result.error) throw new Error(typeof result.error === 'string' ? result.error : JSON.stringify(result.error))
+  if (result.error) throw new Error(formatApiError(result.error))
   return result.data as T
 }
 

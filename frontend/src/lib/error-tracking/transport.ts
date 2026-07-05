@@ -158,9 +158,10 @@ export async function flush(): Promise<void> {
     if (!res.ok && res.status >= 500) {
       reQueueWithBackoff(batch)
     } else if (!res.ok) {
-      // 4xx — drop, likely a configuration issue
+      console.warn('[error-tracking] Dropping events due to %d response:', res.status, batch.length)
     }
-  } catch {
+  } catch (err) {
+    console.warn('[error-tracking] Ingest fetch failed, queuing batch for retry:', err)
     reQueueWithBackoff(batch)
   }
 }
@@ -184,6 +185,8 @@ function reQueueWithBackoff(items: PendingItem[]): void {
         }
       }, delay)
       RETRY_TIMERS.push(timer)
+    } else {
+      console.warn('[error-tracking] Dropping event after %d failed retries:', 3, item.event.message)
     }
   }
 }
