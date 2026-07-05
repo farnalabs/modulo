@@ -436,6 +436,19 @@ updated `schema.ts` and retry.
 Start the frontend-only dev server that proxies API calls to app.modulo.run.
 No local backend, DB, or Docker needed — just the frontend source code.
 
+**Caveat — backend changes:** The local-frontend proxies `/api` and `/ws` to
+`https://app.modulo.run` (production). Backend code changes (Python, DB
+migrations, API routes, Pydantic models) are NOT picked up by this loop —
+the proxy hits the deployed backend, not your local code.
+
+Two options when your change touches the backend:
+1. **Deploy to app.modulo.run** — merge to `main`, then run `/deploy` (canary rollout through staging). Fastest if you're confident.
+2. **Run full local stack** — `docker compose -f docker-compose.local.yml up -d` (Postgres + Redis), then start the backend locally (`uv run uvicorn modulo.api.main:app --reload --port 8000`), and point Vite at it (`VITE_API_URL=http://localhost:8000`).
+
+Rule of thumb: if you're only changing frontend code (`.vue`, `.ts`, CSS),
+use the local-frontend loop. If you're changing backend code, deploy to
+app.modulo.run unless you need iterative backend debugging (then use Docker).
+
 ```powershell
 # From Product/frontend/
 $env:VITE_API_URL = "https://app.modulo.run"
