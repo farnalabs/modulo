@@ -9,38 +9,65 @@ from threading import Lock
 
 _log = logging.getLogger(__name__)
 
-HOT_RELOADABLE_KEYS: frozenset[str] = frozenset({
-    "MODULO_MAX_LOCAL_CONCURRENCY",
-    "MODULO_E2B_API_KEY",
-    "MODULO_LOG_LEVEL",
+HOT_RELOADABLE_KEYS: frozenset[str] = frozenset(
+    {
+        "MODULO_MAX_LOCAL_CONCURRENCY",
+        "MODULO_E2B_API_KEY",
+        "MODULO_LOG_LEVEL",
+        "MODULO_DEMO_MODE",
+        "MODULO_PLUGIN_DISCOVERY",
+        "MODULO_TELEMETRY_ENABLED",
+        "MODULO_OTEL_SERVICE_NAME",
+        "MODULO_PUBLIC_URL",
+        "MODULO_SCIM_TOKEN",
+        "MODULO_SCIM_DEFAULT_ORG_ID",
+        "MODULO_RATELIMIT_BYPASS_TOKEN",
+        "MODULO_INACTIVITY_TIMEOUT_MINUTES",
+        "DEBUG",
+    }
+)
+
+KNOWN_KEYS: list[str] = [
+    "DATABASE_URL",
+    "SECRET_KEY",
+    "FERNET_KEY",
+    "FERNET_KEY_OLD",
+    "REDIS_URL",
+    "MODULO_DB",
+    "MODULO_SECRETS_BACKEND",
+    "CORS_ORIGINS",
+    "CORS_MAX_AGE",
+    "MODULO_USERS",
+    "MODULO_ADMIN_PASSWORD",
+    "MODULO_PUBLIC_URL",
     "MODULO_DEMO_MODE",
-    "MODULO_PLUGIN_DISCOVERY",
+    "MODULO_LICENSE_KEY",
+    "MODULO_OIDC_PROVIDERS",
+    "MODULO_SAML_ENABLED",
+    "MODULO_SAML_IDP_METADATA_URL",
+    "MODULO_SAML_IDP_METADATA_XML",
+    "MODULO_SAML_ENTITY_ID",
+    "MODULO_SAML_SP_PRIVATE_KEY",
+    "MODULO_SAML_SP_X509_CERT",
+    "MODULO_SSO_DEFAULT_ROLE",
     "MODULO_TELEMETRY_ENABLED",
     "MODULO_OTEL_SERVICE_NAME",
-    "MODULO_PUBLIC_URL",
-    "MODULO_SCIM_TOKEN",
-    "MODULO_SCIM_DEFAULT_ORG_ID",
+    "MODULO_PLUGIN_DISCOVERY",
+    "MODULO_LOG_LEVEL",
+    "MODULO_MAX_LOCAL_CONCURRENCY",
+    "MODULO_E2B_API_KEY",
     "MODULO_RATELIMIT_BYPASS_TOKEN",
     "MODULO_INACTIVITY_TIMEOUT_MINUTES",
     "DEBUG",
-})
-
-KNOWN_KEYS: list[str] = [
-    "DATABASE_URL", "SECRET_KEY", "FERNET_KEY", "FERNET_KEY_OLD", "REDIS_URL",
-    "MODULO_DB", "MODULO_SECRETS_BACKEND", "CORS_ORIGINS",
-    "CORS_MAX_AGE", "MODULO_USERS", "MODULO_ADMIN_PASSWORD",
-    "MODULO_PUBLIC_URL", "MODULO_DEMO_MODE", "MODULO_LICENSE_KEY",
-    "MODULO_OIDC_PROVIDERS", "MODULO_SAML_ENABLED", "MODULO_SAML_IDP_METADATA_URL",
-    "MODULO_SAML_IDP_METADATA_XML", "MODULO_SAML_ENTITY_ID",
-    "MODULO_SAML_SP_PRIVATE_KEY", "MODULO_SAML_SP_X509_CERT",
-    "MODULO_SSO_DEFAULT_ROLE", "MODULO_TELEMETRY_ENABLED",
-    "MODULO_OTEL_SERVICE_NAME", "MODULO_PLUGIN_DISCOVERY",
-    "MODULO_LOG_LEVEL", "MODULO_MAX_LOCAL_CONCURRENCY",
-    "MODULO_E2B_API_KEY", "MODULO_RATELIMIT_BYPASS_TOKEN",
-    "MODULO_INACTIVITY_TIMEOUT_MINUTES", "DEBUG",
-    "VAULT_ADDR", "VAULT_TOKEN", "VAULT_ROLE_ID", "VAULT_SECRET_ID",
-    "AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_REGION",
-    "MODULO_SCIM_TOKEN", "MODULO_SCIM_DEFAULT_ORG_ID",
+    "VAULT_ADDR",
+    "VAULT_TOKEN",
+    "VAULT_ROLE_ID",
+    "VAULT_SECRET_ID",
+    "AWS_ACCESS_KEY_ID",
+    "AWS_SECRET_ACCESS_KEY",
+    "AWS_REGION",
+    "MODULO_SCIM_TOKEN",
+    "MODULO_SCIM_DEFAULT_ORG_ID",
 ]
 
 DEFAULT_VALUES: dict[str, str] = {
@@ -62,12 +89,22 @@ DEFAULT_VALUES: dict[str, str] = {
     "MODULO_RATELIMIT_BYPASS_TOKEN": "",
     "MODULO_INACTIVITY_TIMEOUT_MINUTES": "480",
     "DEBUG": "false",
-    "VAULT_ADDR": "", "VAULT_TOKEN": "", "VAULT_ROLE_ID": "", "VAULT_SECRET_ID": "",
-    "AWS_ACCESS_KEY_ID": "", "AWS_SECRET_ACCESS_KEY": "", "AWS_REGION": "us-east-1",
-    "MODULO_USERS": "", "MODULO_ADMIN_PASSWORD": "", "MODULO_OIDC_PROVIDERS": "[]",
-    "MODULO_SAML_ENABLED": "false", "MODULO_SAML_IDP_METADATA_URL": "",
-    "MODULO_SAML_IDP_METADATA_XML": "", "MODULO_SAML_ENTITY_ID": "modulo",
-    "MODULO_SAML_SP_PRIVATE_KEY": "", "MODULO_SAML_SP_X509_CERT": "",
+    "VAULT_ADDR": "",
+    "VAULT_TOKEN": "",
+    "VAULT_ROLE_ID": "",
+    "VAULT_SECRET_ID": "",
+    "AWS_ACCESS_KEY_ID": "",
+    "AWS_SECRET_ACCESS_KEY": "",
+    "AWS_REGION": "us-east-1",
+    "MODULO_USERS": "",
+    "MODULO_ADMIN_PASSWORD": "",
+    "MODULO_OIDC_PROVIDERS": "[]",
+    "MODULO_SAML_ENABLED": "false",
+    "MODULO_SAML_IDP_METADATA_URL": "",
+    "MODULO_SAML_IDP_METADATA_XML": "",
+    "MODULO_SAML_ENTITY_ID": "modulo",
+    "MODULO_SAML_SP_PRIVATE_KEY": "",
+    "MODULO_SAML_SP_X509_CERT": "",
     "MODULO_LICENSE_KEY": "",
 }  # nosec B105 — empty-string placeholders, not hardcoded secrets
 
@@ -128,6 +165,8 @@ class RuntimeConfigStore:
 
     def set_override(self, key: str, value: str) -> None:
         """Set a runtime override that stays in memory until cleared or reloaded."""
+        if key not in KNOWN_KEYS:
+            _log.warning("Runtime config override set for unknown key: %s", key)
         with self._lock:
             self._overrides[key] = value
         _log.info("Runtime config override set: %s", key)
@@ -149,6 +188,7 @@ class RuntimeConfigStore:
         with self._lock:
             for key in KNOWN_KEYS:
                 self._env_values[key] = os.environ.get(key)
+        _validate_key_registries()
         _log.info("Runtime config reloaded from environment")
 
     def get_all(self) -> list[ConfigEntry]:
@@ -161,15 +201,17 @@ class RuntimeConfigStore:
                 override_value: str | None = self._overrides.get(key)
                 current_value, provenance = self._resolve(key)
 
-                items.append(ConfigEntry(
-                    key=key,
-                    current_value=current_value,
-                    default_value=default_value,
-                    env_value=env_value,
-                    override_value=override_value,
-                    provenance=provenance,
-                    hot_reloadable=key in HOT_RELOADABLE_KEYS,
-                ))
+                items.append(
+                    ConfigEntry(
+                        key=key,
+                        current_value=current_value,
+                        default_value=default_value,
+                        env_value=env_value,
+                        override_value=override_value,
+                        provenance=provenance,
+                        hot_reloadable=key in HOT_RELOADABLE_KEYS,
+                    )
+                )
         return items
 
 
