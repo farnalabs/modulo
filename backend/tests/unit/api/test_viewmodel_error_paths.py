@@ -198,6 +198,35 @@ class TestViewModelCurrentErrorPaths:
         assert resp.status_code == 501
         assert "migrations" in resp.json()["detail"].lower()
 
+    def test_programming_error_resolve_plan_context_501(self, client: TestClient) -> None:
+        org = _make_org()
+        user = _make_user()
+
+        with (
+            patch("modulo.api.routes.viewmodel.set_rls_org"),
+            patch("modulo.api.routes.viewmodel.set_rls_user_context"),
+            patch("modulo.api.routes.viewmodel.get_organisation", return_value=org),
+            patch("modulo.api.routes.viewmodel.get_account_by_id", return_value=user),
+            patch("modulo.api.routes.viewmodel.list_team_memberships_for_account", return_value=[]),
+            patch("modulo.api.routes.viewmodel.list_pipelines"),
+            patch("modulo.api.routes.viewmodel.list_runs"),
+            patch("modulo.api.routes.viewmodel.resolve_plan_context", side_effect=ProgrammingError("stmt", "params", "orig")),
+        ):
+            resp = client.get("/api/v1/viewmodel/current")
+
+        assert resp.status_code == 501
+        assert "migrations" in resp.json()["detail"].lower()
+
+    def test_programming_error_with_view_as_team_501(self, client: TestClient) -> None:
+        with (
+            patch("modulo.api.routes.viewmodel.set_rls_org", side_effect=ProgrammingError("stmt", "params", "orig")),
+        ):
+            team_id = uuid.uuid4()
+            resp = client.get(f"/api/v1/viewmodel/current?view_as_team={team_id}")
+
+        assert resp.status_code == 501
+        assert "migrations" in resp.json()["detail"].lower()
+
 
 class TestViewModelViewsErrorPaths:
     def test_programming_error_501(self, client: TestClient) -> None:
