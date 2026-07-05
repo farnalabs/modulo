@@ -7,7 +7,7 @@ import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy.exc import ProgrammingError
 
-from modulo.api.dependencies import _get_engine, get_db_session, get_plan_context
+from modulo.api.dependencies import _get_engine, get_db_session
 from modulo.api.main import app
 from modulo.auth.dependencies import get_current_user
 from modulo.auth.jwt import AuthenticatedPrincipal
@@ -31,7 +31,7 @@ def client() -> Generator[TestClient, None, None]:
     app.dependency_overrides[get_settings] = _make_settings
     app.dependency_overrides[get_db_session] = lambda: MagicMock()
     app.dependency_overrides[_get_engine] = lambda: MagicMock()
-    app.dependency_overrides[get_plan_context] = lambda: type("MockPlan", (), {"tier": lambda self="": "community", "has_license_key": lambda self="": False})()
+    # get_plan_context override removed)
     app.dependency_overrides[get_current_user] = lambda: AuthenticatedPrincipal(
         username="testuser",
         organisation_id="00000000-0000-0000-0000-000000000001",
@@ -280,5 +280,6 @@ class TestCatchAllMiddlewareFallback:
         assert parsed["detail"] == "An unexpected error occurred"
         assert parsed["type"] == "urn:problem:modulo:internal_error"
         assert parsed["status"] == 500
+
 
 

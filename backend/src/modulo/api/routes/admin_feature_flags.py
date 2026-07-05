@@ -11,33 +11,93 @@ from sqlalchemy.exc import ProgrammingError
 from sqlalchemy.ext.asyncio import AsyncSession
 from starlette.responses import Response
 
-from modulo.api.dependencies import get_db_session, get_plan_context
+from modulo.api.dependencies import get_db_session
 from modulo.auth.dependencies import get_current_user
 from modulo.auth.jwt import AuthenticatedPrincipal
-from modulo.core.feature_flags import FeatureFlagRegistry, PlanContext
+from modulo.core.feature_flags import FeatureFlagRegistry
+from modulo.db.crud.organisation import get_organisation
+from modulo.settings import Settings, get_settings
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/v1/admin/feature-flags", tags=["admin-feature-flags"])
 
 
-async def _build_registry(session: AsyncSession, plan_context: PlanContext) -> FeatureFlagRegistry:
+async def _resolve_tier(
+    settings: Settings, session: AsyncSession, current_user: AuthenticatedPrincipal
+) -> str:
+    """Resolve the effective tier for the current user's org.
+
+    Resolution order:
+    1. Org-level license key (from org.settings_json["license_key"])
+    2. System-level in-memory license (store_license())
+    3. System-level env-var license (settings.modulo_license_key)
+    4. Org.plan_id (per-org, from DB)
+    5. Community fallback
+    """
+    from modulo.core.license import get_license, parse_and_verify
+
+    async with session.begin():
+        org = await get_organisation(session, current_user.organisation_id)
+
+    # 1. Org-level license key
+    if org is not None:
+        org_settings = getattr(org, "settings_json", None)
+        org_license_key = org_settings.get("license_key") if isinstance(org_settings, dict) else None
+        if org_license_key:
+            try:
+                validation = parse_and_verify(org_license_key)
+                if validation.valid and validation.license_data is not None:
+                    return validation.license_data.tier
+            except Exception:
+                logger.warning("Failed to parse org-level license key", exc_info=True)
+
+    # 2. System-level in-memory license
+    lic = get_license()
+    if lic is not None:
+        return lic.tier
+
+    # 3. System-level env-var license
+    raw_key: str = getattr(settings, "modulo_license_key", "") or ""
+    if raw_key:
+        try:
+            validation = parse_and_verify(raw_key)
+            if validation.valid and validation.license_data is not None:
+                return validation.license_data.tier
+        except Exception:
+            logger.warning("Failed to parse env-var license key", exc_info=True)
+
+    # 4. Org-level plan_id
+    if org is not None:
+        org_plan_id: str | None = getattr(org, "plan_id", None)
+        if org_plan_id:
+            return org_plan_id
+
+    # 5. Community fallback
+    return "community"
+
+
+async def _build_registry(
+    settings: Settings, session: AsyncSession, current_user: AuthenticatedPrincipal
+) -> FeatureFlagRegistry:
+    tier = await _resolve_tier(settings, session, current_user)
+    from modulo.core.license import get_license
+    lic = get_license()
+    has_key = bool(settings.modulo_license_key) or lic is not None
     async with session.begin():
         return await FeatureFlagRegistry.from_db(
-            session,
-            current_tier=plan_context.tier(),
-            has_license_key=plan_context.has_license_key(),
+            session, current_tier=tier, has_license_key=has_key,
         )
 
 
 @router.get("")
 async def list_feature_flags(
+    settings: Settings = Depends(get_settings),
     session: AsyncSession = Depends(get_db_session),
     current_user: AuthenticatedPrincipal = Depends(get_current_user),
-    plan_context: PlanContext = Depends(get_plan_context),
 ) -> Response:
     try:
-        registry = await _build_registry(session, plan_context)
+        registry = await _build_registry(settings, session, current_user)
         return {
             "license": {
                 "tier": registry.current_tier,
@@ -93,12 +153,12 @@ async def list_feature_flags(
 @router.get("/{flag_name}")
 async def get_feature_flag(
     flag_name: str,
+    settings: Settings = Depends(get_settings),
     session: AsyncSession = Depends(get_db_session),
     current_user: AuthenticatedPrincipal = Depends(get_current_user),
-    plan_context: PlanContext = Depends(get_plan_context),
 ) -> Response:
     try:
-        registry = await _build_registry(session, plan_context)
+        registry = await _build_registry(settings, session, current_user)
         flag = registry.get_flag(flag_name)
         if flag is None:
             raise HTTPException(
@@ -146,12 +206,12 @@ class ToggleFlagRequest(BaseModel):
 async def toggle_feature_flag(
     flag_name: str,
     req: ToggleFlagRequest,
+    settings: Settings = Depends(get_settings),
     session: AsyncSession = Depends(get_db_session),
     current_user: AuthenticatedPrincipal = Depends(get_current_user),
-    plan_context: PlanContext = Depends(get_plan_context),
 ) -> Response:
     try:
-        registry = await _build_registry(session, plan_context)
+        registry = await _build_registry(settings, session, current_user)
         flag = registry.get_flag(flag_name)
         if flag is None:
             raise HTTPException(
