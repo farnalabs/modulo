@@ -5,8 +5,8 @@ Revises: 0057_notifications
 Create Date: 2026-07-03 10:00:00.000000
 """
 
-from alembic import op
 import sqlalchemy as sa
+from alembic import op
 from sqlalchemy import text
 
 revision = "0058_uuid_friendly_ids"
@@ -30,13 +30,13 @@ def upgrade() -> None:
             WHERE numbered.id = runs.id
         )
     """))
-    
+
     # Make run_number non-nullable now
     op.alter_column("runs", "run_number", nullable=False)
-    
+
     # Add unique constraint on (organisation_id, run_number) to prevent race-condition duplicates
     op.create_unique_constraint("uq_runs_org_run_number", "runs", ["organisation_id", "run_number"])
-    
+
     # Add session_number to chat_sessions (nullable initially)
     op.add_column("chat_sessions", sa.Column("session_number", sa.Integer(), nullable=True))
 
@@ -50,10 +50,10 @@ def upgrade() -> None:
             WHERE numbered.id = chat_sessions.id
         )
     """))
-    
+
     # Make session_number non-nullable now
     op.alter_column("chat_sessions", "session_number", nullable=False)
-    
+
     # Add unique constraint on (user_id, session_number)
     op.create_unique_constraint("uq_chat_sessions_user_session_number", "chat_sessions", ["user_id", "session_number"])
 

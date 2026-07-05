@@ -1,0 +1,12 @@
+rules:
+  - id: session-rollback-abuse
+    patterns:
+      - pattern: $SESSION.rollback()
+      - metavariable-regex:
+          metavariable: $SESSION
+          regex: ^(session|db_session|db)$
+    message: "session.rollback() destroys ALL uncommitted writes, including from concurrent operations. Use savepoint = await session.begin_nested() for local rollback scopes."
+    languages: [python]
+    severity: WARNING
+    paths:
+      include: ["**/backend/src/**"]

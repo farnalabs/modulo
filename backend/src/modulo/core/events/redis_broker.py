@@ -58,12 +58,11 @@ class RedisEventBroker:
         return url
 
     def _make_client(self) -> aioredis.Redis:
-        client = aioredis.from_url(  # type: ignore[no-untyped-call]
+        return aioredis.from_url(  # type: ignore[no-untyped-call]
             self._redis_url,
             decode_responses=True,
             **self._REDIS_TIMEOUTS,
         )
-        return client  # type: ignore[no-any-return]
 
     async def connect(self) -> None:
         """Open dedicated connections for publishing and subscribing."""

@@ -49,9 +49,8 @@ def _require_admin(principal: AuthenticatedPrincipal) -> None:
         )
 
 
-def _resolve_effective_license(settings: Settings, org: "Organisation | None" = None) -> LicenseStatusResponse:
+def _resolve_effective_license(settings: Settings, org: Organisation | None = None) -> LicenseStatusResponse:
     """Resolve the effective license, checking org-level, then system-level (env var), then in-memory."""
-    from modulo.db.models.organisation import Organisation
 
     # 1. Org-level license key
     if org is not None:

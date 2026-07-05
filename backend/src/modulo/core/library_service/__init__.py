@@ -1193,7 +1193,7 @@ async def copy_to_adapt(
                 .where(LibraryPrimitive.id == source.id)
                 .values(download_count=func.coalesce(LibraryPrimitive.download_count, 0) + 1)
             )
-        result = await create_library_primitive(
+        return await create_library_primitive(
             session,
             org_id=org_id,
             source="local",
@@ -1218,7 +1218,6 @@ async def copy_to_adapt(
             account_id=created_by,
             auto_update=True,
         )
-    return result
 
 
 # ---------------------------------------------------------------------------

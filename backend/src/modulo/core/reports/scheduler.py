@@ -196,78 +196,77 @@ async def _fire_scheduled_report(
     engine = _get_engine()
     factory = async_sessionmaker(engine, expire_on_commit=False)
 
-    async with factory() as session:
-        async with session.begin():
-            await _set_rls_org(session, org_id)
+    async with factory() as session, session.begin():
+        await _set_rls_org(session, org_id)
 
-            result = await session.execute(
-                select(ScheduledReport)
-                .where(
-                    ScheduledReport.id == report_id,
-                    ScheduledReport.organisation_id == org_id,
-                )
-                .with_for_update()
+        result = await session.execute(
+            select(ScheduledReport)
+            .where(
+                ScheduledReport.id == report_id,
+                ScheduledReport.organisation_id == org_id,
             )
-            report = result.scalar_one_or_none()
-            if report is None or not report.active:
-                return {"status": "skipped", "reason": "report_inactive_or_missing"}
+            .with_for_update()
+        )
+        report = result.scalar_one_or_none()
+        if report is None or not report.active:
+            return {"status": "skipped", "reason": "report_inactive_or_missing"}
 
-            generator = get_generator(report.report_type)
-            if generator is None:
-                _log.warning("No generator registered for report type %s", report.report_type)
-                return {"status": "failed", "reason": f"no_generator_for_{report.report_type}"}
+        generator = get_generator(report.report_type)
+        if generator is None:
+            _log.warning("No generator registered for report type %s", report.report_type)
+            return {"status": "failed", "reason": f"no_generator_for_{report.report_type}"}
 
-            config = report.config_json or {}
-            report_data = await generator(session, org_id, config)
+        config = report.config_json or {}
+        report_data = await generator(session, org_id, config)
 
-            formatter = get_formatter(report.report_type)
-            payload: Any = report_data
-            if formatter is not None:
-                payload = formatter(report_data)
+        formatter = get_formatter(report.report_type)
+        payload: Any = report_data
+        if formatter is not None:
+            payload = formatter(report_data)
 
-            deliverer = get_deliverer(report.report_type)
-            recipient_config = report.recipient_config or {}
-            delivery_results: list[dict[str, Any]] = []
-            if deliverer is not None:
-                delivery_results = await deliverer(payload, recipient_config)
-            else:
-                delivery_results = await _deliver_via_config(payload, recipient_config, org_id)
+        deliverer = get_deliverer(report.report_type)
+        recipient_config = report.recipient_config or {}
+        delivery_results: list[dict[str, Any]] = []
+        if deliverer is not None:
+            delivery_results = await deliverer(payload, recipient_config)
+        else:
+            delivery_results = await _deliver_via_config(payload, recipient_config, org_id)
 
-            now = datetime.datetime.now(datetime.UTC)
-            try:
-                next_send = compute_next_send(report.cron_expression, after=now)
-            except (ValueError, TypeError) as exc:
-                _log.error(
-                    "Invalid cron expression '%s' for report %s: %s",
-                    report.cron_expression, report_id, exc,
-                )
-                await session.execute(
-                    update(ScheduledReport)
-                    .where(ScheduledReport.id == report_id)
-                    .values(active=False)
-                )
-                return {"status": "failed", "reason": f"invalid_cron: {exc}"}
-
+        now = datetime.datetime.now(datetime.UTC)
+        try:
+            next_send = compute_next_send(report.cron_expression, after=now)
+        except (ValueError, TypeError) as exc:
+            _log.error(
+                "Invalid cron expression '%s' for report %s: %s",
+                report.cron_expression, report_id, exc,
+            )
             await session.execute(
                 update(ScheduledReport)
                 .where(ScheduledReport.id == report_id)
-                .values(last_sent_at=now, next_send_at=next_send)
+                .values(active=False)
             )
+            return {"status": "failed", "reason": f"invalid_cron: {exc}"}
 
-            _log.info(
-                "Report %s (%s) sent. Next send: %s",
-                report_id,
-                report.report_type,
-                next_send.isoformat(),
-            )
+        await session.execute(
+            update(ScheduledReport)
+            .where(ScheduledReport.id == report_id)
+            .values(last_sent_at=now, next_send_at=next_send)
+        )
 
-            return {
-                "status": "sent",
-                "report_id": str(report_id),
-                "report_type": report.report_type,
-                "next_send_at": next_send.isoformat(),
-                "delivery_results": delivery_results,
-            }
+        _log.info(
+            "Report %s (%s) sent. Next send: %s",
+            report_id,
+            report.report_type,
+            next_send.isoformat(),
+        )
+
+        return {
+            "status": "sent",
+            "report_id": str(report_id),
+            "report_type": report.report_type,
+            "next_send_at": next_send.isoformat(),
+            "delivery_results": delivery_results,
+        }
 
 
 # ---------------------------------------------------------------------------

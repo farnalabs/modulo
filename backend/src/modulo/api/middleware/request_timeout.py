@@ -40,8 +40,7 @@ class RequestTimeoutMiddleware(BaseHTTPMiddleware):
         if timeout <= 0:
             return await call_next(request)
         try:
-            response = await asyncio.wait_for(call_next(request), timeout=timeout)
-            return response
+            return await asyncio.wait_for(call_next(request), timeout=timeout)
         except TimeoutError:
             _log.warning(
                 "middleware.request_timeout",

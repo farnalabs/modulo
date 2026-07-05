@@ -127,10 +127,7 @@ def _verify_hmac(raw_body: bytes, secret: str, signature_header: str | None, tim
     """
     if signature_header is None:
         return False
-    if timestamp is not None:
-        payload = f"{timestamp}.".encode() + raw_body
-    else:
-        payload = raw_body
+    payload = f"{timestamp}.".encode() + raw_body if timestamp is not None else raw_body
     expected = "sha256=" + hmac.new(secret.encode(), payload, hashlib.sha256).hexdigest()
     return hmac.compare_digest(expected, signature_header)
 
@@ -202,16 +199,15 @@ class TriggerEngine:
         # HMAC is computed over timestamp.body for replay protection
         cfg = trigger.config_json or {}
         hmac_secret: str | None = cfg.get("hmac_secret")
-        if hmac_secret:
-            if not _verify_hmac(raw_body, hmac_secret, hmac_signature, timestamp=ts):
-                await self._log_event(
-                    session,
-                    trigger=trigger,
-                    org_id=org_id,
-                    payload_hash=payload_hash,
-                    result="hmac_failed",
-                )
-                raise HmacValidationError()
+        if hmac_secret and not _verify_hmac(raw_body, hmac_secret, hmac_signature, timestamp=ts):
+            await self._log_event(
+                session,
+                trigger=trigger,
+                org_id=org_id,
+                payload_hash=payload_hash,
+                result="hmac_failed",
+            )
+            raise HmacValidationError()
 
         # Deduplication — insert dedup hash via savepoint; unique constraint handles races.
         is_new = await self._try_insert_dedup(session, trigger_id, org_id, payload_hash)

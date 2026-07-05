@@ -17,7 +17,7 @@ import json
 import logging
 import uuid
 from collections.abc import Sequence
-from typing import Any, cast
+from typing import Any, Self, cast
 
 from opentelemetry import trace
 from opentelemetry.trace import Status, StatusCode
@@ -117,7 +117,7 @@ class ConnectorHub:
         self._runtime_provider = runtime_provider
         self._initialised = False
 
-    async def __aenter__(self) -> "ConnectorHub":
+    async def __aenter__(self) -> Self:
         return self
 
     async def __aexit__(self, *_: object) -> None:

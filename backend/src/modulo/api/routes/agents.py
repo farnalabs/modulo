@@ -566,7 +566,7 @@ async def list_prompt_versions(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Agent not found")
 
     history = list(agent.prompt_version_history or [])
-    entries = [
+    return [
         PromptVersionListEntry(
             version=e["version"],
             created_at=e["created_at"],
@@ -576,7 +576,6 @@ async def list_prompt_versions(
         )
         for e in reversed(history)
     ]
-    return entries
 
 
 @router.get("/{agent_id}/prompts/{version}", response_model=PromptVersionDetail)

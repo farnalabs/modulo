@@ -3,9 +3,7 @@
 import uuid
 from collections.abc import Collection
 from dataclasses import dataclass, field
-from typing import Literal, TypeVar
-
-_T = TypeVar("_T")
+from typing import Literal
 
 
 def try_parse_uuid(raw: object) -> uuid.UUID | None:

@@ -26,8 +26,8 @@ from modulo.api.dependencies import get_db_session
 from modulo.auth.dependencies import get_current_user
 from modulo.auth.jwt import AuthenticatedPrincipal
 from modulo.core.feedback_manager import FeedbackManager
-from modulo.db.models.pipeline_snapshot import PipelineSnapshot
 from modulo.db.models.eval_definition import EvalDefinition
+from modulo.db.models.pipeline_snapshot import PipelineSnapshot
 from modulo.db.models.run import Run
 from modulo.db.rls import set_rls_org
 
@@ -448,6 +448,7 @@ async def review_feedback(
 
             if req.annotation is not None:
                 from sqlalchemy import update as sa_update
+
                 from modulo.db.models.feedback_record import FeedbackRecord
 
                 await session.execute(

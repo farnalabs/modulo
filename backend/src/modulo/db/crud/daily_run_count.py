@@ -22,7 +22,7 @@ async def upsert_daily_run_count(
     run_date: date | None = None,
     team_id: uuid.UUID | None = None,
     increment_count: int = 1,
-    increment_spend: Decimal = Decimal("0"),
+    increment_spend: Decimal = Decimal(0),
 ) -> OrgDailyRunCount:
     """Upsert a daily run count row, atomically incrementing counts.
 
@@ -46,7 +46,7 @@ async def upsert_daily_run_count(
             run_date=run_date,
             team_id=team_id,
             run_count=0,
-            total_spend_usd=Decimal("0"),
+            total_spend_usd=Decimal(0),
         )
         session.add(row)
 
@@ -102,4 +102,4 @@ async def get_org_spend_total(
         q = q.where(OrgDailyRunCount.run_date >= since)
 
     result = await session.execute(q)
-    return result.scalar_one() or Decimal("0")
+    return result.scalar_one() or Decimal(0)

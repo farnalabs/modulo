@@ -1,5 +1,6 @@
 """PagerDutyConnector — async PagerDuty REST API v2 connector."""
 
+import contextlib
 from typing import Any, cast
 
 import httpx
@@ -89,10 +90,8 @@ class PagerDutyConnector(ConnectorBase):
             params["limit"] = q.limit
         offset: int = 0
         if q.cursor:
-            try:
+            with contextlib.suppress(ValueError):
                 offset = int(q.cursor)
-            except ValueError:
-                pass
             params["offset"] = offset
         resp = await c.get("/incidents", params=params)
         resp.raise_for_status()

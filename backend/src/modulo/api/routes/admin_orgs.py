@@ -293,7 +293,8 @@ async def admin_get_org_license(
     if org is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Organisation not found")
 
-    from modulo.core.license import get_license as get_sys_license, parse_and_verify
+    from modulo.core.license import get_license as get_sys_license
+    from modulo.core.license import parse_and_verify
 
     org_key = org.settings_json.get("license_key") if org.settings_json else None
     if org_key:

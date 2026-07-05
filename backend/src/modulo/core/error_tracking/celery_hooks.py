@@ -117,7 +117,6 @@ async def _async_ingest(
         "version": get_version(),
     }
 
-    async with factory() as session:
-        async with session.begin():
-            await set_rls_org(session, effective_org_id)
-            await _SERVICE.ingest(session, effective_org_id, event_data)
+    async with factory() as session, session.begin():
+        await set_rls_org(session, effective_org_id)
+        await _SERVICE.ingest(session, effective_org_id, event_data)

@@ -366,10 +366,7 @@ async def deliver_quality_report(
     """
     from modulo.core.reports.scheduler import _deliver_to_urls
 
-    if isinstance(report_data, str):
-        slack_blocks_str = report_data
-    else:
-        slack_blocks_str = format_slack_message(report_data)
+    slack_blocks_str = report_data if isinstance(report_data, str) else format_slack_message(report_data)
     payload = {"blocks": json.loads(slack_blocks_str)}
     return await _deliver_to_urls(
         recipient_config.get("webhook_urls", []),

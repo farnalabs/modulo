@@ -6,9 +6,6 @@ Create Date: 2026-07-04
 """
 from collections.abc import Sequence
 
-import sqlalchemy as sa
-from alembic import op
-
 revision: str = "0076_merge_node_observations"
 down_revision: str | Sequence[str] | None = (
     "0065_merge_add_schema_deprecation",
