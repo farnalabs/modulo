@@ -1763,6 +1763,12 @@ async def eval_regressions(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
         )
+    except TimeoutError:
+        logger.error("Eval regressions query timed out", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Query timed out. Please try again or reduce the lookback period.",
+        )
     except SQLAlchemyError:
         logger.error("Eval regressions DB error", exc_info=True)
         raise HTTPException(
