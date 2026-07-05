@@ -20,8 +20,8 @@ async def test_advisory_lock_acquires(lock_service):
     result_mock.scalar_one.return_value = True
     session.execute = AsyncMock(return_value=result_mock)
 
-    acquired = await lock_service.acquire(session, uuid.uuid4())
-    assert acquired is True
+    await lock_service.acquire(session, uuid.uuid4())
+    # acquire() returns None on success — no exception means success
 
 
 async def test_advisory_lock_raises_on_contention(lock_service):
@@ -53,8 +53,8 @@ async def test_advisory_lock_acquire_release_round_trip(lock_service):
     session.execute = AsyncMock(return_value=acquire_result)
 
     rid = uuid.uuid4()
-    acquired = await lock_service.acquire(session, rid)
-    assert acquired is True
+    await lock_service.acquire(session, rid)
+    # acquire() returns None on success — no exception means success
 
     session.execute.reset_mock()
 
@@ -80,8 +80,8 @@ async def test_advisory_lock_acquire_contention_then_release(lock_service):
     ok_result.scalar_one.return_value = True
     session.execute = AsyncMock(return_value=ok_result)
 
-    acquired = await lock_service.acquire(session, rid)
-    assert acquired is True
+    await lock_service.acquire(session, rid)
+    # acquire() returns None on success — no exception means success
 
     # Release
     await lock_service.release(session, rid)
