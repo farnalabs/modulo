@@ -136,6 +136,8 @@ class FeedbackManager:
             raise ValidationError(f"page must be >= 1, got {page}")
         if page_size < 1:
             raise ValidationError(f"page_size must be >= 1, got {page_size}")
+        if page_size > 100:
+            raise ValidationError(f"page_size must be <= 100, got {page_size}")
 
     async def _paginate(
         self,
@@ -200,7 +202,14 @@ class FeedbackManager:
 
     @_rls
     async def update_status(self, record_id: UUID, new_status: str) -> FeedbackRecord:
-        current = await self._session.get(FeedbackRecord, record_id)
+        current = (
+            await self._session.execute(
+                select(FeedbackRecord).where(
+                    FeedbackRecord.id == record_id,
+                    FeedbackRecord.organisation_id == self._org_id,
+                )
+            )
+        ).scalar_one_or_none()
         if current is None:
             raise FeedbackRecordNotFoundError(f"FeedbackRecord {record_id} not found")
         allowed = _VALID_STATUS_TRANSITIONS.get(current.feedback_status, set())
@@ -231,13 +240,16 @@ class FeedbackManager:
 
     @_rls
     async def link_correction_run(self, record_id: UUID, correction_run_id: UUID) -> FeedbackRecord:
-        current = await self._session.get(FeedbackRecord, record_id)
+        current = (
+            await self._session.execute(
+                select(FeedbackRecord).where(
+                    FeedbackRecord.id == record_id,
+                    FeedbackRecord.organisation_id == self._org_id,
+                )
+            )
+        ).scalar_one_or_none()
         if current is None:
             raise FeedbackRecordNotFoundError(f"FeedbackRecord {record_id} not found")
-        if current.correction_run_id is not None:
-            raise ConcurrentModificationError(
-                f"FeedbackRecord {record_id} already has a correction run linked: {current.correction_run_id}"
-            )
         allowed = _VALID_STATUS_TRANSITIONS.get(current.feedback_status, set())
         if "correcting" not in allowed:
             raise InvalidTransitionError(
@@ -245,12 +257,17 @@ class FeedbackManager:
                 f"status '{current.feedback_status}'. "
                 f"Allowed transitions: {sorted(allowed) or '<terminal>'}"
             )
+        if current.correction_run_id is not None:
+            raise ConcurrentModificationError(
+                f"FeedbackRecord {record_id} already has a correction run linked: {current.correction_run_id}"
+            )
         result = await self._session.execute(
             update(FeedbackRecord)
             .where(
                 FeedbackRecord.id == record_id,
                 FeedbackRecord.organisation_id == self._org_id,
                 FeedbackRecord.feedback_status == current.feedback_status,
+                FeedbackRecord.correction_run_id.is_(None),
             )
             .values(correction_run_id=correction_run_id, feedback_status="correcting")
             .returning(FeedbackRecord)
@@ -280,15 +297,24 @@ class FeedbackManager:
             eval_engine = EvalEngine()
         if not eval_suite:
             logger.warning("detect_eval_gap called with empty eval_suite for FeedbackRecord %s", record.id)
-            return False
+            record.eval_gap = True
+            return True
         for eval_def in eval_suite:
             if not isinstance(eval_def, dict) and not hasattr(eval_def, "passed"):
                 logger.warning("Malformed eval_def in eval_suite: %s", eval_def)
                 continue
-            result = eval_engine.evaluate(record.rejected_output, eval_def)
+            try:
+                result = eval_engine.evaluate(record.rejected_output, eval_def)
+            except Exception:
+                logger.exception(
+                    "EvalEngine.evaluate failed for FeedbackRecord %s on eval_def %s",
+                    record.id, eval_def,
+                )
+                continue
             if not result.passed:
                 return False
         record.eval_gap = True
+        await self._session.flush()
         logger.info("Eval gap detected for FeedbackRecord %s", record.id)
         return True
 
@@ -324,7 +350,7 @@ class FeedbackManager:
 
         original_run = await get_run(self._session, record.run_id)
         if original_run is None:
-            raise FeedbackRecordNotFoundError(
+            raise FeedbackManagerError(
                 f"Original run {record.run_id} not found for FeedbackRecord {record_id}"
             )
 
@@ -407,27 +433,93 @@ class FeedbackManager:
             )
 
         engine = eval_engine or EvalEngine()
-        output = correction_run.outputs_json or {}
-
-        result = engine.standalone_evaluate(
-            output,
-            name=_POST_CORRECTION_EVAL_NAME,
-            config=eval_config or {},
-        )
-
-        needs_human_review = False
-        if result.passed:
-            needs_human_review = record.feedback_handler_type == "ai_correction_with_human_review"
+        output = correction_run.outputs_json
+        if not output:
             await self._session.execute(
                 update(FeedbackRecord)
                 .where(
                     FeedbackRecord.id == record_id,
                     FeedbackRecord.organisation_id == self._org_id,
+                    FeedbackRecord.feedback_status == "correcting",
+                )
+                .values(feedback_status="escalated")
+            )
+            logger.warning(
+                "Correction run %s produced no output for FeedbackRecord %s — escalated",
+                record.correction_run_id, record_id,
+            )
+            await self._session.flush()
+            return {
+                "passed": False,
+                "detail": "Correction run produced no output",
+                "score": 0.0,
+                "needs_human_review": True,
+            }
+        output = dict(output)
+
+        try:
+            result = engine.standalone_evaluate(
+                output,
+                name=_POST_CORRECTION_EVAL_NAME,
+                config=eval_config or {},
+            )
+        except Exception:
+            logger.exception(
+                "standalone_evaluate failed for FeedbackRecord %s correction run %s",
+                record_id, record.correction_run_id,
+            )
+            await self._session.execute(
+                update(FeedbackRecord)
+                .where(
+                    FeedbackRecord.id == record_id,
+                    FeedbackRecord.organisation_id == self._org_id,
+                    FeedbackRecord.feedback_status == "correcting",
+                )
+                .values(feedback_status="escalated")
+            )
+            await self._session.flush()
+            return {
+                "passed": False,
+                "detail": "Post-correction eval raised an error",
+                "score": 0.0,
+                "needs_human_review": True,
+            }
+
+        needs_human_review = False
+        if result.passed:
+            needs_human_review = record.feedback_handler_type == "ai_correction_with_human_review"
+            result_update = await self._session.execute(
+                update(FeedbackRecord)
+                .where(
+                    FeedbackRecord.id == record_id,
+                    FeedbackRecord.organisation_id == self._org_id,
+                    FeedbackRecord.feedback_status == "correcting",
                 )
                 .values(
                     feedback_status="resolved",
                     needs_human_review=needs_human_review,
                 )
+                .returning(FeedbackRecord)
+            )
+            updated = result_update.scalar_one_or_none()
+            if updated is None:
+                raise ConcurrentModificationError(
+                    f"FeedbackRecord {record_id} status changed concurrently. "
+                    f"Expected 'correcting', retry the post-correction eval."
+                )
+        else:
+            await self._session.execute(
+                update(FeedbackRecord)
+                .where(
+                    FeedbackRecord.id == record_id,
+                    FeedbackRecord.organisation_id == self._org_id,
+                    FeedbackRecord.feedback_status == "correcting",
+                )
+                .values(feedback_status="escalated")
+            )
+            logger.warning(
+                "Correction eval failed for FeedbackRecord %s — escalated for review",
+                record_id,
             )
         logger.info(
             "Post-correction eval for FeedbackRecord %s: passed=%s, needs_human_review=%s",
