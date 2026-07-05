@@ -5,14 +5,14 @@
       <p class="mt-1 text-muted-foreground">{{ $t('views.AdminFeatureFlagsView.all_known_feature_flags_and_their_current_activation_status') }}</p>
       <div v-if="planStore.isLoading" class="mt-2 flex items-center gap-2 text-sm text-muted-foreground">
         <div class="h-4 w-4 animate-spin rounded-full border-2 border-primary border-t-transparent" />
-        Loading plan info...
+        {{ $t('views.AdminFeatureFlagsView.loading_plan_info') }}
       </div>
       <div v-else class="mt-2 flex flex-wrap gap-4 text-sm text-muted-foreground">
         <span>
-          Plan: <strong class="text-foreground">{{ planStore.currentTier }}</strong>
+          {{ $t('views.AdminFeatureFlagsView.plan') }}: <strong class="text-foreground">{{ planStore.currentTier }}</strong>
         </span>
         <span>
-          Features enabled:
+          {{ $t('views.AdminFeatureFlagsView.features_enabled') }}:
           <strong class="text-foreground">{{ enabledCount }}</strong>
           /
           <span>{{ allFlagsCount }}</span>
@@ -28,27 +28,27 @@
       </div>
       <div v-else class="grid grid-cols-1 gap-4 sm:grid-cols-4">
         <div>
-          <span class="text-xs font-medium text-muted-foreground">Tier</span>
+          <span class="text-xs font-medium text-muted-foreground">{{ $t('views.AdminFeatureFlagsView.tier') }}</span>
           <p class="mt-0.5 text-lg font-semibold">{{ license.tier }}</p>
         </div>
         <div>
           <span class="text-xs font-medium text-muted-foreground">{{ $t('views.AdminFeatureFlagsView.license_key') }}</span>
           <p class="mt-0.5">
             <span :class="license.has_license_key ? 'badge badge-status-success' : 'badge badge-status-muted'">
-              {{ license.has_license_key ? 'Active' : 'Not set' }}
+              {{ license.has_license_key ? $t('views.AdminFeatureFlagsView.active') : $t('views.AdminFeatureFlagsView.not_set') }}
             </span>
           </p>
         </div>
         <div>
-          <span class="text-xs font-medium text-muted-foreground">Status</span>
+          <span class="text-xs font-medium text-muted-foreground">{{ $t('views.AdminFeatureFlagsView.status_label') }}</span>
           <p class="mt-0.5">
             <span :class="license.is_valid ? 'badge badge-status-success' : 'badge badge-status-destructive'">
-              {{ license.is_valid ? 'Valid' : 'Invalid' }}
+              {{ license.is_valid ? $t('views.AdminFeatureFlagsView.valid') : $t('views.AdminFeatureFlagsView.invalid') }}
             </span>
           </p>
         </div>
         <div>
-          <span class="text-xs font-medium text-muted-foreground">Expires</span>
+          <span class="text-xs font-medium text-muted-foreground">{{ $t('views.AdminFeatureFlagsView.expires') }}</span>
           <p class="mt-0.5 text-sm font-medium">
             <template v-if="planStore.expiresAt">
               {{ formatDate(planStore.expiresAt) }}
@@ -60,10 +60,9 @@
     </div>
 
     <div v-if="filteredWouldActivate.length > 0" class="card p-4 border-warning/30">
-      <h2 class="mb-2 text-sm font-semibold text-warning">Would activate with a license key</h2>
+      <h2 class="mb-2 text-sm font-semibold text-warning">{{ $t('views.AdminFeatureFlagsView.would_activate') }}</h2>
       <p class="mb-3 text-sm text-warning/80">
-        The following {{ filteredWouldActivate.length }} feature{{ filteredWouldActivate.length === 1 ? '' : 's' }} would become available
-        if a Team license key were configured.
+        {{ $t('views.AdminFeatureFlagsView.would_activate_features', { count: filteredWouldActivate.length }) }}
       </p>
       <div class="flex flex-wrap gap-2">
         <span
@@ -88,7 +87,7 @@
       <ErrorAlert v-else-if="error" :message="error" :on-retry="loadFlags" />
       <template v-else>
         <div v-if="!hasResults && searchQuery" class="flex flex-col items-center justify-center py-16">
-          <p class="text-lg font-medium text-muted-foreground">No feature flags match your search.</p>
+          <p class="text-lg font-medium text-muted-foreground">{{ $t('views.AdminFeatureFlagsView.no_results') }}</p>
         </div>
         <template v-else>
           <TooltipProvider>
@@ -107,9 +106,9 @@
                 <thead>
                   <tr class="border-b bg-muted/10 text-left text-xs font-medium uppercase text-muted-foreground">
                     <th class="px-4 py-3 w-12"></th>
-                    <th class="px-4 py-3">Flag</th>
-                    <th class="px-4 py-3">Status</th>
-                    <th class="px-4 py-3">Description</th>
+                    <th class="px-4 py-3">{{ $t('views.AdminFeatureFlagsView.flag') }}</th>
+                    <th class="px-4 py-3">{{ $t('views.AdminFeatureFlagsView.status') }}</th>
+                    <th class="px-4 py-3">{{ $t('views.AdminFeatureFlagsView.description') }}</th>
                   </tr>
                 </thead>
                 <tbody class="divide-y divide-border">
@@ -153,7 +152,7 @@
                     </td>
                     <td class="px-4 py-3">
                       <span :class="flag.currently_active ? 'badge badge-status-success' : 'badge badge-status-muted'">
-                        {{ flag.currently_active ? 'Active' : 'Inactive' }}
+                        {{ flag.currently_active ? $t('views.AdminFeatureFlagsView.active') : $t('views.AdminFeatureFlagsView.inactive') }}
                       </span>
                     </td>
                     <td class="px-4 py-3 text-sm text-muted-foreground">{{ flag.description }}</td>
@@ -166,7 +165,7 @@
             </div>
           </TooltipProvider>
           <div v-if="totalPages > 1" class="flex items-center justify-center gap-4 py-4">
-            <span class="text-sm text-muted-foreground">Page {{ currentPage }} of {{ totalPages }}</span>
+            <span class="text-sm text-muted-foreground">{{ $t('views.AdminFeatureFlagsView.page_of', { current: currentPage, total: totalPages }) }}</span>
             <div class="flex gap-2">
               <Button
                 variant="outline"
@@ -174,7 +173,7 @@
                 :disabled="currentPage <= 1"
                 @click="currentPage = Math.max(1, currentPage - 1)"
               >
-                Previous
+                {{ $t('common.previous') }}
               </Button>
               <Button
                 variant="outline"
@@ -182,7 +181,7 @@
                 :disabled="currentPage >= totalPages"
                 @click="currentPage = Math.min(totalPages, currentPage + 1)"
               >
-                Next
+                {{ $t('common.next') }}
               </Button>
             </div>
           </div>

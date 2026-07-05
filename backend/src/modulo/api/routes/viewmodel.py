@@ -171,15 +171,22 @@ class ViewModelCurrent(BaseModel):
 async def license_info(
     settings: Settings = Depends(get_settings),
 ) -> LicenseInfo:
-    has_license_key = bool(settings.modulo_license_key)
-    features: list[str] = []
-    if has_license_key:
-        features = ["notifications"]
-    return LicenseInfo(
-        tier="team" if has_license_key else "community",
-        features=features,
-        is_valid=True,
-    )
+    try:
+        has_license_key = bool(settings.modulo_license_key)
+        features: list[str] = []
+        if has_license_key:
+            features = ["notifications"]
+        return LicenseInfo(
+            tier="team" if has_license_key else "community",
+            features=features,
+            is_valid=True,
+        )
+    except Exception:
+        logger.exception("license_info")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to retrieve license information",
+        )
 
 
 @router.get("/api/v1/me", response_model=MeResponse)

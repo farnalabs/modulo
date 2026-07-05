@@ -84,6 +84,13 @@ async def _build_registry(
     from modulo.core.license import get_license
     lic = get_license()
     has_key = bool(settings.modulo_license_key) or lic is not None
+
+    if not has_key and current_user.organisation_id is not None:
+        async with session.begin():
+            org = await get_organisation(session, current_user.organisation_id)
+            if org is not None and isinstance(getattr(org, "settings_json", None), dict):
+                has_key = bool(org.settings_json.get("license_key"))
+
     async with session.begin():
         return await FeatureFlagRegistry.from_db(
             session, current_tier=tier, has_license_key=has_key,
