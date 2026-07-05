@@ -16,7 +16,6 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
-import uuid
 from datetime import UTC, datetime
 from typing import Any
 
@@ -126,10 +125,16 @@ class ClaimExpiryJob:
                 ]
                 all_expired.extend(expired)
 
-                # 3. Reset the stale claims
+                # 3. Reset the stale claims — re-validate conditions to prevent
+                #    race with a concurrent claim (TOCTOU from the SELECT above).
                 await session.execute(
                     update(HitlClaim)
-                    .where(HitlClaim.id.in_(claim_ids))
+                    .where(
+                        HitlClaim.id.in_(claim_ids),
+                        HitlClaim.account_id.is_not(None),
+                        HitlClaim.expires_at < now,
+                        HitlClaim.decision.is_(None),
+                    )
                     .values(
                         account_id=None,
                         claimed_at=None,
@@ -146,21 +151,24 @@ class ClaimExpiryJob:
                     .values(status="awaiting_human")
                 )
 
-                # 5. Log audit events for each expired claim
+                # 5. Log audit events for each expired claim.
+                #    Use savepoints so a single failed audit log does not abort
+                #    the entire org's transaction.
                 for entry in expired:
                     try:
-                        await append_audit_event(
-                            session,
-                            org_id=org_id,
-                            event_type="hitl.claim_expired",
-                            resource_type="hitl_claim",
-                            resource_id=entry["claim_id"],
-                            payload_json={
-                                "pipeline_run_id": str(entry["run_id"]),
-                                "node_id": entry["gate_id"],
-                                "claimed_by": str(entry["claimed_by"]) if entry["claimed_by"] else None,
-                            },
-                        )
+                        async with session.begin_nested():
+                            await append_audit_event(
+                                session,
+                                org_id=org_id,
+                                event_type="hitl.claim_expired",
+                                resource_type="hitl_claim",
+                                resource_id=entry["claim_id"],
+                                payload_json={
+                                    "pipeline_run_id": str(entry["run_id"]),
+                                    "node_id": entry["gate_id"],
+                                    "claimed_by": str(entry["claimed_by"]) if entry["claimed_by"] else None,
+                                },
+                            )
                     except Exception:
                         _log.exception("Failed to record claim_expired audit event for claim %s", entry["claim_id"])
 
@@ -176,7 +184,7 @@ class ClaimExpiryJob:
                                 "gate_id": entry["gate_id"],
                                 "claimed_by": str(entry["claimed_by"]) if entry["claimed_by"] else None,
                             },
-                            run_id=entry["run_id"],
+                            run_id=str(entry["run_id"]),
                         )
                     except Exception:
                         _log.exception(

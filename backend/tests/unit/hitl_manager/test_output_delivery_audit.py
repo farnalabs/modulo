@@ -82,6 +82,10 @@ def _session_decide(
 
     session.execute = _execute
     session.get = AsyncMock(return_value=session_get_gate)
+    begin_nested_cm = AsyncMock()
+    begin_nested_cm.__aenter__ = AsyncMock(return_value=None)
+    begin_nested_cm.__aexit__ = AsyncMock(return_value=False)
+    session.begin_nested = MagicMock(return_value=begin_nested_cm)
     return session
 
 
