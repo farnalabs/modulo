@@ -21,13 +21,24 @@ from typing import Any
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from modulo.core.notifier import (
+    EVENT_BUDGET_EXCEEDED,
+    EVENT_CLAIM_EXPIRED,
+    EVENT_EVAL_BLOCKED,
+    EVENT_EVAL_REGRESSION,
+    EVENT_FEEDBACK_PENDING,
+    EVENT_HITL_AWAITING,
+    EVENT_HITL_OVERDUE,
+    EVENT_RUN_FAILED,
+    EVENT_SYSTEM_ANNOUNCEMENT,
+)
 from modulo.db.crud.notifications import create_notification
 from modulo.db.models.notification import Notification
 
 _log = logging.getLogger(__name__)
 
 _EVENT_CONFIG: dict[str, dict[str, Any]] = {
-    "hitl_awaiting": {
+    EVENT_HITL_AWAITING: {
         "level": "info",
         "scope": "org",
         "category": "hitl.awaiting",
@@ -35,7 +46,7 @@ _EVENT_CONFIG: dict[str, dict[str, Any]] = {
         "dismissible_at_scope": True,
         "ttl_hours": 72,
     },
-    "run_failed": {
+    EVENT_RUN_FAILED: {
         "level": "error",
         "scope": "org",
         "category": "run.failed",
@@ -43,7 +54,7 @@ _EVENT_CONFIG: dict[str, dict[str, Any]] = {
         "dismissible_at_scope": True,
         "ttl_hours": 168,
     },
-    "budget_exceeded": {
+    EVENT_BUDGET_EXCEEDED: {
         "level": "warning",
         "scope": "org",
         "category": "run.budget_exceeded",
@@ -51,7 +62,7 @@ _EVENT_CONFIG: dict[str, dict[str, Any]] = {
         "dismissible_at_scope": True,
         "ttl_hours": 168,
     },
-    "claim_expired": {
+    EVENT_CLAIM_EXPIRED: {
         "level": "info",
         "scope": "org",
         "category": "hitl.claim_expired",
@@ -59,7 +70,7 @@ _EVENT_CONFIG: dict[str, dict[str, Any]] = {
         "dismissible_at_scope": True,
         "ttl_hours": 24,
     },
-    "hitl_overdue": {
+    EVENT_HITL_OVERDUE: {
         "level": "warning",
         "scope": "admin",
         "category": "hitl.overdue",
@@ -67,7 +78,7 @@ _EVENT_CONFIG: dict[str, dict[str, Any]] = {
         "dismissible_at_scope": True,
         "ttl_hours": 168,
     },
-    "eval_regression": {
+    EVENT_EVAL_REGRESSION: {
         "level": "warning",
         "scope": "org",
         "category": "eval.regression",
@@ -75,7 +86,7 @@ _EVENT_CONFIG: dict[str, dict[str, Any]] = {
         "dismissible_at_scope": True,
         "ttl_hours": 336,
     },
-    "eval_blocked": {
+    EVENT_EVAL_BLOCKED: {
         "level": "error",
         "scope": "org",
         "category": "eval.blocked",
@@ -83,7 +94,7 @@ _EVENT_CONFIG: dict[str, dict[str, Any]] = {
         "dismissible_at_scope": True,
         "ttl_hours": 168,
     },
-    "feedback_pending": {
+    EVENT_FEEDBACK_PENDING: {
         "level": "info",
         "scope": "user",
         "category": "feedback.pending",
@@ -91,7 +102,7 @@ _EVENT_CONFIG: dict[str, dict[str, Any]] = {
         "dismissible_at_scope": False,
         "ttl_hours": 336,
     },
-    "system_announcement": {
+    EVENT_SYSTEM_ANNOUNCEMENT: {
         "level": "info",
         "scope": "org",
         "category": "system.announcement",
@@ -102,39 +113,39 @@ _EVENT_CONFIG: dict[str, dict[str, Any]] = {
 }
 
 _TITLE_TEMPLATES: dict[str, str] = {
-    "hitl_awaiting": "HITL review needed — {pipeline_name}",
-    "run_failed": "Run failed — {pipeline_name}",
-    "budget_exceeded": "Budget exceeded — {pipeline_name}",
-    "claim_expired": "HITL claim expired — {pipeline_name}",
-    "hitl_overdue": "HITL overdue — {pipeline_name}",
-    "eval_regression": "Eval regression detected — {agent_name}",
-    "eval_blocked": "Eval blocked — {pipeline_name}",
-    "feedback_pending": "Feedback awaiting review",
-    "system_announcement": "System announcement",
+    EVENT_HITL_AWAITING: "HITL review needed — {pipeline_name}",
+    EVENT_RUN_FAILED: "Run failed — {pipeline_name}",
+    EVENT_BUDGET_EXCEEDED: "Budget exceeded — {pipeline_name}",
+    EVENT_CLAIM_EXPIRED: "HITL claim expired — {pipeline_name}",
+    EVENT_HITL_OVERDUE: "HITL overdue — {pipeline_name}",
+    EVENT_EVAL_REGRESSION: "Eval regression detected — {agent_name}",
+    EVENT_EVAL_BLOCKED: "Eval blocked — {pipeline_name}",
+    EVENT_FEEDBACK_PENDING: "Feedback awaiting review",
+    EVENT_SYSTEM_ANNOUNCEMENT: "System announcement",
 }
 
 _BODY_TEMPLATES: dict[str, str] = {
-    "hitl_awaiting": "Pipeline \"{pipeline_name}\" is waiting for human review.",
-    "run_failed": "Run for \"{pipeline_name}\" failed with error: {error_code}.",
-    "budget_exceeded": "Run for \"{pipeline_name}\" exceeded its token budget.",
-    "claim_expired": "A HITL claim on \"{pipeline_name}\" has expired.",
-    "hitl_overdue": "Pipeline \"{pipeline_name}\" has been awaiting human review for {minutes_overdue} minutes.",
-    "eval_regression": "Eval pass rate dropped for agent \"{agent_name}\".",
-    "eval_blocked": "An eval check blocked pipeline \"{pipeline_name}\".",
-    "feedback_pending": "A feedback record is pending your review.",
-    "system_announcement": "{message}",
+    EVENT_HITL_AWAITING: "Pipeline \"{pipeline_name}\" is waiting for human review.",
+    EVENT_RUN_FAILED: "Run for \"{pipeline_name}\" failed with error: {error_code}.",
+    EVENT_BUDGET_EXCEEDED: "Run for \"{pipeline_name}\" exceeded its token budget.",
+    EVENT_CLAIM_EXPIRED: "A HITL claim on \"{pipeline_name}\" has expired.",
+    EVENT_HITL_OVERDUE: "Pipeline \"{pipeline_name}\" has been awaiting human review for {minutes_overdue} minutes.",
+    EVENT_EVAL_REGRESSION: "Eval pass rate dropped for agent \"{agent_name}\".",
+    EVENT_EVAL_BLOCKED: "An eval check blocked pipeline \"{pipeline_name}\".",
+    EVENT_FEEDBACK_PENDING: "A feedback record is pending your review.",
+    EVENT_SYSTEM_ANNOUNCEMENT: "{message}",
 }
 
-_ACTION_URL_TEMPLATES: dict[str, str] = {
-    "hitl_awaiting": "/runs/{run_id}",
-    "run_failed": "/runs/{run_id}",
-    "budget_exceeded": "/runs/{run_id}",
-    "claim_expired": "/runs/{run_id}",
-    "hitl_overdue": "/runs/{run_id}",
-    "eval_regression": "/evals",
-    "eval_blocked": "/runs/{run_id}",
-    "feedback_pending": "/feedback/inbox",
-    "system_announcement": None,
+_ACTION_URL_TEMPLATES: dict[str, str | None] = {
+    EVENT_HITL_AWAITING: "/runs/{run_id}",
+    EVENT_RUN_FAILED: "/runs/{run_id}",
+    EVENT_BUDGET_EXCEEDED: "/runs/{run_id}",
+    EVENT_CLAIM_EXPIRED: "/runs/{run_id}",
+    EVENT_HITL_OVERDUE: "/runs/{run_id}",
+    EVENT_EVAL_REGRESSION: "/evals",
+    EVENT_EVAL_BLOCKED: "/runs/{run_id}",
+    EVENT_FEEDBACK_PENDING: "/feedback/inbox",
+    EVENT_SYSTEM_ANNOUNCEMENT: None,
 }
 
 
@@ -205,7 +216,7 @@ class NotificationEventMapper:
             return template.format(**payload)
         except KeyError as exc:
             _log.warning("mapper.template_key_missing", extra={"template": template, "key": str(exc)})
-            return template.replace(f"{{{exc.args[0]}}}", "[unknown]", 1)
+            return template.replace(f"{{{exc.args[0]}}}", "[unknown]")
         except (ValueError, IndexError, TypeError):
             _log.warning("mapper.template_format_error", extra={"template": template})
             return template
