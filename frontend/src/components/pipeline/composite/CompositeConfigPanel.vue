@@ -8,7 +8,7 @@ import TabsContent from "../../ui/tabs/TabsContent.vue";
 import ParameterPortForm from "./ParameterPortForm.vue";
 import SchemaMappingPanel from "./SchemaMappingPanel.vue";
 import OutputValidationTab from "./OutputValidationTab.vue";
-import type { ParameterPort } from "../../../types/pipeline";
+import type { ParameterPort, ParameterPortType } from "../../../types/pipeline";
 
 interface EvalConfig {
   id: string;
@@ -46,7 +46,7 @@ const composite = computed(() => {
   return compositeStore.getCompositeById(props.compositeRef) ?? null;
 });
 
-const ports = computed(() => composite.value?.ports ?? []);
+const ports = computed(() => (composite.value?.parameter_ports_json ?? []) as ParameterPort[]);
 
 const localValues = computed(() => props.parameterValues);
 

@@ -65,18 +65,30 @@ describe('ParameterPortForm', () => {
     setActivePinia(createPinia())
   })
 
+function makePort(overrides: Partial<ParameterPort> = {}): ParameterPort {
+  return {
+    id: 'p-default',
+    name: 'default',
+    label: 'Default',
+    description: null,
+    type: 'string',
+    required: false,
+    default: null,
+    options: null,
+    multiline: false,
+    target_injection: { mode: 'prompt_replace', node_id: '', injection_point: 'prompt_template' },
+    ...overrides,
+  }
+}
+
   it('renders string port', async () => {
-    const port: ParameterPort = {
+    const port = makePort({
       id: 'p1',
       name: 'prompt',
       label: 'Prompt',
-      description: null,
-      type: 'string',
       required: true,
       default: 'Hello',
-      options: null,
-      multiline: null,
-    }
+    })
     const wrapper = mount(ParameterPortForm, {
       props: { port, modelValue: '' },
     })
@@ -87,17 +99,13 @@ describe('ParameterPortForm', () => {
   })
 
   it('renders number port', async () => {
-    const port: ParameterPort = {
+    const port = makePort({
       id: 'p2',
       name: 'temperature',
       label: 'Temperature',
-      description: null,
       type: 'number',
-      required: false,
       default: 0.7,
-      options: null,
-      multiline: null,
-    }
+    })
     const wrapper = mount(ParameterPortForm, {
       props: { port, modelValue: 0.7 },
     })
@@ -107,17 +115,13 @@ describe('ParameterPortForm', () => {
   })
 
   it('renders boolean port', async () => {
-    const port: ParameterPort = {
+    const port = makePort({
       id: 'p3',
       name: 'enabled',
       label: 'Enabled',
-      description: null,
       type: 'boolean',
       required: true,
-      default: null,
-      options: null,
-      multiline: null,
-    }
+    })
     const wrapper = mount(ParameterPortForm, {
       props: { port, modelValue: false },
     })
@@ -127,20 +131,17 @@ describe('ParameterPortForm', () => {
   })
 
   it('renders select port', async () => {
-    const port: ParameterPort = {
+    const port = makePort({
       id: 'p4',
       name: 'model',
       label: 'Model',
-      description: null,
       type: 'select',
       required: true,
-      default: null,
       options: [
         { label: 'GPT-4', value: 'gpt-4' },
         { label: 'Claude 3', value: 'claude-3' },
       ],
-      multiline: null,
-    }
+    })
     const wrapper = mount(ParameterPortForm, {
       props: { port, modelValue: '' },
     })
@@ -150,17 +151,12 @@ describe('ParameterPortForm', () => {
   })
 
   it('renders model_backend_ref port', async () => {
-    const port: ParameterPort = {
+    const port = makePort({
       id: 'p5',
       name: 'backend',
       label: 'Backend',
-      description: null,
       type: 'model_backend_ref',
-      required: false,
-      default: null,
-      options: null,
-      multiline: null,
-    }
+    })
     const wrapper = mount(ParameterPortForm, {
       props: { port, modelValue: null },
     })
@@ -170,17 +166,12 @@ describe('ParameterPortForm', () => {
   })
 
   it('renders schema_ref port', async () => {
-    const port: ParameterPort = {
+    const port = makePort({
       id: 'p6',
       name: 'input_schema',
       label: 'Input Schema',
-      description: null,
       type: 'schema_ref',
-      required: false,
-      default: null,
-      options: null,
-      multiline: null,
-    }
+    })
     const wrapper = mount(ParameterPortForm, {
       props: { port, modelValue: null },
     })

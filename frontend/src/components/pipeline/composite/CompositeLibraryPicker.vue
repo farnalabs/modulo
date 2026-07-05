@@ -75,8 +75,8 @@ onMounted(() => {
         </CardHeader>
         <CardContent class="flex items-center justify-between">
           <span class="text-xs text-muted-foreground">
-            {{ composite.ports.length }}
-            {{ composite.ports.length === 1 ? "port" : "ports" }}
+            {{ composite.parameter_ports_json.length }}
+            {{ composite.parameter_ports_json.length === 1 ? "port" : "ports" }}
           </span>
           <button
             class="rounded-lg bg-indigo-600 px-3 py-1 text-xs font-medium text-white hover:bg-indigo-500"
