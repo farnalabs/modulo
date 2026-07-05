@@ -121,6 +121,15 @@ const mockManifest = vi.hoisted(() => ({
       required_tier: 'team',
       required_roles: ['admin'],
     },
+    '/settings/remy': {
+      name: 'settings-remy',
+      breadcrumb: 'My Skills',
+      sidebar_group: 'remy',
+      sidebar_order: 1,
+      type: 'page',
+      required_tier: null,
+      required_roles: null,
+    },
   },
 }))
 
@@ -247,6 +256,30 @@ describe('navigation.ts', () => {
       labelKey: 'item_test',
       requiredRoles: [],
       requiredTier: null,
+    }
+    expect(canSeeItem(item, { role: 'admin' }, { isAtMinimumTier: () => true })).toBe(true)
+  })
+
+  it('canSeeItem filters by permissions', () => {
+    const item: NavItem = {
+      to: '/admin',
+      icon: 'Settings',
+      label: 'Admin',
+      labelKey: 'item_admin',
+      requiredPermissions: ['admin.read', 'admin.write'],
+    }
+    expect(canSeeItem(item, { role: 'admin', permissions: ['admin.read'] }, { isAtMinimumTier: () => true })).toBe(true)
+    expect(canSeeItem(item, { role: 'admin', permissions: ['user.read'] }, { isAtMinimumTier: () => true })).toBe(false)
+    expect(canSeeItem(item, { role: 'admin', permissions: ['admin.read', 'user.read'] }, { isAtMinimumTier: () => true })).toBe(true)
+  })
+
+  it('canSeeItem passes through when permissions not provided', () => {
+    const item: NavItem = {
+      to: '/admin',
+      icon: 'Settings',
+      label: 'Admin',
+      labelKey: 'item_admin',
+      requiredPermissions: ['admin.read'],
     }
     expect(canSeeItem(item, { role: 'admin' }, { isAtMinimumTier: () => true })).toBe(true)
   })
