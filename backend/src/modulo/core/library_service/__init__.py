@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import uuid
 from datetime import UTC, datetime
@@ -9,7 +10,7 @@ from typing import Any
 
 from sqlalchemy import func, select
 from sqlalchemy import update as sa_update
-from sqlalchemy.exc import ProgrammingError
+from sqlalchemy.exc import ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.db.crud.base import PageResult
@@ -1107,8 +1108,8 @@ async def get_primitive(
     except ProgrammingError:
         _log.warning("get_primitive — DB not migrated or table missing for %s", primitive_id)
         return None
-    except Exception:
-        _log.exception("get_primitive — unexpected error for %s", primitive_id)
+    except SQLAlchemyError:
+        _log.exception("get_primitive — DB error for %s", primitive_id)
         return None
     if item is not None:
         return item
@@ -1147,8 +1148,8 @@ async def get_primitive_by_slug(
     except ProgrammingError:
         _log.warning("get_primitive_by_slug — DB not migrated for %s/%s", primitive_type, slug)
         return None
-    except Exception:
-        _log.exception("get_primitive_by_slug — unexpected error for %s/%s", primitive_type, slug)
+    except SQLAlchemyError:
+        _log.exception("get_primitive_by_slug — DB error for %s/%s", primitive_type, slug)
         return None
     if item is not None:
         return item
@@ -1721,6 +1722,7 @@ _COMMUNITY_BY_ID: dict[uuid.UUID, LibraryPrimitive] = {p.id: p for p in _COMMUNI
 _COMMUNITY_BY_SLUG: dict[tuple[str, str], LibraryPrimitive] = {
     (p.primitive_type, p.slug): p for p in _COMMUNITY_PRIMITIVES
 }
+_COMMUNITY_CACHE_LOCK: asyncio.Lock = asyncio.Lock()
 
 
 def _filter_community(
@@ -1946,10 +1948,11 @@ async def publish_contribution(
         if prim is None:
             raise ContributionNotFoundError(f"Contribution {primitive_id} not found")
 
-        if prim.contribution_status != CONTRIBUTION_REVIEW_QUEUE:
+        if prim.contribution_status not in (CONTRIBUTION_DRAFT, CONTRIBUTION_REVIEW_QUEUE):
             raise ContributionInvalidTransitionError(
                 f"Cannot publish contribution {primitive_id}: "
-                f"expected status '{CONTRIBUTION_REVIEW_QUEUE}', got '{prim.contribution_status}'"
+                f"expected status '{CONTRIBUTION_DRAFT}' or '{CONTRIBUTION_REVIEW_QUEUE}', "
+                f"got '{prim.contribution_status}'"
             )
 
         updated = await update_library_primitive(
@@ -1966,9 +1969,10 @@ async def publish_contribution(
     await notify_importers_of_update(session, org_id, primitive_id)
 
     # Add to in-memory community cache so it appears in community listings immediately.
-    _COMMUNITY_PRIMITIVES.append(updated)
-    _COMMUNITY_BY_ID[updated.id] = updated
-    _COMMUNITY_BY_SLUG[(updated.primitive_type, updated.slug)] = updated
+    async with _COMMUNITY_CACHE_LOCK:
+        _COMMUNITY_PRIMITIVES.append(updated)
+        _COMMUNITY_BY_ID[updated.id] = updated
+        _COMMUNITY_BY_SLUG[(updated.primitive_type, updated.slug)] = updated
 
     return updated
 
@@ -2129,15 +2133,15 @@ async def list_contribution_versions(
     if prim is None:
         raise ContributionNotFoundError(f"Contribution {primitive_id} not found")
 
-    group_id = prim.version_group_id or prim.id
+    # If the target primitive has no version_group_id yet, return just itself
+    if prim.version_group_id is None:
+        return [prim]
+
+    group_id = prim.version_group_id
 
     async with session.begin():
         await set_rls_org(session, org_id)
         results = await list_primitives_by_version_group(session, group_id)
-
-    # If the target primitive has no version_group_id yet, return just itself
-    if prim.version_group_id is None:
-        return [prim]
 
     # Include the seed primitive (the one whose version_group_id was set to
     # its own id) — it won't appear in the version-group query because it
