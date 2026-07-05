@@ -67,7 +67,7 @@ async def _get_latest_published_version(
 async def _get_existing_names(
     session: AsyncSession,
     org_id: uuid.UUID,
-    model_cls: type,
+    model_cls: type[Any],
     *,
     for_update: bool = False,
 ) -> set[str]:
@@ -122,8 +122,8 @@ async def export_pipeline_bundle(
                 agent_id_str = node.get("agent_id")
                 if agent_id_str:
                     try:
-                        agent_id = uuid.UUID(agent_id_str)
-                    except (ValueError, AttributeError):
+                        agent_id = _safe_uuid(agent_id_str, "node.agent_id")
+                    except ValueError:
                         logger.warning("Skipping node with invalid agent_id: %s", agent_id_str)
                         continue
                     agent_ids.add(agent_id)
@@ -131,8 +131,8 @@ async def export_pipeline_bundle(
                 schema_id_str = node.get("output_schema_id")
                 if schema_id_str:
                     try:
-                        schema_ids.add(uuid.UUID(schema_id_str))
-                    except (ValueError, AttributeError):
+                        schema_ids.add(_safe_uuid(schema_id_str, "node.output_schema_id"))
+                    except ValueError:
                         logger.warning("Skipping node with invalid output_schema_id: %s", schema_id_str)
 
         agents_list: list[dict[str, Any]] = []
@@ -600,8 +600,14 @@ async def materialize_import(
         output_schema_id_str = ad.get("output_schema_id", "")
         resolved_input_id = schema_id_map.get(input_schema_id_str) or input_schema_id_str
         resolved_output_id = schema_id_map.get(output_schema_id_str) or output_schema_id_str
-        resolved_input_version = schema_version_map.get(input_schema_id_str) or ad.get("input_schema_version", DEFAULT_SCHEMA_VERSION)
-        resolved_output_version = schema_version_map.get(output_schema_id_str) or ad.get("output_schema_version", DEFAULT_SCHEMA_VERSION)
+        resolved_input_version = (
+            schema_version_map.get(input_schema_id_str)
+            or ad.get("input_schema_version", DEFAULT_SCHEMA_VERSION)
+        )
+        resolved_output_version = (
+            schema_version_map.get(output_schema_id_str)
+            or ad.get("output_schema_version", DEFAULT_SCHEMA_VERSION)
+        )
 
         export_mb_id = ad.get("model_backend_id", "")
         resolved_mb_id = ad.get("_resolved_model_backend_id") or mb_overrides.get(export_mb_id) or export_mb_id
@@ -677,9 +683,13 @@ async def materialize_import(
     # --- Step 4: Create edges ---
     pipeline_edges_added: list[PipelineEdge] = []
     for ed in edges_data:
-        source_id = _safe_uuid(ed.get("source_node_id", ""), "edge.source_node_id")
-        target_id = _safe_uuid(ed.get("target_node_id", ""), "edge.target_node_id")
-        edge_id = _safe_uuid(ed["id"]) if ed.get("id") else uuid.uuid4()
+        try:
+            source_id = _safe_uuid(ed.get("source_node_id", ""), "edge.source_node_id")
+            target_id = _safe_uuid(ed.get("target_node_id", ""), "edge.target_node_id")
+            edge_id = _safe_uuid(ed["id"]) if ed.get("id") else uuid.uuid4()
+        except ValueError as exc:
+            warnings.append(f"Skipping edge with invalid UUID: {exc}")
+            continue
         edge_type = ed.get("edge_type", "normal")
         if edge_type not in VALID_EDGE_TYPES:
             warnings.append(f"Unknown edge type '{edge_type}', defaulting to 'normal'.")
