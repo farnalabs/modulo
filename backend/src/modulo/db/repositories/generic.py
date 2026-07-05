@@ -4,7 +4,6 @@ import uuid
 from typing import Any
 
 from sqlalchemy import Select
-from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.db.repositories.base import BaseRepository
 
@@ -27,7 +26,7 @@ class GenericRepository(BaseRepository):
         if org_id is None:
             raise ValueError("org_id must not be None")
         if not isinstance(org_id, uuid.UUID):
-            raise TypeError("org_id must be a uuid.UUID, got %s" % type(org_id).__name__)
+            raise TypeError(f"org_id must be a uuid.UUID, got {type(org_id).__name__}")
         for desc in stmt.column_descriptions:
             entity = desc.get("entity")
             if entity is None or entity is object:

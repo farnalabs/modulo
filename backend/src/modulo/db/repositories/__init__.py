@@ -12,8 +12,6 @@ import uuid
 from collections.abc import AsyncGenerator, Callable
 from typing import Any
 
-logger = logging.getLogger(__name__)
-
 from sqlalchemy import Select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -22,6 +20,8 @@ from modulo.db.repositories.base import BaseRepository
 from modulo.db.repositories.generic import GenericRepository
 from modulo.db.repositories.locks import BaseLockService, _build_lock_service
 from modulo.db.repositories.postgres import PostgresRepository
+
+logger = logging.getLogger(__name__)
 
 
 def _build_repository(
