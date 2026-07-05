@@ -43,8 +43,10 @@ def _build_generate_prompt(
         display = examples[:max_examples]
         try:
             sample_text = json.dumps(display, indent=2, default=str)
-        except ValueError as exc:
-            raise ValueError(f"Example data contains non-serializable values (e.g. circular references): {exc}") from exc
+        except (ValueError, TypeError) as exc:
+            raise ValueError(
+                f"Example data contains non-serializable values (e.g. circular references): {exc}"
+            ) from exc
         parts.append(f"Example records ({len(display)}):\n```\n{sample_text}\n```\n")
     parts.append("Return ONLY the JSON Schema object.")
     return [

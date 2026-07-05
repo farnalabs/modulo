@@ -18,7 +18,9 @@ class SchemaValidationResult:
     errors: list[SchemaValidationError] = field(default_factory=list)
 
 
-_VALID_ITEM_KEYWORDS = {"oneOf", "anyOf", "allOf", "not", "if", "then", "else"}
+_MAX_RECURSION_DEPTH = 50
+_VALID_ITEM_KEYWORDS = {"oneOf", "anyOf", "allOf", "not", "if", "then", "else", "$ref"}
+_VALID_ITEM_KEYWORDS_TUPLE = ("type", *tuple(_VALID_ITEM_KEYWORDS))
 
 
 def _normalize_type(raw: Any) -> str | None:
@@ -29,13 +31,33 @@ def _normalize_type(raw: Any) -> str | None:
     return None
 
 
-def validate_union_schema(schema: dict[str, Any], path: str = "#") -> SchemaValidationResult:
+def _validate_both(schema: dict[str, Any], path: str, _depth: int) -> SchemaValidationResult:
+    result = validate_union_schema(schema, path, _depth)
+    array_result = validate_array_schema(schema, path, _depth)
+    result.errors.extend(array_result.errors)
+    result.valid = len(result.errors) == 0
+    return result
+
+
+def validate_union_schema(
+    schema: dict[str, Any],
+    path: str = "#",
+    _depth: int = 0,
+) -> SchemaValidationResult:
+    if _depth > _MAX_RECURSION_DEPTH:
+        return SchemaValidationResult(
+            valid=False,
+            errors=[SchemaValidationError(path=path, message="Maximum recursion depth exceeded")],
+        )
+
     result = SchemaValidationResult()
 
+    has_union = False
     for kw in ("oneOf", "anyOf"):
         variants = schema.get(kw)
         if variants is None:
             continue
+        has_union = True
         current = f"{path}/{kw}"
         if not isinstance(variants, list):
             result.errors.append(SchemaValidationError(path=current, message=f"'{kw}' must be a non-empty array"))
@@ -43,14 +65,6 @@ def validate_union_schema(schema: dict[str, Any], path: str = "#") -> SchemaVali
         if len(variants) == 0:
             result.errors.append(SchemaValidationError(path=current, message=f"'{kw}' must not be empty"))
             continue
-        if schema.get("type") is not None:
-            result.errors.append(
-                SchemaValidationError(
-                    path=current,
-                    message=f"'{kw}' must not appear alongside 'type' at the same level"
-                    " — use a wrapping object or allOf instead",
-                )
-            )
         for i, variant in enumerate(variants):
             if not isinstance(variant, dict):
                 result.errors.append(
@@ -60,28 +74,47 @@ def validate_union_schema(schema: dict[str, Any], path: str = "#") -> SchemaVali
                     )
                 )
                 continue
-            if all(k not in variant for k in ("type", *list(_VALID_ITEM_KEYWORDS))):
+            if all(k not in variant for k in _VALID_ITEM_KEYWORDS_TUPLE):
                 result.errors.append(
                     SchemaValidationError(
                         path=f"{current}/{i}",
-                        message="Variant has no 'type' or composition keyword",
+                        message="Variant has no 'type', composition keyword, or $ref",
                     )
                 )
-            nested = validate_union_schema(variant, f"{current}/{i}")
+            nested = _validate_both(variant, f"{current}/{i}", _depth + 1)
             result.errors.extend(nested.errors)
+
+    if has_union and schema.get("type") is not None:
+        result.errors.append(
+            SchemaValidationError(
+                path=path,
+                message="'oneOf'/'anyOf' must not appear alongside 'type' at the same level"
+                " — use a wrapping object or allOf instead",
+            )
+        )
 
     properties = schema.get("properties", {})
     if isinstance(properties, dict):
         for prop_name, prop_schema in properties.items():
             if isinstance(prop_schema, dict):
-                nested = validate_union_schema(prop_schema, f"{path}/properties/{prop_name}")
+                nested = _validate_both(prop_schema, f"{path}/properties/{prop_name}", _depth + 1)
                 result.errors.extend(nested.errors)
 
     result.valid = len(result.errors) == 0
     return result
 
 
-def validate_array_schema(schema: dict[str, Any], path: str = "#") -> SchemaValidationResult:
+def validate_array_schema(
+    schema: dict[str, Any],
+    path: str = "#",
+    _depth: int = 0,
+) -> SchemaValidationResult:
+    if _depth > _MAX_RECURSION_DEPTH:
+        return SchemaValidationResult(
+            valid=False,
+            errors=[SchemaValidationError(path=path, message="Maximum recursion depth exceeded")],
+        )
+
     result = SchemaValidationResult()
 
     schema_type = _normalize_type(schema.get("type"))
@@ -99,12 +132,25 @@ def validate_array_schema(schema: dict[str, Any], path: str = "#") -> SchemaVali
                             )
                         )
                         continue
-                    nested = validate_array_schema(v, f"{path}/{kw}/{i}")
+                    nested = validate_array_schema(v, f"{path}/{kw}/{i}", _depth + 1)
+                    result.errors.extend(nested.errors)
+        properties = schema.get("properties", {})
+        if isinstance(properties, dict):
+            for prop_name, prop_schema in properties.items():
+                if isinstance(prop_schema, dict):
+                    nested = validate_array_schema(prop_schema, f"{path}/properties/{prop_name}", _depth + 1)
                     result.errors.extend(nested.errors)
         result.valid = len(result.errors) == 0
         return result
 
     if schema_type != "array":
+        properties = schema.get("properties", {})
+        if isinstance(properties, dict):
+            for prop_name, prop_schema in properties.items():
+                if isinstance(prop_schema, dict):
+                    nested = validate_array_schema(prop_schema, f"{path}/properties/{prop_name}", _depth + 1)
+                    result.errors.extend(nested.errors)
+        result.valid = len(result.errors) == 0
         return result
 
     current = f"{path}/items"
@@ -119,21 +165,18 @@ def validate_array_schema(schema: dict[str, Any], path: str = "#") -> SchemaVali
                 message="'items' is recommended for array schemas — add an items schema or use contains/prefixItems",
             )
         )
-        result.valid = False
         return result
 
     if isinstance(items, dict):
         t = _normalize_type(items.get("type"))
-        if t is None and not any(k in items for k in _VALID_ITEM_KEYWORDS) and not items.get("$ref"):
+        if t is None and not any(k in items for k in _VALID_ITEM_KEYWORDS):
             result.errors.append(
                 SchemaValidationError(
                     path=f"{current}",
                     message="Array items schema should specify 'type', oneOf/anyOf/allOf, or $ref",
                 )
             )
-        nested = validate_union_schema(items, str(current))
-        result.errors.extend(nested.errors)
-        nested = validate_array_schema(items, str(current))
+        nested = _validate_both(items, current, _depth + 1)
         result.errors.extend(nested.errors)
 
     elif isinstance(items, list):
@@ -146,25 +189,17 @@ def validate_array_schema(schema: dict[str, Any], path: str = "#") -> SchemaVali
                     )
                 )
                 continue
-            nested = validate_union_schema(item_schema, f"{current}/{i}")
-            result.errors.extend(nested.errors)
-            nested = validate_array_schema(item_schema, f"{current}/{i}")
+            nested = _validate_both(item_schema, f"{current}/{i}", _depth + 1)
             result.errors.extend(nested.errors)
 
-    contains = schema.get("contains")
     if isinstance(contains, dict):
-        nested = validate_union_schema(contains, f"{path}/contains")
-        result.errors.extend(nested.errors)
-        nested = validate_array_schema(contains, f"{path}/contains")
+        nested = _validate_both(contains, f"{path}/contains", _depth + 1)
         result.errors.extend(nested.errors)
 
-    prefix_items = schema.get("prefixItems", [])
     if isinstance(prefix_items, list):
         for i, ps in enumerate(prefix_items):
             if isinstance(ps, dict):
-                nested = validate_union_schema(ps, f"{path}/prefixItems/{i}")
-                result.errors.extend(nested.errors)
-                nested = validate_array_schema(ps, f"{path}/prefixItems/{i}")
+                nested = _validate_both(ps, f"{path}/prefixItems/{i}", _depth + 1)
                 result.errors.extend(nested.errors)
 
     result.valid = len(result.errors) == 0

@@ -61,7 +61,7 @@ class TestValidateUnionSchema:
         schema = {"oneOf": [{"description": "no type here"}]}
         result = validate_union_schema(schema)
         assert not result.valid
-        assert any("no 'type' or composition" in e.message for e in result.errors)
+        assert any("no 'type', composition keyword, or $ref" in e.message for e in result.errors)
 
     def test_nested_union_in_properties(self) -> None:
         schema = {
@@ -118,7 +118,7 @@ class TestValidateArraySchema:
     def test_array_missing_items_warns(self) -> None:
         schema = {"type": "array"}
         result = validate_array_schema(schema)
-        assert not result.valid
+        assert result.valid
         assert any("'items' is recommended" in e.message for e in result.errors)
 
     def test_array_items_without_type(self) -> None:
