@@ -41,6 +41,9 @@ export default defineConfig({
     exclude: ['tests/e2e/**', 'node_modules/**'],
     setupFiles: ['./src/__tests__/setup.ts'],
   },
+  optimizeDeps: {
+    exclude: ['vue-i18n'],
+  },
   server: {
     port: 5173,
     allowedHosts: ['local-frontend.modulo.run'],

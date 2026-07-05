@@ -431,9 +431,36 @@ updated `schema.ts` and retry.
 
 ---
 
+### Local frontend dev (fastest loop)
+
+Start the frontend-only dev server that proxies API calls to app.modulo.run.
+No local backend, DB, or Docker needed — just the frontend source code.
+
+```powershell
+# From Product/frontend/
+$env:VITE_API_URL = "https://app.modulo.run"
+Start-Process -WindowStyle Hidden -FilePath "C:\nvm4w\nodejs\node.exe" -ArgumentList "node_modules\vite\bin\vite.js --port 5174 --host 0.0.0.0"
+```
+
+Access at `http://local-frontend.modulo.run:5174` (add hosts entry first — see root AGENTS.md).
+
+**IMPORTANT:** Node.js is at `C:\nvm4w\nodejs\node.exe` (not `node` in PATH on Windows).
+Use the full path in `Start-Process` because the background service has a different PATH.
+`npx` / `npm run dev` don't work for backgrounding — always use `node.exe` with the full path to `vite/bin/vite.js`.
+
+**`vue-i18n` pre-bundling fix:** If the page fails to load with `ReferenceError: init_runtime_dom_esm_bundler is not defined`, Vite's dep optimizer is breaking `vue-i18n`. Add it to `optimizeDeps.exclude` in `vite.config.ts`:
+
+```typescript
+optimizeDeps: {
+  exclude: ['vue-i18n'],
+},
+```
+
+Then delete `node_modules/.vite/` and restart Vite.
+
 ### Startup scripts (non-blocking)
 
-Use these to launch services without getting blocked:
+Use these to launch full-stack services without getting blocked:
 
 ```powershell
 # Start Postgres + Redis (from Product/)
