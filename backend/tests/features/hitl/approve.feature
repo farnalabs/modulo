@@ -17,17 +17,17 @@ Feature: HITL Approve
   Scenario: Approve without claim_token is rejected
     Given a run is waiting at gate "pre-deploy"
     When I POST /api/runs/{run_id}/approve with decision "approved" and no claim_token
-    Then the response status is 403
+    Then the response status is 422
 
   Scenario: Approve with expired claim_token is rejected
     Given a run is waiting at gate "pre-deploy"
     And I have claimed gate "pre-deploy"
     And the claim token expires
     When I POST /api/runs/{run_id}/approve with expired claim_token and decision "approved"
-    Then the response status is 403
+    Then the response status is 410
 
   Scenario: Approve a gate claimed by another user is rejected
     Given a run is waiting at gate "pre-deploy"
     And another user has claimed gate "pre-deploy" with claim_token "other-token"
     When I POST /api/runs/{run_id}/approve with claim_token "other-token" and decision "approved"
-    Then the response status is 409
+    Then the response status is 403
