@@ -65,5 +65,9 @@ async def _cleanup() -> None:
 _had_orphans = False
 if __name__ == "__main__":
     asyncio.run(_cleanup())
-    # Exit 0 = orphans found (stamp head), non-zero = clean (upgrade heads)
-    exit(0 if _had_orphans else 1)
+    # Print a machine-readable marker so the entrypoint can decide
+    # stamp vs upgrade without relying on exit codes.
+    if _had_orphans:
+        print("  ACTION: stamp head")
+    else:
+        print("  ACTION: upgrade heads")

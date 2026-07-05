@@ -16,12 +16,11 @@ fi
 
 echo "=== Running DB migrations ==="
 # Clean orphaned alembic_version entries from restructured migration branches.
-# If orphans were found and removed, the migration chain diverges from the
-# codebase — stamp the current head instead of running upgrade paths that
-# would try to re-apply already-existing schema changes.
-.venv/bin/python3 /app/deploy/fly/cleanup_orphan_migrations.py 2>&1
-HAS_ORPHANS=$?
-if [ "$HAS_ORPHANS" -eq 0 ]; then
+# The cleanup script prints "ACTION: stamp head" if orphans were removed,
+# "ACTION: upgrade heads" if the chain is clean.
+OUTPUT=$(.venv/bin/python3 /app/deploy/fly/cleanup_orphan_migrations.py 2>&1)
+echo "$OUTPUT"
+if echo "$OUTPUT" | grep -q "ACTION: stamp head"; then
   .venv/bin/alembic stamp head
   echo "  Stamped head (orphans were present — schema assumed up to date)"
 else
