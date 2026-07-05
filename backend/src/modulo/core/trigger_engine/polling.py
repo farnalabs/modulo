@@ -51,9 +51,10 @@ def _get_engine() -> Any:
     return _engine
 
 
-def _dispose_engine() -> None:
+async def _dispose_engine() -> None:
     global _engine
     if _engine is not None:
+        await _engine.dispose()
         _engine = None
 
 
@@ -170,19 +171,35 @@ class PollingFireTask(Task):  # type: ignore[misc]
         poll_query: str,
         condition_expression: str | None,
     ) -> dict[str, Any]:
-        """Fire a polling trigger synchronously via ``asyncio.run()``."""
+        """Fire a polling trigger synchronously via ``asyncio.run()`` or
+        ``asyncio.create_task()`` if already inside an event loop."""
         import asyncio
 
-        return asyncio.run(
-            fire_polling_trigger(
-                trigger_id=uuid.UUID(trigger_id),
-                org_id=uuid.UUID(org_id),
-                pipeline_id=uuid.UUID(pipeline_id),
-                connector_instance_id=uuid.UUID(connector_instance_id),
-                poll_query=poll_query,
-                condition_expression=condition_expression,
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            # No running loop — fresh event loop
+            return asyncio.run(
+                fire_polling_trigger(
+                    trigger_id=uuid.UUID(trigger_id),
+                    org_id=uuid.UUID(org_id),
+                    pipeline_id=uuid.UUID(pipeline_id),
+                    connector_instance_id=uuid.UUID(connector_instance_id),
+                    poll_query=poll_query,
+                    condition_expression=condition_expression,
+                )
             )
+        # Already inside an event loop (async Celery pool) — create a task
+        coro = fire_polling_trigger(
+            trigger_id=uuid.UUID(trigger_id),
+            org_id=uuid.UUID(org_id),
+            pipeline_id=uuid.UUID(pipeline_id),
+            connector_instance_id=uuid.UUID(connector_instance_id),
+            poll_query=poll_query,
+            condition_expression=condition_expression,
         )
+        future = asyncio.run_coroutine_threadsafe(coro, loop)
+        return future.result()
 
 
 async def fire_polling_trigger(
@@ -217,7 +234,7 @@ async def fire_polling_trigger(
             return {"status": "skipped", "reason": "already_fired_this_cycle"}
 
         # Concurrency check
-        active_count = await _count_active_runs(session, pipeline_id)
+        active_count = await _count_active_runs(session, trigger_id)
         if active_count >= trigger.max_concurrent_runs:
             await _log_poll_event(
                 session,
@@ -311,8 +328,10 @@ async def fire_polling_trigger(
                 org_id=org_id,
                 result="no_match",
             )
-            # Update next_fire_at even on no-match
-            await _update_next_fire(session, trigger)
+            # Update next_fire_at on no-match (separate function avoids setting
+            # last_fired_at which would be semantically misleading — the trigger
+            # didn't actually fire).
+            await _update_next_fire_no_last(session, trigger)
             return {"status": "no_match"}
 
         # Snapshot ID from trigger config
@@ -373,14 +392,35 @@ async def fire_polling_trigger(
 
 
 async def _update_next_fire(session: AsyncSession, trigger: Trigger) -> None:
-    """Compute and persist the next fire time based on poll_interval_seconds."""
+    """Compute and persist the next fire time based on poll_interval_seconds,
+    also updating last_fired_at to now. Only call this when a run was actually created."""
     config = trigger.config_json or {}
-    interval = config.get("poll_interval_seconds", 60)
+    interval = max(int(config.get("poll_interval_seconds", 60)), 1)
     now = datetime.datetime.now(datetime.UTC)
-    next_fire = now + datetime.timedelta(seconds=int(interval))
+    next_fire = now + datetime.timedelta(seconds=interval)
     await session.execute(
         update(Trigger).where(Trigger.id == trigger.id).values(last_fired_at=now, next_fire_at=next_fire)
     )
+
+
+async def _update_next_fire_no_last(session: AsyncSession, trigger: Trigger) -> None:
+    """Advance next_fire_at without touching last_fired_at.
+    Used when the condition was NOT met — the trigger didn't actually fire."""
+    config = trigger.config_json or {}
+    interval = max(int(config.get("poll_interval_seconds", 60)), 1)
+    now = datetime.datetime.now(datetime.UTC)
+    next_fire = now + datetime.timedelta(seconds=interval)
+    await session.execute(
+        update(Trigger).where(Trigger.id == trigger.id).values(next_fire_at=next_fire)
+    )
+
+
+def _validate_poll_config(config: dict[str, Any]) -> None:
+    """Validate polling trigger configuration.
+    Raises ValueError on invalid config."""
+    interval = config.get("poll_interval_seconds", 60)
+    if interval is not None and (not isinstance(interval, (int, float)) or interval < 1):
+        raise ValueError(f"poll_interval_seconds must be >= 1, got {interval!r}")
 
 
 # ---------------------------------------------------------------------------
@@ -555,6 +595,12 @@ class DatabasePollingScheduler(Scheduler):  # type: ignore[misc]
                             error_detail="Polling trigger missing connector_instance_id in config_json",
                         )
                         session.add(event)
+                        # Advance next_fire_at to prevent perpetual re-fetch on every tick
+                        interval = max(int(config.get("poll_interval_seconds", 60)), 1)
+                        next_fire = datetime.datetime.now(datetime.UTC) + datetime.timedelta(seconds=interval)
+                        await session.execute(
+                            update(Trigger).where(Trigger.id == row.id).values(next_fire_at=next_fire)
+                        )
                         continue
 
                     triggers.append(
@@ -590,12 +636,12 @@ async def _set_rls_org(session: AsyncSession, org_id: uuid.UUID) -> None:
         session.info["organisation_id"] = org_id
 
 
-async def _count_active_runs(session: AsyncSession, pipeline_id: uuid.UUID) -> int:
+async def _count_active_runs(session: AsyncSession, trigger_id: uuid.UUID) -> int:
     from sqlalchemy import func as sa_func
 
     result = await session.execute(
         select(sa_func.count()).where(
-            Run.pipeline_id == pipeline_id,
+            Run.trigger_id == trigger_id,
             Run.status.in_(_ACTIVE_STATUSES),
         )
     )

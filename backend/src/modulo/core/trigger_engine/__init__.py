@@ -17,10 +17,13 @@ The caller is responsible for background execution of the created run.
 import hashlib
 import hmac
 import json
+import logging
 import time
 import uuid
 from datetime import UTC, datetime, timedelta
 from typing import Any
+
+_log = logging.getLogger(__name__)
 
 from sqlalchemy import delete, func, select, text
 from sqlalchemy.exc import IntegrityError
@@ -59,8 +62,8 @@ class HmacValidationError(PermissionError):
 
 
 class TimestampExpiredError(PermissionError):
-    def __init__(self) -> None:
-        super().__init__("X-Modulo-Timestamp is outside the ±300s replay window")
+    def __init__(self, detail: str = "X-Modulo-Timestamp is outside the ±300s replay window") -> None:
+        super().__init__(detail)
 
 
 class DuplicateWebhookError(RuntimeError):
@@ -103,18 +106,20 @@ def _sha256_hex(data: bytes) -> str:
 def _verify_timestamp(modulo_timestamp: str | None) -> int:
     """Validate and return the Unix timestamp from the X-Modulo-Timestamp header.
 
-    Raises TimestampExpiredError if the header is missing or outside the
-    ±300s replay window.
+    Raises TimestampExpiredError if the header is missing, malformed, or outside
+    the ±300s replay window, with a distinct message per failure mode.
     """
     if modulo_timestamp is None:
-        raise TimestampExpiredError()
+        raise TimestampExpiredError("X-Modulo-Timestamp header is missing")
     try:
         ts = int(modulo_timestamp)
     except (ValueError, TypeError):
-        raise TimestampExpiredError() from None
+        raise TimestampExpiredError(
+            f"X-Modulo-Timestamp is not a valid integer: {modulo_timestamp!r}"
+        ) from None
     now = time.time()
     if abs(now - ts) > _REPLAY_WINDOW_SECONDS:
-        raise TimestampExpiredError()
+        raise TimestampExpiredError("X-Modulo-Timestamp is outside the ±300s replay window")
     return ts
 
 
@@ -185,7 +190,8 @@ class TriggerEngine:
         # X-Modulo-Timestamp replay window check
         try:
             ts = _verify_timestamp(modulo_timestamp)
-        except TimestampExpiredError:
+        except TimestampExpiredError as exc:
+            _log.warning("Webhook timestamp validation failed for trigger %s: %s", trigger_id, exc)
             await self._log_event(
                 session,
                 trigger=trigger,
@@ -200,6 +206,7 @@ class TriggerEngine:
         cfg = trigger.config_json or {}
         hmac_secret: str | None = cfg.get("hmac_secret")
         if hmac_secret and not _verify_hmac(raw_body, hmac_secret, hmac_signature, timestamp=ts):
+            _log.warning("Webhook HMAC validation failed for trigger %s", trigger_id)
             await self._log_event(
                 session,
                 trigger=trigger,
@@ -212,6 +219,7 @@ class TriggerEngine:
         # Deduplication — insert dedup hash via savepoint; unique constraint handles races.
         is_new = await self._try_insert_dedup(session, trigger_id, org_id, payload_hash)
         if not is_new:
+            _log.warning("Webhook deduplicated for trigger %s (hash=%s)", trigger_id, payload_hash[:16])
             await self._log_event(
                 session,
                 trigger=trigger,
@@ -222,8 +230,14 @@ class TriggerEngine:
             raise DuplicateWebhookError(payload_hash)
 
         # Flood / concurrency protection
-        active_count = await self._count_active_runs(session, trigger.pipeline_id)
+        active_count = await self._count_active_runs(session, trigger.id)
         if active_count >= trigger.max_concurrent_runs:
+            _log.warning(
+                "Webhook concurrency limit reached for trigger %s (%d active >= %d limit)",
+                trigger_id,
+                active_count,
+                trigger.max_concurrent_runs,
+            )
             await self._log_event(
                 session,
                 trigger=trigger,
@@ -257,6 +271,7 @@ class TriggerEngine:
             result="accepted",
             run_id=run.id,
         )
+        _log.info("Webhook accepted for trigger %s → run %s", trigger_id, run.id)
 
         # Store raw payload for replay (link to trigger_event)
         await self._store_raw_payload(
@@ -323,14 +338,19 @@ class TriggerEngine:
         # Run the rest of the pipeline (skip HMAC + timestamp validation)
         payload_hash = _sha256_hex(raw_body)
 
-        # Deduplication check (replay must skip the original event's dedup hash)
-        is_new = await self._try_insert_dedup(session, trigger.id, org_id, payload_hash)
-        if not is_new:
-            raise DuplicateWebhookError(payload_hash)
+        # No dedup check for replays — this is an intentional re-fire.
+        # The original event already went through dedup validation.
 
         # Flood protection
-        active_count = await self._count_active_runs(session, trigger.pipeline_id)
+        active_count = await self._count_active_runs(session, trigger.id)
         if active_count >= trigger.max_concurrent_runs:
+            await self._log_event(
+                session,
+                trigger=trigger,
+                org_id=org_id,
+                payload_hash=payload_hash,
+                result="concurrency_limit_reached",
+            )
             raise ConcurrentRunLimitError(trigger.id, trigger.max_concurrent_runs)
 
         # Payload mapping
@@ -358,6 +378,15 @@ class TriggerEngine:
             run_id=run.id,
         )
 
+        # Store raw payload for the new event (re-replay support)
+        await self._store_raw_payload(
+            session,
+            trigger_event_id=trigger_event.id,
+            raw_body=raw_body,
+            raw_payload=raw_payload,
+            org_id=org_id,
+        )
+
         return run, trigger_event, input_payload
 
     # ------------------------------------------------------------------
@@ -382,7 +411,10 @@ class TriggerEngine:
         the next beat tick — there is no in-memory scheduler to update directly.
         """
         config = trigger.config_json or {}
-        interval = int(config.get("poll_interval_seconds", 60))
+        raw_interval = config.get("poll_interval_seconds", 60)
+        if raw_interval is not None and (not isinstance(raw_interval, (int, float)) or raw_interval < 1):
+            raise ValueError(f"poll_interval_seconds must be >= 1, got {raw_interval!r}")
+        interval = max(int(raw_interval), 1)
         now = datetime.now(UTC)
         trigger.next_fire_at = now + timedelta(seconds=interval)
         await session.flush()
@@ -521,10 +553,10 @@ class TriggerEngine:
             raise TriggerInactiveError(trigger_id)
         return trigger
 
-    async def _count_active_runs(self, session: AsyncSession, pipeline_id: uuid.UUID) -> int:
+    async def _count_active_runs(self, session: AsyncSession, trigger_id: uuid.UUID) -> int:
         result = await session.execute(
             select(func.count()).where(
-                Run.pipeline_id == pipeline_id,
+                Run.trigger_id == trigger_id,
                 Run.status.in_(_ACTIVE_STATUSES),
             )
         )
@@ -593,7 +625,12 @@ class TriggerEngine:
             async with session.begin_nested():
                 session.add(dedup)
                 await session.flush()
-        except IntegrityError:
+        except IntegrityError as exc:
+            # Re-raise non-unique IntegrityErrors (FK violations, NOT NULL checks)
+            # that would indicate a different problem than a duplicate webhook.
+            orig = getattr(exc, "orig", None)
+            if orig is not None and hasattr(orig, "pgcode") and orig.pgcode != "23505":
+                raise
             return False
         return True
 
