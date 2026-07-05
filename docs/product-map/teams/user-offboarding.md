@@ -33,8 +33,8 @@ Admin-initiated deactivation of an individual user — sets `active=false` inval
 - [x] User's `active` column set to `false` in DB
 - [x] All token families for that user are blacklisted (`.is_blacklisted = true`, `.blacklisted_at` set) — JWT families only; OAuth families not yet covered
 - [x] All team memberships for that user are removed from DB
-- [ ] Deactivated user cannot obtain new access/refresh tokens (auth flow checks `active`)
-- [ ] Deactivated user's existing tokens fail on next decode / dependency check
+- [x] Deactivated user cannot obtain new access/refresh tokens (`authenticate_db_user` in `passwords.py:47` checks `account.active` and returns False)
+- [ ] Deactivated user's existing tokens fail on next decode / dependency check (JWT decode is stateless — no DB check on every request)
 
 ### Happy Path — Reactivate
 - [x] `POST /admin/users/{user_id}/reactivate` → 200, user returned with `is_active: true`
@@ -93,8 +93,9 @@ Admin-initiated deactivation of an individual user — sets `active=false` inval
 
 ## Known Gaps
 
-- **No BDD scenarios**: `backend/tests/bdd/features/orgs/member_management.feature` has one deactivation scenario but no detailed assertions for token blacklisting, team membership removal, or API key revocation
-- **No sole-admin guard**: deactivating the last admin in an org is not blocked — could leave org unmanageable
+- **BDD deactivation scenario is a stub**: `backend/tests/bdd/features/orgs/member_management.feature` has "Deactivate user removes access" but the step `deactivate_user` at `test_orgs.py:160` only sets `ctx["user_active"] = False` — it does NOT call the API. No actual endpoint test for the deactivation happy path.
+- **No malformed UUID test coverage**: the unit test file now covers this, but no BDD scenario exists for the 422 validation
+- **No sole-admin guard on deactivation**: `_prevent_last_admin_lockout` exists and is called from `admin_update_user` (PUT) but NOT from `admin_deactivate_user` (POST). Deactivating the last admin in an org bypasses the guard.
 - **No WS token re-validation**: WebSocket connections may stay active for up to 15 min after deactivation
 - **SCIM hard-delete mismatch**: SCIM DELETE does a hard delete rather than soft deactivate — inconsistent with admin deactivation
 - **No OAuth token family blacklisting**: deactivation flow only blacklists JWT token families, not OAuth families
@@ -106,3 +107,11 @@ Admin-initiated deactivation of an individual user — sets `active=false` inval
 - Added `user_deactivated` and `user_reactivated` audit event dispatch to both endpoints
 - Created `test_user_offboarding_programming_error.py` with ProgrammingError→501 unit tests
 - Created website docs stub at `Website/modulo-website/src/docs/user-offboarding.md`
+
+### 2026-07-05 — Cross-cutting QA (feat-teams-user-offboarding)
+- Verified `[x] Deactivated user cannot obtain new access/refresh tokens` — `authenticate_db_user` at `passwords.py:47` returns False for `not account.active`
+- Confirmed `[ ] Deactivated user's existing tokens fail on next decode` is correct — JWT decode is stateless, no DB check
+- Confirmed sole-admin guard (`_prevent_last_admin_lockout`) exists for PUT but NOT POST deactivate — gap is accurate
+- Confirmed `[ ] Deactivate with malformed UUID → 422` is unimplemented in tests — added `test_admin_deactivate_malformed_uuid` test coverage
+- Confirmed `[ ] Deactivate user who is the last member of a team → team has zero members` — no test for this edge case
+- Added malformed UUID → 422 validation tests for both deactivate and reactivate endpoints
