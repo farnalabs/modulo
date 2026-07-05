@@ -111,4 +111,4 @@ Only the export and batch-detail endpoints are behind
   disabled buttons that return 402 on click (intentional per design)
 - No BDD scenarios for export step definitions wired to live production
   pipeline (mocking-only)
-- No website docs page at Website/modulo-website/src/docs/audit-viewer.md
+- ~~No website docs page at Website/modulo-website/src/docs/audit-viewer.md~~ (created)
