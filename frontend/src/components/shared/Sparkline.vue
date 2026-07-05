@@ -1,10 +1,5 @@
 <template>
-  <div
-    v-if="normalizedData.length < 2"
-    class="h-full w-full rounded bg-muted/30"
-  />
   <svg
-    v-else
     :viewBox="`0 0 ${width} ${height}`"
     class="h-full w-full overflow-visible"
     preserveAspectRatio="none"
@@ -54,17 +49,23 @@ const normalizedData = computed(() =>
   props.data.filter((v) => typeof v === "number" && !isNaN(v)),
 );
 
-const max = computed(() => Math.max(...normalizedData.value, 1));
-const min = computed(() => Math.min(...normalizedData.value));
+const chartData = computed(() => {
+  if (normalizedData.value.length >= 2) return normalizedData.value;
+  if (normalizedData.value.length === 0) return [0, 0];
+  return [normalizedData.value[0], normalizedData.value[0]];
+});
+
+const max = computed(() => Math.max(...chartData.value, 1));
+const min = computed(() => Math.min(...chartData.value));
 const range = computed(() => max.value - min.value || 1);
 
 const padding = 2;
 const stepX = computed(
-  () => (props.width - padding * 2) / (normalizedData.value.length - 1),
+  () => (props.width - padding * 2) / (chartData.value.length - 1),
 );
 
 const linePoints = computed(() => {
-  return normalizedData.value
+  return chartData.value
     .map((v, i) => {
       const x = padding + i * stepX.value;
       const y =
@@ -77,7 +78,7 @@ const linePoints = computed(() => {
 });
 
 const areaPoints = computed(() => {
-  const pts = normalizedData.value.map((v, i) => {
+  const pts = chartData.value.map((v, i) => {
     const x = padding + i * stepX.value;
     const y =
       props.height -
