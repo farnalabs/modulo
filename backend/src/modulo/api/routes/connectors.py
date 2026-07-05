@@ -12,6 +12,7 @@ from cryptography.fernet import Fernet
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from httpx import HTTPStatusError, RequestError
 from pydantic import BaseModel, Field
+from sqlalchemy.exc import ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.api.dependencies import get_db_session
@@ -107,10 +108,21 @@ async def list_connectors_endpoint(
     session: AsyncSession = Depends(get_db_session),
     principal: AuthenticatedPrincipal = Depends(get_current_user),
 ) -> ConnectorListResponse:
-    async with session.begin():
-        await set_rls_org(session, principal.organisation_id)
-        await set_rls_user_context(session, principal.account_id, principal.org_role)
-        result = await list_connector_instances(session, page=page, page_size=page_size, cursor=cursor)
+    try:
+        async with session.begin():
+            await set_rls_org(session, principal.organisation_id)
+            await set_rls_user_context(session, principal.account_id, principal.org_role)
+            result = await list_connector_instances(session, page=page, page_size=page_size, cursor=cursor)
+    except ProgrammingError:
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="Connectors are not available. Run database migrations to enable this feature.",
+        ) from None
+    except SQLAlchemyError:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Database error while listing connectors.",
+        ) from None
     return ConnectorListResponse(
         items=[_to_response(ci) for ci in result.items],
         total=result.total,
@@ -148,21 +160,32 @@ async def create_connector_endpoint(
             )
 
     ciphertext = _encrypt(req.credentials, settings.fernet_key)
-    async with session.begin():
-        await set_rls_org(session, principal.organisation_id)
-        await set_rls_user_context(session, principal.account_id, principal.org_role)
-        ci = await create_connector_instance(
-            session,
-            org_id=principal.organisation_id,
-            name=req.name,
-            connector_type_id=req.connector_type_id,
-            owner_id=principal.account_id,
-            credentials_ciphertext=ciphertext,
-            config_json=req.config_json,
-            allowed_operations=req.allowed_operations,
-            visibility=req.visibility,
-            tier=req.tier,
-        )
+    try:
+        async with session.begin():
+            await set_rls_org(session, principal.organisation_id)
+            await set_rls_user_context(session, principal.account_id, principal.org_role)
+            ci = await create_connector_instance(
+                session,
+                org_id=principal.organisation_id,
+                name=req.name,
+                connector_type_id=req.connector_type_id,
+                owner_id=principal.account_id,
+                credentials_ciphertext=ciphertext,
+                config_json=req.config_json,
+                allowed_operations=req.allowed_operations,
+                visibility=req.visibility,
+                tier=req.tier,
+            )
+    except ProgrammingError:
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="Connectors are not available. Run database migrations to enable this feature.",
+        ) from None
+    except SQLAlchemyError:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Database error while creating connector.",
+        ) from None
     return _to_response(ci)
 
 
@@ -172,10 +195,21 @@ async def get_connector_endpoint(
     session: AsyncSession = Depends(get_db_session),
     principal: AuthenticatedPrincipal = Depends(get_current_user),
 ) -> ConnectorResponse:
-    async with session.begin():
-        await set_rls_org(session, principal.organisation_id)
-        await set_rls_user_context(session, principal.account_id, principal.org_role)
-        ci = await get_connector_instance(session, connector_id)
+    try:
+        async with session.begin():
+            await set_rls_org(session, principal.organisation_id)
+            await set_rls_user_context(session, principal.account_id, principal.org_role)
+            ci = await get_connector_instance(session, connector_id)
+    except ProgrammingError:
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="Connectors are not available. Run database migrations to enable this feature.",
+        ) from None
+    except SQLAlchemyError:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Database error while fetching connector.",
+        ) from None
     if ci is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Connector not found")
     return _to_response(ci)
@@ -217,10 +251,21 @@ async def update_connector_endpoint(
                 )
         _ct = _encrypt(new_credentials, settings.fernet_key)
         updates["credentials_ciphertext"] = _ct  # nosemgrep: credential-not-in-state
-    async with session.begin():
-        await set_rls_org(session, principal.organisation_id)
-        await set_rls_user_context(session, principal.account_id, principal.org_role)
-        ci = await update_connector_instance(session, connector_id, updates)
+    try:
+        async with session.begin():
+            await set_rls_org(session, principal.organisation_id)
+            await set_rls_user_context(session, principal.account_id, principal.org_role)
+            ci = await update_connector_instance(session, connector_id, updates)
+    except ProgrammingError:
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="Connectors are not available. Run database migrations to enable this feature.",
+        ) from None
+    except SQLAlchemyError:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Database error while updating connector.",
+        ) from None
     if ci is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Connector not found")
     return _to_response(ci)
@@ -232,9 +277,20 @@ async def delete_connector_endpoint(
     session: AsyncSession = Depends(get_db_session),
     principal: AuthenticatedPrincipal = Depends(get_current_user),
 ) -> None:
-    async with session.begin():
-        await set_rls_org(session, principal.organisation_id)
-        await set_rls_user_context(session, principal.account_id, principal.org_role)
-        deleted = await delete_connector_instance(session, connector_id)
+    try:
+        async with session.begin():
+            await set_rls_org(session, principal.organisation_id)
+            await set_rls_user_context(session, principal.account_id, principal.org_role)
+            deleted = await delete_connector_instance(session, connector_id)
+    except ProgrammingError:
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="Connectors are not available. Run database migrations to enable this feature.",
+        ) from None
+    except SQLAlchemyError:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Database error while deleting connector.",
+        ) from None
     if not deleted:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Connector not found")
