@@ -8,10 +8,12 @@ code:
   - backend/src/modulo/core/runtime_config/
   - backend/src/modulo/api/routes/admin_runtime_config.py
   - frontend/src/views/SettingsRuntimeConfigView.vue
-bdd: []
+bdd:
+  - backend/tests/bdd/features/admin/runtime-config.feature
 depends-on: []
-unit-tests: []
-status: covered
+unit-tests:
+  - backend/tests/unit/core/runtime_config/test_store.py
+status: partial
 ---
 
 # Runtime Configuration UI
@@ -50,4 +52,8 @@ environment-variable values, and hot-reloadable vs static settings.
 
 ## Known Gaps
 
-- No known gaps documented yet
+- [ ] BDD feature file missing (created as stub, needs step definitions)
+- [ ] Frontend i18n gaps: "Key", "Default", "Provenance", "Actions", "Reload from env", "Apply", "Reset", "Reveal", "hot", "static" hardcoded in template
+- [ ] Backend `is_sensitive_env_key` does not match `DATABASE_URL` — frontend masks it, backend leaks it
+- [ ] No website docs page exists for runtime configuration (needs Website repo worktree)
+- [ ] Route handler has no DB error handling (in-memory store, so ProgrammingError catches not applicable — but store is process-global with no persistence, so no 501/503 paths exist)

@@ -29,10 +29,12 @@ SENSITIVE_VALUE_MASK = "\u2022\u2022\u2022\u2022\u2022\u2022"
 
 _SENSITIVE_ENV_KEYS: frozenset[str] = frozenset({
     "MODULO_USERS",
+    "DATABASE_URL",
 })
 
 _SENSITIVE_KEY_PATTERNS = frozenset({
     "token", "secret", "api_key", "password", "passwd", "key", "credential",
+    "database_url", "encryption", "signing", "private",
 })
 
 
