@@ -14,17 +14,12 @@ os.environ.setdefault("FERNET_KEY", "b" * 32)
 os.environ.setdefault("MODULO_CSRF_ENABLED", "false")
 os.environ.setdefault("REDIS_URL", "")
 
-from modulo.api.dependencies import _get_engine, get_db_session
-from modulo.api.main import app
-from modulo.auth.dependencies import get_current_user
-from modulo.auth.jwt import AuthenticatedPrincipal
-from modulo.settings import Settings, get_settings
-
 _ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
 _USER_ID = uuid.UUID("00000000-0000-0000-0000-000000000002")
 
 
-def make_settings() -> Settings:
+def make_settings() -> "Settings":
+    from modulo.settings import Settings
     return Settings(
         database_url="postgresql+asyncpg://localhost/test",
         secret_key="a" * 32,
@@ -47,6 +42,12 @@ def make_mock_session() -> AsyncMock:
 
 @pytest.fixture
 def client() -> Generator[TestClient, None, None]:
+    from modulo.api.dependencies import _get_engine, get_db_session
+    from modulo.api.main import app
+    from modulo.auth.dependencies import get_current_user
+    from modulo.auth.jwt import AuthenticatedPrincipal
+    from modulo.settings import get_settings
+
     mock_session = make_mock_session()
 
     async def override_session() -> AsyncGenerator[AsyncMock, None]:
@@ -63,11 +64,3 @@ def client() -> Generator[TestClient, None, None]:
     )
     yield TestClient(app)
     app.dependency_overrides.clear()
-
-
-from pytest_bdd import given, parsers  # noqa: E402
-
-
-@given(parsers.parse('I am authenticated as an admin in org "{org}"'))
-def _bdd_auth_admin_in_org(org: str) -> None:
-    pass

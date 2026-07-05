@@ -114,7 +114,7 @@ def _trigger_new_run(ctx) -> None:
     ctx["run_type"] = "latest"
 
 
-@when(parsers.parse("I GET /api/agents/reviewer/versions"))
+@when(parsers.parse("I GET the prompt versions for the agent"))
 def _get_prompt_versions(client, request, ctx) -> None:
     agent = ctx.get("agent")
     with (
