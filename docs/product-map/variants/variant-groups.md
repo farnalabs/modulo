@@ -99,6 +99,28 @@ A/B test variant management — named sets of runs against the same pipeline tha
 - [x] GET coverage_gaps → 501 ProgrammingError
 - [x] GET prompt_diffs → 501 ProgrammingError
 
+### Resilience
+
+- [x] Concurrent run quota enforced per pipeline via `check_pipeline_run_quota` (429 on exceeded)
+- [x] Row-level locking (`SELECT ... FOR UPDATE`) in `run_variant_weighted` prevents quota race conditions between concurrent variant runs
+- [x] Empty variants list returns 429 with descriptive message ("no variants configured")
+- [x] `check_pipeline_run_quota` handles zero `max_concurrent_runs` (always blocks)
+- [x] `run_variant_weighted` re-fetches group with `FOR UPDATE` lock before quota check
+
+### Edge cases
+
+- [x] `snapshot_id` accepted as both `str` and `uuid.UUID` in variant definitions (CRUD normalizes with `uuid.UUID(str(...))`)
+- [x] Missing `weight` key defaults to 1.0 in `pick_variant_weighted`
+- [x] All-zero weights fall back to uniform random selection (avoids division by zero)
+- [x] Single-variant group short-circuits in `pick_variant_weighted` — returns directly, no random call
+- [x] `run_context_overrides` with non-dict value is silently skipped (`isinstance(overrides, dict)` guard)
+- [x] `variant_to_response` handles `None` `run_count` (defaults to 0)
+- [x] List pagination caps `page_size` at 100 (FastAPI `Query(le=100)`)
+- [x] 429 for empty variants in run endpoint (variant group with no variants configured)
+- [x] Prompt diffs skip missing snapshots (not a hard error — `continue` on `None` snapshot)
+- [x] ForeignKey `RESTRICT` prevents deletion of pipelines that have variant groups
+- [x] Check constraint enforces `selection_strategy IN ('weighted', 'single')` at DB level
+
 ## Missing implementations (gaps relative to PRD 8.19)
 
 - [ ] Batch run: PRD specifies "fires one run per variant" — current code fires only one run per API call, not N variants
@@ -108,14 +130,16 @@ A/B test variant management — named sets of runs against the same pipeline tha
 - [ ] Cancel/abandon variant: no endpoint or status for marking a variant run as abandoned and excluding from aggregates
 - [ ] All-or-nothing pre-flight quota: PRD says check all N variants before firing any — current code checks per-run only
 - [ ] Prompt versioning library guide: `get_prompt_diffs` exists but documented library pattern for prompt versioning does not
+- [ ] `base_snapshot_ids` parameter for prompt diffs exists in CRUD layer but not exposed as route query parameter
 
 ## Test coverage gaps
 
-- [ ] No unit tests for `run_variant_weighted`
-- [ ] No unit tests for `get_prompt_diffs`
+- [x] Unit tests exist for `run_variant_weighted` (5 test methods in `test_variant_group.py`)
+- [x] Unit tests exist for `get_prompt_diffs` (4 test methods in `test_variant_group.py`)
 
 ## Known Gaps
 
 - No frontend exists for variant group creation, comparison view, or coverage signal
 - No all-or-nothing N-variant quota pre-flight
 - No HITL partial completion handling
+- `base_snapshot_ids` parameter for prompt diffs is implemented in CRUD but not wired to the HTTP route
