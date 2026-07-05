@@ -44,3 +44,13 @@ Feature: GitHub Connector
     Given a GitHub connector with valid token
     When writing a file to GitHub returns HTTP 422 "Unprocessable"
     Then the connector raises a ValueError with "422"
+
+  Scenario: Create a pull request
+    Given a GitHub connector with valid token
+    When I write resource "pr" with head "feature" and base "main"
+    Then the write succeeds
+
+  Scenario: Comment on a pull request
+    Given a GitHub connector with valid token
+    When I write resource "pr_comment" on pull number 1 with body "Reviewed"
+    Then the write succeeds
