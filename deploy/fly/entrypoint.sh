@@ -15,10 +15,18 @@ if [ -f /tmp/database_url.env ]; then
 fi
 
 echo "=== Running DB migrations ==="
-# Clean orphaned alembic_version entries (from restructured migration branches)
-# then run all pending migrations.
+# Clean orphaned alembic_version entries from restructured migration branches.
+# If orphans were found and removed, the migration chain diverges from the
+# codebase — stamp the current head instead of running upgrade paths that
+# would try to re-apply already-existing schema changes.
 .venv/bin/python3 /app/deploy/fly/cleanup_orphan_migrations.py 2>&1
-.venv/bin/alembic upgrade heads
+HAS_ORPHANS=$?
+if [ "$HAS_ORPHANS" -eq 0 ]; then
+  .venv/bin/alembic stamp head
+  echo "  Stamped head (orphans were present — schema assumed up to date)"
+else
+  .venv/bin/alembic upgrade heads
+fi
 
 echo "=== Applying schema patches (columns missing from base migrations) ==="
 .venv/bin/python3 -c "

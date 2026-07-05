@@ -57,7 +57,13 @@ async def _cleanup() -> None:
             else:
                 print(f"  Removed {len(orphans)} orphan(s), "
                       f"{len(known)} known revisions in codebase")
+                # Signal to entrypoint that head should be stamped
+                global _had_orphans
+                _had_orphans = True
 
 
+_had_orphans = False
 if __name__ == "__main__":
     asyncio.run(_cleanup())
+    # Exit 0 = orphans found (stamp head), non-zero = clean (upgrade heads)
+    exit(0 if _had_orphans else 1)
