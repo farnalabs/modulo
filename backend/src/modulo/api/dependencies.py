@@ -54,7 +54,6 @@ def pg_connection_string(database_url: str) -> str:
     return (
         database_url.replace("postgresql+asyncpg://", "postgresql://")
         .replace("postgresql+psycopg://", "postgresql://")
-        .split("?")[0]
     )
 
 
