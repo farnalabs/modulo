@@ -26,7 +26,7 @@ async def fix():
     async with AsyncSessionLocal() as s:
         async with s.begin():
             await s.execute(text('CREATE TABLE IF NOT EXISTS alembic_version (version_num VARCHAR(255) NOT NULL PRIMARY KEY)'))
-            await s.execute(text(\"DELETE FROM alembic_version WHERE version_num = '0037_agent_columns'\"))
+            await s.execute(text(\"DELETE FROM alembic_version WHERE version_num IN ('0037_agent_columns', '0041_node_observations', '0051_error_tracking')\"))
 asyncio.run(fix())
 " 2>&1
 .venv/bin/alembic upgrade heads
