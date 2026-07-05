@@ -240,3 +240,264 @@ async def test_write_graphql_error(connector):
         await connector.write(
             ConnectorPayload(resource="issue", data={"title": "X", "teamId": "t1"})
         )
+
+
+@respx.mock
+async def test_retry_429_then_success(connector):
+    route = respx.post(_GRAPHQL)
+    route.side_effect = [
+        httpx.Response(429, headers={"Retry-After": "0"}, text="Rate limited"),
+        httpx.Response(429, headers={"Retry-After": "0"}, text="Rate limited"),
+        _mock_response({"data": {"viewer": {"id": "u1", "name": "Alice", "email": "a@a.com"}}}),
+    ]
+    result = await connector.health_check()
+    assert result.ok is True
+    assert result.detail == "Alice"
+
+
+@respx.mock
+async def test_retry_502_then_success(connector):
+    respx.post(_GRAPHQL).mock(
+        side_effect=[
+            httpx.Response(502, text="Bad Gateway"),
+            httpx.Response(502, text="Bad Gateway"),
+            _mock_response({"data": {"viewer": {"id": "u1", "name": "Bob", "email": "b@b.com"}}}),
+        ]
+    )
+    result = await connector.health_check()
+    assert result.ok is True
+    assert result.detail == "Bob"
+
+
+@respx.mock
+async def test_retry_exhaustion_429(connector):
+    respx.post(_GRAPHQL).mock(return_value=httpx.Response(429, text="Rate limited"))
+    result = await connector.health_check()
+    assert result.ok is False
+    assert "429" in result.detail
+
+
+@respx.mock
+async def test_retry_exhaustion_connection_error(connector):
+    respx.post(_GRAPHQL).mock(side_effect=httpx.ConnectError("Connection refused"))
+    result = await connector.health_check()
+    assert result.ok is False
+    assert "connection" in result.detail.lower()
+
+
+@respx.mock
+async def test_retry_exhaustion_timeout(connector):
+    respx.post(_GRAPHQL).mock(side_effect=httpx.TimeoutException("Timed out"))
+    result = await connector.health_check()
+    assert result.ok is False
+    assert "timeout" in result.detail.lower()
+
+
+@respx.mock
+async def test_304_not_modified(connector):
+    respx.post(_GRAPHQL).mock(return_value=httpx.Response(304))
+    result = await connector.health_check()
+    assert result.ok is False
+    assert "304" in result.detail
+
+
+@respx.mock
+async def test_query_search_with_pagination(connector):
+    page1 = {
+        "data": {
+            "searchIssues": {
+                "nodes": [{"id": "i1", "identifier": "PROJ-1", "title": "First", "description": None, "priority": 0, "state": {"id": "s1", "name": "Todo"}, "assignee": None, "team": {"id": "t1", "name": "Eng", "key": "PROJ"}, "createdAt": "2024-01-01T00:00:00Z", "updatedAt": "2024-01-01T00:00:00Z", "url": "https://linear.app/team/issue/PROJ-1"}],
+                "pageInfo": {"hasNextPage": True, "endCursor": "cursor-abc"},
+            }
+        }
+    }
+    page2 = {
+        "data": {
+            "searchIssues": {
+                "nodes": [{"id": "i2", "identifier": "PROJ-2", "title": "Second", "description": None, "priority": 1, "state": {"id": "s2", "name": "In Progress"}, "assignee": None, "team": {"id": "t1", "name": "Eng", "key": "PROJ"}, "createdAt": "2024-01-02T00:00:00Z", "updatedAt": "2024-01-02T00:00:00Z", "url": "https://linear.app/team/issue/PROJ-2"}],
+                "pageInfo": {"hasNextPage": False, "endCursor": "cursor-def"},
+            }
+        }
+    }
+    respx.post(_GRAPHQL).mock(
+        side_effect=[_mock_response(page1), _mock_response(page2)]
+    )
+
+    q1 = ConnectorQuery(resource="search", filters={"query": "bug"}, limit=1)
+    r1 = await connector.query(q1)
+    assert len(r1.records) == 1
+    assert r1.next_cursor == "cursor-abc"
+
+    q2 = ConnectorQuery(resource="search", filters={"query": "bug"}, limit=1, cursor="cursor-abc")
+    r2 = await connector.query(q2)
+    assert len(r2.records) == 1
+    assert r2.next_cursor is None
+
+
+@respx.mock
+async def test_query_issue_comments(connector):
+    comments_data = {
+        "data": {
+            "issue": {
+                "comments": {
+                    "nodes": [
+                        {"id": "c1", "body": "Looks good", "user": {"id": "u1", "name": "Alice", "email": "a@a.com"}, "createdAt": "2024-01-01T00:00:00Z", "updatedAt": "2024-01-01T00:00:00Z"},
+                    ]
+                }
+            }
+        }
+    }
+    respx.post(_GRAPHQL).mock(return_value=_mock_response(comments_data))
+    result = await connector.query(ConnectorQuery(resource="issue_comments", filters={"issueId": "issue-1"}))
+    assert len(result.records) == 1
+    assert result.records[0]["body"] == "Looks good"
+
+
+@respx.mock
+async def test_query_issue_comments_missing_issue_id(connector):
+    with pytest.raises(ValueError, match="requires 'issueId' filter"):
+        await connector.query(ConnectorQuery(resource="issue_comments", filters={}))
+
+
+@respx.mock
+async def test_write_issue_comment(connector):
+    comment_data = {
+        "data": {
+            "commentCreate": {
+                "success": True,
+                "comment": {"id": "c1", "body": "Nice work", "user": {"id": "u1", "name": "Alice", "email": "a@a.com"}, "createdAt": "2024-01-01T00:00:00Z", "updatedAt": "2024-01-01T00:00:00Z"},
+            }
+        }
+    }
+    respx.post(_GRAPHQL).mock(return_value=_mock_response(comment_data))
+    result = await connector.write(ConnectorPayload(resource="issue_comment", data={"issueId": "issue-1", "body": "Nice work"}))
+    assert result["id"] == "c1"
+    assert result["body"] == "Nice work"
+
+
+@respx.mock
+async def test_write_issue_comment_failure(connector):
+    respx.post(_GRAPHQL).mock(return_value=_mock_response({"data": {"commentCreate": {"success": False, "comment": None}}}))
+    with pytest.raises(ValueError, match="Failed to create Linear issue comment"):
+        await connector.write(ConnectorPayload(resource="issue_comment", data={"issueId": "i1", "body": "Fail"}))
+
+
+@respx.mock
+async def test_query_teams(connector):
+    teams_data = {
+        "data": {
+            "teams": {
+                "nodes": [
+                    {"id": "t1", "name": "Engineering", "key": "ENG", "description": "Builds stuff"},
+                    {"id": "t2", "name": "Design", "key": "DSN", "description": "Makes it pretty"},
+                ]
+            }
+        }
+    }
+    respx.post(_GRAPHQL).mock(return_value=_mock_response(teams_data))
+    result = await connector.query(ConnectorQuery(resource="teams"))
+    assert len(result.records) == 2
+    assert result.records[0]["key"] == "ENG"
+    assert result.records[1]["name"] == "Design"
+
+
+@respx.mock
+async def test_query_team_projects(connector):
+    projects_data = {
+        "data": {
+            "team": {
+                "projects": {
+                    "nodes": [
+                        {"id": "p1", "name": "Q4 Launch", "description": "Big release", "state": "planned", "startDate": None, "targetDate": None},
+                    ]
+                }
+            }
+        }
+    }
+    respx.post(_GRAPHQL).mock(return_value=_mock_response(projects_data))
+    result = await connector.query(ConnectorQuery(resource="team_projects", filters={"teamId": "t1"}))
+    assert len(result.records) == 1
+    assert result.records[0]["name"] == "Q4 Launch"
+
+
+@respx.mock
+async def test_query_team_states(connector):
+    states_data = {
+        "data": {
+            "team": {
+                "states": {
+                    "nodes": [
+                        {"id": "s1", "name": "Todo", "type": "unstarted", "position": 0},
+                        {"id": "s2", "name": "In Progress", "type": "started", "position": 1},
+                    ]
+                }
+            }
+        }
+    }
+    respx.post(_GRAPHQL).mock(return_value=_mock_response(states_data))
+    result = await connector.query(ConnectorQuery(resource="team_states", filters={"teamId": "t1"}))
+    assert len(result.records) == 2
+    assert result.records[0]["type"] == "unstarted"
+
+
+@respx.mock
+async def test_query_team_labels(connector):
+    labels_data = {
+        "data": {
+            "team": {
+                "labels": {
+                    "nodes": [
+                        {"id": "l1", "name": "bug", "color": "#ff0000"},
+                        {"id": "l2", "name": "feature", "color": "#00ff00"},
+                    ]
+                }
+            }
+        }
+    }
+    respx.post(_GRAPHQL).mock(return_value=_mock_response(labels_data))
+    result = await connector.query(ConnectorQuery(resource="team_labels", filters={"teamId": "t1"}))
+    assert len(result.records) == 2
+    assert result.records[1]["name"] == "feature"
+
+
+@respx.mock
+async def test_query_team_cycles(connector):
+    cycles_data = {
+        "data": {
+            "team": {
+                "cycles": {
+                    "nodes": [
+                        {"id": "cy1", "name": "Sprint 24", "startsAt": "2024-06-01T00:00:00Z", "endsAt": "2024-06-14T00:00:00Z", "completedAt": None},
+                    ]
+                }
+            }
+        }
+    }
+    respx.post(_GRAPHQL).mock(return_value=_mock_response(cycles_data))
+    result = await connector.query(ConnectorQuery(resource="team_cycles", filters={"teamId": "t1"}))
+    assert len(result.records) == 1
+    assert result.records[0]["name"] == "Sprint 24"
+
+
+@respx.mock
+async def test_query_team_projects_missing_team_id(connector):
+    with pytest.raises(ValueError, match="requires 'teamId' filter"):
+        await connector.query(ConnectorQuery(resource="team_projects", filters={}))
+
+
+@respx.mock
+async def test_query_team_states_missing_team_id(connector):
+    with pytest.raises(ValueError, match="requires 'teamId' filter"):
+        await connector.query(ConnectorQuery(resource="team_states", filters={}))
+
+
+@respx.mock
+async def test_query_team_labels_missing_team_id(connector):
+    with pytest.raises(ValueError, match="requires 'teamId' filter"):
+        await connector.query(ConnectorQuery(resource="team_labels", filters={}))
+
+
+@respx.mock
+async def test_query_team_cycles_missing_team_id(connector):
+    with pytest.raises(ValueError, match="requires 'teamId' filter"):
+        await connector.query(ConnectorQuery(resource="team_cycles", filters={}))

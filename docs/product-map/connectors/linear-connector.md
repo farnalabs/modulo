@@ -37,6 +37,8 @@ Async Linear GraphQL API connector implementing `ConnectorBase`. BDD coverage: 8
 - [x] Return data dict on success
 - [x] Define shared issue field selection fragment (`_ISSUE_FIELDS`) for consistent responses
 - [x] All GraphQL operations use the same endpoint `https://api.linear.app/graphql`
+- [x] Implement retry/backoff for transient HTTP errors (429, 502, 503, 504) with exponential backoff
+- [x] Handle 304 Not Modified responses gracefully
 - [ ] Support GraphQL query complexity limits and cost-based rate limiting
 - [x] Support request cancellation via `asyncio` timeout (httpx client has timeout=30s configured)
 
@@ -46,23 +48,28 @@ Async Linear GraphQL API connector implementing `ConnectorBase`. BDD coverage: 8
 - [x] Return issue fields: id, title, description, state, priority, assignee, labels, createdAt, updatedAt
 - [x] Search issues via `query("search")` with text `query` and optional `limit`
 - [x] Default search limit to 100
+- [x] Support cursor-based pagination via `cursor` parameter in `ConnectorQuery`
+- [x] Return `next_cursor` from `ConnectorResult` for continuation
+- [x] Parse `pageInfo.hasNextPage` and `pageInfo.endCursor` from GraphQL response
 - [x] Create issue via `write("issue")` with `team_id`, `title`, optional `description`, `priority`, `assignee_id`, `label_ids`
 - [x] Update issue fields via `write("issue_update")` with `issue_id` and fields
 - [x] Raise `ValueError` for unsupported resources in `query()` and `write()`
-- [ ] Comment on issue — not implemented
+- [x] Read issue comments via `query("issue_comments")` with `issueId` filter
+- [x] Create issue comments via `write("issue_comment")` with `issueId` and `body`
+- [x] Support cursor-based pagination for `query("search")` — `next_cursor` populated from `pageInfo`
 - [ ] Add/remove issue labels — only available via full `issue_update`
 - [ ] Change issue state/status — only available via `issue_update` with `stateId`
 - [ ] Assign/unassign issue — only available via `issue_update`
 - [ ] Archive issue — not implemented
 - [ ] Delete issue — not implemented
-- [ ] Search does not support pagination cursor — `next_cursor` always `None`
 
 ### Team and Project Operations
 
-- [ ] List teams — not implemented
-- [ ] List projects — not implemented
-- [ ] Get team metadata (states, workflows) — not implemented
-- [ ] List issue labels for a team — not implemented
+- [x] List teams via `query("teams")` — returns id, name, key, description
+- [x] List projects for a team via `query("team_projects")` with `teamId` filter
+- [x] Get workflow states for a team via `query("team_states")` with `teamId` filter
+- [x] List issue labels for a team via `query("team_labels")` with `teamId` filter
+- [x] List active/upcoming cycles for a team via `query("team_cycles")` with `teamId` filter
 
 ### Capability Declaration
 
@@ -78,13 +85,16 @@ Async Linear GraphQL API connector implementing `ConnectorBase`. BDD coverage: 8
 - [ ] Detect expired API keys vs network errors vs insufficient permissions
 - [ ] Per-operation permission check before mutation calls
 
-### Error Handling
+### Error Handling & Resilience
 
-- [x] `health_check` catches `httpx.HTTPStatusError` — returns `HealthResult(ok=False)` with status code and response text
-- [x] `health_check` catches generic `Exception` — returns `HealthResult(ok=False)` with truncated message
-- [x] `_graphql` catches `httpx.HTTPStatusError` — raises `ValueError` with status code and response text
-- [x] `_graphql` catches `httpx.TimeoutException` and `httpx.ConnectError` — raises `ValueError` with connection error detail
-- [x] `_graphql` catches JSON decode errors — raises `ValueError` with parsing error detail
+- [x] `health_check` catches generic `Exception` — returns `HealthResult(ok=False)` with truncated message (no redundant `HTTPStatusError` catch; `_graphql` wraps all HTTP errors as `ValueError`)
+- [x] `_graphql` retries 429, 502, 503, 504 with exponential backoff (matching GitHub/Jira/Slack pattern)
+- [x] `_graphql` respects `Retry-After` header for retry timing
+- [x] `_graphql` retries `TimeoutException` with exponential backoff, raises `ValueError("Linear API timeout")` after exhaustion
+- [x] `_graphql` retries `ConnectError` with exponential backoff, raises `ValueError("Linear API connection error")` after exhaustion
+- [x] `_graphql` handles 304 Not Modified — raises `ValueError` with descriptive message
+- [x] `_graphql` catches `httpx.HTTPStatusError` for non-retryable statuses — raises `ValueError` with status code and response text
+- [x] `_graphql` catches `json.JSONDecodeError` — raises `ValueError` with parsing error detail
 - [x] `_graphql` detects GraphQL `"errors"` key in response — raises `ValueError` with error details
 - [x] `query("issue")` with missing `id` filter — raises `ValueError` with descriptive message
 - [x] `write("issue_update")` with missing `id` — raises `ValueError` with descriptive message
@@ -101,15 +111,16 @@ Async Linear GraphQL API connector implementing `ConnectorBase`. BDD coverage: 8
 
 ## Known Gaps
 
-- [ ] **No comment operations**: cannot read or write issue comments
-- [ ] **No team/project enumeration**: agents cannot discover teams, projects, or available workflows at runtime
+- [x] **Comment operations**: implemented — `query("issue_comments")` and `write("issue_comment")` added with full GraphQL support
+- [x] **Team/project enumeration**: implemented — `query("teams")`, `query("team_projects")`, `query("team_states")`, `query("team_labels")`, `query("team_cycles")` all available
+- [x] **Pagination**: implemented — cursor-based pagination for `query("search")` with `next_cursor` in `ConnectorResult`
+- [x] **Rate-limit handling**: implemented — 429/502/503/504 retry with exponential backoff + Retry-After support
 - [ ] **State transitions require raw stateId**: no helper to map workflow state names to IDs
 - [ ] **No label management**: cannot create, rename, or delete labels
-- [ ] **No cycle/sprint awareness**: cannot read or set issue cycle assignment
-- [ ] **No pagination**: `query("search")` results are limited by default with no cursor-based continuation
-- [ ] **No rate-limit handling**: no GraphQL query cost measurement, no 429 handling
+- [ ] **No cycle/sprint assignment**: can read cycles but cannot assign an issue to a cycle
 
 ## QA History
+- 2026-07-05: Cross-cutting QA (improve-architecture): Added retry/backoff to `_graphql` (429/502/503/504 + TimeoutException + ConnectError) matching GitHub/Jira/Slack patterns. Simplified `health_check` (removed dead `httpx.HTTPStatusError` catch). Added cursor-based pagination for `query("search")`. Added comment operations (`issue_comments` read, `issue_comment` write). Added team/project discovery (teams, projects, states, labels, cycles). Added 15 new unit tests covering all new code paths (37 total). Updated product map with new sections. Status: partial (cycle assignment, label management, state helper still gaps).
 - 2026-07-03: Cross-cutting QA (index 110): Fixed HTTP/JSON error handling in `_graphql` (wraps HTTPStatusError, TimeoutException, ConnectError, JSONDecodeError as ValueError). Added 5 resilience unit tests (test_linear_resilience.py). Fixed stale checkbox: timeout confirmed configured (30s). Fixed search default limit (50→100). Added Error Handling section (12 behaviour checkboxes). Status: partial (known gaps unchanged).
 - 2026-07-01: Cross-cutting QA: fixed frontmatter (added unit-tests), removed outdated known gaps #7 (BDD placeholder → 5 real scenarios) and #8 (unit tests exist), added 3 BDD error-path scenarios + step definitions, added 4 unit tests (missing id, update failure, GraphQL error), fixed search to respect `q.limit` via `first:$limit`, consolidated gaps from 9→7
 
