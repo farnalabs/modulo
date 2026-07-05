@@ -83,3 +83,9 @@
 - `os.environ.pop()` / `os.environ[key]=val` in tests without `try/finally` → use `monkeypatch.delenv()` / `monkeypatch.setenv()`. `monkeypatch` automatically restores the original value on teardown, preventing cascading failures when a test mutates global env state.
 
 - `pytest.raises(Exception)` in tests → narrow to the specific exception type the code is expected to raise (e.g. `ValueError`, `JWTError`). Bare `Exception` masks bugs where the code raises an unexpected exception (including `SystemExit`, `KeyboardInterrupt`) and the test passes.
+
+### Alembic / Entrypoint
+
+- **Deployed databases may have orphaned `alembic_version` entries from restructured migration branches.** When a branch migration is rebased onto the main chain, the old revision ID stays in the DB's `alembic_version` table. The entrypoint (`deploy/fly/entrypoint.sh`) runs `cleanup_orphan_migrations.py` before `alembic upgrade heads` to remove any `version_num` that doesn't match a known migration file. If the remaining chain diverges (because the DB migrated through old branch revisions whose schema changes are already present), the entrypoint falls back to `alembic stamp head`. This logic lives in `deploy/fly/cleanup_orphan_migrations.py` and must be kept in sync with the actual migration files — it reads `revision:` from every `.py` in `migrations/versions/`.
+
+- **Alembic `env.py` sync URL driver must use a package in production deps.** The `_to_sync_url` function converts `postgresql+asyncpg://` to `postgresql+psycopg2://`. But `psycopg2` is not in the production dependency tree — only `psycopg-binary` (psycopg v3) is. Use `postgresql+psycopg://` (psycopg v3) instead of `postgresql+psycopg2://`. The fix is in `backend/src/modulo/db/migrations/env.py:_to_sync_url`. Without this, Docker builds fail at startup with `ModuleNotFoundError: No module named 'psycopg2'`.
