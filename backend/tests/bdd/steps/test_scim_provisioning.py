@@ -125,6 +125,7 @@ def _make_scim_settings() -> Settings:
         modulo_admin_password="testpass",
         modulo_license_key="enterprise-license",
         modulo_scim_token=_SCIM_TOKEN,
+        modulo_public_url="http://localhost:8000",
     )
 
 
@@ -135,6 +136,7 @@ def _make_no_license_settings() -> Settings:
         fernet_key=_VALID_32,
         modulo_admin_password="testpass",
         modulo_license_key="",
+        modulo_public_url="http://localhost:8000",
     )
 
 
