@@ -11,6 +11,7 @@ Run with VCR_RECORD_MODE=once against a real API to record cassettes.
 """
 
 import os
+import warnings
 from pathlib import Path
 from typing import Any
 
@@ -29,8 +30,7 @@ def vcr_config(**overrides: Any) -> dict[str, Any]:
     record_mode = os.environ.get("VCR_RECORD_MODE", "none")
     if record_mode not in _VALID_RECORD_MODES:
         raise ValueError(
-            f"Invalid VCR_RECORD_MODE={record_mode!r}. "
-            f"Valid modes: {', '.join(sorted(_VALID_RECORD_MODES))}"
+            f"Invalid VCR_RECORD_MODE={record_mode!r}. Valid modes: {', '.join(sorted(_VALID_RECORD_MODES))}",
         )
 
     config: dict[str, Any] = {
@@ -43,8 +43,6 @@ def vcr_config(**overrides: Any) -> dict[str, Any]:
     }
 
     if not VCR_CASSETTE_DIR.exists():
-        import warnings
-
         warnings.warn(
             f"VCR cassette directory does not exist: {VCR_CASSETTE_DIR}. "
             "Create it or run with VCR_RECORD_MODE=once to record cassettes.",
@@ -54,8 +52,7 @@ def vcr_config(**overrides: Any) -> dict[str, Any]:
     for key, value in overrides.items():
         if key == "record_mode" and value not in _VALID_RECORD_MODES:
             raise ValueError(
-                f"Invalid record_mode={value!r}. "
-                f"Valid modes: {', '.join(sorted(_VALID_RECORD_MODES))}"
+                f"Invalid record_mode={value!r}. Valid modes: {', '.join(sorted(_VALID_RECORD_MODES))}",
             )
         if isinstance(value, list) and isinstance(config.get(key), list):
             config[key] = config[key] + value
