@@ -122,7 +122,7 @@ class GitLabCIRunner(CIRunnerBase):
             raise ValueError("project_id is required in run_id")
         try:
             async with self._client() as client:
-                offset = int(cursor) if cursor else 0
+                offset = int(cursor) if cursor and cursor.isdigit() else 0
                 jobs_r = await client.get(
                     f"/projects/{project_id}/pipelines/{pipeline_id}/jobs",
                     params={"per_page": 100, "page": (offset // 100) + 1},

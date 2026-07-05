@@ -105,11 +105,16 @@ class BitbucketConnector(ConnectorBase):
                         total=body.get("size"),
                     )
                 case "file":
-                    workspace = q.filters["workspace"]
-                    repo = q.filters["repo"]
-                    path = q.filters["path"]
+                    workspace = q.filters.get("workspace")
+                    if not workspace:
+                        raise ValueError("Bitbucket file query requires 'workspace' filter")
+                    repo = q.filters.get("repo")
+                    if not repo:
+                        raise ValueError("Bitbucket file query requires 'repo' filter")
+                    path = q.filters.get("path")
+                    if not path:
+                        raise ValueError("Bitbucket file query requires 'path' filter")
                     ref = q.filters.get("ref", "main")
-                    # Bitbucket raw file endpoint returns the file body directly
                     r = await client.get(
                         f"/repositories/{workspace}/{repo}/src/{ref}/{path}",
                         headers={**self._headers(), "Accept": "*/*"},
@@ -117,8 +122,12 @@ class BitbucketConnector(ConnectorBase):
                     r.raise_for_status()
                     return ConnectorResult(records=[{"content": r.text, "path": path, "ref": ref}])
                 case "pulls":
-                    workspace = q.filters["workspace"]
-                    repo = q.filters["repo"]
+                    workspace = q.filters.get("workspace")
+                    if not workspace:
+                        raise ValueError("Bitbucket pulls query requires 'workspace' filter")
+                    repo = q.filters.get("repo")
+                    if not repo:
+                        raise ValueError("Bitbucket pulls query requires 'repo' filter")
                     state = q.filters.get("state", "OPEN")
                     params: dict[str, Any] = {"pagelen": q.limit, "state": state}
                     r = await client.get(
@@ -132,8 +141,12 @@ class BitbucketConnector(ConnectorBase):
                         total=body.get("size"),
                     )
                 case "issues":
-                    workspace = q.filters["workspace"]
-                    repo = q.filters["repo"]
+                    workspace = q.filters.get("workspace")
+                    if not workspace:
+                        raise ValueError("Bitbucket issues query requires 'workspace' filter")
+                    repo = q.filters.get("repo")
+                    if not repo:
+                        raise ValueError("Bitbucket issues query requires 'repo' filter")
                     params = {"pagelen": q.limit}
                     if "state" in q.filters:
                         params["state"] = q.filters["state"]

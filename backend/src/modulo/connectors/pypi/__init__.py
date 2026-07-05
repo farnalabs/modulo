@@ -2,6 +2,7 @@
 
 from typing import Any, cast
 
+import defusedxml.xmlrpc
 import httpx
 
 from modulo.connectors.base import (
@@ -13,6 +14,7 @@ from modulo.connectors.base import (
     HealthResult,
 )
 
+defusedxml.xmlrpc.monkey_patch()
 _API_BASE = "https://pypi.org/pypi"
 
 
@@ -94,11 +96,10 @@ class PyPIConnector(ConnectorBase):
         text = q.filters.get("text")
         if not text:
             raise ValueError("PyPI search query requires 'text' in filters")
-        import defusedxml.xmlrpc
         spec = {"name": text, "summary": text}
         operator = q.filters.get("operator", "and")
-        defusedxml.xmlrpc.monkey_patch()
         xml_body = defusedxml.xmlrpc.dumps((spec, operator), "search")
+    
         async with httpx.AsyncClient(
             base_url=_API_BASE,
             timeout=30,

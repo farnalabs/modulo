@@ -129,6 +129,7 @@ class GitHubConnector(ConnectorBase):
                     r.raise_for_status()
                     return r
             except httpx.HTTPStatusError as exc:
+                last_exc = exc
                 if exc.response.status_code in _RETRYABLE_STATUSES and attempt < _MAX_RETRIES:
                     retry_after = _parse_retry_after(exc.response)
                     delay = min(retry_after, _MAX_DELAY) if retry_after else min(_BASE_DELAY * (2 ** attempt), _MAX_DELAY)
@@ -136,18 +137,22 @@ class GitHubConnector(ConnectorBase):
                     continue
                 raise ValueError(f"GitHub API HTTP {exc.response.status_code}: {exc.response.text[:200]}") from exc
             except httpx.TimeoutException as exc:
+                last_exc = exc
                 if attempt < _MAX_RETRIES:
                     delay = min(_BASE_DELAY * (2 ** attempt), _MAX_DELAY)
                     await asyncio.sleep(delay)
                     continue
                 raise ValueError("GitHub API timeout") from exc
             except httpx.ConnectError as exc:
+                last_exc = exc
                 if attempt < _MAX_RETRIES:
                     delay = min(_BASE_DELAY * (2 ** attempt), _MAX_DELAY)
                     await asyncio.sleep(delay)
                     continue
                 raise ValueError("GitHub API connection error") from exc
         raise ValueError("GitHub API request failed after retries") from last_exc
+
+
 
     async def _parse_json(self, response: httpx.Response) -> Any:
         """Parse JSON response, wrapping decode errors as ValueError."""
@@ -205,10 +210,9 @@ class GitHubConnector(ConnectorBase):
 
     def _require_filter(self, filters: dict[str, Any], key: str, resource: str) -> str:
         """Get a required filter or raise a descriptive ValueError."""
-        value = filters.get(key)
-        if not value:
+        if key not in filters:
             raise ValueError(f"GitHub {resource} query requires '{key}' filter")
-        return value
+        return filters[key]
 
     async def query(self, q: ConnectorQuery) -> ConnectorResult:
         match q.resource:
@@ -328,10 +332,9 @@ class GitHubConnector(ConnectorBase):
 
     def _require_write_filter(self, data: dict[str, Any], key: str, resource: str) -> str:
         """Get a required write field or raise a descriptive ValueError."""
-        value = data.get(key)
-        if not value:
+        if key not in data:
             raise ValueError(f"GitHub {resource} write requires '{key}' in data")
-        return value
+        return data[key]
 
     async def write(self, payload: ConnectorPayload) -> dict[str, Any]:
         match payload.resource:

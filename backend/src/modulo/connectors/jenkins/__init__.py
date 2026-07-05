@@ -2,6 +2,7 @@
 
 import base64
 import logging
+import re
 from typing import Any
 
 import httpx
@@ -122,8 +123,10 @@ class JenkinsConnector(ConnectorBase):
                 r = await client.post(f"/job/{job_name}/build")
             r.raise_for_status()
             location = r.headers.get("Location", "")
+            queue_match = re.search(r"/queue/item/(\d+)", location)
+            run_id = queue_match.group(1) if queue_match else location
             return CIRun(
-                id=location,
+                id=run_id,
                 pipeline_id=job_name,
                 status=CIRunStatus.QUEUED,
                 url=location,

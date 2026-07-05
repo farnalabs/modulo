@@ -95,3 +95,23 @@
 - **Deployed databases may have orphaned `alembic_version` entries from restructured migration branches.** When a branch migration is rebased onto the main chain, the old revision ID stays in the DB's `alembic_version` table. The entrypoint (`deploy/fly/entrypoint.sh`) runs `cleanup_orphan_migrations.py` before `alembic upgrade heads` to remove any `version_num` that doesn't match a known migration file. If the remaining chain diverges (because the DB migrated through old branch revisions whose schema changes are already present), the entrypoint falls back to `alembic stamp head`. This logic lives in `deploy/fly/cleanup_orphan_migrations.py` and must be kept in sync with the actual migration files — it reads `revision:` from every `.py` in `migrations/versions/`.
 
 - **Alembic `env.py` sync URL driver must use a package in production deps.** The `_to_sync_url` function converts `postgresql+asyncpg://` to `postgresql+psycopg2://`. But `psycopg2` is not in the production dependency tree — only `psycopg-binary` (psycopg v3) is. Use `postgresql+psycopg://` (psycopg v3) instead of `postgresql+psycopg2://`. The fix is in `backend/src/modulo/db/migrations/env.py:_to_sync_url`. Without this, Docker builds fail at startup with `ModuleNotFoundError: No module named 'psycopg2'`.
+
+### Connectors: shell command construction with env vars
+
+- When prepending env vars to a shell command in `_build_exec_cmd`, env vars must prefix the final command itself (`KEY=VALUE cmd`), not appear as a separate `&&`-delimited statement (`KEY=VALUE && cmd` which is invalid shell).
+
+### Connectors: retry loop `last_exc` must be assigned in every `except` block
+
+- In retry-loop patterns with `last_exc: Exception | None = None`, every `except` block must set `last_exc = exc` before `continue` or `raise`. Without assignment, `raise ... from last_exc` on retry exhaustion is `from None` — the original exception chain is lost. Found in 3 connectors (GitHub, Slack, Jira).
+
+### Connectors: pagination cursor must not double as resource identifier
+
+- Never use `q.filters.get("id") or q.cursor` as a fallback resource ID. The pagination cursor is a bookmark, not an entity identifier. Mixing them means a caller that passes a cursor gets a wrong/failed API call instead of a clear validation error.
+
+### Connectors: import stdlib modules at module level
+
+- Always import stdlib modules (`datetime`, `base64`, `uuid`, `urllib.parse`) at module level, not inside method bodies. Lazy imports inside methods: (1) pay the import cost on every invocation, (2) delay dependency-failure detection from import time to first-use time, (3) are flagged by linters. Found in 4 connector files.
+
+### Connectors: use `key in dict` for required filter validation, not `dict.get(key)` with falsy check
+
+- `if not value` after `dict.get(key)` rejects falsy-but-valid values (empty string `""`, integer `0`, boolean `False`). For required fields validation, use `if key not in filters` / `if key not in data` instead. This matches the GitLab connector's correct pattern and avoids introducing subtle bugs when a valid field value is falsy.

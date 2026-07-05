@@ -1,11 +1,11 @@
 export interface MonitorBackend {
   key: string
   init(config: MonitorConfig): Promise<boolean>
-  captureError(event: ErrorEventInput): void
-  captureMessage(message: string, level: 'error' | 'warning' | 'critical'): void
+  captureError(event: MonitorEvent, error?: Error, context?: Record<string, unknown>): void
+  captureMessage(message: string, level: string): void
   setUser(user: UserInfo | null): void
   setTags(tags: Record<string, string>): void
-  addBreadcrumb(breadcrumb: Breadcrumb): void
+  addBreadcrumb?(breadcrumb: Breadcrumb): void
   dispose(): void
 }
 
@@ -14,6 +14,13 @@ export interface MonitorConfig {
   sentry?: { dsn: string }
   datadogRum?: { clientToken: string }
   grafanaFaro?: { url: string; apiKey?: string; appName?: string }
+}
+
+export interface MonitorEvent {
+  level: string
+  message: string
+  stacktrace?: string
+  context?: Record<string, unknown>
 }
 
 export interface ErrorEventInput {

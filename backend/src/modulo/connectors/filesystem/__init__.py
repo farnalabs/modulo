@@ -69,7 +69,9 @@ class FilesystemConnector(ConnectorBase):
                 try:
                     content = await asyncio.to_thread(path.read_text, encoding="utf-8")
                 except FileNotFoundError:
-                    raise ValueError(f"File not found: {rel_path!r}")
+                    raise ValueError(f"File not found: {rel_path!r}") from None
+                except PermissionError:
+                    raise ValueError(f"Permission denied reading file: {rel_path!r}") from None
                 return ConnectorResult(records=[{"path": str(path), "content": content}])
             case "directory":
                 dir_path = self._safe_path(q.filters.get("path", "."))

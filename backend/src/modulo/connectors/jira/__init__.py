@@ -100,6 +100,7 @@ class JiraConnector(ConnectorBase):
         Retries on 429, 502, 503, 504 with exponential backoff + jitter.
         Wraps HTTP/network/parse errors as ValueError.
         """
+        last_exc: Exception | None = None
         for attempt in range(_MAX_RETRIES + 1):
             try:
                 async with self._client() as client:
@@ -114,6 +115,7 @@ class JiraConnector(ConnectorBase):
                     r.raise_for_status()
                     return r
             except httpx.HTTPStatusError as exc:
+                last_exc = exc
                 if exc.response.status_code in _RETRYABLE_STATUSES and attempt < _MAX_RETRIES:
                     retry_after = _parse_retry_after(exc.response)
                     delay = min(retry_after, _MAX_DELAY) if retry_after else min(_BASE_DELAY * (2 ** attempt), _MAX_DELAY)
@@ -121,18 +123,20 @@ class JiraConnector(ConnectorBase):
                     continue
                 raise ValueError(f"Jira API HTTP {exc.response.status_code}: {exc.response.text[:200]}") from exc
             except httpx.TimeoutException as exc:
+                last_exc = exc
                 if attempt < _MAX_RETRIES:
                     delay = min(_BASE_DELAY * (2 ** attempt), _MAX_DELAY)
                     await asyncio.sleep(delay)
                     continue
                 raise ValueError("Jira API timeout") from exc
             except httpx.ConnectError as exc:
+                last_exc = exc
                 if attempt < _MAX_RETRIES:
                     delay = min(_BASE_DELAY * (2 ** attempt), _MAX_DELAY)
                     await asyncio.sleep(delay)
                     continue
                 raise ValueError("Jira API connection error") from exc
-        raise ValueError("Jira API request failed after retries")
+        raise ValueError("Jira API request failed after retries") from last_exc
 
     async def _parse_json(self, response: httpx.Response) -> dict[str, Any]:
         """Safely parse JSON response, wrapping decode errors."""
@@ -221,7 +225,7 @@ class JiraConnector(ConnectorBase):
                 if "issue_key" not in payload.data:
                     raise ValueError("Jira issue update requires 'issue_key' in data")
                 issue_key = payload.data["issue_key"]
-                fields: dict[str, Any] = payload.data["fields"]
+                fields: dict[str, Any] = payload.data.get("fields", {})
                 r = await self._call_api("PUT", f"/issue/{issue_key}", json={"fields": fields})
                 return {"issue_key": issue_key, "updated": True}
             case "issue_comment":
