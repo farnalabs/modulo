@@ -18,10 +18,7 @@ from typing import Any, Literal
 
 import click
 from sqlalchemy import select
-from sqlalchemy.exc import SQLAlchemyError
 from tqdm import tqdm  # type: ignore[import-untyped]
-
-_log = logging.getLogger(__name__)
 
 from modulo.auth.jwt import decode_principal
 from modulo.db.crud.account import get_account_by_id
@@ -36,6 +33,8 @@ from modulo.db.models.pipeline import Pipeline
 from modulo.db.models.run import Run
 from modulo.db.session import AsyncSessionLocal
 from modulo.settings import get_settings
+
+_log = logging.getLogger(__name__)
 
 ConflictStrategy = Literal["skip", "overwrite", "merge"]
 _EXPORT_TABLES = (
@@ -200,7 +199,7 @@ def _write_jsonl(bundle: dict[str, Any], path: Path) -> dict[str, str]:
 
 
 async def _read_jsonl(path: Path) -> tuple[dict[str, Any], list[dict[str, Any]]]:
-    if not path.exists():
+    if not os.path.exists(str(path)):  # noqa: ASYNC240
         raise click.ClickException(f"Input file not found: {path}")
     meta: dict[str, Any] = {}
     records: list[dict[str, Any]] = []
@@ -253,8 +252,14 @@ async def _import_org_data(
         tables_to_import = [(n, r) for n, r in tables_to_import if n == "accounts"]
 
     for table_name, recs in tqdm(tables_to_import, desc="Importing tables", unit="table"):
+        if not table_name:
+            _log.warning("Skipping record with empty __table__ key")
+            counts["errors"] += 1
+            continue
         model_cls = _MODEL_MAP.get(table_name)
         if model_cls is None:
+            _log.warning("Skipping unknown table: %s", table_name)
+            counts["errors"] += 1
             continue
 
         for rec in tqdm(recs, desc=f"  {table_name}", unit="row", leave=False):
@@ -278,31 +283,31 @@ async def _import_org_data(
                     counts["skipped"] += 1
                     continue
 
-                if existing is not None and strategy in ("overwrite", "merge"):
-                    skip_cols = {"id", pk_col, "created_at", "organisation_id"}
-                    for col, val in row_data.items():
-                        if col in skip_cols:
-                            continue
-                        if not hasattr(existing, col):
-                            continue
-                        if strategy == "merge":
-                            current = getattr(existing, col)
-                            if current is not None:
+                async with session.begin_nested():
+                    if existing is not None and strategy in ("overwrite", "merge"):
+                        skip_cols = {"id", pk_col, "created_at", "organisation_id"}
+                        for col, val in row_data.items():
+                            if col in skip_cols:
                                 continue
-                        setattr(existing, col, val)
-                    counts["overwritten"] += 1
-                    continue
+                            if not hasattr(existing, col):
+                                continue
+                            if strategy == "merge":
+                                current = getattr(existing, col)
+                                if current is not None:
+                                    continue
+                            setattr(existing, col, val)
+                        counts["overwritten"] += 1
+                        continue
 
-                if existing is None:
-                    row_data.pop("id", None)
-                    if hasattr(model_cls, "organisation_id"):
-                        row_data["organisation_id"] = org_id
-                    session.add(model_cls(**row_data))
-                    counts["created"] += 1
+                    if existing is None:
+                        row_data.pop("id", None)
+                        if hasattr(model_cls, "organisation_id"):
+                            row_data["organisation_id"] = org_id
+                        session.add(model_cls(**row_data))
+                        counts["created"] += 1
 
             except Exception as exc:
                 _log.warning("Error importing %s row %s: %s", table_name, row_id or "?", exc)
-                await session.rollback()
                 counts["errors"] += 1
 
         try:
@@ -318,7 +323,7 @@ async def _import_org_data(
 # ── Verify helpers ──────────────────────────────────────────────────────────────
 
 
-async def _verify_export(meta: dict[str, Any], records: list[dict[str, Any]]) -> bool:
+def _verify_export(meta: dict[str, Any], records: list[dict[str, Any]]) -> bool:
     expected_hash = meta.get("export_hash", "")
     groups = _group_records(records)
 
@@ -366,6 +371,13 @@ def cli(ctx: click.Context, token: str | None) -> None:
     ctx.obj["admin_user_id"] = admin_id
 
 
+def _parse_uuid(raw: str, label: str = "UUID") -> uuid.UUID:
+    try:
+        return uuid.UUID(raw)
+    except (ValueError, AttributeError) as exc:
+        raise click.ClickException(f"Invalid {label}: {raw!r}") from exc
+
+
 @cli.command()
 @click.argument("org_id", type=str)
 @click.option(
@@ -378,13 +390,6 @@ def cli(ctx: click.Context, token: str | None) -> None:
 @click.option("--pipelines-only", is_flag=True, default=False, help="Export only pipelines")
 @click.option("--users-only", is_flag=True, default=False, help="Export only users")
 @click.pass_context
-def _parse_uuid(raw: str, label: str = "UUID") -> uuid.UUID:
-    try:
-        return uuid.UUID(raw)
-    except (ValueError, AttributeError) as exc:
-        raise click.ClickException(f"Invalid {label}: {raw!r}") from exc
-
-
 def export_org(ctx: click.Context, org_id: str, output: Path, pipelines_only: bool, users_only: bool) -> None:
     """Export all organisation data as a JSONL bundle."""
     asyncio.run(_async_export_org(ctx, _parse_uuid(org_id, "organisation ID"), output, pipelines_only, users_only))
@@ -405,8 +410,10 @@ async def _async_export_org(
             record_count = sum(len(v) for k, v in bundle.items() if isinstance(v, list))
             click.echo(f"Exported {record_count} records to {output}")
             click.echo(f"Export hash: {hashes['__export__']}")
-    except SQLAlchemyError as exc:
-        raise click.ClickException(f"Database error during export: {exc}") from exc
+    except click.ClickException:
+        raise
+    except Exception as exc:
+        raise click.ClickException(f"Export failed: {exc}") from exc
 
 
 @cli.command()
@@ -437,7 +444,10 @@ def import_org(
     users_only: bool,
 ) -> None:
     """Import organisation data from a JSONL bundle with conflict resolution."""
-    asyncio.run(_async_import_org(ctx, _parse_uuid(org_id, "organisation ID"), input_path, on_conflict, pipelines_only, users_only))
+    parsed_org_id = _parse_uuid(org_id, "organisation ID")
+    asyncio.run(
+        _async_import_org(ctx, parsed_org_id, input_path, on_conflict, pipelines_only, users_only)
+    )
 
 
 async def _async_import_org(
@@ -469,8 +479,10 @@ async def _async_import_org(
                 f"{counts['skipped']} skipped, "
                 f"{counts['errors']} errors"
             )
-    except SQLAlchemyError as exc:
-        raise click.ClickException(f"Database error during import: {exc}") from exc
+    except click.ClickException:
+        raise
+    except Exception as exc:
+        raise click.ClickException(f"Import failed: {exc}") from exc
 
 
 @cli.command()
@@ -496,7 +508,7 @@ async def _async_verify_export(ctx: click.Context, org_id: uuid.UUID, input_path
         raise
     except Exception as exc:
         raise click.ClickException(f"Failed to read export file: {exc}") from exc
-    ok = await _verify_export(meta, records)
+    ok = _verify_export(meta, records)
     if not ok:
         raise click.ClickException("Verification failed — data integrity issue detected")
 
