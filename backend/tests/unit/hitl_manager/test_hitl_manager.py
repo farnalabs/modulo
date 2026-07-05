@@ -66,6 +66,10 @@ def _session_get(return_value: Any = None) -> AsyncMock:
     session.execute = AsyncMock(return_value=result)
     session.add = MagicMock()
     session.flush = AsyncMock()
+    begin_nested_cm = AsyncMock()
+    begin_nested_cm.__aenter__ = AsyncMock(return_value=None)
+    begin_nested_cm.__aexit__ = AsyncMock(return_value=False)
+    session.begin_nested = MagicMock(return_value=begin_nested_cm)
     return session
 
 
@@ -103,6 +107,10 @@ def _session_decide(
 
     session.execute = _execute
     session.get = AsyncMock(return_value=session_get_gate)
+    begin_nested_cm = AsyncMock()
+    begin_nested_cm.__aenter__ = AsyncMock(return_value=None)
+    begin_nested_cm.__aexit__ = AsyncMock(return_value=False)
+    session.begin_nested = MagicMock(return_value=begin_nested_cm)
     return session
 
 
@@ -127,7 +135,8 @@ def _session_update(
     # For the claim() UPDATE RETURNING id
     update_result.scalar_one_or_none.return_value = uuid.uuid4() if rows_returned > 0 else None
     # For expire_stale() UPDATE RETURNING run_id, gate_id
-    update_result.all.return_value = [(_RUN, _GATE)] * rows_returned
+    Row = type("Row", (), {"run_id": _RUN, "gate_id": _GATE})
+    update_result.all.return_value = [Row()] * rows_returned
 
     get_result = MagicMock()
     get_result.scalar_one_or_none.return_value = gate
@@ -148,6 +157,11 @@ def _session_update(
         return get_result
 
     session.execute = _execute
+    session.get = AsyncMock(return_value=gate)
+    begin_nested_cm = AsyncMock()
+    begin_nested_cm.__aenter__ = AsyncMock(return_value=None)
+    begin_nested_cm.__aexit__ = AsyncMock(return_value=False)
+    session.begin_nested = MagicMock(return_value=begin_nested_cm)
     return session
 
 
@@ -270,22 +284,25 @@ async def test_claim_team_member_can_claim():
             r.scalar_one_or_none.return_value = unclaimed
             return r
         if call_no == 2:
+            # FOR UPDATE row lock
+            r = MagicMock()
+            r.scalar_one_or_none.return_value = unclaimed
+            return r
+        if call_no == 3:
             # Team membership check
             team_check_hit = True
             r = MagicMock()
             r.scalar_one_or_none.return_value = membership
             return r
-        if call_no == 3:
+        if call_no == 4:
             # UPDATE
             r = MagicMock()
             r.scalar_one_or_none.return_value = uuid.uuid4()
             return r
-        # Re-fetch
-        r = MagicMock()
-        r.scalar_one_or_none.return_value = claimed
-        return r
+        raise AssertionError(f"Unexpected execute call #{call_no}")
 
     session.execute = _execute
+    session.get = AsyncMock(return_value=claimed)
     mgr = HITLManager()
     result = await mgr.claim(session, run_id=_RUN, gate_id=_GATE, org_id=_ORG, claimant_id=_USER)
     assert result is claimed
@@ -312,6 +329,11 @@ async def test_claim_non_team_member_raises():
             r.scalar_one_or_none.return_value = gate
             return r
         if call_no == 2:
+            # FOR UPDATE row lock
+            r = MagicMock()
+            r.scalar_one_or_none.return_value = gate
+            return r
+        if call_no == 3:
             # Team membership check — no membership found
             team_check_hit = True
             r = MagicMock()
@@ -359,6 +381,7 @@ async def test_claim_no_required_team_still_works():
         return r
 
     session.execute = _execute
+    session.get = AsyncMock(return_value=claimed)
     mgr = HITLManager()
     result = await mgr.claim(session, run_id=_RUN, gate_id=_GATE, org_id=_ORG, claimant_id=_USER)
     assert result is claimed
@@ -672,7 +695,9 @@ async def test_deliver_manual_null_expires_at_raises_expired():
 async def test_expire_stale_returns_expired_gates():
     session = AsyncMock()
     expired_result = MagicMock()
-    expired_result.all.return_value = [(_RUN, "gate-a"), (_RUN, "gate-b")]
+    Row = type("Row", (), {"run_id": _RUN, "gate_id": "gate-a"})
+    Row2 = type("Row", (), {"run_id": _RUN, "gate_id": "gate-b"})
+    expired_result.all.return_value = [Row(), Row2()]
     session.execute = AsyncMock(return_value=expired_result)
 
     mgr = HITLManager()

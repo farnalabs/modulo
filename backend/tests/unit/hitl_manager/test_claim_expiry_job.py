@@ -35,11 +35,11 @@ def _org_list_session() -> AsyncMock:
     return session
 
 
-def _stale_rows_2() -> list[tuple]:
-    """Two stale claims."""
+def _stale_rows_2() -> list[object]:
+    """Two stale claims as attribute-accessible objects (like SQLAlchemy Row)."""
     return [
-        (_CLAIM_ID_1, _RUN_1, _GATE_A, _USER_1),
-        (_CLAIM_ID_2, _RUN_2, _GATE_B, _USER_2),
+        type("Row", (), {"id": _CLAIM_ID_1, "run_id": _RUN_1, "gate_id": _GATE_A, "account_id": _USER_1})(),
+        type("Row", (), {"id": _CLAIM_ID_2, "run_id": _RUN_2, "gate_id": _GATE_B, "account_id": _USER_2})(),
     ]
 
 
@@ -51,13 +51,18 @@ async def test_expire_once_resets_stale_claims() -> None:
     org_factory = _mock_session_factory(org_session)
 
     # Per-org transaction session
-    tx_session = AsyncMock()
+    tx_session = AsyncMock(name="tx_session")
     tx_session.add = MagicMock()
     tx_session.flush = AsyncMock()
     begin_cm = AsyncMock()
     begin_cm.__aenter__ = AsyncMock(return_value=None)
     begin_cm.__aexit__ = AsyncMock(return_value=False)
     tx_session.begin = MagicMock(return_value=begin_cm)
+    # Support begin_nested() for savepoint-based audit events
+    begin_nested_cm = AsyncMock()
+    begin_nested_cm.__aenter__ = AsyncMock(return_value=None)
+    begin_nested_cm.__aexit__ = AsyncMock(return_value=False)
+    tx_session.begin_nested = MagicMock(return_value=begin_nested_cm)
 
     stale_rows = _stale_rows_2()
     stale_result = MagicMock()
@@ -123,11 +128,15 @@ async def test_expire_once_empty_when_none_stale() -> None:
     org_session = _org_list_session()
     org_factory = _mock_session_factory(org_session)
 
-    tx_session = AsyncMock()
+    tx_session = AsyncMock(name="tx_session")
     begin_cm = AsyncMock()
     begin_cm.__aenter__ = AsyncMock(return_value=None)
     begin_cm.__aexit__ = AsyncMock(return_value=False)
     tx_session.begin = MagicMock(return_value=begin_cm)
+    begin_nested_cm = AsyncMock()
+    begin_nested_cm.__aenter__ = AsyncMock(return_value=None)
+    begin_nested_cm.__aexit__ = AsyncMock(return_value=False)
+    tx_session.begin_nested = MagicMock(return_value=begin_nested_cm)
 
     # First execute returns no stale claims
     empty_result = MagicMock()
@@ -165,13 +174,17 @@ async def test_expire_once_dispatches_notifications() -> None:
     org_session = _org_list_session()
     org_factory = _mock_session_factory(org_session)
 
-    tx_session = AsyncMock()
+    tx_session = AsyncMock(name="tx_session")
     tx_session.add = MagicMock()
     tx_session.flush = AsyncMock()
     begin_cm = AsyncMock()
     begin_cm.__aenter__ = AsyncMock(return_value=None)
     begin_cm.__aexit__ = AsyncMock(return_value=False)
     tx_session.begin = MagicMock(return_value=begin_cm)
+    begin_nested_cm = AsyncMock()
+    begin_nested_cm.__aenter__ = AsyncMock(return_value=None)
+    begin_nested_cm.__aexit__ = AsyncMock(return_value=False)
+    tx_session.begin_nested = MagicMock(return_value=begin_nested_cm)
 
     stale_rows = _stale_rows_2()
     stale_result = MagicMock()
@@ -232,12 +245,16 @@ async def test_expire_once_no_notifier_skips_dispatch() -> None:
     org_session = _org_list_session()
     org_factory = _mock_session_factory(org_session)
 
-    tx_session = AsyncMock()
+    tx_session = AsyncMock(name="tx_session")
     tx_session.add = MagicMock()
     begin_cm = AsyncMock()
     begin_cm.__aenter__ = AsyncMock(return_value=None)
     begin_cm.__aexit__ = AsyncMock(return_value=False)
     tx_session.begin = MagicMock(return_value=begin_cm)
+    begin_nested_cm = AsyncMock()
+    begin_nested_cm.__aenter__ = AsyncMock(return_value=None)
+    begin_nested_cm.__aexit__ = AsyncMock(return_value=False)
+    tx_session.begin_nested = MagicMock(return_value=begin_nested_cm)
 
     stale_rows = _stale_rows_2()
     stale_result = MagicMock()
@@ -289,13 +306,17 @@ async def test_expire_once_handles_notifier_failure() -> None:
     org_session = _org_list_session()
     org_factory = _mock_session_factory(org_session)
 
-    tx_session = AsyncMock()
+    tx_session = AsyncMock(name="tx_session")
     tx_session.add = MagicMock()
     tx_session.flush = AsyncMock()
     begin_cm = AsyncMock()
     begin_cm.__aenter__ = AsyncMock(return_value=None)
     begin_cm.__aexit__ = AsyncMock(return_value=False)
     tx_session.begin = MagicMock(return_value=begin_cm)
+    begin_nested_cm = AsyncMock()
+    begin_nested_cm.__aenter__ = AsyncMock(return_value=None)
+    begin_nested_cm.__aexit__ = AsyncMock(return_value=False)
+    tx_session.begin_nested = MagicMock(return_value=begin_nested_cm)
 
     stale_rows = _stale_rows_2()
     stale_result = MagicMock()
