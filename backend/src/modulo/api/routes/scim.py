@@ -11,7 +11,7 @@ from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, Field
-from sqlalchemy.exc import ProgrammingError
+from sqlalchemy.exc import ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.api.dependencies import get_db_session
@@ -113,7 +113,10 @@ def _group_to_scim(group: Team, members: list[dict[str, str]], base_url: str) ->
 def _get_base_url(settings: Settings) -> str:
     url = settings.modulo_public_url
     if not url:
-        return "http://localhost:8000"
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="SCIM cannot resolve base URL: MODULO_PUBLIC_URL is not configured",
+        )
     return url.rstrip("/")
 
 
@@ -239,6 +242,12 @@ async def list_users(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="SCIM provisioning is not available. Run database migrations to enable it.",
         ) from None
+    except SQLAlchemyError:
+        _log.error("SCIM endpoint failed: database error")
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="SCIM provisioning is temporarily unavailable due to a database error",
+        ) from None
 
     base_url = _get_base_url(settings)
     return ScimListResponse(
@@ -294,6 +303,12 @@ async def create_user(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="SCIM provisioning is not available. Run database migrations to enable it.",
         ) from None
+    except SQLAlchemyError:
+        _log.error("SCIM endpoint failed: database error")
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="SCIM provisioning is temporarily unavailable due to a database error",
+        ) from None
 
     return _user_to_scim(account, _get_base_url(settings))
 
@@ -314,6 +329,12 @@ async def get_user(
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="SCIM provisioning is not available. Run database migrations to enable it.",
+        ) from None
+    except SQLAlchemyError:
+        _log.error("SCIM endpoint failed: database error")
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="SCIM provisioning is temporarily unavailable due to a database error",
         ) from None
 
     if account is None:
@@ -350,6 +371,12 @@ async def replace_user(
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="SCIM provisioning is not available. Run database migrations to enable it.",
+        ) from None
+    except SQLAlchemyError:
+        _log.error("SCIM endpoint failed: database error")
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="SCIM provisioning is temporarily unavailable due to a database error",
         ) from None
 
     return _user_to_scim(account, _get_base_url(settings))
@@ -407,6 +434,12 @@ async def patch_user(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="SCIM provisioning is not available. Run database migrations to enable it.",
         ) from None
+    except SQLAlchemyError:
+        _log.error("SCIM endpoint failed: database error")
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="SCIM provisioning is temporarily unavailable due to a database error",
+        ) from None
 
     return _user_to_scim(account, _get_base_url(settings))
 
@@ -427,6 +460,12 @@ async def delete_user(
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="SCIM provisioning is not available. Run database migrations to enable it.",
+        ) from None
+    except SQLAlchemyError:
+        _log.error("SCIM endpoint failed: database error")
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="SCIM provisioning is temporarily unavailable due to a database error",
         ) from None
 
     if not deleted:
@@ -460,6 +499,12 @@ async def list_groups(
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="SCIM provisioning is not available. Run database migrations to enable it.",
+        ) from None
+    except SQLAlchemyError:
+        _log.error("SCIM endpoint failed: database error")
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="SCIM provisioning is temporarily unavailable due to a database error",
         ) from None
 
     base_url = _get_base_url(settings)
@@ -544,6 +589,12 @@ async def create_group(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="SCIM provisioning is not available. Run database migrations to enable it.",
         ) from None
+    except SQLAlchemyError:
+        _log.error("SCIM endpoint failed: database error")
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="SCIM provisioning is temporarily unavailable due to a database error",
+        ) from None
 
     base_url = _get_base_url(settings)
     members = [
@@ -573,6 +624,12 @@ async def get_group(
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="SCIM provisioning is not available. Run database migrations to enable it.",
+        ) from None
+    except SQLAlchemyError:
+        _log.error("SCIM endpoint failed: database error")
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="SCIM provisioning is temporarily unavailable due to a database error",
         ) from None
 
     if group is None:
@@ -631,6 +688,12 @@ async def replace_group(
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="SCIM provisioning is not available. Run database migrations to enable it.",
+        ) from None
+    except SQLAlchemyError:
+        _log.error("SCIM endpoint failed: database error")
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="SCIM provisioning is temporarily unavailable due to a database error",
         ) from None
 
     base_url = _get_base_url(settings)
@@ -738,6 +801,12 @@ async def patch_group(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="SCIM provisioning is not available. Run database migrations to enable it.",
         ) from None
+    except SQLAlchemyError:
+        _log.error("SCIM endpoint failed: database error")
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="SCIM provisioning is temporarily unavailable due to a database error",
+        ) from None
 
     base_url = _get_base_url(settings)
     memberships = await scim_list_group_members(session, group.id)
@@ -768,6 +837,12 @@ async def delete_group(
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="SCIM provisioning is not available. Run database migrations to enable it.",
+        ) from None
+    except SQLAlchemyError:
+        _log.error("SCIM endpoint failed: database error")
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="SCIM provisioning is temporarily unavailable due to a database error",
         ) from None
 
     if not deleted:
