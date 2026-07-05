@@ -105,18 +105,6 @@ def patches():
 # ===================================================================
 
 
-@given(parsers.parse('I am authenticated as an admin in org "{org}"'))
-def auth_admin_in_org(org: str) -> None:
-    """No-op — the ``client`` fixture already provides an admin principal.
-
-    The step exists for BDD readability and traceability.
-    """
-
-
-@given(parsers.parse('I am authenticated in org "{org}"'))
-def auth_in_org(org: str) -> None:
-    """No-op — same reasoning as above."""
-
 
 @given(parsers.parse('org "{org}" has pipeline "{name}"'))
 def org_has_pipeline(org: str, name: str, request: pytest.FixtureRequest) -> None:

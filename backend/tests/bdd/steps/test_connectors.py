@@ -477,7 +477,7 @@ def step_github_query_resource_limit(resource, limit, ctx):
     import asyncio
 
     try:
-        result = asyncio.new_event_loop().run_until_complete(connector.query(q))
+        result = asyncio.run(connector.query(q))
         ctx["query_result"] = result
         ctx["query_error"] = None
     except Exception as exc:
@@ -502,7 +502,7 @@ def step_github_query_file_with_filters(resource, repo, path, ctx):
     import asyncio
 
     try:
-        result = asyncio.new_event_loop().run_until_complete(connector.query(q))
+        result = asyncio.run(connector.query(q))
         ctx["query_result"] = result
         ctx["query_error"] = None
     except Exception as exc:
@@ -527,7 +527,7 @@ def step_github_query_pulls_with_filters(resource, repo, state, ctx):
     import asyncio
 
     try:
-        result = asyncio.new_event_loop().run_until_complete(connector.query(q))
+        result = asyncio.run(connector.query(q))
         ctx["query_result"] = result
         ctx["query_error"] = None
     except Exception as exc:
@@ -544,7 +544,7 @@ def step_github_query_invalid(ctx):
     import asyncio
 
     try:
-        asyncio.new_event_loop().run_until_complete(connector.query(q))
+        asyncio.run(connector.query(q))
         ctx["query_result"] = "unexpected_success"
         ctx["query_error"] = None
     except Exception as exc:
@@ -574,7 +574,7 @@ def step_github_write_file(resource, content, path, ctx):
     import asyncio
 
     try:
-        result = asyncio.new_event_loop().run_until_complete(connector.write(payload))
+        result = asyncio.run(connector.write(payload))
         ctx["write_result"] = result
         ctx["query_error"] = None
     except Exception as exc:
@@ -671,6 +671,8 @@ def step_connector_raises_value_error(expected, ctx):
     except ValueError as exc:
         ctx["query_result"] = None
         ctx["query_error"] = str(exc)
+    finally:
+        loop.close()
 
     assert ctx["query_error"] is not None, f"Expected ValueError with '{expected}' but no error occurred"
     assert expected in ctx["query_error"], f"Expected '{expected}' in error but got: {ctx['query_error']}"
@@ -751,7 +753,7 @@ def step_jira_query_issue(resource, key, ctx):
     import asyncio
 
     try:
-        result = asyncio.new_event_loop().run_until_complete(ctx["connector"].query(q))
+        result = asyncio.run(ctx["connector"].query(q))
         ctx["query_result"] = result
         ctx["query_error"] = None
     except Exception as exc:
@@ -771,7 +773,7 @@ def step_jira_query_search(resource, jql, ctx):
     import asyncio
 
     try:
-        result = asyncio.new_event_loop().run_until_complete(ctx["connector"].query(q))
+        result = asyncio.run(ctx["connector"].query(q))
         ctx["query_result"] = result
         ctx["query_error"] = None
     except Exception as exc:
@@ -799,7 +801,7 @@ def step_jira_write_issue(resource, summary, project, ctx):
     import asyncio
 
     try:
-        result = asyncio.new_event_loop().run_until_complete(ctx["connector"].write(payload))
+        result = asyncio.run(ctx["connector"].write(payload))
         ctx["write_result"] = result
         ctx["query_error"] = None
     except Exception as exc:
@@ -826,7 +828,7 @@ def step_jira_update_issue(resource, key, ctx):
     import asyncio
 
     try:
-        result = asyncio.new_event_loop().run_until_complete(ctx["connector"].write(payload))
+        result = asyncio.run(ctx["connector"].write(payload))
         ctx["write_result"] = result
         ctx["query_error"] = None
     except Exception as exc:
@@ -844,7 +846,7 @@ def step_jira_query_without_key(resource, ctx):
     import asyncio
 
     try:
-        asyncio.new_event_loop().run_until_complete(ctx["connector"].query(q))
+        asyncio.run(ctx["connector"].query(q))
         ctx["query_result"] = "unexpected_success"
         ctx["query_error"] = None
     except Exception as exc:
@@ -884,7 +886,7 @@ def step_jira_write_empty_data(resource, ctx):
     import asyncio
 
     try:
-        asyncio.new_event_loop().run_until_complete(ctx["connector"].write(payload))
+        asyncio.run(ctx["connector"].write(payload))
         ctx["write_result"] = "unexpected_success"
         ctx["query_error"] = None
     except Exception as exc:
@@ -975,7 +977,7 @@ def step_linear_query_issue(resource, id_val, ctx):
     import asyncio
 
     try:
-        result = asyncio.new_event_loop().run_until_complete(ctx["connector"].query(q))
+        result = asyncio.run(ctx["connector"].query(q))
         ctx["query_result"] = result
         ctx["query_error"] = None
     except Exception as exc:
@@ -995,7 +997,7 @@ def step_linear_search(resource, query_text, ctx):
     import asyncio
 
     try:
-        result = asyncio.new_event_loop().run_until_complete(ctx["connector"].query(q))
+        result = asyncio.run(ctx["connector"].query(q))
         ctx["query_result"] = result
         ctx["query_error"] = None
     except Exception as exc:
@@ -1018,7 +1020,7 @@ def step_linear_create_issue(resource, title, team, ctx):
     import asyncio
 
     try:
-        result = asyncio.new_event_loop().run_until_complete(ctx["connector"].write(payload))
+        result = asyncio.run(ctx["connector"].write(payload))
         ctx["write_result"] = result
         ctx["query_error"] = None
     except Exception as exc:
@@ -1065,7 +1067,7 @@ def step_linear_update_issue(resource, id_val, ctx):
     import asyncio
 
     try:
-        result = asyncio.new_event_loop().run_until_complete(ctx["connector"].write(payload))
+        result = asyncio.run(ctx["connector"].write(payload))
         ctx["write_result"] = result
         ctx["query_error"] = None
     except Exception as exc:
@@ -1078,7 +1080,7 @@ def step_linear_health_check(ctx):
     import asyncio
 
     try:
-        result = asyncio.new_event_loop().run_until_complete(ctx["connector"].health_check())
+        result = asyncio.run(ctx["connector"].health_check())
         ctx["health_result"] = result
     except Exception as exc:
         ctx["health_result"] = None
@@ -1178,7 +1180,7 @@ def step_slack_query_resource(resource, limit, ctx):
     import asyncio
 
     try:
-        result = asyncio.new_event_loop().run_until_complete(ctx["connector"].query(q))
+        result = asyncio.run(ctx["connector"].query(q))
         ctx["query_result"] = result
         ctx["query_error"] = None
     except Exception as exc:
@@ -1198,7 +1200,7 @@ def step_slack_query_messages(resource, channel, ctx):
     import asyncio
 
     try:
-        result = asyncio.new_event_loop().run_until_complete(ctx["connector"].query(q))
+        result = asyncio.run(ctx["connector"].query(q))
         ctx["query_result"] = result
         ctx["query_error"] = None
     except Exception as exc:
@@ -1218,7 +1220,7 @@ def step_slack_query_messages_no_channel(resource, ctx):
     import asyncio
 
     try:
-        asyncio.new_event_loop().run_until_complete(ctx["connector"].query(q))
+        asyncio.run(ctx["connector"].query(q))
         ctx["query_result"] = "unexpected_success"
         ctx["query_error"] = None
     except Exception as exc:
@@ -1242,7 +1244,7 @@ def step_slack_post_message(resource, channel, text, ctx):
     import asyncio
 
     try:
-        result = asyncio.new_event_loop().run_until_complete(ctx["connector"].write(payload))
+        result = asyncio.run(ctx["connector"].write(payload))
         ctx["write_result"] = result
         ctx["query_error"] = None
     except Exception as exc:
@@ -1275,7 +1277,7 @@ def step_slack_query_messages_with_dates(resource, channel, oldest, latest, ctx)
     import asyncio
 
     try:
-        result = asyncio.new_event_loop().run_until_complete(ctx["connector"].query(q))
+        result = asyncio.run(ctx["connector"].query(q))
         ctx["query_result"] = result
         ctx["query_error"] = None
     except Exception as exc:
@@ -1293,7 +1295,7 @@ def step_slack_query_with_cursor(resource, cursor, ctx):
     import asyncio
 
     try:
-        result = asyncio.new_event_loop().run_until_complete(ctx["connector"].query(q))
+        result = asyncio.run(ctx["connector"].query(q))
         ctx["query_result"] = result
         ctx["query_error"] = None
     except Exception as exc:
@@ -1309,7 +1311,7 @@ def step_slack_query_unknown(resource, ctx):
     import asyncio
 
     try:
-        asyncio.new_event_loop().run_until_complete(ctx["connector"].query(q))
+        asyncio.run(ctx["connector"].query(q))
         ctx["query_result"] = "unexpected_success"
         ctx["query_error"] = None
     except Exception as exc:
@@ -1325,7 +1327,7 @@ def step_slack_write_no_channel(resource, ctx):
     import asyncio
 
     try:
-        asyncio.new_event_loop().run_until_complete(ctx["connector"].write(payload))
+        asyncio.run(ctx["connector"].write(payload))
         ctx["write_result"] = "unexpected_success"
         ctx["query_error"] = None
     except Exception as exc:
@@ -1372,7 +1374,7 @@ def step_slack_non_json_response(ctx):
     import asyncio
 
     try:
-        result = asyncio.new_event_loop().run_until_complete(ctx["connector"].health_check())
+        result = asyncio.run(ctx["connector"].health_check())
         ctx["health_result"] = result
     except Exception as exc:
         ctx["health_result"] = None
@@ -1516,7 +1518,7 @@ def step_gitlab_query_with_state(resource, project, state, ctx):
     q = ConnectorQuery(resource=resource, filters={"project": project, "state": state})
     import asyncio
     try:
-        result = asyncio.new_event_loop().run_until_complete(ctx["connector"].query(q))
+        result = asyncio.run(ctx["connector"].query(q))
         ctx["query_result"] = result
         ctx["query_error"] = None
     except Exception as exc:
@@ -1530,7 +1532,7 @@ def step_gitlab_query_project(resource, project, ctx):
     q = ConnectorQuery(resource=resource, filters={"project": project})
     import asyncio
     try:
-        result = asyncio.new_event_loop().run_until_complete(ctx["connector"].query(q))
+        result = asyncio.run(ctx["connector"].query(q))
         ctx["query_result"] = result
         ctx["query_error"] = None
     except Exception as exc:
@@ -1544,7 +1546,7 @@ def step_gitlab_query_with_iid(resource, project, iid, ctx):
     q = ConnectorQuery(resource=resource, filters={"project": project, "iid": iid})
     import asyncio
     try:
-        result = asyncio.new_event_loop().run_until_complete(ctx["connector"].query(q))
+        result = asyncio.run(ctx["connector"].query(q))
         ctx["query_result"] = result
         ctx["query_error"] = None
     except Exception as exc:
@@ -1558,7 +1560,7 @@ def step_gitlab_query_with_label_id(resource, project, label_id, ctx):
     q = ConnectorQuery(resource=resource, filters={"project": project, "label_id": label_id})
     import asyncio
     try:
-        result = asyncio.new_event_loop().run_until_complete(ctx["connector"].query(q))
+        result = asyncio.run(ctx["connector"].query(q))
         ctx["query_result"] = result
         ctx["query_error"] = None
     except Exception as exc:
@@ -1572,7 +1574,7 @@ def step_gitlab_query_with_name(resource, project, name, ctx):
     q = ConnectorQuery(resource=resource, filters={"project": project, "name": name})
     import asyncio
     try:
-        result = asyncio.new_event_loop().run_until_complete(ctx["connector"].query(q))
+        result = asyncio.run(ctx["connector"].query(q))
         ctx["query_result"] = result
         ctx["query_error"] = None
     except Exception as exc:
@@ -1586,7 +1588,7 @@ def step_gitlab_query_with_pipeline_id(resource, project, pipeline_id, ctx):
     q = ConnectorQuery(resource=resource, filters={"project": project, "pipeline_id": pipeline_id})
     import asyncio
     try:
-        result = asyncio.new_event_loop().run_until_complete(ctx["connector"].query(q))
+        result = asyncio.run(ctx["connector"].query(q))
         ctx["query_result"] = result
         ctx["query_error"] = None
     except Exception as exc:
@@ -1600,7 +1602,7 @@ def step_gitlab_write_issue(project, title, ctx):
     payload = ConnectorPayload(resource="issue", data={"project": project, "title": title})
     import asyncio
     try:
-        result = asyncio.new_event_loop().run_until_complete(ctx["connector"].write(payload))
+        result = asyncio.run(ctx["connector"].write(payload))
         ctx["write_result"] = result
         ctx["query_error"] = None
     except Exception as exc:
@@ -1621,7 +1623,7 @@ def step_gitlab_update_issue(iid, project, state_event, ctx):
     )
     import asyncio
     try:
-        result = asyncio.new_event_loop().run_until_complete(ctx["connector"].write(payload))
+        result = asyncio.run(ctx["connector"].write(payload))
         ctx["write_result"] = result
         ctx["query_error"] = None
     except Exception as exc:
@@ -1638,7 +1640,7 @@ def step_gitlab_write_note(iid, project, body, ctx):
     )
     import asyncio
     try:
-        result = asyncio.new_event_loop().run_until_complete(ctx["connector"].write(payload))
+        result = asyncio.run(ctx["connector"].write(payload))
         ctx["write_result"] = result
         ctx["query_error"] = None
     except Exception as exc:
@@ -1655,7 +1657,7 @@ def step_gitlab_write_label(iid, project, labels, ctx):
     )
     import asyncio
     try:
-        result = asyncio.new_event_loop().run_until_complete(ctx["connector"].write(payload))
+        result = asyncio.run(ctx["connector"].write(payload))
         ctx["write_result"] = result
         ctx["query_error"] = None
     except Exception as exc:
@@ -1672,7 +1674,7 @@ def step_gitlab_write_project_label(project, name, ctx):
     )
     import asyncio
     try:
-        result = asyncio.new_event_loop().run_until_complete(ctx["connector"].write(payload))
+        result = asyncio.run(ctx["connector"].write(payload))
         ctx["write_result"] = result
         ctx["query_error"] = None
     except Exception as exc:
@@ -1689,7 +1691,7 @@ def step_gitlab_write_milestone(project, title, ctx):
     )
     import asyncio
     try:
-        result = asyncio.new_event_loop().run_until_complete(ctx["connector"].write(payload))
+        result = asyncio.run(ctx["connector"].write(payload))
         ctx["write_result"] = result
         ctx["query_error"] = None
     except Exception as exc:
@@ -1706,7 +1708,7 @@ def step_gitlab_trigger_pipeline(project, ref, ctx):
     )
     import asyncio
     try:
-        result = asyncio.new_event_loop().run_until_complete(ctx["connector"].write(payload))
+        result = asyncio.run(ctx["connector"].write(payload))
         ctx["write_result"] = result
         ctx["query_error"] = None
     except Exception as exc:
@@ -1744,7 +1746,7 @@ def step_gitlab_connector_invalid_token(ctx):
 def step_gitlab_health_check(ctx):
     import asyncio
     try:
-        result = asyncio.new_event_loop().run_until_complete(ctx["connector"].health_check())
+        result = asyncio.run(ctx["connector"].health_check())
         ctx["health_result"] = result
     except Exception as exc:
         ctx["health_result"] = None
@@ -1775,7 +1777,7 @@ def step_gitlab_api_unreachable(ctx):
     ctx["connector"].health_check = mock_health_check
     import asyncio
     try:
-        result = asyncio.new_event_loop().run_until_complete(ctx["connector"].health_check())
+        result = asyncio.run(ctx["connector"].health_check())
         ctx["health_result"] = result
     except Exception as exc:
         ctx["health_result"] = None
@@ -1905,7 +1907,7 @@ def step_gitea_query_pulls_issues(resource, repo, state, ctx):
     import asyncio
 
     try:
-        result = asyncio.new_event_loop().run_until_complete(connector.query(q))
+        result = asyncio.run(connector.query(q))
         ctx["query_result"] = result
         ctx["query_error"] = None
     except Exception as exc:
@@ -1935,7 +1937,7 @@ def step_gitea_create_pr(resource, title, head, base, ctx):
     import asyncio
 
     try:
-        result = asyncio.new_event_loop().run_until_complete(connector.write(payload))
+        result = asyncio.run(connector.write(payload))
         ctx["write_result"] = result
         ctx["query_error"] = None
     except Exception as exc:
@@ -1962,7 +1964,7 @@ def step_gitea_create_issue(resource, title, ctx):
     import asyncio
 
     try:
-        result = asyncio.new_event_loop().run_until_complete(connector.write(payload))
+        result = asyncio.run(connector.write(payload))
         ctx["write_result"] = result
         ctx["query_error"] = None
     except Exception as exc:
@@ -2277,7 +2279,7 @@ def step_monday_query_with_board_id(resource, board_id, ctx):
     import asyncio
 
     try:
-        result = asyncio.new_event_loop().run_until_complete(ctx["connector"].query(q))
+        result = asyncio.run(ctx["connector"].query(q))
         ctx["query_result"] = result
         ctx["query_error"] = None
     except Exception as exc:
@@ -2295,7 +2297,7 @@ def step_monday_query_with_item_id(resource, item_id, ctx):
     import asyncio
 
     try:
-        result = asyncio.new_event_loop().run_until_complete(ctx["connector"].query(q))
+        result = asyncio.run(ctx["connector"].query(q))
         ctx["query_result"] = result
         ctx["query_error"] = None
     except Exception as exc:
@@ -2318,7 +2320,7 @@ def step_monday_create_item(resource, name, board_id, ctx):
     import asyncio
 
     try:
-        result = asyncio.new_event_loop().run_until_complete(ctx["connector"].write(payload))
+        result = asyncio.run(ctx["connector"].write(payload))
         ctx["write_result"] = result
         ctx["query_error"] = None
     except Exception as exc:
@@ -2341,7 +2343,7 @@ def step_monday_update_column_values(resource, item_id, column_values, ctx):
     import asyncio
 
     try:
-        result = asyncio.new_event_loop().run_until_complete(ctx["connector"].write(payload))
+        result = asyncio.run(ctx["connector"].write(payload))
         ctx["write_result"] = result
         ctx["query_error"] = None
     except Exception as exc:
@@ -2364,7 +2366,7 @@ def step_monday_change_column_value(resource, item_id, col_id, value, ctx):
     import asyncio
 
     try:
-        result = asyncio.new_event_loop().run_until_complete(ctx["connector"].write(payload))
+        result = asyncio.run(ctx["connector"].write(payload))
         ctx["write_result"] = result
         ctx["query_error"] = None
     except Exception as exc:
@@ -2387,7 +2389,7 @@ def step_monday_add_update(resource, item_id, body, ctx):
     import asyncio
 
     try:
-        result = asyncio.new_event_loop().run_until_complete(ctx["connector"].write(payload))
+        result = asyncio.run(ctx["connector"].write(payload))
         ctx["write_result"] = result
         ctx["query_error"] = None
     except Exception as exc:
@@ -2634,7 +2636,7 @@ def step_trello_query_with_board_id(resource, board_id, ctx):
     import asyncio
 
     try:
-        result = asyncio.new_event_loop().run_until_complete(ctx["connector"].query(q))
+        result = asyncio.run(ctx["connector"].query(q))
         ctx["query_result"] = result
         ctx["query_error"] = None
     except Exception as exc:
@@ -2652,7 +2654,7 @@ def step_trello_query_with_card_id(resource, card_id, ctx):
     import asyncio
 
     try:
-        result = asyncio.new_event_loop().run_until_complete(ctx["connector"].query(q))
+        result = asyncio.run(ctx["connector"].query(q))
         ctx["query_result"] = result
         ctx["query_error"] = None
     except Exception as exc:
@@ -2675,7 +2677,7 @@ def step_trello_create_card(resource, name, list_id, ctx):
     import asyncio
 
     try:
-        result = asyncio.new_event_loop().run_until_complete(ctx["connector"].write(payload))
+        result = asyncio.run(ctx["connector"].write(payload))
         ctx["write_result"] = result
         ctx["query_error"] = None
     except Exception as exc:
@@ -2698,7 +2700,7 @@ def step_trello_add_comment(resource, card_id, text, ctx):
     import asyncio
 
     try:
-        result = asyncio.new_event_loop().run_until_complete(ctx["connector"].write(payload))
+        result = asyncio.run(ctx["connector"].write(payload))
         ctx["write_result"] = result
         ctx["query_error"] = None
     except Exception as exc:
@@ -3301,7 +3303,7 @@ def step_asana_query_with_workspace(resource, workspace, ctx):
     import asyncio
 
     try:
-        result = asyncio.new_event_loop().run_until_complete(ctx["connector"].query(q))
+        result = asyncio.run(ctx["connector"].query(q))
         ctx["query_result"] = result
         ctx["query_error"] = None
     except Exception as exc:
@@ -3319,7 +3321,7 @@ def step_asana_query_with_project_id(resource, project_id, ctx):
     import asyncio
 
     try:
-        result = asyncio.new_event_loop().run_until_complete(ctx["connector"].query(q))
+        result = asyncio.run(ctx["connector"].query(q))
         ctx["query_result"] = result
         ctx["query_error"] = None
     except Exception as exc:
@@ -3337,7 +3339,7 @@ def step_shortcut_query_with_story_id(resource, story_id, ctx):
     import asyncio
 
     try:
-        result = asyncio.new_event_loop().run_until_complete(ctx["connector"].query(q))
+        result = asyncio.run(ctx["connector"].query(q))
         ctx["query_result"] = result
         ctx["query_error"] = None
     except Exception as exc:
@@ -3360,7 +3362,7 @@ def step_asana_create_task(resource, name, project, ctx):
     import asyncio
 
     try:
-        result = asyncio.new_event_loop().run_until_complete(ctx["connector"].write(payload))
+        result = asyncio.run(ctx["connector"].write(payload))
         ctx["write_result"] = result
         ctx["query_error"] = None
     except Exception as exc:
@@ -3383,7 +3385,7 @@ def step_shortcut_create_story(resource, name, project_id, ctx):
     import asyncio
 
     try:
-        result = asyncio.new_event_loop().run_until_complete(ctx["connector"].write(payload))
+        result = asyncio.run(ctx["connector"].write(payload))
         ctx["write_result"] = result
         ctx["query_error"] = None
     except Exception as exc:
@@ -3406,7 +3408,7 @@ def step_asana_add_comment(resource, task_id, text, ctx):
     import asyncio
 
     try:
-        result = asyncio.new_event_loop().run_until_complete(ctx["connector"].write(payload))
+        result = asyncio.run(ctx["connector"].write(payload))
         ctx["write_result"] = result
         ctx["query_error"] = None
     except Exception as exc:
@@ -3429,7 +3431,7 @@ def step_shortcut_update_story(resource, story_id, name, ctx):
     import asyncio
 
     try:
-        result = asyncio.new_event_loop().run_until_complete(ctx["connector"].write(payload))
+        result = asyncio.run(ctx["connector"].write(payload))
         ctx["write_result"] = result
         ctx["query_error"] = None
     except Exception as exc:
@@ -3489,7 +3491,7 @@ def step_shortcut_add_comment(resource, story_id, text, ctx):
     import asyncio
 
     try:
-        result = asyncio.new_event_loop().run_until_complete(ctx["connector"].write(payload))
+        result = asyncio.run(ctx["connector"].write(payload))
         ctx["write_result"] = result
         ctx["query_error"] = None
     except Exception as exc:
@@ -3889,7 +3891,7 @@ def step_youtrack_query_resource(resource, ctx):
     import asyncio
 
     try:
-        result = asyncio.new_event_loop().run_until_complete(ctx["connector"].query(q))
+        result = asyncio.run(ctx["connector"].query(q))
         ctx["query_result"] = result
         ctx["query_error"] = None
     except Exception as exc:
@@ -3905,7 +3907,7 @@ def step_confluence_query_pages(space_id, ctx):
     import asyncio
 
     try:
-        result = asyncio.new_event_loop().run_until_complete(ctx["connector"].query(q))
+        result = asyncio.run(ctx["connector"].query(q))
         ctx["query_result"] = result
         ctx["query_error"] = None
     except Exception as exc:
@@ -3944,7 +3946,7 @@ def step_notion_query_with_database_id(resource, db_id, ctx):
     import asyncio
 
     try:
-        result = asyncio.new_event_loop().run_until_complete(ctx["connector"].query(q))
+        result = asyncio.run(ctx["connector"].query(q))
         ctx["query_result"] = result
         ctx["query_error"] = None
     except Exception as exc:
@@ -3960,7 +3962,7 @@ def step_confluence_query_page(page_id, ctx):
     import asyncio
 
     try:
-        result = asyncio.new_event_loop().run_until_complete(ctx["connector"].query(q))
+        result = asyncio.run(ctx["connector"].query(q))
         ctx["query_result"] = result
         ctx["query_error"] = None
     except Exception as exc:
@@ -4085,7 +4087,7 @@ def step_google_docs_query_with_document_id(resource, document_id, ctx):
     import asyncio
 
     try:
-        result = asyncio.new_event_loop().run_until_complete(ctx["connector"].query(q))
+        result = asyncio.run(ctx["connector"].query(q))
         ctx["query_result"] = result
         ctx["query_error"] = None
     except Exception as exc:
@@ -4103,7 +4105,7 @@ def step_youtrack_query_issues(resource, query_text, ctx):
     import asyncio
 
     try:
-        result = asyncio.new_event_loop().run_until_complete(ctx["connector"].query(q))
+        result = asyncio.run(ctx["connector"].query(q))
         ctx["query_result"] = result
         ctx["query_error"] = None
     except Exception as exc:
@@ -4119,7 +4121,7 @@ def step_confluence_query_spaces(space_type, ctx):
     import asyncio
 
     try:
-        result = asyncio.new_event_loop().run_until_complete(ctx["connector"].query(q))
+        result = asyncio.run(ctx["connector"].query(q))
         ctx["query_result"] = result
         ctx["query_error"] = None
     except Exception as exc:
@@ -4137,7 +4139,7 @@ def step_google_docs_query_with_file_id(resource, file_id, ctx):
     import asyncio
 
     try:
-        result = asyncio.new_event_loop().run_until_complete(ctx["connector"].query(q))
+        result = asyncio.run(ctx["connector"].query(q))
         ctx["query_result"] = result
         ctx["query_error"] = None
     except Exception as exc:
@@ -4155,7 +4157,7 @@ def step_notion_query_with_page_id(resource, page_id, ctx):
     import asyncio
 
     try:
-        result = asyncio.new_event_loop().run_until_complete(ctx["connector"].query(q))
+        result = asyncio.run(ctx["connector"].query(q))
         ctx["query_result"] = result
         ctx["query_error"] = None
     except Exception as exc:
@@ -4171,7 +4173,7 @@ def step_confluence_query_content(cql, ctx):
     import asyncio
 
     try:
-        result = asyncio.new_event_loop().run_until_complete(ctx["connector"].query(q))
+        result = asyncio.run(ctx["connector"].query(q))
         ctx["query_result"] = result
         ctx["query_error"] = None
     except Exception as exc:
@@ -4189,7 +4191,7 @@ def step_youtrack_query_issue(resource, issue_id, ctx):
     import asyncio
 
     try:
-        result = asyncio.new_event_loop().run_until_complete(ctx["connector"].query(q))
+        result = asyncio.run(ctx["connector"].query(q))
         ctx["query_result"] = result
         ctx["query_error"] = None
     except Exception as exc:
@@ -4205,7 +4207,7 @@ def step_confluence_query_children(page_id, ctx):
     import asyncio
 
     try:
-        result = asyncio.new_event_loop().run_until_complete(ctx["connector"].query(q))
+        result = asyncio.run(ctx["connector"].query(q))
         ctx["query_result"] = result
         ctx["query_error"] = None
     except Exception as exc:
@@ -4223,7 +4225,7 @@ def step_youtrack_query_without_id(resource, ctx):
     import asyncio
 
     try:
-        asyncio.new_event_loop().run_until_complete(ctx["connector"].query(q))
+        asyncio.run(ctx["connector"].query(q))
         ctx["query_result"] = "unexpected_success"
         ctx["query_error"] = None
     except Exception as exc:
@@ -4239,7 +4241,7 @@ def step_confluence_query_labels(page_id, ctx):
     import asyncio
 
     try:
-        result = asyncio.new_event_loop().run_until_complete(ctx["connector"].query(q))
+        result = asyncio.run(ctx["connector"].query(q))
         ctx["query_result"] = result
         ctx["query_error"] = None
     except Exception as exc:
@@ -4257,7 +4259,7 @@ def step_notion_query_without_database_id(resource, ctx):
     import asyncio
 
     try:
-        asyncio.new_event_loop().run_until_complete(ctx["connector"].query(q))
+        asyncio.run(ctx["connector"].query(q))
         ctx["query_result"] = "unexpected_success"
         ctx["query_error"] = None
     except Exception as exc:
@@ -4281,7 +4283,7 @@ def step_youtrack_write_issue(resource, summary, project, ctx):
     import asyncio
 
     try:
-        result = asyncio.new_event_loop().run_until_complete(ctx["connector"].write(payload))
+        result = asyncio.run(ctx["connector"].write(payload))
         ctx["write_result"] = result
         ctx["query_error"] = None
     except Exception as exc:
@@ -4300,7 +4302,7 @@ def step_confluence_create_page(space_id, title, ctx):
     import asyncio
 
     try:
-        result = asyncio.new_event_loop().run_until_complete(ctx["connector"].write(payload))
+        result = asyncio.run(ctx["connector"].write(payload))
         ctx["write_result"] = result
         ctx["query_error"] = None
     except Exception as exc:
@@ -4327,7 +4329,7 @@ def step_notion_write_page(resource, db_id, title, ctx):
     import asyncio
 
     try:
-        result = asyncio.new_event_loop().run_until_complete(ctx["connector"].write(payload))
+        result = asyncio.run(ctx["connector"].write(payload))
         ctx["write_result"] = result
         ctx["query_error"] = None
     except Exception as exc:
@@ -4347,7 +4349,7 @@ def step_google_docs_write_document(resource, title, ctx):
     import asyncio
 
     try:
-        result = asyncio.new_event_loop().run_until_complete(ctx["connector"].write(payload))
+        result = asyncio.run(ctx["connector"].write(payload))
         ctx["write_result"] = result
         ctx["query_error"] = None
     except Exception as exc:
@@ -4366,7 +4368,7 @@ def step_confluence_add_label(page_id, label, ctx):
     import asyncio
 
     try:
-        result = asyncio.new_event_loop().run_until_complete(ctx["connector"].write(payload))
+        result = asyncio.run(ctx["connector"].write(payload))
         ctx["write_result"] = result
         ctx["query_error"] = None
     except Exception as exc:
@@ -4386,7 +4388,7 @@ def step_google_docs_write_document_update(resource, document_id, text, ctx):
     import asyncio
 
     try:
-        result = asyncio.new_event_loop().run_until_complete(ctx["connector"].write(payload))
+        result = asyncio.run(ctx["connector"].write(payload))
         ctx["write_result"] = result
         ctx["query_error"] = None
     except Exception as exc:
@@ -4410,7 +4412,7 @@ def step_youtrack_update_issue(resource, issue_id, ctx):
     import asyncio
 
     try:
-        result = asyncio.new_event_loop().run_until_complete(ctx["connector"].write(payload))
+        result = asyncio.run(ctx["connector"].write(payload))
         ctx["write_result"] = result
         ctx["query_error"] = None
     except Exception as exc:
@@ -4434,7 +4436,7 @@ def step_youtrack_write_comment(resource, issue_id, text, ctx):
     import asyncio
 
     try:
-        result = asyncio.new_event_loop().run_until_complete(ctx["connector"].write(payload))
+        result = asyncio.run(ctx["connector"].write(payload))
         ctx["write_result"] = result
         ctx["query_error"] = None
     except Exception as exc:
@@ -4638,7 +4640,7 @@ def step_datadog_health_check(ctx):
     import asyncio
 
     try:
-        result = asyncio.new_event_loop().run_until_complete(ctx["connector"].health_check())
+        result = asyncio.run(ctx["connector"].health_check())
         ctx["health_result"] = result
     except Exception as exc:
         ctx["health_result"] = None
@@ -4653,7 +4655,7 @@ def step_datadog_query_monitors(ctx):
     import asyncio
 
     try:
-        result = asyncio.new_event_loop().run_until_complete(ctx["connector"].query(q))
+        result = asyncio.run(ctx["connector"].query(q))
         ctx["query_result"] = result
         ctx["query_error"] = None
     except Exception as exc:
@@ -4669,7 +4671,7 @@ def step_datadog_query_events(ctx):
     import asyncio
 
     try:
-        result = asyncio.new_event_loop().run_until_complete(ctx["connector"].query(q))
+        result = asyncio.run(ctx["connector"].query(q))
         ctx["query_result"] = result
         ctx["query_error"] = None
     except Exception as exc:
@@ -4685,7 +4687,7 @@ def step_datadog_query_metrics(ctx):
     import asyncio
 
     try:
-        result = asyncio.new_event_loop().run_until_complete(ctx["connector"].query(q))
+        result = asyncio.run(ctx["connector"].query(q))
         ctx["query_result"] = result
         ctx["query_error"] = None
     except Exception as exc:
@@ -4701,7 +4703,7 @@ def step_datadog_query_dashboards(ctx):
     import asyncio
 
     try:
-        result = asyncio.new_event_loop().run_until_complete(ctx["connector"].query(q))
+        result = asyncio.run(ctx["connector"].query(q))
         ctx["query_result"] = result
         ctx["query_error"] = None
     except Exception as exc:
@@ -4717,7 +4719,7 @@ def step_datadog_search_logs(ctx):
     import asyncio
 
     try:
-        result = asyncio.new_event_loop().run_until_complete(ctx["connector"].query(q))
+        result = asyncio.run(ctx["connector"].query(q))
         ctx["query_result"] = result
         ctx["query_error"] = None
     except Exception as exc:
@@ -4737,7 +4739,7 @@ def step_datadog_write_event(title, text, ctx):
     import asyncio
 
     try:
-        result = asyncio.new_event_loop().run_until_complete(ctx["connector"].write(payload))
+        result = asyncio.run(ctx["connector"].write(payload))
         ctx["write_result"] = result
         ctx["query_error"] = None
     except Exception as exc:
@@ -4760,7 +4762,7 @@ def step_datadog_create_monitor(monitor_type, ctx):
     import asyncio
 
     try:
-        result = asyncio.new_event_loop().run_until_complete(ctx["connector"].write(payload))
+        result = asyncio.run(ctx["connector"].write(payload))
         ctx["write_result"] = result
         ctx["query_error"] = None
     except Exception as exc:
@@ -4779,7 +4781,7 @@ def step_datadog_mute_monitor(ctx):
     import asyncio
 
     try:
-        result = asyncio.new_event_loop().run_until_complete(ctx["connector"].write(payload))
+        result = asyncio.run(ctx["connector"].write(payload))
         ctx["write_result"] = result
         ctx["query_error"] = None
     except Exception as exc:
