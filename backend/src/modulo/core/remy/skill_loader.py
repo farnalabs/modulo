@@ -158,12 +158,12 @@ class SkillLoader:
         if config is None:
             return None
         base_prompt = system_prompt_override if system_prompt_override is not None else config.system_prompt
-        return base_prompt if base_prompt else None
+        return base_prompt or None
 
     def _build_guidance_section(self, config: RemyConfig | None) -> str | None:
         if config is None:
             return None
-        return config.additional_guidance if config.additional_guidance else None
+        return config.additional_guidance or None
 
     def _build_overview_section(self, config: RemyConfig | None, ctx_sources: dict[str, str]) -> str | None:
         if config is None:

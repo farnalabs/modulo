@@ -344,10 +344,9 @@ async def _run_in_background(
             settings = get_settings()
             engine = get_or_create_engine(settings)
             factory = async_sessionmaker(engine, expire_on_commit=False)
-            async with factory() as session:
-                async with session.begin():
-                    await set_rls_org(session, org_id)
-                    await update_run_status(session, run_id, "failed", error_code="internal_error")
+            async with factory() as session, session.begin():
+                await set_rls_org(session, org_id)
+                await update_run_status(session, run_id, "failed", error_code="internal_error")
         except Exception:
             _log.exception("run.mark_failed_error", extra={"run_id": str(run_id)})
 
@@ -878,14 +877,13 @@ async def _get_checkpoint_state(
                     raw_checkpoint = parsed
         except (json.JSONDecodeError, Exception) as exc:
             _log.warning("checkpoint.decrypt_skip", extra={"error": str(exc)[:200]})
-    elif isinstance(raw_checkpoint, dict):
-        if raw_checkpoint.get("__encrypted__") and fernet_key:
-            try:
-                f = Fernet(fernet_key.encode())
-                decrypted = f.decrypt(raw_checkpoint["data"].encode())
-                raw_checkpoint = json.loads(decrypted.decode())
-            except Exception as exc:
-                _log.warning("checkpoint.decrypt_skip", extra={"error": str(exc)[:200]})
+    elif isinstance(raw_checkpoint, dict) and raw_checkpoint.get("__encrypted__") and fernet_key:
+        try:
+            f = Fernet(fernet_key.encode())
+            decrypted = f.decrypt(raw_checkpoint["data"].encode())
+            raw_checkpoint = json.loads(decrypted.decode())
+        except Exception as exc:
+            _log.warning("checkpoint.decrypt_skip", extra={"error": str(exc)[:200]})
 
     if isinstance(raw_checkpoint, dict):
         return raw_checkpoint.get("channel_values")

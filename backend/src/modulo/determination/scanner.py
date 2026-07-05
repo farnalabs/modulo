@@ -39,8 +39,7 @@ def _repo_name(rec: dict[str, Any]) -> str:
 
     Handles GitHub (full_name or name) and GitLab (path_with_namespace or name) formats.
     """
-    name = rec.get("full_name") or rec.get("path_with_namespace") or rec.get("name", "")
-    return name
+    return rec.get("full_name") or rec.get("path_with_namespace") or rec.get("name", "")
 
 
 def _add(

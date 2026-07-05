@@ -156,17 +156,16 @@ def _export_checkpoint_blobs_sync(raw_url: str) -> list[dict[str, Any]]:
     if psycopg is None:
         raise RuntimeError("psycopg library is not available")
     rows: list[dict[str, Any]] = []
-    with psycopg.connect(raw_url, row_factory=dict_row, connect_timeout=10) as conn:
-        with conn.cursor() as cur:
-            cur.execute(
-                "SELECT * FROM checkpoint_blobs ORDER BY organisation_id, thread_id, checkpoint_ns, channel, version"
-            )
-            for row in cur:
-                org_id = row.get("organisation_id")
-                row["organisation_id"] = str(org_id) if org_id is not None else None
-                if isinstance(row.get("blob"), (bytes, memoryview)):
-                    row["blob"] = bytes(row["blob"]).hex()
-                rows.append(row)
+    with psycopg.connect(raw_url, row_factory=dict_row, connect_timeout=10) as conn, conn.cursor() as cur:
+        cur.execute(
+            "SELECT * FROM checkpoint_blobs ORDER BY organisation_id, thread_id, checkpoint_ns, channel, version"
+        )
+        for row in cur:
+            org_id = row.get("organisation_id")
+            row["organisation_id"] = str(org_id) if org_id is not None else None
+            if isinstance(row.get("blob"), (bytes, memoryview)):
+                row["blob"] = bytes(row["blob"]).hex()
+            rows.append(row)
     return rows
 
 

@@ -2,6 +2,18 @@
 
 ## Lessons Learned
 
+### Permission gating: `canSeeItem()` must check `requiredPermissions`
+
+- The sidebar nav gating function was ignoring `requiredPermissions` from navigation config, causing unauthorized items to be visible (though non-functional). Always verify that permission-gated nav items actually check permissions — not just feature flags but also role-based `requiredPermissions`. Add an explicit assertion per item: `if (item.requiredPermissions && !userHasPermission(item.requiredPermissions)) return false;`.
+
+### Config: avoid module-level side effects
+
+- `buildSidebarGroups()` called at module import time crashes if any config key is missing or if the router isn't fully initialized. Module-level side effects also make tree-shaking and testing impossible. Guard module-level calls in a `try/catch` or, better, make them lazy — call only when the component mounts, not when the module loads.
+
+### Route config: no duplicate path keys
+
+- Frontend route configuration had duplicate keys (same path mapped twice), letting the second registration silently override the first. Use `new Map()` with unique key validation, or add a CI check (`duplicate-route-keys.ps1`) that fails if any path appears more than once in the route config.
+
 - When rewriting or restoring a layout component (e.g., `AppLayout.vue` after an SFC parsing fix), always verify that responsive hiding classes (`hidden md:flex` on desktop sidebar, `md:hidden` on mobile elements) are preserved. These are easily lost during a restore from a pre-mobile baseline.
 
 - Port editor forms (`PortDefinitionPanel.vue`) must preserve all port fields on edit. When adding a boolean flag like `multiline` to the `ParameterPort` interface, update `formDefaults`, `openEditForm` (to read the flag), `savePort` (to write it), and the template (to provide a UI control). Missing a flag in `openEditForm` causes silent data loss when a user edits a port.
@@ -23,3 +35,9 @@
  - Empty `catch {}` blocks in async API calls → at minimum log the error with `console.warn(err)`. Silent catches make debugging impossible and hide network failures, 500s, and auth errors from both developers and users. For user-visible features, also show a brief inline error or toast.
 
 - `new Date(invalidStr)` never throws — it silently creates an invalid Date object. Always check `isNaN(d.getTime())` after constructing a Date from a string before calling any Date methods. A `try/catch` around Date construction will not catch invalid input.
+
+- Sidebar containers must use `h-screen sticky top-0` (not `min-h-screen`) with `flex flex-col`. The `SidebarFooter` must use `mt-auto` to stay locked at the viewport bottom. Without `sticky`, the sidebar scrolls with the page instead of filling the viewport height when main content is longer than the screen. Without `mt-auto`, the footer floats below the nav items instead of anchoring to the bottom.
+
+- Dashboard trend data (`fetchTrends`) must be fetched in parallel with summary (`fetchSummary`) on mount, not lazily on first duration-button click. The user sees a blank trend section until they interact with the 7d/30d/90d buttons, making the dashboard feel slow. Add `dashboardStore.fetchTrends(7)` to the `onMounted` promise array.
+
+- API client 401 handling must attempt a refresh token rotation before redirecting to login. Use a module-level `_refreshingPromise` to deduplicate concurrent refresh attempts — when multiple API calls get 401 simultaneously, they should share one refresh request and all retry with the new token. Pattern: `const resp = await fn(...); if (resp.response?.status === 401) { const refreshed = await attemptTokenRefresh(); if (refreshed) resp = await fn(...); }`

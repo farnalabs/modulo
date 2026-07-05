@@ -265,8 +265,7 @@ class GitHubConnector(ConnectorBase):
                 if "milestone" in payload.data:
                     issue_body["milestone"] = payload.data["milestone"]
                 r = await self._call_api("POST", f"/repos/{owner_repo}/issues", json=issue_body)
-                result = await self._parse_json(r)
-                return result
+                return await self._parse_json(r)
             case "issue_update":
                 owner_repo = self._require_write_filter(payload.data, "repo", "issue_update")
                 issue_number = self._require_write_filter(payload.data, "issue_number", "issue_update")
@@ -275,8 +274,7 @@ class GitHubConnector(ConnectorBase):
                     if key in payload.data:
                         update_body[key] = payload.data[key]
                 r = await self._call_api("PATCH", f"/repos/{owner_repo}/issues/{issue_number}", json=update_body)
-                result = await self._parse_json(r)
-                return result
+                return await self._parse_json(r)
             case "issue_comment":
                 owner_repo = self._require_write_filter(payload.data, "repo", "issue_comment")
                 issue_number = self._require_write_filter(payload.data, "issue_number", "issue_comment")
@@ -284,8 +282,7 @@ class GitHubConnector(ConnectorBase):
                     "POST", f"/repos/{owner_repo}/issues/{issue_number}/comments",
                     json={"body": self._require_write_filter(payload.data, "body", "issue_comment")},
                 )
-                result = await self._parse_json(r)
-                return result
+                return await self._parse_json(r)
             case "issue_label":
                 owner_repo = self._require_write_filter(payload.data, "repo", "issue_label")
                 issue_number = self._require_write_filter(payload.data, "issue_number", "issue_label")
@@ -293,8 +290,7 @@ class GitHubConnector(ConnectorBase):
                     "POST", f"/repos/{owner_repo}/issues/{issue_number}/labels",
                     json={"labels": self._require_write_filter(payload.data, "labels", "issue_label")},
                 )
-                result = await self._parse_json(r)
-                return result
+                return await self._parse_json(r)
             case "issue_reaction":
                 owner_repo = self._require_write_filter(payload.data, "repo", "issue_reaction")
                 issue_number = self._require_write_filter(payload.data, "issue_number", "issue_reaction")
@@ -303,8 +299,7 @@ class GitHubConnector(ConnectorBase):
                     json={"content": self._require_write_filter(payload.data, "content", "issue_reaction")},
                     headers={"Accept": "application/vnd.github.squirrel-girl-preview+json"},
                 )
-                result = await self._parse_json(r)
-                return result
+                return await self._parse_json(r)
             case "label":
                 owner_repo = self._require_write_filter(payload.data, "repo", "label")
                 label_body: dict[str, Any] = {
@@ -314,8 +309,7 @@ class GitHubConnector(ConnectorBase):
                 if "description" in payload.data:
                     label_body["description"] = payload.data["description"]
                 r = await self._call_api("POST", f"/repos/{owner_repo}/labels", json=label_body)
-                result = await self._parse_json(r)
-                return result
+                return await self._parse_json(r)
             case "milestone":
                 owner_repo = self._require_write_filter(payload.data, "repo", "milestone")
                 milestone_body: dict[str, Any] = {
@@ -326,7 +320,6 @@ class GitHubConnector(ConnectorBase):
                 if "due_on" in payload.data:
                     milestone_body["due_on"] = payload.data["due_on"]
                 r = await self._call_api("POST", f"/repos/{owner_repo}/milestones", json=milestone_body)
-                result = await self._parse_json(r)
-                return result
+                return await self._parse_json(r)
             case _:
                 raise ValueError(f"Unsupported GitHub write resource: {payload.resource!r}")

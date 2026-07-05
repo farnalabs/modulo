@@ -59,10 +59,7 @@ class RemyConfig(BaseModel):
 _CONFIG_KEY_PREFIX = "remy_config:"
 
 PERMISSION_MODE_PRESETS: dict[str, dict[str, str]] = {
-    "full_auto": {tool: "always_allowed" for tool in [
-        "navigate", "click", "fill", "select", "extract", "extract_all",
-        "get_page_interactables", "wait", "go_back", "get_url", "press",
-    ]},
+    "full_auto": dict.fromkeys(["navigate", "click", "fill", "select", "extract", "extract_all", "get_page_interactables", "wait", "go_back", "get_url", "press"], "always_allowed"),
     "safe": {
         "press": "requires_approval",
     },
@@ -145,7 +142,4 @@ class RemyConfigService:
             return True
 
         allowed_team_ids = _normalize_uuids(access.get("team_ids", []))
-        if any(tid in allowed_team_ids for tid in team_ids):
-            return True
-
-        return False
+        return bool(any(tid in allowed_team_ids for tid in team_ids))

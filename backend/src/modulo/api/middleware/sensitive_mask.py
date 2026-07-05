@@ -109,10 +109,7 @@ async def _fetch_value(
         ci = result.scalar_one_or_none()
         if ci is None:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Connector not found")
-        if field:
-            raw = ci.config_json.get(field, "")
-        else:
-            raw = json.dumps(ci.config_json)
+        raw = ci.config_json.get(field, "") if field else json.dumps(ci.config_json)
         return raw if isinstance(raw, str) else json.dumps(raw)
 
     if body.resource_type == "sso_provider":
@@ -134,7 +131,7 @@ async def _fetch_value(
             select(Organisation.otel_config_json).where(Organisation.id == principal.organisation_id)
         )
         row = result.scalar_one_or_none()
-        config = row if row else {}
+        config = row or {}
         if field:
             return config.get(field, "")
         return json.dumps(config)

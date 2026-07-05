@@ -82,10 +82,7 @@ class SsoProviderResponse(BaseModel):
         if provider.scopes:
             try:
                 parsed = json.loads(provider.scopes)
-                if isinstance(parsed, list):
-                    scopes = parsed
-                else:
-                    scopes = [str(parsed)]
+                scopes = parsed if isinstance(parsed, list) else [str(parsed)]
             except (json.JSONDecodeError, TypeError):
                 scopes = None
 
@@ -250,8 +247,7 @@ async def test_provider_connection(
     try:
         if provider.provider_type == "oidc":
             return await _test_oidc_connection(provider)
-        else:
-            return await _test_saml_connection(provider)
+        return await _test_saml_connection(provider)
     except Exception as exc:
         _log.warning("SSO test connection failed: %s", exc)
         return SsoProviderTestResult(

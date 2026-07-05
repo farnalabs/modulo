@@ -15,7 +15,7 @@ import logging
 import uuid
 from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Self
 
 from modulo.core.plugin_registry import get_plugin_registry
 from modulo.core.secrets_backend import SecretsBackend
@@ -92,7 +92,7 @@ class ModelBackendHub:
         self._healthy: dict[uuid.UUID, bool] = {}
         self._fallbacks: dict[uuid.UUID, list[uuid.UUID]] = {}
 
-    async def __aenter__(self) -> "ModelBackendHub":
+    async def __aenter__(self) -> Self:
         return self
 
     async def __aexit__(self, *_: object) -> None:

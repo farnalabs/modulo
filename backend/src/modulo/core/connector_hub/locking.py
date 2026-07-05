@@ -4,6 +4,7 @@ import asyncio
 import hashlib
 import logging
 import uuid
+from typing import Self
 
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -92,7 +93,7 @@ class AdvisoryLockService:
             logger.info("Released lock on resource %s", resource_id)
         self._owner_task_id = None
 
-    async def __aenter__(self) -> "AdvisoryLockService":
+    async def __aenter__(self) -> Self:
         return self
 
     async def __aexit__(self, *_: object) -> None:

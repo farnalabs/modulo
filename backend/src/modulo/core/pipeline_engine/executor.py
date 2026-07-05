@@ -205,40 +205,38 @@ class PipelineExecutor:
         poll_interval = self._capacity_poll_interval
 
         while datetime.now(UTC).timestamp() < deadline:
-            async with self._session_factory() as session:
-                async with session.begin():
-                    await set_rls_org(session, org_id)
-                    # Serialise on the pipeline row — only one executor at a time
-                    # passes this check for a given pipeline.
-                    await session.execute(select(Pipeline).where(Pipeline.id == pipeline_id).with_for_update())
-                    run = await get_run(session, run_id)
-                    if run is None:
-                        raise RunNotFoundError(run_id)
-                    if run.cancellation_requested:
-                        await update_run_status(session, run_id, "cancelled")
-                        cancelled_run = await get_run(session, run_id)
-                        if cancelled_run is None:
-                            raise RunNotFoundError(run_id)
-                        return cancelled_run
-
-                    active_count = await count_active_runs_for_pipeline(session, pipeline_id)
-                    if active_count < max_concurrent:
-                        await update_run_status(session, run_id, "running")
-                        running_run = await get_run(session, run_id)
-                        if running_run is None:
-                            raise RunNotFoundError(run_id)
-                        return running_run
-
-            await asyncio.sleep(poll_interval)
-
-        async with self._session_factory() as session:
-            async with session.begin():
+            async with self._session_factory() as session, session.begin():
                 await set_rls_org(session, org_id)
-                await update_run_status(session, run_id, "failed", error_code="lock_timeout")
+                # Serialise on the pipeline row — only one executor at a time
+                # passes this check for a given pipeline.
+                await session.execute(select(Pipeline).where(Pipeline.id == pipeline_id).with_for_update())
                 run = await get_run(session, run_id)
                 if run is None:
                     raise RunNotFoundError(run_id)
-                return run
+                if run.cancellation_requested:
+                    await update_run_status(session, run_id, "cancelled")
+                    cancelled_run = await get_run(session, run_id)
+                    if cancelled_run is None:
+                        raise RunNotFoundError(run_id)
+                    return cancelled_run
+
+                active_count = await count_active_runs_for_pipeline(session, pipeline_id)
+                if active_count < max_concurrent:
+                    await update_run_status(session, run_id, "running")
+                    running_run = await get_run(session, run_id)
+                    if running_run is None:
+                        raise RunNotFoundError(run_id)
+                    return running_run
+
+            await asyncio.sleep(poll_interval)
+
+        async with self._session_factory() as session, session.begin():
+            await set_rls_org(session, org_id)
+            await update_run_status(session, run_id, "failed", error_code="lock_timeout")
+            run = await get_run(session, run_id)
+            if run is None:
+                raise RunNotFoundError(run_id)
+            return run
 
     async def _load_eval_defs_for_pipeline(
         self,
@@ -250,8 +248,7 @@ class PipelineExecutor:
             EvalDefinition.pipeline_id == pipeline_id,
             EvalDefinition.node_id.isnot(None),
         )
-        eval_rows = (await session.execute(eval_stmt)).scalars().all()
-        return eval_rows
+        return (await session.execute(eval_stmt)).scalars().all()
 
     @staticmethod
     def _build_eval_defs_by_node(
@@ -304,7 +301,7 @@ class PipelineExecutor:
             return None, None, None
 
         total_tokens = sum(n["total_tokens"] for n in node_token_usage.values())
-        total_cost = Decimal("0")
+        total_cost = Decimal(0)
         for n_data in node_token_usage.values():
             n_cost = Decimal(str(n_data.get("input_tokens", 0))) * input_rate
             n_cost += Decimal(str(n_data.get("output_tokens", 0))) * output_rate
@@ -326,49 +323,47 @@ class PipelineExecutor:
         ``_hitl_decision``, and streams the graph until completion or the
         next interrupt.
         """
-        async with self._session_factory() as session:
-            async with session.begin():
-                await set_rls_org(session, org_id)
-                run = await get_run(session, run_id)
-                if run is None:
-                    raise RunNotFoundError(run_id)
-                await update_run_status(session, run_id, "running")
+        async with self._session_factory() as session, session.begin():
+            await set_rls_org(session, org_id)
+            run = await get_run(session, run_id)
+            if run is None:
+                raise RunNotFoundError(run_id)
+            await update_run_status(session, run_id, "running")
 
-                snapshot_result = await session.execute(
-                    select(PipelineSnapshot).where(PipelineSnapshot.id == run.snapshot_id)
-                )
-                snapshot = snapshot_result.scalar_one()
-                graph_json: dict[str, Any] = snapshot.graph_json
+            snapshot_result = await session.execute(
+                select(PipelineSnapshot).where(PipelineSnapshot.id == run.snapshot_id)
+            )
+            snapshot = snapshot_result.scalar_one()
+            graph_json: dict[str, Any] = snapshot.graph_json
 
-                # Re-validate the snapshot before resuming — the pipeline
-                # config may have changed since the original run started.
-                validation = await GraphValidator().validate_for_run(snapshot, {}, session)
-                if not validation.is_valid:
-                    raise GraphValidationError(validation.issues, run_id)
+            # Re-validate the snapshot before resuming — the pipeline
+            # config may have changed since the original run started.
+            validation = await GraphValidator().validate_for_run(snapshot, {}, session)
+            if not validation.is_valid:
+                raise GraphValidationError(validation.issues, run_id)
 
-                # Load eval definitions while session is active.
-                eval_rows = await self._load_eval_defs_for_pipeline(session, run.pipeline_id)
-                resume_eval_defs_by_node = self._build_eval_defs_by_node(eval_rows, org_id, run.pipeline_id)
+            # Load eval definitions while session is active.
+            eval_rows = await self._load_eval_defs_for_pipeline(session, run.pipeline_id)
+            resume_eval_defs_by_node = self._build_eval_defs_by_node(eval_rows, org_id, run.pipeline_id)
 
         pipeline_id = run.pipeline_id
         snapshot_id = run.snapshot_id
         thread_id = run.langgraph_thread_id
 
-        async with self._session_factory() as session:
-            async with session.begin():
-                await set_rls_org(session, org_id)
+        async with self._session_factory() as session, session.begin():
+            await set_rls_org(session, org_id)
 
-                # Load pipeline for runaway protection limits.
-                pipeline_result = await session.execute(select(Pipeline).where(Pipeline.id == pipeline_id))
-                pipeline = pipeline_result.scalar_one_or_none()
-                if pipeline is None:
-                    raise RunNotFoundError(run_id)
+            # Load pipeline for runaway protection limits.
+            pipeline_result = await session.execute(select(Pipeline).where(Pipeline.id == pipeline_id))
+            pipeline = pipeline_result.scalar_one_or_none()
+            if pipeline is None:
+                raise RunNotFoundError(run_id)
 
-                guard = RunawayGuard(
-                    max_duration_seconds=pipeline.max_duration_seconds,
-                    max_steps=pipeline.max_steps,
-                    token_budget=pipeline.token_budget,
-                )
+            guard = RunawayGuard(
+                max_duration_seconds=pipeline.max_duration_seconds,
+                max_steps=pipeline.max_steps,
+                token_budget=pipeline.token_budget,
+            )
 
         compiled = get_or_compile(
             pipeline_id,
@@ -430,18 +425,17 @@ class PipelineExecutor:
             node_token_usage, self._INPUT_TOKEN_RATE, self._OUTPUT_TOKEN_RATE,
         )
 
-        async with self._session_factory() as session:
-            async with session.begin():
-                await set_rls_org(session, org_id)
-                final_run = await update_run_status(
-                    session,
-                    run_id,
-                    final_status,
-                    error_code=error_code,
-                    total_tokens=total_tokens,
-                    total_cost_usd=total_cost if node_token_usage else None,
-                    node_token_usage=node_token_usage,
-                )
+        async with self._session_factory() as session, session.begin():
+            await set_rls_org(session, org_id)
+            final_run = await update_run_status(
+                session,
+                run_id,
+                final_status,
+                error_code=error_code,
+                total_tokens=total_tokens,
+                total_cost_usd=total_cost if node_token_usage else None,
+                node_token_usage=node_token_usage,
+            )
 
         if final_run is None:
             raise RunNotFoundError(run_id)
@@ -457,24 +451,23 @@ class PipelineExecutor:
         """Execute the run to completion. Returns the final Run row."""
         # Load run + pipeline + snapshot in one short-lived transaction.
         # Query directly to avoid SQLAlchemy async lazy-load (MissingGreenlet).
-        async with self._session_factory() as session:
-            async with session.begin():
-                await set_rls_org(session, org_id)
-                run = await get_run(session, run_id)
-                if run is None:
-                    raise RunNotFoundError(run_id)
-                pipeline_result = await session.execute(select(Pipeline).where(Pipeline.id == run.pipeline_id))
-                pipeline = pipeline_result.scalar_one()
-                snapshot_result = await session.execute(
-                    select(PipelineSnapshot).where(PipelineSnapshot.id == run.snapshot_id)
-                )
-                snapshot = snapshot_result.scalar_one()
-                graph_json: dict[str, Any] = snapshot.graph_json
+        async with self._session_factory() as session, session.begin():
+            await set_rls_org(session, org_id)
+            run = await get_run(session, run_id)
+            if run is None:
+                raise RunNotFoundError(run_id)
+            pipeline_result = await session.execute(select(Pipeline).where(Pipeline.id == run.pipeline_id))
+            pipeline = pipeline_result.scalar_one()
+            snapshot_result = await session.execute(
+                select(PipelineSnapshot).where(PipelineSnapshot.id == run.snapshot_id)
+            )
+            snapshot = snapshot_result.scalar_one()
+            graph_json: dict[str, Any] = snapshot.graph_json
 
-                # Pre-run validation — blocks execution on errors.
-                validation = await GraphValidator().validate_for_run(snapshot, input_payload, session)
-                if not validation.is_valid:
-                    raise GraphValidationError(validation.issues, run_id)
+            # Pre-run validation — blocks execution on errors.
+            validation = await GraphValidator().validate_for_run(snapshot, input_payload, session)
+            if not validation.is_valid:
+                raise GraphValidationError(validation.issues, run_id)
 
         # Capture scalar attributes before the session closes.
         pipeline_id = run.pipeline_id
@@ -491,10 +484,9 @@ class PipelineExecutor:
 
         # Load eval definitions for conditional HITL gating (eval-before-interrupt).
         eval_defs_by_node: dict[str, list[EvalDefDTO]] = {}
-        async with self._session_factory() as session:
-            async with session.begin():
-                await set_rls_org(session, org_id)
-                eval_rows = await self._load_eval_defs_for_pipeline(session, pipeline_id)
+        async with self._session_factory() as session, session.begin():
+            await set_rls_org(session, org_id)
+            eval_rows = await self._load_eval_defs_for_pipeline(session, pipeline_id)
         eval_defs_by_node = self._build_eval_defs_by_node(eval_rows, org_id, pipeline_id)
 
         # Wait for capacity slot (or return cancelled/timed out).
@@ -566,55 +558,53 @@ class PipelineExecutor:
 
         # If the run completed, check for eval suite thresholds.
         if final_status == "complete":
-            async with self._session_factory() as session:
-                async with session.begin():
-                    await set_rls_org(session, org_id)
-                    try:
-                        await self._check_eval_suites(session, run_id, pipeline_id)
-                    except EvalSuiteBlockedError as exc:
-                        final_status = "failed"
-                        error_code = "eval_suite_blocked"
-                        error_detail = str(exc)
-                        broker.publish("run_failed", {"error": "eval_suite_blocked", "detail": str(exc)})
-                        _log.warning(
-                            "eval.suite_blocked",
-                            extra={
-                                "run_id": str(run_id),
-                                "suite_id": exc.suite_id,
-                                "score": exc.score,
-                            },
-                        )
+            async with self._session_factory() as session, session.begin():
+                await set_rls_org(session, org_id)
+                try:
+                    await self._check_eval_suites(session, run_id, pipeline_id)
+                except EvalSuiteBlockedError as exc:
+                    final_status = "failed"
+                    error_code = "eval_suite_blocked"
+                    error_detail = str(exc)
+                    broker.publish("run_failed", {"error": "eval_suite_blocked", "detail": str(exc)})
+                    _log.warning(
+                        "eval.suite_blocked",
+                        extra={
+                            "run_id": str(run_id),
+                            "suite_id": exc.suite_id,
+                            "score": exc.score,
+                        },
+                    )
 
             # Fire agent_signal triggers for each completed node.
             if final_status == "complete" and completed_node_outputs:
-                async with self._session_factory() as session:
-                    async with session.begin():
-                        await set_rls_org(session, org_id)
-                        for node_id, node_output in completed_node_outputs.items():
-                            try:
-                                signal_results = await fire_agent_signal(
-                                    session,
-                                    org_id=org_id,
-                                    source_run_id=run_id,
-                                    source_pipeline_id=pipeline_id,
-                                    completed_node_id=node_id,
-                                    node_output=node_output,
+                async with self._session_factory() as session, session.begin():
+                    await set_rls_org(session, org_id)
+                    for node_id, node_output in completed_node_outputs.items():
+                        try:
+                            signal_results = await fire_agent_signal(
+                                session,
+                                org_id=org_id,
+                                source_run_id=run_id,
+                                source_pipeline_id=pipeline_id,
+                                completed_node_id=node_id,
+                                node_output=node_output,
+                            )
+                            for sr in signal_results:
+                                _log.info(
+                                    "agent_signal.%s trigger=%s run=%s",
+                                    sr["status"],
+                                    sr.get("trigger_id", "?"),
+                                    sr.get("run_id", "?"),
                                 )
-                                for sr in signal_results:
-                                    _log.info(
-                                        "agent_signal.%s trigger=%s run=%s",
-                                        sr["status"],
-                                        sr.get("trigger_id", "?"),
-                                        sr.get("run_id", "?"),
-                                    )
-                            except Exception:
-                                _log.exception(
-                                    "agent_signal.failed",
-                                    extra={
-                                        "run_id": str(run_id),
-                                        "node_id": node_id,
-                                    },
-                                )
+                        except Exception:
+                            _log.exception(
+                                "agent_signal.failed",
+                                extra={
+                                    "run_id": str(run_id),
+                                    "node_id": node_id,
+                                },
+                            )
 
         # Close broker after all post-stream work (suite checks, signals).
         set_cancellation_check(None)
@@ -627,19 +617,18 @@ class PipelineExecutor:
         )
 
         # Mark complete/failed/cancelled/awaiting_human.
-        async with self._session_factory() as session:
-            async with session.begin():
-                await set_rls_org(session, org_id)
-                final_run = await update_run_status(
-                    session,
-                    run_id,
-                    final_status,
-                    error_code=error_code,
-                    error_detail=error_detail,
-                    total_tokens=total_tokens,
-                    total_cost_usd=total_cost_usd_val,
-                    node_token_usage=node_token_usage,
-                )
+        async with self._session_factory() as session, session.begin():
+            await set_rls_org(session, org_id)
+            final_run = await update_run_status(
+                session,
+                run_id,
+                final_status,
+                error_code=error_code,
+                error_detail=error_detail,
+                total_tokens=total_tokens,
+                total_cost_usd=total_cost_usd_val,
+                node_token_usage=node_token_usage,
+            )
 
         if final_run is None:
             raise RunNotFoundError(run_id)

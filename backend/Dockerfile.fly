@@ -67,6 +67,7 @@ COPY scripts/ /app/scripts/
 # Entrypoint + bootstrap
 COPY deploy/fly/entrypoint.sh /entrypoint.sh
 COPY deploy/fly/bootstrap_db.py /app/deploy/fly/bootstrap_db.py
+COPY deploy/fly/cleanup_orphan_migrations.py /app/deploy/fly/cleanup_orphan_migrations.py
 RUN chmod +x /entrypoint.sh
 
 EXPOSE 8080

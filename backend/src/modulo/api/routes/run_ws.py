@@ -97,10 +97,9 @@ async def run_websocket(
     # shares the same process-global pool used by the REST API via get_or_create_engine).
     engine = _get_engine(settings)
     session_factory = async_sessionmaker(engine, expire_on_commit=False)
-    async with session_factory() as session:
-        async with session.begin():
-            await set_rls_org(session, principal.organisation_id)
-            run = await get_run(session, run_id)
+    async with session_factory() as session, session.begin():
+        await set_rls_org(session, principal.organisation_id)
+        run = await get_run(session, run_id)
 
     if run is None:
         await ws.send_json({"error": "run_not_found", "detail": f"Run {run_id} not found"})

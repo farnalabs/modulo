@@ -2,7 +2,7 @@ import asyncio
 import json
 import logging
 from collections.abc import AsyncIterator
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, suppress
 from datetime import UTC, datetime
 
 from fastapi import FastAPI
@@ -149,20 +149,19 @@ async def _ensure_default_org(settings: Settings) -> None:
     engine = get_or_create_engine(settings)
     factory = get_or_create_session_factory(engine)
 
-    async with factory() as session:
-        async with session.begin():
-            result = await session.execute(select(Organisation).limit(1))
-            if result.scalar_one_or_none() is not None:
-                logger.info("startup.org_exists")
-                return
+    async with factory() as session, session.begin():
+        result = await session.execute(select(Organisation).limit(1))
+        if result.scalar_one_or_none() is not None:
+            logger.info("startup.org_exists")
+            return
 
-            org = Organisation(
-                name="Default Organisation",
-                slug="default",
-            )
-            session.add(org)
-            await session.flush()
-            logger.info("startup.default_org_created", extra={"org_id": str(org.id)})
+        org = Organisation(
+            name="Default Organisation",
+            slug="default",
+        )
+        session.add(org)
+        await session.flush()
+        logger.info("startup.default_org_created", extra={"org_id": str(org.id)})
 
 
 async def _seed_modulo_users(settings: Settings) -> None:
@@ -186,74 +185,73 @@ async def _seed_modulo_users(settings: Settings) -> None:
     engine = get_or_create_engine(settings)
     factory = get_or_create_session_factory(engine)
 
-    async with factory() as session:
-        async with session.begin():
-            org_result = await session.execute(select(Organisation).order_by(Organisation.created_at).limit(1))
-            org = org_result.scalar_one_or_none()
-            if org is None:
-                logger.warning("startup.no_org_for_user_seed")
-                return
+    async with factory() as session, session.begin():
+        org_result = await session.execute(select(Organisation).order_by(Organisation.created_at).limit(1))
+        org = org_result.scalar_one_or_none()
+        if org is None:
+            logger.warning("startup.no_org_for_user_seed")
+            return
 
-            for entry in settings.modulo_users.split(","):
-                entry = entry.strip()
-                if not entry:
-                    continue
-                colon = entry.find(":")
-                if colon < 1:
-                    continue
-                email = entry[:colon]
-                pw_part = entry[colon + 1 :]
+        for entry in settings.modulo_users.split(","):
+            entry = entry.strip()
+            if not entry:
+                continue
+            colon = entry.find(":")
+            if colon < 1:
+                continue
+            email = entry[:colon]
+            pw_part = entry[colon + 1 :]
 
-                result = await session.execute(select(Account).where(Account.email == email))
-                existing_account = result.scalar_one_or_none()
-                pw_hash = pw_part if pw_part.startswith("$2") else hash_password(pw_part)
+            result = await session.execute(select(Account).where(Account.email == email))
+            existing_account = result.scalar_one_or_none()
+            pw_hash = pw_part if pw_part.startswith("$2") else hash_password(pw_part)
 
-                if existing_account is not None:
-                    if not existing_account.password_hash or not existing_account.password_hash.startswith("$2"):
-                        existing_account.password_hash = pw_hash
-                        logger.info("startup.user_rehashed", extra={"email": email})
+            if existing_account is not None:
+                if not existing_account.password_hash or not existing_account.password_hash.startswith("$2"):
+                    existing_account.password_hash = pw_hash
+                    logger.info("startup.user_rehashed", extra={"email": email})
 
-                    # Ensure OrgMembership exists and role is correct
-                    mem_result = await session.execute(
-                        select(OrgMembership).where(
-                            OrgMembership.account_id == existing_account.id,
-                            OrgMembership.organisation_id == org.id,
-                        )
+                # Ensure OrgMembership exists and role is correct
+                mem_result = await session.execute(
+                    select(OrgMembership).where(
+                        OrgMembership.account_id == existing_account.id,
+                        OrgMembership.organisation_id == org.id,
                     )
-                    membership = mem_result.scalar_one_or_none()
-                    admin_role = "admin" if email in ("admin", "admin@modulo.run") else None
-                    if membership is not None:
-                        if admin_role and membership.role != "admin":
-                            membership.role = "admin"
-                            logger.info("startup.user_role_set_admin", extra={"email": email})
-                        else:
-                            logger.info("startup.user_exists", extra={"email": email})
+                )
+                membership = mem_result.scalar_one_or_none()
+                admin_role = "admin" if email in ("admin", "admin@modulo.run") else None
+                if membership is not None:
+                    if admin_role and membership.role != "admin":
+                        membership.role = "admin"
+                        logger.info("startup.user_role_set_admin", extra={"email": email})
                     else:
-                        new_membership = OrgMembership(
-                            account_id=existing_account.id,
-                            organisation_id=org.id,
-                            role=admin_role or "runner",
-                        )
-                        session.add(new_membership)
-                        logger.info("startup.user_membership_created", extra={"email": email})
-                    continue
+                        logger.info("startup.user_exists", extra={"email": email})
+                else:
+                    new_membership = OrgMembership(
+                        account_id=existing_account.id,
+                        organisation_id=org.id,
+                        role=admin_role or "runner",
+                    )
+                    session.add(new_membership)
+                    logger.info("startup.user_membership_created", extra={"email": email})
+                continue
 
-                account = Account(
-                    email=email,
-                    display_name=email.split("@")[0],
-                    password_hash=pw_hash,
-                    auth_provider="local",
-                )
-                session.add(account)
-                await session.flush()
+            account = Account(
+                email=email,
+                display_name=email.split("@")[0],
+                password_hash=pw_hash,
+                auth_provider="local",
+            )
+            session.add(account)
+            await session.flush()
 
-                membership = OrgMembership(
-                    account_id=account.id,
-                    organisation_id=org.id,
-                    role="admin" if email in ("admin", "admin@modulo.run") else "runner",
-                )
-                session.add(membership)
-                logger.info("startup.user_seeded", extra={"email": email})
+            membership = OrgMembership(
+                account_id=account.id,
+                organisation_id=org.id,
+                role="admin" if email in ("admin", "admin@modulo.run") else "runner",
+            )
+            session.add(membership)
+            logger.info("startup.user_seeded", extra={"email": email})
 
 
 async def _seed_demo_data(settings: Settings) -> None:
@@ -276,36 +274,35 @@ async def _seed_demo_data(settings: Settings) -> None:
     engine = get_or_create_engine(settings)
     factory = get_or_create_session_factory(engine)
 
-    async with factory() as session:
-        async with session.begin():
-            org_result = await session.execute(select(Organisation).order_by(Organisation.created_at).limit(1))
-            org = org_result.scalar_one_or_none()
-            if org is None:
-                logger.warning("startup.demo_no_org")
-                return
+    async with factory() as session, session.begin():
+        org_result = await session.execute(select(Organisation).order_by(Organisation.created_at).limit(1))
+        org = org_result.scalar_one_or_none()
+        if org is None:
+            logger.warning("startup.demo_no_org")
+            return
 
-            demo_email = "demo"
-            result = await session.execute(select(Account).where(Account.email == demo_email))
-            demo_account = result.scalar_one_or_none()
-            if demo_account is None:
-                demo_account = Account(
-                    email=demo_email,
-                    display_name="Demo User",
-                    password_hash=hash_password("demo"),
-                    auth_provider="local",
-                )
-                session.add(demo_account)
-                await session.flush()
+        demo_email = "demo"
+        result = await session.execute(select(Account).where(Account.email == demo_email))
+        demo_account = result.scalar_one_or_none()
+        if demo_account is None:
+            demo_account = Account(
+                email=demo_email,
+                display_name="Demo User",
+                password_hash=hash_password("demo"),
+                auth_provider="local",
+            )
+            session.add(demo_account)
+            await session.flush()
 
-                membership = OrgMembership(
-                    account_id=demo_account.id,
-                    organisation_id=org.id,
-                    role="viewer",
-                )
-                session.add(membership)
-                logger.info("startup.demo_user_seeded")
+            membership = OrgMembership(
+                account_id=demo_account.id,
+                organisation_id=org.id,
+                role="viewer",
+            )
+            session.add(membership)
+            logger.info("startup.demo_user_seeded")
 
-            logger.info("startup.demo_data_ready")
+        logger.info("startup.demo_data_ready")
 
 
 async def _seed_sso_providers(settings: Settings) -> None:
@@ -326,39 +323,38 @@ async def _seed_sso_providers(settings: Settings) -> None:
     engine = get_or_create_engine(settings)
     factory = get_or_create_session_factory(engine)
 
-    async with factory() as session:
-        async with session.begin():
-            existing = await session.execute(select(SsoProvider).limit(1))
-            if existing.scalar_one_or_none() is not None:
-                return
+    async with factory() as session, session.begin():
+        existing = await session.execute(select(SsoProvider).limit(1))
+        if existing.scalar_one_or_none() is not None:
+            return
 
-            try:
-                entries = json.loads(settings.modulo_oidc_providers)
-            except (json.JSONDecodeError, TypeError):
-                logger.warning("startup.sso_providers_invalid_json")
-                return
+        try:
+            entries = json.loads(settings.modulo_oidc_providers)
+        except (json.JSONDecodeError, TypeError):
+            logger.warning("startup.sso_providers_invalid_json")
+            return
 
-            for entry in entries:
-                if not all(k in entry for k in ("provider_id", "client_id", "client_secret", "discovery_url")):
-                    logger.warning("startup.sso_provider_skipped", extra={"entry": str(entry)})
-                    continue
+        for entry in entries:
+            if not all(k in entry for k in ("provider_id", "client_id", "client_secret", "discovery_url")):
+                logger.warning("startup.sso_provider_skipped", extra={"entry": str(entry)})
+                continue
 
-                provider = SsoProvider(
-                    provider_type="oidc",
-                    name=entry.get("provider_id", entry.get("name", "Imported OIDC Provider")),
-                    client_id=entry["client_id"],
-                    client_secret=entry["client_secret"],
-                    discovery_url=entry["discovery_url"],
-                    scopes=json.dumps(["openid", "profile", "email"]),
-                    enabled=True,
-                    auto_provision=True,
-                    default_role=settings.modulo_sso_default_role,
-                )
-                session.add(provider)
-                logger.info(
-                    "startup.sso_provider_seeded",
-                    extra={"provider_id": entry["provider_id"]},
-                )
+            provider = SsoProvider(
+                provider_type="oidc",
+                name=entry.get("provider_id", entry.get("name", "Imported OIDC Provider")),
+                client_id=entry["client_id"],
+                client_secret=entry["client_secret"],
+                discovery_url=entry["discovery_url"],
+                scopes=json.dumps(["openid", "profile", "email"]),
+                enabled=True,
+                auto_provision=True,
+                default_role=settings.modulo_sso_default_role,
+            )
+            session.add(provider)
+            logger.info(
+                "startup.sso_provider_seeded",
+                extra={"provider_id": entry["provider_id"]},
+            )
 
 
 async def _init_checkpointer(conn_string: str, fernet_key: str, fernet_key_old: str = "") -> None:
@@ -386,13 +382,12 @@ async def _run_retention_loop(interval_seconds: int = 3600) -> None:
     factory = get_or_create_session_factory(get_or_create_engine(settings))
     while True:
         try:
-            async with factory() as session:
-                async with session.begin():
-                    from modulo.db.crud.run import batch_delete_old_terminal_runs
+            async with factory() as session, session.begin():
+                from modulo.db.crud.run import batch_delete_old_terminal_runs
 
-                    deleted = await batch_delete_old_terminal_runs(session)
-                    if deleted:
-                        logger.info("retention.deleted_old_runs", extra={"count": deleted})
+                deleted = await batch_delete_old_terminal_runs(session)
+                if deleted:
+                    logger.info("retention.deleted_old_runs", extra={"count": deleted})
         except Exception:
             logger.exception("retention.job_failed")
         await asyncio.sleep(interval_seconds)
@@ -527,10 +522,8 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
     try:
         await retention_task
         for st in _scheduler_tasks:
-            try:
+            with suppress(asyncio.CancelledError):
                 await st
-            except asyncio.CancelledError:
-                pass
     except asyncio.CancelledError:
         pass
     await _shutdown_manager.shutdown()

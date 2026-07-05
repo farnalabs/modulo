@@ -208,7 +208,7 @@ async def saml_metadata(
     acs_url = f"{public_url}/api/v1/auth/saml/acs"
     entity_id = settings.modulo_saml_entity_id
 
-    metadata_xml = (
+    return (
         '<?xml version="1.0"?>'
         "<md:EntityDescriptor"
         ' xmlns:md="urn:oasis:names:tc:SAML:2.0:metadata"'
@@ -222,4 +222,3 @@ async def saml_metadata(
         "  </md:SPSSODescriptor>"
         "</md:EntityDescriptor>"
     )
-    return metadata_xml

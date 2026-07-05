@@ -5,4 +5,4 @@ rules:
     languages: [python]
     severity: ERROR
     paths:
-      include: ["backend/src/**"]
+      include: ["**/backend/src/**"]
