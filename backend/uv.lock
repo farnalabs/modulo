@@ -3085,6 +3085,7 @@ dev = [
     { name = "pytest-playwright" },
     { name = "pytest-recording" },
     { name = "pytest-xdist" },
+    { name = "requests" },
     { name = "respx" },
     { name = "ruff" },
     { name = "schemathesis" },
@@ -3092,6 +3093,7 @@ dev = [
     { name = "testcontainers" },
     { name = "types-passlib" },
     { name = "types-pyyaml" },
+    { name = "websocket-client" },
 ]
 docker = [
     { name = "aiodocker" },
@@ -3122,6 +3124,7 @@ dev = [
     { name = "pytest-recording" },
     { name = "pytest-timeout" },
     { name = "pytest-xdist" },
+    { name = "requests" },
     { name = "respx" },
     { name = "ruff" },
     { name = "schemathesis" },
@@ -3130,6 +3133,7 @@ dev = [
     { name = "types-jmespath" },
     { name = "types-passlib" },
     { name = "types-pyyaml" },
+    { name = "websocket-client" },
 ]
 
 [package.metadata]
@@ -3191,6 +3195,7 @@ requires-dist = [
     { name = "pyyaml", specifier = ">=6.0.1" },
     { name = "redis", specifier = ">=6.4.0" },
     { name = "redis", marker = "extra == 'redis'", specifier = ">=5.0.0" },
+    { name = "requests", marker = "extra == 'dev'", specifier = ">=2.31.0" },
     { name = "respx", marker = "extra == 'dev'", specifier = ">=0.21.0" },
     { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.4.0" },
     { name = "schemathesis", marker = "extra == 'dev'", specifier = ">=3.30.0" },
@@ -3201,6 +3206,7 @@ requires-dist = [
     { name = "types-passlib", marker = "extra == 'dev'", specifier = ">=1.7.7" },
     { name = "types-pyyaml", marker = "extra == 'dev'", specifier = ">=6.0.12.20260518" },
     { name = "uvicorn", extras = ["standard"], specifier = ">=0.49.0" },
+    { name = "websocket-client", marker = "extra == 'dev'", specifier = ">=1.8.0" },
     { name = "websockets", specifier = ">=12.0" },
 ]
 provides-extras = ["dev", "docker", "redis"]
@@ -3226,6 +3232,7 @@ dev = [
     { name = "pytest-recording", specifier = ">=0.13.0" },
     { name = "pytest-timeout", specifier = ">=2.3.1" },
     { name = "pytest-xdist", specifier = ">=3.5.0" },
+    { name = "requests", specifier = ">=2.31.0" },
     { name = "respx", specifier = ">=0.23.1" },
     { name = "ruff", specifier = ">=0.15.18" },
     { name = "schemathesis", specifier = ">=3.30.0" },
@@ -3234,6 +3241,7 @@ dev = [
     { name = "types-jmespath", specifier = ">=1.1.0.20260508" },
     { name = "types-passlib", specifier = ">=1.7.7" },
     { name = "types-pyyaml", specifier = ">=6.0.12.20260518" },
+    { name = "websocket-client", specifier = ">=1.8.0" },
 ]
 
 [[package]]

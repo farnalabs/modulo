@@ -38,6 +38,8 @@ DEFAULT_ADMIN_PASSWORD = "test-password-123"
 class SeedClient:
     """HTTP client wrapper for data seeding."""
 
+    _TIMEOUT = 30.0
+
     def __init__(self, base_url: str, email: str, password: str):
         self.base_url = base_url.rstrip("/")
         self._session = requests.Session()
@@ -62,6 +64,7 @@ class SeedClient:
         **kwargs: Any,
     ) -> dict[str, Any] | list[Any] | None:
         url = f"{self.base_url}{path}"
+        kwargs.setdefault("timeout", self._TIMEOUT)
         resp = self._session.request(method, url, **kwargs)
         if resp.status_code == 204:
             return None
@@ -189,7 +192,8 @@ def seed_api_keys(client: SeedClient, count: int = 3) -> list[dict[str, Any]]:
                 },
             )
             if isinstance(key, dict):
-                _log.info("Created API key: %s → %s", key["name"], key["full_key"][:20])
+                key_preview = key.get("full_key", "?")[:20] if "full_key" in key else "?"
+                _log.info("Created API key: %s → %s", key.get("name", "?"), key_preview)
                 keys.append(key)
         except requests.HTTPError as exc:
             _log.warning("Failed to create API key %s: %s", name, exc)
@@ -201,12 +205,11 @@ def verify_health(client: SeedClient) -> bool:
     """Quick health check to confirm the API is reachable."""
     try:
         me = client.get("/auth/me")
-        if isinstance(me, dict):
+        if isinstance(me, dict) and me.get("email"):
             _log.info("API reachable, authenticated as %s (role: %s)", me.get("email"), me.get("org_role"))
             return True
     except requests.RequestException as exc:
         _log.error("API unreachable: %s", exc)
-        return False
     return False
 
 
@@ -233,7 +236,6 @@ def main() -> None:
         "pipelines_created": len(pipelines),
         "triggers_created": len(triggers),
         "api_keys_created": len(api_keys),
-        "auth_token": f"Bearer {client.token[:20]}...",
     }
     _log.info("Seed complete: %s", json.dumps(summary, indent=2))
 
