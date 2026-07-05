@@ -12,18 +12,21 @@ _ORG = uuid.uuid4()
 
 def _claim(
     *,
-    created_at: datetime | None = None,
+    claimed_at: datetime | None = None,
     run_id: uuid.UUID | None = None,
     gate_id: str = "review-step",
+    account_id: uuid.UUID | None = None,
+    decision: str | None = None,
 ) -> MagicMock:
     g = MagicMock(spec=HitlClaim)
     g.id = uuid.uuid4()
     g.run_id = run_id or uuid.uuid4()
     g.gate_id = gate_id
     g.organisation_id = _ORG
-    g.created_at = created_at or datetime.now(UTC)
+    g.claimed_at = claimed_at or (datetime.now(UTC) if account_id else None)
     g.pipeline_id = uuid.uuid4()
-    g.decision = None
+    g.decision = decision
+    g.account_id = account_id
     return g
 
 
@@ -42,7 +45,7 @@ def _mock_session(claims: list) -> AsyncMock:
 
 async def test_returns_claims_older_than_warning_threshold() -> None:
     now = datetime.now(UTC)
-    mock_old = _claim(created_at=now - timedelta(hours=10))
+    mock_old = _claim(claimed_at=now - timedelta(hours=10), account_id=uuid.uuid4())
 
     session = _mock_session([mock_old])
     result = await get_overdue_claims(session, _ORG, warning_hours=4)
@@ -57,7 +60,7 @@ async def test_returns_claims_older_than_warning_threshold() -> None:
 
 async def test_respects_warning_hours_threshold() -> None:
     now = datetime.now(UTC)
-    mock_oldish = _claim(created_at=now - timedelta(hours=6))
+    mock_oldish = _claim(claimed_at=now - timedelta(hours=6), account_id=uuid.uuid4())
 
     session = _mock_session([mock_oldish])
     result = await get_overdue_claims(session, _ORG, warning_hours=4)
@@ -68,8 +71,8 @@ async def test_respects_warning_hours_threshold() -> None:
 
 async def test_escalates_claims_older_than_escalation_threshold() -> None:
     now = datetime.now(UTC)
-    mock_warning = _claim(created_at=now - timedelta(hours=8))
-    mock_escalated = _claim(created_at=now - timedelta(hours=48))
+    mock_warning = _claim(claimed_at=now - timedelta(hours=8), account_id=uuid.uuid4())
+    mock_escalated = _claim(claimed_at=now - timedelta(hours=48), account_id=uuid.uuid4())
 
     session = _mock_session([mock_warning, mock_escalated])
     result = await get_overdue_claims(session, _ORG, warning_hours=4)
@@ -82,7 +85,7 @@ async def test_escalates_claims_older_than_escalation_threshold() -> None:
 
 async def test_ignores_decided_claims() -> None:
     now = datetime.now(UTC)
-    mock_pending = _claim(created_at=now - timedelta(hours=10))
+    mock_pending = _claim(claimed_at=now - timedelta(hours=10), account_id=uuid.uuid4())
 
     session = _mock_session([mock_pending])
     result = await get_overdue_claims(session, _ORG, warning_hours=4)

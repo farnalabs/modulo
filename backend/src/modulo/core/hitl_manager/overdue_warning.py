@@ -14,6 +14,7 @@ from typing import Any
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.exc import SQLAlchemyError
 
 from modulo.db.models.hitl_claim import HitlClaim
 
@@ -21,6 +22,7 @@ _log = logging.getLogger(__name__)
 
 DEFAULT_WARNING_HOURS = 4
 DEFAULT_ESCALATION_HOURS = 24
+_SECONDS_PER_HOUR = 3600
 
 
 async def get_overdue_claims(
@@ -35,19 +37,29 @@ async def get_overdue_claims(
     are considered.  Returns a list of dicts with claim id, pipeline_run_id,
     node_id, claimed_at, age_hours, and status (``"warning"`` or ``"escalated"``).
     """
+    if warning_hours < 0:
+        raise ValueError(f"warning_hours must be non-negative, got {warning_hours}")
+    if escalation_hours < 0:
+        raise ValueError(f"escalation_hours must be non-negative, got {escalation_hours}")
+
     now = datetime.now(UTC)
     warning_cutoff = now - timedelta(hours=warning_hours)
     escalation_cutoff = now - timedelta(hours=escalation_hours)
 
-    result = await db_session.execute(
-        select(HitlClaim).where(
-            HitlClaim.organisation_id == org_id,
-            HitlClaim.decision.is_(None),
-            HitlClaim.account_id.is_not(None),
-            HitlClaim.claimed_at.is_not(None),
-            HitlClaim.claimed_at < warning_cutoff,
+    try:
+        result = await db_session.execute(
+            select(HitlClaim).where(
+                HitlClaim.organisation_id == org_id,
+                HitlClaim.decision.is_(None),
+                HitlClaim.account_id.is_not(None),
+                HitlClaim.claimed_at.is_not(None),
+                HitlClaim.claimed_at < warning_cutoff,
+            )
         )
-    )
+    except SQLAlchemyError:
+        _log.exception("Failed to query overdue claims for org %s", org_id)
+        return []
+
     claims = result.scalars().all()
 
     return [
@@ -56,7 +68,7 @@ async def get_overdue_claims(
             "pipeline_run_id": str(claim.run_id),
             "node_id": claim.gate_id,
             "claimed_at": claim.claimed_at.isoformat(),
-            "age_hours": round((now - claim.claimed_at).total_seconds() / 3600, 1),
+            "age_hours": round(max((now - claim.claimed_at).total_seconds(), 0.0) / _SECONDS_PER_HOUR, 1),
             "status": "escalated" if claim.claimed_at < escalation_cutoff else "warning",
         }
         for claim in claims

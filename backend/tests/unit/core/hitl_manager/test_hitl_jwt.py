@@ -46,7 +46,16 @@ def _gate(
     g.expires_at = expires_at
     g.decision = decision
     g.decision_at = None
+    g.required_team_id = None
     return g
+
+
+def _begin_nested(session: AsyncMock) -> None:
+    """Add begin_nested async context manager to a session mock."""
+    begin_nested_cm = AsyncMock()
+    begin_nested_cm.__aenter__ = AsyncMock(return_value=None)
+    begin_nested_cm.__aexit__ = AsyncMock(return_value=False)
+    session.begin_nested = MagicMock(return_value=begin_nested_cm)
 
 
 def _session_get(return_value: Any = None) -> AsyncMock:
@@ -59,6 +68,7 @@ def _session_get(return_value: Any = None) -> AsyncMock:
     session.execute = AsyncMock(return_value=result)
     session.add = MagicMock()
     session.flush = AsyncMock()
+    _begin_nested(session)
     return session
 
 
@@ -71,6 +81,7 @@ def _session_claim(
     session = AsyncMock()
     session.add = MagicMock()
     session.flush = AsyncMock()
+    _begin_nested(session)
 
     pre_result = MagicMock()
     pre_result.scalar_one_or_none.return_value = pre_check_gate
@@ -93,6 +104,7 @@ def _session_claim(
         return post_result
 
     session.execute = _execute
+    session.get = AsyncMock(return_value=claimed_gate)
     return session
 
 
@@ -106,6 +118,7 @@ def _session_decide(
     session = AsyncMock()
     session.add = MagicMock()
     session.flush = AsyncMock()
+    _begin_nested(session)
 
     update_result = MagicMock()
     update_result.scalar_one_or_none.return_value = update_returns_id
