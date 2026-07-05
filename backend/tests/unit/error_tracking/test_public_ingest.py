@@ -154,7 +154,6 @@ class TestPublicIngestEndpoint:
 
     def test_rate_limit_passes_after_time_window(self, client, monkeypatch):
         """After 60 seconds, a new request should be allowed."""
-        import time as _real_time
 
         fake_time = [1000.0]
 

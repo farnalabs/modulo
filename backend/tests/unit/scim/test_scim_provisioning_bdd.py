@@ -94,8 +94,8 @@ def _make_mock_user(**overrides: object) -> MagicMock:
     user.active = overrides.get("active", True)
     user.org_role = overrides.get("org_role", "runner")
     user.auth_provider = overrides.get("auth_provider", "scim")
-    user.created_at = overrides.get("created_at", None)
-    user.updated_at = overrides.get("updated_at", None)
+    user.created_at = overrides.get("created_at")
+    user.updated_at = overrides.get("updated_at")
     return user
 
 
@@ -104,10 +104,10 @@ def _make_mock_team(**overrides: object) -> MagicMock:
     team.id = overrides.get("id", _TEAM_ID)
     team.organisation_id = overrides.get("organisation_id", _ORG_ID)
     team.name = overrides.get("name", "Engineering")
-    team.description = overrides.get("description", None)
+    team.description = overrides.get("description")
     team.created_by = overrides.get("created_by", _USER_ID)
-    team.created_at = overrides.get("created_at", None)
-    team.updated_at = overrides.get("updated_at", None)
+    team.created_at = overrides.get("created_at")
+    team.updated_at = overrides.get("updated_at")
     return team
 
 

@@ -1907,24 +1907,24 @@ def each_event_hash_derived_from_previous(ctx, request):
 
 @then("tampering with any event breaks the chain for all subsequent events")
 def tampering_breaks_chain(ctx, request):
-    import hashlib
     import copy
+    import hashlib
     events = ctx.get("audit_events", [])
     assert len(events) >= 3, "Need at least 3 events to demonstrate chain break"
     # Tamper with event at index 1 — corrupt its previous_hash then recompute its _hash
     tampered = copy.deepcopy(events)
     tampered[1]["previous_hash"] = "tampered_hash_value"
     tampered[1]["_hash"] = hashlib.sha256(
-        f"event_1_prev=tampered_hash_value".encode()
+        b"event_1_prev=tampered_hash_value"
     ).hexdigest()
-    
+
     expected_prev = None
     broken_indices = []
     for i, e in enumerate(tampered):
         if e["previous_hash"] != expected_prev:
             broken_indices.append(i)
         expected_prev = e.get("_hash")
-    
+
     assert len(broken_indices) >= 1, "Tampering not detected at the tampered event"
     assert 1 in broken_indices, f"Tampered event (index 1) should break chain, broken at {broken_indices}"
     assert len(broken_indices) >= 2, (

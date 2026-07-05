@@ -333,15 +333,14 @@ class TestConvertToAgent:
         with patch(
             "modulo.api.routes.pipelines.replace_pipeline_graph",
             side_effect=ProgrammingError("stmt", {}, "table not found"),
-        ):
-            with pytest.raises(HTTPException) as excinfo:
-                await convert_node_to_agent_endpoint(
-                    pipeline_id=PIPELINE_ID,
-                    node_id=NODE_ID,
-                    body=body,
-                    session=session,
-                    principal=principal,
-                )
+        ), pytest.raises(HTTPException) as excinfo:
+            await convert_node_to_agent_endpoint(
+                pipeline_id=PIPELINE_ID,
+                node_id=NODE_ID,
+                body=body,
+                session=session,
+                principal=principal,
+            )
 
         assert excinfo.value.status_code == status.HTTP_501_NOT_IMPLEMENTED
 

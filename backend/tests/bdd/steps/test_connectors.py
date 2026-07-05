@@ -649,6 +649,7 @@ def step_github_api_returns_error(status_code, reason, ctx):
 @then(parsers.parse('the connector raises a ValueError with "{expected}"'))
 def step_connector_raises_value_error(expected, ctx):
     import asyncio
+
     from modulo.connectors.base import ConnectorPayload, ConnectorQuery
 
     connector = ctx["connector"]
@@ -857,6 +858,7 @@ def step_jira_query_without_key(resource, ctx):
 @given("a Jira connector that returns API errors")
 def step_jira_connector_api_errors(ctx):
     from unittest.mock import AsyncMock
+
     from modulo.connectors.base import HealthResult
 
     mock_connector = AsyncMock()
@@ -1031,6 +1033,7 @@ def step_linear_create_issue(resource, title, team, ctx):
 @given("a Linear connector that returns API errors")
 def step_linear_connector_api_errors(ctx):
     from unittest.mock import AsyncMock
+
     from modulo.connectors.base import HealthResult
 
     mock_connector = AsyncMock()
@@ -1719,6 +1722,7 @@ def step_gitlab_trigger_pipeline(project, ref, ctx):
 @given("a GitLab connector with invalid token")
 def step_gitlab_connector_invalid_token(ctx):
     from unittest.mock import AsyncMock
+
     from modulo.connectors.base import HealthResult
 
     mock_connector = AsyncMock()

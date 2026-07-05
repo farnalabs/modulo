@@ -63,7 +63,7 @@ def _make_oauth_client(**overrides: object) -> MagicMock:
     c.scopes = overrides.get("scopes", "trigger:run hitl:review")
     c.redirect_uris = overrides.get("redirect_uris", "http://localhost/callback")
     c.organisation_id = overrides.get("organisation_id", _ORG_ID)
-    c.created_by = overrides.get("created_by", None)
+    c.created_by = overrides.get("created_by")
     c.created_at = overrides.get("created_at", datetime(2025, 1, 1, tzinfo=UTC))
     return c
 

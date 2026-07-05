@@ -3,10 +3,8 @@
 import json
 from unittest.mock import MagicMock
 
-import pytest
-
-from modulo.core.documentation_indexer import DocumentationIndex, DocEntry
-from modulo.api.mcp_server import SENSITIVE_CONFIG_KEYS, _is_sensitive_key, _get_doc_index
+from modulo.api.mcp_server import SENSITIVE_CONFIG_KEYS, _get_doc_index, _is_sensitive_key
+from modulo.core.documentation_indexer import DocEntry, DocumentationIndex
 
 
 class TestSensitiveKeyDetection:
@@ -123,7 +121,7 @@ class TestGetOrgConfig:
             MagicMock(key="remy_config:00000000-0000-0000-0000-000000000001", value={"system_prompt": "Helpful."}),
             MagicMock(key="feature_flags", value={"remy_enabled": True}),
         ]
-        key_prefixes = [f"remy_config:00000000-0000-0000-0000-000000000001", "remy_config"]
+        key_prefixes = ["remy_config:00000000-0000-0000-0000-000000000001", "remy_config"]
         filtered = [c for c in configs if any(c.key.startswith(p) for p in key_prefixes)]
         assert len(filtered) == 1
         assert filtered[0].key.startswith("remy_config")

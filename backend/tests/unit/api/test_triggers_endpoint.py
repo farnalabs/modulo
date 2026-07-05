@@ -31,8 +31,8 @@ def _make_mock_trigger(**overrides: object) -> MagicMock:
     t.max_concurrent_runs = overrides.get("max_concurrent_runs", 1)
     t.cron_expression = overrides.get("cron_expression", "0 * * * *")
     t.cron_timezone = overrides.get("cron_timezone", "UTC")
-    t.last_fired_at = overrides.get("last_fired_at", None)
-    t.next_fire_at = overrides.get("next_fire_at", None)
+    t.last_fired_at = overrides.get("last_fired_at")
+    t.next_fire_at = overrides.get("next_fire_at")
     t.created_by = _USER_ID
     t.created_at = _NOW
     t.config_json = overrides.get("config_json", {})

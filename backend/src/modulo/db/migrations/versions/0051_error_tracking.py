@@ -8,7 +8,6 @@ migrations. This empty pass-through allows Alembic to resolve the chain.
 """
 
 from collections.abc import Sequence
-from typing import cast
 
 revision: str = "0051_error_tracking"
 down_revision: str | Sequence[str] | None = "0050_composite_templates"

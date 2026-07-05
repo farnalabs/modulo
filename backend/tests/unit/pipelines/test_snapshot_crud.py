@@ -3,8 +3,6 @@
 import uuid
 from unittest.mock import AsyncMock, MagicMock, patch
 
-import pytest
-
 from modulo.db.crud.pipeline_snapshot_versioning import (
     delete_snapshot,
     get_snapshot_detail,

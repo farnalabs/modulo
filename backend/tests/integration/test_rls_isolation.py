@@ -9,7 +9,7 @@ as a non-superuser role.
 import uuid
 
 import pytest
-from sqlalchemy import event, select, text, update, delete
+from sqlalchemy import delete, event, select, text, update
 from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker
 from sqlalchemy.orm import Session as SASession
 
@@ -337,7 +337,6 @@ async def test_orm_tenant_filter_select_update_delete(monkeypatch: pytest.Monkey
     correctly filters by organisation_id when session.info["org_id"] is set,
     and does not inject when it is not set.
     """
-    import os
 
     from sqlalchemy import String, Uuid
     from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine

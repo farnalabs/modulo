@@ -43,7 +43,7 @@ def _make_mock_team(**overrides: Any) -> MagicMock:
     t.id = overrides.get("id", uuid.uuid4())
     t.organisation_id = overrides.get("organisation_id", ORG_ID)
     t.name = overrides.get("name", "test-team")
-    t.description = overrides.get("description", None)
+    t.description = overrides.get("description")
     t.account_id = overrides.get("account_id", uuid.uuid4())
     t.created_at = overrides.get("created_at", _NOW)
     t.updated_at = _NOW

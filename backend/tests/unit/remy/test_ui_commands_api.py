@@ -10,12 +10,11 @@ from fastapi.testclient import TestClient
 from modulo.api.main import app
 from modulo.api.routes.remy import (
     _pending_permissions,
-    _permission_decisions,
     _pending_ui_results,
-    _ui_command_results,
+    _permission_decisions,
     _session_approvals,
+    _ui_command_results,
 )
-from modulo.auth.jwt import AuthenticatedPrincipal
 from modulo.settings import Settings
 
 

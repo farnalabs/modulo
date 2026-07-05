@@ -23,7 +23,7 @@ try:
     scenarios("../../features/mcp/library_browse.feature")
 except (FileNotFoundError, OSError):
     pass
-from tests.bdd.conftest import make_mock_pipeline  # noqa: E402
+from tests.bdd.conftest import make_mock_pipeline
 
 
 @given("an MCP server is running at /mcp")
