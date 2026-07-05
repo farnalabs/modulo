@@ -7,12 +7,20 @@ rather than mock sessions.
 
 from __future__ import annotations
 
+import json
+import logging
+import os
 import secrets
-from typing import Any
+from typing import Any, cast
 
 import httpx
 
-BASE_URL: str = "https://staging-modulo.fly.dev"
+_log = logging.getLogger(__name__)
+
+BASE_URL: str = os.environ.get(
+    "MODULO_BASE_URL",
+    "https://staging-modulo.fly.dev",
+)
 _HTTP_TIMEOUT: float = 30.0
 
 
@@ -44,27 +52,31 @@ def _random_slug() -> str:
 
 
 def _make_client(
-    base_url: str, token: str | None = None
+    base_url: str,
+    token: str | None = None,
 ) -> httpx.AsyncClient:
     """Create an httpx client for the staging API."""
     headers = {}
     if token:
         headers["Authorization"] = f"Bearer {token}"
+    verify_ssl = os.environ.get("MODULO_VERIFY_SSL", "0") == "1"
     return httpx.AsyncClient(
         base_url=base_url,
-        verify=False,
+        verify=verify_ssl,
         headers=headers or None,
         timeout=_HTTP_TIMEOUT,
     )
 
 
 def _raise_on_bad_status(
-    response: httpx.Response, expected: int, action: str
+    response: httpx.Response,
+    expected: int,
+    action: str,
 ) -> None:
     """Check HTTP response status and raise if unexpected."""
     if response.status_code != expected:
         raise RuntimeError(
-            f"{action} failed ({response.status_code}): {response.text}"
+            f"{action} failed ({response.status_code}): {response.text}",
         )
 
 
@@ -73,19 +85,19 @@ def _extract_token(data: dict[str, Any]) -> str:
     token = data.get("access_token") or data.get("token")
     if not token:
         raise RuntimeError(
-            "Auth response missing access_token and token keys"
+            "Auth response missing access_token and token keys",
         )
-    return token
+    return cast(str, token)
 
 
 def _parse_json_response(response: httpx.Response, action: str) -> dict[str, Any]:
     """Parse JSON from an HTTP response with a descriptive error."""
     try:
-        return response.json()
-    except Exception as exc:
+        result: dict[str, Any] = response.json()
+        return result
+    except json.JSONDecodeError as exc:
         raise RuntimeError(
-            f"Failed to parse {action} response as JSON "
-            f"({response.status_code}): {response.text}"
+            f"Failed to parse {action} response as JSON ({response.status_code}): {response.text}",
         ) from exc
 
 
@@ -103,7 +115,9 @@ async def create_isolated_org(
     org_name = f"E2E Test {slug}"
 
     admin_token = await get_admin_token(
-        base_url=base_url, email=admin_email, password=admin_password
+        base_url=base_url,
+        email=admin_email,
+        password=admin_password,
     )
 
     org_id: str | None = None
@@ -118,7 +132,7 @@ async def create_isolated_org(
             org_id = org_data.get("id")
             if not org_id:
                 raise RuntimeError(
-                    f"Org creation response missing 'id': {org_data}"
+                    f"Org creation response missing 'id': {org_data}",
                 )
 
             user_email = f"runner-{slug}@e2e.modulo"
@@ -137,14 +151,18 @@ async def create_isolated_org(
         if org_id:
             try:
                 async with _make_client(
-                    base_url, token=admin_token
+                    base_url,
+                    token=admin_token,
                 ) as cleanup_client:
                     await cleanup_client.post(
                         "/api/v1/admin/org/deletion-request",
                         json={"org_id": org_id},
                     )
-            except Exception:
-                pass
+            except httpx.RequestError:
+                _log.warning(
+                    "Cleanup org deletion request failed for %s",
+                    org_id,
+                )
         raise
 
     return IsolatedOrgContext(
@@ -161,28 +179,35 @@ async def destroy_isolated_org(ctx: IsolatedOrgContext) -> None:
     """Best-effort teardown: delete the test org."""
     try:
         async with _make_client(
-            ctx.base_url, token=ctx.admin_token
+            ctx.base_url,
+            token=ctx.admin_token,
         ) as client:
             resp = await client.post(
                 "/api/v1/admin/org/deletion-request",
                 json={"org_id": ctx.org_id},
             )
             if resp.status_code not in (200, 201, 202, 204):
-                raise RuntimeError(
-                    f"Org deletion failed ({resp.status_code}): {resp.text}"
+                _log.warning(
+                    "Org deletion returned %s for %s: %s",
+                    resp.status_code,
+                    ctx.org_id,
+                    resp.text,
                 )
-    except Exception:
-        pass
+    except httpx.RequestError:
+        _log.warning("Org deletion request failed for %s", ctx.org_id)
 
 
 async def get_admin_token(
-    *, base_url: str = BASE_URL, email: str, password: str
+    *,
+    base_url: str = BASE_URL,
+    email: str,
+    password: str,
 ) -> str:
     """Authenticate and return a Bearer token."""
     async with _make_client(base_url) as client:
         resp = await client.post(
             "/api/v1/auth/login",
-            json={"username": email, "password": password},
+            json={"email": email, "password": password},
         )
         _raise_on_bad_status(resp, 200, "Auth")
         data = _parse_json_response(resp, "auth")
