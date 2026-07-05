@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import time
 import uuid
 from typing import Any
 
@@ -77,12 +78,13 @@ class DockerRuntimeProvider(RuntimeProvider):
             memory_mb = _DEFAULT_MEMORY_MB
         container_name = f"{_WORKSPACE_PREFIX}{ref}"
 
-        env = [f"{k}={v}" for k, v in (spec.labels or {}).items()]
-        # Validate env entries to prevent malformed Docker API payloads
-        for entry in env:
+        env = []
+        for k, v in (spec.labels or {}).items():
+            entry = f"{k}={v}"
             if any(c in entry for c in ("\n", "\r", "\0")):
-                _log.warning("Skipping env entry with control characters: %s", entry.split("=", 1)[0])
-        env = [e for e in env if not any(c in e for c in ("\n", "\r", "\0"))]
+                _log.warning("Skipping env entry with control characters: %s", k)
+            else:
+                env.append(entry)
 
         try:
             container = await client.containers.create(
@@ -125,6 +127,7 @@ class DockerRuntimeProvider(RuntimeProvider):
             exit_code = info.get("ExitCode", -1)
             return stdout_bytes or b"", stderr_bytes or b"", exit_code
 
+        start = time.monotonic()
         try:
             if timeout is not None:
                 stdout_bytes, stderr_bytes, exit_code = await asyncio.wait_for(
@@ -132,13 +135,15 @@ class DockerRuntimeProvider(RuntimeProvider):
                 )
             else:
                 stdout_bytes, stderr_bytes, exit_code = await _run_exec()
+            duration = int((time.monotonic() - start) * 1000)
         except TimeoutError:
+            duration = int((time.monotonic() - start) * 1000)
             _log.warning("exec_command timed out for container %s", container_id)
             return ExecResult(
                 exit_code=-1,
                 stdout="",
                 stderr="Command timed out",
-                duration_ms=None,
+                duration_ms=duration,
             )
         except Exception:
             _log.exception("exec_command failed for container %s", container_id)
@@ -148,6 +153,7 @@ class DockerRuntimeProvider(RuntimeProvider):
             exit_code=exit_code,
             stdout=stdout_bytes.decode("utf-8", errors="replace"),
             stderr=stderr_bytes.decode("utf-8", errors="replace"),
+            duration_ms=duration,
         )
 
     async def destroy_workspace(self, provider_ref: str) -> None:

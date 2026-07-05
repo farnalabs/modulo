@@ -225,6 +225,8 @@ async def test_exec_command_returns_exec_result(
     assert isinstance(result, ExecResult)
     assert result.exit_code == 0
     assert result.stdout == "Python 3.12.0\n"
+    assert result.duration_ms is not None
+    assert result.duration_ms >= 0
 
 
 @pytest.mark.asyncio
@@ -442,8 +444,8 @@ async def test_get_workspace_status_fallback(
 @pytest.mark.asyncio
 async def test_get_workspace_status_unknown_sandbox() -> None:
     provider = E2BRuntimeProvider(api_key="sk-test")
-    with pytest.raises(ValueError, match="Unknown sandbox"):
-        await provider.get_workspace_status("nonexistent")
+    status = await provider.get_workspace_status("nonexistent")
+    assert status == "terminated"
 
 
 @pytest.mark.asyncio
