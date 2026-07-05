@@ -196,21 +196,28 @@ async def _do_export(org_id: uuid.UUID, output: Path) -> dict[str, Any]:
         },
     }
 
-    async with AsyncSessionLocal() as session:
-        org = await _export_organisation(session, org_id)
-        bundle["organisation"] = org
-        bundle["__meta__"]["org_name"] = org.get("name", "")
+    try:
+        async with AsyncSessionLocal() as session:
+            org = await _export_organisation(session, org_id)
+            bundle["organisation"] = org
+            bundle["__meta__"]["org_name"] = org.get("name", "")
 
-        for table_name, model_cls in tqdm(ENTITY_ORDER, desc="Exporting tables", unit="table"):
-            rows = await _export_entity(session, model_cls, org_id)
-            bundle[table_name] = rows
-            tqdm.write(f"  {table_name:22s}  {len(rows):>6d} rows")
+            for table_name, model_cls in tqdm(ENTITY_ORDER, desc="Exporting tables", unit="table"):
+                rows = await _export_entity(session, model_cls, org_id)
+                bundle[table_name] = rows
+                tqdm.write(f"  {table_name:22s}  {len(rows):>6d} rows")
+    except Exception as exc:
+        msg = f"Database connection failed during export: {exc}"
+        raise SystemExit(msg) from exc
 
     bundle["__meta__"]["hash"] = _compute_hash(bundle)
     return bundle
 
 
-def _write_bundle(bundle: dict[str, Any], path: Path) -> None:
+def _write_bundle(bundle: dict[str, Any], path: Path, *, force: bool = False) -> None:
+    if path.exists() and not force:
+        msg = f"Output file already exists: {path}. Use --force to overwrite."
+        raise SystemExit(msg)
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
         with path.open("w", encoding="utf-8") as f:
@@ -263,84 +270,88 @@ async def _do_import(
     counts: dict[str, int] = {"created": 0, "overwritten": 0, "skipped": 0, "errors": 0}
     id_map: dict[str, str] = {}
 
-    async with AsyncSessionLocal() as session:
-        for table_name, model_cls in tqdm(ENTITY_ORDER, desc="Importing tables", unit="table"):
-            rows: list[dict[str, Any]] = bundle.get(table_name, [])
-            name_field = NAME_CONFLICT_FIELD.get(table_name)
-            skip_cols = IMPORT_SKIP_COLS.get(table_name, {"id", "organisation_id", "created_at", "updated_at"})
+    try:
+        async with AsyncSessionLocal() as session:
+            for table_name, model_cls in tqdm(ENTITY_ORDER, desc="Importing tables", unit="table"):
+                rows: list[dict[str, Any]] = bundle.get(table_name, [])
+                name_field = NAME_CONFLICT_FIELD.get(table_name)
+                skip_cols = IMPORT_SKIP_COLS.get(table_name, {"id", "organisation_id", "created_at", "updated_at"})
 
-            for row in tqdm(rows, desc=f"  {table_name}", unit="row", leave=False):
-                try:
-                    old_id = row.get("id")
-                    old_id_str = str(old_id) if old_id is not None else None
-                    name_val: str | None = row.get(name_field) if name_field else None
+                for row in tqdm(rows, desc=f"  {table_name}", unit="row", leave=False):
+                    try:
+                        old_id = row.get("id")
+                        old_id_str = str(old_id) if old_id is not None else None
+                        name_val: str | None = row.get(name_field) if name_field else None
 
-                    existing = None
-                    if name_val and name_field:
-                        stmt: Any = select(model_cls).where(
-                            model_cls.organisation_id == org_id,
-                            getattr(model_cls, name_field) == name_val,
-                        )
-                        existing = (await session.execute(stmt)).scalars().first()
+                        existing = None
+                        if name_val and name_field:
+                            stmt: Any = select(model_cls).where(
+                                model_cls.organisation_id == org_id,
+                                getattr(model_cls, name_field) == name_val,
+                            )
+                            existing = (await session.execute(stmt)).scalars().first()
 
-                    if existing is not None:
-                        if strategy == "skip":
-                            if old_id_str:
-                                id_map[old_id_str] = str(existing.id)
-                            counts["skipped"] += 1
-                            continue
+                        if existing is not None:
+                            if strategy == "skip":
+                                if old_id_str:
+                                    id_map[old_id_str] = str(existing.id)
+                                counts["skipped"] += 1
+                                continue
 
-                        if strategy == "rename" and name_val and name_field:
-                            max_attempts = 10000
-                            base = f"{name_val}_imported"
-                            new_name = base
-                            counter = 2
-                            while counter <= max_attempts:
-                                chk_stmt: Any = select(model_cls).where(
-                                    model_cls.organisation_id == org_id,
-                                    getattr(model_cls, name_field) == new_name,
-                                )
-                                chk = (await session.execute(chk_stmt)).scalars().first()
-                                if chk is None:
-                                    break
-                                new_name = f"{base}_{counter}"
-                                counter += 1
+                            if strategy == "rename" and name_val and name_field:
+                                max_attempts = 10000
+                                base = f"{name_val}_imported"
+                                new_name = base
+                                counter = 2
+                                while counter <= max_attempts:
+                                    chk_stmt: Any = select(model_cls).where(
+                                        model_cls.organisation_id == org_id,
+                                        getattr(model_cls, name_field) == new_name,
+                                    )
+                                    chk = (await session.execute(chk_stmt)).scalars().first()
+                                    if chk is None:
+                                        break
+                                    new_name = f"{base}_{counter}"
+                                    counter += 1
+                                else:
+                                    raise SystemExit(
+                                        f"Could not find available name for '{name_val}' after {max_attempts} attempts"
+                                    )
+                                row[name_field] = new_name
+                                existing = None
+
+                        row_data = _remap_fk(row, table_name, id_map)
+                        row_data.pop("organisation_id", None)
+                        row_data.pop("id", None)
+                        for col in skip_cols:
+                            row_data.pop(col, None)
+
+                        async with session.begin_nested():
+                            if existing is not None and strategy == "overwrite":
+                                for col, val in row_data.items():
+                                    if hasattr(existing, col):
+                                        setattr(existing, col, val)
+                                if old_id_str:
+                                    id_map[old_id_str] = str(existing.id)
+                                counts["overwritten"] += 1
                             else:
-                                raise SystemExit(
-                                    f"Could not find available name for '{name_val}' after {max_attempts} attempts"
-                                )
-                            row[name_field] = new_name
-                            existing = None
+                                row_data["organisation_id"] = org_id
+                                obj = model_cls(**row_data)
+                                session.add(obj)
+                                await session.flush()
+                                if old_id_str:
+                                    id_map[old_id_str] = str(obj.id)
+                                counts["created"] += 1
 
-                    row_data = _remap_fk(row, table_name, id_map)
-                    row_data.pop("organisation_id", None)
-                    row_data.pop("id", None)
-                    for col in skip_cols:
-                        row_data.pop(col, None)
+                    except Exception as exc:
+                        rid = row.get("id", "?")
+                        tqdm.write(f"  ERROR importing {table_name} row {rid}: {exc}")
+                        counts["errors"] += 1
 
-                    async with session.begin_nested():
-                        if existing is not None and strategy == "overwrite":
-                            for col, val in row_data.items():
-                                if hasattr(existing, col):
-                                    setattr(existing, col, val)
-                            if old_id_str:
-                                id_map[old_id_str] = str(existing.id)
-                            counts["overwritten"] += 1
-                        else:
-                            row_data["organisation_id"] = org_id
-                            obj = model_cls(**row_data)
-                            session.add(obj)
-                            await session.flush()
-                            if old_id_str:
-                                id_map[old_id_str] = str(obj.id)
-                            counts["created"] += 1
-
-                except Exception as exc:
-                    rid = row.get("id", "?")
-                    tqdm.write(f"  ERROR importing {table_name} row {rid}: {exc}")
-                    counts["errors"] += 1
-
-        await session.commit()
+            await session.commit()
+    except Exception as exc:
+        msg = f"Database connection failed during import: {exc}"
+        raise SystemExit(msg) from exc
 
     return counts
 
@@ -358,6 +369,7 @@ def build_parser() -> argparse.ArgumentParser:
     export_p = sub.add_parser("export-org", help="Export all org data as a JSON bundle")
     export_p.add_argument("--org-id", required=True, help="Organisation UUID")
     export_p.add_argument("--output", "-o", type=Path, default="export.json", help="Output JSON path")
+    export_p.add_argument("--force", action="store_true", help="Overwrite existing output file")
     export_p.set_defaults(func=cmd_export)
 
     import_p = sub.add_parser("import-org", help="Import org data from a JSON bundle")
@@ -385,8 +397,9 @@ def _parse_uuid(raw: str, label: str = "UUID") -> uuid.UUID:
 def cmd_export(args: argparse.Namespace) -> None:
     org_id = _parse_uuid(args.org_id, "organisation ID")
     output: Path = args.output
+    force: bool = getattr(args, "force", False)
     bundle = asyncio.run(_do_export(org_id, output))
-    _write_bundle(bundle, output)
+    _write_bundle(bundle, output, force=force)
 
     total = sum(len(v) for k, v in bundle.items() if isinstance(v, list))
 
