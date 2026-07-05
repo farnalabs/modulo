@@ -35,6 +35,7 @@ from modulo.model_backends.llamacpp import LLamaCppBackend
 from modulo.model_backends.lm_studio import LmStudioBackend
 from modulo.model_backends.localai import LocalAIBackend
 from modulo.model_backends.mistral import MistralBackend
+from modulo.model_backends.opencode import OpenCodeBackend
 from modulo.model_backends.ollama import OllamaBackend
 from modulo.model_backends.openai import OpenAIBackend
 from modulo.model_backends.openrouter import OpenRouterBackend
@@ -235,7 +236,7 @@ class ModelBackendHub:
 
 
 _API_KEY_REQUIRED_PROVIDERS: frozenset[str] = frozenset({
-    "ai21", "anthropic", "cohere", "azure_openai", "openai", "openrouter",
+    "ai21", "anthropic", "cohere", "azure_openai", "openai", "opencode", "openrouter",
     "mistral", "togetherai", "deepseek", "gemini", "grok", "fireworks",
     "groq", "perplexity", "qwen", "watsonx",
 })
@@ -295,6 +296,8 @@ def _build_backend(
             )
         case "openai":
             return OpenAIBackend(api_key=creds["api_key"], model_id=model_id, **default_params)
+        case "opencode":
+            return OpenCodeBackend(api_key=creds["api_key"], model_id=model_id, **default_params)
         case "openrouter":
             return OpenRouterBackend(api_key=creds["api_key"], model_id=model_id, **default_params)
         case "lm_studio":

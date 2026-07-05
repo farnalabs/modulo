@@ -142,7 +142,7 @@ async def list_model_backends_endpoint(
 _VALID_PROVIDERS = {
     "ai21", "anthropic", "azure_openai", "bedrock", "cohere", "deepseek",
     "fireworks", "gemini", "grok", "groq", "jan", "llamacpp", "lm_studio",
-    "localai", "mistral", "ollama", "openai", "openrouter", "perplexity",
+    "localai", "mistral", "ollama", "opencode", "openai", "openrouter", "perplexity",
     "qwen", "tgi", "togetherai", "vertexai", "vllm", "watsonx",
 }
 

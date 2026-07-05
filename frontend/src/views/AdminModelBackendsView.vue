@@ -53,6 +53,7 @@
                 >
                   <option value="anthropic">Anthropic</option>
                   <option value="openai">OpenAI</option>
+                  <option value="opencode">OpenCode</option>
                   <option value="azure_openai">{{ $t('views.AdminModelBackendsView.azure_openai') }}</option>
                   <option value="ollama">Ollama</option>
                   <option value="groq">Groq</option>

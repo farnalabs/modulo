@@ -26,6 +26,7 @@ class ModelBackendProvider(enum.StrEnum):
     COHERE = "cohere"
     MISTRAL = "mistral"
     GEMINI = "gemini"
+    OPENCODE = "opencode"
     REPLICATE = "replicate"
     VERTEXAI = "vertexai"
     WATSONX = "watsonx"
