@@ -159,6 +159,23 @@ Feature flag inspection dashboard at `/admin/feature-flags` listing all known fl
 - [x] Frontend catches network errors and displays user-facing error message with Retry
 - [x] Frontend handles undefined/null API fields gracefully (null-coalescing fallbacks)
 - [x] Frontend search empty state shows `"No feature flags match your search."`
+- [x] Frontend planStore.fetchPlan() uses Promise.allSettled — one failing API doesn't cascade to block other data
+- [x] Frontend planStore.fetchPlan() has 15s timeout for each API call via Promise.race
+- [ ] Frontend planStore has no retry mechanism on failure — error is recorded but not retried
+- [ ] `GET /api/v1/admin/license` (admin_license.py) has no ProgrammingError handling — missing DB tables propagate as 500
+- [ ] `GET /api/v1/license` (viewmodel.py) has no error handling at all — no try/except wrapper
+- [ ] `_build_registry` `has_key` does not check org-level license keys — org-level keys are ignored in the `has_license_key` response field
+
+### Resilience
+
+- [x] Frontend error state shows Retry button calling `loadFlags()` again
+- [x] Frontend `SettingsLicenseView.vue` shows ErrorAlert with retry for load failures
+- [x] AdminFeatureFlagsView uses `??` fallbacks for nullable API fields
+- [ ] No degraded-mode fallback to hardcoded `_KNOWN_FLAGS` when DB is unreachable — `FeatureFlagRegistry.from_db` requires DB
+- [ ] `FeatureFlagRegistry._overrides` is a `ClassVar[dict]` shared across requests — not thread-safe in async context
+- [ ] Flag overrides lost on server restart — in-memory only, no persistence layer
+- [ ] `load_from_db()` partial-failure inconsistency — `_tier_rank` may update before `_flags` if the second DB call fails
+- [ ] GET /api/v1/admin/license (admin_license.py) rolls back an opened transaction on ProgrammingError without consuming the error cleanly — the exception propagates through the session context manager, which may leave the session in a closed state
 
 ### Edge Cases
 
