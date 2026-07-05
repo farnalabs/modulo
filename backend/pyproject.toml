@@ -120,7 +120,7 @@ dev = [
     "locust>=2.32.0",
     "websocket-client>=1.8.0",
     "requests>=2.31.0",
-    "factory-boy>=3.3.0",
+    "factory-boy>=3.3.3",
     "mypy>=1.10.0",
     "ruff>=0.4.0",
     "bandit>=1.7.8",
@@ -281,7 +281,7 @@ root_package = "modulo"
 [dependency-groups]
 dev = [
     "bandit>=1.9.4",
-    "factory-boy>=3.3.0",
+    "factory-boy>=3.3.3",
     "httpx>=0.28.1",
     # Starlette 1.x TestClient imports httpx2; keep this even without direct repo imports.
     "httpx2>=2.0.0",
