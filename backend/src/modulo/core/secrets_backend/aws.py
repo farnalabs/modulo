@@ -17,7 +17,7 @@ import asyncio
 import os
 from typing import Any
 
-from modulo.core.secrets_backend import SecretsBackend
+from modulo.core.secrets_backend import SecretsBackend, validate_key
 
 _TIMEOUT: float = 30.0
 
@@ -81,6 +81,7 @@ class AWSSecretsManagerBackend(SecretsBackend):
             return self._client
 
     async def get_secret(self, key: str) -> str:
+        key = validate_key(key)
         client = await self._ensure_client()
 
         try:
@@ -108,6 +109,7 @@ class AWSSecretsManagerBackend(SecretsBackend):
         raise KeyError(key)
 
     async def set_secret(self, key: str, value: str) -> None:
+        key = validate_key(key)
         client = await self._ensure_client()
 
         try:
@@ -135,6 +137,7 @@ class AWSSecretsManagerBackend(SecretsBackend):
             raise RuntimeError(f"AWSSecretsManagerBackend: unexpected error writing secret: {exc}") from exc
 
     async def delete_secret(self, key: str) -> None:
+        key = validate_key(key)
         client = await self._ensure_client()
 
         try:
