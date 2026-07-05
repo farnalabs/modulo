@@ -383,7 +383,14 @@ export default {
     },
     "PipelineEditorView": {
       "pipeline_editor": "Pipeline Editor",
-      "review_gate": "Review Gate"
+      "review_gate": "Review Gate",
+      "revert_to_manual": "Revert to Manual",
+      "revert_dialog_title": "Revert to Manual",
+      "select_snapshot_description": "Select a snapshot that contains the manual configuration for this node.",
+      "snapshot_label": "Snapshot",
+      "select_snapshot_placeholder": "Select a snapshot...",
+      "cancel": "Cancel",
+      "revert": "Revert"
     },
     "AdminPluginsView": {
       "manage_installed_modulo_plugins_and_extensions": "Manage installed Modulo plugins and extensions",
