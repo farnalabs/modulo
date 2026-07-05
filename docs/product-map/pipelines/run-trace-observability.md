@@ -129,11 +129,27 @@ configuration API.
 
 ## Error Handling
 
-- [ ] Observability settings CRUD routes catch ProgrammingError → 501
-- [ ] Run detail/trace endpoints catch ProgrammingError → 501
-- [ ] Auth 401/403 documented for observability settings CRUD
-- [ ] 422 validation errors documented for observability API input validation
-- [ ] OTel exporter failure at startup logged and continues without crashing
+- [x] Observability settings CRUD routes catch ProgrammingError → 501
+  - GET/PUT `/settings/observability` and GET `/settings/observability/preview` catch `ProgrammingError` → 501 (observability.py:149, 197, 294)
+  - POST `/settings/observability/test` has no DB dependency — no catch needed
+- [x] Run detail/trace endpoints catch ProgrammingError → 501
+  - All 16 DB-backed endpoints in runs.py catch `ProgrammingError` → 501 (18 occurrences across trigger_run, stats, heatmap, get_run_status, cancel, get_run_io, export_fixture, workspace_lease, workspace_events, node_output, observe_node, recover_node, prompt_reveal, diff)
+- [x] Auth 401/403 enforced via `Depends(get_current_user)` on all routes
+- [x] 422 validation errors via Pydantic models on observability and runs endpoints
+- [x] OTel exporter failure at startup logged and continues without crashing (export.py:68-69)
+- [ ] End-to-end integration test for `ProgrammingError` catching (unit-testable via mock session)
+
+## Resilience
+
+- [x] In-memory config cache with TTL serves stale data on DB failure (observability.py:86-91)
+- [x] Degraded response built from cache (or defaults) when DB is unreachable (observability.py:132-135)
+- [x] Cache returns defensive copy via `dict(entry)` — prevents caller mutation of cache state
+- [x] Shutdown flushes all buffered spans (export.py:74-87)
+- [x] BatchSpanProcessor for OTLP exporter — non-blocking export
+- [x] Multiple `shutdown_otel()` calls are safe — subsequent calls are no-ops
+- [x] OTLP exporter failure isolated — caught by `except Exception`, logged, continues without it
+- [x] Sensitive headers masked in API responses via `_mask_headers` (observability.py:33-34)
+- [ ] Duplicate orphaned span cleanup in `handler.py:_start_span` — lines 88-95 and 106-114 both try to `.set_status(OK)` and `.end()` the same orphaned span. The outer block (lines 88-95) already ends the span. The inner block (lines 106-114) is dead code — `Span.end()` is idempotent in the SDK, but the redundancy should be cleaned up.
 
 ## QA History
 
@@ -143,6 +159,13 @@ configuration API.
 - Wired set_run_context call into PipelineExecutor._execute_run before astream_events.
 - Updated Known Gaps: Added frontend gaps subsection, updated BDD gap description (real step defs exist, mocking-only), resolved org_id/pipeline_id span attribute gap.
 - Status: partial (metrics endpoint, log streaming endpoint, cost mapping, frontend data wiring, integration tests remain as known gaps).
+
+### index 73 (2026-07-05) — Error Handling & Resilience QA
+- Verified all 5 Error Handling items against code: all [ ]→[x] except integration-test gap.
+- Added Resilience section with 8 [x] items covering cache fallback, defensive copies, shutdown, exporter isolation, and header masking.
+- Found duplicate orphaned span cleanup in `handler.py:_start_span` (lines 88-95 vs 106-114) — documented as Resilience gap.
+- Confirmed website docs stub already exists at `Website/modulo-website/src/docs/observability.md` (36 lines, covers all config options).
+- Status: partial (unchanged — gaps remain in metrics, log streaming, cost mapping, frontend data wiring, integration tests, and the duplicate cleanup edge case).
 
 ## Known Gaps
 
