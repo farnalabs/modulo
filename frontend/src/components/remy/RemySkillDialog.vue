@@ -51,7 +51,7 @@
             v-model="form.body"
             rows="6"
             class="w-full rounded-lg border border-input bg-background px-3 py-2 font-mono text-sm"
-            :placeholder="$t('components.remy.RemySkillDialog.skill_instructions10write_markdown_here')"
+            :placeholder="$t('components.remy.RemySkillDialog.skill_instructions_heading') + '\n' + $t('components.remy.RemySkillDialog.skill_instructions_body')"
             data-testid="remy-skills-form-body"
           />
         </div>
