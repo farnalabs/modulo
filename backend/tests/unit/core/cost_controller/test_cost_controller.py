@@ -239,6 +239,36 @@ class TestCheckAndRecordSpend:
         assert approved is True
         assert reason is None
 
+    async def test_rejects_negative_cost(self, mock_session: AsyncMock) -> None:
+        approved, reason = await check_and_record_spend(
+            mock_session, org_id=_ORG_ID, cost_usd=Decimal(-5), team_id=None
+        )
+
+        assert approved is False
+        assert "non-negative" in (reason or "").lower()
+        # No DB queries should be made when cost is invalid
+        mock_session.execute.assert_not_called()
+
+    async def test_approves_zero_cost(self, mock_session: AsyncMock) -> None:
+        org_count = _make_daily_count_row(run_count=1, total_spend_usd=Decimal(10))
+        org_limit_result = MagicMock(scalar_one_or_none=MagicMock(return_value=Decimal(100)))
+
+        mock_session.execute = AsyncMock(
+            side_effect=[
+                MagicMock(scalar_one_or_none=MagicMock(return_value=org_count)),
+                org_limit_result,
+            ]
+        )
+
+        approved, reason = await check_and_record_spend(
+            mock_session, org_id=_ORG_ID, cost_usd=Decimal(0), team_id=None
+        )
+
+        assert approved is True
+        assert reason is None
+        # run_count still increments even at zero cost
+        assert org_count.run_count == 2
+
 
 # ---------------------------------------------------------------------------
 # get_cost_report
@@ -367,3 +397,23 @@ class TestGetCostReport:
 
         report = await get_cost_report(mock_session, org_id=_ORG_ID, group_by="team", period=period)
         assert len(report) == 1
+
+    async def test_group_by_team_empty(self, mock_session: AsyncMock) -> None:
+        empty_scalars = MagicMock(all=MagicMock(return_value=[]))
+        mock_session.execute = AsyncMock(
+            side_effect=[
+                MagicMock(all=MagicMock(return_value=[])),
+                MagicMock(scalars=MagicMock(return_value=empty_scalars)),
+            ]
+        )
+
+        report = await get_cost_report(mock_session, org_id=_ORG_ID, group_by="team", period="month")
+        assert report == []
+
+    async def test_invalid_period_raises(self, mock_session: AsyncMock) -> None:
+        with pytest.raises(ValueError, match="Unknown period"):
+            await get_cost_report(mock_session, org_id=_ORG_ID, group_by="team", period="century")
+
+    async def test_invalid_group_by_raises(self, mock_session: AsyncMock) -> None:
+        with pytest.raises(ValueError, match="Unknown group_by"):
+            await get_cost_report(mock_session, org_id=_ORG_ID, group_by="department", period="month")
