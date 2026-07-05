@@ -29,7 +29,7 @@ def _make_team(**overrides: object) -> MagicMock:
     t.organisation_id = overrides.get("organisation_id", _ORG_ID)
     t.name = overrides.get("name", "Test Team")
     t.description = overrides.get("description")
-    t.created_by = overrides.get("created_by", _USER_ID)
+    t.account_id = overrides.get("account_id", _USER_ID)
     t.notification_endpoints = overrides.get("notification_endpoints", [])
     return t
 
@@ -43,13 +43,13 @@ class TestCreateTeam:
                 mock_session,
                 org_id=_ORG_ID,
                 name="New Team",
-                created_by=_USER_ID,
+                account_id=_USER_ID,
             )
 
             mock_team.assert_called_once_with(
                 organisation_id=_ORG_ID,
                 name="New Team",
-                created_by=_USER_ID,
+                account_id=_USER_ID,
                 description=None,
             )
             mock_session.add.assert_called_once()
@@ -64,14 +64,14 @@ class TestCreateTeam:
                 mock_session,
                 org_id=_ORG_ID,
                 name="Team with Desc",
-                created_by=_USER_ID,
+                account_id=_USER_ID,
                 description="A description",
             )
 
             mock_team.assert_called_once_with(
                 organisation_id=_ORG_ID,
                 name="Team with Desc",
-                created_by=_USER_ID,
+                account_id=_USER_ID,
                 description="A description",
             )
             assert result is not None
