@@ -54,7 +54,7 @@
           No connectors found. <a href="/settings/connectors" data-testid="onboarding-wizard-create-connector" class="text-primary underline">Create one</a> first, then come back.
         </div>
         <div v-else class="space-y-2">
-          <label class="mb-1 block text-sm font-medium">Select a connector instance</label>
+          <label class="mb-1 block text-sm font-medium">{{ $t('views.OnboardingWizard.select_connector_instance') }}</label>
           <div
             v-for="c in connectors"
             :key="c.id"
@@ -77,26 +77,26 @@
       <!-- Step 2: Run Inference -->
       <div v-if="currentStep === 2" class="space-y-4">
         <div class="rounded-lg bg-muted p-3 text-sm text-muted-foreground">
-          Connector: <strong>{{ wizardState.connectorName }}</strong>
+          {{ $t('views.OnboardingWizard.connector_label') }} <strong>{{ wizardState.connectorName }}</strong>
         </div>
         <div>
-          <label class="mb-1 block text-sm font-medium">Resource type</label>
+          <label class="mb-1 block text-sm font-medium">{{ $t('views.OnboardingWizard.resource_type') }}</label>
           <input
             v-model="wizardState.resourceType"
             type="text"
             data-testid="onboarding-wizard-resource-type"
             class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-            placeholder="e.g. issues, repositories, pull_requests"
+            :placeholder="$t('views.OnboardingWizard.resource_type_placeholder')"
           />
         </div>
         <div>
-          <label class="mb-1 block text-sm font-medium">Sample query <span class="text-muted-foreground">(optional)</span></label>
+          <label class="mb-1 block text-sm font-medium">{{ $t('views.OnboardingWizard.sample_query') }} <span class="text-muted-foreground">{{ $t('views.OnboardingWizard.optional') }}</span></label>
           <textarea
             v-model="wizardState.sampleQuery"
             rows="2"
             data-testid="onboarding-wizard-sample-query"
             class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-            placeholder="e.g. state=open&sort=updated"
+            :placeholder="$t('views.OnboardingWizard.sample_query_placeholder')"
           />
         </div>
         <div class="flex items-center gap-2">
@@ -106,21 +106,21 @@
             class="rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
             @click="inferSchema"
           >
-            {{ inferring ? 'Inferring...' : 'Infer Schema' }}
+            {{ inferring ? $t('views.SchemaInferenceView.inferring') : $t('views.SchemaInferenceView.infer_schema') }}
           </button>
         </div>
         <div v-if="inferError" class="text-sm text-destructive">{{ inferError }}</div>
 
         <div v-if="wizardState.draftSchema" class="rounded-lg border bg-card p-4">
-          <h3 class="mb-3 text-sm font-semibold">Draft: {{ wizardState.draftSchema.name }}</h3>
+          <h3 class="mb-3 text-sm font-semibold">{{ $t('views.OnboardingWizard.draft_label') }}: {{ wizardState.draftSchema.name }}</h3>
           <p v-if="wizardState.draftSchema.description" class="mb-3 text-xs text-muted-foreground">{{ wizardState.draftSchema.description }}</p>
           <table v-if="wizardState.draftSchema.fields.length > 0" class="w-full text-sm">
             <thead>
               <tr class="border-b text-left text-muted-foreground">
-                <th class="pb-2 font-medium">Name</th>
-                <th class="pb-2 font-medium">Type</th>
-                <th class="pb-2 font-medium">Required</th>
-                <th class="pb-2 font-medium">Description</th>
+                <th class="pb-2 font-medium">{{ $t('views.SchemaInferenceView.field_name') }}</th>
+                <th class="pb-2 font-medium">{{ $t('views.SchemaInferenceView.field_type') }}</th>
+                <th class="pb-2 font-medium">{{ $t('views.SchemaInferenceView.field_required') }}</th>
+                <th class="pb-2 font-medium">{{ $t('views.SchemaInferenceView.field_description') }}</th>
               </tr>
             </thead>
             <tbody>
@@ -129,26 +129,26 @@
                 <td class="py-2 font-mono text-xs text-muted-foreground">{{ field.type }}</td>
                 <td class="py-2">
                   <span class="inline-block rounded px-1.5 py-0.5 text-xs font-medium" :class="field.required ? 'bg-primary/10 text-primary' : 'bg-muted text-muted-foreground'">
-                    {{ field.required ? 'yes' : 'no' }}
+                    {{ field.required ? $t('views.SchemaInferenceView.yes') : $t('views.SchemaInferenceView.no') }}
                   </span>
                 </td>
                 <td class="py-2 text-xs text-muted-foreground">{{ field.description ?? '—' }}</td>
               </tr>
             </tbody>
           </table>
-          <p v-else class="text-sm text-muted-foreground">No fields inferred.</p>
+          <p v-else class="text-sm text-muted-foreground">{{ $t('views.SchemaInferenceView.no_fields_inferred') }}</p>
         </div>
       </div>
 
       <!-- Step 3: Review Schemas -->
       <div v-if="currentStep === 3" class="space-y-4">
         <div v-if="!wizardState.draftSchema" class="py-8 text-center text-sm text-muted-foreground">
-          No schema inferred yet. Go back to step 3 and run inference first.
+          {{ $t('views.OnboardingWizard.no_schema_inferred') }}
         </div>
         <template v-else>
           <div class="flex items-center gap-4">
             <div>
-              <label class="mb-1 block text-sm font-medium">Schema name</label>
+              <label class="mb-1 block text-sm font-medium">{{ $t('views.OnboardingWizard.schema_name') }}</label>
               <input
                 v-model="editableSchemaName"
                 type="text"
@@ -157,7 +157,7 @@
               />
             </div>
             <div class="flex-1">
-              <label class="mb-1 block text-sm font-medium">Description</label>
+              <label class="mb-1 block text-sm font-medium">{{ $t('views.OnboardingWizard.description') }}</label>
               <input
                 v-model="editableSchemaDescription"
                 type="text"
@@ -167,7 +167,7 @@
             </div>
           </div>
           <div>
-            <label class="mb-2 block text-sm font-medium">Fields <span class="text-muted-foreground">(read-only — re-infer to change)</span></label>
+            <label class="mb-2 block text-sm font-medium">{{ $t('views.OnboardingWizard.fields') }} <span class="text-muted-foreground">{{ $t('views.OnboardingWizard.fields_hint') }}</span></label>
             <table class="w-full text-sm">
               <thead>
                 <tr class="border-b text-left text-muted-foreground">
@@ -196,12 +196,12 @@
               class="rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
               @click="saveSchema"
             >
-              {{ savingSchema ? 'Saving...' : 'Confirm & Save Schema' }}
+              {{ savingSchema ? $t('views.OnboardingWizard.saving') : $t('views.OnboardingWizard.confirm_save_schema') }}
             </button>
           </div>
           <div v-if="schemaSaveError" class="text-sm text-destructive">{{ schemaSaveError }}</div>
           <div v-if="wizardState.publishedSchemaId" class="rounded-lg bg-success/10 p-3 text-sm text-success">
-            Schema "{{ editableSchemaName }}" saved.
+            {{ $t('views.OnboardingWizard.schema_saved', { name: editableSchemaName }) }}
           </div>
         </template>
       </div>
@@ -401,6 +401,7 @@
 import { ref, reactive, computed, onMounted, watch } from 'vue'
 import { api } from '../lib/api/client'
 import type { components } from '../lib/api/client'
+import { formatApiError } from '../lib/api/formatError'
 
 type ConnectorItem = components['schemas']['ConnectorItem']
 
@@ -511,7 +512,7 @@ async function loadConnectors() {
   try {
     const { data, error: err } = await api.GET('/api/v1/connectors')
     if (err) {
-      connectorsError.value = `Failed to load connectors: ${err}`
+      connectorsError.value = `Failed to load connectors: ${formatApiError(err)}`
     } else if (data) {
       connectors.value = data.items
     }
@@ -554,7 +555,7 @@ async function inferSchema() {
       },
     })
     if (err) {
-      inferError.value = `Schema inference failed: ${err}`
+      inferError.value = `Schema inference failed: ${formatApiError(err)}`
     } else if (data) {
       wizardState.rawDefinitionJson = data.definition_json
       wizardState.draftSchema = {
@@ -584,7 +585,7 @@ async function saveSchema() {
       },
     })
     if (schemaErr) {
-      schemaSaveError.value = `Save failed: ${schemaErr}`
+      schemaSaveError.value = `Save failed: ${formatApiError(schemaErr)}`
       return
     }
     if (!schemaData) {
@@ -602,7 +603,7 @@ async function saveSchema() {
       },
     })
     if (versionErr) {
-      schemaSaveError.value = `Save failed: ${versionErr}`
+      schemaSaveError.value = `Save failed: ${formatApiError(versionErr)}`
       return
     }
 

@@ -1,8 +1,8 @@
 ﻿<template>
   <PageTabs :tabs="[
-    { label: 'Browse', to: '/schemas' },
-    { label: 'Editor', to: '/schemas/editor' },
-    { label: 'Infer', to: '/schemas/infer' },
+    { label: $t('views.SchemaInferenceView.browse'), to: '/schemas' },
+    { label: $t('views.SchemaInferenceView.editor'), to: '/schemas/editor' },
+    { label: $t('views.SchemaInferenceView.infer'), to: '/schemas/infer' },
   ]" />
   <div class="mx-auto max-w-4xl space-y-8 p-6">
     <header>
@@ -16,10 +16,10 @@
 
     <template v-else>
       <section class="rounded-lg border bg-card p-6 shadow-sm">
-        <h2 class="mb-4 text-lg font-semibold">Source</h2>
+        <h2 class="mb-4 text-lg font-semibold">{{ $t('views.SchemaInferenceView.source') }}</h2>
         <div class="space-y-4">
           <div>
-            <label class="mb-1 block text-sm font-medium">Connector</label>
+            <label class="mb-1 block text-sm font-medium">{{ $t('views.SchemaInferenceView.connector') }}</label>
             <select
               v-model="selectedConnectorId"
               data-testid="schema-inference-connector"
@@ -35,7 +35,7 @@
               </option>
             </select>
             <p v-if="connectors.length === 0" class="mt-2 text-sm text-muted-foreground">
-              No connectors available. Create one first.
+              {{ $t('views.SchemaInferenceView.no_connectors_available') }}
             </p>
           </div>
 
@@ -52,15 +52,15 @@
 
           <div>
             <label class="mb-1 block text-sm font-medium">
-              Sample query
-              <span class="text-muted-foreground"> (optional)</span>
+              {{ $t('views.SchemaInferenceView.sample_query') }}
+              <span class="text-muted-foreground"> {{ $t('views.SchemaInferenceView.optional') }}</span>
             </label>
             <textarea
               v-model="sampleQuery"
               rows="2"
               data-testid="schema-inference-sample-query"
               class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-              :placeholder="$t('views.SchemaInferenceView.eg_stateopensortupdated')"
+              :placeholder="$t('views.SchemaInferenceView.eg_stateopensortupdatede')"
             />
           </div>
 
@@ -71,7 +71,7 @@
               class="rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
               @click="inferSchema"
             >
-              {{ inferring ? 'Inferring...' : 'Infer Schema' }}
+              {{ inferring ? $t('views.SchemaInferenceView.inferring') : $t('views.SchemaInferenceView.infer_schema') }}
             </button>
           </div>
         </div>
@@ -82,24 +82,24 @@
         <h2 class="mb-4 text-lg font-semibold">{{ $t('views.SchemaInferenceView.draft_schema') }}</h2>
 
         <div class="mb-3">
-          <label class="block text-sm font-medium text-muted-foreground">Name</label>
+          <label class="block text-sm font-medium text-muted-foreground">{{ $t('views.SchemaInferenceView.name_label') }}</label>
           <p class="text-sm">{{ draftSchema.name }}</p>
         </div>
 
         <div v-if="draftSchema.description" class="mb-3">
-          <label class="block text-sm font-medium text-muted-foreground">Description</label>
+          <label class="block text-sm font-medium text-muted-foreground">{{ $t('views.SchemaInferenceView.description_label') }}</label>
           <p class="text-sm">{{ draftSchema.description }}</p>
         </div>
 
         <div class="mb-4">
-          <label class="mb-2 block text-sm font-medium text-muted-foreground">Fields</label>
+          <label class="mb-2 block text-sm font-medium text-muted-foreground">{{ $t('views.SchemaInferenceView.fields_label') }}</label>
           <table v-if="draftSchema.fields.length > 0" class="w-full text-sm">
             <thead>
               <tr class="border-b text-left text-muted-foreground">
-                <th class="pb-2 font-medium">Name</th>
-                <th class="pb-2 font-medium">Type</th>
-                <th class="pb-2 font-medium">Required</th>
-                <th class="pb-2 font-medium">Description</th>
+                <th class="pb-2 font-medium">{{ $t('views.SchemaInferenceView.field_name') }}</th>
+                <th class="pb-2 font-medium">{{ $t('views.SchemaInferenceView.field_type') }}</th>
+                <th class="pb-2 font-medium">{{ $t('views.SchemaInferenceView.field_required') }}</th>
+                <th class="pb-2 font-medium">{{ $t('views.SchemaInferenceView.field_description') }}</th>
               </tr>
             </thead>
             <tbody>
@@ -111,7 +111,7 @@
                     class="inline-block rounded px-1.5 py-0.5 text-xs font-medium"
                     :class="field.required ? 'bg-primary/10 text-primary' : 'bg-muted text-muted-foreground'"
                   >
-                    {{ field.required ? 'yes' : 'no' }}
+                    {{ field.required ? $t('views.SchemaInferenceView.yes') : $t('views.SchemaInferenceView.no') }}
                   </span>
                 </td>
                 <td class="py-2 text-xs text-muted-foreground">{{ field.description ?? '—' }}</td>
@@ -138,7 +138,7 @@
             >
               <path d="m9 18 6-6-6-6" />
             </svg>
-            {{ showRawJson ? 'Hide' : 'Show' }} raw JSON
+            {{ showRawJson ? $t('common.hide') : $t('common.show') }} raw JSON
           </button>
           <pre v-if="showRawJson" class="mt-2 overflow-x-auto rounded-lg bg-muted p-4 text-xs">{{ formattedJson }}</pre>
         </div>
@@ -150,14 +150,14 @@
             class="rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
             @click="publishSchema"
           >
-            {{ publishing ? 'Publishing...' : 'Publish' }}
+            {{ publishing ? $t('views.SchemaInferenceView.publishing') : $t('views.SchemaInferenceView.publish') }}
           </button>
           <button
             data-testid="schema-inference-discard"
             class="rounded-lg border border-input bg-background px-4 py-2 text-sm font-medium hover:bg-accent"
             @click="resetForm"
           >
-            Discard
+            {{ $t('views.SchemaInferenceView.discard') }}
           </button>
         </div>
         <div v-if="publishError" class="mt-3 text-sm text-destructive">{{ publishError }}</div>
@@ -172,6 +172,7 @@ import { ref, computed, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { api } from '../lib/api/client'
 import type { components } from '../lib/api/client'
+import { formatApiError } from '../lib/api/formatError'
 import LoadingSpinner from '../components/shared/LoadingSpinner.vue'
 import ErrorAlert from '../components/shared/ErrorAlert.vue'
 import PageTabs from "../components/PageTabs.vue"
@@ -216,7 +217,7 @@ async function loadConnectors() {
   try {
     const { data, error: err } = await api.GET('/api/v1/connectors')
     if (err) {
-      connectorsError.value = `Failed to load connectors: ${err}`
+      connectorsError.value = `Failed to load connectors: ${formatApiError(err)}`
     } else if (data) {
       connectors.value = data.items
     }
@@ -260,7 +261,7 @@ async function inferSchema() {
       },
     })
     if (err) {
-      inferError.value = `Schema inference failed: ${err}`
+      inferError.value = `Schema inference failed: ${formatApiError(err)}`
     } else if (data) {
       rawDefinitionJson.value = data.definition_json
       draftSchema.value = {
@@ -289,7 +290,7 @@ async function publishSchema() {
       },
     })
     if (schemaErr) {
-      publishError.value = `Publish failed: ${schemaErr}`
+      publishError.value = `Publish failed: ${formatApiError(schemaErr)}`
       return
     }
     if (!schemaData) {
@@ -307,7 +308,7 @@ async function publishSchema() {
       },
     })
     if (versionErr) {
-      publishError.value = `Publish failed: ${versionErr}`
+      publishError.value = `Publish failed: ${formatApiError(versionErr)}`
       return
     }
 
