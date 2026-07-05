@@ -137,7 +137,7 @@ def _make_conditional_router(
 
 # Keys whose values should be concatenated (not replaced) when multiple nodes
 # write to the same channel in the same step (e.g. parallel branches).
-_CONCAT_KEYS: frozenset[str] = frozenset({"artifacts", "_hitl_gates"})
+_CONCAT_KEYS: frozenset[str] = frozenset({"artifacts", "_hitl_gates", "_run_context_write_log"})
 
 
 def _pipeline_state_reducer(
@@ -146,7 +146,7 @@ def _pipeline_state_reducer(
     """Merge a single state update, concatenating list-valued keys for parallel writes."""
     result = dict(current)
     for k, v in update.items():
-        if k in _CONCAT_KEYS and k in result:
+        if k in _CONCAT_KEYS and k in result and isinstance(result[k], list) and isinstance(v, list):
             result[k] = result[k] + v
         else:
             result[k] = v
