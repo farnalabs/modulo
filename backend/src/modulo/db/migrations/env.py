@@ -14,13 +14,13 @@ _log = logging.getLogger(__name__)
 
 def _to_sync_url(url: str) -> str:
     if url.startswith("postgresql+asyncpg://"):
-        url = url.replace("postgresql+asyncpg://", "postgresql+psycopg2://", 1)
+        url = url.replace("postgresql+asyncpg://", "postgresql+psycopg://", 1)
     elif url.startswith("mysql+asyncmy://"):
         url = url.replace("mysql+asyncmy://", "mysql+pymysql://", 1)
     elif url.startswith("postgresql://"):
-        url = url.replace("postgresql://", "postgresql+psycopg2://", 1)
+        url = url.replace("postgresql://", "postgresql+psycopg://", 1)
     elif url.startswith("postgres://"):
-        url = url.replace("postgres://", "postgresql+psycopg2://", 1)
+        url = url.replace("postgres://", "postgresql+psycopg://", 1)
     elif url.startswith("mysql://"):
         url = url.replace("mysql://", "mysql+pymysql://", 1)
     url = url.replace("?sslmode=disable", "").replace("&sslmode=disable", "")
