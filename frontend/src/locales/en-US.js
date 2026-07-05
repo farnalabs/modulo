@@ -595,7 +595,9 @@ export default {
       "inferring": "Inferring...",
       "resource_type": "Resource type",
       "no_fields_inferred": "No fields inferred.",
-      "publishing": "Publishing..."
+      "publishing": "Publishing...",
+      "eg_issues_repositories_pullrequests": "e.g. issues, repositories, pull requests",
+      "eg_stateopensortupdatede": "e.g. state=open, sort=updated, desc"
     },
     "pipeline": {
       "hide_ports": "Hide Ports"
@@ -650,7 +652,8 @@ export default {
       "new_variant_group": "New Variant Group",
       "failed_to_promote_variant": "Failed to promote variant:",
       "variant_a": "Variant A",
-      "failed_to_run_ab_test": "Failed to run A/B test:"
+      "failed_to_run_ab_test": "Failed to run A/B test:",
+      "eg_claude_vs_gpt4o": "e.g. claude vs gpt-4o"
     },
     "AdminUsersView": {
       "create_user": "Create User",
@@ -881,7 +884,7 @@ export default {
         "create_a_new_skill": "Create a new skill.",
         "update_the_skill_configuration": "Update the skill configuration.",
         "trigger1_trigger2": "trigger1, trigger2",
-        "skill_instructions10write_markdown_here": "# Skill instructions&#10;Write markdown here..."
+        "skill_instructions10write_markdown_here": "# Skill instructions\nWrite markdown here..."
       },
       "RemySessionDrawer": {
         "no_sessions_yet": "No sessions yet",
