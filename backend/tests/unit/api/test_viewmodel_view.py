@@ -42,6 +42,7 @@ def _make_view(**overrides: object) -> MagicMock:
     v.sort_by = overrides.get("sort_by")
     v.sort_order = overrides.get("sort_order", "desc")
     v.created_by = overrides.get("created_by", _USER_ID)
+    v.account_id = overrides.get("account_id", overrides.get("created_by", _USER_ID))
     v.created_at = _NOW
     v.updated_at = _NOW
     return v
