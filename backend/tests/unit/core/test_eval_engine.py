@@ -15,6 +15,7 @@ from modulo.core.eval_engine import (
     EvalResult,
     EvalType,
     SuiteEvalResult,
+    UnknownEvalTypeError,
     evaluate_suite,
 )
 
@@ -441,3 +442,110 @@ class TestStandaloneEvaluate:
         engine = EvalEngine()
         result = engine.standalone_evaluate({"text": "hello"}, name="no-config")
         assert result.passed is False
+
+
+# =============================================================================
+# Error handling — edge cases
+# =============================================================================
+
+
+class TestUnknownEvalType:
+    def test_unknown_eval_type_raises(self) -> None:
+        engine = EvalEngine()
+        # Create a definition with a valid type, then bypass Pydantic validation
+        eval_def = _make_eval_def("regex", {"pattern": r"\d+", "field": "text"})
+        object.__setattr__(eval_def, "eval_type", "nonexistent_type")
+        with pytest.raises(UnknownEvalTypeError, match="nonexistent_type"):
+            engine.evaluate({"text": "hello"}, eval_def)
+
+
+class TestReDoSProtection:
+    def test_nested_quantifier_rejected(self) -> None:
+        engine = EvalEngine()
+        eval_def = _make_eval_def("regex", {"pattern": r"(\d+)+", "field": "text"})
+        result = engine.evaluate({"text": "123"}, eval_def)
+        assert result.passed is False
+        assert "nested quantifier" in result.detail.lower()
+
+    def test_nested_star_quantifier_rejected(self) -> None:
+        engine = EvalEngine()
+        eval_def = _make_eval_def("regex", {"pattern": r"(a*)*", "field": "text"})
+        result = engine.evaluate({"text": "a"}, eval_def)
+        assert result.passed is False
+        assert "nested quantifier" in result.detail.lower()
+
+    def test_safe_complex_pattern_allowed(self) -> None:
+        engine = EvalEngine()
+        eval_def = _make_eval_def("regex", {"pattern": r"\d{1,5}", "field": "text"})
+        result = engine.evaluate({"text": "123"}, eval_def)
+        assert result.passed is True
+
+
+class TestRegexErrorHandling:
+    def test_unknown_flag_does_not_fail(self) -> None:
+        engine = EvalEngine()
+        eval_def = _make_eval_def("regex", {"pattern": r"\d+", "field": "text", "flags": "z"})
+        # Unknown flag 'z' is ignored with a warning — eval still works
+        result = engine.evaluate({"text": "123"}, eval_def)
+        assert result.passed is True
+
+    def test_empty_pattern_treated_as_missing(self) -> None:
+        engine = EvalEngine()
+        eval_def = _make_eval_def("regex", {"pattern": "", "field": "text"})
+        result = engine.evaluate({"text": "hello"}, eval_def)
+        assert result.passed is False
+        assert "missing" in result.detail.lower()
+
+    def test_none_field_value_coerced_to_empty_string(self) -> None:
+        engine = EvalEngine()
+        eval_def = _make_eval_def("regex", {"pattern": r"None", "field": "value"})
+        result = engine.evaluate({"value": None}, eval_def)
+        assert result.passed is False
+
+    def test_excessively_long_pattern_rejected(self) -> None:
+        engine = EvalEngine()
+        eval_def = _make_eval_def("regex", {"pattern": "x" * 1001, "field": "text"})
+        result = engine.evaluate({"text": "hello"}, eval_def)
+        assert result.passed is False
+        assert "exceeds maximum" in result.detail
+
+
+class TestJsonSchemaErrorHandling:
+    def test_field_not_in_output_returns_failed(self) -> None:
+        engine = EvalEngine()
+        schema = {"type": "object", "properties": {"name": {"type": "string"}}, "required": ["name"]}
+        eval_def = _make_eval_def("json_schema", {"schema": schema, "field": "nonexistent"})
+        result = engine.evaluate({"actual": "data"}, eval_def)
+        assert result.passed is False
+        assert "not found" in result.detail
+
+
+class TestCustomFunctionErrorHandling:
+    def test_function_returns_non_dict_handled_gracefully(self) -> None:
+        engine = EvalEngine()
+
+        def bad_fn(output: dict, config: dict) -> dict:
+            return "not-a-dict"  # type: ignore[return-value]
+
+        eval_def = _make_eval_def("custom_function", {"function": "bad", "functions": {"bad": bad_fn}})
+        result = engine.evaluate({"text": "hello"}, eval_def)
+        assert result.passed is False
+        assert "non-dict" in result.detail
+
+    def test_functions_config_not_a_dict_handled_gracefully(self) -> None:
+        engine = EvalEngine()
+
+        def my_fn(output: dict, config: dict) -> dict:
+            return {"passed": True, "score": 1.0, "detail": "ok"}
+
+        eval_def = _make_eval_def("custom_function", {"function": "my_fn", "functions": "not-a-dict"})
+        result = engine.evaluate({"text": "hello"}, eval_def)
+        assert result.passed is False
+        assert "not found" in result.detail
+
+    def test_missing_function_config_key_handled_gracefully(self) -> None:
+        engine = EvalEngine()
+        eval_def = _make_eval_def("custom_function", {"function": "my_fn"})
+        result = engine.evaluate({"text": "hello"}, eval_def)
+        assert result.passed is False
+        assert "not found" in result.detail
