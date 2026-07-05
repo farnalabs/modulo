@@ -4,7 +4,6 @@ prd: 8.3
 delivery-tasks: [task-lib-schemas-seed]
 bdd:
   - backend/tests/bdd/features/library/schemas.feature
-  - backend/tests/bdd/steps/test_schemas.py
 code:
   - backend/scripts/seed_library_schemas.py
   - backend/src/modulo/db/models/schema.py
