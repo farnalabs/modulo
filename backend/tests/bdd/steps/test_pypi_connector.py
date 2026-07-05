@@ -113,7 +113,7 @@ def step_pypi_unreachable(ctx):
 @when("I perform a health check")
 def step_pypi_health_check(ctx):
     try:
-        result = asyncio.new_event_loop().run_until_complete(ctx["connector"].health_check())
+        result = asyncio.run(ctx["connector"].health_check())
         ctx["health_result"] = result
     except Exception as exc:
         ctx["health_result"] = None
@@ -126,7 +126,7 @@ def step_pypi_health_check(ctx):
 def step_pypi_query_package(resource, pkg, ctx):
     q = ConnectorQuery(resource=resource, filters={"package": pkg})
     try:
-        result = asyncio.new_event_loop().run_until_complete(ctx["connector"].query(q))
+        result = asyncio.run(ctx["connector"].query(q))
         ctx["query_result"] = result
         ctx["query_error"] = None
     except Exception as exc:
@@ -140,7 +140,7 @@ def step_pypi_query_package(resource, pkg, ctx):
 def step_pypi_query_version(resource, pkg, version, ctx):
     q = ConnectorQuery(resource=resource, filters={"package": pkg, "version": version})
     try:
-        result = asyncio.new_event_loop().run_until_complete(ctx["connector"].query(q))
+        result = asyncio.run(ctx["connector"].query(q))
         ctx["query_result"] = result
         ctx["query_error"] = None
     except Exception as exc:
@@ -154,7 +154,7 @@ def step_pypi_query_version(resource, pkg, version, ctx):
 def step_pypi_query_search(resource, text, limit, ctx):
     q = ConnectorQuery(resource=resource, filters={"text": text}, limit=limit)
     try:
-        result = asyncio.new_event_loop().run_until_complete(ctx["connector"].query(q))
+        result = asyncio.run(ctx["connector"].query(q))
         ctx["query_result"] = result
         ctx["query_error"] = None
     except Exception as exc:
@@ -168,7 +168,7 @@ def step_pypi_query_search(resource, text, limit, ctx):
 def step_pypi_write(resource, ctx):
     payload = ConnectorPayload(resource=resource, data={})
     try:
-        asyncio.new_event_loop().run_until_complete(ctx["connector"].write(payload))
+        asyncio.run(ctx["connector"].write(payload))
         ctx["write_result"] = "unexpected_success"
         ctx["query_error"] = None
     except Exception as exc:
@@ -180,7 +180,7 @@ def step_pypi_write(resource, ctx):
 def step_pypi_query_no_package(ctx):
     q = ConnectorQuery(resource="package", filters={})
     try:
-        asyncio.new_event_loop().run_until_complete(ctx["connector"].query(q))
+        asyncio.run(ctx["connector"].query(q))
         ctx["query_result"] = "unexpected_success"
         ctx["query_error"] = None
     except Exception as exc:
@@ -192,7 +192,7 @@ def step_pypi_query_no_package(ctx):
 def step_pypi_query_no_version(ctx):
     q = ConnectorQuery(resource="package_version", filters={"package": "requests"})
     try:
-        asyncio.new_event_loop().run_until_complete(ctx["connector"].query(q))
+        asyncio.run(ctx["connector"].query(q))
         ctx["query_result"] = "unexpected_success"
         ctx["query_error"] = None
     except Exception as exc:
@@ -204,7 +204,7 @@ def step_pypi_query_no_version(ctx):
 def step_pypi_query_no_text(ctx):
     q = ConnectorQuery(resource="search", filters={})
     try:
-        asyncio.new_event_loop().run_until_complete(ctx["connector"].query(q))
+        asyncio.run(ctx["connector"].query(q))
         ctx["query_result"] = "unexpected_success"
         ctx["query_error"] = None
     except Exception as exc:

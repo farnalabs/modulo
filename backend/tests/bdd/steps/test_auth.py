@@ -109,14 +109,14 @@ def login(client: Any, email: str, password: str, request: Any, ctx: dict[str, A
 
     Mocks ``authenticate_user`` so the test controls success/failure.
     """
-    with patch("modulo.api.routes.auth.authenticate_user") as mock_auth:
+    with patch("modulo.api.routes.auth.authenticate_db_user") as mock_auth:
         if email == "alice@example.com" and password == "correct-horse-battery":
             mock_auth.return_value = True
         else:
             mock_auth.return_value = False
         resp = client.post(
             "/api/v1/auth/login",
-            json={"username": email, "password": password},
+            json={"email": email, "password": password},
         )
         _store_response(request, ctx, resp)
         return resp
@@ -259,7 +259,6 @@ def step_api_key_exists(name: str, request: Any, ctx: dict[str, Any]) -> None:
 
 def _make_key_response(status_code, **kwargs):
     """Build a SimpleNamespace that looks like a requests.Response for conftest steps."""
-    import json
     from types import SimpleNamespace
 
     return SimpleNamespace(
@@ -268,10 +267,6 @@ def _make_key_response(status_code, **kwargs):
         json=lambda: kwargs,
         text=json.dumps(kwargs),
     )
-
-
-class _ApiKeyCtx:
-    """Internal state for API key test steps."""
 
 
 @when(
