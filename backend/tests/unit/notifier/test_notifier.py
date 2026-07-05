@@ -200,12 +200,20 @@ async def _do_dispatch(
     retain_payload: bool = False,
 ) -> DispatchResult:
     """Helper to call _dispatch_to_endpoint with a real httpx.AsyncClient."""
+    body = json.dumps(
+        {
+            "event": event_type,
+            "payload": payload or {"run_id": str(run_id or _RUN)},
+        },
+        default=str,
+        separators=(",", ":"),
+    ).encode()
     async with httpx.AsyncClient() as client:
         return await n._dispatch_to_endpoint(
             client,
             ep,
             event_type,
-            payload or {"run_id": str(run_id or _RUN)},
+            body,
             run_id or _RUN,
             retain_payload=retain_payload,
         )
