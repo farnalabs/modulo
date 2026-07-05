@@ -1,4 +1,4 @@
-"""Admin feature flag inspection — lists all known flags and their current status."""
+﻿"""Admin feature flag inspection — lists all known flags and their current status."""
 
 from __future__ import annotations
 
@@ -11,37 +11,33 @@ from sqlalchemy.exc import ProgrammingError
 from sqlalchemy.ext.asyncio import AsyncSession
 from starlette.responses import Response
 
-from modulo.api.dependencies import get_db_session
+from modulo.api.dependencies import get_db_session, get_plan_context
 from modulo.auth.dependencies import get_current_user
 from modulo.auth.jwt import AuthenticatedPrincipal
-from modulo.core.feature_flags import FeatureFlagRegistry
-from modulo.settings import Settings, get_settings
+from modulo.core.feature_flags import FeatureFlagRegistry, PlanContext
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/v1/admin/feature-flags", tags=["admin-feature-flags"])
 
 
-async def _build_registry(settings: Settings, session: AsyncSession) -> FeatureFlagRegistry:
-    from modulo.core.license import get_license
-
-    lic = get_license()
-    has_key = bool(settings.modulo_license_key) or lic is not None
-    tier = lic.tier if lic is not None else "team" if settings.modulo_license_key else "community"
+async def _build_registry(session: AsyncSession, plan_context: PlanContext) -> FeatureFlagRegistry:
     async with session.begin():
         return await FeatureFlagRegistry.from_db(
-            session, current_tier=tier, has_license_key=has_key
+            session,
+            current_tier=plan_context.tier(),
+            has_license_key=plan_context.has_license_key(),
         )
 
 
 @router.get("")
 async def list_feature_flags(
-    settings: Settings = Depends(get_settings),
     session: AsyncSession = Depends(get_db_session),
     current_user: AuthenticatedPrincipal = Depends(get_current_user),
+    plan_context: PlanContext = Depends(get_plan_context),
 ) -> Response:
     try:
-        registry = await _build_registry(settings, session)
+        registry = await _build_registry(session, plan_context)
         return {
             "license": {
                 "tier": registry.current_tier,
@@ -97,12 +93,12 @@ async def list_feature_flags(
 @router.get("/{flag_name}")
 async def get_feature_flag(
     flag_name: str,
-    settings: Settings = Depends(get_settings),
     session: AsyncSession = Depends(get_db_session),
     current_user: AuthenticatedPrincipal = Depends(get_current_user),
+    plan_context: PlanContext = Depends(get_plan_context),
 ) -> Response:
     try:
-        registry = await _build_registry(settings, session)
+        registry = await _build_registry(session, plan_context)
         flag = registry.get_flag(flag_name)
         if flag is None:
             raise HTTPException(
@@ -150,12 +146,12 @@ class ToggleFlagRequest(BaseModel):
 async def toggle_feature_flag(
     flag_name: str,
     req: ToggleFlagRequest,
-    settings: Settings = Depends(get_settings),
     session: AsyncSession = Depends(get_db_session),
     current_user: AuthenticatedPrincipal = Depends(get_current_user),
+    plan_context: PlanContext = Depends(get_plan_context),
 ) -> Response:
     try:
-        registry = await _build_registry(settings, session)
+        registry = await _build_registry(session, plan_context)
         flag = registry.get_flag(flag_name)
         if flag is None:
             raise HTTPException(

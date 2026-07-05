@@ -449,6 +449,7 @@ async def admin_create_team(
 class UpdateOrgRequest(BaseModel):
     name: str | None = Field(None, min_length=1, max_length=255)
     logo_url: str | None = Field(None, max_length=2048)
+    plan_id: str | None = None
 
 
 class OrgProfileResponse(BaseModel):
@@ -526,6 +527,8 @@ async def admin_update_org(
                 existing_settings = dict(org.settings_json or {})
                 existing_settings["logo_url"] = req.logo_url
                 updates["settings_json"] = existing_settings
+            if req.plan_id is not None:
+                updates["plan_id"] = req.plan_id
 
             if updates:
                 updated = await update_organisation(session, current_user.organisation_id, updates)
