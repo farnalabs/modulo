@@ -193,8 +193,7 @@ class NotionConnector(ConnectorBase):
                 case "database":
                     r = await client.post("/databases", json=payload.data)
                     r.raise_for_status()
-                    body = r.json()
-                    return body
+                    return r.json()
 
                 case "block_append":
                     block_id = payload.data.get("block_id")
@@ -206,8 +205,7 @@ class NotionConnector(ConnectorBase):
                         json={"children": children},
                     )
                     r.raise_for_status()
-                    body = r.json()
-                    return body
+                    return r.json()
 
                 case "page_update":
                     page_id = payload.data.get("id")
@@ -219,8 +217,7 @@ class NotionConnector(ConnectorBase):
                         json={"properties": properties},
                     )
                     r.raise_for_status()
-                    body = r.json()
-                    return body
+                    return r.json()
 
                 case _:
                     raise ValueError(

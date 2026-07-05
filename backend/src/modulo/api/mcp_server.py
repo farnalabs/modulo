@@ -125,16 +125,15 @@ def _get_session_factory() -> async_sessionmaker[AsyncSession]:
 @asynccontextmanager
 async def _session(org_id: uuid.UUID) -> AsyncGenerator[AsyncSession, None]:
     factory = _get_session_factory()
-    async with factory() as s:
-        async with s.begin():
-            await set_rls_org(s, org_id)
-            try:
-                uid = _ctx_user_id_val()
-                role = _ctx_role_val() or ""
-                await set_rls_user_context(s, uid, role)
-            except (LookupError, ValueError):
-                pass
-            yield s
+    async with factory() as s, s.begin():
+        await set_rls_org(s, org_id)
+        try:
+            uid = _ctx_user_id_val()
+            role = _ctx_role_val() or ""
+            await set_rls_user_context(s, uid, role)
+        except (LookupError, ValueError):
+            pass
+        yield s
 
 
 # ---------------------------------------------------------------------------
@@ -341,8 +340,7 @@ class McpAuthMiddleware(BaseHTTPMiddleware):
             "user_id": str(claims.client_id),
         }
 
-        resp = await call_next(request)
-        return resp
+        return await call_next(request)
 
 
 # ---------------------------------------------------------------------------
@@ -746,14 +744,13 @@ async def review_hitl(
                     .scalars()
                     .first()
                 )
-                if edge and edge.hitl_gate_config:
-                    if edge.hitl_gate_config.get("human_only", False):
-                        return {
-                            "error": "human_only_gate",
-                            "detail": (
-                                "This gate has human_only=true. Only a browser-authenticated human can approve it."
-                            ),
-                        }
+                if edge and edge.hitl_gate_config and edge.hitl_gate_config.get("human_only", False):
+                    return {
+                        "error": "human_only_gate",
+                        "detail": (
+                            "This gate has human_only=true. Only a browser-authenticated human can approve it."
+                        ),
+                    }
 
         try:
             if action == "claim":
@@ -769,7 +766,7 @@ async def review_hitl(
                     "claim_token": gate.claim_token,
                     "expires_at": gate.expires_at.isoformat() if gate.expires_at else None,
                 }
-            elif action == "approve":
+            if action == "approve":
                 gate = await mgr.approve(
                     s,
                     run_id=rid,
@@ -778,7 +775,7 @@ async def review_hitl(
                     claim_token=claim_token or "",
                 )
                 return {"status": "approved", "gate_id": gate_id}
-            elif action == "deliver_manual":
+            if action == "deliver_manual":
                 gate = await mgr.deliver_manual(
                     s,
                     run_id=rid,
@@ -789,15 +786,14 @@ async def review_hitl(
                     actor_id=key_id,
                 )
                 return {"status": "delivered_manual", "gate_id": gate_id}
-            else:
-                gate = await mgr.reject(
-                    s,
-                    run_id=rid,
-                    gate_id=gate_id,
-                    org_id=org_id,
-                    claim_token=claim_token or "",
-                )
-                return {"status": "rejected", "gate_id": gate_id}
+            gate = await mgr.reject(
+                s,
+                run_id=rid,
+                gate_id=gate_id,
+                org_id=org_id,
+                claim_token=claim_token or "",
+            )
+            return {"status": "rejected", "gate_id": gate_id}
         except GateNotFoundError:
             return {"error": "gate_not_found", "run_id": run_id, "gate_id": gate_id}
         except NotTeamMemberError:
@@ -1198,9 +1194,8 @@ async def get_org_config(section: str | None = None) -> dict[str, Any]:
 
         filtered = []
         for cfg in configs:
-            if key_prefixes is not None:
-                if not any(cfg.key.startswith(p) for p in key_prefixes):
-                    continue
+            if key_prefixes is not None and not any(cfg.key.startswith(p) for p in key_prefixes):
+                continue
             if _is_sensitive_key(cfg.key):
                 continue
             filtered.append(cfg)
@@ -1212,10 +1207,7 @@ async def get_org_config(section: str | None = None) -> dict[str, Any]:
         lines = ["| Key | Value |", "|-----|-------|"]
         for cfg in filtered:
             val = cfg.value
-            if isinstance(val, dict):
-                val_str = json.dumps(val, default=str)
-            else:
-                val_str = str(val)
+            val_str = json.dumps(val, default=str) if isinstance(val, dict) else str(val)
             if len(val_str) > 200:
                 val_str = val_str[:200] + "..."
             lines.append(f"| {cfg.key} | {val_str} |")
@@ -1657,38 +1649,37 @@ async def _oauth_authorize(request: Request) -> JSONResponse:
         )
 
     session_factory = _get_session_factory()
-    async with session_factory() as s:
-        async with s.begin():
-            client = await get_oauth_client_by_client_id(s, client_id)
-            if client is None:
-                return JSONResponse(
-                    {"error": "invalid_client", "detail": "Unknown client_id"},
-                    status_code=400,
-                )
-
-            allowed_uris = client.redirect_uris.split()
-            if redirect_uri not in allowed_uris:
-                return JSONResponse(
-                    {"error": "invalid_client", "detail": "redirect_uri not allowed"},
-                    status_code=400,
-                )
-
-            try:
-                requested_scopes = normalize_scopes(scope)
-                valid_scopes = validate_client_scopes(client, requested_scopes)
-            except Exception as exc:
-                return JSONResponse(
-                    {"error": "invalid_scope", "detail": str(exc)},
-                    status_code=400,
-                )
-
-            code = await create_authorization_code(
-                s,
-                client_id=client_id,
-                org_id=client.organisation_id,
-                scopes=" ".join(valid_scopes),
-                redirect_uri=redirect_uri,
+    async with session_factory() as s, s.begin():
+        client = await get_oauth_client_by_client_id(s, client_id)
+        if client is None:
+            return JSONResponse(
+                {"error": "invalid_client", "detail": "Unknown client_id"},
+                status_code=400,
             )
+
+        allowed_uris = client.redirect_uris.split()
+        if redirect_uri not in allowed_uris:
+            return JSONResponse(
+                {"error": "invalid_client", "detail": "redirect_uri not allowed"},
+                status_code=400,
+            )
+
+        try:
+            requested_scopes = normalize_scopes(scope)
+            valid_scopes = validate_client_scopes(client, requested_scopes)
+        except Exception as exc:
+            return JSONResponse(
+                {"error": "invalid_scope", "detail": str(exc)},
+                status_code=400,
+            )
+
+        code = await create_authorization_code(
+            s,
+            client_id=client_id,
+            org_id=client.organisation_id,
+            scopes=" ".join(valid_scopes),
+            redirect_uri=redirect_uri,
+        )
 
     return JSONResponse({"code": code, "state": state})
 
@@ -1730,44 +1721,43 @@ async def _oauth_token(request: Request) -> JSONResponse:
 
     settings = get_settings()
     session_factory = _get_session_factory()
-    async with session_factory() as s:
-        async with s.begin():
-            try:
-                auth_code = await consume_authorization_code(
-                    s,
-                    code=code,
-                    client_id=client_id,
-                    redirect_uri=redirect_uri,
-                    client_secret=client_secret,
-                )
-            except Exception as exc:
-                return JSONResponse(
-                    {"error": "invalid_grant", "detail": str(exc)},
-                    status_code=400,
-                )
-
-            client = await get_oauth_client_by_client_id(s, client_id)
-            if client is None:
-                return JSONResponse(
-                    {"error": "invalid_client", "detail": "Client not found"},
-                    status_code=400,
-                )
-
-            family_id, sequence = await create_oauth_token_family(
+    async with session_factory() as s, s.begin():
+        try:
+            auth_code = await consume_authorization_code(
                 s,
+                code=code,
                 client_id=client_id,
-                org_id=client.organisation_id,
+                redirect_uri=redirect_uri,
+                client_secret=client_secret,
+            )
+        except Exception as exc:
+            return JSONResponse(
+                {"error": "invalid_grant", "detail": str(exc)},
+                status_code=400,
             )
 
-            scopes_list = auth_code.scopes.split()
-            access_token = create_oauth_access_token(
-                client_id,
-                settings.secret_key,
-                organisation_id=str(client.organisation_id),
-                scopes=scopes_list,
-                token_family=family_id,
-                token_sequence=sequence,
+        client = await get_oauth_client_by_client_id(s, client_id)
+        if client is None:
+            return JSONResponse(
+                {"error": "invalid_client", "detail": "Client not found"},
+                status_code=400,
             )
+
+        family_id, sequence = await create_oauth_token_family(
+            s,
+            client_id=client_id,
+            org_id=client.organisation_id,
+        )
+
+        scopes_list = auth_code.scopes.split()
+        access_token = create_oauth_access_token(
+            client_id,
+            settings.secret_key,
+            organisation_id=str(client.organisation_id),
+            scopes=scopes_list,
+            token_family=family_id,
+            token_sequence=sequence,
+        )
 
     return JSONResponse(
         {
@@ -1802,7 +1792,7 @@ def build_mcp_asgi_app() -> Starlette:
         oauth_token_route,
         *list(inner.routes),
     ]
-    app = Starlette(
+    return Starlette(
         routes=all_routes,
         middleware=[
             Middleware(McpAuthMiddleware),
@@ -1811,4 +1801,3 @@ def build_mcp_asgi_app() -> Starlette:
         # Note: lifespan is managed by the parent FastAPI app's _lifespan
         # to ensure it is called — Starlette does not invoke sub-app lifespans.
     )
-    return app

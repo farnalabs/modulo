@@ -453,8 +453,7 @@ async def set_org_context_source(
             await service.set_org_default(
                 principal.organisation_id, source_key, req.source_mode
             )
-            org_defaults = await service.get_org_defaults(principal.organisation_id)
-        return org_defaults
+            return await service.get_org_defaults(principal.organisation_id)
     except ProgrammingError:
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,

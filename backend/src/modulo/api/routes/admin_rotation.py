@@ -163,32 +163,31 @@ async def _run_rotation_background(
     global _rotation_in_progress, _last_rotation_result
 
     try:
-        async with factory() as session:
-            async with session.begin():
-                from modulo.core.fernet_rotation import rotate_all_encrypted_data
+        async with factory() as session, session.begin():
+            from modulo.core.fernet_rotation import rotate_all_encrypted_data
 
-                result = await rotate_all_encrypted_data(session, new_key, old_key)
+            result = await rotate_all_encrypted_data(session, new_key, old_key)
 
-                # Log completion inside the transaction so it gets committed
-                await append_audit_event(
-                    session,
-                    org_id=org_id,
-                    event_type="fernet_key_rotation_completed",
-                    actor_user_id=actor_user_id,
-                    resource_type="encryption",
-                    resource_id=org_id,
-                    payload_json={
-                        "tables_processed": result.tables_processed,
-                        "total_rows_reencrypted": result.total_rows_reencrypted,
-                    },
-                )
-
-                _last_rotation_result = {
-                    "status": "completed",
+            # Log completion inside the transaction so it gets committed
+            await append_audit_event(
+                session,
+                org_id=org_id,
+                event_type="fernet_key_rotation_completed",
+                actor_user_id=actor_user_id,
+                resource_type="encryption",
+                resource_id=org_id,
+                payload_json={
                     "tables_processed": result.tables_processed,
                     "total_rows_reencrypted": result.total_rows_reencrypted,
-                    "details": result.details,
-                }
+                },
+            )
+
+            _last_rotation_result = {
+                "status": "completed",
+                "tables_processed": result.tables_processed,
+                "total_rows_reencrypted": result.total_rows_reencrypted,
+                "details": result.details,
+            }
 
         _log.info(
             "rotation.completed",

@@ -55,7 +55,7 @@ async def get_or_create_daily_count(
         run_date=run_date,
         team_id=team_id,
         run_count=0,
-        total_spend_usd=Decimal("0"),
+        total_spend_usd=Decimal(0),
     )
     session.add(row)
     await session.flush()

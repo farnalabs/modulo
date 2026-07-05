@@ -24,7 +24,7 @@ class RunawayRunError(RuntimeError):
         limit: The configured limit that was exceeded.
     """
 
-    def __init__(self, guard: str, current: int | float, limit: int | float) -> None:
+    def __init__(self, guard: str, current: float, limit: float) -> None:
         self.guard = guard
         self.current = current
         self.limit = limit

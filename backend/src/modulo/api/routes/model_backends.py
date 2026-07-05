@@ -11,11 +11,14 @@ from typing import Any, Literal
 from cryptography.fernet import Fernet
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, Field
+from sqlalchemy import select
+from sqlalchemy.exc import ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.api.dependencies import get_db_session
 from modulo.auth.dependencies import get_current_user
 from modulo.auth.jwt import AuthenticatedPrincipal
+from modulo.core.plugin_registry import get_plugin_registry
 from modulo.db.crud.model_backend import (
     create_model_backend,
     delete_model_backend,
@@ -25,10 +28,7 @@ from modulo.db.crud.model_backend import (
 )
 from modulo.db.models.model_backend import ModelBackend
 from modulo.db.rls import set_rls_org, set_rls_user_context
-from modulo.core.plugin_registry import get_plugin_registry
 from modulo.settings import Settings, get_settings
-from sqlalchemy import select
-from sqlalchemy.exc import ProgrammingError, SQLAlchemyError
 
 router = APIRouter(prefix="/api/v1/model-backends", tags=["model-backends"])
 

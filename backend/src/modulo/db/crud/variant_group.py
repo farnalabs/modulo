@@ -231,7 +231,7 @@ async def get_coverage_gaps(
 
     gaps: list[dict[str, Any]] = []
     for variant in group.variants:
-        variant_eval_ids = set(uuid.UUID(str(eid)) for eid in variant.get("eval_definition_ids", []))
+        variant_eval_ids = {uuid.UUID(str(eid)) for eid in variant.get("eval_definition_ids", [])}
         missing = [str(eid) for eid in eval_def_ids if eid not in variant_eval_ids]
         if missing:
             gaps.append(

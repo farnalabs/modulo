@@ -54,9 +54,7 @@ class LocalRuntimeProvider(RuntimeProvider):
         if hint.lower() == "e2b":
             return False
         image_ref = getattr(profile, "image_ref", None) or ""
-        if "e2b" in image_ref.lower():
-            return False
-        return True
+        return "e2b" not in image_ref.lower()
 
     async def create_workspace(self, spec: WorkspaceSpec) -> str:
         """Create a temp directory on the host as the workspace root.

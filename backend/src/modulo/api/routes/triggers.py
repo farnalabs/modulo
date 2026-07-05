@@ -398,7 +398,7 @@ async def test_polling_condition(
 
     # Evaluate outside the transaction (connector ops are I/O, not DB)
     trigger_engine = TriggerEngine()
-    eval_result = await trigger_engine.evaluate_condition(
+    return await trigger_engine.evaluate_condition(
         session,
         trigger=trigger,
         org_id=principal.organisation_id,
@@ -407,7 +407,6 @@ async def test_polling_condition(
         condition_expression=req.condition_expression,
     )
 
-    return eval_result
 
 
 # ---------------------------------------------------------------------------
@@ -518,7 +517,7 @@ async def update_trigger(
             if req.config_json is not None:
                 trigger.config_json = req.config_json
             if req.cron_expression is not None:
-                if trigger.trigger_type not in ("cron",):
+                if trigger.trigger_type != "cron":
                     raise HTTPException(
                         status_code=status.HTTP_400_BAD_REQUEST,
                         detail="Only cron triggers can have cron expressions",

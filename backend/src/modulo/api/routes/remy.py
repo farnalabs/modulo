@@ -312,17 +312,11 @@ def _resolve_tool_permission(config: RemyConfig, tool_name: str, args: dict[str,
     # 2. Mode-based defaults
     mode = config.permission_mode
     if mode == "locked_down":
-        if tool_name in WRITE_TOOLS or tool_name == "press":
-            base = "requires_approval"
-        else:
-            base = "always_allowed"
+        base = "requires_approval" if tool_name in WRITE_TOOLS or tool_name == "press" else "always_allowed"
     elif mode == "full_auto":
         base = "always_allowed"
     else:
-        if tool_name == "press":
-            base = "requires_approval"
-        else:
-            base = "always_allowed"
+        base = "requires_approval" if tool_name == "press" else "always_allowed"
 
     # 3. Destructive pattern override (applies regardless of mode)
     if base == "always_allowed" and tool_name in WRITE_TOOLS:
@@ -815,7 +809,7 @@ async def stream_chat(
                                 organisation_id=principal.organisation_id,
                                 session_id=session_id,
                                 role="assistant",
-                                content=full_content if full_content else None,
+                                content=full_content or None,
                                 tool_calls_json=None,
                                 parent_id=parent_msg_id,
                             )
@@ -994,7 +988,7 @@ async def stream_chat(
                             organisation_id=principal.organisation_id,
                             session_id=session_id,
                             role="assistant",
-                            content=full_content if full_content else None,
+                            content=full_content or None,
                             tool_calls_json={"tool_calls": tool_calls} if tool_calls else None,
                             parent_id=parent_msg_id,
                         )

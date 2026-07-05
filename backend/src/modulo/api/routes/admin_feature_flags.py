@@ -27,10 +27,7 @@ async def _build_registry(settings: Settings, session: AsyncSession) -> FeatureF
 
     lic = get_license()
     has_key = bool(settings.modulo_license_key) or lic is not None
-    if lic is not None:
-        tier = lic.tier
-    else:
-        tier = "team" if settings.modulo_license_key else "community"
+    tier = lic.tier if lic is not None else "team" if settings.modulo_license_key else "community"
     async with session.begin():
         return await FeatureFlagRegistry.from_db(
             session, current_tier=tier, has_license_key=has_key

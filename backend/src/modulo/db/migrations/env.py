@@ -24,8 +24,7 @@ def _to_sync_url(url: str) -> str:
     elif url.startswith("mysql://"):
         url = url.replace("mysql://", "mysql+pymysql://", 1)
     url = url.replace("?sslmode=disable", "").replace("&sslmode=disable", "")
-    url = url.replace("?ssl=disable", "").replace("&ssl=disable", "")
-    return url
+    return url.replace("?ssl=disable", "").replace("&ssl=disable", "")
 
 target_metadata = Base.metadata
 

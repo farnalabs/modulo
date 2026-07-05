@@ -108,10 +108,7 @@ def problem_from_http_exception(
     status = exc.status_code
     # Handle dict detail (from FastAPI's raise HTTPException(detail={...}))
     raw = exc.detail
-    if isinstance(raw, dict):
-        detail = raw.get("detail", str(raw))
-    else:
-        detail = str(raw)
+    detail = raw.get("detail", str(raw)) if isinstance(raw, dict) else str(raw)
 
     lookup = {
         400: ProblemType.BAD_REQUEST,

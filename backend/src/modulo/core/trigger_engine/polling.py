@@ -203,174 +203,173 @@ async def fire_polling_trigger(
     settings = get_settings()
     factory = async_sessionmaker(_get_engine(), expire_on_commit=False)
 
-    async with factory() as session:
-        async with session.begin():
-            await _set_rls_org(session, org_id)
+    async with factory() as session, session.begin():
+        await _set_rls_org(session, org_id)
 
-            # Re-read trigger with FOR UPDATE
-            result = await session.execute(
-                select(Trigger).where(Trigger.id == trigger_id, Trigger.organisation_id == org_id).with_for_update()
-            )
-            trigger = result.scalar_one_or_none()
-            if trigger is None or not trigger.active:
-                return {"status": "skipped", "reason": "trigger_inactive_or_missing"}
-            if trigger.next_fire_at is not None and trigger.next_fire_at > datetime.datetime.now(datetime.UTC):
-                return {"status": "skipped", "reason": "already_fired_this_cycle"}
+        # Re-read trigger with FOR UPDATE
+        result = await session.execute(
+            select(Trigger).where(Trigger.id == trigger_id, Trigger.organisation_id == org_id).with_for_update()
+        )
+        trigger = result.scalar_one_or_none()
+        if trigger is None or not trigger.active:
+            return {"status": "skipped", "reason": "trigger_inactive_or_missing"}
+        if trigger.next_fire_at is not None and trigger.next_fire_at > datetime.datetime.now(datetime.UTC):
+            return {"status": "skipped", "reason": "already_fired_this_cycle"}
 
-            # Concurrency check
-            active_count = await _count_active_runs(session, pipeline_id)
-            if active_count >= trigger.max_concurrent_runs:
-                await _log_poll_event(
-                    session,
-                    trigger=trigger,
-                    org_id=org_id,
-                    result="concurrency_limit_reached",
-                    error_detail=(f"Active runs: {active_count}, limit: {trigger.max_concurrent_runs}"),
-                )
-                return {
-                    "status": "skipped",
-                    "reason": "concurrency_limit",
-                    "active_runs": active_count,
-                }
-
-            # Load connector instance
-            conn_result = await session.execute(
-                select(ConnectorInstance).where(
-                    ConnectorInstance.id == connector_instance_id,
-                    ConnectorInstance.organisation_id == org_id,
-                )
-            )
-            connector_instance = conn_result.scalar_one_or_none()
-            if connector_instance is None:
-                _log.warning(
-                    "Connector instance %s not found for polling trigger %s", connector_instance_id, trigger_id
-                )
-                await _log_poll_event(
-                    session,
-                    trigger=trigger,
-                    org_id=org_id,
-                    result="poll_error",
-                    error_detail=f"Connector instance {connector_instance_id} not found",
-                )
-                return {"status": "error", "reason": "connector_not_found"}
-
-            # Decrypt credentials and build connector
-            try:
-                secrets_backend = create_secrets_backend(fernet_key=settings.fernet_key, session=session)
-                raw_creds = await secrets_backend.get_secret(str(connector_instance.id))
-                creds: dict[str, Any] = json.loads(raw_creds)
-                connector = _build_polling_connector(
-                    connector_instance.connector_type_id,
-                    connector_instance.config_json,
-                    creds,
-                )
-            except Exception as exc:
-                _log.warning("Failed to initialise connector for polling trigger %s: %s", trigger_id, exc)
-                await _log_poll_event(
-                    session,
-                    trigger=trigger,
-                    org_id=org_id,
-                    result="poll_error",
-                    error_detail=f"Failed to initialise connector: {str(exc)[:200]}",
-                )
-                return {"status": "error", "reason": "connector_init_failed"}
-
-            # Run poll query
-            try:
-                query = ConnectorQuery(resource=poll_query)
-                query_result = await connector.query(query)
-            except Exception as exc:
-                _log.warning("Poll query failed for trigger %s: %s", trigger_id, exc)
-                await _log_poll_event(
-                    session,
-                    trigger=trigger,
-                    org_id=org_id,
-                    result="poll_error",
-                    error_detail=f"Poll query failed: {str(exc)[:200]}",
-                )
-                return {"status": "error", "reason": "query_failed", "error": str(exc)}
-
-            # Evaluate condition
-            try:
-                condition_met = evaluate_condition(query_result, condition_expression)
-            except Exception as exc:
-                _log.warning("Condition evaluation failed for trigger %s: %s", trigger_id, exc)
-                await _log_poll_event(
-                    session,
-                    trigger=trigger,
-                    org_id=org_id,
-                    result="poll_error",
-                    error_detail=f"Condition evaluation failed: {exc}",
-                )
-                return {"status": "error", "reason": "condition_eval_failed", "error": str(exc)}
-
-            if not condition_met:
-                # Log no_match — condition not satisfied this cycle
-                await _log_poll_event(
-                    session,
-                    trigger=trigger,
-                    org_id=org_id,
-                    result="no_match",
-                )
-                # Update next_fire_at even on no-match
-                await _update_next_fire(session, trigger)
-                return {"status": "no_match"}
-
-            # Snapshot ID from trigger config
-            config = trigger.config_json or {}
-            snapshot_id_str = config.get("snapshot_id")
-            if snapshot_id_str:
-                try:
-                    snapshot_id = uuid.UUID(snapshot_id_str)
-                except (ValueError, TypeError):
-                    snapshot_id = uuid.UUID(int=0)
-            else:
-                snapshot_id = uuid.UUID(int=0)
-
-            if snapshot_id == uuid.UUID(int=0):
-                _log.warning("Polling trigger %s has no valid snapshot_id in config", trigger_id)
-
-            # Build input payload from query result
-            input_payload: dict[str, Any] = {
-                "records": query_result.records,
-                "total": query_result.total,
-                "poll_query": poll_query,
-            }
-
-            # Create the run
-            run = await create_run(
-                session,
-                org_id=org_id,
-                pipeline_id=pipeline_id,
-                snapshot_id=snapshot_id,
-                trigger_type="polling",
-                trigger_id=trigger_id,
-                input_payload=input_payload,
-            )
-
-            # Log TriggerEvent — condition_met
-            event = await _log_poll_event(
+        # Concurrency check
+        active_count = await _count_active_runs(session, pipeline_id)
+        if active_count >= trigger.max_concurrent_runs:
+            await _log_poll_event(
                 session,
                 trigger=trigger,
                 org_id=org_id,
-                result="condition_met",
-                run_id=run.id,
+                result="concurrency_limit_reached",
+                error_detail=(f"Active runs: {active_count}, limit: {trigger.max_concurrent_runs}"),
             )
-
-            # Update last_fired_at and next_fire_at
-            await _update_next_fire(session, trigger)
-
-            _log.info(
-                "Polling trigger %s fired → run %s (condition met)",
-                trigger_id,
-                run.id,
-            )
-
             return {
-                "status": "fired",
-                "run_id": str(run.id),
-                "event_id": str(event.id),
+                "status": "skipped",
+                "reason": "concurrency_limit",
+                "active_runs": active_count,
             }
+
+        # Load connector instance
+        conn_result = await session.execute(
+            select(ConnectorInstance).where(
+                ConnectorInstance.id == connector_instance_id,
+                ConnectorInstance.organisation_id == org_id,
+            )
+        )
+        connector_instance = conn_result.scalar_one_or_none()
+        if connector_instance is None:
+            _log.warning(
+                "Connector instance %s not found for polling trigger %s", connector_instance_id, trigger_id
+            )
+            await _log_poll_event(
+                session,
+                trigger=trigger,
+                org_id=org_id,
+                result="poll_error",
+                error_detail=f"Connector instance {connector_instance_id} not found",
+            )
+            return {"status": "error", "reason": "connector_not_found"}
+
+        # Decrypt credentials and build connector
+        try:
+            secrets_backend = create_secrets_backend(fernet_key=settings.fernet_key, session=session)
+            raw_creds = await secrets_backend.get_secret(str(connector_instance.id))
+            creds: dict[str, Any] = json.loads(raw_creds)
+            connector = _build_polling_connector(
+                connector_instance.connector_type_id,
+                connector_instance.config_json,
+                creds,
+            )
+        except Exception as exc:
+            _log.warning("Failed to initialise connector for polling trigger %s: %s", trigger_id, exc)
+            await _log_poll_event(
+                session,
+                trigger=trigger,
+                org_id=org_id,
+                result="poll_error",
+                error_detail=f"Failed to initialise connector: {str(exc)[:200]}",
+            )
+            return {"status": "error", "reason": "connector_init_failed"}
+
+        # Run poll query
+        try:
+            query = ConnectorQuery(resource=poll_query)
+            query_result = await connector.query(query)
+        except Exception as exc:
+            _log.warning("Poll query failed for trigger %s: %s", trigger_id, exc)
+            await _log_poll_event(
+                session,
+                trigger=trigger,
+                org_id=org_id,
+                result="poll_error",
+                error_detail=f"Poll query failed: {str(exc)[:200]}",
+            )
+            return {"status": "error", "reason": "query_failed", "error": str(exc)}
+
+        # Evaluate condition
+        try:
+            condition_met = evaluate_condition(query_result, condition_expression)
+        except Exception as exc:
+            _log.warning("Condition evaluation failed for trigger %s: %s", trigger_id, exc)
+            await _log_poll_event(
+                session,
+                trigger=trigger,
+                org_id=org_id,
+                result="poll_error",
+                error_detail=f"Condition evaluation failed: {exc}",
+            )
+            return {"status": "error", "reason": "condition_eval_failed", "error": str(exc)}
+
+        if not condition_met:
+            # Log no_match — condition not satisfied this cycle
+            await _log_poll_event(
+                session,
+                trigger=trigger,
+                org_id=org_id,
+                result="no_match",
+            )
+            # Update next_fire_at even on no-match
+            await _update_next_fire(session, trigger)
+            return {"status": "no_match"}
+
+        # Snapshot ID from trigger config
+        config = trigger.config_json or {}
+        snapshot_id_str = config.get("snapshot_id")
+        if snapshot_id_str:
+            try:
+                snapshot_id = uuid.UUID(snapshot_id_str)
+            except (ValueError, TypeError):
+                snapshot_id = uuid.UUID(int=0)
+        else:
+            snapshot_id = uuid.UUID(int=0)
+
+        if snapshot_id == uuid.UUID(int=0):
+            _log.warning("Polling trigger %s has no valid snapshot_id in config", trigger_id)
+
+        # Build input payload from query result
+        input_payload: dict[str, Any] = {
+            "records": query_result.records,
+            "total": query_result.total,
+            "poll_query": poll_query,
+        }
+
+        # Create the run
+        run = await create_run(
+            session,
+            org_id=org_id,
+            pipeline_id=pipeline_id,
+            snapshot_id=snapshot_id,
+            trigger_type="polling",
+            trigger_id=trigger_id,
+            input_payload=input_payload,
+        )
+
+        # Log TriggerEvent — condition_met
+        event = await _log_poll_event(
+            session,
+            trigger=trigger,
+            org_id=org_id,
+            result="condition_met",
+            run_id=run.id,
+        )
+
+        # Update last_fired_at and next_fire_at
+        await _update_next_fire(session, trigger)
+
+        _log.info(
+            "Polling trigger %s fired → run %s (condition met)",
+            trigger_id,
+            run.id,
+        )
+
+        return {
+            "status": "fired",
+            "run_id": str(run.id),
+            "event_id": str(event.id),
+        }
 
 
 async def _update_next_fire(session: AsyncSession, trigger: Trigger) -> None:
@@ -520,57 +519,56 @@ class DatabasePollingScheduler(Scheduler):  # type: ignore[misc]
         try:
             factory = async_sessionmaker(_get_engine(), expire_on_commit=False)
 
-            async with factory() as session:
-                async with session.begin():
-                    now = datetime.datetime.now(datetime.UTC)
-                    result = await session.execute(
-                        select(
-                            Trigger.id,
-                            Trigger.organisation_id,
-                            Trigger.pipeline_id,
-                            Trigger.config_json,
-                            Trigger.next_fire_at,
-                        ).where(
-                            Trigger.trigger_type == "polling",
-                            Trigger.active == True,  # noqa: E712
-                            Trigger.next_fire_at <= now,
-                        )
+            async with factory() as session, session.begin():
+                now = datetime.datetime.now(datetime.UTC)
+                result = await session.execute(
+                    select(
+                        Trigger.id,
+                        Trigger.organisation_id,
+                        Trigger.pipeline_id,
+                        Trigger.config_json,
+                        Trigger.next_fire_at,
+                    ).where(
+                        Trigger.trigger_type == "polling",
+                        Trigger.active == True,  # noqa: E712
+                        Trigger.next_fire_at <= now,
                     )
-                    rows = result.all()
+                )
+                rows = result.all()
 
-                    triggers: list[dict[str, Any]] = []
-                    for row in rows:
-                        config = row.config_json or {}
-                        ci_id_str = config.get("connector_instance_id")
-                        try:
-                            connector_instance_id = uuid.UUID(ci_id_str) if ci_id_str else None
-                        except (ValueError, TypeError):
-                            connector_instance_id = None
-                        if connector_instance_id is None:
-                            _log.warning("Polling trigger %s has no connector_instance_id", row.id)
-                            event = TriggerEvent(
-                                organisation_id=row.organisation_id,
-                                trigger_id=row.id,
-                                trigger_type="polling",
-                                raw_payload_hash=hashlib.sha256(b"").hexdigest(),
-                                validation_result="poll_error",
-                                error_detail="Polling trigger missing connector_instance_id in config_json",
-                            )
-                            session.add(event)
-                            continue
-
-                        triggers.append(
-                            {
-                                "trigger_id": row.id,
-                                "org_id": row.organisation_id,
-                                "pipeline_id": row.pipeline_id,
-                                "connector_instance_id": connector_instance_id,
-                                "poll_query": config.get("poll_query", ""),
-                                "condition_expression": config.get("condition_expression"),
-                                "next_fire_at": row.next_fire_at,
-                            }
+                triggers: list[dict[str, Any]] = []
+                for row in rows:
+                    config = row.config_json or {}
+                    ci_id_str = config.get("connector_instance_id")
+                    try:
+                        connector_instance_id = uuid.UUID(ci_id_str) if ci_id_str else None
+                    except (ValueError, TypeError):
+                        connector_instance_id = None
+                    if connector_instance_id is None:
+                        _log.warning("Polling trigger %s has no connector_instance_id", row.id)
+                        event = TriggerEvent(
+                            organisation_id=row.organisation_id,
+                            trigger_id=row.id,
+                            trigger_type="polling",
+                            raw_payload_hash=hashlib.sha256(b"").hexdigest(),
+                            validation_result="poll_error",
+                            error_detail="Polling trigger missing connector_instance_id in config_json",
                         )
-                    return triggers
+                        session.add(event)
+                        continue
+
+                    triggers.append(
+                        {
+                            "trigger_id": row.id,
+                            "org_id": row.organisation_id,
+                            "pipeline_id": row.pipeline_id,
+                            "connector_instance_id": connector_instance_id,
+                            "poll_query": config.get("poll_query", ""),
+                            "condition_expression": config.get("condition_expression"),
+                            "next_fire_at": row.next_fire_at,
+                        }
+                    )
+                return triggers
         except Exception:
             _log.exception("Failed to fetch polling triggers from database")
             return []

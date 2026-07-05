@@ -17,8 +17,7 @@ logger = logging.getLogger(__name__)
 class CatchAllMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next: Any) -> Response:
         try:
-            response = await call_next(request)
-            return response  # type: ignore[no-any-return]
+            return await call_next(request)
         except Exception:
             rid = getattr(request.state, "request_id", None)
             logger.exception(
@@ -66,11 +65,10 @@ async def _ingest_unhandled_error(request: Request) -> None:
         }
 
         service = ErrorIngestionService()
-        async with factory() as session:
-            async with session.begin():
-                await set_rls_org(session, org_id)
-                if org_id is not None:
-                    await service.ingest(session, org_id, event_data)
+        async with factory() as session, session.begin():
+            await set_rls_org(session, org_id)
+            if org_id is not None:
+                await service.ingest(session, org_id, event_data)
     except Exception:
         logger.exception("middleware.error_ingest_failed")
 
