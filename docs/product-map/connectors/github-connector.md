@@ -32,7 +32,7 @@ Async GitHub REST API connector implementing `ConnectorBase`. Provides read/writ
 - [x] `health_check()` calls `GET /user` to validate token
 - [x] Return `HealthResult(ok=False)` with HTTP status and response body on non-200
 - [x] Return `HealthResult(ok=True)` with authenticated user login on success
-- [ ] Accept configurable API base URL for GHES (hard-coded to `api.github.com`)
+- [x] Accept configurable API base URL for GHES via `GitHubConnector(token, base_url=...)`
 
 ### OAuth Scopes — capability verification
 
@@ -44,20 +44,22 @@ Async GitHub REST API connector implementing `ConnectorBase`. Provides read/writ
 - [ ] Report missing scopes as individually named errors (e.g. `missing_scope:repo`) — health check mentions scope names in prose but no machine-parseable error codes
 - [ ] Block run start when scopes are insufficient (pre-run health check in ConnectorHub)
 
-### PR Operations — listing and commenting
+### PR Operations — listing, creating, commenting, and file inspection
 
 - [x] List pull requests via `query("pulls")` with `repo` and `state` filters
-- [x] Filter PRs by state (default `"open"`)
+- [x] Filter PRs by state (default `"open"`), sort, and direction
 - [x] Limit results via `q.limit`
 - [x] Raise `ValueError` for unsupported resources in `query()`
-- [ ] Post PR comment (BDD scenario exists in `github.feature` but no `write("pr_comment")` implementation)
-- [ ] **Create PR** — `Capability.CREATE_PR` declared in `base.py` but no `write("pr")` implementation in `GitHubConnector`
+- [x] Post review comment on a PR via `write("pr_comment")` with `repo`, `pull_number`, `body`
+- [x] **Create PR** — `write("pr")` with `repo`, `title`, `head`, `base`, optional `body`, `draft`, `maintainer_can_modify`
+- [x] **Update PR** — `write("pr_update")` with `repo`, `pull_number`, optional `title`, `body`, `state`, `base`
+- [x] List commits on a PR via `query("pr_commits")` with `repo` and `pull_number`
+- [x] List changed files on a PR via `query("pr_files")` with `repo` and `pull_number`
+- [x] `query("pulls")` supports pagination via Link header parsing — `next_cursor` is populated
 - [ ] Merge PR — no implementation
-- [ ] List PR files/changed files — not implemented
 - [ ] Get PR diff — not implemented
 - [ ] Request PR review — not implemented
 - [ ] Add PR labels — not implemented
-- [ ] `query("pulls")` does not support pagination cursor — `next_cursor` always `None`
 
 ### File Operations — read and write via Contents API
 
@@ -123,18 +125,72 @@ Async GitHub REST API connector implementing `ConnectorBase`. Provides read/writ
 - [x] Health check catches all exceptions returning `HealthResult(ok=False)` with truncated detail — tested
 - [x] Health check returns `HealthResult(ok=False)` with status detail on non-200 — tested
 
+## Resilience & Integration Robustness
+
+### Retry/Backoff
+
+- [x] Retry on HTTP 429 (rate limit) with exponential backoff — max 3 retries
+- [x] Retry on HTTP 502, 503, 504 (server errors) with exponential backoff — max 3 retries
+- [x] Retry on connection errors (`ConnectError`) with exponential backoff — max 3 retries
+- [x] Retry on timeout (`TimeoutException`) with exponential backoff — max 3 retries
+- [x] Respect `Retry-After` header when present for rate-limit retry delay
+- [x] Give up after max retries and raise the underlying error
+- [x] Base delay starts at 1s and doubles per attempt (1s, 2s, 4s), capped at 30s
+- [x] Retry is applied to all `_call_api` invocations — shared by both `query()` and `write()`
+- [ ] No circuit breaker — retries are unconditional up to max attempts
+- [ ] No `X-RateLimit-Remaining` header inspection before making requests
+- [ ] No rate-limit budget-aware scheduling
+
+### Pagination
+
+- [x] List endpoints (`repos`, `pulls`, `issues`, `issue_comments`, `issue_events`, `labels`, `milestones`, `assignees`, `timeline`) parse Link header for pagination
+- [x] `next_cursor` contains the full `next` URL from the Link header
+- [ ] Cursor is opaque (full URL) — no page-number extraction helper
+- [ ] No automatic pagination across pages — caller must follow `next_cursor`
+
+## Edge Cases
+
+### Missing/Invalid Inputs
+
+- [x] Missing `repo` filter raises `ValueError` with descriptive message — all resources
+- [x] Missing `path` filter raises `ValueError` for file operations — tested
+- [x] Missing `issue_number` raises `ValueError` for issue-specific operations — tested
+- [x] Missing `pull_number` raises `ValueError` for PR-specific operations — tested
+- [x] Missing `title` raises `ValueError` for issue/PR creation — tested
+- [x] Missing `head` or `base` raises `ValueError` for PR creation — tested
+- [x] Missing `body` raises `ValueError` for issue/PR comments — tested
+- [x] Missing `content` raises `ValueError` for file writes — tested
+- [x] Missing `name` raises `ValueError` for label creation — tested
+- [x] Unsupported resource string raises `ValueError` — tested for both query and write
+
+### HTTP Error Mapping
+
+- [x] HTTP 304 (Not Modified) raises `ValueError` with explanatory message
+- [x] HTTP 4xx errors raise `ValueError` with status code and truncated response body (200 chars)
+- [x] HTTP 5xx errors raise `ValueError` with status code — retried before raising
+- [x] Connection-level failures (`ConnectError`) raise `ValueError` — retried before raising
+- [x] Timeout failures raise `ValueError` — retried before raising
+- [x] JSON decode failures raise `ValueError` with "invalid JSON" message and truncated body (200 chars)
+
 ## Known Gaps
 
 - [ ] **No OAuth flow**: PAT-only auth; no OAuth 2.0 authorization code flow for user-context operations
-- [ ] **PR creation unimplemented**: `CREATE_PR` capability declared, but `write("pr")` resource handler missing
-- [ ] **PR commenting not wired**: BDD scenario exists but no `write("pr_comment")` in connector code
 - [ ] **Scope verification incomplete**: health check verifies `repo` and `read:org` classic PAT scopes; fine-grained PAT `pull_requests:write` not checked
 - [ ] **PRD vs code scope mismatch**: PRD §7.11 specifies fine-grained PAT scopes (`contents:read`, `contents:write`, `pull_requests:write`) but code uses classic PAT scopes (`repo`, `read:org`) — different scope systems
-- [ ] **No pagination**: `query("pulls")` and `query("repos")` don't return `next_cursor`
-- [ ] **No GHES support**: API base URL is hard-coded to `https://api.github.com`
-- [ ] **No rate-limit handling**: no 429 retry, no `X-RateLimit-Remaining` header inspection
-- [ ] **No retry on transient HTTP errors**: errors are now wrapped as ValueError but no retry/backoff logic exists for 5xx or 429
-- [ ] **Token expiry not distinguished from other errors**: errors are now wrapped as ValueError with status code/structure, but expired PAT, insufficient scopes, and network errors still lack distinct structured error types
+- [ ] **No rate-limit budget awareness**: retry/backoff exists for 429, but `X-RateLimit-Remaining` header is not inspected before making requests; no rate-limit budget-aware scheduling
+- [ ] **Token expiry not distinguished from other errors**: expired PAT, insufficient scopes, and network errors all raise `ValueError` — no distinct structured error types
 - [ ] **Fine-grained PAT not supported**: code requires classic PAT `repo` scope; fine-grained PAT with `contents:read`, `contents:write`, `pull_requests:write` would fail `REQUIRED_SCOPES` check
 - [ ] **`read:org` scope requirement unclear**: product map doesn't explain why `read:org` is required — may be unnecessary for most agent workflows
+- [ ] **Merge PR not implemented**: no `write("pr_merge")` resource handler
+- [ ] **Get PR diff not implemented**: no `query("pr_diff")` resource
+- [ ] **Request PR review not implemented**: no `write("pr_review_request")` resource
+- [ ] **Add PR labels not implemented**: no `write("pr_label")` or `query("pr_labels")` resource
+- [ ] **Search issues not implemented**: no `query("search_issues")` resource — would use GitHub Search API
+- [ ] **Assign issue not implemented**: no `write("issue_assign")` resource
+- [ ] **File content encoding**: caller must base64-encode file content; no encode/decode helper in connector
+- [ ] **Recursive file listing**: `GET /contents` only returns one level; no tree API integration
+- [ ] **Path traversal protection**: relies on GitHub API server-side; no local validation before sending request
+- [ ] **No machine-parseable error codes**: all errors raise `ValueError` with human-readable messages; no structured error type hierarchy
+- [ ] **No circuit breaker**: retries are unconditional up to max attempts; no circuit breaker pattern for sustained failures
+- [ ] **BDD coverage**: 8 scenarios exist covering basic CRUD + error paths; no BDD for PR operations, retry/backoff, pagination, or configurable base URL
 

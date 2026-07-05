@@ -81,7 +81,7 @@ async def test_query_issues_with_pagination(connector):
 
 @respx.mock
 async def test_query_issues_missing_repo(connector):
-    with pytest.raises(KeyError):
+    with pytest.raises(ValueError, match="requires 'repo' filter"):
         await connector.query(ConnectorQuery(resource="issues"))
 
 
@@ -528,7 +528,7 @@ async def test_unsupported_write_resource(connector):
 
 @respx.mock
 async def test_query_issues_missing_issue_number(connector):
-    with pytest.raises(KeyError):
+    with pytest.raises(ValueError, match="requires 'issue_number' filter"):
         await connector.query(
             ConnectorQuery(resource="issue", filters={"repo": "owner/repo"})
         )
@@ -536,7 +536,7 @@ async def test_query_issues_missing_issue_number(connector):
 
 @respx.mock
 async def test_query_issue_comments_missing_issue_number(connector):
-    with pytest.raises(KeyError):
+    with pytest.raises(ValueError, match="requires 'issue_number' filter"):
         await connector.query(
             ConnectorQuery(resource="issue_comments", filters={"repo": "owner/repo"})
         )
@@ -544,7 +544,7 @@ async def test_query_issue_comments_missing_issue_number(connector):
 
 @respx.mock
 async def test_write_issue_missing_title(connector):
-    with pytest.raises(KeyError):
+    with pytest.raises(ValueError, match="requires 'title' in data"):
         await connector.write(
             ConnectorPayload(
                 resource="issue",
@@ -555,7 +555,7 @@ async def test_write_issue_missing_title(connector):
 
 @respx.mock
 async def test_write_issue_comment_missing_body(connector):
-    with pytest.raises(KeyError):
+    with pytest.raises(ValueError, match="requires 'body' in data"):
         await connector.write(
             ConnectorPayload(
                 resource="issue_comment",
@@ -566,7 +566,7 @@ async def test_write_issue_comment_missing_body(connector):
 
 @respx.mock
 async def test_write_label_missing_name(connector):
-    with pytest.raises(KeyError):
+    with pytest.raises(ValueError, match="requires 'name' in data"):
         await connector.write(
             ConnectorPayload(
                 resource="label",
@@ -577,7 +577,7 @@ async def test_write_label_missing_name(connector):
 
 @respx.mock
 async def test_write_milestone_missing_title(connector):
-    with pytest.raises(KeyError):
+    with pytest.raises(ValueError, match="requires 'title' in data"):
         await connector.write(
             ConnectorPayload(
                 resource="milestone",
