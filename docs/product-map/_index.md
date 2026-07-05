@@ -113,7 +113,7 @@ status: covered | partial | gap    # auto-updated by graph-validate
 ### Infrastructure
 - [feat-infra-sse-event-bus](infra/sse-event-bus.md) => PRD 8.22
 
-### library
+### Library
 - [feat-library-schemas](library/library-schemas.md) => PRD 8.3
 - [feat-community-library](library/community-library.md) => PRD 15
 - [feat-library-auto-update](library/auto-update.md) => PRD 8.14
