@@ -375,16 +375,17 @@ class FeatureFlagRegistry:
         self._tier_rank = {t["tier_id"]: t["rank"] for t in db_tiers}
 
         db_flags = await list_feature_flags(session)
-        self._flags = [
-            FeatureFlag(
-                name=f["name"],
-                description=f["description"],
-                tier=f["tier_id"],
-                depends_on=f["depends_on"],
-            )
-            for f in db_flags
-            if f["is_active"]
-        ]
+        if db_flags:
+            self._flags = [
+                FeatureFlag(
+                    name=f["name"],
+                    description=f["description"],
+                    tier=f["tier_id"],
+                    depends_on=f["depends_on"],
+                )
+                for f in db_flags
+                if f["is_active"]
+            ]
         self._refresh()
 
     @classmethod
