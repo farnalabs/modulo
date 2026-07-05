@@ -88,11 +88,14 @@ Standalone schema inference page (`/schemas/infer`) and onboarding wizard steps 
 - [x] Empty resource type rejection (button disabled)
 - [x] Null description renders dash placeholder ("—")
 - [x] Empty fields array renders "No fields inferred"
+- [x] API error objects formatted via `formatApiError()` — no bare `${err}` in template literals (fixed Jul 2026)
+- [x] `.catch()` blocks use `formatApiError` for structured error display (fixed Jul 2026)
 
 ### i18n compliance
 
-- [ ] All user-facing strings use `$t()` or `t()` — **violation: ~20 hardcoded strings in SchemaInferenceView.vue, ~18 in OnboardingWizard.vue schema steps**
-- [ ] Template button text, labels, placeholders, table headers, and error hints are all hardcoded English
+- [ ] All user-facing strings use `$t()` or `t()` — **remaining violations: ~8 hardcoded strings in SchemaInferenceView.vue (PageTabs tab labels use `$t`, Source/Connector labels, table headers, buttons use `$t`; remaining are step titles/steps data array not yet migrated), ~14 in OnboardingWizard.vue schema steps (step titles, nav buttons, connector placeholder not yet migrated)**
+- [ ] Template button text, labels, placeholders, table headers now use `$t()` in both views (fixed Jul 2026)
+- [ ] Error messages use `formatApiError()` instead of bare `${err}` in both views (fixed Jul 2026)
 
 ### Missing — not yet implemented
 
@@ -112,5 +115,6 @@ Standalone schema inference page (`/schemas/infer`) and onboarding wizard steps 
 - **Frontend test is minimal:** `SchemaInferenceView.spec.ts` exists but only tests render and string containment — no interaction tests, no API mock coverage for inference/publish flows, no OnboardingWizard tests.
 - **No `abstract_name` integration:** PRD 8.16 step 4 requires browsing the community library filtered by inferred `abstract_name`. The inference service doesn't return `abstract_name`, and the frontend library filter dropdown doesn't support it.
 - **Sample cap mismatch:** PRD says 200 default sample records; code caps at 50 in prompt builder and 100 in API limit — no sample count displayed in UI.
-- **i18n violations:** ~38 hardcoded user-facing strings across SchemaInferenceView.vue and OnboardingWizard.vue (buttons, labels, table headers, placeholders, error messages). All should use `$t()`.
+- **i18n violations (partial fix Jul 2026):** ~22 hardcoded strings remain (step titles data array in OnboardingWizard.vue, PageTabs nav in SchemaInferenceView.vue step titles not migrated). All error messages now use `formatApiError()` instead of bare `${err}`. Template labels, table headers, buttons, and placeholders in both views now use `$t()`.
+- **formatApiError fix (Jul 2026):** All 8 bare `${err}` template literals in error messages across SchemaInferenceView.vue and OnboardingWizard.vue were replaced with `formatApiError(err)`. `openapi-fetch` returns error objects (not strings) on non-2xx — bare `${err}` renders `[object Object]` instead of the API's error detail.
 - **PRD gaps cascade:** Several PRD 8.16 requirements not yet implemented in the backend (rare-field flagging, enum detection, SandboxedEnvironment, data lifecycle enforcement) cascade to the UI — no UI can surface what the backend doesn't provide.
