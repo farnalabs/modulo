@@ -5,26 +5,8 @@ from datetime import UTC, datetime
 
 import pytest
 
-from modulo.core.pipeline_engine.executor import _graph_json_hash, _map_lg_event, _seed_state
+from modulo.core.pipeline_engine.executor import _map_lg_event, _seed_state
 from modulo.core.pipeline_engine.runaway_protection import RunawayGuard, RunawayRunError
-
-
-class TestGraphJsonHash:
-    def test_consistent_hash(self) -> None:
-        data = {"nodes": [{"id": "a"}], "edges": []}
-        h1 = _graph_json_hash(data)
-        h2 = _graph_json_hash(data)
-        assert h1 == h2
-
-    def test_different_input_different_hash(self) -> None:
-        a = _graph_json_hash({"nodes": [{"id": "a"}]})
-        b = _graph_json_hash({"nodes": [{"id": "b"}]})
-        assert a != b
-
-    def test_key_order_independence(self) -> None:
-        h1 = _graph_json_hash({"a": 1, "b": 2})
-        h2 = _graph_json_hash({"b": 2, "a": 1})
-        assert h1 == h2
 
 
 class TestMapLgEvent:
