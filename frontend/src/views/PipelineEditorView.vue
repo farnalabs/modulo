@@ -123,7 +123,7 @@
             class="inline-flex w-full items-center justify-center rounded-lg border border-input bg-background px-4 py-2 text-sm font-medium hover:bg-accent"
             @click="openRevertDialog"
           >
-            Revert to Manual
+            {{ $t('views.PipelineEditorView.revert_to_manual') }}
           </button>
         </div>
       </aside>
@@ -373,22 +373,22 @@
 
     <div v-if="showRevertDialog" class="fixed inset-0 z-50 flex items-center justify-center bg-black/50" @click.self="showRevertDialog = false">
       <div class="w-full max-w-lg rounded-lg border bg-card p-6 shadow-lg">
-        <h3 class="mb-4 text-lg font-semibold">Revert to Manual</h3>
+        <h3 class="mb-4 text-lg font-semibold">{{ $t('views.PipelineEditorView.revert_dialog_title') }}</h3>
         <div v-if="revertLoading" class="flex items-center justify-center py-8">
           <div class="h-6 w-6 animate-spin rounded-full border-4 border-primary border-t-transparent" />
         </div>
         <div v-else class="space-y-4">
           <p class="text-sm text-muted-foreground">
-            Select a snapshot that contains the manual configuration for this node.
+            {{ $t('views.PipelineEditorView.select_snapshot_description') }}
           </p>
           <div>
-            <label class="mb-1 block text-sm font-medium">Snapshot</label>
+            <label class="mb-1 block text-sm font-medium">{{ $t('views.PipelineEditorView.snapshot_label') }}</label>
             <select
               v-model="revertSnapshotId"
               data-testid="pipeline-editor-snapshot-select"
               class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm"
             >
-              <option value="">Select a snapshot...</option>
+              <option value="">{{ $t('views.PipelineEditorView.select_snapshot_placeholder') }}</option>
               <option
                 v-for="s in snapshots"
                 :key="s.id"
@@ -409,7 +409,7 @@
               class="rounded-lg border border-input bg-background px-4 py-2 text-sm hover:bg-accent"
               @click="showRevertDialog = false"
             >
-              Cancel
+              {{ $t('views.PipelineEditorView.cancel') }}
             </button>
             <button
               :disabled="!revertSnapshotId"
@@ -417,7 +417,7 @@
               class="rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
               @click="revertToManual"
             >
-              Revert
+              {{ $t('views.PipelineEditorView.revert') }}
             </button>
           </div>
         </div>

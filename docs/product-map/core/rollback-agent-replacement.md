@@ -72,14 +72,51 @@ Reverting an agent node back to a manual node, using a pipeline snapshot to rest
 - [ ] Can restore a previous pipeline snapshot to undo the revert entirely
 - [ ] After snapshot restore, pipeline matches state before agent was added
 
-## Known Gaps - BDD feature files (node_types.feature, manual_node.feature) are placeholders with no scenarios
-- No BDD step definitions exist for the revert-to-manual endpoint
-- Persona scenario `@goal-alice-rollback-step` is tagged @delivered but has no step definitions
+## Error Handling
+
+- [x] Route wraps DB operations in `try/except (IntegrityError, ProgrammingError, SQLAlchemyError)` returning 501
+- [x] `replace_pipeline_graph` called within the transaction scope so errors propagate to the route-level handler
+- [x] Frontend shows error message in a styled red alert box on failure
+- [x] Non-existent pipeline/node returns 404 with descriptive message
+- [x] Invalid node type (non-agent) returns 422 with specific detail ("Only agent nodes can be reverted to manual")
+- [x] Missing snapshot returns 404
+- [x] Snapshot without target node returns 422 with specific detail
+- [x] Non-manual snapshot node returns 422 with specific detail
+- [x] Snapshot node without output schema returns 422 with specific detail
+- [ ] Frontend error display reverts to `e instanceof Error ? e.message : String(e)` — does not use `formatApiError(err)` for structured error extraction (openapi-fetch returns objects, not strings)
+- [ ] Frontend uses hardcoded English error messages — no `$t()` wrapping for user-facing error strings
+
+## Resilience
+
+- [x] Transaction boundary protects atomicity — revert either fully commits or fully rolls back
+- [x] Row-level lock (`SELECT ... FOR UPDATE`) prevents concurrent modifications during revert
+- [x] RLS context established within the transaction before any DB operations
+- [x] Full graph replacement (`replace_pipeline_graph`) atomically swaps nodes + edges
+- [ ] No advisory lock for multi-worker contention on the same pipeline (same pattern as the replace endpoint)
+- [ ] No idempotency check — multiple reverts of the same node produce no error (no-op after first revert since `node_type` is already "manual")
+- [ ] Revert does not create a new snapshot of the reverted state — cannot undo a revert via snapshot rollback
+
+## Edge Cases
+
+- [x] Agent node with empty label falls back to snapshot node label or "Manual {id}"
+- [x] Snapshot `output_schema_id` may be a string or UUID — code handles both with `str()`
+- [x] Node `id` in snapshot may be UUID or string — `_find_node_in_list` handles both
+- [x] Pipeline with no graph_nodes_json or edges — treated as empty lists
+- [x] Reverting an already-manual node returns 422 (proper validation)
+- [ ] Multiple concurrent revert requests on the same node — no concurrency test
+- [ ] Large pipeline graph (1000+ nodes) — no performance testing
+- [ ] Snapshot with multiple manual nodes — only the target node is restored
+- [ ] Edge between reverted node and downstream nodes — preserved as-is, no validation of compatibility post-revert
+
+## Known Gaps
+- BDD feature files (node_types.feature, manual_node.feature) lack revert-to-manual scenarios
+- `test_revert_to_manual_steps.py` exists but tests a PATCH /graph endpoint, not the real revert-to-manual POST endpoint
+- Persona scenario `@goal-alice-rollback-step` is tagged @delivered but steps use mocked endpoints, not real revert-to-manual
 - No unit tests for the revert-to-manual API endpoint
 - No integration tests verifying snapshot-based restore of a reverted node
 - Frontend snapshot picker does not show snapshot creation date or diff preview
 - No visual diff between current agent config and selected snapshot's manual config
 - Revert confirmation has no "are you sure?" step before execution
-- Missing ProgrammingError catch (501 Not Implemented) — FIXED in this commit
-- Missing audit event after revert — FIXED in this commit
 - Revert-to-manual does not create a new snapshot (the code updates the graph in-place but does not create a PipelineSnapshot)
+- No i18n support for revert UI strings — all revert-related text is hardcoded English
+- Website docs: no page exists for rollback-agent-replacement feature
