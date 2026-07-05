@@ -88,7 +88,5 @@ COMPLEXITY_REVIEWER: dict[str, Any] = {
         "estimated_tokens",
         "complexity_reason",
     ],
-    "tags": ["context-setter", "canonical", "library", "complexity", "cost"],
-    "version": "1.0.0",
-    "author": "Modulo",
+    "tags": ["context-setter", "canonical", "complexity", "cost"],
 }
