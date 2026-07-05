@@ -69,12 +69,24 @@ async def get_user_settings(
 SUPPORTED_LOCALES = {"en-US"}
 
 
-@router.put("/me/settings")
+@router.put("/me/settings", response_model=SettingsResponse)
 async def update_user_settings(
-    req: SettingsUpdate,
+    req: SettingsUpdate | None = None,
     current_user: AuthenticatedPrincipal = Depends(get_current_user),
     session: AsyncSession = Depends(get_db_session),
 ) -> dict[str, Any]:
+    if req is None:
+        try:
+            async with session.begin():
+                account = await get_account_by_id(session, current_user.account_id)
+        except ProgrammingError:
+            raise HTTPException(
+                status_code=status.HTTP_501_NOT_IMPLEMENTED,
+                detail="Feature is not available. Run database migrations to enable it.",
+            ) from None
+        if account is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Account not found")
+        return account.preferences
     prefs = {}
     if req.theme is not None:
         prefs["theme"] = req.theme
