@@ -78,7 +78,7 @@ Model backends are a first-class resource, parallel to connector instances. Ever
 - [x] `ModelBackendBase` ABC defines: `invoke()`, `stream()`, `backend_id` property
 - [x] `backend_id` follows `"{vendor}/{model_id}"` format
 - [x] `id`, `name`, `display_name` fields on DB entity (`model_backends` table)
-- [x] `provider` enum with values `ai21 | anthropic | azure_openai | bedrock | cohere | deepseek | fireworks | gemini | grok | groq | jan | llamacpp | lm_studio | localai | mistral | ollama | openai | openrouter | perplexity | qwen | replicate | tgi | togetherai | vertexai | vllm | watsonx` — DB CheckConstraint + `ModelBackendProvider` enum (26 providers)
+- [x] `provider` enum with values `ai21 | anthropic | azure_openai | bedrock | cohere | deepseek | fireworks | gemini | grok | groq | jan | llamacpp | lm_studio | localai | mistral | ollama | openai | openrouter | perplexity | qwen | replicate | tgi | togetherai | vertexai | vllm | watsonx` — DB CheckConstraint + `ModelBackendProvider` enum (25 providers; `replicate` registered in enum but no backend implementation)
 - [x] `model_id` string field
 - [x] `default_params` JSON column (temperature, max_tokens, timeout)
 - [x] `cost_tracking` flag (`enabled`/`disabled` with CheckConstraint)
@@ -119,10 +119,10 @@ Model backends are a first-class resource, parallel to connector instances. Ever
 - [x] `VertexAIBackend`: wraps `ChatVertexAI`
 - [x] `VllmBackend`: wraps `ChatOpenAI`
 - [x] `WatsonXBackend`: wraps `WatsonxLLM`
-- [x] `ReplicateBackend`: wraps `ChatReplicate`
+- [ ] `ReplicateBackend`: wraps `ChatReplicate` — no backend implementation file exists; enum value registered in `ModelBackendProvider` but factory has no `replicate` case
 - [ ] `Custom` backend (user-provided endpoint) — not implemented
 - [ ] Provider-specific `invoke()` param forwarding (e.g. `max_tokens` to Anthropic) — not validated
-- [x] All 26 provider backends registered in `ModelBackendHub._build_backend()` factory
+- [ ] All 25 provider backends (missing `replicate`) registered in `ModelBackendHub._build_backend()` factory — `replicate` missing from factory; would fall through to plugin registry or raise `ValueError`
 
 ### Credential Management — encryption and rotation
 
@@ -216,8 +216,10 @@ Model backends are a first-class resource, parallel to connector instances. Ever
 - [ ] **No rate limiting on model backend API endpoints**: only general per-endpoint rate limits apply
 - [ ] **No multi-backend test coverage**: `fallback_backend_ids` stored on entity but no runtime fallback logic verified in tests
 - [ ] **BDD rate_limiting.feature out of place**: rate_limiting.feature lives in model_backends directory but tests general API rate limiting (runs, webhooks, MCP), not backend-specific rate limiting
+- [ ] **ReplicateBackend missing**: `ModelBackendProvider` enum includes `replicate` but no `replicate/__init__.py` backend file exists; `_build_backend()` factory has no `replicate` case — would fall through to plugin registry or raise `ValueError`
 
 ## QA History
 
 - 2026-07-03 (improve-architecture index 84): Cross-cutting QA pass 2. Fixed massively stale product map — marked 40+ behaviours [ ]→[x] across DB entity, Fernet encryption, CRUD API routes, PipelineSnapshot pinning, graph validator health checks, and BDD step definitions. Resolved 5 stale known gaps (DB entity, credential encryption, model_backend_pins_json, BDD steps, REST API). Added ReplicateBackend to provider list. Added 11 new known gaps (no health check on save, no deletion protection FK, no soft-delete, no cost tracking, no health API route, no credential rotation endpoint, no caching, no duplicate name constraint, no rate limiting, no multi-backend fallback test coverage, rate_limiting.feature out of place). Added 9 edge case [x] from error path audit (MODEL_BACKEND_NOT_FOUND/INACTIVE/UNHEALTHY, 404, 501, 401/403, credential encryption). Created website docs stub.
 - 2026-07-02 (improve-architecture index 53): Cross-cutting QA pass 1. Fixed frontmatter YAML (bdd/unit-tests/code paths). Added 22 missing provider backends. Added 5 BDD feature file refs. Marked health_check method and HealthResult dataclass as [x].
+- 2026-07-05 (qa-iterate prodmap model-backends): Corrected false claims: ReplicateBackend changed from `[x]` to `[ ]` (no backend implementation file exists; enum-only). "All 26 provider backends registered" changed from `[x]` to `[ ]` (only 25 built-in; `replicate` missing from `_build_backend()` factory). Updated provider count text from "26 providers" to "25 providers; replicate registered in enum but no backend implementation". Added ReplicateBackend missing to Known Gaps.
