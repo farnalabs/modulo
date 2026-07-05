@@ -45,6 +45,9 @@ class AutonomyLevel(enum.StrEnum):
         return cls.MANUAL_APPROVAL
 
 
+AUTONOMY_LEVEL_VALUES = [m.value for m in AutonomyLevel]
+
+
 def _try_autonomy(value: str | None, label: str) -> AutonomyLevel | None:
     if value is None:
         return None
@@ -74,6 +77,8 @@ def effective_autonomy_level(
         )
         if result is not None:
             return result
+    elif run_context is not None:
+        _log.warning("run_context is not a dict (got %s), ignoring", type(run_context).__name__)
     result = _try_autonomy(pipeline_default, "pipeline_default_autonomy_level")
     if result is not None:
         return result
@@ -93,12 +98,9 @@ def should_notify_on_complete(autonomy: AutonomyLevel) -> bool:
 def autonomy_change_payload(
     previous: str | None,
     current: str | None,
-) -> dict[str, Any]:
+) -> dict[str, str | None]:
     """Build a payload recording an autonomy level change."""
     return {
         "previous_level": previous,
         "new_level": current,
     }
-
-
-AUTONOMY_LEVEL_VALUES = [m.value for m in AutonomyLevel]
