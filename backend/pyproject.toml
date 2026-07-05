@@ -11,7 +11,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "modulo"
-version = "0.3.64"
+version = "0.3.65"
 description = "Governed orchestration for your agentic SDLC"
 license = "MIT"
 authors = [
@@ -113,6 +113,8 @@ dev = [
     "respx>=0.21.0",
     "testcontainers[postgres]>=4.5.0",
     "locust>=2.32.0",
+    "websocket-client>=1.8.0",
+    "requests>=2.31.0",
     "factory-boy>=3.3.0",
     "mypy>=1.10.0",
     "ruff>=0.4.0",
@@ -239,6 +241,8 @@ dev = [
     "semgrep>=1.70.0",
     "testcontainers[postgres]>=4.5.0",
     "locust>=2.32.0",
+    "websocket-client>=1.8.0",
+    "requests>=2.31.0",
     "types-jmespath>=1.1.0.20260508",
     "types-passlib>=1.7.7",
     "types-PyYAML>=6.0.12.20260518",

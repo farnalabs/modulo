@@ -8,11 +8,17 @@ and designed for Locust's gevent-based execution model.
 import logging
 import time
 from typing import Any
+from urllib.parse import quote
 
 _log = logging.getLogger(__name__)
 
 DEFAULT_BASE_URL = "http://localhost:8000/api/v1"
+DEFAULT_TIMEOUT = 30.0
 _TERMINAL_STATUSES = frozenset({"complete", "failed", "cancelled", "eval_failed"})
+
+
+def _auth_headers(token: str) -> dict[str, str]:
+    return {"Authorization": f"Bearer {token}"}
 
 
 def login(
@@ -22,7 +28,7 @@ def login(
     base_url: str = DEFAULT_BASE_URL,
 ) -> str:
     """Authenticate and return a Bearer access token."""
-    resp = client.post(f"{base_url}/auth/login", json={"email": email, "password": password})
+    resp = client.post(f"{base_url}/auth/login", json={"email": email, "password": password}, timeout=DEFAULT_TIMEOUT)
     resp.raise_for_status()
     return resp.json()["access_token"]
 
@@ -35,7 +41,7 @@ def create_pipeline(
     **kwargs: Any,
 ) -> dict[str, Any]:
     """Create a pipeline and return the full response dict."""
-    headers = {"Authorization": f"Bearer {token}"}
+    headers = _auth_headers(token)
     payload = {
         "name": name,
         "description": kwargs.get("description", ""),
@@ -46,7 +52,7 @@ def create_pipeline(
         "run_context_defaults": kwargs.get("run_context_defaults", {}),
         "default_autonomy_level": kwargs.get("default_autonomy_level", "manual_approval"),
     }
-    resp = client.post(f"{base_url}/pipelines", json=payload, headers=headers)
+    resp = client.post(f"{base_url}/pipelines", json=payload, headers=headers, timeout=DEFAULT_TIMEOUT)
     resp.raise_for_status()
     return resp.json()
 
@@ -59,11 +65,12 @@ def trigger_run(
     input_payload: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Trigger a pipeline run and return the run response (status 202)."""
-    headers = {"Authorization": f"Bearer {token}"}
+    headers = _auth_headers(token)
     resp = client.post(
         f"{base_url}/runs",
         json={"pipeline_id": pipeline_id, "input_payload": input_payload or {}},
         headers=headers,
+        timeout=DEFAULT_TIMEOUT,
     )
     resp.raise_for_status()
     return resp.json()
@@ -75,9 +82,9 @@ def get_run(
     run_id: str,
     base_url: str = DEFAULT_BASE_URL,
 ) -> dict[str, Any]:
-    """Poll run status."""
-    headers = {"Authorization": f"Bearer {token}"}
-    resp = client.get(f"{base_url}/runs/{run_id}", headers=headers)
+    """Fetch run status (single request, no polling)."""
+    headers = _auth_headers(token)
+    resp = client.get(f"{base_url}/runs/{run_id}", headers=headers, timeout=DEFAULT_TIMEOUT)
     resp.raise_for_status()
     return resp.json()
 
@@ -91,12 +98,17 @@ def wait_for_run(
     base_url: str = DEFAULT_BASE_URL,
 ) -> dict[str, Any]:
     """Poll a run until it reaches a terminal state or the timeout expires."""
+    if timeout <= 0:
+        raise ValueError(f"wait_for_run timeout must be positive, got {timeout}")
     deadline = time.time() + timeout
     while time.time() < deadline:
         run = get_run(client, token, run_id, base_url)
-        if run["status"] in _TERMINAL_STATUSES:
+        status = run.get("status")
+        if status is None:
+            _log.warning("Run %s response missing 'status' key: %s", run_id, run)
+        elif status in _TERMINAL_STATUSES:
             return run
-        time.sleep(poll_interval)
+        time.sleep(max(poll_interval, 0.1))
     raise TimeoutError(f"Run {run_id} did not reach terminal state within {timeout}s")
 
 
@@ -106,8 +118,8 @@ def get_ws_token(
     base_url: str = DEFAULT_BASE_URL,
 ) -> str:
     """Acquire a short-lived WebSocket token."""
-    headers = {"Authorization": f"Bearer {token}"}
-    resp = client.post(f"{base_url}/auth/ws-token", json={}, headers=headers)
+    headers = _auth_headers(token)
+    resp = client.post(f"{base_url}/auth/ws-token", json={}, headers=headers, timeout=DEFAULT_TIMEOUT)
     resp.raise_for_status()
     return resp.json()["ws_token"]
 
@@ -128,7 +140,8 @@ def build_ws_url(
     host_part = base_url.replace("http://", "").replace("https://", "")
     host_part = host_part.replace("/api/v1", "")
     host_part = host_part.rstrip("/")
-    return f"{scheme}://{host_part}/api/v1/runs/{run_id}/ws?token={ws_token}&since_event_seq={since_event_seq}"
+    qs = quote(ws_token, safe="")
+    return f"{scheme}://{host_part}/api/v1/runs/{run_id}/ws?token={qs}&since_event_seq={since_event_seq}"
 
 
 def get_pending_hitl(
@@ -138,10 +151,35 @@ def get_pending_hitl(
     base_url: str = DEFAULT_BASE_URL,
 ) -> list[dict[str, Any]]:
     """List all pending (undecided) HITL gates for a run."""
-    headers = {"Authorization": f"Bearer {token}"}
-    resp = client.get(f"{base_url}/runs/{run_id}/hitl/pending", headers=headers)
+    headers = _auth_headers(token)
+    resp = client.get(f"{base_url}/runs/{run_id}/hitl/pending", headers=headers, timeout=DEFAULT_TIMEOUT)
     resp.raise_for_status()
     return resp.json()["gates"]
+
+
+def _hitl_action(
+    client: Any,
+    token: str,
+    run_id: str,
+    gate_id: str,
+    claim_token: str,
+    action: str,
+    base_url: str = DEFAULT_BASE_URL,
+    extra_payload: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Shared helper for HITL approve/reject actions."""
+    headers = _auth_headers(token)
+    payload: dict[str, Any] = {"claim_token": claim_token}
+    if extra_payload:
+        payload.update(extra_payload)
+    resp = client.post(
+        f"{base_url}/runs/{run_id}/hitl/{gate_id}/{action}",
+        json=payload,
+        headers=headers,
+        timeout=DEFAULT_TIMEOUT,
+    )
+    resp.raise_for_status()
+    return resp.json()
 
 
 def claim_hitl(
@@ -152,11 +190,12 @@ def claim_hitl(
     base_url: str = DEFAULT_BASE_URL,
 ) -> str:
     """Claim a HITL gate and return the claim token."""
-    headers = {"Authorization": f"Bearer {token}"}
+    headers = _auth_headers(token)
     resp = client.post(
         f"{base_url}/runs/{run_id}/hitl/{gate_id}/claim",
         json={"expiry_minutes": 15},
         headers=headers,
+        timeout=DEFAULT_TIMEOUT,
     )
     resp.raise_for_status()
     return resp.json()["claim_token"]
@@ -171,13 +210,7 @@ def approve_hitl(
     base_url: str = DEFAULT_BASE_URL,
 ) -> None:
     """Approve an interrupted HITL gate and resume the run."""
-    headers = {"Authorization": f"Bearer {token}"}
-    resp = client.post(
-        f"{base_url}/runs/{run_id}/hitl/{gate_id}/approve",
-        json={"claim_token": claim_token},
-        headers=headers,
-    )
-    resp.raise_for_status()
+    _hitl_action(client, token, run_id, gate_id, claim_token, "approve", base_url=base_url)
 
 
 def reject_hitl(
@@ -189,10 +222,8 @@ def reject_hitl(
     base_url: str = DEFAULT_BASE_URL,
 ) -> None:
     """Reject an interrupted HITL gate."""
-    headers = {"Authorization": f"Bearer {token}"}
-    resp = client.post(
-        f"{base_url}/runs/{run_id}/hitl/{gate_id}/reject",
-        json={"claim_token": claim_token, "reason": "Automated load test rejection"},
-        headers=headers,
+    _hitl_action(
+        client, token, run_id, gate_id, claim_token, "reject",
+        base_url=base_url,
+        extra_payload={"reason": "Automated load test rejection"},
     )
-    resp.raise_for_status()
