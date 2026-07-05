@@ -12,6 +12,7 @@ import pytest
 from modulo.core.mcp.scope_validator import (
     TOOL_SCOPE_REQUIREMENTS,
     MCPAuthorizationError,
+    MCPConfigurationError,
     check_tool_scope,
 )
 
@@ -66,6 +67,60 @@ class TestCheckToolScope:
         with pytest.raises(MCPAuthorizationError) as excinfo:
             check_tool_scope("superadmin", "trigger_pipeline")
         assert "Unknown role" in str(excinfo.value)
+
+    def test_empty_tool_name_raises(self) -> None:
+        with pytest.raises(MCPAuthorizationError) as excinfo:
+            check_tool_scope("admin", "")
+        assert "empty or whitespace-only" in str(excinfo.value)
+
+    def test_whitespace_tool_name_raises(self) -> None:
+        with pytest.raises(MCPAuthorizationError) as excinfo:
+            check_tool_scope("admin", "   ")
+        assert "empty or whitespace-only" in str(excinfo.value)
+
+    def test_empty_action_raises(self) -> None:
+        with pytest.raises(MCPAuthorizationError) as excinfo:
+            check_tool_scope("admin", "review_hitl", action="")
+        assert "empty or whitespace-only" in str(excinfo.value)
+
+    def test_whitespace_action_raises(self) -> None:
+        with pytest.raises(MCPAuthorizationError) as excinfo:
+            check_tool_scope("admin", "review_hitl", action="   ")
+        assert "empty or whitespace-only" in str(excinfo.value)
+
+    def test_unknown_action_for_tool_raises(self) -> None:
+        with pytest.raises(MCPAuthorizationError) as excinfo:
+            check_tool_scope("admin", "trigger_pipeline", action="approve")
+        assert "Unknown action" in str(excinfo.value)
+        assert "trigger_pipeline" in str(excinfo.value)
+
+    def test_case_insensitive_tool_name(self) -> None:
+        check_tool_scope("runner", "TRIGGER_PIPELINE")
+        check_tool_scope("runner", "Trigger_Pipeline")
+
+    def test_case_insensitive_action(self) -> None:
+        check_tool_scope("runner", "review_hitl", action="CLAIM")
+        check_tool_scope("operator", "review_hitl", action="Approve")
+
+    def test_non_string_tool_name_raises(self) -> None:
+        with pytest.raises(MCPAuthorizationError) as excinfo:
+            check_tool_scope("admin", 123)  # type: ignore[arg-type]
+        assert "must be a string" in str(excinfo.value)
+
+    def test_non_string_action_raises(self) -> None:
+        with pytest.raises(MCPAuthorizationError) as excinfo:
+            check_tool_scope("admin", "review_hitl", action=456)  # type: ignore[arg-type]
+        assert "must be a string" in str(excinfo.value)
+
+    def test_empty_string_role_passes_lookup_then_raises_unknown(self) -> None:
+        with pytest.raises(MCPAuthorizationError) as excinfo:
+            check_tool_scope("", "trigger_pipeline")
+        assert "Unknown role" in str(excinfo.value)
+
+    def test_none_type_tool_name_raises(self) -> None:
+        with pytest.raises(MCPAuthorizationError) as excinfo:
+            check_tool_scope("admin", None)  # type: ignore[arg-type]
+        assert "must be a string" in str(excinfo.value)
 
 
 class TestReviewHitlActionScopes:
@@ -125,6 +180,7 @@ class TestConstants:
             "get_trigger_events",
             "create_pipeline",
             "update_pipeline_graph",
+            "create_model_backend",
         }
         assert set(TOOL_SCOPE_REQUIREMENTS) == expected_tools
 
@@ -132,6 +188,21 @@ class TestConstants:
         valid_roles = {"viewer", "runner", "operator", "admin"}
         for tool, role in TOOL_SCOPE_REQUIREMENTS.items():
             assert role in valid_roles, f"{tool} has invalid role '{role}'"
+
+    def test_unregistered_tool_returns_none(self) -> None:
+        result = check_tool_scope("viewer", "some_unknown_tool")
+        assert result is None
+
+    def test_mcp_configuration_error_is_exception(self) -> None:
+        assert issubclass(MCPConfigurationError, Exception)
+
+    def test_tool_scope_requirements_immutable_keys(self) -> None:
+        # Ensure TOOL_SCOPE_REQUIREMENTS contains all expected tool keys
+        assert "trigger_pipeline" in TOOL_SCOPE_REQUIREMENTS
+        assert "create_model_backend" in TOOL_SCOPE_REQUIREMENTS
+
+_FAKE_ID = "00000000-0000-0000-0000-000000000001"
+
 
 class TestToolHandlerScopeErrorFormat:
     """Tool handlers return ``insufficient_scope`` error when scope check fails."""
@@ -144,60 +215,24 @@ class TestToolHandlerScopeErrorFormat:
         with patch("modulo.api.mcp_server.validate_current_auth", return_value=True):
             yield
 
-    async def test_trigger_pipeline_insufficient_scope(self) -> None:
-        from modulo.api.mcp_server import _ctx_role as _role
-        from modulo.api.mcp_server import trigger_pipeline as _tp
-
-        _role.set(None)
-        result = await _tp(pipeline_id="00000000-0000-0000-0000-000000000001")
-        assert result == {
-            "error": "insufficient_scope",
-            "detail": "No authentication context: role not set",
-        }
-
-    async def test_cancel_run_insufficient_scope(self) -> None:
-        from modulo.api.mcp_server import _ctx_role as _role
-        from modulo.api.mcp_server import cancel_run as _cr
-
-        _role.set(None)
-        result = await _cr(run_id="00000000-0000-0000-0000-000000000001")
-        assert result == {
-            "error": "insufficient_scope",
-            "detail": "No authentication context: role not set",
-        }
-
-    async def test_list_pending_hitl_insufficient_scope(self) -> None:
-        from modulo.api.mcp_server import _ctx_role as _role
-        from modulo.api.mcp_server import list_pending_hitl as _lph
-
-        _role.set(None)
-        result = await _lph()
-        assert result == {
-            "error": "insufficient_scope",
-            "detail": "No authentication context: role not set",
-        }
-
-    async def test_copy_library_primitive_insufficient_scope(self) -> None:
-        from modulo.api.mcp_server import _ctx_role as _role
-        from modulo.api.mcp_server import copy_library_primitive as _clp
-
-        _role.set(None)
-        result = await _clp(primitive_id="00000000-0000-0000-0000-000000000001")
-        assert result == {
-            "error": "insufficient_scope",
-            "detail": "No authentication context: role not set",
-        }
-
-    async def test_review_hitl_insufficient_scope(self) -> None:
-        from modulo.api.mcp_server import _ctx_role as _role
-        from modulo.api.mcp_server import review_hitl as _rh
-
-        _role.set(None)
-        result = await _rh(
-            run_id="00000000-0000-0000-0000-000000000001",
-            gate_id="gate-1",
-            action="claim",
-        )
+    @pytest.mark.parametrize(
+        ("handler_name", "kwargs"),
+        [
+            ("trigger_pipeline", {"pipeline_id": _FAKE_ID}),
+            ("cancel_run", {"run_id": _FAKE_ID}),
+            ("list_pending_hitl", {}),
+            ("copy_library_primitive", {"primitive_id": _FAKE_ID}),
+            ("review_hitl", {"run_id": _FAKE_ID, "gate_id": "gate-1", "action": "claim"}),
+        ],
+    )
+    async def test_insufficient_scope_when_role_none(
+        self, handler_name: str, kwargs: dict[str, str],
+    ) -> None:
+        import importlib
+        mcp = importlib.import_module("modulo.api.mcp_server")
+        handler = getattr(mcp, handler_name)
+        mcp._ctx_role.set(None)
+        result = await handler(**kwargs)
         assert result == {
             "error": "insufficient_scope",
             "detail": "No authentication context: role not set",
@@ -209,10 +244,7 @@ class TestToolHandlerScopeErrorFormat:
 
         _role.set("viewer")
         result = await _rh(
-            run_id="00000000-0000-0000-0000-000000000001",
-            gate_id="gate-1",
-            action="approve",
-            claim_token="tok",
+            run_id=_FAKE_ID, gate_id="gate-1", action="approve", claim_token="tok",
         )
         assert result["error"] == "insufficient_scope"
         assert "requires 'operator' role, got 'viewer'" in result["detail"]
@@ -223,10 +255,7 @@ class TestToolHandlerScopeErrorFormat:
 
         _role.set("runner")
         result = await _rh(
-            run_id="00000000-0000-0000-0000-000000000001",
-            gate_id="gate-1",
-            action="approve",
-            claim_token="tok",
+            run_id=_FAKE_ID, gate_id="gate-1", action="approve", claim_token="tok",
         )
         assert result["error"] == "insufficient_scope"
         assert "requires 'operator' role, got 'runner'" in result["detail"]
@@ -239,9 +268,7 @@ class TestToolHandlerScopeErrorFormat:
         with patch("modulo.api.mcp_server._session") as mock_session:
             mock_session.return_value.__aenter__.return_value = AsyncMock()
             result = await _rh(
-                run_id="00000000-0000-0000-0000-000000000001",
-                gate_id="gate-1",
-                action="claim",
+                run_id=_FAKE_ID, gate_id="gate-1", action="claim",
             )
             assert result["error"] != "insufficient_scope"
 
@@ -260,5 +287,5 @@ class TestToolHandlerScopeErrorFormat:
 
         _role.set(None)
         with patch("modulo.api.mcp_server._session"):
-            result = await _grs(run_id="00000000-0000-0000-0000-000000000001")
+            result = await _grs(run_id=_FAKE_ID)
         assert "insufficient_scope" not in result
