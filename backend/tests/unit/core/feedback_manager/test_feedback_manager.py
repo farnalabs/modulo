@@ -7,6 +7,7 @@ import pytest
 
 from modulo.core.feedback_manager import (
     FeedbackManager,
+    FeedbackManagerError,
     FeedbackRecordNotFoundError,
     InvalidTransitionError,
 )
@@ -245,10 +246,11 @@ class TestUpdateStatus:
         updated = MagicMock(spec=FeedbackRecord)
         updated.id = sample_record.id
         updated.feedback_status = "routing"
-        mock_session.get = AsyncMock(return_value=sample_record)
-        mock_result = MagicMock()
-        mock_result.scalar_one_or_none.return_value = updated
-        mock_session.execute = AsyncMock(return_value=mock_result)
+        fetch_result = MagicMock()
+        fetch_result.scalar_one_or_none.return_value = sample_record
+        update_result = MagicMock()
+        update_result.scalar_one_or_none.return_value = updated
+        mock_session.execute = AsyncMock(side_effect=[fetch_result, update_result])
 
         record = await mgr.update_status(sample_record.id, "routing")
         assert record is not None
@@ -257,13 +259,17 @@ class TestUpdateStatus:
     async def test_rejects_invalid_transition(
         self, mock_session: AsyncMock, mgr: FeedbackManager, sample_record: FeedbackRecord
     ) -> None:
-        mock_session.get = AsyncMock(return_value=sample_record)
+        fetch_result = MagicMock()
+        fetch_result.scalar_one_or_none.return_value = sample_record
+        mock_session.execute = AsyncMock(return_value=fetch_result)
 
         with pytest.raises(InvalidTransitionError, match="Cannot transition"):
             await mgr.update_status(sample_record.id, "nonexistent")
 
     async def test_raises_when_not_found(self, mock_session: AsyncMock, mgr: FeedbackManager) -> None:
-        mock_session.get = AsyncMock(return_value=None)
+        fetch_result = MagicMock()
+        fetch_result.scalar_one_or_none.return_value = None
+        mock_session.execute = AsyncMock(return_value=fetch_result)
 
         with pytest.raises(FeedbackRecordNotFoundError, match="not found"):
             await mgr.update_status(uuid.uuid4(), "routing")
@@ -278,10 +284,11 @@ class TestLinkCorrectionRun:
         updated.id = sample_record.id
         updated.correction_run_id = correction_id
         updated.feedback_status = "correcting"
-        mock_session.get = AsyncMock(return_value=sample_record)
-        mock_result = MagicMock()
-        mock_result.scalar_one_or_none.return_value = updated
-        mock_session.execute = AsyncMock(return_value=mock_result)
+        fetch_result = MagicMock()
+        fetch_result.scalar_one_or_none.return_value = sample_record
+        update_result = MagicMock()
+        update_result.scalar_one_or_none.return_value = updated
+        mock_session.execute = AsyncMock(side_effect=[fetch_result, update_result])
 
         record = await mgr.link_correction_run(sample_record.id, correction_id)
         assert record is not None
@@ -290,13 +297,13 @@ class TestLinkCorrectionRun:
 
 
 class TestDetectEvalGap:
-    async def test_returns_false_when_no_evals(
+    async def test_returns_true_when_no_evals(
         self, mock_session: AsyncMock, mgr: FeedbackManager, sample_record: FeedbackRecord
     ) -> None:
         mock_session.execute = AsyncMock()
 
         is_gap = await mgr.detect_eval_gap(sample_record, eval_suite=[])
-        assert is_gap is False
+        assert is_gap is True
 
 
 class TestSpawnCorrectionRun:
@@ -396,7 +403,7 @@ class TestSpawnCorrectionRun:
             patch.object(mgr, "get_feedback_record", return_value=sample_record),
             patch("modulo.core.feedback_manager.get_run", return_value=None),
         ):
-            with pytest.raises(FeedbackRecordNotFoundError, match=r"Original run .* not found"):
+            with pytest.raises(FeedbackManagerError, match=r"Original run .* not found"):
                 await mgr.spawn_correction_run(sample_record.id)
 
     async def test_copies_input_payload(
