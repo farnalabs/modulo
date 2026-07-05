@@ -358,21 +358,28 @@ class GraphValidator:
     # Schema compatibility
     # ------------------------------------------------------------------
 
-    def _check_schema_compatibility(
-        self,
-        graph_json: dict[str, Any],
+    @staticmethod
+    def _build_schema_pins_map(
         schema_pins: list[dict[str, Any]],
-        result: ValidationResult,
-    ) -> None:
-        # node_id -> direction -> schema_id
-        schemas: dict[str, dict[str, str]] = {}
+    ) -> dict[str, dict[str, str]]:
+        """Build node_id -> direction -> schema_id from schema pin list."""
+        pins: dict[str, dict[str, str]] = {}
         for pin in schema_pins:
             nid = str(pin.get("node_id", "?"))
             direction = pin.get("direction", "?")
             schema_id = pin.get("schema_id")
             if schema_id is None:
                 continue
-            schemas.setdefault(nid, {})[direction] = str(schema_id)
+            pins.setdefault(nid, {})[direction] = str(schema_id)
+        return pins
+
+    def _check_schema_compatibility(
+        self,
+        graph_json: dict[str, Any],
+        schema_pins: list[dict[str, Any]],
+        result: ValidationResult,
+    ) -> None:
+        schemas = self._build_schema_pins_map(schema_pins)
 
         for edge in graph_json.get("edges", []):
             if edge.get("type") in _SKIPPED_EDGE_TYPES:
@@ -399,15 +406,7 @@ class GraphValidator:
         result: ValidationResult,
     ) -> None:
         """Field-level schema: output fields must exist in input with compatible types."""
-        # node_id -> direction -> schema_id
-        pins: dict[str, dict[str, str]] = {}
-        for pin in schema_pins:
-            nid = str(pin.get("node_id", "?"))
-            direction = pin.get("direction", "?")
-            schema_id = pin.get("schema_id")
-            if schema_id is None:
-                continue
-            pins.setdefault(nid, {})[direction] = str(schema_id)
+        pins = self._build_schema_pins_map(schema_pins)
 
         all_schema_ids: set[str] = set()
         for mapping in pins.values():
@@ -774,18 +773,20 @@ class GraphValidator:
             return
 
         composite_refs: set[uuid.UUID] = set()
+        node_ref_map: dict[str, uuid.UUID] = {}
         for node in composite_nodes:
             raw = node.get("composite_ref")
+            nid = str(node.get("id", "?"))
             if raw is not None:
                 parsed = try_parse_uuid(raw)
                 if parsed is not None:
                     composite_refs.add(parsed)
+                    node_ref_map[nid] = parsed
                 else:
-                    node_id = str(node.get("id", "?"))
                     result.error(
                         "COMPOSITE_INVALID_REF",
-                        f"Node '{node_id}': composite_ref is not a valid UUID",
-                        node_id=node_id,
+                        f"Node '{nid}': composite_ref is not a valid UUID",
+                        node_id=nid,
                     )
 
         if not composite_refs:
@@ -804,9 +805,8 @@ class GraphValidator:
             if raw is None:
                 continue
 
-            try:
-                ref = uuid.UUID(str(raw))
-            except (ValueError, TypeError):
+            ref = node_ref_map.get(node_id)
+            if ref is None:
                 continue
 
             template = found.get(ref)
