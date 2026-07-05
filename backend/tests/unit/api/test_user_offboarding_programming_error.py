@@ -1,4 +1,4 @@
-"""Unit tests: ProgrammingError on user offboarding routes returns 501."""
+"""Unit tests for user offboarding routes — error handling and validation."""
 import uuid
 from collections.abc import AsyncGenerator, Generator
 from unittest.mock import AsyncMock, MagicMock
@@ -77,3 +77,11 @@ class TestAdminUserDeactivateProgrammingError:
         resp = client_admin.post(f"{self.URL}/{target_id}/reactivate")
         assert resp.status_code == 501
         assert "migrations" in resp.text.lower()
+
+    def test_deactivate_malformed_uuid_returns_422(self, client_admin: TestClient) -> None:
+        resp = client_admin.post(f"{self.URL}/not-a-uuid/deactivate")
+        assert resp.status_code == 422
+
+    def test_reactivate_malformed_uuid_returns_422(self, client_admin: TestClient) -> None:
+        resp = client_admin.post(f"{self.URL}/not-a-uuid/reactivate")
+        assert resp.status_code == 422
