@@ -285,6 +285,7 @@ export const useRemyStore = defineStore('remy', () => {
       : `Tool: ${tc.tool_name} — failed: ${tc.error ?? 'unknown error'}`
     messages.value.push(createMessage('tool_result', summary, {
       session_id: activeSessionId.value ?? '',
+      tool_results_json: { ...tc },
     }))
   }
 
