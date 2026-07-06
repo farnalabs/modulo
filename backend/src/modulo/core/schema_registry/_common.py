@@ -15,6 +15,15 @@ _log = logging.getLogger(__name__)
 _FENCE_RE = re.compile(r"```(?:\w+)?\s*\n(.*?)\n```", re.DOTALL)
 
 
+def _safe_json_dumps(data: Any, indent: int = 2) -> str:
+    try:
+        return json.dumps(data, indent=indent, default=str)
+    except (ValueError, TypeError) as exc:
+        raise ValueError(
+            f"Data contains non-serializable values (e.g. circular references): {exc}"
+        ) from exc
+
+
 def parse_schema_from_response(response_text: str) -> dict[str, Any]:
     text = response_text.strip()
     m = _FENCE_RE.search(text)
@@ -23,9 +32,9 @@ def parse_schema_from_response(response_text: str) -> dict[str, Any]:
     schema = json.loads(text)
     if not isinstance(schema, dict):
         raise ValueError("LLM response is not a JSON object")
-    schema.setdefault("type", "object")
-    schema.setdefault("properties", {})
-    return schema
+    result: dict[str, Any] = {"type": "object", "properties": {}}
+    result.update(schema)
+    return result
 
 
 async def invoke_and_parse(
@@ -51,7 +60,7 @@ async def invoke_and_parse(
             _log.exception("LLM call failed during schema %s (attempt %d/%d)", context, attempt, _max_retries)
             if attempt == _max_retries:
                 raise error_cls("LLM call failed") from exc
-            await asyncio.sleep(1 * attempt)
+            await asyncio.sleep(2 ** attempt)
             continue
 
         try:

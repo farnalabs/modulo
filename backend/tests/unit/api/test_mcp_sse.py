@@ -414,7 +414,20 @@ class TestMcpAuthMiddlewareContext:
         mock_cm.__aenter__ = AsyncMock(return_value=AsyncMock())
         mock_cm.__aexit__ = AsyncMock(return_value=False)
         mock_session.return_value = mock_cm
-        mock_get_factory.return_value = MagicMock()
+        mock_result = MagicMock()
+        mock_result.scalar_one_or_none = MagicMock()
+        mock_result.scalar_one_or_none.return_value = MagicMock()
+        mock_result.scalar_one_or_none.return_value.hashed_secret = "s" * 64
+        mock_sess = MagicMock()
+        mock_sess.begin = MagicMock()
+        mock_sess.begin.return_value.__aenter__ = AsyncMock(return_value=None)
+        mock_sess.begin.return_value.__aexit__ = AsyncMock(return_value=False)
+        mock_sess.execute = AsyncMock(return_value=mock_result)
+        factory_mock = MagicMock()
+        factory_mock.return_value = session_cm = AsyncMock()
+        session_cm.__aenter__ = AsyncMock(return_value=mock_sess)
+        session_cm.__aexit__ = AsyncMock(return_value=False)
+        mock_get_factory.return_value = factory_mock
 
         _reset_ctx()
 

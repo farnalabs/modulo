@@ -19,7 +19,7 @@ class SchemaValidationResult:
 
 
 _MAX_RECURSION_DEPTH = 50
-_VALID_ITEM_KEYWORDS = {"oneOf", "anyOf", "allOf", "not", "if", "then", "else", "$ref"}
+_VALID_ITEM_KEYWORDS = {"oneOf", "anyOf", "allOf", "not", "if", "then", "else", "$ref", "enum", "const"}
 _VALID_ITEM_KEYWORDS_TUPLE = ("type", *tuple(_VALID_ITEM_KEYWORDS))
 
 

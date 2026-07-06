@@ -182,7 +182,7 @@ def test_create_pipeline_from_template_returns_201(client: TestClient) -> None:
     # Verify create_pipeline was called with correct args
     call_kwargs = create_mock.await_args.kwargs
     assert call_kwargs["org_id"] == _ORG_ID
-    assert call_kwargs["created_by"] == _USER_ID
+    assert call_kwargs["account_id"] == _USER_ID
     assert call_kwargs["name"] == "PR Review Pipeline"
     assert call_kwargs["description"] == "My custom PR pipeline"
     assert call_kwargs["run_context_defaults"]["library_source_id"] == str(primitive_id)

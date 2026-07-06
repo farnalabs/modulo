@@ -1,12 +1,11 @@
 """Schema inference service - uses an LLM to infer JSON Schema from sample data."""
 
-import json
 import logging
 from typing import Any
 
 from langchain_core.messages import BaseMessage, HumanMessage, SystemMessage
 
-from modulo.core.schema_registry._common import invoke_and_parse
+from modulo.core.schema_registry._common import _safe_json_dumps, invoke_and_parse
 from modulo.model_backends.base import ModelBackendBase
 
 _log = logging.getLogger(__name__)
@@ -36,12 +35,7 @@ def _build_infer_prompt(
     max_records: int = _MAX_SAMPLE_RECORDS,
 ) -> list[BaseMessage]:
     display = samples[:max_records]
-    try:
-        sample_text = json.dumps(display, indent=2, default=str)
-    except (ValueError, TypeError) as exc:
-        raise ValueError(
-            f"Sample data contains non-serializable values (e.g. circular references): {exc}"
-        ) from exc
+    sample_text = _safe_json_dumps(display)
     message_text = (
         f"Sample data ({len(display)} records):\n```\n{sample_text}\n```\nReturn ONLY the JSON Schema object."
     )
