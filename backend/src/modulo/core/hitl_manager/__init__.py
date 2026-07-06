@@ -48,7 +48,7 @@ _log = logging.getLogger(__name__)
 # Public API
 # ---------------------------------------------------------------------------
 
-__all__: list[str] = [
+__all__: tuple[str, ...] = (
     "AlreadyClaimedError",
     "ClaimTokenExpiredError",
     "ClaimTokenInvalidError",
@@ -58,7 +58,7 @@ __all__: list[str] = [
     "HITLError",
     "HITLManager",
     "NotTeamMemberError",
-]
+)
 
 # ---------------------------------------------------------------------------
 # Exceptions
@@ -169,9 +169,9 @@ class HITLManager:
         )
         session.add(gate)
         try:
-            await session.flush()
+            async with session.begin_nested():
+                await session.flush()
         except IntegrityError:
-            await session.rollback()
             existing = await self._get(session, run_id=run_id, gate_id=gate_id, org_id=org_id)
             if existing is None:
                 raise RuntimeError(f"Concurrent gate creation lost race for run={run_id} gate={gate_id}")
