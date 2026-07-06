@@ -91,8 +91,12 @@ Schema Inference (8.16) samples records from a connected tool and uses an LLM to
 - [ ] `POST /api/v1/schemas/validate` — no DB access, no catch needed
 - [ ] `POST /api/v1/schemas/import` — no DB access yet, no catch needed
 - [ ] `POST /api/v1/schemas/migrate/plan` — no DB access, no catch needed
-- [x] `POST /api/v1/schemas/infer` (line 494) — caught, returns 501
-- [x] `POST /api/v1/schemas/generate` (line 597) — caught, returns 501
+- [x] `POST /api/v1/schemas/infer` — ProgrammingError caught, returns 501
+- [x] `POST /api/v1/schemas/infer` — SQLAlchemyError caught, returns 503
+- [x] `POST /api/v1/schemas/infer` — Exception caught, returns 500
+- [x] `POST /api/v1/schemas/generate` — ProgrammingError caught, returns 501
+- [x] `POST /api/v1/schemas/generate` — SQLAlchemyError caught, returns 503
+- [x] `POST /api/v1/schemas/generate` — Exception caught, returns 500
 
 ## Known Gaps
 - **Sample cap mismatch:** Code hardcodes 50 max samples; PRD specifies default 200.
@@ -139,6 +143,20 @@ Schema Inference (8.16) samples records from a connected tool and uses an LLM to
 - [x] Backend_ids empty between check and initialisation → 503 guard
 
 ## QA History
+
+### 2026-07-08 — Cross-cutting QA (improve-architecture index 276)
+
+**CRITICAL fixes applied:**
+- Added `except Exception → 500` guard to both `infer_schema_endpoint` and `generate_schema_endpoint` first try/except blocks (previously only caught `ProgrammingError` and `SQLAlchemyError`, allowing Python-level errors like TypeError, KeyError, ValueError from `get_connector_instance`/`list_model_backends`/Pydantic validation to propagate as opaque 500 to CatchAllMiddleware)
+
+**MAJOR fixes applied:**
+- `generate_schema_endpoint` `SchemaGenerationError` handler now includes `{exc}` in 502 detail message (was static `"Schema generation failed."`, now `f"Schema generation failed: {exc}"` matching `infer_schema_endpoint`'s pattern)
+
+**Product map updates:**
+- Added 3 new Error Handling checkboxes (Exception→500 for infer, SQLAlchemyError→503 for infer, Exception→500 for generate, SQLAlchemyError→503 for generate)
+- Added QA History entry
+
+**Status:** partial (5 known PRD scope gaps remain: sample cap 50 vs 200, no enum detection, no rare-field flagging, no abstract_name, no SandboxedEnvironment, no data lifecycle)
 
 ### 2026-07-05 — Cross-cutting QA (improve-architecture index 147)
 
