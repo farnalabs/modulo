@@ -15,6 +15,8 @@ _log = logging.getLogger(__name__)
 def _to_sync_url(url: str) -> str:
     if url.startswith("postgresql+asyncpg://"):
         url = url.replace("postgresql+asyncpg://", "postgresql+psycopg://", 1)
+    elif url.startswith("sqlite+aiosqlite://"):
+        url = url.replace("sqlite+aiosqlite://", "sqlite://", 1)
     elif url.startswith("mysql+asyncmy://"):
         url = url.replace("mysql+asyncmy://", "mysql+pymysql://", 1)
     elif url.startswith("postgresql://"):
