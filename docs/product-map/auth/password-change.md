@@ -30,7 +30,7 @@ Logged-in users can change their own password via the My Profile page. Admins ca
 - [x] Returns 422 if new password fails strength validation
 - [x] Returns 422 if new password is too short (< 8 chars)
 - [x] Returns 404 if authenticated user is not found in DB
-- [x] Returns 403 if request is unauthenticated (no JWT)
+- [x] Returns 401 if request is unauthenticated (no JWT)
 - [x] Blacklists all token families for the user after password change
 - [x] Hashes new password with bcrypt before storing
 
@@ -56,13 +56,16 @@ Logged-in users can change their own password via the My Profile page. Admins ca
 - [ ] Password change logged to audit trail (not yet implemented — audit trail scope gap)
 
 ## Error Handling
-- [ ] PUT /api/v1/me/password returns 501 Not Implemented when DB table is missing (ProgrammingError)
-- [ ] Token family blacklist failure during password change logs warning but does not fail the request
-- [ ] Unauthenticated requests return 403 (no JWT)
+- [x] PUT /api/v1/me/password returns 501 Not Implemented when DB table is missing (ProgrammingError) — fixed in QA (2026-07-06)
+- [x] Token family blacklist failure during password change logs warning but does not fail the request — per-family try/except with savepoints; fixed in QA (2026-07-06)
+- [ ] Unauthenticated requests return 401 (no JWT) — FastAPI HTTPBearer default (auto_error=True); cannot change without altering auth dependency contract
 
 ## Known Gaps
 
 - Password change is not logged to the audit trail yet — the audit system currently covers admin actions but not user self-service actions
+- Website docs page for password change does not exist — no stub at `Website/modulo-website/src/docs/auth/password-change.md`
+- PUT /api/v1/me/password does not validate that `new_password` differs from `current_password` — no `!=` check between old and new (minor: user can "change" to same password)
 
 ## QA History
 - 2026-07-05: QA-iterate (prodmap auth). Added Error Handling and QA History sections. Fixed status: covered → partial (audit trail gap).
+- 2026-07-06: Cross-cutting QA. Fixed 401 vs 403 status code in behaviours. Added Known Gaps for ProgrammingError, token blacklist isolation, missing website docs. Added ProgrammingError catch and per-family blacklist error isolation to the route handler.
