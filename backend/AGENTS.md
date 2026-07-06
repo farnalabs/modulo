@@ -88,6 +88,18 @@
 
 - Config values that are expected to be a `dict` (e.g. a callable registry) must be validated with `isinstance(val, dict)` before accessing `.get()` or `[]`. A non-empty list is truthy, so `config.get("key") or {}` does NOT fall back to `{}` for list values — `[1, 2].get(key)` raises `AttributeError`.
 
+### HTTP: every `requests` call must have an explicit timeout
+
+- Even in scripts, tools, and test helpers, every `requests.Session.post()` / `.get()` / `.request()` call must pass `timeout=N`. Without it, a network hang blocks the caller indefinitely. This applies to `_login()` methods that bypass a shared `_request()` helper — they must set `timeout=` independently.
+
+### HTTP response handling: call `raise_for_status()` before JSON parsing
+
+- Pattern `if not resp.ok: log_error(); resp.raise_for_status(); return resp.json()` creates a dead branch: `raise_for_status()` always raises on non-2xx, so the `if not resp.ok` branch is either redundant (never reached) or the only guard. Simplify to: `resp.raise_for_status()` first (covers all non-2xx), then `resp.json()`. This gives a single, clear control flow with no dead branches.
+
+### URL construction: use `urlparse`/`urlunparse`, not string replace chains
+
+- Building URLs with `.replace("http://", "").replace("https://", "").replace("/api/v1", "").rstrip("/")` is fragile — it breaks on unexpected URL formats (query params, auth, fragments) and silently corrupts edge cases. Use `urllib.parse.urlparse` + `urlunparse` to manipulate scheme, netloc, and path separately.
+
 - When accepting a user-supplied callable and parsing its return value with `.get()`, wrap the parsing in `try/except TypeError` or validate `isinstance(ret, dict)` first. A non-dict return (e.g. `None`, a list, a string) crashes the caller with `AttributeError: 'NoneType' object has no attribute 'get'`.
 
 ### Alembic / Entrypoint

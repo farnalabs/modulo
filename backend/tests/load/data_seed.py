@@ -27,12 +27,10 @@ from typing import Any
 
 import requests
 
+from tests.load.conftest import DEFAULT_ADMIN_EMAIL, DEFAULT_ADMIN_PASSWORD, DEFAULT_BASE_URL
+
 _log = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
-
-DEFAULT_BASE_URL = "http://localhost:8000/api/v1"
-DEFAULT_ADMIN_EMAIL = "admin@modulo.test"
-DEFAULT_ADMIN_PASSWORD = "test-password-123"
 
 
 class SeedClient:
@@ -50,9 +48,15 @@ class SeedClient:
         resp = self._session.post(
             f"{self.base_url}/auth/login",
             json={"email": email, "password": password},
+            timeout=self._TIMEOUT,
         )
         resp.raise_for_status()
-        token = resp.json()["access_token"]
+        try:
+            body = resp.json()
+        except requests.JSONDecodeError:
+            _log.error("Auth endpoint returned non-JSON: %s", resp.text[:200])
+            raise
+        token = body["access_token"]
         self._session.headers.update({"Authorization": f"Bearer {token}"})
         _log.info("Authenticated as %s", email)
         return token
@@ -68,16 +72,12 @@ class SeedClient:
         resp = self._session.request(method, url, **kwargs)
         if resp.status_code == 204:
             return None
+        resp.raise_for_status()
         try:
-            data = resp.json()
+            return resp.json()
         except requests.JSONDecodeError:
             _log.warning("Non-JSON response %s %s: %s", method, path, resp.text[:200])
-            resp.raise_for_status()
             return None
-        if not resp.ok:
-            _log.error("Request failed %s %s: %s", method, path, data)
-            resp.raise_for_status()
-        return data
 
     def get(self, path: str) -> dict[str, Any] | list[Any] | None:
         return self._request("GET", path)
@@ -123,7 +123,7 @@ def seed_pipelines(client: SeedClient, count: int = 5) -> list[dict[str, Any]]:
             if isinstance(pipeline, dict):
                 pipelines.append(pipeline)
                 _log.info("Created pipeline: %s (%s)", pipeline["name"], pipeline["id"])
-        except requests.HTTPError as exc:
+        except requests.RequestException as exc:
             _log.warning("Failed to create pipeline %d: %s", i + 1, exc)
 
     _log.info("Created %d/%d pipelines", len(pipelines), count)
@@ -153,7 +153,7 @@ def seed_triggers(client: SeedClient, pipelines: list[dict[str, Any]]) -> list[d
         if isinstance(manual, dict):
             triggers.append(manual)
             _log.info("Created manual trigger: %s", manual["id"])
-    except requests.HTTPError as exc:
+    except requests.RequestException as exc:
         _log.warning("Failed to create manual trigger: %s", exc)
 
     try:
@@ -171,7 +171,7 @@ def seed_triggers(client: SeedClient, pipelines: list[dict[str, Any]]) -> list[d
         if isinstance(cron, dict):
             triggers.append(cron)
             _log.info("Created cron trigger: %s", cron["id"])
-    except requests.HTTPError as exc:
+    except requests.RequestException as exc:
         _log.warning("Failed to create cron trigger: %s", exc)
 
     return triggers
@@ -181,6 +181,9 @@ def seed_api_keys(client: SeedClient, count: int = 3) -> list[dict[str, Any]]:
     """Create API keys for programmatic load test access."""
     keys = []
     names = ["load-test-operator", "load-test-runner", "load-test-ci"]
+
+    if count > len(names):
+        _log.warning("Requested %d API keys but only %d names configured", count, len(names))
 
     for name in names[:count]:
         try:
@@ -192,10 +195,9 @@ def seed_api_keys(client: SeedClient, count: int = 3) -> list[dict[str, Any]]:
                 },
             )
             if isinstance(key, dict):
-                key_preview = key.get("full_key", "?")[:20] if "full_key" in key else "?"
-                _log.info("Created API key: %s → %s", key.get("name", "?"), key_preview)
+                _log.info("Created API key: %s (id: %s)", key.get("name", "?"), key.get("id", "?"))
                 keys.append(key)
-        except requests.HTTPError as exc:
+        except requests.RequestException as exc:
             _log.warning("Failed to create API key %s: %s", name, exc)
 
     return keys
