@@ -148,7 +148,7 @@ export const useRemyStore = defineStore('remy', () => {
       if (resp.error) {
         error.value = extractErrorMessage(resp.error)
       } else {
-        messages.value = resp.data ?? []
+        messages.value = (resp.data as any)?.items ?? []
         activeSessionId.value = id
       }
     } catch (e: unknown) {

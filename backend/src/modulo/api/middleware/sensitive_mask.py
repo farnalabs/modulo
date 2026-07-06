@@ -30,6 +30,7 @@ SENSITIVE_VALUE_MASK = "\u2022\u2022\u2022\u2022\u2022\u2022"
 _SENSITIVE_ENV_KEYS: frozenset[str] = frozenset({
     "MODULO_USERS",
     "DATABASE_URL",
+    "PYPI_TOKEN",
 })
 
 _SENSITIVE_KEY_PATTERNS = frozenset({

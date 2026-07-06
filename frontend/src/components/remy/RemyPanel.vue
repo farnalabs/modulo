@@ -134,39 +134,6 @@
         />
       </div>
       <div class="remy-main">
-        <div
-          v-if="!store.activeSessionId"
-          class="flex flex-col items-center justify-center h-full gap-4 p-8 text-center"
-        >
-          <div
-            class="flex items-center justify-center rounded-full bg-primary/10 p-4"
-          >
-            <svg
-              xmlns="http://www.w3.org/2000/svg"
-              width="32"
-              height="32"
-              viewBox="0 0 24 24"
-              fill="none"
-              stroke="currentColor"
-              stroke-width="1.5"
-              class="text-primary"
-            >
-              <path
-                d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2z"
-              />
-              <path d="M8 14s1.5 2 4 2 4-2 4-2" />
-              <line x1="9" y1="9" x2="9.01" y2="9" />
-              <line x1="15" y1="9" x2="15.01" y2="9" />
-            </svg>
-          </div>
-          <h3 class="text-lg font-semibold">Remy</h3>
-          <p class="text-sm text-muted-foreground max-w-xs">
-            AI assistant for your Modulo workspace. Start a new conversation or
-            select an existing one.
-          </p>
-          <button class="inline-flex items-center justify-center rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90" @click="handleNewSession">New Session</button>
-        </div>
-        <template v-else>
           <div class="remy-chat-tabs flex items-center border-b px-2">
             <button
               class="remy-tab"
@@ -206,7 +173,6 @@
             <RemySessionDrawer @select-session="activeTab = 'chat'" />
           </div>
           <RemyContextSources v-show="activeTab === 'sources'" />
-        </template>
       </div>
     </div>
 
@@ -350,8 +316,11 @@ async function handleNewSession() {
   }
 }
 
-onMounted(() => {
-  store.fetchSessions();
+onMounted(async () => {
+  await store.fetchSessions();
+  if (!store.activeSessionId) {
+    await handleNewSession();
+  }
 });
 
 onUnmounted(() => {
