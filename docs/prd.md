@@ -3013,7 +3013,10 @@ When all six are met, the decision to move to v1 is made explicitly. Alpha does 
 - Architecture overview for contributors
 
 ### 10.5 Opt-In Telemetry
-`MODULO_TELEMETRY=true` (default: false). Anonymous ping on startup: connector type IDs, model backend provider IDs, pipeline count, run count in last 7 days, Modulo version, Python version, OS type. No content, no credentials, no user data. Payload schema published publicly.
+
+Telemetry is opt-in and disabled by default. The OTel bridge (`setup_otel`) is configured via `MODULO_TELEMETRY_ENABLED=true` (default: `false`). When enabled, spans are exported to stdout and optionally to an OTLP endpoint if `OTEL_EXPORTER_OTLP_ENDPOINT` is set. No telemetry data leaves the process without explicit operator configuration.
+
+**Anonymous startup ping (deferred):** The original spec envisioned an anonymous startup ping reporting connector type IDs, model backend provider IDs, pipeline count, run count in last 7 days, Modulo version, Python version, and OS type — with no content, no credentials, no user data, and a publicly published payload schema. This ping is **not implemented** and is documented here as a future consideration. The current `MODULO_TELEMETRY_ENABLED` flag controls OTel exporter configuration only.
 
 ---
 
