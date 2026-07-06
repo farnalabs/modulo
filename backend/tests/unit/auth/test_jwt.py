@@ -56,7 +56,14 @@ def test_expired_token_raises() -> None:
 
 
 def test_none_algorithm_rejected() -> None:
-    """Tokens with alg:none must be rejected — not in the allowed algorithms list."""
+    """Tokens with alg:none must be rejected at decode time.
+
+    Manually constructs a JWT with alg: none (bypassing python-jose encode-time
+    validation) and verifies that decode_principal rejects it since HS256 is the
+    only allowed algorithm.
+    """
+    import base64, json
+
     claims = {
         "sub": "alice",
         "org_id": _ORG,
@@ -64,10 +71,10 @@ def test_none_algorithm_rejected() -> None:
         "org_role": "admin",
         "exp": int(time.time()) + 3600,
     }
-    # The library may reject alg:none at encode time (preferred) or at decode time
-    # Either way the test passes: alg:none must never be accepted
-    with pytest.raises((JWTError, ValueError)):
-        token = jose_jwt.encode(claims, "", algorithm="none")
+    header_b64 = base64.urlsafe_b64encode(json.dumps({"alg": "none", "typ": "JWT"}).encode()).rstrip(b"=").decode()
+    payload_b64 = base64.urlsafe_b64encode(json.dumps(claims).encode()).rstrip(b"=").decode()
+    token = f"{header_b64}.{payload_b64}."
+    with pytest.raises(JWTError):
         decode_principal(token, _KEY)
 
 
