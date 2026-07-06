@@ -1,5 +1,6 @@
 import { ref, computed } from 'vue'
 import { api } from '../lib/api/client'
+import { formatApiError } from '../lib/api/formatError'
 
 export interface SavedView {
   id: string
@@ -28,11 +29,14 @@ export function useViews(viewType: string) {
     loading.value = true
     error.value = null
     try {
-      const { data, error: apiError } = await (api as any).GET('/api/v1/views', {
-        params: { query: { view_type: viewType } },
+      const resp = await api.GET('/api/v1/views', {
+        params: { query: { view_type: viewType } as any },
       })
-      if (apiError) throw new Error(typeof apiError === 'string' ? apiError : (apiError as any).message ?? String(apiError))
-      views.value = (data as any)?.items ?? []
+      if (resp.error) {
+        error.value = formatApiError(resp.error)
+      } else {
+        views.value = resp.data?.items ?? []
+      }
     } catch (e: unknown) {
       error.value = e instanceof Error ? e.message : String(e)
     } finally {

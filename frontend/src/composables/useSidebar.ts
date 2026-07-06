@@ -60,8 +60,7 @@ function toggleGroup(id: string, defaultCollapsed: boolean) {
 }
 
 function isGroupCollapsed(id: string, defaultCollapsed: boolean): boolean {
-  const pref = groupPrefs.value[id]
-  return pref !== undefined ? pref : defaultCollapsed
+  return groupPrefs.value[id] ?? defaultCollapsed
 }
 
 function setViewMode(mode: 'simple' | 'advanced') {
