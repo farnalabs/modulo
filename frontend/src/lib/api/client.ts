@@ -80,7 +80,7 @@ async function attemptTokenRefresh(): Promise<boolean> {
   }
 }
 
-function getAuthHeaders(): Record<string, string> {
+export function getAuthHeaders(): Record<string, string> {
   const token = getAccessToken()
   if (token) {
     return { Authorization: `Bearer ${token}` }

@@ -10,7 +10,7 @@ export function useRemyContext() {
     entities: [],
   })
 
-  function extractEntities(_routeName: string, params: Record<string, string>): string[] {
+  function extractEntities(params: Record<string, string>): string[] {
     const entities: string[] = []
     if (params.id) entities.push(`run:${params.id}`)
     if (params.teamId) entities.push(`team:${params.teamId}`)
@@ -28,7 +28,7 @@ export function useRemyContext() {
       pageContext.value = {
         route: (name as string) ?? route.path,
         params: resolved,
-        entities: extractEntities(name as string, resolved),
+        entities: extractEntities(resolved),
       }
     },
     { immediate: true },
