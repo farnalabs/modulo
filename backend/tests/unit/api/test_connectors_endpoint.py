@@ -167,10 +167,28 @@ def test_get_connector_not_found_returns_404(client: TestClient) -> None:
     assert resp.status_code == 404
 
 
+def _make_ci_mock() -> MagicMock:
+    ci = MagicMock()
+    ci.id = _CONNECTOR_ID
+    ci.organisation_id = _ORG_ID
+    ci.name = "Test Connector"
+    ci.connector_type_id = "filesystem"
+    ci.credentials_ciphertext = b"encrypted"
+    ci.config_json = {}
+    ci.allowed_operations = []
+    ci.status = "active"
+    ci.visibility = "org"
+    ci.tier = "native"
+    ci.created_at = _NOW
+    ci.updated_at = _NOW
+    return ci
+
+
 def test_update_connector_returns_200(client: TestClient) -> None:
     connector = _make_connector()
     connector.name = "Updated"
     with (
+        patch("modulo.api.routes.connectors.get_connector_instance", return_value=_make_ci_mock()),
         patch("modulo.api.routes.connectors.update_connector_instance", return_value=connector),
         patch("modulo.api.routes.connectors.set_rls_org"),
         patch("modulo.api.routes.connectors.set_rls_user_context"),
@@ -182,6 +200,7 @@ def test_update_connector_returns_200(client: TestClient) -> None:
 
 def test_update_connector_not_found_returns_404(client: TestClient) -> None:
     with (
+        patch("modulo.api.routes.connectors.get_connector_instance", return_value=None),
         patch("modulo.api.routes.connectors.update_connector_instance", return_value=None),
         patch("modulo.api.routes.connectors.set_rls_org"),
         patch("modulo.api.routes.connectors.set_rls_user_context"),
