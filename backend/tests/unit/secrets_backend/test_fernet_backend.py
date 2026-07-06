@@ -1,5 +1,6 @@
 """Unit tests for FernetSecretsBackend."""
 
+import binascii
 import uuid
 from unittest.mock import AsyncMock, MagicMock
 
@@ -134,6 +135,16 @@ class TestSetSecret:
 
         with pytest.raises(RuntimeError, match="no DB session"):
             await backend.set_secret("some-key", _SECRET_VALUE)
+
+    async def test_empty_key_raises_value_error(self, mock_session):
+        backend = FernetSecretsBackend(fernet_key=_KEY, session=mock_session)
+
+        with pytest.raises(ValueError, match="non-empty"):
+            await backend.set_secret("", _SECRET_VALUE)
+
+    async def test_invalid_fernet_key_at_construction_raises(self):
+        with pytest.raises((ValueError, binascii.Error)):
+            FernetSecretsBackend(fernet_key="not-a-valid-base64-key")
 
     async def test_no_rls_context_raises(self, mock_session):
         async def mock_execute(stmt, *args, **kwargs):

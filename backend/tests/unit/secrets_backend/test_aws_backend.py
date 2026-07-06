@@ -51,6 +51,11 @@ def _make_backend():
 
 
 class TestAWSSecretsManagerBackend:
+    async def test_empty_key_raises_value_error(self, mock_boto3):
+        backend = _make_backend()
+        with pytest.raises(ValueError, match="non-empty"):
+            await backend.get_secret("")
+
     async def test_get_secret_reads_from_aws(self, mock_boto3):
         backend = _make_backend()
         backend._client.get_secret_value.return_value = {"SecretString": "my-value"}

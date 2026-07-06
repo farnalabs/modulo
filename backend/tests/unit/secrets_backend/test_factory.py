@@ -6,7 +6,7 @@ from unittest.mock import patch
 import pytest
 from cryptography.fernet import Fernet
 
-from modulo.core.secrets_backend import create_secrets_backend
+from modulo.core.secrets_backend import create_secrets_backend, validate_key
 from modulo.core.secrets_backend.aws import AWSSecretsManagerBackend
 from modulo.core.secrets_backend.fernet import FernetSecretsBackend
 from modulo.core.secrets_backend.vault import VaultSecretsBackend
@@ -102,3 +102,8 @@ def test_backend_name_whitespace_trimmed():
 def test_fernet_key_required_when_backend_is_fernet():
     with pytest.raises(ValueError, match="fernet_key is required"):
         create_secrets_backend(fernet_key=None)
+
+
+def test_empty_key_raises_value_error():
+    with pytest.raises(ValueError, match="non-empty"):
+        validate_key("")
