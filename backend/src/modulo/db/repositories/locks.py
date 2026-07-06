@@ -157,7 +157,14 @@ class GenericLock(BaseLockService):
                 return
             lock = _generic_locks.get(key)
             if lock is not None:
-                lock.release()
+                try:
+                    lock.release()
+                except RuntimeError:
+                    logger.warning(
+                        "release_lock: lock.release() failed for key=%r — already released?",
+                        key,
+                        exc_info=True,
+                    )
             del _generic_owners[key]
             _generic_locks.pop(key, None)
 
