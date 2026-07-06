@@ -106,12 +106,14 @@ Uses sub-chart generated secret if available, else falls back to provided DATABA
 {{- define "modulo.databaseUrl" -}}
 {{- if .Values.secrets.DATABASE_URL }}
 {{- .Values.secrets.DATABASE_URL }}
-{{- else if .Values.postgresql.enabled }}
+{{- else if and .Values.postgresql.enabled .Values.postgresql.auth.password }}
 {{- $host := printf "%s-postgresql.%s.svc.cluster.local" .Release.Name .Release.Namespace }}
 {{- $port := "5432" }}
 {{- $db := .Values.postgresql.auth.database }}
 {{- $user := .Values.postgresql.auth.username }}
-{{- printf "postgresql://%s:$(DATABASE_PASSWORD)@%s:%s/%s" $user $host $port $db }}
+{{- printf "postgresql://%s:%s@%s:%s/%s" $user .Values.postgresql.auth.password $host $port $db }}
+{{- else if .Values.postgresql.enabled }}
+{{- fail "Set either secrets.DATABASE_URL or postgresql.auth.password. Auto-generated passwords require explicit postgresql.auth.password in values." }}
 {{- else }}
 {{- fail "Either set secrets.DATABASE_URL or enable postgresql.enabled=true" }}
 {{- end }}
@@ -123,10 +125,12 @@ Return the proper Redis connection URL.
 {{- define "modulo.redisUrl" -}}
 {{- if .Values.secrets.REDIS_URL }}
 {{- .Values.secrets.REDIS_URL }}
-{{- else if .Values.redis.enabled }}
+{{- else if and .Values.redis.enabled .Values.redis.auth.password }}
 {{- $host := printf "%s-redis-master.%s.svc.cluster.local" .Release.Name .Release.Namespace }}
 {{- $port := "6379" }}
-{{- printf "redis://:$(REDIS_PASSWORD)@%s:%s" $host $port }}
+{{- printf "redis://:%s@%s:%s" .Values.redis.auth.password $host $port }}
+{{- else if .Values.redis.enabled }}
+{{- fail "Set either secrets.REDIS_URL or redis.auth.password. Auto-generated passwords require explicit redis.auth.password in values." }}
 {{- else }}
 {{- fail "Either set secrets.REDIS_URL or enable redis.enabled=true" }}
 {{- end }}

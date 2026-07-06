@@ -71,16 +71,38 @@ spec:
             {{- toYaml . | nindent 12 }}
           {{- end }}
           env:
+            {{- if .Values.secrets.DATABASE_URL }}
             - name: DATABASE_URL
               valueFrom:
                 secretKeyRef:
                   name: {{ include "modulo.backend.secretName" . }}
                   key: DATABASE_URL
+            {{- end }}
+            {{- if .Values.secrets.REDIS_URL }}
             - name: REDIS_URL
               valueFrom:
                 secretKeyRef:
                   name: {{ include "modulo.backend.secretName" . }}
                   key: REDIS_URL
+            {{- end }}
+            {{- if and .Values.postgresql.enabled (not .Values.secrets.DATABASE_URL) }}
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Release.Name }}-postgresql
+                  key: password
+            - name: DATABASE_URL
+              value: "postgresql://{{ .Values.postgresql.auth.username }}:$(POSTGRES_PASSWORD)@{{ .Release.Name }}-postgresql.{{ .Release.Namespace }}.svc.cluster.local:5432/{{ .Values.postgresql.auth.database }}"
+            {{- end }}
+            {{- if and .Values.redis.enabled (not .Values.secrets.REDIS_URL) }}
+            - name: REDIS_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Release.Name }}-redis
+                  key: redis-password
+            - name: REDIS_URL
+              value: "redis://:$(REDIS_PASSWORD)@{{ .Release.Name }}-redis-master.{{ .Release.Namespace }}.svc.cluster.local:6379"
+            {{- end }}
             - name: SECRET_KEY
               valueFrom:
                 secretKeyRef:
@@ -91,6 +113,41 @@ spec:
                 secretKeyRef:
                   name: {{ include "modulo.backend.secretName" . }}
                   key: FERNET_KEY
+            {{- if .Values.secrets.MODULO_ADMIN_PASSWORD }}
+            - name: MODULO_ADMIN_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "modulo.backend.secretName" . }}
+                  key: MODULO_ADMIN_PASSWORD
+            {{- end }}
+            {{- if .Values.secrets.MODULO_SCIM_TOKEN }}
+            - name: MODULO_SCIM_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "modulo.backend.secretName" . }}
+                  key: MODULO_SCIM_TOKEN
+            {{- end }}
+            {{- if .Values.secrets.MODULO_RATELIMIT_BYPASS_TOKEN }}
+            - name: MODULO_RATELIMIT_BYPASS_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "modulo.backend.secretName" . }}
+                  key: MODULO_RATELIMIT_BYPASS_TOKEN
+            {{- end }}
+            {{- if .Values.secrets.MODULO_LICENSE_KEY }}
+            - name: MODULO_LICENSE_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "modulo.backend.secretName" . }}
+                  key: MODULO_LICENSE_KEY
+            {{- end }}
+            {{- if .Values.secrets.MODULO_USERS }}
+            - name: MODULO_USERS
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "modulo.backend.secretName" . }}
+                  key: MODULO_USERS
+            {{- end }}
           {{- with .Values.backend.extraEnv }}
             {{- toYaml . | nindent 12 }}
           {{- end }}
