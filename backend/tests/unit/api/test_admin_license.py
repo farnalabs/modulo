@@ -65,6 +65,12 @@ def _make_valid_payload(**overrides: object) -> dict:
 # ── Fixtures ──────────────────────────────────────────────────────────────
 
 
+def _mock_org(settings_json: dict | None = None) -> MagicMock:
+    org = MagicMock()
+    org.settings_json = settings_json
+    return org
+
+
 @pytest.fixture(autouse=True)
 def _reset_license_state() -> Generator[None, None, None]:
     clear_license()
@@ -216,13 +222,8 @@ class TestStoreAndGetLicense:
 class TestGetLicense:
     URL = "/api/v1/admin/license"
 
-    def _mock_org(self, settings_json: dict | None = None) -> MagicMock:
-        org = MagicMock()
-        org.settings_json = settings_json
-        return org
-
     def test_returns_no_license_when_none_set(self, client: TestClient) -> None:
-        org = self._mock_org(settings_json=None)
+        org = _mock_org(settings_json=None)
         with patch("modulo.api.routes.admin_license.get_organisation", new=AsyncMock(return_value=org)):
             resp = client.get(self.URL)
         assert resp.status_code == 200
@@ -238,7 +239,7 @@ class TestGetLicense:
         assert result.license_data is not None
         store_license(key, result.license_data)
 
-        org = self._mock_org(settings_json={})
+        org = _mock_org(settings_json={})
         with patch("modulo.api.routes.admin_license.get_organisation", new=AsyncMock(return_value=org)):
             resp = client.get(self.URL)
         assert resp.status_code == 200
@@ -277,7 +278,7 @@ class TestUploadLicense:
         resp = client.post(self.URL, json={"license_key": key})
         assert resp.status_code == 200
 
-        org = self._mock_org(settings_json={})
+        org = _mock_org(settings_json={})
         with patch("modulo.api.routes.admin_license.get_organisation", new=AsyncMock(return_value=org)):
             resp2 = client.get(self.URL)
         assert resp2.status_code == 200
