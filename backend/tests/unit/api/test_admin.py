@@ -30,7 +30,7 @@ _EXPORT = {
             "created_at": "2025-01-01T00:00:00+00:00",
         }
     ],
-    "users": [{"id": str(_USER_ID), "email": "admin@test.com"}],
+    "memberships": [{"id": str(_USER_ID), "email": "admin@test.com"}],
     "pipelines": [],
     "runs": [],
     "audit_events": [],
