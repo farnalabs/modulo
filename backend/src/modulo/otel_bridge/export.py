@@ -37,20 +37,16 @@ def setup_otel(
     Call once at application startup before any spans are created. Idempotent —
     replaces the global provider if already set.
     """
-    if not telemetry_enabled:
-        _log.info(
-            "OTel telemetry is DISABLED (MODULO_TELEMETRY_ENABLED not set to true). No telemetry data will be exported."
-        )
-        # Create a no-op provider that drops all spans
-        provider = TracerProvider(resource=Resource.create({"service.name": service_name}))
-        trace.set_tracer_provider(provider)
-        return
-
-    # Shut down any previously configured provider before replacing
     shutdown_otel()
 
     resource = Resource.create({"service.name": service_name})
     provider = TracerProvider(resource=resource)
+    if not telemetry_enabled:
+        _log.info(
+            "OTel telemetry is DISABLED (MODULO_TELEMETRY_ENABLED not set to true). No telemetry data will be exported."
+        )
+        trace.set_tracer_provider(provider)
+        return
 
     # Stdout exporter — always enabled when telemetry is on.
     # Prints spans as JSON lines for local debugging. Uses SimpleSpanProcessor
@@ -64,11 +60,23 @@ def setup_otel(
         try:
             otlp_exporter = OTLPSpanExporter(endpoint=otlp_endpoint)
             provider.add_span_processor(BatchSpanProcessor(otlp_exporter))
-            _log.info("OTel OTLP exporter configured: endpoint=%s", otlp_endpoint)
+            _log.info("OTel OTLP exporter configured: endpoint=%s", _sanitise_url(otlp_endpoint))
         except Exception:
             _log.exception("Failed to configure OTLP exporter; continuing without it")
+            _log.info("OTLP endpoint: %s", _sanitise_url(otlp_endpoint))
 
     trace.set_tracer_provider(provider)
+
+
+def _sanitise_url(url: str) -> str:
+    """Strip credentials from a URL for safe logging."""
+    from urllib.parse import urlparse, urlunparse
+    parsed = urlparse(url)
+    if not parsed.password and not parsed.username:
+        return url
+    host = parsed.hostname or ""
+    clean = parsed._replace(netloc=f"{host}:{parsed.port}") if parsed.port else parsed._replace(netloc=host)
+    return urlunparse(clean)
 
 
 def shutdown_otel() -> None:
@@ -79,9 +87,8 @@ def shutdown_otel() -> None:
     are no-ops once the provider is shut down.
     """
     provider = trace.get_tracer_provider()
-    shutdown = getattr(provider, "shutdown", None)
-    if callable(shutdown):
+    if hasattr(provider, "shutdown"):
         try:
-            shutdown()
+            provider.shutdown()
         except Exception:
             _log.exception("Failed to shut down OTel provider")
