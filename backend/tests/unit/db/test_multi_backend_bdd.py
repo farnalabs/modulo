@@ -6,7 +6,7 @@ MariaDB, and SQLite backends.  Mirrors the BDD scenarios in:
 """
 
 import uuid
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from sqlalchemy import Select
@@ -20,6 +20,7 @@ from modulo.db.repositories.locks import (
     _generic_locks,
 )
 from modulo.db.repositories.postgres import PostgresRepository
+from modulo.db.repositories import RepositoryHub
 
 _TENANT_KEY = "org_id"
 _ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
@@ -453,12 +454,149 @@ class TestTimeFunctionsMultiBackend:
         assert now is not None
         assert now.tzinfo is not None
 
-    def test_backend_type_hint_in_repository_hub(self) -> None:
-        hub = MagicMock()
-        hub.db_type = None
-        assert hasattr(hub, "db_type") or True
-
     def test_created_at_column_uses_default_factory(self) -> None:
         from modulo.db.models.base import Base
 
         assert hasattr(Base, "metadata")
+
+
+# ===========================================================================
+# Scenario 8: RepositoryHub construction/dispatch
+# ===========================================================================
+
+
+class TestRepositoryHubDispatch:
+    """Verify RepositoryHub dispatches to the correct backend-specific implementation."""
+
+    def test_postgres_repo_is_postgres_repository(self) -> None:
+        hub = RepositoryHub(session_factory=MagicMock(), db_type="postgres")
+        from modulo.db.repositories.postgres import PostgresRepository
+
+        assert isinstance(hub.repo, PostgresRepository)
+
+    def test_sqlite_repo_is_generic_repository(self) -> None:
+        hub = RepositoryHub(session_factory=MagicMock(), db_type="sqlite")
+        assert isinstance(hub.repo, GenericRepository)
+
+    def test_mariadb_repo_is_generic_repository(self) -> None:
+        hub = RepositoryHub(session_factory=MagicMock(), db_type="mariadb")
+        assert isinstance(hub.repo, GenericRepository)
+
+    def test_postgres_lock_is_postgres_lock(self) -> None:
+        hub = RepositoryHub(session_factory=MagicMock(), db_type="postgres")
+        assert isinstance(hub.locks, PostgresLock)
+
+    def test_sqlite_lock_is_generic_lock(self) -> None:
+        hub = RepositoryHub(session_factory=MagicMock(), db_type="sqlite")
+        assert isinstance(hub.locks, GenericLock)
+
+    def test_mariadb_lock_is_generic_lock(self) -> None:
+        hub = RepositoryHub(session_factory=MagicMock(), db_type="mariadb")
+        assert isinstance(hub.locks, GenericLock)
+
+
+# ===========================================================================
+# Scenario 9: register_tenant_filter registration behaviour
+# ===========================================================================
+
+
+class TestRegisterTenantFilter:
+    """Verify register_tenant_filter skips for postgres and registers for others."""
+
+    def test_skips_for_postgres(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("MODULO_DB", "postgres")
+        monkeypatch.setenv("DATABASE_URL", "postgresql+asyncpg://u:p@localhost/db")
+        monkeypatch.setenv("SECRET_KEY", "a" * 32)
+        monkeypatch.setenv("FERNET_KEY", "a" * 32)
+
+        from modulo.settings import Settings, get_settings
+        from unittest.mock import patch
+
+        with patch("modulo.db.rls.get_settings") as mock_get_settings:
+            mock_settings = MagicMock(spec=Settings)
+            mock_settings.modulo_db = "postgres"
+            mock_get_settings.return_value = mock_settings
+
+            from modulo.db.rls import register_tenant_filter
+
+            with patch("modulo.db.rls.event.listen") as mock_listen:
+                register_tenant_filter()
+
+            mock_listen.assert_not_called()
+
+    def test_registers_for_sqlite(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        from modulo.settings import Settings
+        from unittest.mock import patch
+
+        with patch("modulo.db.rls.get_settings") as mock_get_settings:
+            mock_settings = MagicMock(spec=Settings)
+            mock_settings.modulo_db = "sqlite"
+            mock_get_settings.return_value = mock_settings
+
+            from modulo.db.rls import register_tenant_filter
+
+            with patch("modulo.db.rls.event.listen") as mock_listen:
+                register_tenant_filter()
+
+            mock_listen.assert_called_once()
+
+    def test_registers_for_mariadb(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        from modulo.settings import Settings
+        from unittest.mock import patch
+
+        with patch("modulo.db.rls.get_settings") as mock_get_settings:
+            mock_settings = MagicMock(spec=Settings)
+            mock_settings.modulo_db = "mariadb"
+            mock_get_settings.return_value = mock_settings
+
+            from modulo.db.rls import register_tenant_filter
+
+            with patch("modulo.db.rls.event.listen") as mock_listen:
+                register_tenant_filter()
+
+            mock_listen.assert_called_once()
+
+
+# ===========================================================================
+# Scenario 10: register_rls_reset_hook skip behaviour
+# ===========================================================================
+
+
+class TestRegisterRlsResetHookSkip:
+    """Verify register_rls_reset_hook skips for non-postgres backends."""
+
+    def test_skips_for_sqlite(self) -> None:
+        engine = MagicMock()
+        engine.dialect.name = "sqlite"
+        engine.sync_engine = MagicMock()
+
+        from modulo.db.rls import register_rls_reset_hook
+
+        with patch("modulo.db.rls.event.listens_for") as mock_listens:
+            register_rls_reset_hook(engine)
+
+        mock_listens.assert_not_called()
+
+    def test_skips_for_mysql(self) -> None:
+        engine = MagicMock()
+        engine.dialect.name = "mysql"
+        engine.sync_engine = MagicMock()
+
+        from modulo.db.rls import register_rls_reset_hook
+
+        with patch("modulo.db.rls.event.listens_for") as mock_listens:
+            register_rls_reset_hook(engine)
+
+        mock_listens.assert_not_called()
+
+    def test_registers_for_postgres(self) -> None:
+        engine = MagicMock()
+        engine.dialect.name = "postgresql"
+        engine.sync_engine = MagicMock()
+
+        from modulo.db.rls import register_rls_reset_hook
+
+        with patch("modulo.db.rls.event.listens_for") as mock_listens:
+            register_rls_reset_hook(engine)
+
+        mock_listens.assert_called_once()
