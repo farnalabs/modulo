@@ -137,7 +137,8 @@ vi.mock('@/manifest.yaml', () => ({
   default: mockManifest,
 }))
 
-import { navGroups, canSeeItem } from '../config/navigation'
+import { getNavGroups, canSeeItem } from '../config/navigation'
+const navGroups = getNavGroups()
 import type { NavItem } from '../config/navigation'
 
 describe('navigation.ts', () => {
@@ -273,7 +274,7 @@ describe('navigation.ts', () => {
     expect(canSeeItem(item, { role: 'admin', permissions: ['admin.read', 'user.read'] }, { isAtMinimumTier: () => true })).toBe(true)
   })
 
-  it('canSeeItem passes through when permissions not provided', () => {
+  it('canSeeItem denies access when permissions not provided but required', () => {
     const item: NavItem = {
       to: '/admin',
       icon: 'Settings',
@@ -281,7 +282,18 @@ describe('navigation.ts', () => {
       labelKey: 'item_admin',
       requiredPermissions: ['admin.read'],
     }
-    expect(canSeeItem(item, { role: 'admin' }, { isAtMinimumTier: () => true })).toBe(true)
+    expect(canSeeItem(item, { role: 'admin' }, { isAtMinimumTier: () => true })).toBe(false)
+  })
+
+  it('canSeeItem denies access when permissions array is empty', () => {
+    const item: NavItem = {
+      to: '/admin',
+      icon: 'Settings',
+      label: 'Admin',
+      labelKey: 'item_admin',
+      requiredPermissions: ['admin.read'],
+    }
+    expect(canSeeItem(item, { role: 'admin', permissions: [] }, { isAtMinimumTier: () => true })).toBe(false)
   })
 
   it('sets labelKey from routeLabelKeyMap for known routes', () => {
