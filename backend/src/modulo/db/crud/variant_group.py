@@ -3,6 +3,7 @@
 All functions require RLS org context to be set by the caller.
 """
 
+import logging
 import random
 import uuid
 from typing import Any
@@ -13,6 +14,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.db.crud.run import count_active_runs_for_pipeline, create_run
 from modulo.db.models.variant_group import VariantGroup
+
+_log = logging.getLogger(__name__)
 
 
 async def create_variant_group(
@@ -64,6 +67,7 @@ async def list_variant_groups(
     try:
         total = (await session.execute(count_q)).scalar_one()
     except ProgrammingError:
+        _log.warning("variant_group table not found — returning empty list")
         return [], 0
     items = list(
         (await session.execute(q.order_by(VariantGroup.created_at.desc()).offset(offset).limit(page_size))).scalars()
