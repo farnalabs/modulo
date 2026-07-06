@@ -277,7 +277,9 @@ class TestUploadLicense:
         resp = client.post(self.URL, json={"license_key": key})
         assert resp.status_code == 200
 
-        resp2 = client.get(self.URL)
+        org = self._mock_org(settings_json={})
+        with patch("modulo.api.routes.admin_license.get_organisation", new=AsyncMock(return_value=org)):
+            resp2 = client.get(self.URL)
         assert resp2.status_code == 200
         data2 = resp2.json()
         assert data2["has_license"] is True
