@@ -56,3 +56,16 @@ Users can disable auto-update on adapted community library primitives to pin a s
 
 - No integration test verifying that `notify_importers_of_update` actually skips auto_update=false copies in a real DB transaction
 - No Playwright test for the frontend toggle interaction
+
+## QA History
+
+### 2026-07-06 — Library product map QA
+
+**CRITICAL — No findings in this file.**
+
+**MAJOR — No findings in this file.**
+
+**Product map updated:**
+- Added QA History section for tracking.
+
+**Status:** covered (no changes).
