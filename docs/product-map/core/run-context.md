@@ -35,7 +35,7 @@ unit-tests:
   - backend/tests/unit/core/run_context/test_decorator_resilience.py
   - backend/tests/unit/core/run_context/test_run_context_bdd.py
   - backend/tests/unit/pipeline_engine/test_decorator.py
-depends-on: []
+depends-on: [feat-core-agent-model, feat-core-pipeline-execution, feat-core-db-abstraction-core]
 status: partial
 ---
 

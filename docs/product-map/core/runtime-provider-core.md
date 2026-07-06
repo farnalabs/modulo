@@ -23,7 +23,7 @@ unit-tests:
   - backend/tests/unit/graph_validator/test_environment_capabilities.py
   - backend/tests/unit/api/test_environments.py
 depends-on: [feat-core-pipeline-execution]
-delivery-tasks: []
+delivery-tasks: [task-runtime-provider-core]
 status: partial
 ---
 

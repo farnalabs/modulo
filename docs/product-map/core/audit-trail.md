@@ -21,7 +21,7 @@ unit-tests:
   - backend/tests/unit/audit_logger/test_append_only.py
   - backend/tests/integration/test_audit_append_only.py
 
-depends-on: []
+depends-on: [feat-core-db-abstraction-core]
 status: partial
 ---
 

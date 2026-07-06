@@ -5,7 +5,7 @@ delivery-tasks: [task-nv12-backup-restore]
 code:
   - backend/src/modulo/cli/backup.py
 bdd: []
-depends-on: []
+depends-on: [feat-core-db-abstraction-core, feat-core-secrets-backend]
 unit-tests:
   - backend/tests/unit/cli/test_backup.py
 status: partial

@@ -24,7 +24,7 @@ unit-tests:
   - backend/tests/unit/db/test_repositories_locks.py
 
 delivery-tasks: []
-depends-on: []
+depends-on: [feat-core-db-abstraction-core]
 status: partial
 ---
 
