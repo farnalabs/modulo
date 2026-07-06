@@ -28,6 +28,7 @@
                 <div>
                   <h3 class="font-medium">{{ b.label }}</h3>
                   <p class="text-xs text-muted-foreground">{{ b.description }}</p>
+                  <p v-if="!b.enabled" class="text-xs text-muted-foreground/60 mt-1">{{ b.hint }}</p>
                 </div>
                 <label class="relative inline-flex items-center cursor-pointer">
                   <input type="checkbox" v-model="b.enabled" class="sr-only peer" @change="onDirty" />
@@ -98,6 +99,7 @@ interface BackendForm {
   key: string
   label: string
   description: string
+  hint: string
   enabled: boolean
   fields: BackendField[]
 }
@@ -107,6 +109,7 @@ const backendForms = reactive<BackendForm[]>([
     key: 'builtin',
     label: 'Built-in (DB)',
     description: 'Store errors in Modulo\'s own database. Always available, no external service needed.',
+    hint: '',
     enabled: true,
     fields: [],
   },
@@ -114,6 +117,7 @@ const backendForms = reactive<BackendForm[]>([
     key: 'sentry',
     label: 'Sentry',
     description: 'Error tracking with session replays, source maps, and performance monitoring.',
+    hint: 'Requires a Sentry DSN from https://sentry.io',
     enabled: false,
     fields: [
       { key: 'dsn', label: 'DSN', value: '', placeholder: 'https://xxx@o123.ingest.sentry.io/123', secret: true, revealed: false },
@@ -123,6 +127,7 @@ const backendForms = reactive<BackendForm[]>([
     key: 'datadog_rum',
     label: 'Datadog RUM',
     description: 'Real User Monitoring with performance metrics, session replays, and logs.',
+    hint: 'Requires a Datadog RUM client token — create one in Datadog under UX Monitoring',
     enabled: false,
     fields: [
       { key: 'clientToken', label: 'Client Token', value: '', placeholder: 'pub123456...', secret: true, revealed: false },
@@ -133,6 +138,7 @@ const backendForms = reactive<BackendForm[]>([
     key: 'grafana_faro',
     label: 'Grafana Faro',
     description: 'OpenTelemetry-based monitoring with Grafana Cloud. No cookies set.',
+    hint: 'Requires a Faro collector URL — set up a Grafana Cloud stack with Faro',
     enabled: false,
     fields: [
       { key: 'url', label: 'Collector URL', value: '', placeholder: 'https://faro-collector.example.com', secret: false, revealed: false },
