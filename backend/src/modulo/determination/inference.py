@@ -6,6 +6,7 @@ Uncertainty is surfaced explicitly; gaps are preferred over fabrication.
 
 import uuid
 from collections import Counter
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any
 
@@ -14,26 +15,22 @@ from modulo.determination.scanner import ScanSample
 _VALID_CONFIDENCES = frozenset({"high", "medium", "low"})
 
 
+@dataclass
 class Finding:
     """A single finding about the SDLC."""
 
-    def __init__(
-        self,
-        category: str,
-        finding: str,
-        evidence: str,
-        confidence: str,
-        uncertainty: str = "",
-        related_connector: uuid.UUID | None = None,
-    ) -> None:
-        if confidence not in _VALID_CONFIDENCES:
-            raise ValueError(f"confidence must be one of {sorted(_VALID_CONFIDENCES)}, got {confidence!r}")
-        self.category = category
-        self.finding = finding
-        self.evidence = evidence
-        self.confidence = confidence
-        self.uncertainty = uncertainty
-        self.related_connector = related_connector
+    category: str
+    finding: str
+    evidence: str
+    confidence: str
+    uncertainty: str = ""
+    related_connector: uuid.UUID | None = None
+
+    def __post_init__(self) -> None:
+        if self.confidence not in _VALID_CONFIDENCES:
+            raise ValueError(
+                f"confidence must be one of {sorted(_VALID_CONFIDENCES)}, got {self.confidence!r}"
+            )
 
 
 _CI_FILES = {
@@ -53,7 +50,7 @@ def _age_days(value: Any) -> float | None:
     try:
         dt = datetime.fromisoformat(value)
         return (datetime.now(UTC) - dt).total_seconds() / 86400
-    except (ValueError, TypeError):
+    except ValueError:
         return None
 
 
@@ -67,7 +64,6 @@ def infer(samples: list[ScanSample]) -> list[Finding]:
     issue_statuses: list[str] = []
     has_ci_config = False
     has_planning_stage = False
-    has_code_review_stage = False
     pr_ages: list[float] = []
     stale_pr_count = 0
 
@@ -119,7 +115,6 @@ def infer(samples: list[ScanSample]) -> list[Finding]:
 
     # --- Stage: Code Review ---
     if pull_requests:
-        has_code_review_stage = True
         findings.append(
             Finding(
                 category="stage",
@@ -223,7 +218,7 @@ def infer(samples: list[ScanSample]) -> list[Finding]:
         stages_found.append("development")
     if has_planning_stage:
         stages_found.append("planning")
-    if has_code_review_stage:
+    if pull_requests:
         stages_found.append("code review")
     if has_ci_config:
         stages_found.append("ci/cd")
