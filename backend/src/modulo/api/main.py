@@ -410,23 +410,12 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
         logger.warning("startup.sqlite_mode")
 
     if not settings.redis_url:
-        if not settings.debug:
-            raise RuntimeError(
-                "REDIS_URL is not configured. Modulo requires Redis for distributed "
-                "event coordination, rate limiting, caching, and session state. "
-                "Set REDIS_URL in your environment or fly.toml [env] section."
-            )
-        logger.warning(
-            "startup.no_redis — in-memory fallbacks active (debug mode only). "
-            "Not suitable for production — set REDIS_URL."
+        raise RuntimeError(
+            "REDIS_URL is required. Modulo uses Redis for event coordination, rate limiting, "
+            "caching, and session state. Provision Upstash Redis and set REDIS_URL in fly.toml."
         )
-
+    logger.info("startup.redis_configured — Celery beat available for distributed scheduling")
     _scheduler_tasks: list[asyncio.Task] = []
-    if settings.redis_url:
-        logger.info("startup.redis_configured — Celery beat available for distributed scheduling")
-    else:
-        _scheduler_tasks = await start_schedulers()
-        logger.info("startup.no_redis — in-process schedulers active (debug mode only)")
 
     setup_otel(
         service_name=settings.modulo_otel_service_name,
