@@ -169,6 +169,22 @@ class TestCreateProviderIntegrityError:
 
 
 # ---------------------------------------------------------------------------
+# IntegrityError on update → 409
+# ---------------------------------------------------------------------------
+
+
+class TestUpdateProviderIntegrityError:
+    @patch("modulo.api.routes.admin_sso.update_provider", new=AsyncMock(side_effect=IntegrityError("mock", {}, "")))
+    def test_update_provider_returns_409(self, client: TestClient) -> None:
+        resp = client.put(
+            f"/api/v1/admin/sso/providers/{_PROVIDER_ID}",
+            json={"name": "Duplicate Provider"},
+        )
+        assert resp.status_code == 409
+        assert "already exists" in resp.text.lower()
+
+
+# ---------------------------------------------------------------------------
 # SSO auth routes — SQLAlchemyError → 503
 # ---------------------------------------------------------------------------
 
