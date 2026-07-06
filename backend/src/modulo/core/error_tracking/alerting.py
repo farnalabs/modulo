@@ -13,6 +13,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.core.error_tracking.alert_dispatcher import dispatch_alert
+from modulo.core.error_tracking.metrics import record_error_alert
 from modulo.db.models.error_group import ErrorGroup
 from modulo.db.models.error_notification_rule import ErrorNotificationRule
 
@@ -137,6 +138,7 @@ class AlertEngine:
         """Dispatch a list of triggered alerts, swallowing per-alert failures."""
         for alert in alerts:
             try:
+                record_error_alert(alert.level, alert.action_type)
                 await dispatch_alert(
                     org_id=org_id,
                     alert=alert,
@@ -151,17 +153,21 @@ class AlertEngine:
 
     async def _get_last_fired(self, key: _CooldownKey) -> float | None:
         if self._redis is not None:
-            raw = await self._redis.get(str(key))
-            if raw:
-                try:
-                    return float(json.loads(raw))
-                except (ValueError, TypeError):
-                    return None
-            return None
+            try:
+                raw = await self._redis.get(str(key))
+                if raw:
+                    try:
+                        return float(json.loads(raw))
+                    except (ValueError, TypeError):
+                        return None
+            except Exception:
+                _log.exception("alert.cooldown_redis_get_failed", extra={"key": str(key)})
         return self._cooldowns.get(key)
 
     async def _set_last_fired(self, key: _CooldownKey, value: float) -> None:
         if self._redis is not None:
-            await self._redis.setex(str(key), _COOLDOWN_TTL, json.dumps(value))
-        else:
-            self._cooldowns[key] = value
+            try:
+                await self._redis.setex(str(key), _COOLDOWN_TTL, json.dumps(value))
+            except Exception:
+                _log.exception("alert.cooldown_redis_set_failed", extra={"key": str(key)})
+        self._cooldowns[key] = value
