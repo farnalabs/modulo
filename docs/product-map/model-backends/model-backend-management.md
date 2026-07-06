@@ -40,6 +40,7 @@ code:
   - backend/src/modulo/model_backends/anthropic/__init__.py
   - backend/src/modulo/model_backends/openai/__init__.py
   - backend/src/modulo/model_backends/ollama/__init__.py
+  - backend/src/modulo/model_backends/opencode/__init__.py
   - backend/src/modulo/model_backends/stub/backend.py
   - backend/src/modulo/model_backends/ai21/__init__.py
   - backend/src/modulo/model_backends/azure_openai/__init__.py
@@ -78,7 +79,7 @@ Model backends are a first-class resource, parallel to connector instances. Ever
 - [x] `ModelBackendBase` ABC defines: `invoke()`, `stream()`, `backend_id` property
 - [x] `backend_id` follows `"{vendor}/{model_id}"` format
 - [x] `id`, `name`, `display_name` fields on DB entity (`model_backends` table)
-- [x] `provider` enum with values `ai21 | anthropic | azure_openai | bedrock | cohere | deepseek | fireworks | gemini | grok | groq | jan | llamacpp | lm_studio | localai | mistral | ollama | openai | openrouter | perplexity | qwen | replicate | tgi | togetherai | vertexai | vllm | watsonx` — DB CheckConstraint + `ModelBackendProvider` enum (25 providers; `replicate` registered in enum but no backend implementation)
+- [x] `provider` enum with values `ai21 | anthropic | azure_openai | bedrock | cohere | custom | deepseek | fireworks | gemini | grok | groq | jan | llamacpp | lm_studio | localai | mistral | ollama | openai | opencode | openrouter | perplexity | qwen | replicate | tgi | togetherai | vertexai | vllm | watsonx` — DB CheckConstraint + `ModelBackendProvider` enum (28 providers in enum; 26 have backend implementations; `replicate` and `custom` registered in enum but no backend implementation)
 - [x] `model_id` string field
 - [x] `default_params` JSON column (temperature, max_tokens, timeout)
 - [x] `cost_tracking` flag (`enabled`/`disabled` with CheckConstraint)
@@ -94,6 +95,7 @@ Model backends are a first-class resource, parallel to connector instances. Ever
 - [x] `OllamaBackend`: wraps `ChatOpenAI` pointed at Ollama's OpenAI-compatible endpoint
 - [x] `OllamaBackend` defaults base URL to `http://localhost:11434/v1`
 - [x] `OllamaBackend` substitutes `"ollama"` as placeholder API key when `None` is provided
+- [x] `OpenCodeBackend`: wraps `ChatOpenAI` pointed at OpenCode's OpenAI-compatible endpoint
 - [x] `StubModelBackend`: deterministic test double keyed by normalized input
 - [x] All backends expose `invoke(messages)` returning `BaseMessage`
 - [x] All backends expose `stream(messages)` returning `AsyncIterator[BaseMessage]`
@@ -122,7 +124,7 @@ Model backends are a first-class resource, parallel to connector instances. Ever
 - [ ] `ReplicateBackend`: wraps `ChatReplicate` — no backend implementation file exists; enum value registered in `ModelBackendProvider` but factory has no `replicate` case
 - [ ] `Custom` backend (user-provided endpoint) — not implemented
 - [ ] Provider-specific `invoke()` param forwarding (e.g. `max_tokens` to Anthropic) — not validated
-- [ ] All 25 provider backends (missing `replicate`) registered in `ModelBackendHub._build_backend()` factory — `replicate` missing from factory; would fall through to plugin registry or raise `ValueError`
+- [ ] All 26 provider backends (missing `replicate`, `custom`) registered in `ModelBackendHub._build_backend()` factory — `replicate` and `custom` missing from factory; would fall through to plugin registry or raise `ValueError`
 
 ### Credential Management — encryption and rotation
 
@@ -217,7 +219,7 @@ Model backends are a first-class resource, parallel to connector instances. Ever
 - [ ] **No rate limiting on model backend API endpoints**: only general per-endpoint rate limits apply
 - [ ] **No multi-backend test coverage**: `fallback_backend_ids` stored on entity but no runtime fallback logic verified in tests
 - [ ] **BDD rate_limiting.feature out of place**: rate_limiting.feature lives in model_backends directory but tests general API rate limiting (runs, webhooks, MCP), not backend-specific rate limiting
-- [ ] **ReplicateBackend missing**: `ModelBackendProvider` enum includes `replicate` but no `replicate/__init__.py` backend file exists; `_build_backend()` factory has no `replicate` case — would fall through to plugin registry or raise `ValueError`
+- [ ] **ReplicateBackend and CustomBackend missing**: `ModelBackendProvider` enum includes `replicate` and `custom` but neither has a backend implementation directory; `_build_backend()` factory has no case for either — would fall through to plugin registry or raise `ValueError`
 
 ## QA History
 
@@ -228,3 +230,4 @@ Model backends are a first-class resource, parallel to connector instances. Ever
 
 - 2026-07-08 (improve-architecture index 273): Cross-cutting QA. Fixed CRITICAL — `ModelBackendResponse.model_config` used `from_attributes: False` preventing `model_validate()` from ORM; changed to `from_attributes: True, populate_by_name: True` matching all other response models. `created_by` uses `validation_alias="account_id"` which requires `from_attributes=True`. Fixed CRITICAL — frontend provider dropdown sent `"google"` (backed expects `gemini`) and `"together"` (backed expects `togetherai`) — dead controls that always returned 422. Fixed CRITICAL — frontend created/had hardcoded English strings across entire view (add button, form labels, table headers, credentials badge, delete confirmation, action buttons) — wrapped ~30 strings in `$t()` wrappers with new i18n keys. Fixed CRITICAL — frontend error handlers used `String(err)` and `e instanceof Error ? e.message : String(e)` instead of `formatApiError(err)` — would display `[object Object]` on API errors. Fixed MAJOR — added `with_for_update()` to duplicate name check in create route (TOCTOU race prevention). Fixed MAJOR — added `except IntegrityError → 409` catch to create route (FK/constraint violations now return 409 instead of propagating to SQLAlchemyError→503). Fixed MAJOR — added `replicate` and `custom` to `_VALID_PROVIDERS` (were missing from API validation, so frontend provider dropdown options for these returned 422). Removed `replicate` and `custom` from frontend provider dropdown (no backend implementation — ReplicateBackend missing from factory, Custom not implemented). Added 1 new unit test `test_create_model_backend_integrity_error_returns_409` to `test_model_backends_endpoint.py`. Updated product map: added IntegrityError→409 behaviour checkbox, added QA History section. All existing tests pass (unchanged). Merged to main. Status: partial.
 - 2026-07-05 (qa-iterate prodmap model-backends): Corrected false claims: ReplicateBackend changed from `[x]` to `[ ]` (no backend implementation file exists; enum-only). "All 26 provider backends registered" changed from `[x]` to `[ ]` (only 25 built-in; `replicate` missing from `_build_backend()` factory). Updated provider count text from "26 providers" to "25 providers; replicate registered in enum but no backend implementation". Added ReplicateBackend missing to Known Gaps.
+- 2026-07-06 (qa-iterate prodmap model-backends): Fixes from code verification. Corrected exception base classes (`BackendNotFoundError(KeyError)`→`BackendNotFoundError(Exception)`, `BackendUnavailableError(RuntimeError)`→`BackendUnavailableError(Exception)`). Corrected `_build_backend` error message to `ValueError("Unknown model backend provider: {provider!r}")`. Corrected UUID fallback handling claim (caught, not uncaught). Fixed logging claim — Hub has 11+ logger calls; real gap is failover events not surfaced via `audit_logger` callback. Updated provider count from 25 to 28 (enum) / 26 (implemented). Added `opencode` to `code:` frontmatter and provider list. Added `custom` to provider list. Updated ReplicateBackend gap to also cover CustomBackend.
