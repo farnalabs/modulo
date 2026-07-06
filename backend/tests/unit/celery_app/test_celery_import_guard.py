@@ -25,6 +25,7 @@ class TestGetCeleryApp:
             mock_settings.return_value = settings
 
             import modulo.celery_app
+
             importlib.reload(modulo.celery_app)
             result = modulo.celery_app.get_celery_app()
             assert result is None
@@ -38,6 +39,7 @@ class TestGetCeleryApp:
             mock_settings.return_value = settings
 
             import modulo.celery_app
+
             importlib.reload(modulo.celery_app)
             result = modulo.celery_app.get_celery_app()
             assert result is not None
@@ -46,17 +48,20 @@ class TestGetCeleryApp:
     def test_module_has_celery_sentinel(self):
         """When Celery IS installed, Celery class is the real Celery class."""
         import modulo.celery_app
+
         assert modulo.celery_app.Celery is not None
 
     def test_module_has_get_celery_app_function(self):
         """The module exports get_celery_app function."""
         import modulo.celery_app
+
         assert hasattr(modulo.celery_app, "get_celery_app")
         assert callable(modulo.celery_app.get_celery_app)
 
     def test_celery_app_attr_is_none_initially(self):
         """The module-level celery_app attribute is None initially."""
         import modulo.celery_app
+
         importlib.reload(modulo.celery_app)
         assert modulo.celery_app.celery_app is None
 
@@ -65,12 +70,14 @@ class TestCronSchedulerSentinel:
     def test_module_loads(self):
         """cron_scheduler module should load without errors."""
         import modulo.core.cron_scheduler
+
         importlib.reload(modulo.core.cron_scheduler)
         assert modulo.core.cron_scheduler.CronFireTask is not None
 
     def test_has_celery_fallbacks(self):
         """Object sentinel fallbacks exist for Celery classes."""
         import modulo.core.cron_scheduler
+
         importlib.reload(modulo.core.cron_scheduler)
         assert modulo.core.cron_scheduler.Celery is not None
         assert modulo.core.cron_scheduler.Task is not None
@@ -82,11 +89,13 @@ class TestCeleryTasksGuard:
     def test_module_loads(self):
         """celery_tasks module should load without errors."""
         import modulo.core.notifier.celery_tasks as ct
+
         assert ct.get_celery_app is not None
 
     def test_has_celery_fallbacks(self):
         """Module has Celery and Task attributes."""
         import modulo.core.notifier.celery_tasks as ct
+
         assert hasattr(ct, "Celery")
         assert hasattr(ct, "Task")
 
@@ -95,6 +104,7 @@ class TestCleanupJobGuard:
     def test_module_loads(self):
         """webhook_dedup_cleanup module should load without errors."""
         import modulo.core.cleanup_jobs.webhook_dedup_cleanup as wc
+
         assert wc.get_celery_app is not None
 
 
@@ -102,4 +112,5 @@ class TestReportSchedulerGuard:
     def test_module_loads(self):
         """reports/scheduler module should load without errors."""
         import modulo.core.reports.scheduler as rs
+
         assert rs.get_celery_app is not None

@@ -250,25 +250,42 @@ class TestSkillLoaderBuildSystemPrompt:
     # ── Existing tests (adapted to new architecture) ──────────────────
 
     async def test_with_config_system_prompt_only(
-        self, loader: SkillLoader, mock_session: AsyncMock, org_id: uuid.UUID, user_id: uuid.UUID,
+        self,
+        loader: SkillLoader,
+        mock_session: AsyncMock,
+        org_id: uuid.UUID,
+        user_id: uuid.UUID,
     ) -> None:
-        prompt = await self._run(loader, org_id, user_id,
-                                 config_kwargs={"system_prompt": "You are a helpful assistant."})
+        prompt = await self._run(
+            loader, org_id, user_id, config_kwargs={"system_prompt": "You are a helpful assistant."}
+        )
         assert "You are a helpful assistant." in prompt
         assert "Organisation Skills" not in prompt
         assert "User Skills" not in prompt
 
     async def test_with_page_context(
-        self, loader: SkillLoader, mock_session: AsyncMock, org_id: uuid.UUID, user_id: uuid.UUID,
+        self,
+        loader: SkillLoader,
+        mock_session: AsyncMock,
+        org_id: uuid.UUID,
+        user_id: uuid.UUID,
     ) -> None:
-        prompt = await self._run(loader, org_id, user_id,
-                                 config_kwargs={"system_prompt": "System prompt."},
-                                 page_context="User is on the Reports page")
+        prompt = await self._run(
+            loader,
+            org_id,
+            user_id,
+            config_kwargs={"system_prompt": "System prompt."},
+            page_context="User is on the Reports page",
+        )
         assert "Page Context" in prompt
         assert "User is on the Reports page" in prompt
 
     async def test_with_org_and_user_skills(
-        self, loader: SkillLoader, mock_session: AsyncMock, org_id: uuid.UUID, user_id: uuid.UUID,
+        self,
+        loader: SkillLoader,
+        mock_session: AsyncMock,
+        org_id: uuid.UUID,
+        user_id: uuid.UUID,
     ) -> None:
         org_skill = _mock_skill("org-skill", body="Org skill body", source_mode=None)
         user_skill = _mock_skill("user-skill", body="User skill body", source_mode=None)
@@ -287,11 +304,20 @@ class TestSkillLoaderBuildSystemPrompt:
             side_effect=[org_result, user_result],
         )
 
-        prompt = await self._run(loader, org_id, user_id,
-                                 config_kwargs={"system_prompt": "", "additional_guidance": ""},
-                                 ctx_overrides={"user_profile": "off", "product_docs": "off",
-                                                "integration_status": "off", "org_config": "off",
-                                                "feature_overview": "off", "product_primer": "off"})
+        prompt = await self._run(
+            loader,
+            org_id,
+            user_id,
+            config_kwargs={"system_prompt": "", "additional_guidance": ""},
+            ctx_overrides={
+                "user_profile": "off",
+                "product_docs": "off",
+                "integration_status": "off",
+                "org_config": "off",
+                "feature_overview": "off",
+                "product_primer": "off",
+            },
+        )
         assert "Organisation Skills" in prompt
         assert "org-skill" in prompt
         assert "Org skill body" in prompt
@@ -300,72 +326,118 @@ class TestSkillLoaderBuildSystemPrompt:
         assert "User skill body" in prompt
 
     async def test_with_additional_guidance(
-        self, loader: SkillLoader, mock_session: AsyncMock, org_id: uuid.UUID, user_id: uuid.UUID,
+        self,
+        loader: SkillLoader,
+        mock_session: AsyncMock,
+        org_id: uuid.UUID,
+        user_id: uuid.UUID,
     ) -> None:
-        prompt = await self._run(loader, org_id, user_id,
-                                 config_kwargs={"system_prompt": "You are helpful.",
-                                                "additional_guidance": "Always be concise."})
+        prompt = await self._run(
+            loader,
+            org_id,
+            user_id,
+            config_kwargs={"system_prompt": "You are helpful.", "additional_guidance": "Always be concise."},
+        )
         assert "You are helpful." in prompt
         assert "Always be concise." in prompt
 
     async def test_with_no_config_or_skills(
-        self, loader: SkillLoader, mock_session: AsyncMock, org_id: uuid.UUID, user_id: uuid.UUID,
+        self,
+        loader: SkillLoader,
+        mock_session: AsyncMock,
+        org_id: uuid.UUID,
+        user_id: uuid.UUID,
     ) -> None:
-        prompt = await self._run(loader, org_id, user_id,
-                                 config_kwargs={"system_prompt": "", "additional_guidance": ""},
-                                 ctx_overrides={"product_docs": "off", "integration_status": "off",
-                                                "org_config": "off", "feature_overview": "off",
-                                                "user_profile": "off", "product_primer": "off"})
+        prompt = await self._run(
+            loader,
+            org_id,
+            user_id,
+            config_kwargs={"system_prompt": "", "additional_guidance": ""},
+            ctx_overrides={
+                "product_docs": "off",
+                "integration_status": "off",
+                "org_config": "off",
+                "feature_overview": "off",
+                "user_profile": "off",
+                "product_primer": "off",
+            },
+        )
         assert prompt == ""
 
     async def test_with_include_ui_tools_text_false_excludes_tools(
-        self, loader: SkillLoader, mock_session: AsyncMock, org_id: uuid.UUID, user_id: uuid.UUID,
+        self,
+        loader: SkillLoader,
+        mock_session: AsyncMock,
+        org_id: uuid.UUID,
+        user_id: uuid.UUID,
     ) -> None:
-        prompt = await self._run(loader, org_id, user_id,
-                                 config_kwargs={"system_prompt": "You are helpful."})
+        prompt = await self._run(loader, org_id, user_id, config_kwargs={"system_prompt": "You are helpful."})
         assert "Browser Tools Available (Text Mode)" not in prompt
 
     async def test_with_include_ui_tools_text_true_includes_tools(
-        self, loader: SkillLoader, mock_session: AsyncMock, org_id: uuid.UUID, user_id: uuid.UUID,
+        self,
+        loader: SkillLoader,
+        mock_session: AsyncMock,
+        org_id: uuid.UUID,
+        user_id: uuid.UUID,
     ) -> None:
-        prompt = await self._run(loader, org_id, user_id,
-                                 config_kwargs={"system_prompt": "You are helpful."},
-                                 include_ui_tools_text=True)
+        prompt = await self._run(
+            loader, org_id, user_id, config_kwargs={"system_prompt": "You are helpful."}, include_ui_tools_text=True
+        )
         assert "Browser Tools Available (Text Mode)" in prompt
         assert "**navigate**(path:" in prompt
 
     # ── New tests for context source filtering ────────────────────────
 
     async def test_product_primer_included_when_always_on(
-        self, loader: SkillLoader, mock_session: AsyncMock, org_id: uuid.UUID, user_id: uuid.UUID,
+        self,
+        loader: SkillLoader,
+        mock_session: AsyncMock,
+        org_id: uuid.UUID,
+        user_id: uuid.UUID,
     ) -> None:
-        prompt = await self._run(loader, org_id, user_id,
-                                 config_kwargs={"system_prompt": "Base.",
-                                                "product_primer": "We build Modulo."})
+        prompt = await self._run(
+            loader, org_id, user_id, config_kwargs={"system_prompt": "Base.", "product_primer": "We build Modulo."}
+        )
         assert "Product Overview" in prompt
         assert "We build Modulo." in prompt
 
     async def test_product_primer_skipped_when_off(
-        self, loader: SkillLoader, mock_session: AsyncMock, org_id: uuid.UUID, user_id: uuid.UUID,
+        self,
+        loader: SkillLoader,
+        mock_session: AsyncMock,
+        org_id: uuid.UUID,
+        user_id: uuid.UUID,
     ) -> None:
-        prompt = await self._run(loader, org_id, user_id,
-                                 config_kwargs={"system_prompt": "Base.",
-                                                "product_primer": "We build Modulo."},
-                                 ctx_overrides={"product_primer": "off"})
+        prompt = await self._run(
+            loader,
+            org_id,
+            user_id,
+            config_kwargs={"system_prompt": "Base.", "product_primer": "We build Modulo."},
+            ctx_overrides={"product_primer": "off"},
+        )
         assert "Product Overview" not in prompt
 
     async def test_product_primer_skipped_when_empty(
-        self, loader: SkillLoader, mock_session: AsyncMock, org_id: uuid.UUID, user_id: uuid.UUID,
+        self,
+        loader: SkillLoader,
+        mock_session: AsyncMock,
+        org_id: uuid.UUID,
+        user_id: uuid.UUID,
     ) -> None:
-        prompt = await self._run(loader, org_id, user_id,
-                                 config_kwargs={"system_prompt": "Base.", "product_primer": ""})
+        prompt = await self._run(
+            loader, org_id, user_id, config_kwargs={"system_prompt": "Base.", "product_primer": ""}
+        )
         assert "Product Overview" not in prompt
 
     async def test_knowledge_tools_section_includes_tool_sources(
-        self, loader: SkillLoader, mock_session: AsyncMock, org_id: uuid.UUID, user_id: uuid.UUID,
+        self,
+        loader: SkillLoader,
+        mock_session: AsyncMock,
+        org_id: uuid.UUID,
+        user_id: uuid.UUID,
     ) -> None:
-        prompt = await self._run(loader, org_id, user_id,
-                                 config_kwargs={"system_prompt": "Base."})
+        prompt = await self._run(loader, org_id, user_id, config_kwargs={"system_prompt": "Base."})
         assert "Available Knowledge Tools" in prompt
         assert "get_documentation" in prompt
         assert "get_integration_status" in prompt
@@ -373,37 +445,77 @@ class TestSkillLoaderBuildSystemPrompt:
         assert "get_available_features" in prompt
 
     async def test_knowledge_tools_skipped_when_no_tool_sources(
-        self, loader: SkillLoader, mock_session: AsyncMock, org_id: uuid.UUID, user_id: uuid.UUID,
+        self,
+        loader: SkillLoader,
+        mock_session: AsyncMock,
+        org_id: uuid.UUID,
+        user_id: uuid.UUID,
     ) -> None:
-        prompt = await self._run(loader, org_id, user_id,
-                                 config_kwargs={"system_prompt": "Base."},
-                                 ctx_overrides={"product_docs": "off", "integration_status": "off",
-                                                "org_config": "off", "feature_overview": "off"})
+        prompt = await self._run(
+            loader,
+            org_id,
+            user_id,
+            config_kwargs={"system_prompt": "Base."},
+            ctx_overrides={
+                "product_docs": "off",
+                "integration_status": "off",
+                "org_config": "off",
+                "feature_overview": "off",
+            },
+        )
         assert "Available Knowledge Tools" not in prompt
 
     async def test_user_profile_included_when_always_on(
-        self, loader: SkillLoader, mock_session: AsyncMock, org_id: uuid.UUID, user_id: uuid.UUID,
+        self,
+        loader: SkillLoader,
+        mock_session: AsyncMock,
+        org_id: uuid.UUID,
+        user_id: uuid.UUID,
     ) -> None:
-        prompt = await self._run(loader, org_id, user_id,
-                                 config_kwargs={"system_prompt": "Base."},
-                                 ctx_overrides={"user_profile": "always_on", "product_docs": "off",
-                                                "integration_status": "off", "org_config": "off",
-                                                "feature_overview": "off"})
+        prompt = await self._run(
+            loader,
+            org_id,
+            user_id,
+            config_kwargs={"system_prompt": "Base."},
+            ctx_overrides={
+                "user_profile": "always_on",
+                "product_docs": "off",
+                "integration_status": "off",
+                "org_config": "off",
+                "feature_overview": "off",
+            },
+        )
         # No DB match => no profile block, but method is called
         assert "User Profile" not in prompt
 
     async def test_user_profile_skipped_when_off(
-        self, loader: SkillLoader, mock_session: AsyncMock, org_id: uuid.UUID, user_id: uuid.UUID,
+        self,
+        loader: SkillLoader,
+        mock_session: AsyncMock,
+        org_id: uuid.UUID,
+        user_id: uuid.UUID,
     ) -> None:
-        prompt = await self._run(loader, org_id, user_id,
-                                 config_kwargs={"system_prompt": "Base."},
-                                 ctx_overrides={"user_profile": "off", "product_docs": "off",
-                                                "integration_status": "off", "org_config": "off",
-                                                "feature_overview": "off"})
+        prompt = await self._run(
+            loader,
+            org_id,
+            user_id,
+            config_kwargs={"system_prompt": "Base."},
+            ctx_overrides={
+                "user_profile": "off",
+                "product_docs": "off",
+                "integration_status": "off",
+                "org_config": "off",
+                "feature_overview": "off",
+            },
+        )
         assert "User Profile" not in prompt
 
     async def test_skills_filtered_by_source_mode(
-        self, loader: SkillLoader, mock_session: AsyncMock, org_id: uuid.UUID, user_id: uuid.UUID,
+        self,
+        loader: SkillLoader,
+        mock_session: AsyncMock,
+        org_id: uuid.UUID,
+        user_id: uuid.UUID,
     ) -> None:
         always_on = _mock_skill("always-on-skill", source_mode="always_on", body="Always")
         tool_mode = _mock_skill("tool-skill", source_mode="tool", body="Tool")
@@ -420,11 +532,20 @@ class TestSkillLoaderBuildSystemPrompt:
             side_effect=[mock_result, mock_result],
         )
 
-        prompt = await self._run(loader, org_id, user_id,
-                                 config_kwargs={"system_prompt": "Base."},
-                                 ctx_overrides={"product_docs": "off", "integration_status": "off",
-                                                "org_config": "off", "feature_overview": "off",
-                                                "user_profile": "off", "product_primer": "off"})
+        prompt = await self._run(
+            loader,
+            org_id,
+            user_id,
+            config_kwargs={"system_prompt": "Base."},
+            ctx_overrides={
+                "product_docs": "off",
+                "integration_status": "off",
+                "org_config": "off",
+                "feature_overview": "off",
+                "user_profile": "off",
+                "product_primer": "off",
+            },
+        )
         # always-on and null skills appear in the skills block
         assert "always-on-skill" in prompt
         assert "Always" in prompt
@@ -438,7 +559,11 @@ class TestSkillLoaderBuildSystemPrompt:
         assert "off-skill" not in prompt
 
     async def test_tool_skills_listed_in_knowledge_tools(
-        self, loader: SkillLoader, mock_session: AsyncMock, org_id: uuid.UUID, user_id: uuid.UUID,
+        self,
+        loader: SkillLoader,
+        mock_session: AsyncMock,
+        org_id: uuid.UUID,
+        user_id: uuid.UUID,
     ) -> None:
         tool_skill = _mock_skill("qa-review", source_mode="tool", description="Review quality")
         always_on_skill = _mock_skill("auto-fix", source_mode="always_on", body="Auto")
@@ -452,24 +577,43 @@ class TestSkillLoaderBuildSystemPrompt:
             side_effect=[mock_result, mock_result],
         )
 
-        prompt = await self._run(loader, org_id, user_id,
-                                 config_kwargs={"system_prompt": "Base."},
-                                 ctx_overrides={"product_docs": "off", "integration_status": "off",
-                                                "org_config": "off", "feature_overview": "off",
-                                                "user_profile": "off", "product_primer": "off"})
+        prompt = await self._run(
+            loader,
+            org_id,
+            user_id,
+            config_kwargs={"system_prompt": "Base."},
+            ctx_overrides={
+                "product_docs": "off",
+                "integration_status": "off",
+                "org_config": "off",
+                "feature_overview": "off",
+                "user_profile": "off",
+                "product_primer": "off",
+            },
+        )
         # get_skill tool appears when tool-mode skills exist
         assert "Available Knowledge Tools" in prompt
         assert "get_skill(name)" in prompt
 
     async def test_prompt_composition_order(
-        self, loader: SkillLoader, mock_session: AsyncMock, org_id: uuid.UUID, user_id: uuid.UUID,
+        self,
+        loader: SkillLoader,
+        mock_session: AsyncMock,
+        org_id: uuid.UUID,
+        user_id: uuid.UUID,
     ) -> None:
-        prompt = await self._run(loader, org_id, user_id,
-                                 config_kwargs={"system_prompt": "System prompt.",
-                                                "additional_guidance": "Additional guidance.",
-                                                "product_primer": "Product overview."},
-                                 page_context="Page context.",
-                                 ctx_overrides={"user_profile": "off"})
+        prompt = await self._run(
+            loader,
+            org_id,
+            user_id,
+            config_kwargs={
+                "system_prompt": "System prompt.",
+                "additional_guidance": "Additional guidance.",
+                "product_primer": "Product overview.",
+            },
+            page_context="Page context.",
+            ctx_overrides={"user_profile": "off"},
+        )
         # Check sections appear in order
         sys_idx = prompt.index("System prompt.")
         add_idx = prompt.index("Additional guidance.")

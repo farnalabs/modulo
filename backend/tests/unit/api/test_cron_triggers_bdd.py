@@ -107,8 +107,10 @@ def test_create_cron_trigger_with_full_config_returns_201(client: TestClient) ->
     ):
         session = _make_mock_session()
         session.execute = AsyncMock(return_value=_make_trigger_result([trigger]))
+
         async def override_session() -> AsyncGenerator[AsyncMock, None]:
             yield session
+
         client.app.dependency_overrides[get_db_session] = override_session
         resp = client.post(
             f"/api/v1/pipelines/{_PIPELINE_ID}/triggers",
@@ -140,8 +142,10 @@ def test_create_cron_trigger_invalid_expression_returns_422(client: TestClient) 
         patch("modulo.api.routes.triggers.validate_cron_expression", return_value="bad cron"),
     ):
         session = _make_mock_session()
+
         async def override_session() -> AsyncGenerator[AsyncMock, None]:
             yield session
+
         client.app.dependency_overrides[get_db_session] = override_session
         resp = client.post(
             f"/api/v1/pipelines/{_PIPELINE_ID}/triggers",
@@ -385,8 +389,10 @@ def test_create_cron_trigger_with_timezone_returns_201(client: TestClient) -> No
     ):
         session = _make_mock_session()
         session.execute = AsyncMock(return_value=_make_trigger_result([trigger]))
+
         async def override_session() -> AsyncGenerator[AsyncMock, None]:
             yield session
+
         client.app.dependency_overrides[get_db_session] = override_session
         resp = client.post(
             f"/api/v1/pipelines/{_PIPELINE_ID}/triggers",

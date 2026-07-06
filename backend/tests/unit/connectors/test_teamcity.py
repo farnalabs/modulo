@@ -28,11 +28,10 @@ def test_connector_type(teamcity):
 # Health check
 # ---------------------------------------------------------------------------
 
+
 @respx.mock
 async def test_health_check_ok(teamcity):
-    respx.get(f"{_TC_BASE}/app/rest/server").mock(
-        return_value=httpx.Response(200, json={"version": "2024.07"})
-    )
+    respx.get(f"{_TC_BASE}/app/rest/server").mock(return_value=httpx.Response(200, json={"version": "2024.07"}))
     result = await teamcity.health_check()
     assert result.ok is True
 
@@ -57,15 +56,19 @@ async def test_health_check_fail_500(teamcity):
 # trigger_run
 # ---------------------------------------------------------------------------
 
+
 @respx.mock
 async def test_trigger_run(teamcity):
     route = respx.post(f"{_TC_BASE}/app/rest/buildQueue").mock(
-        return_value=httpx.Response(200, json={
-            "id": 42,
-            "buildTypeId": "MyBuild",
-            "href": "/app/rest/builds/id:42",
-            "state": "queued",
-        })
+        return_value=httpx.Response(
+            200,
+            json={
+                "id": 42,
+                "buildTypeId": "MyBuild",
+                "href": "/app/rest/builds/id:42",
+                "state": "queued",
+            },
+        )
     )
     run = await teamcity.trigger_run(pipeline_id="MyBuild")
     assert run.pipeline_id == "MyBuild"
@@ -77,12 +80,15 @@ async def test_trigger_run(teamcity):
 @respx.mock
 async def test_trigger_run_with_branch(teamcity):
     route = respx.post(f"{_TC_BASE}/app/rest/buildQueue").mock(
-        return_value=httpx.Response(200, json={
-            "id": 43,
-            "buildTypeId": "MyBuild",
-            "href": "/app/rest/builds/id:43",
-            "state": "queued",
-        })
+        return_value=httpx.Response(
+            200,
+            json={
+                "id": 43,
+                "buildTypeId": "MyBuild",
+                "href": "/app/rest/builds/id:43",
+                "state": "queued",
+            },
+        )
     )
     run = await teamcity.trigger_run(pipeline_id="MyBuild", branch="feature/foo")
     assert run.branch == "feature/foo"
@@ -92,12 +98,15 @@ async def test_trigger_run_with_branch(teamcity):
 @respx.mock
 async def test_trigger_run_with_variables(teamcity):
     route = respx.post(f"{_TC_BASE}/app/rest/buildQueue").mock(
-        return_value=httpx.Response(200, json={
-            "id": 44,
-            "buildTypeId": "MyBuild",
-            "href": "/app/rest/builds/id:44",
-            "state": "queued",
-        })
+        return_value=httpx.Response(
+            200,
+            json={
+                "id": 44,
+                "buildTypeId": "MyBuild",
+                "href": "/app/rest/builds/id:44",
+                "state": "queued",
+            },
+        )
     )
     run = await teamcity.trigger_run(pipeline_id="MyBuild", variables={"ENV": "prod"})
     assert run.status == CIRunStatus.QUEUED
@@ -108,20 +117,24 @@ async def test_trigger_run_with_variables(teamcity):
 # get_run_status
 # ---------------------------------------------------------------------------
 
+
 @respx.mock
 async def test_get_run_status_success(teamcity):
     respx.get(f"{_TC_BASE}/app/rest/builds/id:42").mock(
-        return_value=httpx.Response(200, json={
-            "id": 42,
-            "state": "finished",
-            "status": "SUCCESS",
-            "buildType": {"buildTypeId": "MyBuild", "id": "MyBuild"},
-            "href": "/app/rest/builds/id:42",
-            "branchName": "main",
-            "startDate": "2024-07-01T12:00:00+0000",
-            "finishDate": "2024-07-01T12:05:00+0000",
-            "duration": 300000,
-        })
+        return_value=httpx.Response(
+            200,
+            json={
+                "id": 42,
+                "state": "finished",
+                "status": "SUCCESS",
+                "buildType": {"buildTypeId": "MyBuild", "id": "MyBuild"},
+                "href": "/app/rest/builds/id:42",
+                "branchName": "main",
+                "startDate": "2024-07-01T12:00:00+0000",
+                "finishDate": "2024-07-01T12:05:00+0000",
+                "duration": 300000,
+            },
+        )
     )
     run = await teamcity.get_run_status("42")
     assert run.status == CIRunStatus.SUCCESS
@@ -133,12 +146,15 @@ async def test_get_run_status_success(teamcity):
 @respx.mock
 async def test_get_run_status_failure(teamcity):
     respx.get(f"{_TC_BASE}/app/rest/builds/id:42").mock(
-        return_value=httpx.Response(200, json={
-            "id": 42,
-            "state": "finished",
-            "status": "FAILURE",
-            "buildType": {"buildTypeId": "MyBuild"},
-        })
+        return_value=httpx.Response(
+            200,
+            json={
+                "id": 42,
+                "state": "finished",
+                "status": "FAILURE",
+                "buildType": {"buildTypeId": "MyBuild"},
+            },
+        )
     )
     run = await teamcity.get_run_status("42")
     assert run.status == CIRunStatus.FAILURE
@@ -147,11 +163,14 @@ async def test_get_run_status_failure(teamcity):
 @respx.mock
 async def test_get_run_status_running(teamcity):
     respx.get(f"{_TC_BASE}/app/rest/builds/id:42").mock(
-        return_value=httpx.Response(200, json={
-            "id": 42,
-            "state": "running",
-            "buildType": {"buildTypeId": "MyBuild"},
-        })
+        return_value=httpx.Response(
+            200,
+            json={
+                "id": 42,
+                "state": "running",
+                "buildType": {"buildTypeId": "MyBuild"},
+            },
+        )
     )
     run = await teamcity.get_run_status("42")
     assert run.status == CIRunStatus.IN_PROGRESS
@@ -160,11 +179,14 @@ async def test_get_run_status_running(teamcity):
 @respx.mock
 async def test_get_run_status_queued(teamcity):
     respx.get(f"{_TC_BASE}/app/rest/builds/id:42").mock(
-        return_value=httpx.Response(200, json={
-            "id": 42,
-            "state": "queued",
-            "buildType": {"buildTypeId": "MyBuild"},
-        })
+        return_value=httpx.Response(
+            200,
+            json={
+                "id": 42,
+                "state": "queued",
+                "buildType": {"buildTypeId": "MyBuild"},
+            },
+        )
     )
     run = await teamcity.get_run_status("42")
     assert run.status == CIRunStatus.QUEUED
@@ -173,6 +195,7 @@ async def test_get_run_status_queued(teamcity):
 # ---------------------------------------------------------------------------
 # get_run_logs
 # ---------------------------------------------------------------------------
+
 
 @respx.mock
 async def test_get_run_logs(teamcity):
@@ -197,27 +220,31 @@ async def test_get_run_logs_with_cursor(teamcity):
 # list_runs
 # ---------------------------------------------------------------------------
 
+
 @respx.mock
 async def test_list_runs(teamcity):
     respx.get(f"{_TC_BASE}/app/rest/builds").mock(
-        return_value=httpx.Response(200, json={
-            "build": [
-                {
-                    "id": 1,
-                    "state": "finished",
-                    "status": "SUCCESS",
-                    "buildType": {"buildTypeId": "MyBuild"},
-                    "href": "/app/rest/builds/id:1",
-                },
-                {
-                    "id": 2,
-                    "state": "finished",
-                    "status": "FAILURE",
-                    "buildType": {"buildTypeId": "MyBuild"},
-                    "href": "/app/rest/builds/id:2",
-                },
-            ]
-        })
+        return_value=httpx.Response(
+            200,
+            json={
+                "build": [
+                    {
+                        "id": 1,
+                        "state": "finished",
+                        "status": "SUCCESS",
+                        "buildType": {"buildTypeId": "MyBuild"},
+                        "href": "/app/rest/builds/id:1",
+                    },
+                    {
+                        "id": 2,
+                        "state": "finished",
+                        "status": "FAILURE",
+                        "buildType": {"buildTypeId": "MyBuild"},
+                        "href": "/app/rest/builds/id:2",
+                    },
+                ]
+            },
+        )
     )
     runs = await teamcity.list_runs(pipeline_id="MyBuild")
     assert len(runs) == 2
@@ -228,22 +255,25 @@ async def test_list_runs(teamcity):
 @respx.mock
 async def test_list_runs_filter_by_status(teamcity):
     respx.get(f"{_TC_BASE}/app/rest/builds").mock(
-        return_value=httpx.Response(200, json={
-            "build": [
-                {
-                    "id": 1,
-                    "state": "finished",
-                    "status": "SUCCESS",
-                    "buildType": {"buildTypeId": "MyBuild"},
-                },
-                {
-                    "id": 2,
-                    "state": "finished",
-                    "status": "FAILURE",
-                    "buildType": {"buildTypeId": "MyBuild"},
-                },
-            ]
-        })
+        return_value=httpx.Response(
+            200,
+            json={
+                "build": [
+                    {
+                        "id": 1,
+                        "state": "finished",
+                        "status": "SUCCESS",
+                        "buildType": {"buildTypeId": "MyBuild"},
+                    },
+                    {
+                        "id": 2,
+                        "state": "finished",
+                        "status": "FAILURE",
+                        "buildType": {"buildTypeId": "MyBuild"},
+                    },
+                ]
+            },
+        )
     )
     runs = await teamcity.list_runs(pipeline_id="MyBuild", status=CIRunStatus.FAILURE)
     assert len(runs) == 1
@@ -254,15 +284,19 @@ async def test_list_runs_filter_by_status(teamcity):
 # query — generic resources
 # ---------------------------------------------------------------------------
 
+
 @respx.mock
 async def test_query_projects(teamcity):
     respx.get(f"{_TC_BASE}/app/rest/projects").mock(
-        return_value=httpx.Response(200, json={
-            "project": [
-                {"id": "ProjectA", "name": "Project A"},
-                {"id": "ProjectB", "name": "Project B"},
-            ]
-        })
+        return_value=httpx.Response(
+            200,
+            json={
+                "project": [
+                    {"id": "ProjectA", "name": "Project A"},
+                    {"id": "ProjectB", "name": "Project B"},
+                ]
+            },
+        )
     )
     q = ConnectorQuery(resource="projects")
     result = await teamcity.query(q)
@@ -273,11 +307,14 @@ async def test_query_projects(teamcity):
 @respx.mock
 async def test_query_build_types(teamcity):
     respx.get(f"{_TC_BASE}/app/rest/buildTypes").mock(
-        return_value=httpx.Response(200, json={
-            "buildType": [
-                {"id": "BT1", "name": "Build Type 1", "projectId": "ProjectA"},
-            ]
-        })
+        return_value=httpx.Response(
+            200,
+            json={
+                "buildType": [
+                    {"id": "BT1", "name": "Build Type 1", "projectId": "ProjectA"},
+                ]
+            },
+        )
     )
     q = ConnectorQuery(resource="buildTypes", filters={"project_id": "ProjectA"})
     result = await teamcity.query(q)
@@ -288,11 +325,14 @@ async def test_query_build_types(teamcity):
 @respx.mock
 async def test_query_builds(teamcity):
     respx.get(f"{_TC_BASE}/app/rest/builds").mock(
-        return_value=httpx.Response(200, json={
-            "build": [
-                {"id": 1, "state": "finished", "status": "SUCCESS", "buildType": {"buildTypeId": "BT1"}},
-            ]
-        })
+        return_value=httpx.Response(
+            200,
+            json={
+                "build": [
+                    {"id": 1, "state": "finished", "status": "SUCCESS", "buildType": {"buildTypeId": "BT1"}},
+                ]
+            },
+        )
     )
     q = ConnectorQuery(resource="builds", filters={"buildTypeId": "BT1"})
     result = await teamcity.query(q)
@@ -303,12 +343,15 @@ async def test_query_builds(teamcity):
 @respx.mock
 async def test_query_agents(teamcity):
     respx.get(f"{_TC_BASE}/app/rest/agents").mock(
-        return_value=httpx.Response(200, json={
-            "agent": [
-                {"name": "agent-1", "connected": True},
-                {"name": "agent-2", "connected": False},
-            ]
-        })
+        return_value=httpx.Response(
+            200,
+            json={
+                "agent": [
+                    {"name": "agent-1", "connected": True},
+                    {"name": "agent-2", "connected": False},
+                ]
+            },
+        )
     )
     q = ConnectorQuery(resource="agents")
     result = await teamcity.query(q)
@@ -326,6 +369,7 @@ async def test_query_unsupported_resource(teamcity):
 # ---------------------------------------------------------------------------
 # write — generic resources
 # ---------------------------------------------------------------------------
+
 
 @respx.mock
 async def test_write_build(teamcity):
@@ -371,6 +415,7 @@ async def test_write_unsupported_resource(teamcity):
 # ---------------------------------------------------------------------------
 # Test double
 # ---------------------------------------------------------------------------
+
 
 async def test_double_health_check(teamcity_double):
     result = await teamcity_double.health_check()

@@ -250,7 +250,8 @@ class TestContributeFixture:
                 "modulo.core.library_service.update_library_primitive",
                 new_callable=AsyncMock,
                 return_value=None,
-            ),pytest.raises(ContributionNotFoundError)
+            ),
+            pytest.raises(ContributionNotFoundError),
         ):
             await contribute_fixture(
                 session,
@@ -304,7 +305,8 @@ class TestSubmitForReview:
                 "modulo.core.library_service.get_library_primitive",
                 new_callable=AsyncMock,
                 return_value=None,
-            ),pytest.raises(ContributionNotFoundError, match=str(prim_id))
+            ),
+            pytest.raises(ContributionNotFoundError, match=str(prim_id)),
         ):
             await submit_contribution_for_review(session, org_id, prim_id, created_by=uuid.uuid4())
 
@@ -320,7 +322,8 @@ class TestSubmitForReview:
                 "modulo.core.library_service.get_library_primitive",
                 new_callable=AsyncMock,
                 return_value=prim,
-            ),pytest.raises(ContributionInvalidTransitionError, match=str(prim_id))
+            ),
+            pytest.raises(ContributionInvalidTransitionError, match=str(prim_id)),
         ):
             await submit_contribution_for_review(session, org_id, prim_id, created_by=uuid.uuid4())
 
@@ -336,7 +339,8 @@ class TestSubmitForReview:
                 "modulo.core.library_service.get_library_primitive",
                 new_callable=AsyncMock,
                 return_value=prim,
-            ),pytest.raises(ContributionInvalidTransitionError)
+            ),
+            pytest.raises(ContributionInvalidTransitionError),
         ):
             await submit_contribution_for_review(session, org_id, prim_id, created_by=uuid.uuid4())
 
@@ -359,7 +363,8 @@ class TestSubmitForReview:
                 "modulo.core.library_service.update_library_primitive",
                 new_callable=AsyncMock,
                 return_value=None,
-            ),pytest.raises(ContributionNotFoundError)
+            ),
+            pytest.raises(ContributionNotFoundError),
         ):
             await submit_contribution_for_review(session, org_id, prim_id, created_by=created_by)
 
@@ -421,7 +426,8 @@ class TestPublish:
                 "modulo.core.library_service.get_library_primitive",
                 new_callable=AsyncMock,
                 return_value=None,
-            ),pytest.raises(ContributionNotFoundError, match=str(prim_id))
+            ),
+            pytest.raises(ContributionNotFoundError, match=str(prim_id)),
         ):
             await publish_contribution(session, org_id, prim_id, approved_by=uuid.uuid4())
 
@@ -462,7 +468,8 @@ class TestPublish:
                 "modulo.core.library_service.get_library_primitive",
                 new_callable=AsyncMock,
                 return_value=prim,
-            ),pytest.raises(ContributionInvalidTransitionError)
+            ),
+            pytest.raises(ContributionInvalidTransitionError),
         ):
             await publish_contribution(session, org_id, prim_id, approved_by=uuid.uuid4())
 
@@ -483,7 +490,8 @@ class TestPublish:
                 "modulo.core.library_service.update_library_primitive",
                 new_callable=AsyncMock,
                 return_value=None,
-            ),pytest.raises(ContributionNotFoundError)
+            ),
+            pytest.raises(ContributionNotFoundError),
         ):
             await publish_contribution(session, org_id, prim_id, approved_by=uuid.uuid4())
 
@@ -601,19 +609,31 @@ class TestSubmitContributionVersion:
         created_by = uuid.uuid4()
         prim_id = uuid.uuid4()
         group_id = uuid.uuid4()
-        existing = _fake_primitive(pid=prim_id, contribution_status=CONTRIBUTION_PUBLISHED, version="1.1", version_group_id=group_id)
+        existing = _fake_primitive(
+            pid=prim_id, contribution_status=CONTRIBUTION_PUBLISHED, version="1.1", version_group_id=group_id
+        )
         new_prim = _fake_primitive(pid=uuid.uuid4(), contribution_status=CONTRIBUTION_DRAFT, version="1.2")
 
         with (
             patch("modulo.core.library_service.set_rls_org", new_callable=AsyncMock),
             patch("modulo.core.library_service.get_library_primitive", new_callable=AsyncMock, return_value=existing),
-            patch("modulo.core.library_service.create_library_primitive", new_callable=AsyncMock, return_value=new_prim) as mock_create,
-            patch("modulo.core.library_service.update_library_primitive", new_callable=AsyncMock, return_value=new_prim),
+            patch(
+                "modulo.core.library_service.create_library_primitive", new_callable=AsyncMock, return_value=new_prim
+            ) as mock_create,
+            patch(
+                "modulo.core.library_service.update_library_primitive", new_callable=AsyncMock, return_value=new_prim
+            ),
         ):
             result = await submit_contribution_version(
-                session, org_id, prim_id,
-                created_by=created_by, name="Fixture v2", slug="fixture-v2",
-                description="Updated", tags=["v2"], fixture_map={"a": "b"},
+                session,
+                org_id,
+                prim_id,
+                created_by=created_by,
+                name="Fixture v2",
+                slug="fixture-v2",
+                description="Updated",
+                tags=["v2"],
+                fixture_map={"a": "b"},
             )
 
         assert result is new_prim
@@ -630,9 +650,15 @@ class TestSubmitContributionVersion:
         ):
             with pytest.raises(ContributionNotFoundError):
                 await submit_contribution_version(
-                    session, org_id, uuid.uuid4(),
-                    created_by=uuid.uuid4(), name="X", slug="x",
-                    description=None, tags=[], fixture_map={"a": "b"},
+                    session,
+                    org_id,
+                    uuid.uuid4(),
+                    created_by=uuid.uuid4(),
+                    name="X",
+                    slug="x",
+                    description=None,
+                    tags=[],
+                    fixture_map={"a": "b"},
                 )
 
     async def test_submit_version_on_draft_raises_invalid_transition(self):
@@ -647,9 +673,15 @@ class TestSubmitContributionVersion:
         ):
             with pytest.raises(ContributionInvalidTransitionError):
                 await submit_contribution_version(
-                    session, org_id, prim_id,
-                    created_by=uuid.uuid4(), name="X", slug="x",
-                    description=None, tags=[], fixture_map={"a": "b"},
+                    session,
+                    org_id,
+                    prim_id,
+                    created_by=uuid.uuid4(),
+                    name="X",
+                    slug="x",
+                    description=None,
+                    tags=[],
+                    fixture_map={"a": "b"},
                 )
 
     async def test_submit_version_update_returns_none_raises_not_found(self):
@@ -663,14 +695,22 @@ class TestSubmitContributionVersion:
         with (
             patch("modulo.core.library_service.set_rls_org", new_callable=AsyncMock),
             patch("modulo.core.library_service.get_library_primitive", new_callable=AsyncMock, return_value=existing),
-            patch("modulo.core.library_service.create_library_primitive", new_callable=AsyncMock, return_value=new_prim),
+            patch(
+                "modulo.core.library_service.create_library_primitive", new_callable=AsyncMock, return_value=new_prim
+            ),
             patch("modulo.core.library_service.update_library_primitive", new_callable=AsyncMock, return_value=None),
         ):
             with pytest.raises(ContributionNotFoundError):
                 await submit_contribution_version(
-                    session, org_id, prim_id,
-                    created_by=created_by, name="X", slug="x",
-                    description=None, tags=[], fixture_map={"a": "b"},
+                    session,
+                    org_id,
+                    prim_id,
+                    created_by=created_by,
+                    name="X",
+                    slug="x",
+                    description=None,
+                    tags=[],
+                    fixture_map={"a": "b"},
                 )
 
     async def test_submit_version_seeds_version_group_id(self):
@@ -679,19 +719,31 @@ class TestSubmitContributionVersion:
         org_id = uuid.uuid4()
         created_by = uuid.uuid4()
         prim_id = uuid.uuid4()
-        existing = _fake_primitive(pid=prim_id, contribution_status=CONTRIBUTION_PUBLISHED, version_group_id=None, version="1.0")
+        existing = _fake_primitive(
+            pid=prim_id, contribution_status=CONTRIBUTION_PUBLISHED, version_group_id=None, version="1.0"
+        )
         new_prim = _fake_primitive(pid=uuid.uuid4(), contribution_status=CONTRIBUTION_DRAFT, version="1.1")
 
         with (
             patch("modulo.core.library_service.set_rls_org", new_callable=AsyncMock),
             patch("modulo.core.library_service.get_library_primitive", new_callable=AsyncMock, return_value=existing),
-            patch("modulo.core.library_service.create_library_primitive", new_callable=AsyncMock, return_value=new_prim),
-            patch("modulo.core.library_service.update_library_primitive", new_callable=AsyncMock, return_value=new_prim) as mock_update,
+            patch(
+                "modulo.core.library_service.create_library_primitive", new_callable=AsyncMock, return_value=new_prim
+            ),
+            patch(
+                "modulo.core.library_service.update_library_primitive", new_callable=AsyncMock, return_value=new_prim
+            ) as mock_update,
         ):
             await submit_contribution_version(
-                session, org_id, prim_id,
-                created_by=created_by, name="X", slug="x",
-                description=None, tags=[], fixture_map={"a": "b"},
+                session,
+                org_id,
+                prim_id,
+                created_by=created_by,
+                name="X",
+                slug="x",
+                description=None,
+                tags=[],
+                fixture_map={"a": "b"},
             )
 
         # Should seed version_group_id to prim_id
@@ -713,7 +765,11 @@ class TestListContributionVersions:
         with (
             patch("modulo.core.library_service.set_rls_org", new_callable=AsyncMock),
             patch("modulo.core.library_service.get_library_primitive", new_callable=AsyncMock, return_value=existing),
-            patch("modulo.core.library_service.list_primitives_by_version_group", new_callable=AsyncMock, return_value=[v2, existing]),
+            patch(
+                "modulo.core.library_service.list_primitives_by_version_group",
+                new_callable=AsyncMock,
+                return_value=[v2, existing],
+            ),
         ):
             result = await list_contribution_versions(session, org_id, prim_id)
 
@@ -739,7 +795,9 @@ class TestListContributionVersions:
         with (
             patch("modulo.core.library_service.set_rls_org", new_callable=AsyncMock),
             patch("modulo.core.library_service.get_library_primitive", new_callable=AsyncMock, return_value=existing),
-            patch("modulo.core.library_service.list_primitives_by_version_group", new_callable=AsyncMock, return_value=[]),
+            patch(
+                "modulo.core.library_service.list_primitives_by_version_group", new_callable=AsyncMock, return_value=[]
+            ),
         ):
             result = await list_contribution_versions(session, org_id, prim_id)
 
@@ -757,7 +815,11 @@ class TestListContributionVersions:
         with (
             patch("modulo.core.library_service.set_rls_org", new_callable=AsyncMock),
             patch("modulo.core.library_service.get_library_primitive", new_callable=AsyncMock, return_value=existing),
-            patch("modulo.core.library_service.list_primitives_by_version_group", new_callable=AsyncMock, return_value=[v2]),
+            patch(
+                "modulo.core.library_service.list_primitives_by_version_group",
+                new_callable=AsyncMock,
+                return_value=[v2],
+            ),
         ):
             result = await list_contribution_versions(session, org_id, prim_id)
 

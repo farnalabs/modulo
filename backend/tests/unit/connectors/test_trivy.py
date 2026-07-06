@@ -131,9 +131,7 @@ async def test_query_artifact_image(connector):
             },
         ),
     )
-    result = await connector.query(
-        ConnectorQuery(resource="artifact", filters={"image": "alpine:3.18"})
-    )
+    result = await connector.query(ConnectorQuery(resource="artifact", filters={"image": "alpine:3.18"}))
     assert len(result.records) > 0
     assert result.records[0]["Results"][0]["Target"] == "alpine:3.18"
 
@@ -166,9 +164,7 @@ async def test_query_artifact_filesystem(connector):
             json={"Results": [{"Target": "/app", "Vulnerabilities": []}]},
         ),
     )
-    result = await connector.query(
-        ConnectorQuery(resource="artifact", filters={"filesystem": "/app"})
-    )
+    result = await connector.query(ConnectorQuery(resource="artifact", filters={"filesystem": "/app"}))
     assert len(result.records) == 1
     assert result.records[0]["Results"][0]["Target"] == "/app"
 
@@ -229,9 +225,7 @@ async def test_query_reports_with_cursor(connector):
             json=[{"digest": "sha256:ghi", "ArtifactName": "debian:11"}],
         ),
     )
-    result = await connector.query(
-        ConnectorQuery(resource="reports", limit=100, cursor="next-token")
-    )
+    result = await connector.query(ConnectorQuery(resource="reports", limit=100, cursor="next-token"))
     assert len(result.records) == 1
 
 
@@ -250,9 +244,7 @@ async def test_query_report(connector):
             },
         ),
     )
-    result = await connector.query(
-        ConnectorQuery(resource="report", filters={"digest": "sha256:abc123"})
-    )
+    result = await connector.query(ConnectorQuery(resource="report", filters={"digest": "sha256:abc123"}))
     assert len(result.records) == 1
     assert result.records[0]["digest"] == "sha256:abc123"
 
@@ -262,9 +254,7 @@ async def test_query_report_not_found(connector):
     respx.get(f"{BASE_URL}/trivy/v1/reports/sha256:nonexistent").mock(
         return_value=httpx.Response(200, json={}),
     )
-    result = await connector.query(
-        ConnectorQuery(resource="report", filters={"digest": "sha256:nonexistent"})
-    )
+    result = await connector.query(ConnectorQuery(resource="report", filters={"digest": "sha256:nonexistent"}))
     assert len(result.records) == 1
 
 
@@ -335,9 +325,7 @@ async def test_write_scan_image(connector):
             json={"Results": [{"Target": "alpine:3.18", "Vulnerabilities": []}]},
         ),
     )
-    result = await connector.write(
-        ConnectorPayload(resource="scan", data={"image": "alpine:3.18"})
-    )
+    result = await connector.write(ConnectorPayload(resource="scan", data={"image": "alpine:3.18"}))
     assert "Results" in result
     assert result["Results"][0]["Target"] == "alpine:3.18"
 
@@ -373,9 +361,7 @@ async def test_write_scan_filesystem(connector):
             json={"Results": [{"Target": "/app", "Vulnerabilities": []}]},
         ),
     )
-    result = await connector.write(
-        ConnectorPayload(resource="scan", data={"filesystem": "/app"})
-    )
+    result = await connector.write(ConnectorPayload(resource="scan", data={"filesystem": "/app"}))
     assert result["Results"][0]["Target"] == "/app"
 
 

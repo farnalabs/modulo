@@ -1,4 +1,4 @@
-﻿"""Tests for error dashboard API endpoints (list, detail, update, events)."""
+"""Tests for error dashboard API endpoints (list, detail, update, events)."""
 
 from __future__ import annotations
 
@@ -68,6 +68,7 @@ def _make_app():
 
     from modulo.api.dependencies import get_db_session
     from modulo.auth.dependencies import get_current_user
+
     app.dependency_overrides[get_current_user] = _override_user
     app.dependency_overrides[get_db_session] = _override_db
     return app

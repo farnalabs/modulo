@@ -90,10 +90,12 @@ def _assert_feature_402(resp):
     else:
         assert "audit_viewer" in detail.lower()
 
+
 class TestAuditGating:
     def test_list_events_is_community_tier_when_disabled(self, client_no_audit: TestClient) -> None:
         """Per PRD: read-only recent-events listing is community tier, not gated."""
         from unittest.mock import patch
+
         with patch("modulo.api.routes.audit.list_audit_events", return_value={"items": [], "total": 0}):
             resp = client_no_audit.get("/api/v1/admin/audit")
         assert resp.status_code in (200,), f"Expected free-tier access, got {resp.status_code}"
@@ -104,6 +106,7 @@ class TestAuditGating:
     def test_verify_chain_is_community_tier(self, client_no_audit: TestClient) -> None:
         """Per PRD: chain verification is community tier."""
         from unittest.mock import patch
+
         with patch("modulo.api.routes.audit.verify_chain", return_value={"valid": True}):
             resp = client_no_audit.get("/api/v1/admin/audit/verify")
         assert resp.status_code in (200,), f"Expected free-tier access, got {resp.status_code}"

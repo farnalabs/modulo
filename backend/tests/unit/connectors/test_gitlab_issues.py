@@ -34,10 +34,12 @@ async def test_query_issues(connector):
 async def test_query_issues_with_filters(connector):
     route = respx.get(f"{_API}/projects/group%2Fproject/issues")
     route.mock(return_value=httpx.Response(200, json=[{"id": 2, "iid": 43}]))
-    result = await connector.query(ConnectorQuery(
-        resource="issues",
-        filters={"project": "group/project", "state": "closed", "labels": "bug", "milestone": "Sprint 1"},
-    ))
+    result = await connector.query(
+        ConnectorQuery(
+            resource="issues",
+            filters={"project": "group/project", "state": "closed", "labels": "bug", "milestone": "Sprint 1"},
+        )
+    )
     url = str(route.calls.last.request.url)
     assert "state=closed" in url
     assert "labels=bug" in url
@@ -49,10 +51,12 @@ async def test_query_issues_with_filters(connector):
 async def test_query_issues_search(connector):
     route = respx.get(f"{_API}/projects/group%2Fproject/issues")
     route.mock(return_value=httpx.Response(200, json=[]))
-    result = await connector.query(ConnectorQuery(
-        resource="issues",
-        filters={"project": "group/project", "search": "login bug"},
-    ))
+    result = await connector.query(
+        ConnectorQuery(
+            resource="issues",
+            filters={"project": "group/project", "search": "login bug"},
+        )
+    )
     assert "search=login+bug" in str(route.calls.last.request.url)
     assert len(result.records) == 0
 
@@ -61,10 +65,12 @@ async def test_query_issues_search(connector):
 async def test_query_issues_sort(connector):
     route = respx.get(f"{_API}/projects/group%2Fproject/issues")
     route.mock(return_value=httpx.Response(200, json=[]))
-    await connector.query(ConnectorQuery(
-        resource="issues",
-        filters={"project": "group/project", "sort": "asc", "order_by": "created_at"},
-    ))
+    await connector.query(
+        ConnectorQuery(
+            resource="issues",
+            filters={"project": "group/project", "sort": "asc", "order_by": "created_at"},
+        )
+    )
     url = str(route.calls.last.request.url)
     assert "sort=asc" in url
     assert "order_by=created_at" in url
@@ -74,10 +80,12 @@ async def test_query_issues_sort(connector):
 async def test_query_issues_assignee(connector):
     route = respx.get(f"{_API}/projects/group%2Fproject/issues")
     route.mock(return_value=httpx.Response(200, json=[]))
-    await connector.query(ConnectorQuery(
-        resource="issues",
-        filters={"project": "group/project", "assignee_id": 42},
-    ))
+    await connector.query(
+        ConnectorQuery(
+            resource="issues",
+            filters={"project": "group/project", "assignee_id": 42},
+        )
+    )
     assert "assignee_id=42" in str(route.calls.last.request.url)
 
 
@@ -161,10 +169,12 @@ async def test_query_issue_notes(connector):
 async def test_query_issue_notes_sort(connector):
     route = respx.get(f"{_API}/projects/group%2Fproject/issues/42/notes")
     route.mock(return_value=httpx.Response(200, json=[]))
-    await connector.query(ConnectorQuery(
-        resource="issue_notes",
-        filters={"project": "group/project", "iid": 42, "sort": "asc", "order_by": "created_at"},
-    ))
+    await connector.query(
+        ConnectorQuery(
+            resource="issue_notes",
+            filters={"project": "group/project", "iid": 42, "sort": "asc", "order_by": "created_at"},
+        )
+    )
     url = str(route.calls.last.request.url)
     assert "sort=asc" in url
     assert "order_by=created_at" in url
@@ -202,10 +212,12 @@ async def test_query_merge_requests(connector):
 async def test_query_merge_requests_filters(connector):
     route = respx.get(f"{_API}/projects/group%2Fproject/merge_requests")
     route.mock(return_value=httpx.Response(200, json=[]))
-    await connector.query(ConnectorQuery(
-        resource="merge_requests",
-        filters={"project": "group/project", "state": "opened", "labels": "bug", "milestone": "Sprint 1"},
-    ))
+    await connector.query(
+        ConnectorQuery(
+            resource="merge_requests",
+            filters={"project": "group/project", "state": "opened", "labels": "bug", "milestone": "Sprint 1"},
+        )
+    )
     url = str(route.calls.last.request.url)
     assert "state=opened" in url
     assert "labels=bug" in url
@@ -287,10 +299,12 @@ async def test_query_jobs(connector):
 async def test_write_issue(connector):
     route = respx.post(f"{_API}/projects/group%2Fproject/issues")
     route.mock(return_value=httpx.Response(200, json={"id": 100, "iid": 50, "title": "New bug", "state": "opened"}))
-    result = await connector.write(ConnectorPayload(
-        resource="issue",
-        data={"project": "group/project", "title": "New bug", "description": "Details here"},
-    ))
+    result = await connector.write(
+        ConnectorPayload(
+            resource="issue",
+            data={"project": "group/project", "title": "New bug", "description": "Details here"},
+        )
+    )
     assert result["iid"] == 50
     assert result["state"] == "opened"
 
@@ -299,10 +313,18 @@ async def test_write_issue(connector):
 async def test_write_issue_with_labels(connector):
     route = respx.post(f"{_API}/projects/group%2Fproject/issues")
     route.mock(return_value=httpx.Response(200, json={"id": 101, "labels": ["bug"]}))
-    await connector.write(ConnectorPayload(
-        resource="issue",
-        data={"project": "group/project", "title": "Bug", "labels": ["bug"], "milestone_id": 1, "assignee_ids": [42]},
-    ))
+    await connector.write(
+        ConnectorPayload(
+            resource="issue",
+            data={
+                "project": "group/project",
+                "title": "Bug",
+                "labels": ["bug"],
+                "milestone_id": 1,
+                "assignee_ids": [42],
+            },
+        )
+    )
     assert route.calls.last.request.content is not None
 
 
@@ -310,10 +332,12 @@ async def test_write_issue_with_labels(connector):
 async def test_write_issue_minimal(connector):
     route = respx.post(f"{_API}/projects/group%2Fproject/issues")
     route.mock(return_value=httpx.Response(200, json={"id": 102, "title": "Minimal"}))
-    result = await connector.write(ConnectorPayload(
-        resource="issue",
-        data={"project": "group/project", "title": "Minimal"},
-    ))
+    result = await connector.write(
+        ConnectorPayload(
+            resource="issue",
+            data={"project": "group/project", "title": "Minimal"},
+        )
+    )
     assert result["title"] == "Minimal"
 
 
@@ -326,10 +350,12 @@ async def test_write_issue_minimal(connector):
 async def test_write_issue_update_close(connector):
     route = respx.put(f"{_API}/projects/group%2Fproject/issues/42")
     route.mock(return_value=httpx.Response(200, json={"id": 100, "iid": 42, "state": "closed"}))
-    result = await connector.write(ConnectorPayload(
-        resource="issue_update",
-        data={"project": "group/project", "iid": 42, "state_event": "close"},
-    ))
+    result = await connector.write(
+        ConnectorPayload(
+            resource="issue_update",
+            data={"project": "group/project", "iid": 42, "state_event": "close"},
+        )
+    )
     assert result["state"] == "closed"
 
 
@@ -337,10 +363,12 @@ async def test_write_issue_update_close(connector):
 async def test_write_issue_update_reopen(connector):
     route = respx.put(f"{_API}/projects/group%2Fproject/issues/42")
     route.mock(return_value=httpx.Response(200, json={"id": 100, "state": "reopened"}))
-    result = await connector.write(ConnectorPayload(
-        resource="issue_update",
-        data={"project": "group/project", "iid": 42, "state_event": "reopen"},
-    ))
+    result = await connector.write(
+        ConnectorPayload(
+            resource="issue_update",
+            data={"project": "group/project", "iid": 42, "state_event": "reopen"},
+        )
+    )
     assert result["state"] == "reopened"
 
 
@@ -348,10 +376,12 @@ async def test_write_issue_update_reopen(connector):
 async def test_write_issue_update_title(connector):
     route = respx.put(f"{_API}/projects/group%2Fproject/issues/42")
     route.mock(return_value=httpx.Response(200, json={"id": 100, "title": "Updated"}))
-    result = await connector.write(ConnectorPayload(
-        resource="issue_update",
-        data={"project": "group/project", "iid": 42, "title": "Updated"},
-    ))
+    result = await connector.write(
+        ConnectorPayload(
+            resource="issue_update",
+            data={"project": "group/project", "iid": 42, "title": "Updated"},
+        )
+    )
     assert result["title"] == "Updated"
 
 
@@ -364,10 +394,12 @@ async def test_write_issue_update_title(connector):
 async def test_write_issue_note(connector):
     route = respx.post(f"{_API}/projects/group%2Fproject/issues/42/notes")
     route.mock(return_value=httpx.Response(200, json={"id": 200, "body": "Fixed"}))
-    result = await connector.write(ConnectorPayload(
-        resource="issue_note",
-        data={"project": "group/project", "iid": 42, "body": "Fixed"},
-    ))
+    result = await connector.write(
+        ConnectorPayload(
+            resource="issue_note",
+            data={"project": "group/project", "iid": 42, "body": "Fixed"},
+        )
+    )
     assert result["body"] == "Fixed"
 
 
@@ -380,10 +412,12 @@ async def test_write_issue_note(connector):
 async def test_write_issue_label(connector):
     route = respx.put(f"{_API}/projects/group%2Fproject/issues/42")
     route.mock(return_value=httpx.Response(200, json={"id": 100, "labels": ["bug", "frontend"]}))
-    result = await connector.write(ConnectorPayload(
-        resource="issue_label",
-        data={"project": "group/project", "iid": 42, "labels": ["bug", "frontend"]},
-    ))
+    result = await connector.write(
+        ConnectorPayload(
+            resource="issue_label",
+            data={"project": "group/project", "iid": 42, "labels": ["bug", "frontend"]},
+        )
+    )
     assert "bug" in result["labels"]
 
 
@@ -396,10 +430,12 @@ async def test_write_issue_label(connector):
 async def test_write_label(connector):
     route = respx.post(f"{_API}/projects/group%2Fproject/labels")
     route.mock(return_value=httpx.Response(200, json={"id": 5, "name": "bug", "color": "#FF0000"}))
-    result = await connector.write(ConnectorPayload(
-        resource="label",
-        data={"project": "group/project", "name": "bug", "color": "#FF0000", "description": "Bug label"},
-    ))
+    result = await connector.write(
+        ConnectorPayload(
+            resource="label",
+            data={"project": "group/project", "name": "bug", "color": "#FF0000", "description": "Bug label"},
+        )
+    )
     assert result["name"] == "bug"
     assert result["color"] == "#FF0000"
 
@@ -413,10 +449,17 @@ async def test_write_label(connector):
 async def test_write_milestone(connector):
     route = respx.post(f"{_API}/projects/group%2Fproject/milestones")
     route.mock(return_value=httpx.Response(200, json={"id": 10, "title": "Sprint 1", "state": "active"}))
-    result = await connector.write(ConnectorPayload(
-        resource="milestone",
-        data={"project": "group/project", "title": "Sprint 1", "description": "First sprint", "due_date": "2025-01-31"},
-    ))
+    result = await connector.write(
+        ConnectorPayload(
+            resource="milestone",
+            data={
+                "project": "group/project",
+                "title": "Sprint 1",
+                "description": "First sprint",
+                "due_date": "2025-01-31",
+            },
+        )
+    )
     assert result["title"] == "Sprint 1"
 
 
@@ -429,10 +472,12 @@ async def test_write_milestone(connector):
 async def test_write_pipeline_run(connector):
     route = respx.post(f"{_API}/projects/group%2Fproject/pipeline")
     route.mock(return_value=httpx.Response(200, json={"id": 99, "ref": "main", "status": "pending"}))
-    result = await connector.write(ConnectorPayload(
-        resource="pipeline_run",
-        data={"project": "group/project", "ref": "main"},
-    ))
+    result = await connector.write(
+        ConnectorPayload(
+            resource="pipeline_run",
+            data={"project": "group/project", "ref": "main"},
+        )
+    )
     assert result["id"] == 99
     assert result["status"] == "pending"
 
@@ -441,14 +486,16 @@ async def test_write_pipeline_run(connector):
 async def test_write_pipeline_run_with_variables(connector):
     route = respx.post(f"{_API}/projects/group%2Fproject/pipeline")
     route.mock(return_value=httpx.Response(200, json={"id": 100, "ref": "main"}))
-    await connector.write(ConnectorPayload(
-        resource="pipeline_run",
-        data={
-            "project": "group/project",
-            "ref": "main",
-            "variables": [{"key": "VAR", "value": "val"}],
-        },
-    ))
+    await connector.write(
+        ConnectorPayload(
+            resource="pipeline_run",
+            data={
+                "project": "group/project",
+                "ref": "main",
+                "variables": [{"key": "VAR", "value": "val"}],
+            },
+        )
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -460,16 +507,18 @@ async def test_write_pipeline_run_with_variables(connector):
 async def test_write_merge_request(connector):
     route = respx.post(f"{_API}/projects/group%2Fproject/merge_requests")
     route.mock(return_value=httpx.Response(200, json={"id": 50, "iid": 25, "title": "New MR", "state": "opened"}))
-    result = await connector.write(ConnectorPayload(
-        resource="merge_request",
-        data={
-            "project": "group/project",
-            "title": "New MR",
-            "source_branch": "feature",
-            "target_branch": "main",
-            "description": "Description",
-        },
-    ))
+    result = await connector.write(
+        ConnectorPayload(
+            resource="merge_request",
+            data={
+                "project": "group/project",
+                "title": "New MR",
+                "source_branch": "feature",
+                "target_branch": "main",
+                "description": "Description",
+            },
+        )
+    )
     assert result["iid"] == 25
 
 
@@ -539,9 +588,12 @@ async def test_write_missing_project_issue(connector):
 @respx.mock
 async def test_write_missing_iid_issue_label(connector):
     with pytest.raises(ValueError, match="Missing required filter"):
-        await connector.write(ConnectorPayload(
-            resource="issue_label", data={"project": "group/project", "labels": ["bug"]},
-        ))
+        await connector.write(
+            ConnectorPayload(
+                resource="issue_label",
+                data={"project": "group/project", "labels": ["bug"]},
+            )
+        )
 
 
 @respx.mock
@@ -557,7 +609,9 @@ async def test_write_issue_api_error(connector):
     route = respx.post(f"{_API}/projects/group%2Fproject/issues")
     route.mock(return_value=httpx.Response(422, text="Validation failed"))
     with pytest.raises(ValueError, match="GitLab API HTTP 422"):
-        await connector.write(ConnectorPayload(
-            resource="issue",
-            data={"project": "group/project", "title": ""},
-        ))
+        await connector.write(
+            ConnectorPayload(
+                resource="issue",
+                data={"project": "group/project", "title": ""},
+            )
+        )

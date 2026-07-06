@@ -68,9 +68,7 @@ async def test_query_file(connector):
 async def test_query_pulls(connector):
     body = {"values": [{"id": 42, "title": "Fix bug", "state": "OPEN"}], "size": 1}
     respx.get(f"{_API}/repositories/myteam/myrepo/pullrequests").mock(return_value=httpx.Response(200, json=body))
-    result = await connector.query(
-        ConnectorQuery(resource="pulls", filters={"workspace": "myteam", "repo": "myrepo"})
-    )
+    result = await connector.query(ConnectorQuery(resource="pulls", filters={"workspace": "myteam", "repo": "myrepo"}))
     assert result.records[0]["id"] == 42
 
 
@@ -78,9 +76,7 @@ async def test_query_pulls(connector):
 async def test_query_issues(connector):
     body = {"values": [{"id": 7, "title": "Bug report", "state": "new"}], "size": 1}
     respx.get(f"{_API}/repositories/myteam/myrepo/issues").mock(return_value=httpx.Response(200, json=body))
-    result = await connector.query(
-        ConnectorQuery(resource="issues", filters={"workspace": "myteam", "repo": "myrepo"})
-    )
+    result = await connector.query(ConnectorQuery(resource="issues", filters={"workspace": "myteam", "repo": "myrepo"}))
     assert result.records[0]["id"] == 7
 
 

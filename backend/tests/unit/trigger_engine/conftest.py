@@ -1,4 +1,5 @@
 """pytest fixtures for trigger engine tests."""
+
 import os
 
 os.environ.setdefault("DATABASE_URL", "postgresql+asyncpg://localhost/test")

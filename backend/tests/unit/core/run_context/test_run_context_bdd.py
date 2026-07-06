@@ -238,9 +238,7 @@ class TestContextAccessible:
     """All nodes can read run_context regardless of role."""
 
     async def test_agent_can_read_run_context(self) -> None:
-        state: dict[str, Any] = {
-            "run_context": {"branch": "main", "cancelled": False}
-        }
+        state: dict[str, Any] = {"run_context": {"branch": "main", "cancelled": False}}
 
         @cancellable_node(role="agent")
         async def reader(state_in: dict[str, Any]) -> dict[str, Any]:
@@ -333,9 +331,7 @@ class TestAuditWarning:
         with caplog.at_level(logging.WARNING), pytest.raises(ContextSetterViolationError):
             await bad_node(_LIVE_STATE)
 
-        warning_messages = [
-            r.message for r in caplog.records if r.levelno == logging.WARNING
-        ]
+        warning_messages = [r.message for r in caplog.records if r.levelno == logging.WARNING]
         assert any("violation" in msg for msg in warning_messages)
 
     async def test_warning_includes_node_name(self, caplog: pytest.LogCaptureFixture) -> None:

@@ -8,10 +8,11 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from fastapi.testclient import TestClient
 
-from modulo.api.dependencies import _get_engine, get_db_session
+from modulo.api.dependencies import _get_engine, get_db_session, get_plan_context
 from modulo.api.main import app
 from modulo.auth.dependencies import get_current_user
 from modulo.auth.jwt import AuthenticatedPrincipal
+from modulo.core.feature_flags import DbPlanContext, FeatureFlagRegistry
 from modulo.db.crud.base import PageResult
 from modulo.settings import Settings, get_settings
 
@@ -71,6 +72,11 @@ def _fake_user(
     return user
 
 
+def _team_plan_context() -> DbPlanContext:
+    registry = FeatureFlagRegistry(current_tier="team", has_license_key=True)
+    return DbPlanContext(registry)
+
+
 def _fake_team(
     team_id: uuid.UUID = _TEAM_ID,
     name: str = "Engineering",
@@ -88,11 +94,13 @@ def _fake_team(
 @pytest.fixture()
 def client() -> Generator[TestClient, None, None]:
     mock_session = _make_mock_session()
+    plan_ctx = _team_plan_context()
 
     async def override_session() -> AsyncGenerator[AsyncMock, None]:
         yield mock_session
 
     app.dependency_overrides[get_settings] = _make_settings
+    app.dependency_overrides[get_plan_context] = lambda: plan_ctx
     app.dependency_overrides[get_db_session] = override_session
     app.dependency_overrides[_get_engine] = lambda: MagicMock()
     app.dependency_overrides[get_current_user] = lambda: AuthenticatedPrincipal(
@@ -115,11 +123,13 @@ def unauth_client() -> Generator[TestClient, None, None]:
 @pytest.fixture()
 def operator_client() -> Generator[TestClient, None, None]:
     mock_session = _make_mock_session()
+    plan_ctx = _team_plan_context()
 
     async def override_session() -> AsyncGenerator[AsyncMock, None]:
         yield mock_session
 
     app.dependency_overrides[get_settings] = _make_settings
+    app.dependency_overrides[get_plan_context] = lambda: plan_ctx
     app.dependency_overrides[get_db_session] = override_session
     app.dependency_overrides[_get_engine] = lambda: MagicMock()
     app.dependency_overrides[get_current_user] = lambda: AuthenticatedPrincipal(

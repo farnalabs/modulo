@@ -223,9 +223,7 @@ class TestRevealSsoClientSecret:
         mock_provider.client_secret = "sso-secret-value"
         _setup_session_execute(mock_provider)
 
-        with patch(
-            "modulo.api.middleware.sensitive_mask.Redis.from_url"
-        ) as mock_redis_factory:
+        with patch("modulo.api.middleware.sensitive_mask.Redis.from_url") as mock_redis_factory:
             mock_redis = AsyncMock()
             mock_redis.setex = AsyncMock()
             mock_redis.aclose = AsyncMock()
@@ -250,9 +248,7 @@ class TestRevealSsoClientSecret:
         mock_provider.client_secret = "sso-secret-value"
         _setup_session_execute(mock_provider)
 
-        with patch(
-            "modulo.api.middleware.sensitive_mask.Redis.from_url"
-        ) as mock_redis_factory:
+        with patch("modulo.api.middleware.sensitive_mask.Redis.from_url") as mock_redis_factory:
             mock_redis = AsyncMock()
             mock_redis.setex = AsyncMock()
             mock_redis.aclose = AsyncMock()
@@ -288,9 +284,7 @@ class TestRevealExpiry:
         mock_provider.client_secret = "test-secret"
         _setup_session_execute(mock_provider)
 
-        with patch(
-            "modulo.api.middleware.sensitive_mask.Redis.from_url"
-        ) as mock_redis_factory:
+        with patch("modulo.api.middleware.sensitive_mask.Redis.from_url") as mock_redis_factory:
             mock_redis = AsyncMock()
             mock_redis.setex = AsyncMock()
             mock_redis.aclose = AsyncMock()

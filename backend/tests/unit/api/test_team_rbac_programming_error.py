@@ -47,9 +47,7 @@ def _make_settings() -> Settings:
 def _make_session_raising_programming_error() -> AsyncMock:
     session = AsyncMock()
     begin_cm = AsyncMock()
-    begin_cm.__aenter__ = AsyncMock(
-        side_effect=ProgrammingError("relation does not exist", None, None)
-    )
+    begin_cm.__aenter__ = AsyncMock(side_effect=ProgrammingError("relation does not exist", None, None))
     begin_cm.__aexit__ = AsyncMock(return_value=False)
     session.begin = MagicMock(return_value=begin_cm)
     return session

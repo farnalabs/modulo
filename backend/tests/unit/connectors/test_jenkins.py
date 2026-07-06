@@ -31,9 +31,7 @@ def test_connector_type(jenkins):
 
 @respx.mock
 async def test_health_check_ok(jenkins):
-    respx.get(f"{_JENKINS_BASE}/api/json").mock(
-        return_value=httpx.Response(200, json={"nodeName": "master"})
-    )
+    respx.get(f"{_JENKINS_BASE}/api/json").mock(return_value=httpx.Response(200, json={"nodeName": "master"}))
     result = await jenkins.health_check()
     assert result.ok is True
 
@@ -297,17 +295,13 @@ async def test_write_unsupported_resource(jenkins):
 @respx.mock
 async def test_trigger_run_missing_pipeline_id(jenkins):
     with pytest.raises(httpx.HTTPError):
-        respx.post(f"{_JENKINS_BASE}/job//build").mock(
-            return_value=httpx.Response(404, text="Not found")
-        )
+        respx.post(f"{_JENKINS_BASE}/job//build").mock(return_value=httpx.Response(404, text="Not found"))
         await jenkins.trigger_run(pipeline_id="")
 
 
 @respx.mock
 async def test_list_runs_missing_pipeline_id(jenkins):
-    respx.get(f"{_JENKINS_BASE}/job//api/json").mock(
-        return_value=httpx.Response(404, text="Not found")
-    )
+    respx.get(f"{_JENKINS_BASE}/job//api/json").mock(return_value=httpx.Response(404, text="Not found"))
     with pytest.raises(httpx.HTTPError):
         await jenkins.list_runs(pipeline_id="")
 
@@ -315,9 +309,7 @@ async def test_list_runs_missing_pipeline_id(jenkins):
 @respx.mock
 async def test_query_builds_missing_job_name(jenkins):
     q = ConnectorQuery(resource="builds", filters={})
-    respx.get(f"{_JENKINS_BASE}/job//api/json").mock(
-        return_value=httpx.Response(404, text="Not found")
-    )
+    respx.get(f"{_JENKINS_BASE}/job//api/json").mock(return_value=httpx.Response(404, text="Not found"))
     with pytest.raises(httpx.HTTPError):
         await jenkins.query(q)
 

@@ -88,9 +88,7 @@ class TestSqliteMultiBackend:
                 )
 
             session.info["org_id"] = org_a
-            result = await session.execute(
-                select(OrgMembership).where(OrgMembership.organisation_id == org_a)
-            )
+            result = await session.execute(select(OrgMembership).where(OrgMembership.organisation_id == org_a))
             memberships = result.scalars().all()
             assert len(memberships) == 1
             assert memberships[0].account_id == user_a_id

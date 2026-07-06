@@ -124,7 +124,6 @@ class TestBuildPollingConnector:
 # ---------------------------------------------------------------------------
 
 
-
 def _make_trigger(
     active: bool = True,
     max_concurrent_runs: int = 5,
@@ -619,7 +618,6 @@ class TestPollingFireTask:
         assert PollingFireTask.autoretry_for == (Exception,)
         assert PollingFireTask.max_retries == 2
         assert PollingFireTask.default_retry_delay == 30
-
 
     async def test_fire_trigger_connector_init_failed(
         self,

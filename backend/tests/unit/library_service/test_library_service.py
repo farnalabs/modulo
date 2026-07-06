@@ -809,7 +809,9 @@ async def test_list_org_contributions_passes_page_params():
     with (
         patch("modulo.core.library_service.set_rls_org", new_callable=AsyncMock),
         patch(
-            "modulo.core.library_service.list_library_primitives", new_callable=AsyncMock, return_value=page,
+            "modulo.core.library_service.list_library_primitives",
+            new_callable=AsyncMock,
+            return_value=page,
         ) as mock_list,
     ):
         await list_org_contributions(session, org_id, page=2, page_size=10)

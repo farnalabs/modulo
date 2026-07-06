@@ -48,7 +48,10 @@ def _connector_instance(
 
 
 def _model_backend(
-    bid: uuid.UUID, *, status: str = "active", last_health_check_error: str | None = None,
+    bid: uuid.UUID,
+    *,
+    status: str = "active",
+    last_health_check_error: str | None = None,
 ) -> MagicMock:
     m = MagicMock()
     m.id = bid

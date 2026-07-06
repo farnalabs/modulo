@@ -17,9 +17,6 @@ from starlette.testclient import TestClient
 _ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
 
 
-
-
-
 # =========================================================================
 # CatchAllMiddleware
 # =========================================================================
@@ -77,9 +74,7 @@ class TestCatchAllMiddleware:
         mock_ingest.assert_awaited_once()
 
     @patch("modulo.api.middleware.catch_all._ingest_unhandled_error")
-    def test_crash_in_ingest_does_not_crash_response(
-        self, mock_ingest: Any
-    ) -> None:
+    def test_crash_in_ingest_does_not_crash_response(self, mock_ingest: Any) -> None:
         mock_ingest.side_effect = RuntimeError("ingest crashed too")
         app = _make_app()
         client = TestClient(app)
@@ -87,9 +82,7 @@ class TestCatchAllMiddleware:
         assert resp.status_code == 500
 
     @patch("modulo.api.middleware.catch_all._ingest_unhandled_error")
-    def test_ingest_receives_request_context(
-        self, mock_ingest: Any
-    ) -> None:
+    def test_ingest_receives_request_context(self, mock_ingest: Any) -> None:
         app = _make_app()
         client = TestClient(app)
         resp = client.get("/crash")

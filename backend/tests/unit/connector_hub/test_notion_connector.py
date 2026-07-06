@@ -24,9 +24,7 @@ def connector():
 @respx.mock
 async def test_health_check_ok(connector):
     respx.get(f"{_BASE}/users").mock(
-        return_value=httpx.Response(
-            200, json={"results": [{"id": "u1"}, {"id": "u2"}]}
-        ),
+        return_value=httpx.Response(200, json={"results": [{"id": "u1"}, {"id": "u2"}]}),
     )
     result = await connector.health_check()
     assert result.ok is True
@@ -75,9 +73,7 @@ async def test_query_databases_with_query(connector):
     respx.post(f"{_BASE}/search").mock(
         return_value=httpx.Response(200, json={"results": results, "next_cursor": None}),
     )
-    result = await connector.query(
-        ConnectorQuery(resource="databases", filters={"query": "Project"})
-    )
+    result = await connector.query(ConnectorQuery(resource="databases", filters={"query": "Project"}))
     assert result.total == 1
 
 
@@ -87,9 +83,7 @@ async def test_query_databases_with_cursor(connector):
     respx.post(f"{_BASE}/search").mock(
         return_value=httpx.Response(200, json={"results": results, "next_cursor": "cursor_abc"}),
     )
-    result = await connector.query(
-        ConnectorQuery(resource="databases", cursor="cursor_prev")
-    )
+    result = await connector.query(ConnectorQuery(resource="databases", cursor="cursor_prev"))
     assert result.total == 1
     assert result.next_cursor == "cursor_abc"
 
@@ -105,9 +99,7 @@ async def test_query_database(connector):
     respx.get(f"{_BASE}/databases/db1").mock(
         return_value=httpx.Response(200, json=db),
     )
-    result = await connector.query(
-        ConnectorQuery(resource="database", filters={"database_id": "db1"})
-    )
+    result = await connector.query(ConnectorQuery(resource="database", filters={"database_id": "db1"}))
     assert len(result.records) == 1
     assert result.records[0]["id"] == "db1"
 
@@ -128,9 +120,7 @@ async def test_query_pages(connector):
     respx.post(f"{_BASE}/databases/db1/query").mock(
         return_value=httpx.Response(200, json={"results": pages, "next_cursor": None}),
     )
-    result = await connector.query(
-        ConnectorQuery(resource="pages", filters={"database_id": "db1"})
-    )
+    result = await connector.query(ConnectorQuery(resource="pages", filters={"database_id": "db1"}))
     assert result.total == 2
     assert result.records[0]["id"] == "p1"
 
@@ -170,9 +160,7 @@ async def test_query_page(connector):
     respx.get(f"{_BASE}/pages/p1").mock(
         return_value=httpx.Response(200, json=page),
     )
-    result = await connector.query(
-        ConnectorQuery(resource="page", filters={"page_id": "p1"})
-    )
+    result = await connector.query(ConnectorQuery(resource="page", filters={"page_id": "p1"}))
     assert len(result.records) == 1
     assert result.records[0]["id"] == "p1"
 
@@ -193,9 +181,7 @@ async def test_query_blocks(connector):
     respx.get(f"{_BASE}/blocks/block_id_1/children").mock(
         return_value=httpx.Response(200, json={"results": blocks, "next_cursor": None}),
     )
-    result = await connector.query(
-        ConnectorQuery(resource="blocks", filters={"block_id": "block_id_1"})
-    )
+    result = await connector.query(ConnectorQuery(resource="blocks", filters={"block_id": "block_id_1"}))
     assert result.total == 2
     assert result.records[0]["type"] == "paragraph"
 
@@ -377,6 +363,4 @@ async def test_query_http_error(connector):
 async def test_write_http_error(connector):
     respx.post(f"{_BASE}/pages").mock(return_value=httpx.Response(429, text="Rate Limited"))
     with pytest.raises(httpx.HTTPStatusError):
-        await connector.write(
-            ConnectorPayload(resource="page", data={})
-        )
+        await connector.write(ConnectorPayload(resource="page", data={}))

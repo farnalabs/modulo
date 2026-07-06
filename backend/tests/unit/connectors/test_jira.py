@@ -137,14 +137,18 @@ async def test_query_issue_http_error(connector):
 
 @respx.mock
 async def test_query_search_http_error(connector):
-    respx.post(f"{_BASE}/search").mock(return_value=httpx.Response(400, json={"errorMessages": ["Field 'xyz' does not exist"]}))
+    respx.post(f"{_BASE}/search").mock(
+        return_value=httpx.Response(400, json={"errorMessages": ["Field 'xyz' does not exist"]})
+    )
     with pytest.raises(ValueError, match="Jira API HTTP 400"):
         await connector.query(ConnectorQuery(resource="search", filters={"jql": "invalid jql"}))
 
 
 @respx.mock
 async def test_write_create_issue_http_error(connector):
-    respx.post(f"{_BASE}/issue").mock(return_value=httpx.Response(400, json={"errors": {"summary": "Operation blocked"}}))
+    respx.post(f"{_BASE}/issue").mock(
+        return_value=httpx.Response(400, json={"errors": {"summary": "Operation blocked"}})
+    )
     with pytest.raises(ValueError, match="Jira API HTTP 400"):
         await connector.write(
             ConnectorPayload(
@@ -192,7 +196,9 @@ async def test_query_issue_comments_pagination(connector):
         "maxResults": 1,
     }
     respx.get(f"{_BASE}/issue/PROJ-123/comment").mock(return_value=httpx.Response(200, json=comments_data))
-    result = await connector.query(ConnectorQuery(resource="issue_comments", filters={"issue_key": "PROJ-123"}, limit=1))
+    result = await connector.query(
+        ConnectorQuery(resource="issue_comments", filters={"issue_key": "PROJ-123"}, limit=1)
+    )
     assert result.next_cursor == "1"
 
 
@@ -303,7 +309,9 @@ async def test_search_pagination_cursor(connector):
         "maxResults": 1,
     }
     respx.post(f"{_BASE}/search").mock(return_value=httpx.Response(200, json=search_body))
-    result = await connector.query(ConnectorQuery(resource="search", filters={"jql": "project = PROJ", "max_results": 1}))
+    result = await connector.query(
+        ConnectorQuery(resource="search", filters={"jql": "project = PROJ", "max_results": 1})
+    )
     assert len(result.records) == 1
     assert result.total == 10
     assert result.next_cursor == "1"

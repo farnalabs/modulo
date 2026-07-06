@@ -95,11 +95,7 @@ class TestChatMessage:
     def test_role_check_constraint_exists(self) -> None:
         table = Base.metadata.tables["chat_messages"]
         check = next(
-            (
-                c
-                for c in table.constraints
-                if isinstance(c, CheckConstraint) and c.name == "ck_chat_messages_role"
-            ),
+            (c for c in table.constraints if isinstance(c, CheckConstraint) and c.name == "ck_chat_messages_role"),
             None,
         )
         assert check is not None, "Missing ck_chat_messages_role CHECK constraint"
@@ -166,11 +162,7 @@ class TestRemySkill:
     def test_exactly_one_owner_check_constraint(self) -> None:
         table = Base.metadata.tables["remy_skills"]
         check = next(
-            (
-                c
-                for c in table.constraints
-                if isinstance(c, CheckConstraint) and c.name == "ck_remy_skills_owner"
-            ),
+            (c for c in table.constraints if isinstance(c, CheckConstraint) and c.name == "ck_remy_skills_owner"),
             None,
         )
         assert check is not None, "Missing ck_remy_skills_owner CHECK constraint"

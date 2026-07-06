@@ -65,14 +65,12 @@ class TestReadiness:
 
     def test_healthz_ready_degraded_overall(self, client: TestClient) -> None:
         with (
-            patch("modulo.api.routes.health._check_database",
-                  AsyncMock(return_value=_ok_check("database"))),
-            patch("modulo.api.routes.health._check_redis",
-                  AsyncMock(return_value=_degraded_check("redis not configured"))),
-            patch("modulo.api.routes.health._check_checkpointer",
-                  AsyncMock(return_value=_ok_check("checkpointer"))),
-            patch("modulo.api.routes.health._check_migrations",
-                  AsyncMock(return_value=_ok_check("migrations"))),
+            patch("modulo.api.routes.health._check_database", AsyncMock(return_value=_ok_check("database"))),
+            patch(
+                "modulo.api.routes.health._check_redis", AsyncMock(return_value=_degraded_check("redis not configured"))
+            ),
+            patch("modulo.api.routes.health._check_checkpointer", AsyncMock(return_value=_ok_check("checkpointer"))),
+            patch("modulo.api.routes.health._check_migrations", AsyncMock(return_value=_ok_check("migrations"))),
         ):
             resp = client.get("/healthz/ready")
         assert resp.status_code == 200
@@ -84,14 +82,10 @@ class TestReadiness:
 
     def test_healthz_ready_unavailable_overall(self, client: TestClient) -> None:
         with (
-            patch("modulo.api.routes.health._check_database",
-                  AsyncMock(return_value=_unavailable_check("db down"))),
-            patch("modulo.api.routes.health._check_redis",
-                  AsyncMock(return_value=_ok_check("redis"))),
-            patch("modulo.api.routes.health._check_checkpointer",
-                  AsyncMock(return_value=_ok_check("checkpointer"))),
-            patch("modulo.api.routes.health._check_migrations",
-                  AsyncMock(return_value=_ok_check("migrations"))),
+            patch("modulo.api.routes.health._check_database", AsyncMock(return_value=_unavailable_check("db down"))),
+            patch("modulo.api.routes.health._check_redis", AsyncMock(return_value=_ok_check("redis"))),
+            patch("modulo.api.routes.health._check_checkpointer", AsyncMock(return_value=_ok_check("checkpointer"))),
+            patch("modulo.api.routes.health._check_migrations", AsyncMock(return_value=_ok_check("migrations"))),
         ):
             resp = client.get("/healthz/ready")
         assert resp.status_code == 503
@@ -101,14 +95,10 @@ class TestReadiness:
 
     def test_healthz_ready_all_ok(self, client: TestClient) -> None:
         with (
-            patch("modulo.api.routes.health._check_database",
-                  AsyncMock(return_value=_ok_check("database"))),
-            patch("modulo.api.routes.health._check_redis",
-                  AsyncMock(return_value=_ok_check("redis"))),
-            patch("modulo.api.routes.health._check_checkpointer",
-                  AsyncMock(return_value=_ok_check("checkpointer"))),
-            patch("modulo.api.routes.health._check_migrations",
-                  AsyncMock(return_value=_ok_check("migrations"))),
+            patch("modulo.api.routes.health._check_database", AsyncMock(return_value=_ok_check("database"))),
+            patch("modulo.api.routes.health._check_redis", AsyncMock(return_value=_ok_check("redis"))),
+            patch("modulo.api.routes.health._check_checkpointer", AsyncMock(return_value=_ok_check("checkpointer"))),
+            patch("modulo.api.routes.health._check_migrations", AsyncMock(return_value=_ok_check("migrations"))),
         ):
             resp = client.get("/healthz/ready")
         assert resp.status_code == 200
@@ -119,14 +109,10 @@ class TestReadiness:
 
     def test_healthz_ready_check_keys_present(self, client: TestClient) -> None:
         with (
-            patch("modulo.api.routes.health._check_database",
-                  AsyncMock(return_value=_ok_check("database"))),
-            patch("modulo.api.routes.health._check_redis",
-                  AsyncMock(return_value=_ok_check("redis"))),
-            patch("modulo.api.routes.health._check_checkpointer",
-                  AsyncMock(return_value=_ok_check("checkpointer"))),
-            patch("modulo.api.routes.health._check_migrations",
-                  AsyncMock(return_value=_ok_check("migrations"))),
+            patch("modulo.api.routes.health._check_database", AsyncMock(return_value=_ok_check("database"))),
+            patch("modulo.api.routes.health._check_redis", AsyncMock(return_value=_ok_check("redis"))),
+            patch("modulo.api.routes.health._check_checkpointer", AsyncMock(return_value=_ok_check("checkpointer"))),
+            patch("modulo.api.routes.health._check_migrations", AsyncMock(return_value=_ok_check("migrations"))),
         ):
             resp = client.get("/healthz/ready")
         body = resp.json()
@@ -140,14 +126,13 @@ class TestReadiness:
 class TestHttpTimeout:
     def test_healthz_ready_with_timeout_check(self, client: TestClient) -> None:
         with (
-            patch("modulo.api.routes.health._check_database",
-                  AsyncMock(return_value=_unavailable_check("timeout after 5s"))),
-            patch("modulo.api.routes.health._check_redis",
-                  AsyncMock(return_value=_ok_check("redis"))),
-            patch("modulo.api.routes.health._check_checkpointer",
-                  AsyncMock(return_value=_ok_check("checkpointer"))),
-            patch("modulo.api.routes.health._check_migrations",
-                  AsyncMock(return_value=_ok_check("migrations"))),
+            patch(
+                "modulo.api.routes.health._check_database",
+                AsyncMock(return_value=_unavailable_check("timeout after 5s")),
+            ),
+            patch("modulo.api.routes.health._check_redis", AsyncMock(return_value=_ok_check("redis"))),
+            patch("modulo.api.routes.health._check_checkpointer", AsyncMock(return_value=_ok_check("checkpointer"))),
+            patch("modulo.api.routes.health._check_migrations", AsyncMock(return_value=_ok_check("migrations"))),
         ):
             resp = client.get("/healthz/ready")
         assert resp.status_code == 503

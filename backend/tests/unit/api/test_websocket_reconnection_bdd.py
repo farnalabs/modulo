@@ -407,9 +407,7 @@ class TestConcurrentSubscribers:
             received = []
             while not q.empty():
                 received.append(q.get_nowait())
-            assert len(received) == n_events, (
-                f"Subscriber {i} got {len(received)} events, expected {n_events}"
-            )
+            assert len(received) == n_events, f"Subscriber {i} got {len(received)} events, expected {n_events}"
 
     def test_subscriber_events_have_monotonic_sequence(self) -> None:
         n_subscribers = 3
@@ -423,9 +421,7 @@ class TestConcurrentSubscribers:
             seqs = []
             while not q.empty():
                 seqs.append(q.get_nowait().seq)
-            assert seqs == list(range(1, n_events + 1)), (
-                f"Subscriber {i} seqs {seqs} != [1..{n_events}]"
-            )
+            assert seqs == list(range(1, n_events + 1)), f"Subscriber {i} seqs {seqs} != [1..{n_events}]"
 
     def test_unsubscribed_subscriber_stops_receiving(self) -> None:
         q1 = self.broker.subscribe()

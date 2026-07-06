@@ -42,8 +42,7 @@ class TestSystemConfigModel:
 
         table = SystemConfig.__table__
         has_unique = any(
-            isinstance(c, UniqueConstraint) and [col.name for col in c.columns] == ["key"]
-            for c in table.constraints
+            isinstance(c, UniqueConstraint) and [col.name for col in c.columns] == ["key"] for c in table.constraints
         )
         assert has_unique
 
@@ -118,7 +117,6 @@ class TestGetEffectiveSetting:
         org = MagicMock()
         org.settings_json = {"theme": "dark", "max_items": 50}
 
-
         get_organisation_result = AsyncMock(return_value=org)
         with pytest.MonkeyPatch().context() as m:
             m.setattr("modulo.db.settings_resolver.get_organisation", get_organisation_result)
@@ -132,7 +130,6 @@ class TestGetEffectiveSetting:
 
         config_entity = MagicMock()
         config_entity.value = "system_wide"
-
 
         get_org = AsyncMock(return_value=org)
         get_cfg = AsyncMock(return_value=config_entity)

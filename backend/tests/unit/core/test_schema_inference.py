@@ -143,6 +143,7 @@ class TestSchemaInferenceService:
             async def invoke(self, messages, **kwargs):
                 self.captured_messages = messages
                 from langchain_core.messages import AIMessage
+
                 return AIMessage(content='{"type": "object", "properties": {}}')
 
             def stream(self, messages, **kwargs):

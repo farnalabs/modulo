@@ -258,6 +258,7 @@ class TestPublishPrimitive:
 class TestPublishV2:
     def test_publish_v2_signed(self, client: TestClient) -> None:
         from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+
         _real_private = Ed25519PrivateKey.generate()
         _real_public = _real_private.public_key()
 
@@ -581,9 +582,7 @@ class TestTrustAnchor:
             patch("modulo.api.routes.registry.get_publisher_status", return_value="verified"),
             patch("modulo.api.routes.registry.set_rls_org"),
         ):
-            resp = client.get(
-                f"{VERIFY_URL}?public_key_pem=YmFk"
-            )
+            resp = client.get(f"{VERIFY_URL}?public_key_pem=YmFk")
         assert resp.status_code == 200
         data = resp.json()
         assert data["trust_anchor_verified"] is False

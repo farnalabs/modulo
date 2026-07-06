@@ -85,10 +85,12 @@ def unauth_client() -> Generator[TestClient, None, None]:
 
 class TestGetNodeOutput:
     def test_returns_node_output(self, client: TestClient) -> None:
-        run = _make_run(outputs_json={
-            "planner": {"plan": "Step 1: analyse", "confidence": 0.9},
-            "coder": {"code": "print('hello')", "language": "python"},
-        })
+        run = _make_run(
+            outputs_json={
+                "planner": {"plan": "Step 1: analyse", "confidence": 0.9},
+                "coder": {"code": "print('hello')", "language": "python"},
+            }
+        )
 
         with (
             patch("modulo.api.routes.runs.get_run", return_value=run),
@@ -103,9 +105,11 @@ class TestGetNodeOutput:
         assert body["output"] == {"plan": "Step 1: analyse", "confidence": 0.9}
 
     def test_returns_different_node_output(self, client: TestClient) -> None:
-        run = _make_run(outputs_json={
-            "writer": {"draft": "Hello world", "word_count": 2},
-        })
+        run = _make_run(
+            outputs_json={
+                "writer": {"draft": "Hello world", "word_count": 2},
+            }
+        )
 
         with (
             patch("modulo.api.routes.runs.get_run", return_value=run),
@@ -117,9 +121,11 @@ class TestGetNodeOutput:
         assert resp.json()["output"] == {"draft": "Hello world", "word_count": 2}
 
     def test_node_output_is_valid_json(self, client: TestClient) -> None:
-        run = _make_run(outputs_json={
-            "formatter": {"result": "ok", "errors": []},
-        })
+        run = _make_run(
+            outputs_json={
+                "formatter": {"result": "ok", "errors": []},
+            }
+        )
 
         with (
             patch("modulo.api.routes.runs.get_run", return_value=run),
@@ -170,14 +176,16 @@ class TestGetNodeOutput:
 
 class TestSensitiveMasking:
     def test_masks_top_level_sensitive_keys(self, client: TestClient) -> None:
-        run = _make_run(outputs_json={
-            "planner": {
-                "api_key": "sk-123",
-                "token": "abc-def",
-                "name": "My Agent",
-                "public_url": "https://example.com",
-            },
-        })
+        run = _make_run(
+            outputs_json={
+                "planner": {
+                    "api_key": "sk-123",
+                    "token": "abc-def",
+                    "name": "My Agent",
+                    "public_url": "https://example.com",
+                },
+            }
+        )
 
         with (
             patch("modulo.api.routes.runs.get_run", return_value=run),
@@ -193,15 +201,17 @@ class TestSensitiveMasking:
         assert output["public_url"] == "https://example.com"
 
     def test_masks_nested_sensitive_keys(self, client: TestClient) -> None:
-        run = _make_run(outputs_json={
-            "coder": {
-                "config": {
-                    "api_key": "sk-nested",
-                    "timeout": 30,
+        run = _make_run(
+            outputs_json={
+                "coder": {
+                    "config": {
+                        "api_key": "sk-nested",
+                        "timeout": 30,
+                    },
+                    "result": "done",
                 },
-                "result": "done",
-            },
-        })
+            }
+        )
 
         with (
             patch("modulo.api.routes.runs.get_run", return_value=run),
@@ -216,14 +226,16 @@ class TestSensitiveMasking:
         assert output["result"] == "done"
 
     def test_masks_in_list_items(self, client: TestClient) -> None:
-        run = _make_run(outputs_json={
-            "formatter": {
-                "items": [
-                    {"key": "safe-value", "public": "visible"},
-                    {"credential": "secret-cred", "public": "also-visible"},
-                ],
-            },
-        })
+        run = _make_run(
+            outputs_json={
+                "formatter": {
+                    "items": [
+                        {"key": "safe-value", "public": "visible"},
+                        {"credential": "secret-cred", "public": "also-visible"},
+                    ],
+                },
+            }
+        )
 
         with (
             patch("modulo.api.routes.runs.get_run", return_value=run),
@@ -239,15 +251,17 @@ class TestSensitiveMasking:
         assert output["items"][1]["public"] == "also-visible"
 
     def test_preserves_non_string_types(self, client: TestClient) -> None:
-        run = _make_run(outputs_json={
-            "planner": {
-                "count": 42,
-                "active": True,
-                "tags": ["a", "b"],
-                "score": 3.14,
-                "nested": None,
-            },
-        })
+        run = _make_run(
+            outputs_json={
+                "planner": {
+                    "count": 42,
+                    "active": True,
+                    "tags": ["a", "b"],
+                    "score": 3.14,
+                    "nested": None,
+                },
+            }
+        )
 
         with (
             patch("modulo.api.routes.runs.get_run", return_value=run),

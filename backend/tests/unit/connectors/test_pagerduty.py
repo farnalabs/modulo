@@ -32,9 +32,7 @@ async def test_health_check_ok(connector: PagerDutyConnector) -> None:
 
 @respx.mock
 async def test_health_check_invalid_token(connector: PagerDutyConnector) -> None:
-    respx.get(f"{_BASE}/users", params={"limit": 1}).mock(
-        return_value=httpx.Response(401, text="Unauthorized")
-    )
+    respx.get(f"{_BASE}/users", params={"limit": 1}).mock(return_value=httpx.Response(401, text="Unauthorized"))
     result = await connector.health_check()
     assert result.ok is False
     assert "Invalid PagerDuty API token" in result.detail
@@ -42,9 +40,7 @@ async def test_health_check_invalid_token(connector: PagerDutyConnector) -> None
 
 @respx.mock
 async def test_health_check_network_error(connector: PagerDutyConnector) -> None:
-    respx.get(f"{_BASE}/users", params={"limit": 1}).mock(
-        side_effect=httpx.ConnectError("connection refused")
-    )
+    respx.get(f"{_BASE}/users", params={"limit": 1}).mock(side_effect=httpx.ConnectError("connection refused"))
     result = await connector.health_check()
     assert result.ok is False
     assert "connection refused" in result.detail
@@ -52,9 +48,7 @@ async def test_health_check_network_error(connector: PagerDutyConnector) -> None
 
 @respx.mock
 async def test_health_check_other_status(connector: PagerDutyConnector) -> None:
-    respx.get(f"{_BASE}/users", params={"limit": 1}).mock(
-        return_value=httpx.Response(429, text="Too Many Requests")
-    )
+    respx.get(f"{_BASE}/users", params={"limit": 1}).mock(return_value=httpx.Response(429, text="Too Many Requests"))
     result = await connector.health_check()
     assert result.ok is False
     assert "429" in result.detail
@@ -115,9 +109,7 @@ async def test_query_incidents_with_cursor(connector: PagerDutyConnector) -> Non
             },
         )
     )
-    result = await connector.query(
-        ConnectorQuery(resource="incidents", cursor="25")
-    )
+    result = await connector.query(ConnectorQuery(resource="incidents", cursor="25"))
     assert len(result.records) == 1
     assert result.next_cursor is not None
 
@@ -137,9 +129,7 @@ async def test_query_incidents_with_limit(connector: PagerDutyConnector) -> None
             },
         )
     )
-    result = await connector.query(
-        ConnectorQuery(resource="incidents", limit=5)
-    )
+    result = await connector.query(ConnectorQuery(resource="incidents", limit=5))
     assert len(result.records) == 5
 
 
@@ -168,9 +158,7 @@ async def test_query_services_with_query_filter(connector: PagerDutyConnector) -
             json={"services": [{"id": "S3", "name": "API Gateway"}], "total": 1, "more": False},
         )
     )
-    result = await connector.query(
-        ConnectorQuery(resource="services", filters={"query": "api"})
-    )
+    result = await connector.query(ConnectorQuery(resource="services", filters={"query": "api"}))
     assert len(result.records) == 1
     assert result.records[0]["name"] == "API Gateway"
 
@@ -181,9 +169,7 @@ async def test_query_users(connector: PagerDutyConnector) -> None:
         {"id": "U1", "name": "Alice", "email": "alice@example.com"},
         {"id": "U2", "name": "Bob", "email": "bob@example.com"},
     ]
-    respx.get(f"{_BASE}/users").mock(
-        return_value=httpx.Response(200, json={"users": users, "total": 2, "more": False})
-    )
+    respx.get(f"{_BASE}/users").mock(return_value=httpx.Response(200, json={"users": users, "total": 2, "more": False}))
     result = await connector.query(ConnectorQuery(resource="users"))
     assert len(result.records) == 2
     assert result.records[0]["name"] == "Alice"
@@ -195,9 +181,7 @@ async def test_query_teams(connector: PagerDutyConnector) -> None:
         {"id": "T1", "name": "Engineering"},
         {"id": "T2", "name": "Operations"},
     ]
-    respx.get(f"{_BASE}/teams").mock(
-        return_value=httpx.Response(200, json={"teams": teams, "total": 2, "more": False})
-    )
+    respx.get(f"{_BASE}/teams").mock(return_value=httpx.Response(200, json={"teams": teams, "total": 2, "more": False}))
     result = await connector.query(ConnectorQuery(resource="teams"))
     assert len(result.records) == 2
     assert result.records[0]["name"] == "Engineering"
@@ -210,9 +194,7 @@ async def test_query_escalation_policies(connector: PagerDutyConnector) -> None:
         {"id": "EP2", "name": "Standard Escalation"},
     ]
     respx.get(f"{_BASE}/escalation_policies").mock(
-        return_value=httpx.Response(
-            200, json={"escalation_policies": policies, "total": 2, "more": False}
-        )
+        return_value=httpx.Response(200, json={"escalation_policies": policies, "total": 2, "more": False})
     )
     result = await connector.query(ConnectorQuery(resource="escalation_policies"))
     assert len(result.records) == 2
@@ -445,18 +427,14 @@ async def test_write_invalid_resource(connector: PagerDutyConnector) -> None:
 
 @respx.mock
 async def test_query_http_500(connector: PagerDutyConnector) -> None:
-    respx.get(f"{_BASE}/incidents").mock(
-        return_value=httpx.Response(500, text="Internal Server Error")
-    )
+    respx.get(f"{_BASE}/incidents").mock(return_value=httpx.Response(500, text="Internal Server Error"))
     with pytest.raises(httpx.HTTPStatusError):
         await connector.query(ConnectorQuery(resource="incidents"))
 
 
 @respx.mock
 async def test_write_http_403(connector: PagerDutyConnector) -> None:
-    respx.post(f"{_BASE}/incidents").mock(
-        return_value=httpx.Response(403, text="Forbidden")
-    )
+    respx.post(f"{_BASE}/incidents").mock(return_value=httpx.Response(403, text="Forbidden"))
     with pytest.raises(httpx.HTTPStatusError):
         await connector.write(
             ConnectorPayload(
@@ -481,9 +459,7 @@ async def test_query_incidents_with_cursor_passthrough(connector: PagerDutyConne
             },
         )
     )
-    result = await connector.query(
-        ConnectorQuery(resource="incidents", cursor="100")
-    )
+    result = await connector.query(ConnectorQuery(resource="incidents", cursor="100"))
     assert len(result.records) == 1
     assert result.next_cursor == "101"
 
@@ -497,17 +473,13 @@ async def test_query_on_calls_with_limit(connector: PagerDutyConnector) -> None:
         return_value=httpx.Response(
             200,
             json={
-                "oncalls": [
-                    {"user": {"id": f"U{i}"}} for i in range(5)
-                ],
+                "oncalls": [{"user": {"id": f"U{i}"}} for i in range(5)],
                 "total": 5,
                 "more": False,
             },
         )
     )
-    result = await connector.query(
-        ConnectorQuery(resource="on_calls", limit=3)
-    )
+    result = await connector.query(ConnectorQuery(resource="on_calls", limit=3))
     assert len(result.records) == 3
 
 
@@ -544,8 +516,6 @@ async def test_query_users_with_team_filter(connector: PagerDutyConnector) -> No
             json={"users": [{"id": "U3", "name": "Charlie"}], "total": 1, "more": False},
         )
     )
-    result = await connector.query(
-        ConnectorQuery(resource="users", filters={"team_ids": "TEAM1"})
-    )
+    result = await connector.query(ConnectorQuery(resource="users", filters={"team_ids": "TEAM1"}))
     assert len(result.records) == 1
     assert result.records[0]["name"] == "Charlie"

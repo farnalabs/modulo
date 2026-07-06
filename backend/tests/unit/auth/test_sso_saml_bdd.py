@@ -55,18 +55,10 @@ _SAML_RESPONSE_XML = """<?xml version="1.0" encoding="UTF-8"?>
 def _make_saml_response(email: str, display_name: str, groups: list[str] | None = None) -> str:
     groups_xml = ""
     if groups:
-        values = "".join(
-            f'        <saml:AttributeValue>{g}</saml:AttributeValue>'
-            for g in groups
-        )
-        groups_xml = (
-            '      <saml:Attribute Name="groups">\n'
-            f"{values}\n"
-            '      </saml:Attribute>'
-        )
+        values = "".join(f"        <saml:AttributeValue>{g}</saml:AttributeValue>" for g in groups)
+        groups_xml = f'      <saml:Attribute Name="groups">\n{values}\n      </saml:Attribute>'
     xml = (
-        _SAML_RESPONSE_XML
-        .replace("__EMAIL__", email)
+        _SAML_RESPONSE_XML.replace("__EMAIL__", email)
         .replace("__DISPLAY_NAME__", display_name)
         .replace("__GROUPS_XML__", groups_xml)
     )
