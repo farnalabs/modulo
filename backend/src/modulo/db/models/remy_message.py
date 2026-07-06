@@ -31,8 +31,8 @@ class ChatMessage(Base):
     )
     role: Mapped[str] = mapped_column(String(20), nullable=False)
     content: Mapped[str | None] = mapped_column(Text)
-    tool_calls_json: Mapped[dict | None] = mapped_column(JSON, nullable=True)
-    tool_results_json: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    tool_calls_json: Mapped[dict[str, object] | None] = mapped_column(JSON, nullable=True)
+    tool_results_json: Mapped[dict[str, object] | None] = mapped_column(JSON, nullable=True)
     token_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
     parent_id: Mapped[uuid.UUID | None] = mapped_column(
         Uuid(),
