@@ -6,6 +6,7 @@ from typing import Any
 
 from sqlalchemy import delete as sa_delete
 from sqlalchemy import func, select
+from sqlalchemy.exc import ProgrammingError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.db.crud.pipeline_snapshot import create_snapshot_from_live_graph
@@ -68,10 +69,13 @@ async def list_snapshots(
     snapshots = list(result.scalars())
 
     # Get total count
-    count_result = await session.execute(
-        select(func.count()).select_from(PipelineSnapshot).where(PipelineSnapshot.pipeline_id == pipeline_id)
-    )
-    total = count_result.scalar() or 0
+    try:
+        count_result = await session.execute(
+            select(func.count()).select_from(PipelineSnapshot).where(PipelineSnapshot.pipeline_id == pipeline_id)
+        )
+        total = count_result.scalar() or 0
+    except ProgrammingError:
+        return [], 0
 
     return snapshots, total
 

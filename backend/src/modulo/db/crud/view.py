@@ -8,6 +8,7 @@ import uuid
 from typing import Any
 
 from sqlalchemy import func, select
+from sqlalchemy.exc import ProgrammingError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.db.crud.base import PageResult, apply_updates
@@ -60,7 +61,10 @@ async def list_views(
         conditions.append(SavedView.view_type == view_type)
 
     count_q = select(func.count()).select_from(SavedView).where(*conditions)
-    total = (await session.execute(count_q)).scalar_one()
+    try:
+        total = (await session.execute(count_q)).scalar_one()
+    except ProgrammingError:
+        return PageResult(items=[], total=0, page=page, page_size=page_size)
 
     offset = (page - 1) * page_size
     items = list(

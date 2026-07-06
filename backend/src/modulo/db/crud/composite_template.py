@@ -8,6 +8,7 @@ import uuid
 from typing import Any
 
 from sqlalchemy import func, select
+from sqlalchemy.exc import ProgrammingError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.db.crud.base import PageResult, apply_updates
@@ -61,13 +62,16 @@ async def list_composite_templates(
     page_size: int = 20,
 ) -> PageResult[CompositeTemplate]:
     offset = (page - 1) * page_size
-    total = (
-        await session.execute(
-            select(func.count()).select_from(CompositeTemplate).where(
-                CompositeTemplate.organisation_id == org_id
+    try:
+        total = (
+            await session.execute(
+                select(func.count()).select_from(CompositeTemplate).where(
+                    CompositeTemplate.organisation_id == org_id
+                )
             )
-        )
-    ).scalar_one()
+        ).scalar_one()
+    except ProgrammingError:
+        return PageResult(items=[], total=0, page=page, page_size=page_size)
     stmt = (
         select(CompositeTemplate)
         .where(CompositeTemplate.organisation_id == org_id)
