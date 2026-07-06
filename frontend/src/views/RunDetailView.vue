@@ -130,7 +130,7 @@
                   class="inline-flex items-center gap-1 rounded-md px-2 py-1 text-xs font-medium text-primary hover:bg-primary/10"
                   @click="toggleNodeIO(node.name)"
                 >
-                  {{ expandedNodes.has(node.name) ? 'Hide' : 'Show' }}
+                  {{ expandedNodes.has(node.name) ? $t('views.RunDetailView.hide') : $t('views.RunDetailView.show') }}
                 </button>
                 <span v-else class="text-muted-foreground">—</span>
               </td>
@@ -149,7 +149,7 @@
                   class="inline-flex items-center gap-1 rounded-md px-2 py-1 text-xs font-medium text-muted-foreground hover:text-primary"
                   @click="revealPrompt(node.name)"
                 >
-                  [Prompt hidden — click to reveal]
+                  {{ $t('views.RunDetailView.prompt_hidden_click_to_reveal') }}
                 </button>
                 <span v-else class="text-xs text-muted-foreground">—</span>
               </td>
@@ -198,7 +198,7 @@
               </span>
             </DialogTitle>
             <DialogDescription class="sr-only">
-              Rendered prompt sent to the LLM for this node.
+              {{ $t('views.RunDetailView.prompt_dialog_description') }}
             </DialogDescription>
           </DialogHeader>
           <div class="max-h-[60vh] overflow-auto rounded-lg border bg-muted p-4">
@@ -209,7 +209,7 @@
               data-testid="run-detail-copy-prompt"
               @click="copyPromptText"
             >
-              {{ promptCopied ? 'Copied!' : 'Copy Prompt' }}
+              {{ promptCopied ? $t('views.RunDetailView.copied') : $t('views.RunDetailView.copy_prompt') }}
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -221,6 +221,7 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref } from 'vue'
 import { useRoute } from 'vue-router'
+import { useI18n } from 'vue-i18n'
 import { api } from '../lib/api/client'
 import type { components } from '../lib/api/client'
 import BackLink from '../components/BackLink.vue'
@@ -257,6 +258,7 @@ interface NodeEntry {
 }
 
 const route = useRoute()
+const { t } = useI18n()
 const loading = ref(true)
 const error = ref<string | null>(null)
 const run = ref<RunResponse | null>(null)
@@ -342,6 +344,9 @@ async function revealPrompt(nodeName: string) {
     )
     if (err || !data) {
       revealedPrompts.value = { ...revealedPrompts.value, [nodeName]: null }
+      console.warn('Prompt reveal API error:', err)
+      const detail = (err as Record<string, unknown>)?.detail
+      error.value = `${t('views.RunDetailView.prompt_reveal_error')} ${detail ? String(detail) : ''}`
       return
     }
     const d = data as components['schemas']['PromptRevealResponse']

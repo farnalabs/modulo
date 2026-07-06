@@ -1043,6 +1043,20 @@ async def reveal_node_prompt(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
         ) from None
+    except HTTPException:
+        raise
+    except SQLAlchemyError as exc:
+        _log.warning("prompt_reveal.db_error", extra={"error": str(exc)[:200]})
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Feature is temporarily unavailable. Please try again.",
+        ) from None
+    except Exception as exc:
+        _log.error("prompt_reveal.error", extra={"error": str(exc)[:200]})
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="An unexpected error occurred while revealing the prompt.",
+        ) from None
 
 
 # ---------------------------------------------------------------------------
