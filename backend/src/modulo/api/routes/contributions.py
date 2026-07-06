@@ -70,7 +70,7 @@ async def create_contribution(
             prim = await contribute_fixture(
                 session,
                 org_id=principal.organisation_id,
-                account_id=principal.account_id,
+                created_by=principal.account_id,
                 name=req.name,
                 slug=req.slug,
                 description=req.description,
@@ -105,7 +105,7 @@ async def submit_for_review(
             session,
             principal.organisation_id,
             primitive_id,
-            account_id=principal.account_id,
+            created_by=principal.account_id,
         )
     except ProgrammingError:
         raise HTTPException(
@@ -201,7 +201,7 @@ async def submit_contribution_version_endpoint(
                 session,
                 principal.organisation_id,
                 primitive_id,
-                account_id=principal.account_id,
+                created_by=principal.account_id,
                 name=req.name,
                 slug=req.slug,
                 description=req.description,
