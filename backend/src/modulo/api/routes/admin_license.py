@@ -19,6 +19,7 @@ from modulo.core.license import (
     store_license,
 )
 from modulo.db.crud.organisation import get_organisation
+from modulo.db.models.organisation import Organisation
 from modulo.settings import Settings, get_settings
 
 logger = logging.getLogger(__name__)
@@ -97,7 +98,7 @@ def _resolve_effective_license(settings: Settings, org: Organisation | None = No
                 org_id=d.org_id or None,
             )
 
-    return LicenseStatusResponse(has_license=False)
+    return LicenseStatusResponse(has_license=False, tier="team")
 
 
 @router.get("", response_model=LicenseStatusResponse)
