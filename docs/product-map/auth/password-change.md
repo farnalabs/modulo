@@ -57,6 +57,9 @@ Logged-in users can change their own password via the My Profile page. Admins ca
 
 ## Error Handling
 - [x] PUT /api/v1/me/password returns 501 Not Implemented when DB table is missing (ProgrammingError) — fixed in QA (2026-07-06)
+- [x] PUT /api/v1/me/password returns 503 Service Unavailable on SQLAlchemyError (connection/deadlock failure) — fixed in QA (cross-cutting, 2026-07-08)
+- [x] GET /api/v1/me/settings returns 501 on ProgrammingError, 503 on SQLAlchemyError — fixed in QA (cross-cutting, 2026-07-08)
+- [x] PUT /api/v1/me/settings returns 501 on ProgrammingError, 503 on SQLAlchemyError — fixed in QA (cross-cutting, 2026-07-08)
 - [x] Token family blacklist failure during password change logs warning but does not fail the request — per-family try/except with savepoints; fixed in QA (2026-07-06)
 - [ ] Unauthenticated requests return 401 (no JWT) — FastAPI HTTPBearer default (auto_error=True); cannot change without altering auth dependency contract
 
@@ -69,3 +72,4 @@ Logged-in users can change their own password via the My Profile page. Admins ca
 ## QA History
 - 2026-07-05: QA-iterate (prodmap auth). Added Error Handling and QA History sections. Fixed status: covered → partial (audit trail gap).
 - 2026-07-06: Cross-cutting QA. Fixed 401 vs 403 status code in behaviours. Added Known Gaps for ProgrammingError, token blacklist isolation, missing website docs. Added ProgrammingError catch and per-family blacklist error isolation to the route handler.
+- 2026-07-08: Cross-cutting QA (index 258). Fixed CRITICAL — added SQLAlchemyError→503 catches to all 11 DB-accessing routes in me.py (get_user_settings, update_user_settings, change_password, 4 remy skills, 3 context sources) — previously only caught ProgrammingError→501, allowing connection/deadlock failures to propagate as 500. Fixed CRITICAL — BDD step definitions in test_change_password.py patched wrong function names (`get_user_by_id`/`list_families_for_user` instead of `get_account_by_id`/`list_families_for_account`) — mocks silently didn't mock the real code path, BDD tests made real DB calls without isolation. Fixed MAJOR — moved lazy `verify_password` import from inside change_password handler to module level. Added 6 new unit tests in test_me_sqlalchemy_error.py (3× ProgrammingError→501, 3× SQLAlchemyError→503). All 14 me password tests pass. Merged to main at v.NEXT. Status: partial.
