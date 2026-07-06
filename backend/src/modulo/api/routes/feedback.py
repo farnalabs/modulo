@@ -19,7 +19,7 @@ from typing import Any
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel
 from sqlalchemy import select
-from sqlalchemy.exc import ProgrammingError
+from sqlalchemy.exc import ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.api.dependencies import get_db_session
@@ -113,6 +113,11 @@ async def create_feedback(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feedback system is not available. Run database migrations to enable this feature.",
         )
+    except SQLAlchemyError:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Database error occurred. Please try again later.",
+        )
 
     return {
         "id": str(record.id),
@@ -150,6 +155,11 @@ async def list_feedback(
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feedback system is not available. Run database migrations to enable this feature.",
+        )
+    except SQLAlchemyError:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Database error occurred. Please try again later.",
         )
 
     return {
@@ -209,6 +219,11 @@ async def list_feedback_inbox(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feedback system is not available. Run database migrations to enable this feature.",
         )
+    except SQLAlchemyError:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Database error occurred. Please try again later.",
+        )
 
     pipeline_map = result.get("pipeline_map", {})
 
@@ -232,30 +247,35 @@ async def list_eval_proposals(
             await set_rls_org(session, principal.organisation_id)
             mgr = FeedbackManager(session, principal.organisation_id)
             result = await mgr.get_eval_proposals(page=page, page_size=page_size)
+
+            items = result["items"]
+            node_name_map: dict[str, str] = {}
+            run_ids = [r.run_id for r in items if r.run_id]
+            if run_ids:
+                run_rows = await session.execute(
+                    select(Run.id, Run.snapshot_id).where(Run.id.in_(run_ids))
+                )
+                rows = run_rows.all()
+                snapshot_ids = [r.snapshot_id for r in rows if r.snapshot_id]
+                if snapshot_ids:
+                    snap_rows = await session.execute(
+                        select(PipelineSnapshot.id, PipelineSnapshot.graph_json).where(PipelineSnapshot.id.in_(snapshot_ids))
+                    )
+                    snap_rows_result = snap_rows.all()
+                    for snap_id, graph_json in snap_rows_result:
+                        if graph_json:
+                            for node in graph_json.get("nodes", []):
+                                node_name_map[str(node.get("id"))] = node.get("name") or node.get("label", "")
     except ProgrammingError:
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feedback system is not available. Run database migrations to enable this feature.",
         )
-
-    items = result["items"]
-    node_name_map: dict[str, str] = {}
-    run_ids = [r.run_id for r in items if r.run_id]
-    if run_ids:
-        run_rows = await session.execute(
-            select(Run.id, Run.snapshot_id).where(Run.id.in_(run_ids))
+    except SQLAlchemyError:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Database error occurred. Please try again later.",
         )
-        rows = await run_rows.all()
-        snapshot_ids = [r.snapshot_id for r in rows if r.snapshot_id]
-        if snapshot_ids:
-            snap_rows = await session.execute(
-                select(PipelineSnapshot.id, PipelineSnapshot.graph_json).where(PipelineSnapshot.id.in_(snapshot_ids))
-            )
-            snap_rows_result = await snap_rows.all()
-            for snap_id, graph_json in snap_rows_result:
-                if graph_json:
-                    for node in graph_json.get("nodes", []):
-                        node_name_map[str(node.get("id"))] = node.get("name") or node.get("label", "")
 
     return {
         "items": [_serialise_record(r, producing_node_name=node_name_map.get(r.producing_node_id)) for r in items],
@@ -280,6 +300,11 @@ async def get_feedback(
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feedback system is not available. Run database migrations to enable this feature.",
+        )
+    except SQLAlchemyError:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Database error occurred. Please try again later.",
         )
 
     if record is None:
@@ -312,6 +337,11 @@ async def update_feedback_status(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feedback system is not available. Run database migrations to enable this feature.",
         )
+    except SQLAlchemyError:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Database error occurred. Please try again later.",
+        )
 
     if record is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Feedback record not found")
@@ -337,6 +367,11 @@ async def detect_eval_gap(
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feedback system is not available. Run database migrations to enable this feature.",
+        )
+    except SQLAlchemyError:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Database error occurred. Please try again later.",
         )
 
     if record is None:
@@ -366,6 +401,11 @@ async def detect_eval_gap(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feedback system is not available. Run database migrations to enable this feature.",
         )
+    except SQLAlchemyError:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Database error occurred. Please try again later.",
+        )
 
     return {
         "id": str(record.id),
@@ -388,6 +428,11 @@ async def get_inbox_item(
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feedback system is not available. Run database migrations to enable this feature.",
+        )
+    except SQLAlchemyError:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Database error occurred. Please try again later.",
         )
 
     if record is None:
@@ -469,6 +514,11 @@ async def review_feedback(
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feedback system is not available. Run database migrations to enable this feature.",
+        )
+    except SQLAlchemyError:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Database error occurred. Please try again later.",
         )
     except (InvalidTransitionError, ConcurrentModificationError) as exc:
         raise HTTPException(
