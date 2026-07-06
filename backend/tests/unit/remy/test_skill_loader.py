@@ -1,6 +1,7 @@
 """Unit tests for SkillLoader — YAML frontmatter parsing and system prompt assembly."""
 
 import uuid
+from collections.abc import Callable
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -232,11 +233,13 @@ class TestSkillLoaderBuildSystemPrompt:
         page_context: str | None = None,
         system_prompt_override: str | None = None,
         include_ui_tools_text: bool = False,
+        ui_tools_text_fn: Callable[[], str] | None = None,
     ) -> str:
         cfg_stub = _ConfigServiceStub(**(config_kwargs or {}))
         ctx_stub = _CtxSourceStub(overrides=ctx_overrides)
         with (
             patch.object(loader, "_config_service", cfg_stub),
+            patch.object(loader, "_ui_tools_text_fn", ui_tools_text_fn),
             patch("modulo.core.remy.skill_loader.RemyContextSourceService", return_value=ctx_stub),
         ):
             return await loader.build_system_prompt(
@@ -382,7 +385,10 @@ class TestSkillLoaderBuildSystemPrompt:
         user_id: uuid.UUID,
     ) -> None:
         prompt = await self._run(
-            loader, org_id, user_id, config_kwargs={"system_prompt": "You are helpful."}, include_ui_tools_text=True
+            loader, org_id, user_id,
+            config_kwargs={"system_prompt": "You are helpful."},
+            include_ui_tools_text=True,
+            ui_tools_text_fn=lambda: "# Browser Tools Available (Text Mode)\n**navigate**(path: 'url')\n",
         )
         assert "Browser Tools Available (Text Mode)" in prompt
         assert "**navigate**(path:" in prompt
