@@ -15,6 +15,7 @@ locations for maximum compatibility:
   - ``ctx["response"]``       — used by test_library.py's status_404 step
 """
 
+import json
 import uuid
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
@@ -139,10 +140,6 @@ def token_encodes_org_id(request: Any) -> None:
     assert payload["org_id"] is not None
 
 
-@then("the response status is 401")
-def status_401(request: Any) -> None:
-    resp = request.node.response
-    assert resp.status_code == 401, f"Expected 401, got {resp.status_code}: {resp.text}"
 
 
 # -- Expired token scenario ------------------------------------------------
@@ -603,12 +600,6 @@ def step_rls_enforced(request: Any, expected: str) -> None:
 # -- Cross-org pipeline run is forbidden -----------------------------------
 
 
-@given(
-    parsers.parse('I authenticate as a user in "{org}"'),
-)
-def alt_authenticate_org(request: Any, org: str) -> None:
-    """Store org identity for the cross-org run scenario."""
-    request.node.current_org = org
 
 
 @when(

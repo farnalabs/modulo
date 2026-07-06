@@ -73,11 +73,6 @@ def _patch_get_pipeline(
     patches.append(patcher)
 
 
-def _id_from_url(url: str) -> uuid.UUID:
-    """Derive a stable UUID from a pipeline name for deterministic testing."""
-    return uuid.uuid5(ORG_ID, url.strip("/").rsplit("/", 1)[-1])
-
-
 # ---------------------------------------------------------------------------
 # Fixtures
 # ---------------------------------------------------------------------------

@@ -49,15 +49,16 @@ def _onboarding_state_path():
     base = os.path.join(os.path.dirname(__file__), "..", "..", "..", "src", "modulo", "api", "routes")
     return os.path.join(base, "..", "..", "..", "..", ".onboarding-state.json")
 
-
 # ===========================================================================
 # Override auth steps to propagate role into ctx
 # ===========================================================================
 
 
 @given(parsers.parse('I am authenticated as a viewer in org "{org}"'))
-def _orgs_auth_viewer(org: str, ctx):
+def _orgs_auth_viewer(org: str, request, ctx):
+    """Set viewer role in ctx for member_management steps."""
     ctx["org_role"] = "viewer"
+    request.node._viewer_auth = True
 
 
 # ===========================================================================
@@ -162,22 +163,10 @@ def deactivate_user(request, username: str, client, ctx):
     ctx["user_active"] = False
 
 
-@then("the response status is 201")
-def response_status_201(request):
-    resp = request.node._resp
-    assert resp.status_code == 201, f"Expected 201, got {resp.status_code}: {resp.text[:200]}"
-
-
 @then(parsers.parse('the membership has role "{role}"'))
 def membership_has_role(request, role: str):
     body = request.node._resp.json()
     assert body.get("role") == role, f"Expected role {role!r}, got {body.get('role')!r}"
-
-
-@then("the response status is 204")
-def response_status_204(request):
-    resp = request.node._resp
-    assert resp.status_code == 204, f"Expected 204, got {resp.status_code}"
 
 
 @then(parsers.parse('"{username}" is no longer a member'))

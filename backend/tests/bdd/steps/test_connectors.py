@@ -60,11 +60,6 @@ def get_connector_health(request, connector_id, ctx):
         request.node._resp_body = ctx["health_result"]
 
 
-@then("the response status is 200")
-def response_status_200(request):
-    # In BDD step tests the response is stored on request.node; for the
-    # health endpoint a 200 is implied unless an exception is raised.
-    assert request.node._resp is not None
 
 
 @then("the response ok is true")

@@ -18,11 +18,8 @@ os.environ.setdefault("DATABASE_URL", "sqlite+aiosqlite:///./test.db")
 os.environ.setdefault("SECRET_KEY", "a" * 32)
 os.environ.setdefault("FERNET_KEY", "b" * 32)
 
-from modulo.api.dependencies import _get_engine, get_db_session
-from modulo.api.main import app
-from modulo.auth.dependencies import get_current_user
 from modulo.auth.jwt import AuthenticatedPrincipal
-from modulo.settings import Settings, get_settings
+from modulo.settings import Settings
 
 _VALID_32 = "a" * 32
 ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
@@ -151,26 +148,21 @@ def mock_session() -> AsyncMock:
 
 @pytest.fixture
 def client(mock_session: AsyncMock) -> Generator[TestClient, None, None]:
-    async def override_session() -> AsyncGenerator[AsyncMock, None]:
-        yield mock_session
-
-    app.dependency_overrides[get_settings] = make_settings
-    app.dependency_overrides[get_db_session] = override_session
-    app.dependency_overrides[_get_engine] = lambda: MagicMock()
-    app.dependency_overrides[get_current_user] = lambda: AuthenticatedPrincipal(
+    yield from _make_test_client(
+        mock_session,
         username="testuser",
         organisation_id=ORG_ID,
         account_id=USER_ID,
         org_role="admin",
     )
 
-    yield TestClient(app)
-
-    app.dependency_overrides.clear()
-
 
 @pytest.fixture
 def unauth_client(mock_session: AsyncMock) -> Generator[TestClient, None, None]:
+    from modulo.api.dependencies import _get_engine, get_db_session
+    from modulo.api.main import app
+    from modulo.settings import get_settings
+
     async def override_session() -> AsyncGenerator[AsyncMock, None]:
         yield mock_session
 
@@ -218,13 +210,19 @@ def _bdd_check_response_status(status: int, request) -> None:
 
 
 def _make_test_client(mock_session: AsyncMock, **principal_kwargs: Any) -> Generator[TestClient, None, None]:
+    from modulo.api.dependencies import _get_engine, get_db_session
+    from modulo.api.main import app
+    from modulo.auth.dependencies import get_current_user
+    from modulo.settings import get_settings
+
     async def override_session() -> AsyncGenerator[AsyncMock, None]:
         yield mock_session
 
     app.dependency_overrides[get_settings] = make_settings
     app.dependency_overrides[get_db_session] = override_session
     app.dependency_overrides[_get_engine] = lambda: MagicMock()
-    app.dependency_overrides[get_current_user] = lambda: AuthenticatedPrincipal(**principal_kwargs)
+    if principal_kwargs:
+        app.dependency_overrides[get_current_user] = lambda: AuthenticatedPrincipal(**principal_kwargs)
 
     yield TestClient(app)
 
@@ -265,22 +263,4 @@ def system_admin_client(mock_session: AsyncMock) -> Generator[TestClient, None, 
     )
 
 
-# ---------------------------------------------------------------------------
-# Shared response store — standardises how @when steps record responses for
-# @then assertions.  Reduces the 3-location-store pattern that was duplicated
-# in 19+ step files to a single importable helper.
-# ---------------------------------------------------------------------------
 
-
-def store_response(request: Any, resp: Any, ctx: dict[str, Any] | None = None) -> None:
-    """Record a response so shared ``@then`` steps can inspect it.
-
-    Writes to all three locations expected by the various step-file conventions:
-    - ``request.node._resp`` — test_connectors.py, test_auth.py
-    - ``request.node.response`` — test_auth.py, test_jwt_security.py
-    - ``ctx["response"]`` — test_library.py (when ctx is provided)
-    """
-    request.node._resp = resp
-    request.node.response = resp
-    if ctx is not None:
-        ctx["response"] = resp

@@ -10,7 +10,6 @@ import pytest
 from pytest_bdd import given, parsers, scenarios, then, when
 
 from modulo.api.dependencies import get_plan_context
-from modulo.api.main import app as _app
 from modulo.core.feature_flags import CommunityTier, LicenseData, LicenseKeyTier
 from modulo.settings import Settings, get_settings
 
@@ -56,6 +55,8 @@ def _make_id_token(email: str, name: str, sub: str = "abc123") -> str:
 
 
 def _setup_oidc_client(license_key: str = "test-license-key") -> None:
+    from modulo.api.main import app as _app
+
     if not license_key:
         _plan = CommunityTier()
     else:
