@@ -31,7 +31,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.connectors.base import ConnectorQuery
 from modulo.core.secrets_backend import create_secrets_backend
-from modulo.core.trigger_engine.polling import evaluate_condition as _evaluate_condition
 from modulo.db.crud.run import create_run
 from modulo.db.models.connector_instance import ConnectorInstance
 from modulo.db.models.run import Run
@@ -101,6 +100,35 @@ _ACTIVE_STATUSES = ("pending", "running", "awaiting_human", "claimed", "waiting_
 
 def _sha256_hex(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
+
+
+def _is_unique_violation(exc: IntegrityError) -> bool:
+    """Return True if *exc* is a unique-constraint violation (not FK, NOT NULL, etc.).
+
+    Handles PostgreSQL (pgcode 23505), SQLite (UNIQUE constraint failed), and
+    MariaDB/MySQL (IntegrityError: 1062 Duplicate entry).
+    """
+    orig = getattr(exc, "orig", None)
+    if orig is None:
+        return False
+
+    # PostgreSQL — asyncpg raises with pgcode attribute
+    pgcode = getattr(orig, "pgcode", None)
+    if pgcode is not None:
+        return pgcode == "23505"
+
+    # SQLite — aiosqlite wraps the message as a string
+    msg = str(orig)
+    if "UNIQUE constraint failed" in msg:
+        return True
+
+    # MariaDB / MySQL — asyncmy raises with args[0] as error number
+    if isinstance(orig, Exception):
+        err_args = getattr(orig, "args", None)
+        if err_args and len(err_args) > 0 and err_args[0] == 1062:
+            return True
+
+    return False
 
 
 def _verify_timestamp(modulo_timestamp: str | None) -> int:
@@ -313,7 +341,7 @@ class TriggerEngine:
             select(Trigger).where(
                 Trigger.id == event.trigger_id,
                 Trigger.organisation_id == org_id,
-            )
+            ).with_for_update()
         )
         trigger = trigger_result.scalar_one_or_none()
         if trigger is None:
@@ -411,8 +439,10 @@ class TriggerEngine:
         the next beat tick — there is no in-memory scheduler to update directly.
         """
         config = trigger.config_json or {}
-        raw_interval = config.get("poll_interval_seconds", 60)
-        if raw_interval is not None and (not isinstance(raw_interval, (int, float)) or raw_interval < 1):
+        raw_interval = config.get("poll_interval_seconds")
+        if raw_interval is None:
+            raw_interval = 60
+        elif not isinstance(raw_interval, (int, float)) or raw_interval < 1:
             raise ValueError(f"poll_interval_seconds must be >= 1, got {raw_interval!r}")
         interval = max(int(raw_interval), 1)
         now = datetime.now(UTC)
@@ -441,6 +471,7 @@ class TriggerEngine:
         """
         from modulo.core.trigger_engine.polling import (
             _build_polling_connector,
+            evaluate_condition as _evaluate_condition,
         )
         from modulo.settings import get_settings
 
@@ -469,18 +500,18 @@ class TriggerEngine:
                 creds,
             )
         except Exception as exc:
-            return {"status": "error", "error": f"Connector init failed: {exc}"}
+            return {"status": "error", "error": f"Connector init failed: {str(exc)[:200]}"}
 
         try:
             query = ConnectorQuery(resource=poll_query)
             query_result = await connector.query(query)
         except Exception as exc:
-            return {"status": "error", "error": f"Query failed: {exc}"}
+            return {"status": "error", "error": f"Query failed: {str(exc)[:200]}"}
 
         try:
             matched = _evaluate_condition(query_result, condition_expression)
         except Exception as exc:
-            return {"status": "error", "error": f"Condition evaluation failed: {exc}"}
+            return {"status": "error", "error": f"Condition evaluation failed: {str(exc)[:200]}"}
 
         return {
             "status": "condition_met" if matched else "no_match",
@@ -626,12 +657,9 @@ class TriggerEngine:
                 session.add(dedup)
                 await session.flush()
         except IntegrityError as exc:
-            # Re-raise non-unique IntegrityErrors (FK violations, NOT NULL checks)
-            # that would indicate a different problem than a duplicate webhook.
-            orig = getattr(exc, "orig", None)
-            if orig is not None and hasattr(orig, "pgcode") and orig.pgcode != "23505":
-                raise
-            return False
+            if _is_unique_violation(exc):
+                return False
+            raise
         return True
 
     async def _log_event(
