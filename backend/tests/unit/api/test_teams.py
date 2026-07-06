@@ -466,6 +466,10 @@ class TestAdminCreateTeam:
                 "modulo.api.routes.admin.create_team",
                 return_value=_make_team(name="Admin Team"),
             ),
+            patch(
+                "modulo.api.routes.admin.get_team_by_name",
+                return_value=None,
+            ),
             patch("modulo.api.routes.admin.set_rls_org"),
         ):
             resp = client.post(
