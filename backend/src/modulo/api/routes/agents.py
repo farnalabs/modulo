@@ -17,7 +17,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from modulo.api.dependencies import get_db_session
 from modulo.auth.dependencies import get_current_user
 from modulo.auth.jwt import AuthenticatedPrincipal
-from modulo.core.prompt_optimizer import PromptOptimizer
+from modulo.core.prompt_optimizer import OptimizationFailedError, PromptOptimizer
 from modulo.core.secrets_backend import create_secrets_backend
 from modulo.db.crud.agent import (
     add_prompt_version,
@@ -493,8 +493,19 @@ async def optimize_prompt(
             return "".join(texts)
         return str(content)
 
-    optimizer = PromptOptimizer(_llm_call)
-    result = await optimizer.optimize(agent.prompt_template, eval_results, eval_defs)
+    try:
+        optimizer = PromptOptimizer(_llm_call)
+        result = await optimizer.optimize(agent.prompt_template, eval_results, eval_defs)
+    except OptimizationFailedError:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Prompt optimization failed: LLM call failed after retries",
+        ) from None
+    except Exception:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Prompt optimization failed unexpectedly",
+        ) from None
 
     history = list(agent.prompt_version_history or [])
     next_version = f"v{len(history) + 1}"
