@@ -63,11 +63,13 @@ def _make_mock_primitive(**overrides) -> MagicMock:
     p.ed25519_signature = None
     p.verified = None
     p.trust_tier = "unverified"
+    p.tier = "community"
     p.download_count = None
     p.average_rating = None
     p.review_count = None
     p.owner_team_id = None
     p.created_by = None
+    p.account_id = uuid.UUID("00000000-0000-0000-0000-000000000002")
     p.created_at = datetime(2025, 1, 1, tzinfo=UTC)
     p.updated_at = datetime(2025, 1, 1, tzinfo=UTC)
     for k, v in overrides.items():
@@ -245,6 +247,23 @@ class TestSubmitForReview:
         assert body["contribution_status"] == "review_queue"
         assert body["visibility"] == "org"
 
+    def test_submit_for_review_uses_created_by_kwarg(self, client: TestClient):
+        prim = _make_mock_primitive(contribution_status="review_queue")
+
+        with (
+            patch(
+                "modulo.api.routes.contributions.submit_contribution_for_review",
+                new_callable=AsyncMock,
+                return_value=prim,
+            ) as mock_submit,
+            patch("modulo.api.routes.contributions.set_rls_org", new_callable=AsyncMock),
+        ):
+            resp = client.post(f"/api/v1/library/contribute/{_PRIMITIVE_ID}/submit")
+
+        assert resp.status_code == 200
+        mock_submit.assert_awaited_once()
+        assert mock_submit.call_args.kwargs["created_by"] == _USER_ID
+
     def test_submit_for_review_404(self, client: TestClient):
         with (
             patch(
@@ -418,6 +437,30 @@ class TestSubmitVersion:
         body = resp.json()
         assert body["name"] == "Test Fixture"
         assert body["contribution_status"] == "draft"
+
+    def test_submit_version_uses_created_by_kwarg(self, client: TestClient):
+        prim = _make_mock_primitive(version="1.1", contribution_status="draft")
+
+        with (
+            patch(
+                "modulo.api.routes.contributions.submit_contribution_version",
+                new_callable=AsyncMock,
+                return_value=prim,
+            ) as mock_version,
+            patch("modulo.api.routes.contributions.set_rls_org", new_callable=AsyncMock),
+        ):
+            resp = client.post(
+                f"/api/v1/library/contribute/{_PRIMITIVE_ID}/versions",
+                json={
+                    "name": "Versioned Fixture",
+                    "slug": "versioned-fixture",
+                    "fixture_map": {"prompt": "response"},
+                },
+            )
+
+        assert resp.status_code == 201
+        mock_version.assert_awaited_once()
+        assert mock_version.call_args.kwargs["created_by"] == _USER_ID
 
     def test_submit_version_404(self, client: TestClient):
         with (

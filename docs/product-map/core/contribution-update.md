@@ -68,7 +68,7 @@ Submitting new versions of published community contributions, listing version hi
 
 - [x] Empty version string falls back to 1.0 via IndexError caught in try/except
 - [x] Non-numeric version parts fall back to 1.0 via ValueError caught in try/except
-- [ ] Version with single part ("1") — split gives ["1"], minor incremented to "2"
+- [x] Version with single part ("1") — split gives ["1"], minor incremented to "2"
 - [x] Very long version string handled by split on any length
 - [x] Same version number submitted twice allowed since version_group_id differs
 - [x] notify_importers_of_update with None version_group_id returns early (no-op)
