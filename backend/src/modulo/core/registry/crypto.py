@@ -19,6 +19,8 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+_SERIALISATION_ERROR = "primitive_data contains non-serializable values"
+
 __all__ = [
     "generate_keypair",
     "sign_primitive",
@@ -28,7 +30,10 @@ __all__ = [
 
 def _canonical_json(obj: Mapping[str, object]) -> bytes:
     """Deterministic JSON serialisation for signing."""
-    return json.dumps(obj, separators=(",", ":"), sort_keys=True).encode()
+    try:
+        return json.dumps(obj, separators=(",", ":"), sort_keys=True).encode()
+    except (TypeError, ValueError, OverflowError) as exc:
+        raise ValueError(_SERIALISATION_ERROR) from exc
 
 
 def generate_keypair() -> dict[str, str]:
@@ -65,7 +70,10 @@ def sign_primitive(primitive_data: Mapping[str, object], private_key_hex: str) -
         private_key = Ed25519PrivateKey.from_private_bytes(private_bytes)
     except ValueError:
         raise ValueError("invalid private key hex") from None
-    canonical = _canonical_json(primitive_data)
+    try:
+        canonical = _canonical_json(primitive_data)
+    except ValueError as exc:
+        raise ValueError(str(exc)) from None
     sig = private_key.sign(canonical)
     return sig.hex()
 
@@ -80,7 +88,11 @@ def verify_signature(primitive_data: Mapping[str, object], signature_hex: str, p
         public_key = Ed25519PublicKey.from_public_bytes(public_bytes)
         canonical = _canonical_json(primitive_data)
         public_key.verify(bytes.fromhex(signature_hex), canonical)
-    except (InvalidSignature, ValueError):
+    except InvalidSignature:
+        logger.warning("verify_signature: invalid signature for key %s[:8]", public_key_hex[:8])
+        return False
+    except ValueError:
+        logger.warning("verify_signature: bad hex input (key or signature)")
         return False
     else:
         return True
