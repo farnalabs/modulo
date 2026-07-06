@@ -214,6 +214,7 @@ class McpAuthMiddleware(BaseHTTPMiddleware):
     """
 
     async def dispatch(self, request: Request, call_next: Any) -> Response:
+        global _auth_token_fallback, _auth_org_id_fallback, _auth_user_id_fallback, _auth_role_fallback
         # Allow unauthenticated access to the health check endpoint.
         clean = request.url.path.rstrip("/")
         if clean in ("/mcp/healthz", "/healthz"):
@@ -275,7 +276,6 @@ class McpAuthMiddleware(BaseHTTPMiddleware):
                 _ctx_auth_token.set(token)
                 _ctx_auth_type.set("api_key")
                 # Also set fallbacks for FastMCP child tasks (contextvars don't propagate).
-                global _auth_token_fallback, _auth_org_id_fallback, _auth_user_id_fallback, _auth_role_fallback
                 _auth_token_fallback = token
                 _auth_org_id_fallback = org_id
                 _auth_user_id_fallback = key.account_id

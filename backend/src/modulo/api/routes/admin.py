@@ -52,6 +52,7 @@ from modulo.db.models.pipeline import Pipeline
 from modulo.db.models.run import Run
 from modulo.db.models.stage import Stage
 from modulo.db.models.team import Team
+from modulo.db.models.team_membership import TeamMembership
 from modulo.db.rls import set_rls_org, set_rls_user_context
 
 logger = logging.getLogger(__name__)
@@ -999,19 +1000,15 @@ async def admin_list_teams(
             org_id = current_user.organisation_id
             result = await list_teams(session, org_id=org_id, page=page, page_size=page_size)
 
-            # Enrich with member counts
+            # Enrich with member counts via ORM (avoids raw SQL type binding issues)
             team_ids = [t.id for t in result.items]
             member_counts: dict[uuid.UUID, int] = {}
             if team_ids:
                 count_rows = (
                     await session.execute(
-                        text("""
-                            SELECT team_id, COUNT(*) AS cnt
-                            FROM team_memberships
-                            WHERE team_id = ANY(:team_ids)
-                            GROUP BY team_id
-                        """),
-                        {"team_ids": team_ids},
+                        select(TeamMembership.team_id, func.count().label("cnt"))
+                        .where(TeamMembership.team_id.in_(team_ids))
+                        .group_by(TeamMembership.team_id)
                     )
                 ).all()
                 for row in count_rows:
@@ -1020,7 +1017,12 @@ async def admin_list_teams(
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
-        )
+        ) from None
+    except Exception:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="An unexpected error occurred while fetching teams.",
+        ) from None
 
     return AdminTeamListResponse(
         items=[
