@@ -316,7 +316,6 @@ class McpAuthMiddleware(BaseHTTPMiddleware):
             _ctx_auth_token.set(token)
             _ctx_auth_type.set("oauth")
             # Also set fallbacks for FastMCP child tasks (contextvars don't propagate).
-            global _auth_token_fallback, _auth_org_id_fallback, _auth_user_id_fallback, _auth_role_fallback
             _auth_token_fallback = token
             _auth_org_id_fallback = principal.organisation_id
             _auth_user_id_fallback = principal.account_id
