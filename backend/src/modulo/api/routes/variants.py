@@ -1,5 +1,6 @@
 """Variant group API — A/B test management endpoints."""
 
+import logging
 import uuid
 from typing import Any
 
@@ -23,6 +24,8 @@ from modulo.db.crud.variant_group import (
     update_variant_group,
 )
 from modulo.db.rls import set_rls_org
+
+_log = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/v1/variant-groups", tags=["variant-groups"])
 
@@ -131,6 +134,15 @@ async def create_group(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database error occurred. Please try again.",
         ) from None
+    except HTTPException:
+        raise
+    except Exception:
+        _log.exception("Unexpected error in variant group endpoint")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="An unexpected error occurred. Please try again.",
+        ) from None
+
     return _variant_to_response(group)
 
 
@@ -156,6 +168,14 @@ async def list_groups(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database error occurred. Please try again.",
         ) from None
+    except HTTPException:
+        raise
+    except Exception:
+        _log.exception("Unexpected error in variant group list endpoint")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="An unexpected error occurred. Please try again.",
+        ) from None
     return [_variant_to_response(g) for g in items]
 
 
@@ -178,6 +198,14 @@ async def get_group(
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database error occurred. Please try again.",
+        ) from None
+    except HTTPException:
+        raise
+    except Exception:
+        _log.exception("Unexpected error in variant group endpoint")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="An unexpected error occurred. Please try again.",
         ) from None
     if group is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Variant group not found")
@@ -219,6 +247,14 @@ async def update_group(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database error occurred. Please try again.",
         ) from None
+    except HTTPException:
+        raise
+    except Exception:
+        _log.exception("Unexpected error in variant group endpoint")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="An unexpected error occurred. Please try again.",
+        ) from None
     if group is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Variant group not found")
     return _variant_to_response(group)
@@ -248,6 +284,14 @@ async def delete_group(
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database error occurred. Please try again.",
+        ) from None
+    except HTTPException:
+        raise
+    except Exception:
+        _log.exception("Unexpected error in variant group delete endpoint")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="An unexpected error occurred. Please try again.",
         ) from None
     if not deleted:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Variant group not found")
@@ -305,6 +349,14 @@ async def run_variant(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database error occurred. Please try again.",
         ) from None
+    except HTTPException:
+        raise
+    except Exception:
+        _log.exception("Unexpected error in variant group run endpoint")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="An unexpected error occurred. Please try again.",
+        ) from None
 
     if result is None:
         raise HTTPException(
@@ -345,6 +397,14 @@ async def coverage_gaps(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database error occurred. Please try again.",
         ) from None
+    except HTTPException:
+        raise
+    except Exception:
+        _log.exception("Unexpected error in variant group coverage-gaps endpoint")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="An unexpected error occurred. Please try again.",
+        ) from None
     return gaps
 
 
@@ -373,5 +433,13 @@ async def prompt_diffs(
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database error occurred. Please try again.",
+        ) from None
+    except HTTPException:
+        raise
+    except Exception:
+        _log.exception("Unexpected error in variant group prompt-diffs endpoint")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="An unexpected error occurred. Please try again.",
         ) from None
     return diffs
