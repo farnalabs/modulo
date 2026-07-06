@@ -1713,6 +1713,12 @@ async def eval_dashboard(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
         )
+    except SQLAlchemyError:
+        logger.warning("Eval dashboard DB error", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Database error. Please try again later.",
+        )
 
     return EvalDashboardResponse(
         summary=summary,
@@ -1859,6 +1865,12 @@ async def okr_progress(
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
+        )
+    except SQLAlchemyError:
+        logger.warning("OKR progress DB error", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Database error. Please try again later.",
         )
 
     return OkrProgressResponse(
