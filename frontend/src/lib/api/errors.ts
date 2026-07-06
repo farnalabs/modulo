@@ -1,6 +1,6 @@
 import { api } from './client'
 import type { components } from './client'
-import { formatApiError } from './formatError'
+import { throwOnError } from './formatError'
 
 export type ErrorGroupSummary = components['schemas']['ErrorGroupSummary']
 export type ErrorGroupDetail = components['schemas']['ErrorGroupDetail']
@@ -16,11 +16,6 @@ export interface FetchErrorGroupsParams {
   search?: string
   limit?: number
   offset?: number
-}
-
-function throwOnError<T>(result: { data?: T; error?: unknown }): T {
-  if (result.error) throw new Error(formatApiError(result.error))
-  return result.data as T
 }
 
 export async function fetchErrorGroups(params: FetchErrorGroupsParams = {}): Promise<ErrorListResponse> {
