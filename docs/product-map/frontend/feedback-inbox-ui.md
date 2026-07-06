@@ -6,7 +6,6 @@ bdd:
   - backend/tests/bdd/features/eval/feedback_system.feature
 code:
   - frontend/src/views/FeedbackInboxView.vue
-  - frontend/src/lib/api/schema.ts
 unit-tests:
   - frontend/src/__tests__/FeedbackInboxView.spec.ts
   - backend/tests/unit/api/test_feedback_endpoint.py
@@ -16,6 +15,10 @@ status: partial
 ---
 
 # Feedback Inbox UI
+
+Frontend inbox for reviewing and managing HITL feedback records across all
+pipelines. Supports status filtering, date range filtering, annotation, manual
+correction trigger, and resolution.
 
 ## Behaviours
 
@@ -89,12 +92,7 @@ status: partial
 - [x] "Save Annotation" failure shows error message inline, buttons re-enabled
 - [x] "Mark Resolved" failure shows error message inline, buttons re-enabled
 - [x] "Trigger Correction Run" failure shows error message inline, button re-enabled
-- [ ] Main list does NOT have a Retry button on error (only `<ErrorAlert>` which relies on `onRetry` prop — not passed)
-- [ ] Error messages use template literal interpolation (`Failed to load feedback: ${err}`) — may produce `[object Object]` if err is not a string
-- [ ] `loadPipelines()` silently swallows all errors (empty `catch` block) — non-critical but loses error visibility
-- [ ] All user-facing strings now use `$t()/t()` wrappers — 18 hardcoded strings were fixed in QA index 130
-- [ ] No explicit request timeouts on API calls
-- [ ] No retry logic for transient failures (beyond manual Retry button on detail)
+- [ ] Main list does NOT have a Retry button on error (Known Gap — see below)
 
 ## Edge Cases
 
@@ -120,17 +118,9 @@ status: partial
 - No explicit API request timeouts
 - `loadPipelines()` catch block silently swallows all errors
 - `formatDate()` hardcoded to `'en-US'` locale instead of using i18n locale
-- Error messages use template literal interpolation with `err` — may produce `[object Object]` for non-string errors
 
 ## QA History
 
 ### 2026-07-04 — Cross-cutting QA (index 130)
-- **Fixed**: All 39 behaviour checkboxes marked [x] where code implements them (was all [ ]).
-- **Fixed**: Corrected review schema behaviour — API uses `action` field, not `status`.
-- **Fixed**: Removed stale "BDD feature file is a placeholder" gap — file has 7 real scenarios.
-- **Fixed**: Added 18 `$t()` i18n wrappers for hardcoded English strings in template (Status, Pipeline, From, To, option labels, Retry, Rejection Reason, Rejected Output, Correction Proposal, Trigger Correction Run, Triggering, Annotation, placeholder, Save Annotation, Saving, Mark Resolved, no rejection reason fallback).
-- **Fixed**: Added 18 new i18n keys to en-US.js for FeedbackInboxView.
-- **Added**: New Error Handling section with 10 behaviour checkboxes.
-- **Added**: New Edge Cases section with 10 behaviour checkboxes.
-- **Added**: Known gaps for duplicate action semantics (Save Annotation == Mark Resolved), missing maxlength, missing retry button, missing timeouts, silent catch, hardcoded locale, template literal interpolation risk.
-- **Noted**: `saveAnnotation()` and `resolveRecord()` send identical `action: mark_reviewed` payload — this is a design issue where no API distinction exists between "save annotation only" and "save annotation and resolve". The frontend shows different success messages but does the same thing."
+- **Fixed**: 39 behaviour checkboxes verified, review schema corrected to use `action` field, stale BDD placeholder gap removed, 18 i18n wrappers added, Error Handling + Edge Cases sections added.
+- **Noted**: Save Annotation and Mark Resolved send identical payload — no API distinction exists for "save only" vs "save and resolve."

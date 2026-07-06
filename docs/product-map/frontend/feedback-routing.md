@@ -15,12 +15,16 @@ code:
 unit-tests:
   - backend/tests/unit/api/test_feedback_endpoint.py
   - backend/tests/unit/core/feedback_manager/test_feedback_manager.py
-  - backend/tests/integration/feedback_manager/test_feedback_flow.py
 depends-on: [feat-evals-feedback-records]
 status: partial
 ---
 
 # Feedback System — Routing
+
+Feedback routing layer: handler dispatch (human, ai_correction,
+ai_correction_with_human_review), correction run lifecycle, and eval gap
+detection for HITL rejection feedback. The frontend inbox UI is documented
+in `feat-frontend-feedback-inbox-ui`.
 
 ## Behaviours
 
@@ -40,7 +44,6 @@ status: partial
 - [x] `human` handler: FeedbackRecord surfaced in inbox for manual review
 - [x] `ai_correction` handler: auto-spawns correction run, auto-resolves if evals pass
 - [x] `ai_correction_with_human_review` handler: auto-spawns correction run, marks `needs_human_review`
-- [ ] `feedback_handler` supersedes `reject_target` when both set on same gate
 - [ ] Setting both `feedback_handler` and `reject_target` is a validation error (`reject_routing_conflict`)
 
 ### Correction run mechanics
@@ -73,15 +76,7 @@ status: partial
 - [ ] Published evals immediately active for future runs of that pipeline
 - [ ] Library contribution of curated evals (v2)
 
-### Feedback inbox UI
-
-- [x] Inbox shows all pending FeedbackRecords across all pipelines
-- [x] Inbox filterable by status, pipeline, producing agent
-- [x] Inbox filterable by date range
-- [x] `human` handler: annotation UI with notes and manual correction trigger
-- [x] `ai_correction_with_human_review`: correction proposal display with accept/reject
-- [ ] Eval proposals queue with draft eval editor
-- [x] Paginated results
+<!-- Inbox UI behaviours are documented in feat-frontend-feedback-inbox-ui -->
 
 ### API endpoints
 
@@ -138,25 +133,22 @@ status: partial
 - [ ] `run_post_correction_eval` exceptions (record not found, wrong status, no linked run) not caught at API level (method not yet wired into run completion lifecycle)
 - [x] Date parsing in `list_feedback_inbox`: invalid `date_from`/`date_to` format caught → 422
 
-## QA History
+## Edge Cases
 
-### 2026-07-03 — Cross-cutting QA (index 87)
-- **Fixed**: Frontend `resolveRecord()` and `triggerCorrection()` sent `{ status: ... }` instead of `{ action: ... }` to review endpoint. Pydantic v2 silently dropped extra fields, defaulting `action` to `"mark_reviewed"` — causing "Trigger Correction Run" to mark as reviewed instead. Corrected all three frontend review API calls to use proper `action` field.
-- **Fixed**: Backend `ReviewFeedbackRequest` model lacked `annotation` field. Added the field and persistence logic in the review handler.
-- **Fixed**: `FeedbackRecord` model lacked `annotation` column. Added column + Alembic migration `0059_feedback_annotation`.
-- **Fixed**: Stale Known Gaps — BDD features now correctly marked as real scenarios (not placeholders).
-- **Added**: Error Handling section with audited error paths.
-- **Added**: Annotation serialisation in `_serialise_record()`.
-- **Not fixed (requires separate task)**: `reject_routing_conflict` validation, AI correction agent primitive, eval proposals UI, checkpoint seeding, eval suite population for `detect_eval_gap`.
-
-### 2026-07-06 — Cross-cutting QA (this session)
-- **Fixed**: Backend `list_feedback_inbox` — invalid `date_from`/`date_to` ISO format now returns 422 instead of uncaught ValueError → 500.
-- **Fixed**: Backend `review_feedback` — `InvalidTransitionError` and `ConcurrentModificationError` from `update_status` caught and returned as 409 instead of propagating as 500.
-- **Fixed**: Backend `review_feedback` — `spawn_correction_run` exception handler changed from dead `except ValueError` to `except (FeedbackRecordNotFoundError, FeedbackManagerError)` → 404.
-- **Fixed**: Frontend `FeedbackInboxView` — all error/success messages now use `$t()` / `t()` i18n keys instead of hardcoded English strings.
-- **Fixed**: Frontend `FeedbackInboxView` — `openapi-fetch` error objects now rendered via `formatApiError()` instead of raw `${err}` (was producing `[object Object]`).
-- **Added**: Website docs stub for feedback routing at `Website/modulo-website/src/docs/feedback-routing.md`.
-- **Updated**: Product map entries for fixed error handling gaps.
+- [x] Concurrent modification during status update returns 409 Conflict
+- [x] Invalid status transitions return validation error
+- [x] FeedbackRecord is immutable after creation
+- [x] Review action on terminal status returns 409 Conflict
+- [x] Dismiss on terminated record returns 409 Conflict
+- [x] `create_correction_run` on record with no run_id returns 422
+- [x] Invalid date format for date range filter returns 422
+- [x] HITL gate with `human_only` returns 403 on MCP approve
+- [ ] Correction run spawned while pipeline is deleted mid-flight — no graceful handling
+- [ ] Network failure during correction run spawn — error propagated but no retry
+- [ ] Concurrent correction run spawns from two review actions on same record — no dedup
+- [ ] Empty or null rejection reason/output in feedback record — fallback text exists per UI
+- [ ] User reviews record while correction run is in-flight — status transition may be blocked
+- [ ] Feedback for deleted pipeline — `spawn_correction_run` returns 404
 
 ## Known Gaps
 
@@ -171,7 +163,7 @@ status: partial
 - **No eval proposals UI**: Eval proposals queue with draft eval editor
   (PRD 8.20 ¶1495) not yet built
 - **detect_eval_gap hardcodes eval_suite=[]**: The API endpoint at
-  `POST /feedback/{id}/detect-gap` passes `eval_suite=[]` instead of reading
+  `POST /api/v1/feedback/{record_id}/detect-gap` passes `eval_suite=[]` instead of reading
   the pipeline's eval suite, so gap detection always returns `False` when no
   eval suite is explicitly provided.
 - **`dismissed` not fully wired as terminal status**: The status machine
@@ -180,3 +172,11 @@ status: partial
 - **Eval failure during correction does NOT escalate**: Per PRD §8.20, eval
   failure should set status to `escalated`, but the current implementation
   keeps the record in `correcting`.
+
+## QA History
+
+### 2026-07-03 — Cross-cutting QA (index 87)
+- **Fixed**: Frontend review API calls now use `action` field (was `status`). Backend `ReviewFeedbackRequest` and `FeedbackRecord` gained `annotation` field + migration. Stale Known Gaps corrected. Error Handling section added.
+
+### 2026-07-06 — Cross-cutting QA
+- **Fixed**: Backend error handling — date parsing → 422, invalid transition/concurrent mod → 409, spawn exception mapping → 404. Frontend i18n and `formatApiError()` applied. Product map entries updated.

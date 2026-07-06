@@ -134,21 +134,8 @@ json_schema, custom_function.
 
 ### 2026-07-04 — Cross-cutting QA (index 125)
 
-**Covered:**
-- Behaviour verification: all ~36 behaviours marked [x] after code inspection
-- Error handling audit: 8/8 checkboxes verified
-- Edge cases: 7/7 verified
-- Code fixes applied:
-  - Silent error swallowing in loadNodes → inline error message (`nodesError` ref)
-  - Silent error swallowing in loadEvals → inline error message (`evalsError` ref)
-  - Delete-404 → specific "Eval was already deleted" message
-  - Config placeholder → i18n key
-  - Hardcoded 'Invalid JSON' → t() call
+Verified ~36 behaviours, 8 error handling paths, 7 edge cases. Fixed 5 issues: silent error swallowing in loadNodes/loadEvals (inline error messages), Delete-404 message, config placeholder i18n, hardcoded 'Invalid JSON' → t().
 
 ### 2026-07-06 — Cross-cutting QA follow-up
 
-**Covered:**
-- Verified all user-facing strings use `$t()` / `t()` — no hardcoded text
-- Verified no `${err}` template literals in error handling
-- Verified backend error handling: all eval routes catch `ProgrammingError` (501) and `SQLAlchemyError` (503) with structured responses
-- Website docs stub created at `Website/modulo-website/src/docs/evals/eval-editor.md`
+Verified i18n compliance, no `${err}` template literals, backend ProgrammingError/SQLAlchemyError catching on all eval routes. Website docs stub created.

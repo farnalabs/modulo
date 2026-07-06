@@ -3,6 +3,7 @@ id: feat-frontend-ownership-picker
 prd: 9.3
 delivery-tasks: [task-nv1-ownership-picker]
 bdd:
+  - backend/tests/bdd/features/teams/ownership_picker.feature
   - backend/tests/bdd/features/workflows/import.feature
   - backend/tests/bdd/features/workflows/export.feature
   - backend/tests/bdd/features/library/copy_to_adapt.feature
@@ -11,7 +12,6 @@ code:
   - frontend/src/views/LibraryPipelineWizard.vue
 unit-tests:
   - backend/tests/unit/api/test_ownership_picker_bdd.py
-  - backend/tests/bdd/steps/test_ownership_picker.py
 depends-on: [feat-teams-team-ownership]
 status: partial
 ---
@@ -80,8 +80,9 @@ from the admin API.
 - [x] `owner_team_id` and `visibility` sent to `POST /api/v1/libraries/{id}/create-pipeline` on create
 - [x] Created pipeline carries the selected ownership fields
 
-### BDD Coverage (backend — no frontend BDD exists)
+### BDD Coverage (backend)
 
+- [x] Ownership picker feature file exists at `backend/tests/bdd/features/teams/ownership_picker.feature`
 - [x] Import assigns owner_team_id from bundle selection (import.feature:46-49)
 - [x] Export strips owner_team_id from bundle (export.feature:21-24)
 - [x] Copy-to-adapt propagates target_team_id as owner_team_id (copy_to_adapt.feature:21-23)
@@ -112,7 +113,7 @@ from the admin API.
 ### Test Coverage
 - No dedicated frontend unit tests for OwnershipPicker component — always stubbed in parent tests
 - No Playwright E2E test for ownership picker selection flow
-- BDD coverage exists only for backend ownership propagation (import/export/copy-to-adapt) — no BDD for frontend picker interaction
+- BDD coverage for ownership picker interaction is through ownership_picker.feature (teams domain) + import/export/copy-to-adapt (workflow propagation) — no frontend BDD for picker UI interaction
 
 ### Component Limitations
 - No `disabled` prop — CSS classes exist but are never triggered
