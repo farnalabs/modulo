@@ -96,21 +96,30 @@ def _string_values(payload: ConnectorPayload) -> list[str]:
     visited: set[int] = set()
 
     def _walk(obj: Any) -> None:
-        obj_id = id(obj)
-        if obj_id in visited:
+        if isinstance(obj, str):
+            values.append(obj)
+        elif isinstance(obj, dict):
+            _walk_dict(obj)
+        elif isinstance(obj, list):
+            _walk_list(obj)
+
+    def _walk_dict(d: dict[str, Any]) -> None:
+        d_id = id(d)
+        if d_id in visited:
             return
-        visited.add(obj_id)
-        try:
-            if isinstance(obj, str):
-                values.append(obj)
-            elif isinstance(obj, dict):
-                for v in obj.values():
-                    _walk(v)
-            elif isinstance(obj, list):
-                for v in obj:
-                    _walk(v)
-        finally:
-            visited.discard(obj_id)
+        visited.add(d_id)
+        for v in d.values():
+            _walk(v)
+        visited.discard(d_id)
+
+    def _walk_list(lst: list[Any]) -> None:
+        lst_id = id(lst)
+        if lst_id in visited:
+            return
+        visited.add(lst_id)
+        for v in lst:
+            _walk(v)
+        visited.discard(lst_id)
 
     _walk(payload.data)
     return values

@@ -19,7 +19,7 @@ def truncate_input(text: str | None, max_length: int | None) -> str:
         return text or ""
 
     if max_length < 1:
-        return "[Input truncated to 0 characters]"
+        return f"\n\n[Input truncated to {max_length} characters]"
 
     if len(text) <= max_length:
         return text
