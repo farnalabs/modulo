@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { mount } from '@vue/test-utils'
+import { mount, flushPromises } from '@vue/test-utils'
 import { nextTick } from 'vue'
 
 const { mockGet, mockPost } = vi.hoisted(() => ({
@@ -16,10 +16,6 @@ vi.mock('../lib/api/client', () => ({
 }))
 
 import AdminNotificationDeliveryLogView from '../views/AdminNotificationDeliveryLogView.vue'
-
-function flushPromises() {
-  return new Promise(resolve => setTimeout(resolve, 0))
-}
 
 const failedEntry = {
   id: 'dlv-fail-1',

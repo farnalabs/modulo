@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { mount } from '@vue/test-utils'
+import { mount, flushPromises } from '@vue/test-utils'
 import { createPinia, setActivePinia } from 'pinia'
 import { createRouter, createWebHistory } from 'vue-router'
 import { nextTick } from 'vue'
@@ -51,10 +51,6 @@ const router = createRouter({
     { path: '/stages', name: 'stages', component: StageBoardView },
   ],
 })
-
-function flushPromises() {
-  return new Promise(resolve => setTimeout(resolve, 0))
-}
 
 describe('StageBoardView', () => {
   beforeEach(() => {
