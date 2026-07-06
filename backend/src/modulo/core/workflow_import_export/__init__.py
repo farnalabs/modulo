@@ -7,6 +7,7 @@ Import resolves local equivalents via a binding wizard.
 
 from __future__ import annotations
 
+import copy
 import io
 import json
 import logging
@@ -59,8 +60,8 @@ async def _get_latest_published_version(
             .limit(1)
         )
         return sv_result.scalar_one_or_none()
-    except SQLAlchemyError:
-        logger.warning("Failed to fetch latest published version for schema %s", schema_id)
+    except Exception:
+        logger.error("Failed to fetch latest published version for schema %s", schema_id)
         raise
 
 
@@ -71,18 +72,22 @@ async def _get_existing_names(
     *,
     for_update: bool = False,
 ) -> set[str]:
-    stmt = select(model_cls.name).where(model_cls.organisation_id == org_id)
-    if for_update:
-        stmt = stmt.with_for_update()
-    result = await session.execute(stmt)
-    return {row[0] for row in result}
+    try:
+        stmt = select(model_cls.name).where(model_cls.organisation_id == org_id)
+        if for_update:
+            stmt = stmt.with_for_update()
+        result = await session.execute(stmt)
+        return {row[0] for row in result}
+    except Exception:
+        logger.error("_get_existing_names: failed to fetch names for %s", model_cls.__name__)
+        raise
 
 
 def _safe_uuid(value: Any, label: str = "field") -> uuid.UUID:
     """Convert a value to UUID, raising ValueError with a descriptive message."""
     try:
         return uuid.UUID(value) if not isinstance(value, uuid.UUID) else value
-    except (ValueError, AttributeError) as exc:
+    except (ValueError, AttributeError, TypeError) as exc:
         raise ValueError(f"Invalid UUID for {label}: {value!r}") from exc
 
 
@@ -111,7 +116,7 @@ async def export_pipeline_bundle(
         stmt = select(Pipeline).where(Pipeline.id == pipeline_id)
         pipeline = (await session.execute(stmt)).scalar_one_or_none()
         if pipeline is None:
-            raise LookupError(f"Pipeline {pipeline_id} not found")
+            raise ValueError(f"Pipeline {pipeline_id} not found")
 
         agent_ids: set[uuid.UUID] = set()
         schema_ids: set[uuid.UUID] = set()
@@ -157,8 +162,10 @@ async def export_pipeline_bundle(
                         "token_budget": a.token_budget,
                     }
                 )
-                schema_ids.add(a.input_schema_id)
-                schema_ids.add(a.output_schema_id)
+                if a.input_schema_id:
+                    schema_ids.add(a.input_schema_id)
+                if a.output_schema_id:
+                    schema_ids.add(a.output_schema_id)
                 if a.model_backend_id:
                     model_backend_ids.add(a.model_backend_id)
 
@@ -194,7 +201,11 @@ async def export_pipeline_bundle(
             ]
 
         # Edges
-        edge_result = await session.execute(select(PipelineEdge).where(PipelineEdge.pipeline_id == pipeline_id))
+        edge_result = await session.execute(
+            select(PipelineEdge)
+            .where(PipelineEdge.pipeline_id == pipeline_id)
+            .order_by(PipelineEdge.created_at)
+        )
         edges = list(edge_result.scalars())
         edges_list = [
             {
@@ -221,8 +232,8 @@ async def export_pipeline_bundle(
             "model_backends": model_backends_list,
             "edges": edges_list,
         }
-    except SQLAlchemyError:
-        logger.warning("export_pipeline_bundle: SQLAlchemyError while building bundle for pipeline %s", pipeline_id)
+    except Exception:
+        logger.error("export_pipeline_bundle: failed while building bundle for pipeline %s", pipeline_id)
         raise
 
     buf = io.BytesIO()
@@ -257,51 +268,61 @@ async def resolve_schema(
             "warning": "Schema entry missing 'name' field.",
         }
 
-    # First try abstract_name match
-    if abstract_name:
-        stmt = select(Schema).where(
-            Schema.organisation_id == org_id,
-            Schema.abstract_name == abstract_name,
-        )
-        result = await session.execute(stmt)
-        schema = result.scalar_one_or_none()
-        if schema is not None:
-            sv = await _get_latest_published_version(session, schema.id)
-            return {
-                "schema_id": str(schema.id),
-                "version": sv.version if sv else DEFAULT_SCHEMA_VERSION,
-                "warning": None,
-            }
-
-    # Try matching by same definition structure — batch load all schema versions
-    if definition:
-        all_schemas = (await session.execute(select(Schema).where(Schema.organisation_id == org_id))).scalars().all()
-        schema_ids = [s.id for s in all_schemas]
-        if schema_ids:
-            all_svs = (
-                await session.execute(
-                    select(SchemaVersion)
-                    .where(
-                        SchemaVersion.schema_id.in_(schema_ids),
-                        SchemaVersion.published.is_(True),
-                    )
-                    .order_by(SchemaVersion.schema_id, SchemaVersion.version_number.desc())
+    try:
+        # First try abstract_name match
+        if abstract_name:
+            stmt = (
+                select(Schema)
+                .where(
+                    Schema.organisation_id == org_id,
+                    Schema.abstract_name == abstract_name,
                 )
+                .order_by(Schema.created_at.desc())
+            )
+            result = await session.execute(stmt)
+            schema = result.scalar_one_or_none()
+            if schema is not None:
+                sv = await _get_latest_published_version(session, schema.id)
+                return {
+                    "schema_id": str(schema.id),
+                    "version": sv.version if sv else DEFAULT_SCHEMA_VERSION,
+                    "warning": None,
+                }
+
+        # Try matching by same definition structure — batch load all schema versions
+        if definition:
+            all_schemas = (
+                await session.execute(select(Schema).where(Schema.organisation_id == org_id))
             ).scalars().all()
+            schema_ids = [s.id for s in all_schemas]
+            if schema_ids:
+                all_svs = (
+                    await session.execute(
+                        select(SchemaVersion)
+                        .where(
+                            SchemaVersion.schema_id.in_(schema_ids),
+                            SchemaVersion.published.is_(True),
+                        )
+                        .order_by(SchemaVersion.schema_id, SchemaVersion.version_number.desc())
+                    )
+                ).scalars().all()
 
-            published: dict[uuid.UUID, SchemaVersion] = {}
-            for sv in all_svs:
-                if sv.schema_id not in published:
-                    published[sv.schema_id] = sv
+                published: dict[uuid.UUID, SchemaVersion] = {}
+                for sv in all_svs:
+                    if sv.schema_id not in published:
+                        published[sv.schema_id] = sv
 
-            for s in all_schemas:
-                sv = published.get(s.id)
-                if sv and sv.definition_json == definition:
-                    return {
-                        "schema_id": str(s.id),
-                        "version": sv.version,
-                        "warning": None,
-                    }
+                for s in all_schemas:
+                    sv = published.get(s.id)
+                    if sv and sv.definition_json == definition:
+                        return {
+                            "schema_id": str(s.id),
+                            "version": sv.version,
+                            "warning": None,
+                        }
+    except Exception:
+        logger.error("resolve_schema: DB query failed for schema '%s'", name)
+        raise
 
     return {
         "schema_id": None,
@@ -316,13 +337,22 @@ async def resolve_connector_type(
     connector_type_id: str,
 ) -> dict[str, Any]:
     """Find a local connector instance matching the given type."""
-    stmt = select(ConnectorInstance).where(
-        ConnectorInstance.organisation_id == org_id,
-        ConnectorInstance.connector_type_id == connector_type_id,
-        ConnectorInstance.status == "active",
-    )
-    result = await session.execute(stmt)
-    instances = list(result.scalars())
+    try:
+        stmt = (
+            select(ConnectorInstance)
+            .where(
+                ConnectorInstance.organisation_id == org_id,
+                ConnectorInstance.connector_type_id == connector_type_id,
+                ConnectorInstance.status == "active",
+            )
+            .order_by(ConnectorInstance.created_at.desc())
+        )
+        result = await session.execute(stmt)
+        instances = list(result.scalars())
+    except Exception:
+        logger.error("resolve_connector_type: DB query failed for type '%s'", connector_type_id)
+        raise
+
     if instances:
         return {
             "instance_id": str(instances[0].id),
@@ -351,34 +381,42 @@ async def resolve_model_backend(
             "warning": "Model backend entry is missing required fields (name, provider, model_id).",
         }
 
-    # Try by name first
-    stmt = select(ModelBackend).where(
-        ModelBackend.organisation_id == org_id,
-        ModelBackend.name == name,
-        ModelBackend.status == "active",
-    )
-    result = await session.execute(stmt)
-    backend = result.scalar_one_or_none()
-    if backend is not None:
-        return {
-            "model_backend_id": str(backend.id),
-            "warning": None,
-        }
+    try:
+        # Try by name first
+        stmt = (
+            select(ModelBackend)
+            .where(
+                ModelBackend.organisation_id == org_id,
+                ModelBackend.name == name,
+                ModelBackend.status == "active",
+            )
+            .order_by(ModelBackend.created_at.desc())
+        )
+        result = await session.execute(stmt)
+        backend = result.scalar_one_or_none()
+        if backend is not None:
+            return {
+                "model_backend_id": str(backend.id),
+                "warning": None,
+            }
 
-    # Try by provider+model_id
-    stmt2 = select(ModelBackend).where(
-        ModelBackend.organisation_id == org_id,
-        ModelBackend.provider == provider,
-        ModelBackend.model_id == model_id,
-        ModelBackend.status == "active",
-    )
-    result2 = await session.execute(stmt2)
-    backend2 = result2.scalar_one_or_none()
-    if backend2 is not None:
-        return {
-            "model_backend_id": str(backend2.id),
-            "warning": None,
-        }
+        # Try by provider+model_id
+        stmt2 = select(ModelBackend).where(
+            ModelBackend.organisation_id == org_id,
+            ModelBackend.provider == provider,
+            ModelBackend.model_id == model_id,
+            ModelBackend.status == "active",
+        )
+        result2 = await session.execute(stmt2)
+        backend2 = result2.scalar_one_or_none()
+        if backend2 is not None:
+            return {
+                "model_backend_id": str(backend2.id),
+                "warning": None,
+            }
+    except Exception:
+        logger.error("resolve_model_backend: DB query failed for '%s' (%s/%s)", name, provider, model_id)
+        raise
 
     return {
         "model_backend_id": None,
@@ -486,10 +524,10 @@ async def materialize_import(
     schema_overrides: dict[str, str] = schema_id_overrides or {}
     sv_overrides: dict[str, str] = schema_version_overrides or {}
     conn_overrides: dict[str, str] = connector_instance_overrides or {}
-    pipeline_info = bundle.get("pipeline", {})
-    agents_data = bundle.get("agents", [])
-    schemas_data = bundle.get("schemas", [])
-    edges_data = bundle.get("edges", [])
+    pipeline_info = bundle.get("pipeline") or {}
+    agents_data = bundle.get("agents") or []
+    schemas_data = bundle.get("schemas") or []
+    edges_data = bundle.get("edges") or []
     name = pipeline_name_override or pipeline_info.get("name", "Imported Pipeline")
 
     existing_agent_names = await get_existing_agent_names(session, org_id)
@@ -557,6 +595,10 @@ async def materialize_import(
                 warnings.append(
                     f"Schema '{existing_schema.name}' exists with different structure. Created as '{sname}' instead."
                 )
+            elif existing_sv and existing_sv.definition_json == definition:
+                schema_id_map[export_schema_id] = str(existing_schema.id)
+                schema_version_map[export_schema_id] = existing_sv.version
+                continue
 
         try:
             new_schema = await create_schema(
@@ -567,7 +609,7 @@ async def materialize_import(
                 description=sd.get("description"),
                 abstract_name=sd.get("abstract_name"),
             )
-        except SQLAlchemyError as exc:
+        except Exception as exc:
             logger.error("Failed to create schema '%s': %s", sname, exc)
             raise
 
@@ -584,7 +626,7 @@ async def materialize_import(
                 account_id=created_by,
                 published=True,
             )
-        except SQLAlchemyError as exc:
+        except Exception as exc:
             logger.error("Failed to create schema version for '%s': %s", sname, exc)
             raise
 
@@ -599,8 +641,8 @@ async def materialize_import(
 
         input_schema_id_str = ad.get("input_schema_id", "")
         output_schema_id_str = ad.get("output_schema_id", "")
-        resolved_input_id = schema_id_map.get(input_schema_id_str) or input_schema_id_str
-        resolved_output_id = schema_id_map.get(output_schema_id_str) or output_schema_id_str
+        resolved_input_id = schema_id_map.get(input_schema_id_str)
+        resolved_output_id = schema_id_map.get(output_schema_id_str)
         resolved_input_version = (
             schema_version_map.get(input_schema_id_str)
             or ad.get("input_schema_version", DEFAULT_SCHEMA_VERSION)
@@ -611,7 +653,7 @@ async def materialize_import(
         )
 
         export_mb_id = ad.get("model_backend_id", "")
-        resolved_mb_id = ad.get("_resolved_model_backend_id") or mb_overrides.get(export_mb_id) or export_mb_id
+        resolved_mb_id = ad.get("_resolved_model_backend_id") or mb_overrides.get(export_mb_id)
 
         agent_args = {
             "session": session,
@@ -626,6 +668,21 @@ async def materialize_import(
             "token_budget": ad.get("token_budget"),
         }
 
+        if input_schema_id_str and not resolved_input_id:
+            warnings.append(
+                f"Agent '{aname}' references unresolved input schema '{input_schema_id_str}'. "
+                "The schema reference will be omitted."
+            )
+        if output_schema_id_str and not resolved_output_id:
+            warnings.append(
+                f"Agent '{aname}' references unresolved output schema '{output_schema_id_str}'. "
+                "The schema reference will be omitted."
+            )
+        if export_mb_id and not resolved_mb_id:
+            warnings.append(
+                f"Agent '{aname}' references unresolved model backend '{export_mb_id}'. "
+                "The model backend reference will be omitted."
+            )
         if resolved_input_id:
             agent_args["input_schema_id"] = _safe_uuid(resolved_input_id, "agent.input_schema_id")
             agent_args["input_schema_version"] = resolved_input_version
@@ -651,11 +708,15 @@ async def materialize_import(
         graph_nodes = []
         warnings.append("Pipeline 'graph_nodes_json' is not a list; nodes will be empty.")
 
-    # Rewire agent_id and connector binding references in graph nodes
+    # Rewire agent_id, output_schema_id, and connector binding references in graph nodes
+    graph_nodes = copy.deepcopy(graph_nodes)
     for node in graph_nodes:
         node_export_id = node.get("agent_id")
         if node_export_id and node_export_id in agent_id_map:
             node["agent_id"] = agent_id_map[node_export_id]
+        node_output_schema = node.get("output_schema_id")
+        if node_output_schema and node_output_schema in schema_id_map:
+            node["output_schema_id"] = schema_id_map[node_output_schema]
         connector_binding = node.get("connector_binding")
         if connector_binding:
             existing_id = connector_binding.get("instance_id", "")
@@ -671,10 +732,10 @@ async def materialize_import(
             description=pipeline_info.get("description"),
             visibility="org",
             owner_team_id=owner_team_id,
-            node_timeout_seconds=pipeline_info.get("node_timeout_seconds", DEFAULT_NODE_TIMEOUT),
+            node_timeout_seconds=pipeline_info.get("node_timeout_seconds") or DEFAULT_NODE_TIMEOUT,
             run_context_defaults=pipeline_info.get("run_context_defaults"),
         )
-    except SQLAlchemyError as exc:
+    except Exception as exc:
         logger.error("Failed to create pipeline '%s': %s", pname, exc)
         raise
 
@@ -737,7 +798,7 @@ async def materialize_import(
             visibility="org",
             account_id=created_by,
         )
-    except SQLAlchemyError as exc:
+    except Exception as exc:
         logger.error("Failed to create library primitive for pipeline '%s': %s", pname, exc)
         raise
 
