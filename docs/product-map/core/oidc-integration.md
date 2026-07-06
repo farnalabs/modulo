@@ -170,7 +170,8 @@ status: partial
 - [x] Provider not found on update/delete/toggle returns 404
 - [x] SAML connection test returns 404 for unknown provider
 - [x] All admin endpoints catch `ProgrammingError` → 501 Not Implemented
-- [x] Duplicate provider name raises ValueError → 409 Conflict
+- [x] Duplicate provider name on create raises ValueError → 409 Conflict
+- [x] Duplicate provider name on update raises ValueError → 409 Conflict (with proactive pre-check in CRUD + IntegrityError fallback on route)
 
 ## Resilience & Integration Robustness
 
@@ -255,7 +256,7 @@ status: partial
 - [ ] No refresh token rotation for OIDC-initiated sessions (token family is created but refresh flow not tested end-to-end)
 - [ ] Group mapping test coverage is limited to unit tests with mocked provider lookups — no integration test with seeded DB provider
 - [ ] `oidc_verify.py` depends on `python-jose` library — consider migrating to `PyJWT` with JWKS support for reduced dependency footprint
-- [ ] Non-list `groups` claim (string) in ID token would cause AttributeError during `claims.get("groups", []) or []` — no defensive type guard
+- [x] Non-list `groups` claim (string) in ID token silently coerced to `[]` — defensive type guard present (`isinstance` check at `sso.py:306`)
 
 ## QA History
 
@@ -267,3 +268,7 @@ status: partial
 - **Major**: `test_jit_raises_if_no_org` patched `get_user_by_email` which was renamed to `get_account_by_email` — test was broken
 - **Major**: Product map error paths section lines 139–140 incorrectly described `raise_for_status()` as raising `ValueError` (it raises `httpx.HTTPStatusError`) and claimed discovery HTTP errors propagate as 401 (they propagated as 500) — both fixed
 - **Minor**: Missing tests for discovery HTTP error, code exchange HTTP error, and provisioning RuntimeError in callback — 3 new tests added to `test_oidc_verify.py`
+
+### 2026-07-07 — Cross-cutting architecture QA re-check (index 240)
+- **Major**: `update_provider_endpoint` in `admin_sso.py` missing `IntegrityError` → 409 catch — duplicate name on update returned 503 instead of 409. Added `IntegrityError` catch and proactive duplicate-name check in `sso_provider.py:update_provider()` (matching `create_provider()` pattern).
+- **Minor**: Stale Known Gap "Non-list groups claim" — defensive type guard (`isinstance` check) already exists at `sso.py:306`. Marked gap as `[x]`.
