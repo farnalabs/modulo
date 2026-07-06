@@ -37,6 +37,10 @@ afterEach(() => {
   if (tracker) tracker.dispose()
   ;(window as unknown as Record<string, unknown>).__MODULO_ERROR_TRACKING_DISABLED__ = false
   vi.restoreAllMocks()
+  vi.useRealTimers()
+  if (typeof window !== 'undefined') {
+    delete (window as any).fetch
+  }
 })
 
 describe('ErrorTracker', () => {
@@ -331,16 +335,20 @@ describe('Transport batching', () => {
     vi.useRealTimers()
   })
 
-  it('gets session key before first ingest', () => {
+  it('gets session key before first ingest', async () => {
     window.fetch = mockFetch as unknown as typeof fetch
-    const tracker = createErrorTracker()
+    const tracker = createErrorTracker({ monitorBackends: [new BuiltinMonitorBackend()] })
 
-    tracker.captureError(new Error('test'))
+    for (let i = 0; i < 10; i++) {
+      tracker.captureError(new Error(`error ${i}`))
+    }
 
-    const keyCalls = mockFetch.mock.calls.filter(
-      (c: unknown[]) => typeof c[0] === 'string' && (c[0] as string).includes('/session-key'),
-    )
-    expect(keyCalls.length).toBeGreaterThanOrEqual(0)
+    await vi.waitFor(() => {
+      const keyCalls = mockFetch.mock.calls.filter(
+        (c: unknown[]) => typeof c[0] === 'string' && (c[0] as string).includes('/session-key'),
+      )
+      expect(keyCalls.length).toBeGreaterThanOrEqual(1)
+    })
 
     tracker.dispose()
   })

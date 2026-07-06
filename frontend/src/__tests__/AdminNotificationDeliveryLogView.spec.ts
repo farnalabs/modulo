@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { mount } from '@vue/test-utils'
+import { mount, flushPromises } from '@vue/test-utils'
 import { nextTick } from 'vue'
 
 vi.mock('../lib/api/client', () => ({
@@ -11,10 +11,6 @@ vi.mock('../lib/api/client', () => ({
 }))
 
 import AdminNotificationDeliveryLogView from '../views/AdminNotificationDeliveryLogView.vue'
-
-function flushPromises() {
-  return new Promise(resolve => setTimeout(resolve, 0))
-}
 
 describe('AdminNotificationDeliveryLogView', () => {
   beforeEach(() => {

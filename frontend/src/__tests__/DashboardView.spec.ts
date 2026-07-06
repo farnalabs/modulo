@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { mount } from '@vue/test-utils'
+import { mount, flushPromises } from '@vue/test-utils'
 import { createPinia, setActivePinia } from 'pinia'
 
 const mockSummaryData = {
@@ -71,10 +71,6 @@ vi.mock('../lib/api/client', () => ({
 
 import DashboardView from '../views/DashboardView.vue'
 import { usePlanStore } from '../stores/planStore'
-
-function flushPromises() {
-  return new Promise(resolve => setTimeout(resolve, 0))
-}
 
 function setupDefaultMocks() {
   mockGet.mockImplementation((url: string) => {
