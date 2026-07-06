@@ -113,8 +113,8 @@
               <path d="m9 18 6-6-6-6" />
             </svg>
 
-            <span :class="statusBadgeClass(record.status)" class="capitalize">
-              {{ record.status }}
+            <span :class="statusBadgeClass(record.feedback_status)" class="capitalize">
+              {{ record.feedback_status }}
             </span>
 
             <div class="min-w-0 flex-1">
@@ -131,10 +131,10 @@
             <div class="min-w-0 flex-1">
               <Tooltip :delay-duration="300">
                 <TooltipTrigger as-child>
-                  <p class="truncate text-sm text-muted-foreground">{{ record.rejection_reason || record.summary || '-' }}</p>
+                  <p class="truncate text-sm text-muted-foreground">{{ record.rejection_reason || '-' }}</p>
                 </TooltipTrigger>
                 <TooltipContent side="top" class="max-w-xs">
-                  <p>{{ record.rejection_reason || record.summary || '-' }}</p>
+                  <p>{{ record.rejection_reason || '-' }}</p>
                 </TooltipContent>
               </Tooltip>
             </div>
@@ -144,10 +144,10 @@
             </span>
 
             <span
-              v-if="record.handler_type"
+              v-if="record.feedback_handler_type"
               class="inline-flex flex-shrink-0 items-center rounded-full bg-muted px-2 py-0.5 text-xs font-medium text-muted-foreground"
             >
-              {{ record.handler_type }}
+              {{ record.feedback_handler_type }}
             </span>
           </div>
 
@@ -180,7 +180,7 @@
                   <pre class="max-h-48 overflow-auto rounded-lg border border-primary/20 bg-primary/5 p-4 text-xs"><code>{{ formatJson(detailMap[record.id].correction_proposal) }}</code></pre>
                 </div>
 
-                <div v-if="detailMap[record.id].status === 'pending' || detailMap[record.id].status === 'routing'">
+                <div v-if="detailMap[record.id].feedback_status === 'pending' || detailMap[record.id].feedback_status === 'routing'">
                   <button
                     :disabled="triggering[record.id]"
                     data-testid="feedback-inbox-trigger-correction"
@@ -400,7 +400,7 @@ async function resolveRecord(recordId: string) {
       detailMap.value[recordId] = data
       annotationMessage.value[recordId] = { type: 'success', text: t('views.FeedbackInboxView.marked_as_resolved') }
       const rec = records.value.find(r => r.id === recordId)
-      if (rec) rec.status = 'resolved'
+      if (rec) rec.feedback_status = 'resolved'
       if (feedbackTimeouts.value[recordId]) clearTimeout(feedbackTimeouts.value[recordId])
       feedbackTimeouts.value[recordId] = setTimeout(() => { annotationMessage.value[recordId] = null }, 3000)
     }
@@ -425,7 +425,7 @@ async function triggerCorrection(recordId: string) {
       detailMap.value[recordId] = data
       annotationMessage.value[recordId] = { type: 'success', text: t('views.FeedbackInboxView.correction_run_triggered') }
       const rec = records.value.find(r => r.id === recordId)
-      if (rec) rec.status = 'correcting'
+      if (rec) rec.feedback_status = 'correcting'
       if (feedbackTimeouts.value[recordId]) clearTimeout(feedbackTimeouts.value[recordId])
       feedbackTimeouts.value[recordId] = setTimeout(() => { annotationMessage.value[recordId] = null }, 3000)
     }
