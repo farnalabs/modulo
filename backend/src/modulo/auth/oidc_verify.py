@@ -54,8 +54,8 @@ def _cache_get(jwks_uri: str) -> list[dict[str, Any]] | None:
     entry = _jwks_cache.get(jwks_uri)
     if entry is None:
         return None
-    expires_at, keys = entry
-    if time.time() - expires_at >= _JWKS_CACHE_TTL:
+    fetched_at, keys = entry
+    if time.time() - fetched_at >= _JWKS_CACHE_TTL:
         _jwks_cache.pop(jwks_uri, None)
         return None
     return keys
