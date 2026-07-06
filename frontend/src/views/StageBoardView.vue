@@ -5,7 +5,7 @@
     <header class="flex flex-wrap items-center justify-between gap-4">
       <div>
         <h1 class="text-3xl font-bold tracking-tight">Stage Board</h1>
-        <p class="mt-1 text-muted-foreground">Visual pipeline stage management board</p>
+        <p class="mt-1 text-muted-foreground">Organise pipelines into stages — track progress as pipelines move through development, testing, and production phases. Drag pipelines between stages to update their lifecycle status.</p>
       </div>
       <button
         data-testid="stage-board-create-btn"

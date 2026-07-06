@@ -126,8 +126,8 @@ routes:
     parent: /
     product_map: null
     i18n_key: nav.output_diff
-    sidebar_group: core
-    sidebar_order: 8
+    sidebar_group: analysis
+    sidebar_order: 1
     type: page
     <<: *community
     deprecated: false
@@ -156,7 +156,7 @@ routes:
     product_map: null
     i18n_key: nav.run_detail
     sidebar_group: core
-    sidebar_order: 9
+    sidebar_order: 8
     type: detail_page
     pattern: /runs/:id
     dynamic_params:
@@ -187,8 +187,8 @@ routes:
     parent: /
     product_map: null
     i18n_key: nav.evals
-    sidebar_group: core
-    sidebar_order: 10
+    sidebar_group: analysis
+    sidebar_order: 2
     type: form_page
     <<: *community
     deprecated: false
@@ -200,8 +200,8 @@ routes:
     parent: /
     product_map: null
     i18n_key: nav.eval_proposals
-    sidebar_group: core
-    sidebar_order: 11
+    sidebar_group: analysis
+    sidebar_order: 3
     type: list_page
     <<: *community
     deprecated: false
@@ -213,8 +213,8 @@ routes:
     parent: /
     product_map: null
     i18n_key: nav.variants
-    sidebar_group: core
-    sidebar_order: 12
+    sidebar_group: analysis
+    sidebar_order: 4
     type: page
     <<: *community
     deprecated: false
@@ -226,8 +226,8 @@ routes:
     parent: /
     product_map: null
     i18n_key: nav.ab_test_models
-    sidebar_group: core
-    sidebar_order: 13
+    sidebar_group: analysis
+    sidebar_order: 5
     type: page
     <<: *community
     deprecated: false
@@ -240,7 +240,7 @@ routes:
     product_map: null
     i18n_key: nav.schemas
     sidebar_group: core
-    sidebar_order: 14
+    sidebar_order: 9
     type: list_page
     <<: *community
     deprecated: false
@@ -254,7 +254,7 @@ routes:
     product_map: null
     i18n_key: nav.schema_editor
     sidebar_group: core
-    sidebar_order: 15
+    sidebar_order: 10
     type: form_page
     pattern: /schemas/editor/:id
     dynamic_params:
@@ -270,7 +270,7 @@ routes:
     product_map: null
     i18n_key: nav.schema_infer
     sidebar_group: core
-    sidebar_order: 16
+    sidebar_order: 11
     type: form_page
     <<: *community
     deprecated: false
@@ -978,45 +978,51 @@ sidebar_groups:
     default_expanded: true
     simple_mode: true
     labelKey: components.SidebarNav.group_core
+  analysis:
+    label: Analysis
+    order: 2
+    default_expanded: true
+    simple_mode: false
+    labelKey: components.SidebarNav.group_analysis
   remy:
     label: Remy
-    order: 2
+    order: 3
     default_expanded: true
     simple_mode: true
     labelKey: components.SidebarNav.group_remy
   settings:
     label: Settings
-    order: 3
+    order: 4
     default_expanded: true
     simple_mode: true
     labelKey: components.SidebarNav.group_settings
   access-control:
     label: Access Control
-    order: 4
+    order: 5
     default_expanded: true
     simple_mode: false
     labelKey: components.SidebarNav.group_access_control
   cost-management:
     label: Cost Management
-    order: 5
+    order: 6
     default_expanded: true
     simple_mode: false
     labelKey: components.SidebarNav.group_cost_management
   system:
     label: System
-    order: 6
+    order: 7
     default_expanded: true
     simple_mode: false
     labelKey: components.SidebarNav.group_system
   monitoring:
     label: Monitoring
-    order: 7
+    order: 8
     default_expanded: true
     simple_mode: false
     labelKey: components.SidebarNav.group_monitoring
   extensions:
     label: Extensions
-    order: 8
+    order: 9
     default_expanded: true
     simple_mode: false
     labelKey: components.SidebarNav.group_extensions
