@@ -5,6 +5,36 @@
       class="remy-messages flex-1 overflow-y-auto p-3 space-y-3"
     >
       <div
+        v-if="store.activeSessionId && store.messages.length === 0 && !store.isStreaming"
+        class="remy-msg assistant"
+      >
+        <div class="remy-msg-avatar">
+          <div class="avatar-assistant">
+            <svg
+              xmlns="http://www.w3.org/2000/svg"
+              width="14"
+              height="14"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="2"
+            >
+              <path
+                d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2z"
+              />
+              <path d="M8 14s1.5 2 4 2 4-2 4-2" />
+              <line x1="9" y1="9" x2="9.01" y2="9" />
+              <line x1="15" y1="9" x2="15.01" y2="9" />
+            </svg>
+          </div>
+        </div>
+        <div class="remy-msg-content">
+          <div class="remy-markdown">
+            <p class="remy-p">Hi! I'm Remy, your Modulo AI assistant. I can help you build pipelines, run evaluations, manage your workspace, and answer questions about your data. What would you like help with?</p>
+          </div>
+        </div>
+      </div>
+      <div
         v-for="msg in store.messages"
         :key="msg.id"
       >
