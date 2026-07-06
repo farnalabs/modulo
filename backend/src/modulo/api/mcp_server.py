@@ -434,6 +434,7 @@ async def create_pipeline(
     try:
         if not await validate_current_auth():
             return _tool_error("Token revoked or expired — re-authenticate")
+        check_tool_scope(_ctx_role_val(), "create_pipeline")
         from modulo.db.crud.pipeline import create_pipeline
 
         org_id = _ctx_org_id_val()
@@ -462,6 +463,8 @@ async def create_pipeline(
             "default_autonomy_level": pipeline.default_autonomy_level,
             "created_at": pipeline.created_at.isoformat() if pipeline.created_at else None,
         }
+    except MCPAuthorizationError as exc:
+        return {"error": "insufficient_scope", "detail": str(exc)}
     except Exception:
         _log.exception("create_pipeline failed")
         return _tool_error("Failed to create pipeline")

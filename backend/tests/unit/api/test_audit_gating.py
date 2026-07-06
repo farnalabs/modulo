@@ -7,7 +7,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from fastapi.testclient import TestClient
 
-from modulo.api.dependencies import _get_engine, get_db_session
+from modulo.api.dependencies import _get_engine, get_db_session, get_plan_context
 from modulo.api.main import app
 from modulo.auth.dependencies import get_current_user
 from modulo.auth.jwt import AuthenticatedPrincipal
@@ -69,12 +69,48 @@ def _build_client(settings_fn) -> Generator[TestClient, None, None]:
 
 @pytest.fixture()
 def client_no_audit() -> Generator[TestClient, None, None]:
-    yield from _build_client(_settings_without_license)
+    mock_session = _make_mock_session()
+
+    async def override_session() -> AsyncGenerator[AsyncMock, None]:
+        yield mock_session
+
+    app.dependency_overrides[get_settings] = _settings_without_license
+    app.dependency_overrides[get_db_session] = override_session
+    app.dependency_overrides[_get_engine] = lambda: MagicMock()
+    app.dependency_overrides[get_current_user] = lambda: AuthenticatedPrincipal(
+        username="admin",
+        organisation_id=_ORG_ID,
+        account_id=_USER_ID,
+        org_role="admin",
+    )
+    mock_plan = MagicMock()
+    mock_plan.feature_enabled.return_value = False
+    app.dependency_overrides[get_plan_context] = lambda: mock_plan
+    yield TestClient(app)
+    app.dependency_overrides.clear()
 
 
 @pytest.fixture()
 def client_with_audit() -> Generator[TestClient, None, None]:
-    yield from _build_client(_settings_with_license)
+    mock_session = _make_mock_session()
+
+    async def override_session() -> AsyncGenerator[AsyncMock, None]:
+        yield mock_session
+
+    app.dependency_overrides[get_settings] = _settings_with_license
+    app.dependency_overrides[get_db_session] = override_session
+    app.dependency_overrides[_get_engine] = lambda: MagicMock()
+    app.dependency_overrides[get_current_user] = lambda: AuthenticatedPrincipal(
+        username="admin",
+        organisation_id=_ORG_ID,
+        account_id=_USER_ID,
+        org_role="admin",
+    )
+    mock_plan = MagicMock()
+    mock_plan.feature_enabled.return_value = True
+    app.dependency_overrides[get_plan_context] = lambda: mock_plan
+    yield TestClient(app)
+    app.dependency_overrides.clear()
 
 
 # ── Audit endpoints return 402 when feature disabled ──

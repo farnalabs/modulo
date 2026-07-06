@@ -8,7 +8,7 @@ import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy.exc import IntegrityError, ProgrammingError, SQLAlchemyError
 
-from modulo.api.dependencies import get_db_session
+from modulo.api.dependencies import get_db_session, get_plan_context
 from modulo.api.main import app
 from modulo.auth.dependencies import get_current_user
 from modulo.auth.jwt import AuthenticatedPrincipal
@@ -51,6 +51,9 @@ def client() -> Generator[TestClient, None, None]:
         account_id=uuid.UUID("00000000-0000-0000-0000-000000000002"),
         org_role="admin",
     )
+    mock_plan = MagicMock()
+    mock_plan.feature_enabled.return_value = True
+    app.dependency_overrides[get_plan_context] = lambda: mock_plan
     yield TestClient(app)
     app.dependency_overrides.clear()
 
