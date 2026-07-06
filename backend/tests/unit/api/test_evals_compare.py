@@ -146,6 +146,9 @@ class TestEvalCompare:
             _make_result(scalar_one_value=run_b),
             _make_result(all_value=[result_a]),
             _make_result(all_value=[result_b]),
+            _make_result(scalar_one_value=None),  # set_rls_org (second block)
+            _make_result(scalar_value=None),  # set_rls_user_context (user_id, second block)
+            _make_result(scalar_value=None),  # set_rls_user_context (org_role, second block)
             _make_result(all_value=[eval_def]),
         ]
 
