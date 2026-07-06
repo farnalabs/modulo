@@ -44,8 +44,6 @@ status: partial
 
 # Team Management UI
 
-Discovered from 1 completed delivery task.
-
 ## Behaviours
 
 ### Team list

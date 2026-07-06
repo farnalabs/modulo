@@ -72,7 +72,7 @@ A HITL gate may specify `required_team_id` to restrict claim/approve to members 
 - [x] `test_claim_no_required_team_still_works` — gate without team restriction is unchanged
 
 ### Error Handling
-- **[CRITICAL]** HITLManager.create_gate() is defined but NEVER called from production code — gate row is never created. Claim endpoint returns GateNotFoundError for any gate reached during a pipeline run.
+- [ ] HITLManager.create_gate() is defined but never called from production code — gate row is never created. Claim endpoint returns GateNotFoundError for any gate reached during a pipeline run.
 
 ## Known Gaps
 
