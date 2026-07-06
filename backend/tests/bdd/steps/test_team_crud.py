@@ -9,8 +9,7 @@ import pytest
 from fastapi.testclient import TestClient
 from pytest_bdd import given, parsers, scenarios, then, when
 
-from modulo.api.main import app
-from modulo.settings import get_settings
+
 from tests.bdd.conftest import make_settings
 
 try:
@@ -69,6 +68,9 @@ def team_exists(team_name: str, ctx) -> None:
 
 @when(parsers.parse('I create a team with name "{name}" and description "{description}"'))
 def create_team(name: str, description: str, request, ctx) -> None:
+    from modulo.api.main import app
+    from modulo.settings import get_settings
+
     client = TestClient(app)
     app.dependency_overrides[get_settings] = make_settings
     app.dependency_overrides = {}
@@ -109,6 +111,8 @@ def create_team(name: str, description: str, request, ctx) -> None:
 
 @when("I list teams")
 def list_teams(request, ctx) -> None:
+    from modulo.api.main import app
+    from modulo.settings import get_settings
     client = TestClient(app)
     app.dependency_overrides[get_settings] = make_settings
     app.dependency_overrides = {}
@@ -134,6 +138,8 @@ def list_teams(request, ctx) -> None:
 
 @when(parsers.parse('I get team "{team_name}"'))
 def get_team_by_name(team_name: str, request, ctx) -> None:
+    from modulo.api.main import app
+    from modulo.settings import get_settings
     client = TestClient(app)
     app.dependency_overrides[get_settings] = make_settings
     app.dependency_overrides = {}
@@ -150,6 +156,8 @@ def get_team_by_name(team_name: str, request, ctx) -> None:
 
 @when(parsers.parse('I get team by id "{team_id}"'))
 def get_team_by_uuid(team_id: str, request, ctx) -> None:
+    from modulo.api.main import app
+    from modulo.settings import get_settings
     client = TestClient(app)
     app.dependency_overrides[get_settings] = make_settings
     app.dependency_overrides = {}
@@ -165,6 +173,8 @@ def get_team_by_uuid(team_id: str, request, ctx) -> None:
 
 @when(parsers.parse('I rename team "{old_name}" to "{new_name}"'))
 def rename_team(old_name: str, new_name: str, request, ctx) -> None:
+    from modulo.api.main import app
+    from modulo.settings import get_settings
     client = TestClient(app)
     app.dependency_overrides[get_settings] = make_settings
     app.dependency_overrides = {}
@@ -205,6 +215,8 @@ def rename_team(old_name: str, new_name: str, request, ctx) -> None:
 
 @when(parsers.parse('I delete team "{team_name}"'))
 def delete_team(team_name: str, request, ctx) -> None:
+    from modulo.api.main import app
+    from modulo.settings import get_settings
     client = TestClient(app)
     app.dependency_overrides[get_settings] = make_settings
     app.dependency_overrides = {}
@@ -231,6 +243,8 @@ def delete_team(team_name: str, request, ctx) -> None:
 
 @when(parsers.parse('I delete team by id "{team_id}"'))
 def delete_team_by_id(team_id: str, request, ctx) -> None:
+    from modulo.api.main import app
+    from modulo.settings import get_settings
     client = TestClient(app)
     app.dependency_overrides[get_settings] = make_settings
     app.dependency_overrides = {}

@@ -7,8 +7,7 @@ import pytest
 from fastapi.testclient import TestClient
 from pytest_bdd import given, parsers, scenarios, then, when
 
-from modulo.api.main import app
-from modulo.settings import get_settings
+
 from tests.bdd.conftest import make_settings
 
 try:
@@ -52,6 +51,9 @@ def team_already_exists(team_name: str, ctx) -> None:
 
 @when(parsers.parse('I POST /api/teams with name "{name}" and description "{description}"'))
 def create_team(name: str, description: str, request, ctx) -> None:
+    from modulo.api.main import app
+    from modulo.settings import get_settings
+
     client = TestClient(app)
     app.dependency_overrides[get_settings] = make_settings
     app.dependency_overrides = {}

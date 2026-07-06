@@ -14,10 +14,8 @@ from fastapi.testclient import TestClient
 from jose import jwt as jose_jwt
 from pytest_bdd import given, parsers, scenarios, then, when
 
-from modulo.api.dependencies import _get_engine, get_db_session
-from modulo.api.main import app
+from modulo.settings import Settings
 from modulo.core.rate_limiter import AuthRateLimiter
-from modulo.settings import Settings, get_settings
 
 # ---------------------------------------------------------------------------
 # Register feature file
@@ -71,6 +69,10 @@ def _store_response(request: Any, ctx: dict[str, Any], resp: Any) -> None:
 
 @pytest.fixture
 def token_client(mock_session: AsyncMock) -> Generator[TestClient, None, None]:
+    from modulo.api.dependencies import _get_engine, get_db_session
+    from modulo.api.main import app
+    from modulo.settings import get_settings
+
     async def override_session() -> Generator[AsyncMock, None]:
         yield mock_session
 
