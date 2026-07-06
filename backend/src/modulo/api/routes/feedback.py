@@ -536,7 +536,7 @@ async def review_feedback(
                 record = await mgr.update_status(record_id, "resolved")
 
             elif req.action == "dismiss":
-                record = await mgr.update_status(record_id, "resolved")
+                record = await mgr.update_status(record_id, "dismissed")
 
             elif req.action == "create_correction_run":
                 if not record.run_id:

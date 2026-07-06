@@ -40,7 +40,7 @@ human-in-the-loop resolution.
 
 ## Eval Proposals Queue
 
-- [x] `GET /feedback/proposals` lists records with `eval_gap=True` and status in `pending`/`routing`
+- [x] `GET /api/v1/feedback/proposals` lists records with `eval_gap=True` and status in `pending`/`routing`
 - [x] Paginated response with `page`, `page_size`, `total`
 - [x] Returns producing node name resolved from pipeline snapshot graph JSON
 - [ ] No frontend UI for reviewing/publishing eval proposals — API-only
@@ -129,6 +129,16 @@ human-in-the-loop resolution.
 - [x] CHECK constraint on `feedback_status`: `pending`, `routing`, `correcting`, `resolved`, `escalated`, `dismissed`
 - [x] CHECK constraint on `feedback_handler_type`: `human`, `ai_correction`, `ai_correction_with_human_review`
 - [x] Foreign keys: `run_id` → runs.id (CASCADE), `account_id` → accounts.id (RESTRICT), `correction_run_id` → runs.id (SET NULL), `producing_agent_id` → agents.id (SET NULL)
+
+## QA History
+
+### 2026-07-09 — Cross-cutting QA (index 278)
+
+**Fixed CRITICAL** — `dismiss` review action called `update_status(record_id, "resolved")` instead of `"dismissed"`. The DB CHECK constraint and product map both specify `dismissed` as a valid terminal status with transitions from `pending` and `escalated`, but the code never reached it — dismiss was functionally identical to mark_reviewed. Added `"dismissed"` to `_VALID_STATUS_TRANSITIONS` with `pending→dismissed` and `escalated→dismissed` transitions. `dismiss` action now transitions to `"dismissed"`.
+
+**Fixed MAJOR** — `dismiss` action unit test (`test_dismisses_feedback`) mocked `update_status` returning `feedback_status="dismissed"` but the code path sent `"resolved"`. The test passed but never verified the actual status value passed to `update_status`. Added `call_kwargs["new_status"] == "dismissed"` assertion.
+
+**Fixed MINOR** — Product map proposals API path was `/feedback/proposals` without `/api/v1` prefix (line 100 references the correct full path). Corrected to `/api/v1/feedback/proposals`.
 
 ## Known Gaps
 
