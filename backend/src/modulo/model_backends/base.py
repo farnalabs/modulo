@@ -1,3 +1,4 @@
+import asyncio
 import logging
 from abc import ABC, abstractmethod
 from collections.abc import AsyncIterator
@@ -5,7 +6,7 @@ from dataclasses import dataclass
 from typing import Any
 
 import httpx
-from langchain_core.messages import BaseMessage
+from langchain_core.messages import BaseMessage, HumanMessage
 
 logger = logging.getLogger(__name__)
 
@@ -19,7 +20,7 @@ class HealthResult:
     detail: str = ""
 
 
-async def _openai_compatible_health_check(
+async def openai_compatible_health_check(
     base_url: str,
     api_key: str | None,
 ) -> HealthResult:
@@ -37,7 +38,7 @@ async def _openai_compatible_health_check(
     except httpx.TimeoutException:
         logger.warning("Health check timed out for %s", url)
         return HealthResult(ok=False, detail="Health check timed out")
-    except Exception as exc:
+    except httpx.HTTPError as exc:
         logger.warning("Health check failed for %s: %s", url, exc)
         return HealthResult(ok=False, detail=str(exc)[:HEALTH_DETAIL_MAX_LENGTH])
 
@@ -71,9 +72,6 @@ class ModelBackendBase(ABC):
 
     async def health_check(self) -> HealthResult:
         """Verify connectivity. Default: minimal ping invoke. Override for efficiency."""
-        import asyncio
-
-        from langchain_core.messages import HumanMessage
         try:
             await asyncio.wait_for(
                 self.invoke([HumanMessage(content="ping")], max_tokens=1),

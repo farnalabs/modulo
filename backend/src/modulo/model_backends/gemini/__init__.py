@@ -1,5 +1,6 @@
 """GeminiBackend — wraps ChatGoogleGenerativeAI for Google Gemini models."""
 
+import logging
 from collections.abc import AsyncIterator
 from typing import Any
 
@@ -7,7 +8,14 @@ import httpx
 from langchain_core.messages import BaseMessage
 from langchain_google_genai import ChatGoogleGenerativeAI
 
-from modulo.model_backends.base import HealthResult, ModelBackendBase
+from modulo.model_backends.base import (
+    HEALTH_CHECK_TIMEOUT,
+    HEALTH_DETAIL_MAX_LENGTH,
+    HealthResult,
+    ModelBackendBase,
+)
+
+logger = logging.getLogger(__name__)
 
 GEMINI_BASE_URL = "https://generativelanguage.googleapis.com/v1beta"
 
@@ -35,18 +43,20 @@ class GeminiBackend(ModelBackendBase):
 
     async def health_check(self) -> HealthResult:
         try:
-            async with httpx.AsyncClient(timeout=10.0) as client:
+            async with httpx.AsyncClient(timeout=HEALTH_CHECK_TIMEOUT) as client:
                 response = await client.get(
                     f"{GEMINI_BASE_URL}/models",
                     params={"key": self._api_key},
                 )
                 if response.is_success:
                     return HealthResult(ok=True)
-                return HealthResult(ok=False, detail=response.text[:500])
+                return HealthResult(ok=False, detail=response.text[:HEALTH_DETAIL_MAX_LENGTH])
         except httpx.TimeoutException:
+            logger.warning("Health check timed out for GeminiBackend")
             return HealthResult(ok=False, detail="Health check timed out")
-        except Exception as exc:
-            return HealthResult(ok=False, detail=str(exc)[:500])
+        except httpx.HTTPError as exc:
+            logger.warning("Health check failed for GeminiBackend: %s", exc)
+            return HealthResult(ok=False, detail=str(exc)[:HEALTH_DETAIL_MAX_LENGTH])
 
     async def invoke(self, messages: list[BaseMessage], **kwargs: Any) -> BaseMessage:
         return await self._model.ainvoke(messages, **kwargs)
@@ -54,4 +64,4 @@ class GeminiBackend(ModelBackendBase):
     def stream(
     self, messages: list[BaseMessage], tools: list[dict] | None = None, **kwargs: Any,
 ) -> AsyncIterator[BaseMessage]:
-        return self._model.astream(messages, **kwargs)
+        return self._model.astream(messages, tools=tools, **kwargs)
