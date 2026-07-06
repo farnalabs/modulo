@@ -621,6 +621,15 @@ async def _analyse_bundle(
                 if result.get("warning"):
                     warnings.append(result["warning"])
 
+            # Check for duplicate agent names within the bundle
+            agent_names_in_bundle = [a.get("name", "") for a in bundle.get("agents", [])]
+            seen_names: set[str] = set()
+            for aname in agent_names_in_bundle:
+                if aname and aname in seen_names:
+                    warnings.append(f"Duplicate agent name '{aname}' found in bundle. Each agent must have a unique name.")
+                if aname:
+                    seen_names.add(aname)
+
             existing_agent_names = await get_existing_agent_names(session, principal.organisation_id)
             for agent in bundle.get("agents", []):
                 aname = agent.get("name", "")
