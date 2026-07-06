@@ -40,7 +40,7 @@ def _make_blocker(model_class: type, table_name: str, mutation: str) -> Callable
     ) -> None:
         eid = getattr(target, "id", "?")
         raise AppendOnlyViolationError(
-            f"{model_class.__name__} {eid} cannot be {mutation}ed: {table_name} are append-only"
+            f"{model_class.__name__} {eid} cannot be {mutation}d: {table_name} are append-only"
         )
 
     return _block
@@ -48,8 +48,8 @@ def _make_blocker(model_class: type, table_name: str, mutation: str) -> Callable
 
 def _register_blocker(model_class: type, table_name: str) -> None:
     """Register before_update and before_delete listeners for a model."""
-    event.listen(model_class, "before_update", _make_blocker(model_class, table_name, "updat"))
-    event.listen(model_class, "before_delete", _make_blocker(model_class, table_name, "delet"))
+    event.listen(model_class, "before_update", _make_blocker(model_class, table_name, "update"))
+    event.listen(model_class, "before_delete", _make_blocker(model_class, table_name, "delete"))
     _log.info("Registered append-only guard on %s (UPDATE/DELETE blocked)", model_class.__name__)
 
 
@@ -63,7 +63,6 @@ def register_append_only_guard() -> None:
     with _guard_lock:
         if _guard_registered:
             return
+        _register_blocker(AuditEvent, AuditEvent.__tablename__)
+        _register_blocker(ErrorEvent, ErrorEvent.__tablename__)
         _guard_registered = True
-
-    _register_blocker(AuditEvent, "audit_events")
-    _register_blocker(ErrorEvent, "error_events")
