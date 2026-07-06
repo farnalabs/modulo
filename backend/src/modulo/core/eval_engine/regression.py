@@ -59,8 +59,10 @@ async def detect_regressions(
         raise ValueError(f"threshold must be >= 0, got {threshold}")
 
     now = datetime.now(UTC)
-    baseline_start = now - timedelta(days=days)
     recent_window_days = max(days // 4, 1)
+    if recent_window_days >= days:
+        recent_window_days = max(days // 2, 1)
+    baseline_start = now - timedelta(days=days)
     recent_start = now - timedelta(days=recent_window_days)
 
     try:
@@ -101,10 +103,10 @@ async def detect_regressions(
             )
         ).all()
     except TimeoutError:
-        _log.error("regression.detect_timeout", extra={"org_id": str(org_id), "days": days})
+        _log.error("Regression detection query timed out for org %s (days=%s)", org_id, days)
         raise
     except SQLAlchemyError:
-        _log.exception("regression.detect_db_error", extra={"org_id": str(org_id), "days": days})
+        _log.exception("Regression detection DB error for org %s (days=%s)", org_id, days)
         raise
 
     alerts: list[RegressionAlert] = []
@@ -116,7 +118,8 @@ async def detect_regressions(
 
         if recent_total == 0 or baseline_total == 0:
             _log.info(
-                "regression.skip_insufficient_data", extra={"eval_id": str(row.eval_id), "eval_name": row.eval_name}
+                "Skipping eval %s (%s) — insufficient data for regression check (recent=%s, baseline=%s)",
+                row.eval_id, row.eval_name, recent_total, baseline_total,
             )
             continue
 
@@ -124,23 +127,22 @@ async def detect_regressions(
         prev_pass_rate = baseline_passed / baseline_total
         drop = prev_pass_rate - current_pass_rate
 
-        if drop >= threshold:
+        if drop > threshold:
             trend = "declining"
-        elif drop <= -threshold:
+            alerts.append(
+                RegressionAlert(
+                    eval_id=row.eval_id,
+                    eval_name=row.eval_name,
+                    prev_pass_rate=round(prev_pass_rate, 4),
+                    current_pass_rate=round(current_pass_rate, 4),
+                    drop_pct=round(drop, 4),
+                    trend=trend,
+                    affected_run_ids=list(row.affected_run_ids),
+                )
+            )
+        elif drop < -threshold:
             trend = "improving"
         else:
             trend = "stable"
-
-        alerts.append(
-            RegressionAlert(
-                eval_id=row.eval_id,
-                eval_name=row.eval_name,
-                prev_pass_rate=round(prev_pass_rate, 4),
-                current_pass_rate=round(current_pass_rate, 4),
-                drop_pct=round(drop, 4),
-                trend=trend,
-                affected_run_ids=list(row.affected_run_ids),
-            )
-        )
 
     return alerts
