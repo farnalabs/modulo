@@ -1,7 +1,8 @@
 import { ref, onMounted, onUnmounted } from 'vue'
 import type { EventBusEvent } from '@/types/events'
 import { getHandlers } from '@/stores/syncRegistry'
-import { getAccessToken } from '@/lib/api/client'
+import { getAuthHeaders } from '@/lib/api/client'
+import { parseSSEStream } from '@/lib/sse'
 
 export type EventHandler = (event: EventBusEvent) => void
 
@@ -12,6 +13,7 @@ let abortController: AbortController | null = null
 const handlers = new Map<string, Set<EventHandler>>()
 let reconnectAttempts = 0
 const MAX_RECONNECT_ATTEMPTS = 10
+const FETCH_TIMEOUT_MS = 30000
 let reconnectTimer: ReturnType<typeof setTimeout> | null = null
 
 function connect(): void {
@@ -20,7 +22,6 @@ function connect(): void {
     clearTimeout(reconnectTimer)
     reconnectTimer = null
   }
-  reconnectAttempts = 0
   doConnect()
 }
 
@@ -42,16 +43,15 @@ function scheduleReconnect(): void {
 async function doConnect(): Promise<void> {
   cleanup()
   abortController = new AbortController()
-  const token = getAccessToken()
+  const timeoutId = setTimeout(() => abortController?.abort(), FETCH_TIMEOUT_MS)
   let reader: ReadableStreamDefaultReader<Uint8Array> | null = null
 
   try {
     const response = await fetch(SSE_URL, {
-      headers: {
-        ...(token ? { Authorization: `Bearer ${token}` } : {}),
-      },
+      headers: { ...getAuthHeaders() },
       signal: abortController.signal,
     })
+    clearTimeout(timeoutId)
 
     if (!response.ok || !response.body) {
       scheduleReconnect()
@@ -62,46 +62,27 @@ async function doConnect(): Promise<void> {
     reconnectAttempts = 0
 
     reader = response.body.getReader()
-    const decoder = new TextDecoder()
-    let buffer = ''
-    let currentEvent = ''
 
-    for (;;) {
-      const { done, value } = await reader.read()
-      if (done) break
-
-      buffer += decoder.decode(value, { stream: true })
-      const lines = buffer.split('\n')
-      buffer = lines.pop() ?? ''
-
-      for (const line of lines) {
-        if (line.startsWith('event: ')) {
-          currentEvent = line.slice(7).trim()
-        } else if (line.startsWith('data: ')) {
-          const dataLine = line.slice(6)
-          try {
-            const data = JSON.parse(dataLine)
-            if (currentEvent === 'resource_changed') {
-              const typeHandlers = handlers.get(data.type)
-              if (typeHandlers) {
-                for (const handler of typeHandlers) {
-                  try { handler(data) } catch (e) {
-                    console.error('[EventBus] Handler error', String(e))
-                  }
-                }
-              }
-              try { dispatchToStore(data) } catch (e) {
-                console.error('[EventBus] dispatchToStore error', String(e))
+    for await (const { event, data } of parseSSEStream(reader)) {
+      if (event === 'resource_changed') {
+        try {
+          const parsed = JSON.parse(data)
+          const typeHandlers = handlers.get(parsed.type)
+          if (typeHandlers) {
+            for (const handler of typeHandlers) {
+              try { handler(parsed) } catch (e) {
+                console.error('[EventBus] Handler error', e)
               }
             }
-          } catch {
-            // Ignore parse errors on SSE data lines
           }
-          currentEvent = ''
+          dispatchToStore(parsed)
+        } catch {
+          console.warn('[EventBus] Failed to parse SSE data')
         }
       }
     }
   } catch (e: unknown) {
+    clearTimeout(timeoutId)
     if (e instanceof Error && e.name === 'AbortError') return
     scheduleReconnect()
     return
@@ -155,19 +136,13 @@ export const eventBus = {
       typeHandlers.delete(handler)
       if (typeHandlers.size === 0) handlers.delete(resourceType)
     }
-    if (totalHandlerCount() <= 0) disconnect()
+    if (handlers.size === 0) disconnect()
   },
   reconnect(): void {
     cleanup()
     reconnectAttempts = 0
     doConnect()
   },
-}
-
-function totalHandlerCount(): number {
-  let count = 0
-  for (const typeHandlers of handlers.values()) count += typeHandlers.size
-  return count
 }
 
 export function useEventStream(options?: { resourceType?: string; onEvent?: EventHandler }) {

@@ -1,6 +1,7 @@
 import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
-import { api, getAccessToken } from '@/lib/api/client'
+import { api, getAuthHeaders } from '@/lib/api/client'
+import { formatApiError } from '@/lib/api/formatError'
 import type { ChatSession, ChatMessage, PageContext } from '@/types/remy'
 
 export interface PermissionRequest {
@@ -10,6 +11,7 @@ export interface PermissionRequest {
 
 const POSITION_KEY = 'remy_panel_position'
 const SIZE_KEY = 'remy_panel_size'
+const DEFAULT_CONTEXT_WINDOW_TOKENS = 200000
 
 function loadPosition(): { x: number; y: number } {
   try {
@@ -21,7 +23,9 @@ function loadPosition(): { x: number; y: number } {
         y: Math.max(8, Math.min(parsed.y, window.innerHeight - 100)),
       }
     }
-  } catch { /* ignore */ }
+  } catch {
+    console.warn('[RemyStore] Failed to load panel position')
+  }
   const defaultX = Math.max(8, window.innerWidth - 460)
   return { x: defaultX, y: 80 }
 }
@@ -30,20 +34,31 @@ function loadSize(): { width: number; height: number } {
   try {
     const raw = localStorage.getItem(SIZE_KEY)
     if (raw) return JSON.parse(raw)
-  } catch { /* ignore */ }
+  } catch {
+    console.warn('[RemyStore] Failed to load panel size')
+  }
   const defaultWidth = Math.min(440, window.innerWidth - 16)
   const defaultHeight = Math.min(600, window.innerHeight - 120)
   return { width: defaultWidth, height: defaultHeight }
 }
 
-function extractErrorMessage(err: unknown): string {
-  if (typeof err === 'string') return err
-  if (err && typeof err === 'object') {
-    const obj = err as Record<string, unknown>
-    if (typeof obj.detail === 'string') return obj.detail
-    if (typeof obj.message === 'string') return obj.message
+export function extractErrorMessage(err: unknown): string {
+  return formatApiError(err)
+}
+
+function createMessage(role: ChatMessage['role'], content: string, overrides?: Partial<ChatMessage>): ChatMessage {
+  return {
+    id: `${role}-${Date.now()}`,
+    session_id: '',
+    role,
+    content,
+    tool_calls_json: null,
+    tool_results_json: null,
+    token_count: null,
+    parent_id: null,
+    created_at: new Date().toISOString(),
+    ...overrides,
   }
-  return String(err)
 }
 
 export const useRemyStore = defineStore('remy', () => {
@@ -88,11 +103,11 @@ export const useRemyStore = defineStore('remy', () => {
     sessionsLoading.value = true
     error.value = null
     try {
-      const { data, error: err } = await (api as any).GET('/api/v1/remy/sessions')
-      if (err) {
-        error.value = extractErrorMessage(err)
+      const resp = await api.GET('/api/v1/remy/sessions')
+      if (resp.error) {
+        error.value = extractErrorMessage(resp.error)
       } else {
-        sessions.value = (data as any)?.items ?? []
+        sessions.value = resp.data?.items ?? []
       }
     } catch (e: unknown) {
       error.value = e instanceof Error ? e.message : extractErrorMessage(e)
@@ -104,11 +119,14 @@ export const useRemyStore = defineStore('remy', () => {
   async function createSession() {
     error.value = null
     try {
-      const { data, error: err } = await (api as any).POST('/api/v1/remy/sessions', {
-        body: { name: null, provider: null, model: null, context_window_tokens: 200000 },
+      const resp = await api.POST('/api/v1/remy/sessions', {
+        body: { name: null, provider: null, model: null, context_window_tokens: DEFAULT_CONTEXT_WINDOW_TOKENS } as any,
       })
-      if (err) throw new Error(extractErrorMessage(err))
-      const session = data as ChatSession
+      if (resp.error) {
+        error.value = extractErrorMessage(resp.error)
+        return null
+      }
+      const session = resp.data!
       if (Array.isArray(sessions.value)) sessions.value.unshift(session)
       activeSessionId.value = session.id
       messages.value = []
@@ -124,13 +142,13 @@ export const useRemyStore = defineStore('remy', () => {
     error.value = null
     messages.value = []
     try {
-      const { data, error: err } = await (api as any).GET('/api/v1/remy/sessions/{id}/messages', {
+      const resp = await api.GET('/api/v1/remy/sessions/{id}/messages', {
         params: { path: { id } },
       })
-      if (err) {
-        error.value = extractErrorMessage(err)
+      if (resp.error) {
+        error.value = extractErrorMessage(resp.error)
       } else {
-        messages.value = (data as any) ?? []
+        messages.value = resp.data ?? []
         activeSessionId.value = id
       }
     } catch (e: unknown) {
@@ -143,10 +161,13 @@ export const useRemyStore = defineStore('remy', () => {
   async function deleteSession(id: string) {
     error.value = null
     try {
-      const { error: err } = await (api as any).DELETE('/api/v1/remy/sessions/{id}', {
+      const resp = await api.DELETE('/api/v1/remy/sessions/{id}', {
         params: { path: { id } },
       })
-      if (err) throw new Error(extractErrorMessage(err))
+      if (resp.error) {
+        error.value = extractErrorMessage(resp.error)
+        return
+      }
       sessions.value = Array.isArray(sessions.value) ? sessions.value.filter(s => s.id !== id) : []
       if (activeSessionId.value === id) {
         activeSessionId.value = null
@@ -159,18 +180,7 @@ export const useRemyStore = defineStore('remy', () => {
 
   async function sendMessage(text: string) {
     if (!activeSessionId.value) return
-    const userMsg: ChatMessage = {
-      id: `msg-${Date.now()}`,
-      session_id: activeSessionId.value,
-      role: 'user',
-      content: text,
-      tool_calls_json: null,
-      tool_results_json: null,
-      token_count: null,
-      parent_id: null,
-      created_at: new Date().toISOString(),
-    }
-    messages.value.push(userMsg)
+    messages.value.push(createMessage('user', text, { session_id: activeSessionId.value }))
     isStreaming.value = true
   }
 
@@ -210,61 +220,52 @@ export const useRemyStore = defineStore('remy', () => {
   }
 
   async function approvePermission(requestId: string, action: 'approve' | 'reject' | 'approve_for_session') {
-    const token = getAccessToken()
+    const headers = getAuthHeaders()
     try {
-      await fetch(`/api/v1/remy/sessions/${activeSessionId.value}/permission-response`, {
+      const resp = await fetch(`/api/v1/remy/sessions/${activeSessionId.value}/permission-response`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+          ...headers,
         },
         body: JSON.stringify({ request_id: requestId, action }),
       })
+      if (!resp.ok) {
+        console.warn('[RemyStore] Permission response failed', resp.status)
+      }
       pendingPermission.value = null
-    } catch {
-      // Best effort — the stream will surface errors
+    } catch (e) {
+      console.warn('[RemyStore] Permission response error', e)
+      pendingPermission.value = null
     }
   }
 
   async function resetSessionPermissions() {
     if (!activeSessionId.value) return
-    const token = getAccessToken()
+    const headers = getAuthHeaders()
     try {
-      await fetch(`/api/v1/remy/sessions/${activeSessionId.value}/reset-permissions`, {
+      const resp = await fetch(`/api/v1/remy/sessions/${activeSessionId.value}/reset-permissions`, {
         method: 'POST',
-        headers: { ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+        headers: { ...headers },
       })
-    } catch {
-      // Best effort
+      if (!resp.ok) {
+        console.warn('[RemyStore] Reset permissions failed', resp.status)
+      }
+    } catch (e) {
+      console.warn('[RemyStore] Reset permissions error', e)
     }
   }
 
   function appendSystemMessage(content: string) {
-    messages.value.push({
-      id: `sys-${Date.now()}`,
+    messages.value.push(createMessage('summary', content, {
       session_id: activeSessionId.value ?? '',
-      role: 'summary',
-      content,
-      tool_calls_json: null,
-      tool_results_json: null,
-      token_count: null,
-      parent_id: null,
-      created_at: new Date().toISOString(),
-    })
+    }))
   }
 
   function appendTurnSeparator(label: string) {
-    messages.value.push({
-      id: `sep-${Date.now()}`,
+    messages.value.push(createMessage('summary', label, {
       session_id: activeSessionId.value ?? '',
-      role: 'summary',
-      content: label,
-      tool_calls_json: null,
-      tool_results_json: null,
-      token_count: null,
-      parent_id: null,
-      created_at: new Date().toISOString(),
-    })
+    }))
   }
 
   function appendToken(text: string) {
@@ -272,17 +273,9 @@ export const useRemyStore = defineStore('remy', () => {
     if (lastMsg && lastMsg.role === 'assistant') {
       lastMsg.content = (lastMsg.content ?? '') + text
     } else {
-      messages.value.push({
-        id: `stream-${Date.now()}`,
+      messages.value.push(createMessage('assistant', text, {
         session_id: activeSessionId.value ?? '',
-        role: 'assistant',
-        content: text,
-        tool_calls_json: null,
-        tool_results_json: null,
-        token_count: null,
-        parent_id: null,
-        created_at: new Date().toISOString(),
-      })
+      }))
     }
   }
 
@@ -290,17 +283,9 @@ export const useRemyStore = defineStore('remy', () => {
     const summary = tc.success
       ? `Tool: ${tc.tool_name} — completed`
       : `Tool: ${tc.tool_name} — failed: ${tc.error ?? 'unknown error'}`
-    messages.value.push({
-      id: `tool-${Date.now()}-${tc.tool_call_id}`,
+    messages.value.push(createMessage('tool_result', summary, {
       session_id: activeSessionId.value ?? '',
-      role: 'tool_result',
-      content: summary,
-      tool_calls_json: null,
-      tool_results_json: null,
-      token_count: null,
-      parent_id: null,
-      created_at: new Date().toISOString(),
-    })
+    }))
   }
 
   return {
