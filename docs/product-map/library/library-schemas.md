@@ -14,6 +14,7 @@ unit-tests:
   - backend/tests/integration/crud/test_schema.py
   - backend/tests/unit/library/test_schema_seeds.py
   - backend/tests/bdd/steps/test_schemas.py
+  - backend/tests/unit/api/test_schema_exception_guard.py
 depends-on: [feat-core-schema-system]
 status: partial
 ---
@@ -80,6 +81,22 @@ with properties, types, descriptions, and required fields.
 - No integration test that runs the seed script against a real DB (seed_library_schemas.py creates all 22 schemas but is not tested via CI integration test)
 - No BDD step definitions for pipeline_builder.feature (5 UI scenarios)
 - Team ownership enforcement during schema CRUD is not tested
+
+#### Error Handling — Exception → 500
+
+- [x] `list_schemas_endpoint` — caught, returns 500
+- [x] `create_schema_endpoint` — caught, returns 500
+- [x] `get_schema_endpoint` — caught, returns 500
+- [x] `update_schema_endpoint` — caught, returns 500
+- [x] `deprecate_schema_endpoint` — caught, returns 500
+- [x] `delete_schema_endpoint` — caught, returns 500
+- [x] `list_schema_versions_endpoint` — caught, returns 500
+- [x] `create_schema_version_endpoint` — caught, returns 500
+- [x] `get_schema_version_endpoint` — caught, returns 500
+- [x] `list_schema_fields_endpoint` — caught, returns 500
+- [x] `migrate_data_endpoint` — DB section caught, returns 500
+- [x] `migrate/plan endpoint` — caught, returns 500
+- [x] Unit tests in `test_schema_exception_guard.py` covering all 12 routes
 
 ## QA History
 
