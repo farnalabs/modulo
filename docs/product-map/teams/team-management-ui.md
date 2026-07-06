@@ -20,6 +20,8 @@ unit-tests:
   - backend/tests/unit/api/test_teams.py
   - backend/tests/unit/api/test_team_deletion_bdd.py
   - backend/tests/unit/api/test_team_gating.py
+  - backend/tests/unit/api/test_team_rbac_sqlalchemy_error.py
+  - backend/tests/unit/api/test_teams_exception_guard.py
   - backend/tests/unit/api/test_view_as_team_bdd.py
   - backend/tests/unit/auth/test_team_rbac.py
   - backend/tests/unit/auth/test_sso_team_mapping_bdd.py
@@ -184,10 +186,31 @@ The following behaviours are tracked in dedicated product map entries:
 ### Error Handling
 
 - [x] All team endpoints catch `sqlalchemy.exc.ProgrammingError` and return 501 Not Implemented
+- [x] All team endpoints catch `sqlalchemy.exc.SQLAlchemyError` and return 503 Service Unavailable
+- [x] All team endpoints catch Python `Exception` and return 500 Internal Server Error
 - [x] Team not found returns 404 on all CRUD endpoints
 - [x] Non-admin receives 403 on all team mutation endpoints
 - [x] Team operator privilege cap enforced — cannot grant roles above their own
 - [x] Resource conflict (team still owns resources) returns 409 with per-resource-type breakdown
+- [x] `test_teams_exception_guard.py` — 9 unit tests covering Exception→500 on all 9 team routes
+
+## QA History
+
+### 2026-07-08 — Cross-cutting QA (improve-architecture index 270)
+
+**CRITICAL fixes applied:**
+- Added `except Exception → 500` catches with `_log.exception` to 8 team routes in `teams.py` (create, get, update, delete, list_members, add_member, remove_member, change_member_role) — previously only `list_teams_endpoint` had the generic guard. Python-level errors (TypeError, KeyError, ValueError) would propagate as raw 500 to CatchAllMiddleware on all other routes.
+
+**MAJOR fixes applied:**
+- Frontend `SettingsTeamsView.vue`: removed `"admin"` from both member role select dropdowns (lines 221, 265) — backend `AddMemberRequest.role` and `ChangeMemberRoleRequest.role` only accept `viewer|runner|operator` via `Field(pattern=r"^(viewer|runner|operator)$")`. Selecting "Admin" always returned 422, making the option a dead control that silently failed.
+- Frontend `SettingsTeamsView.vue`: replaced 5 `e instanceof Error ? e.message : String(e)` catch blocks with `formatApiError(e)` in `saveRename`, `deleteTeam`, `addMember`, `changeMemberRole`, and `removeMember` — API error responses were rendering as `[object Object]` instead of readable `error.detail`.
+
+**Product map updates:**
+- Added `except Exception → 500` and `SQLAlchemyError → 503` error handling checkboxes
+- Added `test_teams_exception_guard.py` to unit-tests frontmatter
+- Added QA History section
+
+**Status:** partial (12 known gaps unchanged)
 
 ## Known Gaps
 

@@ -201,6 +201,14 @@ async def create_team_endpoint(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database temporarily unavailable. Please try again.",
         ) from None
+    except HTTPException:
+        raise
+    except Exception:
+        _log.exception("create_team unexpected error", extra={"org_id": str(current_user.organisation_id)})
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="An unexpected error occurred while creating the team.",
+        ) from None
 
     from modulo.core.audit_logger import append_audit_event
 
@@ -252,6 +260,14 @@ async def get_team_endpoint(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database temporarily unavailable. Please try again.",
         ) from None
+    except HTTPException:
+        raise
+    except Exception:
+        _log.exception("get_team unexpected error", extra={"org_id": str(current_user.organisation_id), "team_id": str(team_id)})
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="An unexpected error occurred while fetching the team.",
+        ) from None
 
     if team is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Team not found")
@@ -300,6 +316,14 @@ async def update_team_endpoint(
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database temporarily unavailable. Please try again.",
+        ) from None
+    except HTTPException:
+        raise
+    except Exception:
+        _log.exception("update_team unexpected error", extra={"org_id": str(current_user.organisation_id), "team_id": str(team_id)})
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="An unexpected error occurred while updating the team.",
         ) from None
 
     if team is None:
@@ -389,6 +413,14 @@ async def delete_team_endpoint(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database temporarily unavailable. Please try again.",
         ) from None
+    except HTTPException:
+        raise
+    except Exception:
+        _log.exception("delete_team unexpected error", extra={"org_id": str(current_user.organisation_id), "team_id": str(team_id)})
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="An unexpected error occurred while deleting the team.",
+        ) from None
 
     if not deleted:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Team not found")
@@ -439,6 +471,14 @@ async def list_members_endpoint(
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database temporarily unavailable. Please try again.",
+        ) from None
+    except HTTPException:
+        raise
+    except Exception:
+        _log.exception("list_members unexpected error", extra={"org_id": str(current_user.organisation_id), "team_id": str(team_id)})
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="An unexpected error occurred while listing members.",
         ) from None
 
     return MembershipListResponse(
@@ -527,6 +567,14 @@ async def add_member_endpoint(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database temporarily unavailable. Please try again.",
         ) from None
+    except HTTPException:
+        raise
+    except Exception:
+        _log.exception("add_member unexpected error", extra={"org_id": str(current_user.organisation_id), "team_id": str(team_id)})
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="An unexpected error occurred while adding the member.",
+        ) from None
 
     return MembershipResponse(
         id=str(membership.id),
@@ -567,6 +615,14 @@ async def remove_member_endpoint(
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database temporarily unavailable. Please try again.",
+        ) from None
+    except HTTPException:
+        raise
+    except Exception:
+        _log.exception("remove_member unexpected error", extra={"org_id": str(current_user.organisation_id), "team_id": str(team_id), "membership_id": str(membership_id)})
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="An unexpected error occurred while removing the member.",
         ) from None
 
 
@@ -617,6 +673,14 @@ async def change_member_role_endpoint(
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database temporarily unavailable. Please try again.",
+        ) from None
+    except HTTPException:
+        raise
+    except Exception:
+        _log.exception("change_member_role unexpected error", extra={"org_id": str(current_user.organisation_id), "team_id": str(team_id), "membership_id": str(membership_id)})
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="An unexpected error occurred while changing the member role.",
         ) from None
 
     return MembershipResponse(
