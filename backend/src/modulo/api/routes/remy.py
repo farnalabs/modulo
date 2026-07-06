@@ -357,8 +357,142 @@ def clear_all_session_approvals() -> None:
     _session_approvals.clear()
 
 
+# MCP tool definitions for the LLM's tools parameter.
+# These mirror the @mcp.tool decorators in mcp_server.py.
+# When the LLM calls one of these, the backend proxies the call to the MCP server.
+_MCP_TOOL_DEFINITIONS: list[dict[str, Any]] = [
+    {
+        "type": "function",
+        "function": {
+            "name": "get_documentation",
+            "description": "Search product documentation, FAQ, and how-to guides for relevant sections. Supports free-text keyword search.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {"type": "string", "description": "Free-text search query"},
+                    "section": {"type": "string", "description": "Optional section filter"},
+                },
+                "required": ["query"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_integration_status",
+            "description": "Get current health status of all connectors, model backends, and triggers.",
+            "parameters": {
+                "type": "object",
+                "properties": {},
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_org_config",
+            "description": "Get org-level configuration. Optionally filter to a specific section (remy, plan, rate_limits). Never exposes secrets.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "section": {"type": "string", "description": "Optional section filter: remy, plan, rate_limits"},
+                },
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_available_features",
+            "description": "List product features enabled on the current plan tier.",
+            "parameters": {
+                "type": "object",
+                "properties": {},
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "browse_library",
+            "description": "Browse the library of primitives (schemas, agents, workflows, pipeline templates, test fixtures). Supports filtering by type, text search, and pagination.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "primitive_type": {"type": "string", "description": "Filter by type: schema, agent, workflow, pipeline_template, test_fixture"},
+                    "search": {"type": "string", "description": "Text search query"},
+                    "cursor": {"type": "string", "description": "Pagination cursor"},
+                    "limit": {"type": "integer", "description": "Results per page (default 20)"},
+                },
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "create_model_backend",
+            "description": "Register a new LLM provider API key. Common providers: openai, anthropic, gemini, deepseek, groq, opencode. The API key is encrypted at rest.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "name": {"type": "string", "description": "Unique name for this backend"},
+                    "display_name": {"type": "string", "description": "Human-readable display name"},
+                    "provider": {"type": "string", "description": "Provider ID (openai, anthropic, gemini, deepseek, groq, opencode, etc.)"},
+                    "model_id": {"type": "string", "description": "Model ID (e.g. gpt-4o, claude-sonnet-4-20250514, deepseek-v4-flash)"},
+                    "api_key": {"type": "string", "description": "API key for the provider"},
+                },
+                "required": ["name", "display_name", "provider", "model_id", "api_key"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "list_pending_hitl",
+            "description": "List all pending human-in-the-loop gates across all pipeline runs.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "page": {"type": "integer", "description": "Page number (default 1)"},
+                    "page_size": {"type": "integer", "description": "Items per page (default 20)"},
+                },
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_trigger_events",
+            "description": "Get recent trigger events for a given trigger or pipeline.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "trigger_id": {"type": "string", "description": "Filter by trigger ID"},
+                    "pipeline_id": {"type": "string", "description": "Filter by pipeline ID"},
+                    "limit": {"type": "integer", "description": "Max events to return (default 20)"},
+                },
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "list_pipelines_tool",
+            "description": "List pipelines in the organisation. Returns summaries.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "page": {"type": "integer", "description": "Page number (default 1)"},
+                    "page_size": {"type": "integer", "description": "Items per page (default 20)"},
+                },
+            },
+        },
+    },
+]
+
+
 def _get_all_tool_definitions() -> list[dict[str, Any]]:
-    """Combine UI tool definitions for the LLM's tools parameter."""
+    """Combine UI tool and MCP tool definitions for the LLM's tools parameter."""
     tools: list[dict[str, Any]] = []
     for name, schema in _UI_TOOLS.items():
         tools.append({
@@ -372,6 +506,7 @@ def _get_all_tool_definitions() -> list[dict[str, Any]]:
                 },
             },
         })
+    tools.extend(_MCP_TOOL_DEFINITIONS)
     return tools
 
 
