@@ -1,6 +1,7 @@
 import { defineStore } from "pinia";
 import { ref, computed } from "vue";
 import { api } from "../lib/api/client";
+import { withTimeout } from "../lib/asyncUtils";
 import { formatApiError } from "../lib/api/formatError";
 import { registerHandler } from "./syncRegistry";
 import type { EventBusEvent } from "@/types/events";
@@ -11,7 +12,7 @@ export const usePlanStore = defineStore("plan", () => {
   const isLoading = ref(false);
   const error = ref<string | null>(null);
   const expiresAt = ref<string | null>(null);
-  const orgName = ref<string | null>(null);
+  const orgId = ref<string | null>(null);
   const tierLabels = ref<Record<string, string>>({});
   const tierRanks = ref<Record<string, number>>({});
   const syncingIds = ref(new Set<string>());
@@ -22,8 +23,8 @@ export const usePlanStore = defineStore("plan", () => {
 
   function featureEnabled(name: string): boolean {
     if (Object.keys(features.value).length === 0) {
-      if (hasLoadedOnce) return true;
-      return false;
+      if (!hasLoadedOnce) return false;
+      return features.value[name] ?? false;
     }
     return features.value[name] ?? false;
   }
@@ -49,24 +50,21 @@ export const usePlanStore = defineStore("plan", () => {
     const apiErrors: string[] = [];
     try {
       const results = await Promise.allSettled([
-        Promise.race([
+        withTimeout(
           api.GET("/api/v1/admin/feature-flags"),
-          new Promise<never>((_, reject) =>
-            setTimeout(() => reject(new Error("Feature flags request timed out after 15s")), 15000),
-          ),
-        ]),
-        Promise.race([
+          15000,
+          "Feature flags request",
+        ),
+        withTimeout(
           api.GET("/api/v1/admin/license"),
-          new Promise<never>((_, reject) =>
-            setTimeout(() => reject(new Error("License request timed out after 15s")), 15000),
-          ),
-        ]),
-        Promise.race([
+          15000,
+          "License request",
+        ),
+        withTimeout(
           api.GET("/api/v1/admin/tiers"),
-          new Promise<never>((_, reject) =>
-            setTimeout(() => reject(new Error("Tiers request timed out after 15s")), 15000),
-          ),
-        ]),
+          15000,
+          "Tiers request",
+        ),
       ]);
 
       const [flagsSettled, licenseSettled, tiersSettled] = results;
@@ -93,7 +91,7 @@ export const usePlanStore = defineStore("plan", () => {
           apiErrors.push(`License: ${formatApiError(licenseRes.error)}`);
         } else if (licenseRes.data) {
           expiresAt.value = licenseRes.data.expires_at ?? null;
-          orgName.value = licenseRes.data.org_id ?? null;
+          orgId.value = licenseRes.data.org_id ?? null;
           if (licenseRes.data.tier) currentTier.value = licenseRes.data.tier;
         }
       } else {
@@ -118,11 +116,11 @@ export const usePlanStore = defineStore("plan", () => {
         apiErrors.push(`Tiers: ${tiersSettled.reason?.message ?? String(tiersSettled.reason)}`);
       }
 
-      error.value = apiErrors.length > 0 ? apiErrors.join("; ") : null;
-      if (!error.value) hasLoadedOnce = true;
+      const combinedError = apiErrors.length > 0 ? apiErrors.join("; ") : null;
+      error.value = combinedError;
+      if (!combinedError) hasLoadedOnce = true;
     } catch (e: unknown) {
-      apiErrors.push(e instanceof Error ? e.message : String(e));
-      error.value = apiErrors.join("; ");
+      error.value = formatApiError(e);
     } finally {
       isLoading.value = false;
     }
@@ -166,7 +164,8 @@ export const usePlanStore = defineStore("plan", () => {
     error,
     isTeam,
     expiresAt,
-    orgName,
+    orgId,
+    orgName: orgId,
     tierLabels,
     tierRanks,
     fetchPlan,
