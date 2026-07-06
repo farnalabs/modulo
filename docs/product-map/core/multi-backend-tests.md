@@ -1,7 +1,7 @@
 ---
 id: feat-core-multi-backend-tests
 prd: 12
-bdd: []
+bdd: backend/tests/features/organisation/multi_backend.feature
 code:
   - backend/tests/unit/test_multi_backend_config.py
   - backend/tests/unit/test_multi_backend_sqlite.py
@@ -10,6 +10,8 @@ code:
   - backend/tests/unit/db/test_repositories_base.py
   - backend/tests/unit/db/test_repositories_generic.py
   - backend/tests/unit/db/test_repositories_locks.py
+  - backend/tests/unit/db/test_multi_backend_bdd.py
+  - backend/tests/bdd/steps/test_multi_backend.py
   - backend/tests/integration/test_rls_isolation.py
   - backend/tests/integration/test_cross_tenant_isolation.py
 unit-tests:
@@ -91,23 +93,23 @@ Tests that verify Modulo's database abstraction layer works across all three sup
 - [x] Second transaction on pooled connection does not inherit org_id
 - [x] RLS policy exists on all org-scoped tables
 - [x] RLS actually filters rows for non-superuser roles
-- [ ] RepositoryHub construction/dispatch unit test
-- [ ] `register_tenant_filter()` registration behaviour test (skips for postgres, registers for others)
-- [ ] `register_rls_reset_hook` skip behaviour for non-postgres backends
+- [x] RepositoryHub construction/dispatch unit test
+- [x] `register_tenant_filter()` registration behaviour test (skips for postgres, registers for others)
+- [x] `register_rls_reset_hook` skip behaviour for non-postgres backends
 - [ ] `_build_engine()` test for sqlite and mariadb backend config
 - [ ] MariaDB live integration test (docker-compose.mariadb.yml in CI)
 - [ ] SQLite live integration test (full CRUD suite against SQLite, not just smoke test)
-- [ ] BDD feature file for multi-backend behaviour
+- [x] BDD feature file for multi-backend behaviour
 - [ ] Alembic migration conditional DDL for non-Postgres backends
 - [ ] API behaviour difference tests for sqlite/mariadb (pool config, rate limiter)
 - [ ] Cross-tenant isolation integration tests for GenericRepository (WHERE-clause filtering)
 
-## Known Gaps - No RepositoryHub construction/dispatch unit test exists
-- `register_tenant_filter()` has no direct unit test — only its inner listener is tested via `_inject_tenant_filter` tests
-- `register_rls_reset_hook` skip path for non-postgres backends is untested
+## Known Gaps
 - `_build_engine()` has no tests for sqlite or mariadb configurations
 - No MariaDB live integration tests exist (docker-compose.mariadb.yml exists but is not exercised in CI)
 - SQLite integration tests are limited to a single smoke file — no full CRUD suite against SQLite
-- No BDD feature files exercise multi-backend behaviours
 - Alembic migration conditional DDL for non-Postgres backends is not yet implemented (ADR 002 Phase 4)
-- Cross-tenant isolation integration tests only run against Postgres — GenericRepository WHERE-clause filtering is untested at integration level 
+- Cross-tenant isolation integration tests only run against Postgres — GenericRepository WHERE-clause filtering is untested at integration level
+
+## QA History
+- 2026-07-06: improve-architecture (index 226) — Fixed product map `bdd:` frontmatter (was `[]`, now points to `multi_backend.feature`). Added `RepositoryHub` construction/dispatch unit tests (3 repo types × 3 lock types = 6 tests). Added `register_tenant_filter()` registration behaviour test (skips postgres, registers for sqlite/mariadb). Added `register_rls_reset_hook` skip behaviour test (skips sqlite/mysql, registers for postgres). Fixed `test_backend_type_hint_in_repository_hub` — removed `or True` that made it always pass. Removed stale Known Gap about missing BDD feature file. Status: partial (6 known gaps remain — `_build_engine()` test, MariaDB CI, SQLite CRUD suite, Alembic conditional DDL, API difference tests, GenericRepository integration test). 
