@@ -220,7 +220,10 @@ class TestCommunityTier:
     URL = "/api/v1/admin/license"
 
     def test_community_tier_returned_when_no_license(self, admin_client: TestClient) -> None:
-        resp = admin_client.get(self.URL)
+        mock_org = MagicMock()
+        mock_org.settings_json = None
+        with patch("modulo.api.routes.admin_license.get_organisation", return_value=mock_org):
+            resp = admin_client.get(self.URL)
         assert resp.status_code == 200
         data = resp.json()
         assert data["has_license"] is False
