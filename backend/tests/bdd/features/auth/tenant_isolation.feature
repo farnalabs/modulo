@@ -7,7 +7,7 @@ Feature: Tenant Isolation
     Given organisation "acme" has pipeline "deploy-service"
     And organisation "globex" has pipeline "run-tests"
     When I authenticate as a user in "acme"
-    And I GET /api/pipelines
+    And I GET /api/v1/pipelines
     Then I see "deploy-service"
     And I do not see "run-tests"
 
