@@ -17,7 +17,9 @@ status: partial
 ---
 # Team HITL Gates
 
-A HITL gate may specify `required_team_id` to restrict claim/approve to members of that team with `runner` or `operator` team role. Enforcement uses a DB-live membership check (not JWT claims). `human_only` and `required_team_id` are additive — both must hold independently.
+A HITL gate may specify `required_team_id` to restrict claim/approve to members of that team. Enforcement uses a DB-live membership check (not JWT claims). `human_only` and `required_team_id` are additive — both must hold independently.
+
+**Note:** Role filtering (`runner`/`operator`-only) is documented intent but NOT enforced in `claim()` — any team role (including `viewer`) can claim a team-scoped gate.
 
 ## Behaviours
 
@@ -35,7 +37,7 @@ A HITL gate may specify `required_team_id` to restrict claim/approve to members 
 ### Claim — team enforcement
 - [x] `HITLManager.claim()` performs a DB-live membership check when `gate.required_team_id` is set
 - [x] Membership check queries `TeamMembership` where `team_id == required_team_id` AND `user_id == claimant_id` AND `organisation_id == org_id`
-- [x] Team member with `runner` or `operator` team role can claim a team-scoped gate
+- [ ] Team member with `runner` or `operator` team role can claim a team-scoped gate — code checks TeamMembership existence only, not role (any role qualifies including `viewer`)
 - [x] Non-team member receives `NotTeamMemberError` (PermissionError)
 - [x] Gate without `required_team_id` does not query team membership at claim time
 - [x] Team membership check happens after gate-exists/not-decided/not-claimed pre-checks but before UPDATE
@@ -54,7 +56,7 @@ A HITL gate may specify `required_team_id` to restrict claim/approve to members 
 
 ### MCP exposure
 - [x] `list_pending_hitl` exposes `required_team_id` in the gate resource
-- [x] Gate context resource exposes `required_team_id` and `required_team_name` to LLM clients and reviewers
+- [ ] Gate context resource (`modulo://runs/{run_id}/hitl/{gate_id}`) does NOT expose `required_team_id` or `required_team_name` — only basic gate metadata (Gate, Run, Pipeline, Decision, Claimed by, Claim expires)
 
 ### Expiry and overdue
 - [x] `expire_stale()` resets claims regardless of `required_team_id` (column is not reset — only claim fields)
@@ -79,4 +81,6 @@ A HITL gate may specify `required_team_id` to restrict claim/approve to members 
 - No test for `human_only` + `required_team_id` additive enforcement at ViewModel layer
 - No test for team notification fallback chain (team endpoints → org endpoints)
 - No performance test for DB-live membership check on high-claim-contention gates
-- `PendingHitlGate` in viewmodel still needs `required_team_name` propagation from `HitlClaim` model 
+- `PendingHitlGate` in viewmodel has `required_team_name` field defined but it is NEVER populated — `model_validate(h)` on a raw `HitlClaim` ORM row lacks the team name; no join or lookup is performed
+- MCP `resource_hitl_gate` (`modulo://runs/{run_id}/hitl/{gate_id}`) does not expose `required_team_id` or `required_team_name`
+- Team membership role enforcement: `claim()` checks TeamMembership existence only — any role (including `viewer`) can claim a team-scoped gate; no role filter applied 
