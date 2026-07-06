@@ -32,10 +32,10 @@ in `feat-frontend-feedback-inbox-ui`.
 
 - [x] HITL rejection creates FeedbackRecord with status `pending`
 - [x] FeedbackRecord stores rejection reason, rejected output, producing node/agent
-- [x] Status state machine enforces valid transitions: pending → routing → correcting → resolved | escalated
-- [x] `dismissed` is a terminal status from pending/note for future
+- [x] Status state machine enforces valid transitions: pending → routing → correcting → resolved | escalated (DB CHECK constraint: pending, routing, correcting, resolved, escalated — no `dismissed`)
 - [x] Invalid transitions return validation error
 - [x] FeedbackRecord is immutable after creation
+- [ ] `dismissed` is not a valid DB status — `dismiss` action maps to `resolved` (DB CHECK constraint only allows `pending, routing, correcting, resolved, escalated`)
 
 ### Handler types and routing strategy
 
@@ -129,6 +129,17 @@ in `feat-frontend-feedback-inbox-ui`.
 - [x] `update_status`: invalid transition → InvalidTransitionError → 409 Conflict in review handler
 - [x] `update_status`: concurrent modification → ConcurrentModificationError → 409 Conflict in review handler
 
+### Generic Exception → 500 guard (added 2026-07-08)
+- [x] `create_feedback` — catches Exception → 500
+- [x] `list_feedback` — catches Exception → 500
+- [x] `list_feedback_inbox` — catches Exception → 500
+- [x] `list_eval_proposals` — catches Exception → 500
+- [x] `get_feedback` — catches Exception → 500
+- [x] `update_feedback_status` — catches Exception → 500
+- [x] `detect_eval_gap` — catches Exception → 500
+- [x] `get_inbox_item` — catches Exception → 500
+- [x] `review_feedback` — catches Exception → 500
+
 ### Missing error handling
 - [ ] `run_post_correction_eval` exceptions (record not found, wrong status, no linked run) not caught at API level (method not yet wired into run completion lifecycle)
 - [x] Date parsing in `list_feedback_inbox`: invalid `date_from`/`date_to` format caught → 422
@@ -162,13 +173,10 @@ in `feat-frontend-feedback-inbox-ui`.
   both `feedback_handler` and `reject_target` on the same gate not yet implemented
 - **No eval proposals UI**: Eval proposals queue with draft eval editor
   (PRD 8.20 ¶1495) not yet built
-- **detect_eval_gap hardcodes eval_suite=[]**: The API endpoint at
-  `POST /api/v1/feedback/{record_id}/detect-gap` passes `eval_suite=[]` instead of reading
-  the pipeline's eval suite, so gap detection always returns `False` when no
-  eval suite is explicitly provided.
-- **`dismissed` not fully wired as terminal status**: The status machine
-  allows `pending→dismissed` and `escalated→dismissed`, but the UI does not
-  display a dismiss action button.
+- [x] **RESOLVED** (2026-07-08): `detect_eval_gap` now fetches pipeline eval definitions from DB — no longer hardcodes `eval_suite=[]`. Verified in `feedback.py` route handler.
+- **`dismissed` not a valid DB status**: `dismiss` action maps to `resolved`.
+  DB CHECK constraint only allows `pending, routing, correcting, resolved, escalated`.
+  `dismissed` would require a DB migration to add to the CHECK constraint and valid transitions.
 - **Eval failure during correction does NOT escalate**: Per PRD §8.20, eval
   failure should set status to `escalated`, but the current implementation
   keeps the record in `correcting`.
@@ -180,3 +188,21 @@ in `feat-frontend-feedback-inbox-ui`.
 
 ### 2026-07-06 — Cross-cutting QA
 - **Fixed**: Backend error handling — date parsing → 422, invalid transition/concurrent mod → 409, spawn exception mapping → 404. Frontend i18n and `formatApiError()` applied. Product map entries updated.
+
+### 2026-07-08 — Cross-cutting QA (improve-architecture index 275)
+
+**CRITICAL fixes applied:**
+- Frontend `FeedbackInboxView.vue` field name mismatches: `record.status` → `record.feedback_status`, `record.handler_type` → `record.feedback_handler_type`, `detailMap[id].status` → `detailMap[id].feedback_status`, `rec.status` → `rec.feedback_status` in resolve/trigger handlers. The API returns `feedback_status` and `feedback_handler_type` from `_serialise_record()` — the frontend was referencing nonexistent fields, causing status badges, handler type badges, and conditional "Trigger Correction Run" button to never work. Also removed dead `record.summary` reference (API does not return a `summary` field).
+- Added `except Exception → 500` catches (with `except HTTPException: raise` guard) to all 9 feedback routes in `feedback.py` — Python-level errors (TypeError, KeyError, ValueError) from model_validate, dict processing, etc. previously propagated as opaque 500 to CatchAllMiddleware.
+
+**MAJOR fixes applied:**
+- Annotation UPDATE query in `review_feedback` route added `FeedbackRecord.organisation_id == principal.organisation_id` filter — on non-Postgres backends (SQLite/MariaDB), the `_inject_tenant_filter` may not inject on explicit `update()` statements, risking cross-org annotation writes.
+- Moved `from sqlalchemy import update as sa_update` and `from modulo.db.models.feedback_record import FeedbackRecord` from lazy method-body imports to module level in `feedback.py`.
+- Added `logger` to `feedback.py` for structured error logging.
+
+**Product map corrections:**
+- Corrected DB Model section — `dismissed` is NOT in the CHECK constraint (actual: `pending, routing, correcting, resolved, escalated`). Removed `dismissed` from the valid status list. The `dismiss` action correctly maps to `resolved` because DB doesn't allow `dismissed`.
+- Added Error Handling subsection documenting the new `except Exception → 500` guard on all 9 routes.
+- Added 9 new `[x]` behaviour checkboxes for Exception → 500 generic guard coverage on all feedback routes.
+
+**Status:** partial (7 known gaps remain — no pagination controls in UI, no eval proposals UI, no retry button on main list, no maxlength validation, no status staleness handling, `formatDate` hardcoded, no `ai_correction_with_human_review` accept/reject UI).
