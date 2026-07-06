@@ -14,7 +14,7 @@ from cryptography.fernet import Fernet
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, Field
 from sqlalchemy import select
-from sqlalchemy.exc import ProgrammingError, SQLAlchemyError
+from sqlalchemy.exc import IntegrityError, ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 logger = logging.getLogger(__name__)
@@ -80,7 +80,7 @@ class ModelBackendResponse(BaseModel):
     created_at: datetime
     updated_at: datetime
 
-    model_config = {"from_attributes": False}
+    model_config = {"from_attributes": True, "populate_by_name": True}
 
 
 class ModelBackendListResponse(BaseModel):
@@ -152,10 +152,10 @@ async def list_model_backends_endpoint(
 
 
 _VALID_PROVIDERS = {
-    "ai21", "anthropic", "azure_openai", "bedrock", "cohere", "deepseek",
+    "ai21", "anthropic", "azure_openai", "bedrock", "cohere", "custom", "deepseek",
     "fireworks", "gemini", "grok", "groq", "jan", "llamacpp", "lm_studio",
     "localai", "mistral", "ollama", "opencode", "openai", "openrouter", "perplexity",
-    "qwen", "tgi", "togetherai", "vertexai", "vllm", "watsonx",
+    "qwen", "replicate", "tgi", "togetherai", "vertexai", "vllm", "watsonx",
 }
 
 
@@ -200,7 +200,7 @@ async def create_model_backend_endpoint(
                     select(ModelBackend).where(
                         ModelBackend.organisation_id == principal.organisation_id,
                         ModelBackend.name == req.name,
-                    )
+                    ).with_for_update()
                 )
             ).scalar_one_or_none()
             if existing is not None:
@@ -230,6 +230,11 @@ async def create_model_backend_endpoint(
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Model backends are not available. Run database migrations to enable this feature.",
+        ) from None
+    except IntegrityError:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="A model backend with this configuration already exists.",
         ) from None
     except SQLAlchemyError:
         raise HTTPException(
