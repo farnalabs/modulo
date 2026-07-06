@@ -670,8 +670,8 @@ async function loadPipelines() {
     if (!err && data) {
       pipelines.value = data.items
     }
-  } catch {
-    // Non-fatal — pipeline names will fall back to truncated IDs
+  } catch (err) {
+    console.warn('Failed to load pipelines:', err)
   }
 }
 

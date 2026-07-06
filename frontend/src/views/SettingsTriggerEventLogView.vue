@@ -217,7 +217,7 @@ async function loadEvents(cursor?: string | null) {
       params: { query: params as any },
     })
     if (err) {
-      error.value = `Failed to load trigger events: ${err}`
+      error.value = `Failed to load trigger events: ${formatApiError(err)}`
     } else if (data) {
       items.value = data.items
       total.value = data.total

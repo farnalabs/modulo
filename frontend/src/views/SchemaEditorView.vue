@@ -550,8 +550,8 @@ async function loadLatestVersion(schemaId: string) {
         fields.value = loadedFields
       }
     }
-  } catch {
-    // silently ignore — user can still edit
+  } catch (err) {
+    console.warn('Failed to load schema fields:', err)
   }
 }
 
@@ -613,8 +613,8 @@ async function validateSchema(): Promise<boolean> {
         errors.push(`${e.path}: ${e.message}`)
       }
     }
-  } catch {
-    // skip server-side validation if unavailable
+  } catch (err) {
+    console.warn('Server-side validation unavailable:', err)
   }
 
   if (errors.length > 0) {
@@ -749,8 +749,8 @@ function formatDate(dateStr: string): string {
 async function copyJsonPreview() {
   try {
     await navigator.clipboard.writeText(jsonPreview.value)
-  } catch {
-    // clipboard not available
+  } catch (err) {
+    console.warn('Clipboard write failed:', err)
   }
 }
 
