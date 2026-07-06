@@ -54,10 +54,14 @@ def apply_field_mapping(source: dict[str, Any], field_map: dict[str, Any] | None
             value = compiled.search(source)
             result[target_key] = value
         except jmespath.exceptions.JMESPathError as exc:
-            logger.warning("Field mapping JMESPath error for '%s': %s", target_key, exc)
+            logger.error("Field mapping JMESPath error for '%s': %s", target_key, exc)
             result[target_key] = None
         except TypeError as exc:
-            logger.warning("Field mapping TypeError for '%s': %s", target_key, exc)
+            logger.exception(
+                "Field mapping TypeError for '%s': %s — programming bug in JMESPath usage",
+                target_key,
+                exc,
+            )
             result[target_key] = None
 
     return result

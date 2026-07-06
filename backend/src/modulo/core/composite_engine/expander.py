@@ -19,6 +19,28 @@ logger = logging.getLogger(__name__)
 _PARAM_PLACEHOLDER_RE = re.compile(r"\{\{parameter\.(\w+)\}\}")
 
 
+def _eval_fail(eval_name: str, msg: str) -> str:
+    return f"Eval '{eval_name}': {msg}"
+
+
+def _validate_validation_field(
+    config: dict[str, Any],
+    eval_name: str,
+    failures: list[str],
+    *,
+    required: bool = True,
+) -> str | None:
+    field = config.get("field", "")
+    if not isinstance(field, str):
+        failures.append(_eval_fail(eval_name, "'field' must be a string"))
+        return None
+    if not field:
+        if required:
+            failures.append(_eval_fail(eval_name, "missing 'field' in config"))
+        return None
+    return field
+
+
 def run_output_validation(
     mapped_output: dict[str, Any],
     output_validation: OutputValidation,
@@ -41,22 +63,19 @@ def run_output_validation(
     """
     failures: list[str] = []
     for eval_def in output_validation.eval_definitions:
+        name = eval_def.name
         config = eval_def.config
         match eval_def.type:
             case "regex":
                 pattern = config.get("pattern", "")
                 if not isinstance(pattern, str):
-                    failures.append(f"Eval '{eval_def.name}': 'pattern' must be a string")
+                    failures.append(_eval_fail(name, "'pattern' must be a string"))
                     continue
                 if not pattern:
-                    failures.append(f"Eval '{eval_def.name}': missing 'pattern' in config")
+                    failures.append(_eval_fail(name, "missing 'pattern' in config"))
                     continue
-                field = config.get("field", "")
-                if not isinstance(field, str):
-                    failures.append(f"Eval '{eval_def.name}': 'field' must be a string")
-                    continue
-                if not field:
-                    failures.append(f"Eval '{eval_def.name}': missing 'field' in config")
+                field = _validate_validation_field(config, name, failures)
+                if field is None:
                     continue
                 raw = mapped_output.get(field)
                 value = "" if raw is None else str(raw)
@@ -66,41 +85,41 @@ def run_output_validation(
                     if isinstance(flags_str, str) and "i" in flags_str:
                         flags |= re.IGNORECASE
                     if not re.search(pattern, value, flags):
-                        failures.append(f"Eval '{eval_def.name}': regex /{pattern}/ did not match field '{field}'")
+                        failures.append(_eval_fail(name, f"regex /{pattern}/ did not match field '{field}'"))
                 except re.error as exc:
-                    failures.append(f"Eval '{eval_def.name}': regex error: {exc}")
+                    failures.append(_eval_fail(name, f"regex error: {exc}"))
 
             case "json_schema":
                 schema = config.get("schema", {})
-                if not isinstance(schema, dict) or schema is None:
-                    failures.append(f"Eval '{eval_def.name}': 'schema' must be a dict")
+                if not isinstance(schema, dict):
+                    failures.append(_eval_fail(name, "'schema' must be a dict"))
                     continue
-                field = config.get("field", "")
-                if not isinstance(field, str):
-                    failures.append(f"Eval '{eval_def.name}': 'field' must be a string")
+                field = _validate_validation_field(config, name, failures, required=False)
+                if field is not None and field not in mapped_output:
+                    failures.append(_eval_fail(name, f"configured field '{field}' not found in output"))
                     continue
-                data = mapped_output.get(field, mapped_output) if field else mapped_output
+                data = mapped_output[field] if field else mapped_output
                 try:
                     jsonschema.validate(data, schema)
                 except jsonschema.ValidationError as exc:
-                    failures.append(f"Eval '{eval_def.name}': JSON Schema validation failed: {exc.message}")
+                    failures.append(_eval_fail(name, f"JSON Schema validation failed: {exc.message}"))
                 except jsonschema.SchemaError as exc:
-                    failures.append(f"Eval '{eval_def.name}': JSON Schema definition error: {exc.message}")
+                    failures.append(_eval_fail(name, f"JSON Schema definition error: {exc.message}"))
 
             case "llm_judge":
                 if llm_judge_callable is None:
-                    failures.append(f"Eval '{eval_def.name}': llm_judge requires a callable but none provided")
+                    failures.append(_eval_fail(name, "llm_judge requires a callable but none provided"))
                     continue
                 try:
                     raw = llm_judge_callable(mapped_output, config)
                     if not isinstance(raw, dict):
-                        failures.append(f"Eval '{eval_def.name}': llm_judge returned non-dict result")
+                        failures.append(_eval_fail(name, "llm_judge returned non-dict result"))
                         continue
                     if not raw.get("passed"):
                         detail = raw.get("detail", "llm_judge evaluated as failed")
-                        failures.append(f"Eval '{eval_def.name}': {detail}")
+                        failures.append(_eval_fail(name, detail))
                 except Exception as exc:
-                    failures.append(f"Eval '{eval_def.name}': llm_judge raised: {exc}")
+                    failures.append(_eval_fail(name, f"llm_judge raised: {exc}"))
 
             case _:
                 raise ValueError(f"Unknown eval type for output validation: {eval_def.type}")
@@ -146,13 +165,11 @@ def execute_composite_with_retry(
         output_validation = OutputValidation()
 
     max_retries = output_validation.max_validation_retries
-    retry_count = 0
 
-    while True:
+    for attempt_count in range(max_retries + 1):
         # NOTE: expand_composite_node result is intentionally discarded here.
-        # This is called for its side effects (e.g. parameter injection, validation
-        # that the template has nodes). Tests mock this function to simulate
-        # sub-pipeline re-execution on retry.
+        # The caller owns sub-pipeline execution; this is called to re-validate
+        # expanded metadata (parameter injection) on each retry attempt.
         expand_composite_node(node_def, composite_template, parameter_values)
 
         output_mapping = node_def.get("composite_output_mapping")
@@ -182,23 +199,21 @@ def execute_composite_with_retry(
                     )
 
         if blocking_failures:
-            raise CompositeValidationError(blocking_failures, retry_count)
+            raise CompositeValidationError(blocking_failures, attempt_count)
 
         if not retry_eligible_failures:
             return mapped_output
 
-        if retry_count >= max_retries:
-            raise CompositeValidationError(result.failures, retry_count)
-
-        retry_count += 1
         logger.info(
             "Composite output validation retry %d/%d — %d failure(s)",
-            retry_count,
+            attempt_count + 1,
             max_retries,
             len(result.failures),
         )
-        if retry_count < max_retries:
-            time.sleep(0.5 * retry_count)
+        if attempt_count < max_retries:
+            time.sleep(0.5 * (attempt_count + 1))
+
+    raise CompositeValidationError(result.failures, max_retries)
 
 
 def expand_composite_node(
