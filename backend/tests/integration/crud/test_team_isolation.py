@@ -33,22 +33,32 @@ async def _create_org(db_engine: AsyncEngine, slug: str) -> uuid.UUID:
 
 
 async def _create_user(db_engine: AsyncEngine, org_id: uuid.UUID, email: str) -> uuid.UUID:
-    user_id = uuid.uuid4()
+    account_id = uuid.uuid4()
     async with db_engine.connect() as conn, conn.begin():
         await conn.execute(
             text(
-                "INSERT INTO accounts (id, organisation_id, email, display_name, "
-                "org_role, auth_provider, active, signup_json, is_service_account) "
-                "VALUES (:id, :org_id, :email, :name, 'admin', 'local', true, '{}'::json, false)",
+                "INSERT INTO accounts (id, email, display_name, "
+                "auth_provider, active, password_hash) "
+                "VALUES (:id, :email, :name, 'local', true, 'hash')",
             ),
             {
-                "id": str(user_id),
-                "org_id": str(org_id),
+                "id": str(account_id),
                 "email": email,
                 "name": email.split("@", maxsplit=1)[0],
             },
         )
-    return user_id
+        await conn.execute(
+            text(
+                "INSERT INTO org_memberships (id, account_id, organisation_id, role) "
+                "VALUES (:mid, :aid, :oid, 'admin')",
+            ),
+            {
+                "mid": str(uuid.uuid4()),
+                "aid": str(account_id),
+                "oid": str(org_id),
+            },
+        )
+    return account_id
 
 
 # ---------------------------------------------------------------------------
@@ -56,7 +66,6 @@ async def _create_user(db_engine: AsyncEngine, org_id: uuid.UUID, email: str) ->
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.skip(reason="awaiting-implementation — RLS isolation needs investigation")
 async def test_teams_isolated_between_orgs(db_engine: AsyncEngine) -> None:
     """Teams created in org A must not be visible when querying as org B."""
     org_a = await _create_org(db_engine, f"team-iso-a-{uuid.uuid4().hex[:8]}")
@@ -68,23 +77,21 @@ async def test_teams_isolated_between_orgs(db_engine: AsyncEngine) -> None:
 
     factory = async_sessionmaker(db_engine, expire_on_commit=False)
 
-    async with factory() as session:
+    async with factory() as session, session.begin():
         await session.execute(
             text("SELECT set_config('app.organisation_id', :oid, true)"),
             {"oid": str(org_a)},
         )
         await create_team(session, org_id=org_a, name="Team A", account_id=user_a)
-        await session.flush()
 
-    async with factory() as session:
+    async with factory() as session, session.begin():
         await session.execute(
             text("SELECT set_config('app.organisation_id', :oid, true)"),
             {"oid": str(org_b)},
         )
         await create_team(session, org_id=org_b, name="Team B", account_id=user_b)
-        await session.flush()
 
-    async with factory() as session:
+    async with factory() as session, session.begin():
         await session.execute(
             text("SELECT set_config('app.organisation_id', :oid, true)"),
             {"oid": str(org_a)},
@@ -94,7 +101,7 @@ async def test_teams_isolated_between_orgs(db_engine: AsyncEngine) -> None:
         assert "Team A" in names_a
         assert "Team B" not in names_a
 
-    async with factory() as session:
+    async with factory() as session, session.begin():
         await session.execute(
             text("SELECT set_config('app.organisation_id', :oid, true)"),
             {"oid": str(org_b)},
@@ -114,28 +121,26 @@ async def test_team_name_unique_per_org(db_engine: AsyncEngine) -> None:
 
     factory = async_sessionmaker(db_engine, expire_on_commit=False)
 
-    async with factory() as session:
+    async with factory() as session, session.begin():
         await session.execute(
             text("SELECT set_config('app.organisation_id', :oid, true)"),
             {"oid": str(org)},
         )
         await create_team(session, org_id=org, name="Unique Name", account_id=user)
-        await session.flush()
 
-    async with factory() as session:
+    async with factory() as session, session.begin():
         await session.execute(
             text("SELECT set_config('app.organisation_id', :oid, true)"),
             {"oid": str(org)},
         )
         with pytest.raises(DBAPIError):
             await create_team(session, org_id=org, name="Unique Name", account_id=user)
-            await session.flush()
 
     # Same name in a different org must succeed
     other_org = await _create_org(db_engine, f"unique-other-{uuid.uuid4().hex[:8]}")
     other_user = await _create_user(db_engine, other_org, "other@test.com")
     factory = async_sessionmaker(db_engine, expire_on_commit=False)
-    async with factory() as session:
+    async with factory() as session, session.begin():
         await session.execute(
             text("SELECT set_config('app.organisation_id', :oid, true)"),
             {"oid": str(other_org)},
@@ -146,7 +151,6 @@ async def test_team_name_unique_per_org(db_engine: AsyncEngine) -> None:
             name="Unique Name",
             account_id=other_user,
         )
-        await session.flush()
         assert team.name == "Unique Name"
 
 
@@ -168,23 +172,20 @@ async def test_memberships_isolated_between_orgs(db_engine: AsyncEngine) -> None
 
     factory = async_sessionmaker(db_engine, expire_on_commit=False)
 
-    async with factory() as session:
+    async with factory() as session, session.begin():
         await session.execute(
             text("SELECT set_config('app.organisation_id', :oid, true)"),
             {"oid": str(org_a)},
         )
         team_a = await create_team(session, org_id=org_a, name="Mem Team A", account_id=user_a1)
-        await session.flush()
         await add_team_member(session, org_id=org_a, team_id=team_a.id, account_id=user_a2, role="viewer")
-        await session.flush()
 
-    async with factory() as session:
+    async with factory() as session, session.begin():
         await session.execute(
             text("SELECT set_config('app.organisation_id', :oid, true)"),
             {"oid": str(org_b)},
         )
         team_b = await create_team(session, org_id=org_b, name="Mem Team B", account_id=user_b)
-        await session.flush()
 
     async with factory() as session:
         await session.execute(
@@ -213,24 +214,21 @@ async def test_membership_unique_per_team_user(db_engine: AsyncEngine) -> None:
 
     factory = async_sessionmaker(db_engine, expire_on_commit=False)
 
-    async with factory() as session:
+    async with factory() as session, session.begin():
         await session.execute(
             text("SELECT set_config('app.organisation_id', :oid, true)"),
             {"oid": str(org)},
         )
         team = await create_team(session, org_id=org, name="Dup Test Team", account_id=user)
-        await session.flush()
         await add_team_member(session, org_id=org, team_id=team.id, account_id=user, role="viewer")
-        await session.flush()
 
-    async with factory() as session:
+    async with factory() as session, session.begin():
         await session.execute(
             text("SELECT set_config('app.organisation_id', :oid, true)"),
             {"oid": str(org)},
         )
         with pytest.raises(DBAPIError):
             await add_team_member(session, org_id=org, team_id=team.id, account_id=user, role="operator")
-            await session.flush()
 
 
 async def test_crud_team_round_trip(db_engine: AsyncEngine) -> None:
@@ -249,7 +247,7 @@ async def test_crud_team_round_trip(db_engine: AsyncEngine) -> None:
 
     factory = async_sessionmaker(db_engine, expire_on_commit=False)
 
-    async with factory() as session:
+    async with factory() as session, session.begin():
         await session.execute(
             text("SELECT set_config('app.organisation_id', :oid, true)"),
             {"oid": str(org)},
@@ -261,7 +259,6 @@ async def test_crud_team_round_trip(db_engine: AsyncEngine) -> None:
             account_id=user,
             description="A team for round-trip testing",
         )
-        await session.flush()
         assert created.name == "Round Trip Team"
         assert created.description == "A team for round-trip testing"
 
@@ -305,16 +302,14 @@ async def test_membership_round_trip(db_engine: AsyncEngine) -> None:
 
     factory = async_sessionmaker(db_engine, expire_on_commit=False)
 
-    async with factory() as session:
+    async with factory() as session, session.begin():
         await session.execute(
             text("SELECT set_config('app.organisation_id', :oid, true)"),
             {"oid": str(org)},
         )
         team = await create_team(session, org_id=org, name="Mem CRUD Team", account_id=user_a)
-        await session.flush()
 
         membership = await add_team_member(session, org_id=org, team_id=team.id, account_id=user_b, role="viewer")
-        await session.flush()
         assert membership.team_id == team.id
         assert membership.account_id == user_b
         assert membership.role == "viewer"
