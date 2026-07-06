@@ -96,9 +96,48 @@ status: partial
 - [ ] Prompt version comparison via run_context_overrides with `prompt_version` key
 - [ ] Agents declare multiple prompt template versions and select by context key
 
+## Error Handling
+
+- [x] `except ProgrammingError → 501 Not Implemented` on all 7 route handlers (create, list, get, update, delete, run, coverage-gaps, prompt-diffs)
+- [x] `except SQLAlchemyError → 503 Service Unavailable` on all 7 route handlers
+- [x] `except IntegrityError → 409 Conflict` on create, update, delete, and run endpoints
+- [x] `except Exception → 500 Internal Server Error` on all 7 route handlers (guards against Python-level errors)
+- [x] Group not found → 404 on get, update, delete, run, coverage-gaps, prompt-diffs
+- [x] Pipeline quota exceeded → 429 on run
+- [x] Empty variants list → 429 on run
+- [x] Missing `snapshot_id` in variant → variant run not created (graceful None return)
+- [x] Invalid `snapshot_id` UUID → ValueError caught by `except Exception` → 500
+
+## Edge Cases
+
+- [x] Empty variants list — group exists but has no variants, run attempt returns 429
+- [x] Single variant — pick_variant_weighted short-circuits (no random)
+- [x] All-zero weights — falls back to uniform random selection
+- [x] Missing weight key — defaults to 1.0
+- [x] Variant group deleted mid-flight — row lock returns None, run attempt returns 429
+- [x] Concurrent run quota — checked both at route level and inside locked transaction
+- [x] `run_context_overrides` may be non-dict — `isinstance(overrides, dict)` guard
+- [x] Missing `snapshot_id` in variant dict — `.get()` returns None, run aborted gracefully
+- [ ] Empty `prompt_pins_json` — no agent diffs returned
+
+## Resilience & Integration Robustness
+
+- [x] `SELECT ... FOR UPDATE` row lock prevents concurrent quota races
+- [x] Quota double-checked (route handler + locked transaction) prevents TOCTOU
+- [x] Variant selection uses `random.random()` (not cryptographic — acceptable for A/B test weighting)
+- [x] `run_context_overrides` merged with input_payload in defensive copy
+- [x] `get_prompt_diffs` skips missing snapshots gracefully (no crash on stale references)
+- [x] `get_prompt_diffs` dict comprehensions guard against malformed `prompt_pins_json`
+- [ ] No retry/backoff on run creation failure
+- [ ] No circuit breaker on repeated variant selection failures
+
 ## Known Gaps
 
 - No comparison view UI — backend for variant CRUD and weighted running exists, but the comparison surface (side-by-side eval scores, token cost, output diff, HITL outcomes) is not yet built
 - No eval coverage signal Warning — the `get_coverage_gaps` function exists but the UX warning ("Variants diverged but evals did not differentiate") is not wired
 - No HITL partial completion flow — variant runs blocked on HITL have no special handling; abandon/cancel not implemented
 - No pre-eval degraded mode banner in UI — backend `degraded_evals` flag exists but no UI prompt
+
+## QA History
+
+- 2026-07-08: improve-architecture (index 261) — Fixed CRITICAL: added `except Exception → 500` catches to all 7 route handlers (previously missing generic exception guard — Python-level errors like KeyError, TypeError, ValueError propagated as raw 500). Fixed MAJOR: `run_variant_weighted` changed `variant["snapshot_id"]` to `variant.get("snapshot_id")` with None guard to prevent KeyError crash on missing snapshot_id. Fixed MAJOR: `get_prompt_diffs` dict comprehensions changed from bare `p["agent_id"]`/`p["prompt_version_hash"]` to `p.get(...)` with guard to prevent KeyError on malformed `prompt_pins_json`. Added Error Handling section (10 checkboxes), Edge Cases section (9 checkboxes), Resilience & Integration Robustness section (6 checkboxes) to product map. Added 9 new unit tests covering `except Exception → 500` for all 7 route handlers (9 test classes) and 1 CRUD-level test for missing snapshot_id. All 20 variant tests pass (10 new + 10 existing). Merged to main at v0.3.242. Status: partial.
