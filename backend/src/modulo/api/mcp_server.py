@@ -174,7 +174,16 @@ async def validate_current_auth() -> bool:
 
         if auth_type == "oauth":
             settings = get_settings()
-            claims = decode_oauth_access_token(token, settings.secret_key)
+            try:
+                claims = decode_oauth_access_token(token, settings.secret_key)
+            except JWTError:
+                # Regular JWT (used by Remy) — skip OAuth token family check
+                try:
+                    from modulo.auth.jwt import decode_principal
+                    decode_principal(token, settings.secret_key)
+                except JWTError:
+                    return False
+                return True
             async with _session(claims.organisation_id) as s:
                 return await check_oauth_token_family_valid(
                     s,
@@ -306,6 +315,12 @@ class McpAuthMiddleware(BaseHTTPMiddleware):
             _ctx_user_id.set(principal.account_id)
             _ctx_auth_token.set(token)
             _ctx_auth_type.set("oauth")
+            # Also set fallbacks for FastMCP child tasks (contextvars don't propagate).
+            global _auth_token_fallback, _auth_org_id_fallback, _auth_user_id_fallback, _auth_role_fallback
+            _auth_token_fallback = token
+            _auth_org_id_fallback = principal.organisation_id
+            _auth_user_id_fallback = principal.account_id
+            _auth_role_fallback = principal.org_role or "runner"
             request.scope["auth_principal"] = {
                 "type": "user",
                 "org_id": str(principal.organisation_id) if principal.organisation_id else "",
