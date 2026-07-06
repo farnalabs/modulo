@@ -6,7 +6,7 @@ from typing import Any
 from langchain_core.messages import BaseMessage
 from langchain_openai import ChatOpenAI
 
-from modulo.model_backends.base import HealthResult, ModelBackendBase, _openai_compatible_health_check
+from modulo.model_backends.base import HealthResult, ModelBackendBase, openai_compatible_health_check
 
 TOGETHERAI_BASE_URL = "https://api.together.xyz/v1"
 
@@ -39,7 +39,7 @@ class TogetherAIBackend(ModelBackendBase):
         return f"TogetherAIBackend(model_id={self._backend_id!r})"
 
     async def health_check(self) -> HealthResult:
-        return await _openai_compatible_health_check(
+        return await openai_compatible_health_check(
             base_url=TOGETHERAI_BASE_URL,
             api_key=self._api_key,
         )
@@ -50,4 +50,4 @@ class TogetherAIBackend(ModelBackendBase):
     def stream(
     self, messages: list[BaseMessage], tools: list[dict] | None = None, **kwargs: Any,
 ) -> AsyncIterator[BaseMessage]:
-        return self._model.astream(messages, **kwargs)
+        return self._model.astream(messages, tools=tools, **kwargs)

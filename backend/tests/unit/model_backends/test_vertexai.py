@@ -30,7 +30,7 @@ def test_repr(backend):
 
 
 def test_default_location_constant():
-    assert VERTEXAI_DEFAULT_LOCATION == "us-central-1"
+    assert VERTEXAI_DEFAULT_LOCATION == "us-central1"
 
 
 async def test_invoke_delegates_to_langchain(backend):
@@ -78,7 +78,7 @@ def test_constructor_passes_default_params():
         mock_chat.assert_called_once_with(
             model_name="gemini-2.0-flash-001",
             project="p",
-            location="us-central-1",
+            location="us-central1",
             temperature=0.7,
             max_tokens=4096,
         )

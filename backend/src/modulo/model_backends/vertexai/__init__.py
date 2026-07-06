@@ -1,12 +1,21 @@
 """VertexAIBackend — wraps ChatVertexAI for Google Vertex AI models."""
 
+import asyncio
+import logging
 from collections.abc import AsyncIterator
 from typing import Any
 
 from langchain_core.messages import BaseMessage, HumanMessage
 from langchain_google_vertexai import ChatVertexAI
 
-from modulo.model_backends.base import HealthResult, ModelBackendBase
+from modulo.model_backends.base import (
+    HEALTH_CHECK_TIMEOUT,
+    HEALTH_DETAIL_MAX_LENGTH,
+    HealthResult,
+    ModelBackendBase,
+)
+
+logger = logging.getLogger(__name__)
 
 VERTEXAI_DEFAULT_LOCATION = "us-central1"
 
@@ -40,10 +49,17 @@ class VertexAIBackend(ModelBackendBase):
 
     async def health_check(self) -> HealthResult:
         try:
-            await self._model.ainvoke([HumanMessage(content="ping")], max_tokens=1)
+            await asyncio.wait_for(
+                self._model.ainvoke([HumanMessage(content="ping")], max_tokens=1),
+                timeout=HEALTH_CHECK_TIMEOUT,
+            )
             return HealthResult(ok=True)
+        except TimeoutError:
+            logger.warning("Health check timed out for VertexAIBackend")
+            return HealthResult(ok=False, detail="Health check timed out")
         except Exception as exc:
-            return HealthResult(ok=False, detail=str(exc)[:500])
+            logger.warning("Health check failed for VertexAIBackend: %s", exc)
+            return HealthResult(ok=False, detail=str(exc)[:HEALTH_DETAIL_MAX_LENGTH])
 
     async def invoke(self, messages: list[BaseMessage], **kwargs: Any) -> BaseMessage:
         return await self._model.ainvoke(messages, **kwargs)
@@ -51,4 +67,4 @@ class VertexAIBackend(ModelBackendBase):
     def stream(
     self, messages: list[BaseMessage], tools: list[dict] | None = None, **kwargs: Any,
 ) -> AsyncIterator[BaseMessage]:
-        return self._model.astream(messages, **kwargs)
+        return self._model.astream(messages, tools=tools, **kwargs)
