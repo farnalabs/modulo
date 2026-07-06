@@ -12,6 +12,7 @@ in OpenTelemetry spans with connector_type, operation_name, and org_id attribute
 Sensitive data (credentials, API keys, user content) is never included in span attributes.
 """
 
+import asyncio
 import copy
 import json
 import logging
@@ -91,7 +92,7 @@ class ConnectorNotFoundError(KeyError):
     """Raised when hub.get() is called with an unregistered connector ID."""
 
     def __init__(self, connector_id: uuid.UUID) -> None:
-        super().__init__(str(connector_id))
+        super().__init__(f"Connector not found: {connector_id}")
         self.connector_id = connector_id
 
 
@@ -129,6 +130,7 @@ class ConnectorHub:
     async def __aexit__(self, *_: object) -> None:
         self._connectors.clear()
         self._acls.clear()
+        self._initialised = False
 
     async def initialise(self, instances: Sequence[ConnectorInstance]) -> None:
         """Decrypt credentials and initialise connectors. Call once at run start.
@@ -142,7 +144,10 @@ class ConnectorHub:
             return
         for ci in instances:
             try:
-                raw_str = await self._secrets_backend.get_secret(str(ci.id))
+                raw_str = await asyncio.wait_for(
+                    self._secrets_backend.get_secret(str(ci.id)),
+                    timeout=30.0,
+                )
                 if raw_str is None:
                     raise ConnectorDecryptError(ci.id)
                 try:
@@ -150,7 +155,7 @@ class ConnectorHub:
                 except json.JSONDecodeError as exc:
                     raise ConnectorDecryptError(ci.id) from exc
                 if not isinstance(parsed, dict):
-                    raise ConnectorDecryptError(ci.id)
+                    raise ConnectorDecryptError(ci.id) from TypeError(f"Expected dict, got {type(parsed).__name__}")
                 creds: dict[str, Any] = parsed
                 connector = _build_connector(
                     ci.connector_type_id,
@@ -170,9 +175,16 @@ class ConnectorHub:
                 )
                 self._connectors[ci.id] = traced
                 self._acls[ci.id] = acl
-            except Exception:
+            except (ConnectorDecryptError, ValueError, TypeError, KeyError, json.JSONDecodeError, asyncio.TimeoutError, OSError):
                 logger.warning(
                     "Skipping connector %s (%s)",
+                    ci.id,
+                    ci.connector_type_id,
+                    exc_info=True,
+                )
+            except Exception:
+                logger.error(
+                    "Unexpected error skipping connector %s (%s) — programming bug",
                     ci.id,
                     ci.connector_type_id,
                     exc_info=True,
@@ -287,7 +299,7 @@ class _TracedConnector(ConnectorBase):
                     try:
                         post_span(span, result)
                     except Exception as meta_exc:
-                        logger.warning("post_span callback failed: %s", meta_exc)
+                        logger.warning("post_span callback failed: %s", meta_exc, exc_info=True)
                 return result
             except Exception as exc:
                 span.set_status(Status(StatusCode.ERROR, f"{operation} failed"))
@@ -346,11 +358,13 @@ def _get_cred(creds: dict[str, Any], key: str, type_id: str) -> Any:
 
 
 def _require_config(config: dict[str, Any] | None, key: str, label: str) -> str:
-    """Extract and validate a required config value. Raises ValueError if missing."""
+    """Extract and validate a required config value. Raises ValueError if missing, TypeError if not a string."""
     cfg = config or {}
     if key not in cfg:
         raise ValueError(f"{label} requires {key!r} in config_json")
     value = cfg[key]
+    if not isinstance(value, str):
+        raise TypeError(f"{label} config key {key!r} must be a string, got {type(value).__name__}")
     return value
 
 
