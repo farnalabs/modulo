@@ -3,6 +3,7 @@
 import asyncio
 import json
 import logging
+import random
 import re
 from dataclasses import dataclass
 from typing import Any, Protocol, cast
@@ -24,6 +25,8 @@ _UNKNOWN_LABEL = "unknown"
 _LLM_TIMEOUT = 60.0
 _MAX_RETRIES = 3
 _RETRY_BASE_DELAY = 1.0
+_RETRY_BACKOFF_MULTIPLIER = 2.0
+_RETRY_JITTER_FACTOR = 0.1
 
 SYSTEM_PROMPT = """You are an expert prompt engineer. Your task is to analyse eval failures
 for an AI agent prompt and suggest concrete improvements.
@@ -110,6 +113,12 @@ def _build_failure_context(
             }
         )
 
+    if not failures:
+        _log.warning(
+            "No failing evals found in %d results; optimizer will have no failure data",
+            len(eval_results),
+        )
+
     return f"""<current_prompt>
 {current_prompt}
 </current_prompt>
@@ -120,12 +129,13 @@ def _build_failure_context(
 
 
 # Matches a fenced code block with optional json language tag
-_CODE_FENCE_RE = re.compile(r"``` ?(?:json)?\s*\n(.*?)```", re.DOTALL)
+_CODE_FENCE_RE = re.compile(r"```\s*(?:json)?\s*\n?\s*(.*?)```", re.DOTALL)
 
 
 def _parse_llm_response(raw: str) -> OptimizationResult:
     cleaned = raw.strip()
     if not cleaned:
+        _log.error("LLM response is empty after stripping")
         raise OptimizationFailedError("Empty LLM response")
 
     parsed: dict[str, Any] | None = None
@@ -145,6 +155,12 @@ def _parse_llm_response(raw: str) -> OptimizationResult:
             raise OptimizationFailedError(
                 "LLM response is not valid JSON and contains no code-fenced block"
             ) from None
+
+    if not isinstance(parsed, dict):
+        _log.error("LLM response is valid JSON but not an object: got %s", type(parsed).__name__)
+        raise OptimizationFailedError(
+            f"LLM response is valid JSON but not an object: got {type(parsed).__name__}"
+        )
 
     try:
         return OptimizationResult(
@@ -166,6 +182,8 @@ class PromptOptimizer:
     ) -> None:
         if llm_call is None:
             raise ValueError("llm_call must not be None")
+        if not callable(llm_call):
+            raise ValueError("llm_call must be callable")
         self._llm_call = llm_call
         self._system_prompt = system_prompt or SYSTEM_PROMPT
 
@@ -177,6 +195,8 @@ class PromptOptimizer:
     ) -> OptimizationResult:
         if current_prompt is None:
             raise ValueError("current_prompt must not be None")
+        if not current_prompt.strip():
+            raise ValueError("current_prompt must not be empty or whitespace-only")
         if eval_results is None:
             eval_results = []
         if eval_definitions is None:
@@ -203,16 +223,14 @@ class PromptOptimizer:
                 )
                 _log.info("LLM response received (%d chars)", len(raw))
                 return _parse_llm_response(raw)
-            except TimeoutError:
+            except TimeoutError as exc:
                 _log.warning(
                     "LLM call timed out after %ss (attempt %d/%d)",
                     _LLM_TIMEOUT,
                     attempt + 1,
                     _MAX_RETRIES,
                 )
-                last_exc = TimeoutError(
-                    f"LLM call timed out after {_LLM_TIMEOUT}s"
-                )
+                last_exc = exc
             except OptimizationFailedError:
                 raise
             except Exception as exc:
@@ -226,10 +244,13 @@ class PromptOptimizer:
                 last_exc = exc
 
             if attempt < _MAX_RETRIES - 1:
-                delay = _RETRY_BASE_DELAY * (2**attempt)
-                _log.info("Retrying in %.1fs", delay)
-                await asyncio.sleep(delay)
+                delay = _RETRY_BASE_DELAY * (_RETRY_BACKOFF_MULTIPLIER**attempt)
+                jitter = delay * _RETRY_JITTER_FACTOR * (2 * random.random() - 1)  # noqa: S311
+                total_delay = delay + jitter
+                _log.info("Retrying in %.1fs", total_delay)
+                await asyncio.sleep(total_delay)
 
+        _log.error("LLM call failed after %d attempts", _MAX_RETRIES)
         raise OptimizationFailedError(
             f"LLM call failed after {_MAX_RETRIES} attempts"
         ) from last_exc
