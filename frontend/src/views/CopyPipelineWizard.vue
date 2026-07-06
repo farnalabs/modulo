@@ -131,7 +131,7 @@
             <div>
               <label class="block text-sm font-medium text-foreground mb-1">Target Ownership</label>
               <p class="text-xs text-muted-foreground mb-2">Choose who the copied pipeline belongs to.</p>
-              <OwnershipPicker v-model="ownership" label="Owner" />
+              <OwnershipPicker v-model="ownership" :label="$t('views.LibraryPipelineWizard.owner')" />
             </div>
 
             <div class="border-t border-border pt-4">

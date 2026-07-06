@@ -169,7 +169,7 @@
 
               <div>
                 <label class="block text-sm font-medium text-foreground mb-1">{{ $t('views.PipelineTemplateGallery.target_ownership') }}</label>
-                <OwnershipPicker v-model="ownership" label="Owner" />
+                <OwnershipPicker v-model="ownership" :label="$t('views.LibraryPipelineWizard.owner')" />
               </div>
 
               <div>
