@@ -4,6 +4,7 @@ prd: 8.16, 8.4
 delivery-tasks: [task-nv5-sdlc-onboarding-path]
 bdd:
   - backend/tests/bdd/features/orgs/org_onboarding.feature
+  - backend/tests/bdd/features/onboarding/sdlc_onboarding.feature
 unit-tests:
   - backend/tests/unit/api/test_onboarding.py
 code:
@@ -38,23 +39,23 @@ Existing SDLC onboarding: teams can map their current process (even manual steps
 
 ### Backend — Onboarding Wizard REST API
 
-- [ ] GET /api/v1/onboarding/status returns is_first_run, completed_steps, current_step, total_steps
-- [ ] Returns is_first_run=True with empty completed_steps when no state file exists
-- [ ] Auto-detects first-run completion when pipelines exist (marks is_first_run=False)
-- [ ] Returns current_step=null when is_first_run=False
-- [ ] Returns current_step pointing to first incomplete step
-- [ ] POST /api/v1/onboarding/step marks a step completed
-- [ ] Duplicate step marking is idempotent
-- [ ] Auto-clears is_first_run when all 4 steps are completed
-- [ ] Returns 422 for invalid step_id
-- [ ] Returns 401/403 for unauthenticated requests
-- [ ] GET /api/v1/onboarding/step/{step_id} returns step metadata and data
-- [ ] connect_tools step returns connector definitions (GitHub, Jira, Linear)
+- [x] GET /api/v1/onboarding/status returns is_first_run, completed_steps, current_step, total_steps
+- [x] Returns is_first_run=True with empty completed_steps when no state file exists
+- [x] Auto-detects first-run completion when pipelines exist (marks is_first_run=False)
+- [x] Returns current_step=null when is_first_run=False
+- [x] Returns current_step pointing to first incomplete step
+- [x] POST /api/v1/onboarding/step marks a step completed
+- [x] Duplicate step marking is idempotent
+- [x] Auto-clears is_first_run when all 4 steps are completed
+- [x] Returns 422 for invalid step_id
+- [x] Returns 401/403 for unauthenticated requests
+- [x] GET /api/v1/onboarding/step/{step_id} returns step metadata and data
+- [x] connect_tools step returns connector definitions (GitHub, Jira, Linear)
 - [ ] select_template step loads templates from LibraryPrimitive
 - [ ] configure_agent step returns static guidance
 - [ ] run_demo step returns static guidance
-- [ ] Returns 404 for unknown step_id
-- [ ] Persists state to .onboarding-state.json on each mutation
+- [x] Returns 404 for unknown step_id
+- [x] Persists state to .onboarding-state.json on each mutation
 
 ### Frontend — Onboarding Wizard
 
@@ -117,6 +118,15 @@ Existing SDLC onboarding: teams can map their current process (even manual steps
 - [x] Duplicate step completion is idempotent
 - [x] Network errors surface user-visible error text throughout wizard
 
+### Edge Cases
+- [ ] **Corrupted state file:** `_load_onboarding_json` returns `None` on `json.JSONDecodeError` → treated as fresh first run (state reset). No data-loss warning or recovery mechanism.
+- [ ] **TOCTOU race on state file:** `_load_onboarding_state` + `_save_onboarding_state` is not atomic — two concurrent requests can interleave reads/writes, losing one completion.
+- [ ] **Step marking when not first run:** `mark_step_completed` does not check `is_first_run` — steps can be completed even when onboarding is already finished.
+- [ ] **State file path is relative to source tree:** Resolves to `repo-root/.onboarding-state.json` via `os.path.join(os.path.dirname(__file__), "../../..")`. Fragile in Docker/deployment contexts where the source tree may not be writable.
+- [ ] **Missing POST /step auth test:** No unit test verifies unauthenticated requests return 401 for `POST /api/v1/onboarding/step`.
+- [ ] **Missing GET /step/{step_id} auth test:** No unit test verifies unauthenticated requests return 401 for `GET /api/v1/onboarding/step/{step_id}`.
+- [ ] **ProgrammingError only caught for select_template:** `get_step_data` only wraps the `select_template` DB query in `try/except ProgrammingError`. Other steps that may add DB queries in the future would propagate 500s.
+
 ### BDD Coverage
 - [x] `org_onboarding.feature`: 5 real scenarios with step definitions in `test_orgs.py`
 - [x] `sdlc_onboarding.feature`: 8 real scenarios with step definitions in `test_sdlc_onboarding.py`
@@ -131,3 +141,4 @@ Existing SDLC onboarding: teams can map their current process (even manual steps
 - **No frontend component smoke test** for OnboardingWizard.vue.
 - **`depends-on` references feature IDs** (`feat-core-schema-inference-ui`, `feat-core-replace-step-agent`) — previously pointed to raw task IDs.
 - **test_sdlc_onboarding.py is mocking-only:** BDD step definitions use MagicMock responses rather than real API calls, so scenarios validate UI logic but not true HTTP contract.
+- **No website docs page:** No onboarding documentation exists at `Website/modulo-website/src/docs/core/`. The feature is user-facing and should have a stub page linking to PRD §8.16.
