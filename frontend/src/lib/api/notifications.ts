@@ -1,10 +1,5 @@
 import { api } from './client'
-import { formatApiError } from './formatError'
-
-function throwOnError<T>(result: { data?: T; error?: unknown }): T {
-  if (result.error) throw new Error(formatApiError(result.error))
-  return result.data as T
-}
+import { throwOnError } from './formatError'
 
 export interface NotificationResponse {
   id: string
@@ -69,5 +64,6 @@ export async function fetchNotificationDetail(id: string): Promise<NotificationR
 }
 
 export async function fetchUnreadCount(): Promise<number> {
-  return (throwOnError(await api.GET('/api/v1/notifications/in-app/unread-count')) as { count: number }).count
+  const data = throwOnError(await api.GET('/api/v1/notifications/in-app/unread-count')) as { count?: number }
+  return data.count ?? 0
 }

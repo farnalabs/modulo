@@ -1154,7 +1154,11 @@ wheels = [
 
 [[package]]
 name = "farnalabs-modulo"
+<<<<<<< HEAD
 version = "0.3.241"
+=======
+version = "0.3.242"
+>>>>>>> qa-lib-worktree
 source = { editable = "." }
 dependencies = [
     { name = "aiosqlite" },
