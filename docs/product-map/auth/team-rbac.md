@@ -26,6 +26,8 @@ code:
 unit-tests:
   - backend/tests/unit/auth/test_team_rbac.py
   - backend/tests/unit/db/test_migration_0026.py
+  - backend/tests/unit/api/test_team_rbac_programming_error.py
+  - backend/tests/unit/api/test_team_rbac_sqlalchemy_error.py
 depends-on: [feat-teams-team-crud]
 status: partial
 ---
@@ -142,7 +144,7 @@ Org-level and team-level role hierarchy with privilege cap, team membership mana
 - [ ] The feature flag disables team RBAC endpoints for non-enterprise tiers
 - [ ] Free tier sees the feature as locked/locked-badge in the UI
 
-### Error handling (ProgrammingError→501)
+### Error handling — ProgrammingError→501
 - [x] List teams returns 501 when DB table is missing
 - [x] Create team returns 501 when DB table is missing
 - [x] Get team returns 501 when DB table is missing
@@ -156,6 +158,21 @@ Org-level and team-level role hierarchy with privilege cap, team membership mana
 - [x] Update API key returns 501 when DB table is missing
 - [x] Revoke API key returns 501 when DB table is missing
 
+### Error handling — SQLAlchemyError→503
+- [x] List teams returns 503 on connection/deadlock failure
+- [x] Create team returns 503 on connection/deadlock failure
+- [x] Get team returns 503 on connection/deadlock failure
+- [x] Update team returns 503 on connection/deadlock failure
+- [x] Delete team returns 503 on connection/deadlock failure
+- [x] List team members returns 503 on connection/deadlock failure
+- [x] Add team member returns 503 on connection/deadlock failure
+- [x] Remove team member returns 503 on connection/deadlock failure
+- [x] Change member role returns 503 on connection/deadlock failure
+
+### Error handling — IntegrityError→409
+- [x] Create team concurrent duplicate name returns 409 (TOCTOU race guard)
+- [x] Duplicate name on update returns 409 (application-level check before DB)
+
 ### Stage board and UI
 - [ ] The Stage board only surfaces pipelines and stages the user has access to
 - [ ] Team-private resources do not reveal "(N hidden)" — total absence for non-members
@@ -167,6 +184,7 @@ Org-level and team-level role hierarchy with privilege cap, team membership mana
 - [ ] Bulk "Reassign all resources to org-wide" action is admin-only
 
 ### Edge cases and error states
+- [x] List members returns 404 when team does not exist
 - [x] Adding a user to a team that does not exist returns 404
 - [x] Adding a non-existent user to a team returns 404
 - [x] Requesting a team role that does not exist in the hierarchy is rejected (Pydantic regex pattern)
@@ -177,7 +195,7 @@ Org-level and team-level role hierarchy with privilege cap, team membership mana
 - [x] Updating a team to an already-taken name returns 409
 - [x] Fetching a non-existent team returns 404
 - [x] Deleting a non-existent team returns 404
-- [x] Team with resources cannot be deleted (not implemented in teams.py)
+- [x] Team with resources cannot be deleted (delete route checks Pipeline, Stage, ConnectorInstance, ModelBackend, LibraryPrimitive)
 - [ ] Bulk reassign followed by delete is idempotent (not implemented)
 - [ ] A user assigned the same team role via SSO on repeated JIT provision is not re-added (SSO JIT not yet wired)
 - [x] Orphaned team_memberships on user deletion are cleaned up via FK CASCADE
@@ -219,6 +237,7 @@ Org-level and team-level role hierarchy with privilege cap, team membership mana
 - Team-scoped API key application-level enforcement is not implemented (RLS-only)
 - No BDD scenarios for resource ownership/visibility enforcement
 - No frontend Stage Board team filtering UI (v1)
+- Audit event failures on team create/update/delete do not propagate to the caller — the operation completes but the event is lost silently (logged as warning only)
 
 ## QA History
 
@@ -233,4 +252,15 @@ Org-level and team-level role hierarchy with privilege cap, team membership mana
 - Verified required_team_id HITL gate enforcement is implemented.
 - Verified feature flag `team_rbac` gated at routers.
 - Verified `apply_group_mappings` correctly handles: new member creation, role update on re-mapping, skip on same role.
-- Status: partial (known gaps updated). 
+- Status: partial (known gaps updated).
+
+### 2026-07-08 — Cross-cutting QA (improve-architecture index 247)
+- Fixed CRITICAL: Added SQLAlchemyError→503 catches to 7 route handlers in teams.py (create, get, update, delete, list_members, add_member, remove_member, change_member_role) — connection/deadlock failures previously propagated as raw 500. Only list_teams had the correct pattern.
+- Fixed CRITICAL: Added IntegrityError→409 catch on create_team_endpoint (TOCTOU race — concurrent duplicate name after check-then-act) and update_team_endpoint.
+- Fixed MAJOR: Audit events on create, update, delete now wrapped in separate try/except so audit failures never block the response or produce misleading error messages. Team is created/updated/deleted regardless of audit event success.
+- Fixed MAJOR: list_members_endpoint now validates team exists and returns 404 for non-existent team (previously returned empty members list).
+- Fixed MAJOR: delete_team_endpoint audit event moved outside the deletion try/except — if audit fails, team was deleted but 501 was returned.
+- Created `test_team_rbac_sqlalchemy_error.py` with 10 tests (9× SQLAlchemyError→503 + 1× IntegrityError→409).
+- Updated product map: added 9× SQLAlchemyError→503 + 2× IntegrityError→409 behaviour checkboxes. Corrected stale `[ ]`→`[x]` for team-with-resources deletion guard. Added list_members 404 behaviour.
+- Added unit-tests frontmatter ref to test_team_rbac_programming_error.py and test_team_rbac_sqlalchemy_error.py.
+- Status: partial (known gaps unchanged, 1 new gap added for audit event isolation).
