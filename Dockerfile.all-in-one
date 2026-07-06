@@ -2,7 +2,7 @@
 FROM node:22-alpine AS frontend-builder
 WORKDIR /app
 COPY frontend/package.json frontend/package-lock.json ./
-    RUN npm ci --ignore-platform
+    RUN npm install --frozen-lockfile --ignore-platform
 COPY frontend/ ./
 RUN npm run build
 
