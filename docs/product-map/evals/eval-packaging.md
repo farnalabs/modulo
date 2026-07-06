@@ -31,7 +31,7 @@ Grouping eval definitions into suites with configurable pass thresholds, includi
 - [x] List evals by suite_id
 - [x] Multiple evals can share the same suite_id
 - [x] Suite_id is a string field — no dedicated suite entity
-- [x] Migration adds suite_id and pass_threshold columns (0023_eval_suite_threshold)
+- [x] Migration adds suite_id and pass_threshold columns (0072_eval_suite_threshold)
 
 ### Suite-Level Pass Threshold
 - [x] pass_threshold stored on each eval definition in a suite
@@ -39,7 +39,7 @@ Grouping eval definitions into suites with configurable pass thresholds, includi
 - [x] Suite passes when aggregate_score >= pass_threshold
 - [x] Suite fails when aggregate_score < pass_threshold
 - [x] Suite without pass_threshold always passes
-- [x] Empty suite (no results) passes with aggregate_score=1.0
+- [x] Empty suite (no results) passes with aggregate_score=0.0
 - [x] threshold = 0 — always passes
 - [x] threshold = 1 — only perfect scores pass
 
@@ -68,7 +68,7 @@ Grouping eval definitions into suites with configurable pass thresholds, includi
 
 ### BDD
 - [x] eval_suite_crud.feature — 8 real CRUD scenarios (create, list, get, update, delete) with auth checks
-- [ ] eval_run.feature — "Eval run below threshold fails" scenario tests suite threshold
+- [x] eval_run.feature — "Eval run below threshold fails" scenario tests suite threshold
 
 ### Error Handling
 - [x] POST /evals returns 501 Not Implemented on ProgrammingError (missing DB table)
@@ -91,4 +91,10 @@ Grouping eval definitions into suites with configurable pass thresholds, includi
 - No suite-level permission model (any admin can create/join any suite_id)
 - Suite_id not pipeline-scoped — cross-pipeline query semantics undefined
 - Deleting the last eval in a suite leaves suite_id orphaned with no cleanup
+- `GET /evals` has no `suite_id` query parameter — list-by-suite_id is only available via direct DB query, not REST API
 - No website docs page for eval-packaging (needs creation in Website repo)
+
+## QA Findings (2026-07-06)
+- Product map claimed migration `0023` but actual file is `0072_eval_suite_threshold`
+- Product map claimed empty suite `aggregate_score=1.0` but code returns `0.0` (suite still passes, only the score value differed)
+- `eval_run.feature` scenario "Eval run below threshold fails" existed but was unchecked — verified and confirmed present
