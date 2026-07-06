@@ -1,10 +1,7 @@
 <script setup lang="ts">
 import { ref, computed } from "vue";
 import { useCompositeStore } from "../../../stores/compositeStore";
-import Tabs from "../../ui/tabs/Tabs.vue";
-import TabsList from "../../ui/tabs/TabsList.vue";
-import TabsTrigger from "../../ui/tabs/TabsTrigger.vue";
-import TabsContent from "../../ui/tabs/TabsContent.vue";
+import { Tabs, TabsList, TabsTrigger, TabsContent } from "../../ui/tabs";
 import ParameterPortForm from "./ParameterPortForm.vue";
 import SchemaMappingPanel from "./SchemaMappingPanel.vue";
 import OutputValidationTab from "./OutputValidationTab.vue";

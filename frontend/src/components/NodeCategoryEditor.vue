@@ -99,6 +99,7 @@
 <script setup lang="ts">
 import { ref, reactive, computed, watch } from "vue";
 import { api } from "../lib/api/client";
+import { formatApiError } from "../lib/api/formatError";
 
 export interface NodeCategoryForm {
   name: string;
@@ -175,7 +176,7 @@ async function save() {
         },
       );
       if (err) {
-        throw new Error(String(err));
+        throw new Error(formatApiError(err));
       }
       if (data) {
         emit("saved", data);
@@ -185,7 +186,7 @@ async function save() {
         body,
       });
       if (err) {
-        throw new Error(String(err));
+        throw new Error(formatApiError(err));
       }
       if (data) {
         emit("saved", data);

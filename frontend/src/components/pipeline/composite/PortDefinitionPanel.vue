@@ -85,9 +85,13 @@ function savePort() {
     type: form.value.type,
     required: form.value.required,
     default:
-      form.value.type === "number"
-        ? Number(form.value.default)
-        : form.value.default || undefined,
+      form.value.default === "" || form.value.default === undefined
+        ? undefined
+        : form.value.type === "number"
+          ? Number(form.value.default)
+          : form.value.type === "boolean"
+            ? form.value.default === "true"
+            : form.value.default,
     multiline: form.value.multiline,
     target_injection: {
       mode: "prompt_replace",
@@ -140,8 +144,8 @@ async function detectPlaceholders() {
       const newPorts = result.ports.filter((p) => !existing.has(p.name));
       emit("update:ports", [...props.ports, ...newPorts]);
     }
-  } catch {
-    // Best-effort detection - user can retry
+  } catch (e) {
+    console.warn("Placeholder detection failed:", e);
   } finally {
     detectLoading.value = false
   }
