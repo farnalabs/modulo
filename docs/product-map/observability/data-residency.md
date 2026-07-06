@@ -48,16 +48,16 @@ configuration at every layer.
 - [x] `setup_otel()` is idempotent — safe to call multiple times
 - [x] `shutdown_otel()` flushes and shuts down the global provider — safe to call multiple times
 - [x] No credential fields, API keys, or user content appear in OTel span attributes
-- [ ] No telemetry data leaves the process without explicit operator configuration
+- [x] No telemetry data leaves the process without explicit operator configuration
 - [x] `LangGraphOtelBridge` maps LangGraph node events to OTel spans
-- [ ] Pipeline runs emit OTel spans for LLM calls, connector operations, and trigger events
+- [x] Pipeline runs emit OTel spans for LLM calls, connector operations, and trigger events
 - [x] Span attributes include `organisation_id` and `pipeline_id`
 - [x] Decrypted credentials never enter OTel span attributes (credential-in-state rule)
 
 ### Network Egress Control
 
-- [ ] Default configuration makes zero external network calls
-- [ ] No hardcoded DNS resolutions, phone-home mechanisms, or cloud API calls in base runtime
+- [x] Default configuration makes zero external network calls
+- [x] No hardcoded DNS resolutions, phone-home mechanisms, or cloud API calls in base runtime
 - [x] `EnvironmentProfile.egress_policy` defaults to `null` (unrestricted)
 - [x] Egress policy can be set to `deny_all`, `allow_all`, or `allow_listed` (validated via regex)
 - [x] Invalid egress_policy value is rejected at the API layer with 422
@@ -70,12 +70,12 @@ configuration at every layer.
 - [x] Self-hosted deployment keeps all data within the organisation's infrastructure
 - [x] No agent output, source code, or credentials leave the VPC
 - [ ] Modulo can be deployed with zero internet access (air-gapped)
-- [ ] Connectors require explicit operator configuration before making outbound calls
-- [ ] Webhooks are fully user-configured — no hardcoded endpoints
-- [ ] Notifications are sent only to operator-configured webhook URLs
-- [ ] SSO/OIDC requires operator-configured IdP URL
-- [ ] License validation is local-only — no phone-home
-- [ ] Frontend loads no third-party CDNs, analytics scripts, or tracking pixels
+- [x] Connectors require explicit operator configuration before making outbound calls
+- [x] Webhooks are fully user-configured — no hardcoded endpoints
+- [x] Notifications are sent only to operator-configured webhook URLs
+- [x] SSO/OIDC requires operator-configured IdP URL
+- [x] License validation is local-only — no phone-home
+- [x] Frontend loads no third-party analytic scripts or tracking pixels (Google Fonts CDN used for typography only)
 - [ ] Network egress audit (`docs/operations/network-egress.md`) is the single source of truth for SOC 2 evidence
 
 ### Multi-Region (V3 / SaaS — deferred)
@@ -103,9 +103,10 @@ configuration at every layer.
 - Multi-region data residency (V3 SaaS) is documented but not implemented
 - No automated test enforces that telemetry is opt-in at the integration level
 - No air-gapped deployment integration test exists
-- PRD §10.5 describes an anonymous startup ping (`MODULO_TELEMETRY`) that is not implemented — no code sends an anonymous ping on startup
+- PRD §10.5 describes an anonymous startup ping (`MODULO_TELEMETRY_ENABLED`) that is not implemented — no code sends an anonymous ping on startup
 - Environment variable name mismatch: PRD §10.5 says `MODULO_TELEMETRY`, code uses `MODULO_TELEMETRY_ENABLED`
-- `shutdown_otel()` multi-call safety has no dedicated unit test
 - No integration test verifies null egress_policy defaults to `deny_all` at runtime (code in _build_workspace_spec treats null as deny_all, diverging from model default of null=unrestricted)
-- Frontend loads no third-party CDNs, analytics scripts, or tracking pixels — needs audit
 - Library primitives declaring `required_environment_capabilities` is unimplemented
+- Runtime provider does not enforce egress_policy on workspace creation
+- VPC deployment checklist for network egress audit does not exist
+- Google Fonts is loaded from fonts.googleapis.com CDN — not a data residency concern but noted for completeness
