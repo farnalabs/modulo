@@ -211,7 +211,7 @@ class ModuloPostgresSaver(AsyncPostgresSaver):
             if raw.get("__encrypted__") and self._fernet is not None:
                 plain = self._decrypt_with_fallback(raw["data"].encode())
                 return _deserialize_checkpoint(plain.decode())
-            return _deserialize_checkpoint(json.dumps(raw, default=str))
+            return cast(Checkpoint, raw)
         if isinstance(raw, str) and raw.startswith('{"__encrypted__"'):
             try:
                 wrapper = json.loads(raw)
