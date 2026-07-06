@@ -218,7 +218,6 @@
                         <option value="viewer">Viewer</option>
                         <option value="runner">Runner</option>
                         <option value="operator">Operator</option>
-                        <option value="admin">Admin</option>
                       </select>
                     </td>
                     <td class="py-2 text-right">
@@ -262,7 +261,6 @@
                 <option value="viewer">Viewer</option>
                 <option value="runner">Runner</option>
                 <option value="operator">Operator</option>
-                <option value="admin">Admin</option>
               </select>
               <button
                 :disabled="!addMemberUserId || addingMember"
@@ -504,7 +502,7 @@ async function saveRename() {
       await loadTeams()
     }
   } catch (e: unknown) {
-    memberActionError.value[renameTeamId.value ?? ''] = `Rename failed: ${e instanceof Error ? e.message : String(e)}`
+    memberActionError.value[renameTeamId.value ?? ''] = `Rename failed: ${formatApiError(e)}`
   } finally {
     renamingTeam.value = false
   }
@@ -532,7 +530,7 @@ async function deleteTeam(teamId: string) {
       await loadTeams()
     }
   } catch (e: unknown) {
-    deleteError.value = e instanceof Error ? e.message : String(e)
+    deleteError.value = formatApiError(e)
   } finally {
     deletingTeam.value = false
   }
@@ -561,7 +559,7 @@ async function addMember(teamId: string) {
       if (team) team.member_count++
     }
   } catch (e: unknown) {
-    memberActionError.value[teamId] = `Add member failed: ${e instanceof Error ? e.message : String(e)}`
+    memberActionError.value[teamId] = `Add member failed: ${formatApiError(e)}`
   } finally {
     addingMember.value = false
   }
@@ -582,7 +580,7 @@ async function changeMemberRole(teamId: string, member: MembershipResponse) {
       await loadMembers(teamId)
     }
   } catch (e: unknown) {
-    memberActionError.value[teamId] = `Role change failed: ${e instanceof Error ? e.message : String(e)}`
+    memberActionError.value[teamId] = `Role change failed: ${formatApiError(e)}`
     await loadMembers(teamId)
   }
 }
@@ -601,7 +599,7 @@ async function removeMember(teamId: string, member: MembershipResponse) {
       if (team) team.member_count--
     }
   } catch (e: unknown) {
-    memberActionError.value[teamId] = `Remove failed: ${e instanceof Error ? e.message : String(e)}`
+    memberActionError.value[teamId] = `Remove failed: ${formatApiError(e)}`
   }
 }
 
