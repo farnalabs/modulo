@@ -590,7 +590,14 @@ async def infer_schema_endpoint(
             detail="Schema management is temporarily unavailable.",
         ) from None
 
-    secrets_backend = create_secrets_backend(fernet_key=settings.fernet_key)
+    try:
+        secrets_backend = create_secrets_backend(fernet_key=settings.fernet_key)
+    except Exception:
+        logger.exception("schemas.infer.secrets_backend")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to initialize secrets backend for schema inference.",
+        )
 
     async with ConnectorHub(secrets_backend=secrets_backend) as ch:
         try:
@@ -735,7 +742,14 @@ async def generate_schema_endpoint(
             detail="Schema management is temporarily unavailable.",
         ) from None
 
-    secrets_backend = create_secrets_backend(fernet_key=settings.fernet_key)
+    try:
+        secrets_backend = create_secrets_backend(fernet_key=settings.fernet_key)
+    except Exception:
+        logger.exception("schemas.generate.secrets_backend")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to initialize secrets backend for schema generation.",
+        )
 
     async with ModelBackendHub() as mh:
         try:
@@ -1082,3 +1096,7 @@ async def import_schema_endpoint(
         description=description,
         fields=fields,
     )
+
+# TEST_MARKER - remove me
+
+
