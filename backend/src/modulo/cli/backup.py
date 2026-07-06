@@ -169,6 +169,54 @@ def _export_checkpoint_blobs_sync(raw_url: str) -> list[dict[str, Any]]:
     return rows
 
 
+def _export_checkpoints_sync(raw_url: str) -> list[dict[str, Any]]:
+    if psycopg is None:
+        raise RuntimeError("psycopg library is not available")
+    rows: list[dict[str, Any]] = []
+    with psycopg.connect(raw_url, row_factory=dict_row, connect_timeout=10) as conn, conn.cursor() as cur:
+        cur.execute(
+            "SELECT * FROM checkpoints "
+            "ORDER BY organisation_id, thread_id, checkpoint_ns, checkpoint_id"
+        )
+        for row in cur:
+            serialised: dict[str, Any] = {}
+            for key, val in row.items():
+                if isinstance(val, uuid.UUID):
+                    serialised[key] = str(val)
+                elif isinstance(val, (bytes, memoryview)):
+                    serialised[key] = bytes(val).hex()
+                elif isinstance(val, datetime):
+                    serialised[key] = val.isoformat()
+                else:
+                    serialised[key] = val
+            rows.append(serialised)
+    return rows
+
+
+def _export_checkpoint_writes_sync(raw_url: str) -> list[dict[str, Any]]:
+    if psycopg is None:
+        raise RuntimeError("psycopg library is not available")
+    rows: list[dict[str, Any]] = []
+    with psycopg.connect(raw_url, row_factory=dict_row, connect_timeout=10) as conn, conn.cursor() as cur:
+        cur.execute(
+            "SELECT * FROM checkpoint_writes "
+            "ORDER BY organisation_id, thread_id, checkpoint_ns, checkpoint_id, task_id, idx"
+        )
+        for row in cur:
+            serialised: dict[str, Any] = {}
+            for key, val in row.items():
+                if isinstance(val, uuid.UUID):
+                    serialised[key] = str(val)
+                elif isinstance(val, (bytes, memoryview)):
+                    serialised[key] = bytes(val).hex()
+                elif isinstance(val, datetime):
+                    serialised[key] = val.isoformat()
+                else:
+                    serialised[key] = val
+            rows.append(serialised)
+    return rows
+
+
 _CREDENTIALS_TABLES: list[str] = ["connector_instances", "model_backends"]
 
 
@@ -230,6 +278,68 @@ def _restore_checkpoint_blobs_sync(raw_url: str, blobs: list[dict[str, Any]]) ->
                 )
         conn.commit()
     return len(blobs)
+
+
+def _restore_checkpoints_sync(raw_url: str, checkpoints: list[dict[str, Any]]) -> int:
+    if psycopg is None:
+        raise RuntimeError("psycopg library is not available")
+    with psycopg.connect(raw_url, connect_timeout=10) as conn:
+        with conn.cursor() as cur:
+            cur.execute("TRUNCATE TABLE checkpoints CASCADE")
+            for row in checkpoints:
+                org_id_raw = row.get("organisation_id")
+                org_uuid = uuid.UUID(org_id_raw) if org_id_raw else None
+                cur.execute(
+                    "INSERT INTO checkpoints "
+                    "(organisation_id, thread_id, checkpoint_ns, checkpoint_id, "
+                    " parent_checkpoint_id, checkpoint, metadata) "
+                    "VALUES (%s, %s, %s, %s, %s, %s, %s)",
+                    (
+                        org_uuid,
+                        row.get("thread_id"),
+                        row.get("checkpoint_ns"),
+                        row.get("checkpoint_id"),
+                        row.get("parent_checkpoint_id"),
+                        row.get("checkpoint"),
+                        row.get("metadata"),
+                    ),
+                )
+        conn.commit()
+    return len(checkpoints)
+
+
+def _restore_checkpoint_writes_sync(raw_url: str, writes: list[dict[str, Any]]) -> int:
+    if psycopg is None:
+        raise RuntimeError("psycopg library is not available")
+    with psycopg.connect(raw_url, connect_timeout=10) as conn:
+        with conn.cursor() as cur:
+            cur.execute("TRUNCATE TABLE checkpoint_writes CASCADE")
+            for row in writes:
+                blob: bytes | None = None
+                raw_blob = row.get("blob")
+                if raw_blob is not None:
+                    blob = bytes.fromhex(raw_blob)
+                org_id_raw = row.get("organisation_id")
+                org_uuid = uuid.UUID(org_id_raw) if org_id_raw else None
+                cur.execute(
+                    "INSERT INTO checkpoint_writes "
+                    "(organisation_id, thread_id, checkpoint_ns, checkpoint_id, "
+                    " task_id, idx, channel, type, blob) "
+                    "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)",
+                    (
+                        org_uuid,
+                        row.get("thread_id"),
+                        row.get("checkpoint_ns"),
+                        row.get("checkpoint_id"),
+                        row.get("task_id"),
+                        row.get("idx"),
+                        row.get("channel"),
+                        row.get("type"),
+                        blob,
+                    ),
+                )
+        conn.commit()
+    return len(writes)
 
 
 def _re_encrypt_credentials_sync(
@@ -356,6 +466,16 @@ def backup(db_url: str | None, output_dir: Path | None) -> None:
         _write_json(backup_dir / "checkpoint_blobs.json", blobs)
         click.echo(f"  {len(blobs)} checkpoint blob records exported")
 
+        click.echo("Exporting checkpoints...")
+        checkpoints = _export_checkpoints_sync(raw_url)
+        _write_json(backup_dir / "checkpoints.json", checkpoints)
+        click.echo(f"  {len(checkpoints)} checkpoint records exported")
+
+        click.echo("Exporting checkpoint_writes...")
+        cwrites = _export_checkpoint_writes_sync(raw_url)
+        _write_json(backup_dir / "checkpoint_writes.json", cwrites)
+        click.echo(f"  {len(cwrites)} checkpoint write records exported")
+
         click.echo("Exporting credentials references...")
         creds = _export_credentials_references_sync(raw_url)
         _write_json(backup_dir / "credentials_references.json", creds)
@@ -435,6 +555,24 @@ def restore(backup_dir: Path, db_url: str | None, yes: bool, previous_fernet_key
             click.echo(f"  {restored} checkpoint blob records restored")
         else:
             click.echo("  No checkpoint_blobs.json found — skipping")
+
+        checkpoints_json = backup_dir / "checkpoints.json"
+        if checkpoints_json.exists():
+            click.echo("Restoring checkpoints from JSON export...")
+            checkpoints_data: list[dict[str, Any]] = json.loads(checkpoints_json.read_text(encoding="utf-8"))
+            restored_cp = _restore_checkpoints_sync(raw_url, checkpoints_data)
+            click.echo(f"  {restored_cp} checkpoint records restored")
+        else:
+            click.echo("  No checkpoints.json found — skipping")
+
+        cwrites_json = backup_dir / "checkpoint_writes.json"
+        if cwrites_json.exists():
+            click.echo("Restoring checkpoint_writes from JSON export...")
+            cwrites_data: list[dict[str, Any]] = json.loads(cwrites_json.read_text(encoding="utf-8"))
+            restored_cw = _restore_checkpoint_writes_sync(raw_url, cwrites_data)
+            click.echo(f"  {restored_cw} checkpoint write records restored")
+        else:
+            click.echo("  No checkpoint_writes.json found — skipping")
 
         creds_json = backup_dir / "credentials_references.json"
         current_key_hash = _fernet_key_hash(settings.fernet_key)
