@@ -358,6 +358,7 @@ import { ref, computed, onMounted } from 'vue'
 import { useApi } from '../composables/useApi'
 import { usePlanStore } from '../stores/planStore'
 import FeatureGate from '../components/FeatureGate.vue'
+import { formatApiError } from '../lib/api/formatError'
 
 const planStore = usePlanStore()
 const { get, post, patch } = useApi()
@@ -523,7 +524,7 @@ async function createStage() {
     createVisibility.value = 'org'
     await loadStages()
   } catch (e: unknown) {
-    createError.value = e instanceof Error ? e.message : String(e)
+    createError.value = formatApiError(e)
   }
 }
 
@@ -531,8 +532,8 @@ onMounted(async () => {
   planStore.fetchPlan()
   try {
     await Promise.all([loadStages(), loadPipelines(), loadTeams()])
-  } catch {
-    pageError.value = 'Failed to load stage board data'
+  } catch (e) {
+    pageError.value = formatApiError(e)
   } finally {
     loading.value = false
   }

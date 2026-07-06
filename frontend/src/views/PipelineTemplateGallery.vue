@@ -224,6 +224,7 @@ import { useApi } from '../composables/useApi'
 import OwnershipPicker from '../components/OwnershipPicker.vue'
 import type { OwnershipValue } from '../components/OwnershipPicker.vue'
 import ErrorAlert from '../components/shared/ErrorAlert.vue'
+import { formatApiError } from '../lib/api/formatError'
 
 interface TemplateItem {
   id: string
@@ -321,7 +322,7 @@ async function loadTemplates() {
     templates.value = data.items
     total.value = data.total
   } catch (e) {
-    error.value = e instanceof Error ? e.message : 'Failed to load templates'
+    error.value = formatApiError(e)
   } finally {
     loading.value = false
   }
@@ -367,7 +368,7 @@ async function useTemplate() {
     showDialog.value = false
     router.push({ name: 'pipeline-editor', params: { id: data.pipeline_id } })
   } catch (e) {
-    createError.value = e instanceof Error ? e.message : 'Failed to create pipeline from template'
+    createError.value = formatApiError(e)
   } finally {
     creating.value = false
   }
