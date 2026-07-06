@@ -49,7 +49,8 @@ _INFERRED_SCHEMA = {
 class TestSchemaInferenceFullFlow:
     """Full end-to-end flow: sample data → stub LLM → parsed schema."""
 
-    @pytest.mark.asyncio
+    pytestmark = pytest.mark.asyncio
+
     async def test_infer_from_realistic_records(self) -> None:
         """Stub responds with a valid schema; service parses and returns it."""
         backend = _StubBackend(response=json.dumps(_INFERRED_SCHEMA))
@@ -61,7 +62,6 @@ class TestSchemaInferenceFullFlow:
         schema = await service.infer(records)
         assert schema == _INFERRED_SCHEMA
 
-    @pytest.mark.asyncio
     async def test_infer_uses_all_fields(self) -> None:
         """Schema includes fields inferred from all sample record keys."""
         schema_result = {
@@ -85,7 +85,6 @@ class TestSchemaInferenceFullFlow:
         assert "assignee" in schema["properties"]
         assert "points" in schema["properties"]
 
-    @pytest.mark.asyncio
     async def test_infer_with_empty_records_list(self) -> None:
         """Empty sample list produces a valid schema from backend."""
         backend = _StubBackend(response=json.dumps({"type": "object", "properties": {}}))
@@ -93,7 +92,6 @@ class TestSchemaInferenceFullFlow:
         schema = await service.infer([])
         assert schema == {"type": "object", "properties": {}}
 
-    @pytest.mark.asyncio
     async def test_infer_handles_markdown_wrapped_response(self) -> None:
         """Markdown-wrapped JSON from backend is parsed correctly."""
         wrapped = "```json\n" + json.dumps(_INFERRED_SCHEMA) + "\n```"
@@ -103,7 +101,6 @@ class TestSchemaInferenceFullFlow:
         schema = await service.infer(records)
         assert schema == _INFERRED_SCHEMA
 
-    @pytest.mark.asyncio
     async def test_infer_raises_on_backend_failure(self) -> None:
         """Backend exception is wrapped in SchemaInferenceError."""
         backend = _StubBackend(fail=True)
@@ -111,7 +108,6 @@ class TestSchemaInferenceFullFlow:
         with pytest.raises(SchemaInferenceError, match="LLM call failed"):
             await service.infer([{"id": 1}])
 
-    @pytest.mark.asyncio
     async def test_infer_raises_on_unparseable_response(self) -> None:
         """Backend returns non-JSON; service raises SchemaInferenceError."""
         backend = _StubBackend(response="not valid json")
@@ -119,7 +115,6 @@ class TestSchemaInferenceFullFlow:
         with pytest.raises(SchemaInferenceError, match="Failed to parse"):
             await service.infer([{"id": 1}])
 
-    @pytest.mark.asyncio
     async def test_infer_with_deeply_nested_structures(self) -> None:
         """Nested object/array structures in samples are handled."""
         schema = {
@@ -148,7 +143,6 @@ class TestSchemaInferenceFullFlow:
         assert result["properties"]["nested"]["type"] == "object"
         assert result["properties"]["tags"]["type"] == "array"
 
-    @pytest.mark.asyncio
     async def test_infer_with_non_string_aimessage_content(self) -> None:
         """AIMessage with list content (non-string) raises SchemaInferenceError."""
 

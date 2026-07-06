@@ -161,6 +161,20 @@ def _make_polling_config_json() -> str:
 
 
 # ---------------------------------------------------------------------------
+# Settings fixture
+# ---------------------------------------------------------------------------
+
+
+@pytest_asyncio.fixture
+def settings_mock(db_url: str) -> MagicMock:
+    sm = MagicMock()
+    sm.database_url = db_url
+    sm.fernet_key = _VALID_32
+    sm.modulo_secrets_backend = "fernet"
+    return sm
+
+
+# ---------------------------------------------------------------------------
 # Tests
 # ---------------------------------------------------------------------------
 
@@ -169,12 +183,9 @@ def _make_polling_config_json() -> str:
 async def test_polling_trigger_happy_path(
     db_url: str,
     polling_trigger: dict[str, Any],
+    settings_mock: MagicMock,
 ) -> None:
     """Verify poll-to-run: condition met → run created + TriggerEvent logged."""
-    settings_mock = MagicMock()
-    settings_mock.database_url = db_url
-    settings_mock.fernet_key = _VALID_32
-    settings_mock.modulo_secrets_backend = "fernet"
 
     connector_mock = AsyncMock()
     connector_mock.query.return_value = ConnectorResult(
@@ -240,12 +251,9 @@ async def test_polling_trigger_happy_path(
 async def test_polling_trigger_no_match(
     db_url: str,
     polling_trigger: dict[str, Any],
+    settings_mock: MagicMock,
 ) -> None:
     """Verify condition no_match → no run created, no_match event logged."""
-    settings_mock = MagicMock()
-    settings_mock.database_url = db_url
-    settings_mock.fernet_key = _VALID_32
-    settings_mock.modulo_secrets_backend = "fernet"
 
     connector_mock = AsyncMock()
     connector_mock.query.return_value = ConnectorResult(
@@ -300,18 +308,15 @@ async def test_polling_trigger_no_match(
 async def test_polling_trigger_concurrency_limit(
     db_url: str,
     polling_trigger: dict[str, Any],
+    settings_mock: MagicMock,
 ) -> None:
     """Verify max_concurrent_runs is respected."""
-    settings_mock = MagicMock()
-    settings_mock.database_url = db_url
-    settings_mock.fernet_key = _VALID_32
-    settings_mock.modulo_secrets_backend = "fernet"
 
     # Set max_concurrent_runs to 2 and create 2 already-active runs
     engine = create_async_engine(db_url)
-    factory = async_sessionmaker(engine, expire_on_commit=False)
-    async with factory() as session:
-        async with session.begin():
+    try:
+        factory = async_sessionmaker(engine, expire_on_commit=False)
+        async with factory() as session, session.begin():
             await set_rls_org(session, _ORG_ID)
             await session.execute(
                 text("UPDATE triggers SET max_concurrent_runs = 2 WHERE id = :id"),
@@ -335,7 +340,8 @@ async def test_polling_trigger_concurrency_limit(
                         "tid": str(_TRIGGER_ID),
                     },
                 )
-        await session.commit()
+    finally:
+        await engine.dispose()
 
     secrets_backend_mock = AsyncMock()
     secrets_backend_mock.get_secret.return_value = '{"token": "test"}'
@@ -376,12 +382,9 @@ async def test_polling_trigger_concurrency_limit(
 async def test_polling_trigger_connector_not_found(
     db_url: str,
     polling_trigger: dict[str, Any],
+    settings_mock: MagicMock,
 ) -> None:
     """Verify missing connector_instance logs poll_error."""
-    settings_mock = MagicMock()
-    settings_mock.database_url = db_url
-    settings_mock.fernet_key = _VALID_32
-    settings_mock.modulo_secrets_backend = "fernet"
 
     with (
         patch(f"{_POLL_PKG}.get_settings", return_value=settings_mock),
@@ -403,24 +406,22 @@ async def test_polling_trigger_connector_not_found(
 async def test_polling_trigger_inactive(
     db_url: str,
     polling_trigger: dict[str, Any],
+    settings_mock: MagicMock,
 ) -> None:
     """Verify inactive trigger is skipped."""
-    settings_mock = MagicMock()
-    settings_mock.database_url = db_url
-    settings_mock.fernet_key = _VALID_32
-    settings_mock.modulo_secrets_backend = "fernet"
 
     # Deactivate the trigger
     engine = create_async_engine(db_url)
-    factory = async_sessionmaker(engine, expire_on_commit=False)
-    async with factory() as session:
-        async with session.begin():
+    try:
+        factory = async_sessionmaker(engine, expire_on_commit=False)
+        async with factory() as session, session.begin():
             await set_rls_org(session, _ORG_ID)
             await session.execute(
                 text("UPDATE triggers SET active = false WHERE id = :id"),
                 {"id": str(_TRIGGER_ID)},
             )
-        await session.commit()
+    finally:
+        await engine.dispose()
 
     with patch(f"{_POLL_PKG}.get_settings", return_value=settings_mock):
         result = await _fire_polling_trigger(
@@ -442,12 +443,9 @@ async def test_polling_trigger_inactive(
 async def test_polling_trigger_condition_eval_failure(
     db_url: str,
     polling_trigger: dict[str, Any],
+    settings_mock: MagicMock,
 ) -> None:
     """Verify invalid JMESPath logs poll_error."""
-    settings_mock = MagicMock()
-    settings_mock.database_url = db_url
-    settings_mock.fernet_key = _VALID_32
-    settings_mock.modulo_secrets_backend = "fernet"
 
     connector_mock = AsyncMock()
     connector_mock.query.return_value = ConnectorResult(
