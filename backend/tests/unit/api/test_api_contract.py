@@ -68,6 +68,7 @@ def _make_mock_pipeline(**kwargs: Any) -> MagicMock:
     p.run_context_defaults = kwargs.get("run_context_defaults", {})
     p.default_autonomy_level = kwargs.get("default_autonomy_level", "manual_approval")
     p.created_by = kwargs.get("created_by", _USER_ID)
+    p.account_id = kwargs.get("account_id", kwargs.get("created_by", _USER_ID))
     p.created_at = kwargs.get("created_at", _NOW)
     p.updated_at = kwargs.get("updated_at", _NOW)
     return p
