@@ -240,7 +240,7 @@ class TestGetLicense:
         assert resp.status_code == 200
         data = resp.json()
         assert data["has_license"] is False
-        assert data["tier"] == "community"
+        assert data["tier"] == "team"
         assert data["features"] == []
 
     def test_returns_license_when_set(self, client: TestClient) -> None:
