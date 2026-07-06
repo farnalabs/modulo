@@ -16,6 +16,7 @@ unit-tests:
   - backend/tests/unit/api/test_variants.py
   - backend/tests/unit/api/test_variant_groups_bdd.py
   - backend/tests/unit/api/test_variants_programming_error.py
+  - backend/tests/unit/api/test_evals_programming_error.py
   - backend/tests/unit/db/crud/test_variant_group.py
   - backend/tests/integration/crud/test_variant_group.py
 depends-on: [feat-evals-eval-engine, feat-variants-variant-groups]
@@ -89,7 +90,9 @@ Discovered from 1 completed delivery task.
 | [x] ProgrammingError→501 | `POST /api/v1/variant-groups/{id}/run` (run_variant) | `test_variants_programming_error::TestRunVariantProgrammingError` |
 | [x] ProgrammingError→501 | `GET /api/v1/variant-groups/{id}/coverage-gaps` (coverage_gaps) | `test_variants_programming_error::TestCoverageGapsProgrammingError` |
 | [x] ProgrammingError→501 | `GET /api/v1/variant-groups/{id}/prompt-diffs` (prompt_diffs) | `test_variants_programming_error::TestPromptDiffsProgrammingError` |
-| [x] ProgrammingError→501 | `GET /api/v1/evals/coverage` (eval_coverage in evals.py) | implicit via evals route tests |
+| [x] ProgrammingError→501 | `GET /api/v1/evals/coverage` (eval_coverage in evals.py) | `test_evals_programming_error::TestEvalCoverageProgrammingError` |
+| [x] SQLAlchemyError→503 | `GET /api/v1/evals/coverage` (eval_coverage in evals.py) | `test_evals_programming_error::TestEvalCoverageProgrammingError` |
+| [x] Exception→500 | `GET /api/v1/evals/coverage` (eval_coverage in evals.py) | `test_evals_programming_error::TestEvalCoverageProgrammingError` |
 | [x] ProgrammingError→501 | Admin eval dashboard (admin.py) | implicit via admin route tests |
 | [x] ProgrammingError→501 | `POST /api/v1/feedback/{id}/detect-gap` (feedback.py) | `test_feedback::TestDetectEvalGap*` |
 | [x] 404 | `GET /api/v1/variant-groups/{id}` when not found | `test_variants::TestGetGroup.test_raises_404_when_not_found` |
@@ -100,15 +103,15 @@ Discovered from 1 completed delivery task.
 | [x] 404 | `GET /api/v1/variant-groups/{id}/prompt-diffs` when not found | `test_variants::TestPromptDiffsGroupNotFound` |
 | [x] 429 | `POST /api/v1/variant-groups/{id}/run` — no variants configured | `test_variants::TestRunVariantEmptyVariants` |
 | [x] 429 | `POST /api/v1/variant-groups/{id}/run` — pipeline quota exceeded | `test_variants::TestRunVariant.test_raises_429_when_quota_exceeded` |
-| [ ] 403 | Admin eval dashboard for non-admin users | uncovered |
+| [x] 403 | Admin eval dashboard for non-admin users | `admin.py:1599-1603` — built-in role check |
 
 ## Known Gaps
 - BDD feature file `run_variants.feature` is a placeholder — no scenarios implemented
-- No integration tests exist for variant group endpoints
-- No unit tests for `get_coverage_gaps` CRUD function
+- Integration tests for variant group endpoints `@pytest.mark.skip(reason="awaiting-implementation")`
 - Variant comparison view is not yet implemented (PRD 8.19 comparison view)
 - Eval coverage gap warning on variant comparison view not wired (frontend + backend signal)
 - `detect_eval_gap` endpoint now fetches eval definitions but passes them as raw model objects — EvalEngine.evaluate expects specific format; integration test needed
 
 ## QA History
-- 2026-07-04: Cross-cutting QA (index 120). Fixed CRITICAL: detect_eval_gap endpoint passed eval_suite=[] instead of fetching pipeline's eval definitions — always returned False. Added 6 missing ProgrammingError→501 unit tests. Updated product map: marked ~20 behaviour checkboxes [ ]→[x], added Error Handling section (18 checkboxes), updated Known Gaps. Status: partial. 
+- 2026-07-04: Cross-cutting QA (index 120). Fixed CRITICAL: detect_eval_gap endpoint passed eval_suite=[] instead of fetching pipeline's eval definitions — always returned False. Added 6 missing ProgrammingError→501 unit tests. Updated product map: marked ~20 behaviour checkboxes [ ]→[x], added Error Handling section (18 checkboxes), updated Known Gaps. Status: partial.
+- 2026-07-09: Cross-cutting QA (index 277). Fixed CRITICAL — `list_variant_groups` CRUD silently swallowed ProgrammingError without logging; added `_log.warning()`. Added 4 CRUD unit tests for `get_coverage_gaps` (happy path, missing eval detection, provided eval_def_ids, partial coverage, missing eval_definition_ids key). Added Exception→500 test for `eval_coverage` endpoint. Corrected product map: marked admin eval dashboard 403 [ ]→[x] (role check already exists at admin.py:1599-1603), added missing SQLAlchemyError→503 and Exception→500 rows for eval_coverage error handling table. Removed resolved Known Gap "No unit tests for get_coverage_gaps CRUD function". Status: partial. 
