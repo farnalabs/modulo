@@ -44,6 +44,41 @@
         </div>
       </div>
 
+      <!-- Empty state CTA for fresh organisations -->
+      <div v-if="summary.total_runs === 0 && summary.active_pipelines === 0" class="rounded-lg border bg-card p-8 text-center space-y-6">
+        <div>
+          <p class="text-lg font-medium">{{ $t('views.DashboardView.welcome_to_modulo') }}</p>
+          <p class="mt-1 text-sm text-muted-foreground">{{ $t('views.DashboardView.welcome_subtitle') }}</p>
+        </div>
+        <div class="flex flex-col items-center gap-4">
+          <a
+            href="/onboarding"
+            class="inline-flex items-center gap-2 rounded-lg bg-primary px-6 py-3 text-sm font-semibold text-primary-foreground hover:brightness-110 transition-all"
+          >
+            <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+            {{ $t('views.DashboardView.see_what_modulo_can_do') }}
+          </a>
+          <div class="flex items-center justify-center gap-3">
+            <a
+              href="/library"
+              class="rounded-lg border border-input bg-background px-4 py-2 text-sm font-medium hover:bg-accent transition-all"
+            >
+              {{ $t('views.DashboardView.create_pipeline') }}
+            </a>
+            <a
+              href="/templates"
+              class="rounded-lg border border-input bg-background px-4 py-2 text-sm font-medium hover:bg-accent transition-all"
+            >
+              {{ $t('views.DashboardView.browse_templates') }}
+            </a>
+          </div>
+          <div class="text-sm text-muted-foreground">
+            <p>{{ $t('views.DashboardView.configure_ai_provider_description') }}</p>
+            <a href="/admin/model-backends" class="text-primary hover:underline font-medium">{{ $t('views.DashboardView.configure_ai_provider') }}</a>
+          </div>
+        </div>
+      </div>
+
       <!-- Row 1: Summary stat cards -->
       <div class="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
         <StatCard :label="$t('views.DashboardView.total_runs')" :value="summary.total_runs" color="primary" to="/pipelines">
@@ -193,19 +228,8 @@
             <Sparkline class="h-12 w-full" :data="trendSpendData" color="var(--color-warning)" />
           </div>
         </div>
-        <div v-else class="space-y-4 opacity-50">
-          <div>
-            <p class="text-xs font-medium text-muted-foreground mb-1">{{ $t('views.DashboardView.run_count') }}</p>
-            <Sparkline class="h-12 w-full" :data="[0]" color="var(--color-muted)" />
-          </div>
-          <div>
-            <p class="text-xs font-medium text-muted-foreground mb-1">{{ $t('views.DashboardView.eval_pass_rate_label') }}</p>
-            <Sparkline class="h-12 w-full" :data="[0]" color="var(--color-muted)" />
-          </div>
-          <div>
-            <p class="text-xs font-medium text-muted-foreground mb-1">{{ $t('views.DashboardView.token_spend') }}</p>
-            <Sparkline class="h-12 w-full" :data="[0]" color="var(--color-muted)" />
-          </div>
+        <div v-else class="flex items-center justify-center py-12">
+          <p class="text-sm italic text-muted-foreground">{{ $t('views.DashboardView.no_data_trends') }}</p>
         </div>
       </div>
 
@@ -238,27 +262,7 @@
         </div>
       </div>
 
-      <!-- Empty state CTA for fresh organisations -->
-      <div v-if="summary.total_runs === 0 && summary.active_pipelines === 0" class="rounded-lg border bg-card p-8 text-center">
-        <p class="text-lg font-medium">{{ $t('views.DashboardView.welcome_to_modulo') }}</p>
-        <p class="mt-1 text-sm text-muted-foreground">
-          {{ $t('views.DashboardView.get_started_description') }}
-        </p>
-        <div class="mt-4 flex items-center justify-center gap-3">
-          <a
-            href="/library"
-            class="rounded-lg bg-primary px-4 py-2 text-sm font-semibold text-primary-foreground border border-primary/30 hover:brightness-110 transition-all"
-          >
-            {{ $t('views.DashboardView.create_pipeline') }}
-          </a>
-          <a
-            href="/templates"
-            class="rounded-lg border border-input bg-background px-4 py-2 text-sm font-medium hover:bg-accent transition-all"
-          >
-            {{ $t('views.DashboardView.browse_templates') }}
-          </a>
-        </div>
-      </div>
+
 
     </template>
   </div>
