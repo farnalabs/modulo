@@ -261,3 +261,15 @@ async def _run_in_background(
         await executor.execute(run_id=run_id, org_id=org_id, input_payload=input_payload)
     except Exception:
         _log.exception("Unhandled error in webhook-triggered run %s", run_id)
+        try:
+            settings = get_settings()
+            engine = get_or_create_engine(settings)
+            factory = async_sessionmaker(engine, expire_on_commit=False)
+            from modulo.db.crud.run import update_run_status
+            from modulo.db.rls import set_rls_org
+
+            async with factory() as session, session.begin():
+                await set_rls_org(session, org_id)
+                await update_run_status(session, run_id, "failed", error_code="internal_error")
+        except Exception:
+            _log.exception("webhook.run.mark_failed_error", extra={"run_id": str(run_id)})

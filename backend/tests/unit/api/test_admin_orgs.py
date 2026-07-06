@@ -39,10 +39,12 @@ SYSTEM_ADMIN_PRINCIPAL = AuthenticatedPrincipal(
 @pytest.fixture
 def mock_session():
     """Create a mock DB session for testing."""
-    from unittest.mock import AsyncMock
+    from unittest.mock import AsyncMock, MagicMock
 
     session = AsyncMock()
+    session.begin = MagicMock()
     session.begin.return_value.__aenter__.return_value = session
+    session.begin.return_value.__aexit__.return_value = None
     session.execute.return_value.scalar_one_or_none.return_value = None
     session.execute.return_value.scalar_one.return_value = 0
     session.execute.return_value.scalars.return_value.all.return_value = []
@@ -96,7 +98,7 @@ async def test_create_org_success(client_system_admin, mock_session):
 
     original_create = admin_orgs.create_organisation
 
-    async def mock_create_org(session, *, name, slug, created_by):
+    async def mock_create_org(session, *, name, slug, created_by, plan_id=None):
         org = Organisation(
             id=uuid4(),
             name=name,

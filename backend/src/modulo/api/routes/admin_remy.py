@@ -9,7 +9,7 @@ from typing import Any
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, Field
 from sqlalchemy import select
-from sqlalchemy.exc import ProgrammingError
+from sqlalchemy.exc import ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.api.dependencies import get_db_session
@@ -175,6 +175,11 @@ async def get_remy_config(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
         ) from None
+    except SQLAlchemyError:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Database error while fetching Remy config.",
+        ) from None
 
 
 @router.get("/available-providers", response_model=AvailableProvidersResponse)
@@ -265,6 +270,11 @@ async def update_remy_config(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
         ) from None
+    except SQLAlchemyError:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Database error while updating Remy config.",
+        ) from None
 
 
 # ── Org-level Skills CRUD ─────────────────────────────────────────────
@@ -321,6 +331,11 @@ async def list_org_skills(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
         ) from None
+    except SQLAlchemyError:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Database error while listing skills.",
+        ) from None
 
 
 @router.post("/skills", response_model=SkillResponse, status_code=status.HTTP_201_CREATED)
@@ -350,6 +365,11 @@ async def create_org_skill(
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
+        ) from None
+    except SQLAlchemyError:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Database error while creating skill.",
         ) from None
 
 
@@ -382,6 +402,11 @@ async def update_org_skill(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
         ) from None
+    except SQLAlchemyError:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Database error while updating skill.",
+        ) from None
 
 
 @router.delete("/skills/{skill_id}", status_code=status.HTTP_204_NO_CONTENT)
@@ -400,6 +425,11 @@ async def delete_org_skill(
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
+        ) from None
+    except SQLAlchemyError:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Database error while deleting skill.",
         ) from None
 
 
@@ -433,6 +463,11 @@ async def get_org_context_sources(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
         ) from None
+    except SQLAlchemyError:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Database error while fetching context sources.",
+        ) from None
 
 
 @router.put("/context-sources/{source_key}")
@@ -458,6 +493,11 @@ async def set_org_context_source(
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
+        ) from None
+    except SQLAlchemyError:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Database error while updating context source.",
         ) from None
 
 
@@ -489,6 +529,11 @@ async def reset_org_context_sources(
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
+        ) from None
+    except SQLAlchemyError:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Database error while resetting context sources.",
         ) from None
 
 

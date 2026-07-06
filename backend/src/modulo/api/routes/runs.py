@@ -10,7 +10,7 @@ from typing import Any, Literal
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, status
 from pydantic import BaseModel, Field
 from sqlalchemy import select, text
-from sqlalchemy.exc import ProgrammingError
+from sqlalchemy.exc import ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
 from modulo.api.dependencies import (
@@ -120,7 +120,7 @@ async def _validate_run_input_basics(
     edges = graph_json.get("edges", [])
     if not nodes:
         raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail="Pipeline graph has no nodes",
         )
 
@@ -128,7 +128,7 @@ async def _validate_run_input_basics(
     entry_candidates = [n for n in nodes if str(n.get("id")) not in target_ids]
     if not entry_candidates:
         raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail="Pipeline graph has no entry node (cycle detected)",
         )
 
@@ -141,13 +141,13 @@ async def _validate_run_input_basics(
     agent = agent_result.scalar_one_or_none()
     if agent is None:
         raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail=f"Entry agent {agent_id_str} not found",
         )
 
     if not isinstance(input_payload, dict):
         raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail="Input payload must be a JSON object",
         )
 
@@ -302,25 +302,19 @@ async def cancel_run(
         async with session.begin():
             await set_rls_org(session, principal.organisation_id)
             run = await get_run(session, run_id)
-    except ProgrammingError:
-        raise HTTPException(
-            status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="Feature is not available. Run database migrations to enable it.",
-        )
 
-    if run is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Run not found")
+            if run is None:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Run not found")
 
-    if run.status in _TERMINAL_STATUSES:
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail=f"Run is already in terminal status: {run.status}",
-        )
+            if run.status in _TERMINAL_STATUSES:
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail=f"Run is already in terminal status: {run.status}",
+                )
 
-    try:
-        async with session.begin():
-            await set_rls_org(session, principal.organisation_id)
             await request_cancellation(session, run_id)
+    except HTTPException:
+        raise
     except ProgrammingError:
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
@@ -972,15 +966,15 @@ async def reveal_node_prompt(
             await set_rls_org(session, principal.organisation_id)
             run = await get_run(session, run_id)
 
-        if run is None:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Run not found")
+            if run is None:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Run not found")
 
-        # Load snapshot to get graph definition.
-        snapshot_id = run.snapshot_id
-        snapshot_result = await session.execute(
-            select(PipelineSnapshot).where(PipelineSnapshot.id == snapshot_id)
-        )
-        snapshot = snapshot_result.scalar_one_or_none()
+            # Load snapshot to get graph definition.
+            snapshot_id = run.snapshot_id
+            snapshot_result = await session.execute(
+                select(PipelineSnapshot).where(PipelineSnapshot.id == snapshot_id)
+            )
+            snapshot = snapshot_result.scalar_one_or_none()
         if snapshot is None:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
@@ -1146,18 +1140,17 @@ async def diff_node_output(
 
     for op, i1, i2, j1, j2 in differ.get_opcodes():
         if op == "equal":
-            for _ in range(i2 - i1):
+            for idx in range(i1, i2):
                 diff_lines.append(
                     NodeOutputDiffLine(
                         type="unchanged",
-                        content=lines_a[i1].rstrip("\n"),
+                        content=lines_a[idx].rstrip("\n"),
                         line_a=line_a,
                         line_b=line_b,
                     )
                 )
                 line_a += 1
                 line_b += 1
-            i1, j1 = i2, j2
         elif op == "replace":
             for _ in range(i2 - i1):
                 diff_lines.append(
