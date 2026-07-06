@@ -45,6 +45,7 @@ status: partial
 - [x] Page parameter (default 1) respected
 - [x] Page_size parameter (default 20, max 100) respected
 - [x] Unauthenticated request lists teams → 401/403
+- [x] Non-admin lists teams via admin endpoint → 403 (was incorrectly 400, fixed in 2026-07-09)
 - [x] Results ordered by created_at ascending
 
 ### Get team
@@ -138,6 +139,19 @@ status: partial
 - [x] Concurrent duplicate membership insertion handled (DB constraint catches)
 - [x] Pagination avoids full-table scans (LIMIT/OFFSET with index on org_id)
 
+### Error Handling (API routes)
+
+- [x] ProgrammingError → 501 on all 9 team/membership routes in `teams.py`
+- [x] SQLAlchemyError → 503 on all 9 team/membership routes in `teams.py`
+- [x] Exception → 500 (with structured logging) on all 9 team/membership routes in `teams.py`
+- [x] IntegrityError → 409 on create team route in `teams.py`
+- [x] Admin create team (`admin.py`) now catches ProgrammingError→501, SQLAlchemyError→503, IntegrityError→409, Exception→500
+- [x] Admin update team (`admin.py`) now catches ProgrammingError→501, SQLAlchemyError→503, Exception→500
+- [x] Admin delete team (`admin.py`) now catches ProgrammingError→501, SQLAlchemyError→503, Exception→500
+- [x] Admin list teams (`admin.py`) now catches ProgrammingError→501, SQLAlchemyError→503, Exception→500
+- [x] Admin create team duplicate name pre-check with `get_team_by_name` + integrity guard
+- [x] Audit event failures caught (non-fatal) on all team mutation routes — team operation completes regardless of audit success
+
 ### Backward compatibility / data migration
 - [x] Team entity is alpha-stage (no existing data to migrate)
 - [x] OrgScoped base class consistent with all other entities
@@ -151,3 +165,21 @@ status: partial
 - Daily spend limit not exposed through REST API
 - No integration tests for the membership privilege cap
 - RLS isolation test (`test_teams_isolated_between_orgs`) still skipped — uses SET_CONFIG directly instead of the app-level RLS helpers
+
+## QA History
+
+### 2026-07-09 — Cross-cutting QA (improve-architecture index 281) — feat-teams-team-crud
+
+**Lens:** Correctness, bugs, maintainability, SOLID/DRY, error handling, edge cases/resilience
+
+**Fixed (CRITICAL):** Admin team routes (`admin_create_team`, `admin_update_team`, `admin_delete_team`) in `admin.py` had no try/except error handling — `ProgrammingError`, `SQLAlchemyError`, `IntegrityError`, and Python-level errors (`TypeError`, `KeyError`, `ValueError`) propagated as raw 500 to CatchAllMiddleware. Added comprehensive guards (ProgrammingError→501, SQLAlchemyError→503, IntegrityError→409, HTTPException→re-raise, Exception→500) to all 3 routes.
+
+**Fixed (CRITICAL):** `admin_create_team` in `admin.py` missing duplicate name pre-check — creating a team with a duplicate name hit an uncaught IntegrityError (raw 500). Added `get_team_by_name` pre-check (409 Conflict) plus `except IntegrityError → 409` safety net.
+
+**Fixed (MAJOR):** `admin_list_teams` in `admin.py` returned 400 for non-admin users instead of 403. Changed to `HTTP_403_FORBIDDEN`.
+
+**Fixed (MAJOR):** `admin_list_teams` in `admin.py` had no `except SQLAlchemyError → 503` — connection/deadlock failures returned 500. Added the catch with structured logging.
+
+**Fixed (MAJOR):** `admin_update_team` and `admin_create_team` audit event blocks had no error handling — audit failures propagated after the team was already mutated. Added `except ProgrammingError`/`except SQLAlchemyError` catching.
+
+**All tests pass:** 30 API endpoint + 22 CRUD unit tests = 52/52 pass. No regressions.
