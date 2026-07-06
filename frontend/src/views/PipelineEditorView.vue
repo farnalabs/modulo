@@ -772,7 +772,7 @@ async function saveEdgeConfig() {
       populateEdgeForm(updatedEdge)
     }
   } catch (e: unknown) {
-    edgeSaveError.value = e instanceof Error ? e.message : String(e)
+    edgeSaveError.value = formatApiError(e)
   } finally {
     savingEdge.value = false
   }
@@ -819,7 +819,7 @@ async function handleSaveAsComposite() {
     showSaveAsComposite.value = false
     router.push({ name: 'library' })
   } catch (e: unknown) {
-    saveAsError.value = e instanceof Error ? e.message : String(e)
+    saveAsError.value = formatApiError(e)
   } finally {
     saving.value = false
   }
@@ -846,7 +846,7 @@ async function convertToAgent() {
     await loadGraph()
     selectedNodeData.value = rawNodes.value.find((n: any) => n.id === nodeId) || null
   } catch (e: unknown) {
-    convertError.value = e instanceof Error ? e.message : String(e)
+    convertError.value = formatApiError(e)
   }
 }
 
@@ -861,7 +861,7 @@ async function revertToManual() {
     await loadGraph()
     selectedNodeData.value = rawNodes.value.find((n: any) => n.id === nodeId) || null
   } catch (e: unknown) {
-    revertError.value = e instanceof Error ? e.message : String(e)
+    revertError.value = formatApiError(e)
   } finally {
     revertLoading.value = false
   }
