@@ -1257,6 +1257,7 @@ export default {
     "hide": "Hide",
     "failed_to_load": "Failed to load",
     "failed_to_save": "Failed to save",
-    "configuration_saved": "Configuration saved"
+    "configuration_saved": "Configuration saved",
+    "reset": "Reset"
   }
 }

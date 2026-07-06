@@ -114,10 +114,20 @@
           <CardTitle>Configuration Snippets</CardTitle>
           <CardDescription>Copy these snippets to configure MCP clients</CardDescription>
         </CardHeader>
-        <CardContent>
-          <div class="rounded-lg border bg-card p-8 text-center">
-            <p class="text-lg font-medium">Configuration Snippets</p>
-            <p class="mt-1 text-sm text-muted-foreground">Coming soon — code snippets for popular MCP clients will appear here.</p>
+        <CardContent class="space-y-4">
+          <div class="flex items-center gap-2">
+            <label class="text-sm font-medium whitespace-nowrap">Client:</label>
+            <select v-model="selectedMcpClient" class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm">
+              <option value="opencode">opencode / Claude Code</option>
+              <option value="claude">Claude Desktop</option>
+              <option value="cursor">Cursor</option>
+              <option value="continue">Continue.dev</option>
+              <option value="custom">Custom</option>
+            </select>
+          </div>
+          <div class="rounded-lg bg-muted/30 p-4">
+            <pre class="text-xs font-mono whitespace-pre-wrap break-all">{{ mcpConfigSnippet }}</pre>
+            <Button variant="outline" size="sm" class="mt-2" @click="copySnippet">Copy</Button>
           </div>
         </CardContent>
       </Card>
@@ -128,11 +138,9 @@
           <CardTitle>Registered OAuth Clients</CardTitle>
           <CardDescription>MCP OAuth client applications registered for token-based auth</CardDescription>
         </CardHeader>
-        <CardContent>
-          <div class="rounded-lg border bg-card p-8 text-center">
-            <p class="text-lg font-medium">OAuth Clients</p>
-            <p class="mt-1 text-sm text-muted-foreground">Coming soon — OAuth client registration will appear here.</p>
-          </div>
+        <CardContent class="space-y-4">
+          <p class="text-sm text-muted-foreground">Configure OAuth client applications for MCP token-based auth.</p>
+          <Button variant="outline" size="sm" disabled>Register OAuth Client (coming in v0.4)</Button>
         </CardContent>
       </Card>
     </template>
@@ -260,7 +268,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted, onUnmounted } from 'vue'
+import { ref, computed, onMounted, onUnmounted } from 'vue'
 import { api } from '../lib/api/client'
 import { formatApiError, type ProblemDetail } from '../lib/api/formatError'
 import type { components } from '../lib/api/client'
@@ -315,6 +323,42 @@ const revokeKeyError = ref<string | null>(null)
 
 const copiedField = ref<string | null>(null)
 let mcpCopyTimeout: ReturnType<typeof setTimeout> | null = null
+
+const selectedMcpClient = ref('opencode')
+
+const mcpConfigSnippet = computed(() => {
+  const url = mcpUrl.value || 'http://localhost:8000'
+  switch (selectedMcpClient.value) {
+    case 'opencode':
+      return `mcp {\n  server = "${url}"\n}`
+    case 'claude':
+      return JSON.stringify({
+        mcpServers: {
+          modulo: { url, apiKey: '<YOUR_API_KEY>' },
+        },
+      }, null, 2)
+    case 'cursor':
+      return JSON.stringify({
+        mcpServers: {
+          modulo: { url, apiKey: '<YOUR_API_KEY>' },
+        },
+      }, null, 2)
+    case 'continue':
+      return JSON.stringify({
+        experimental: {
+          mcp: {
+            servers: {
+              modulo: { url, apiKey: '<YOUR_API_KEY>' },
+            },
+          },
+        },
+      }, null, 2)
+    case 'custom':
+      return `MCP_SERVER_URL=${url}`
+    default:
+      return ''
+  }
+})
 
 function formatDate(iso: string): string {
   try {
@@ -450,6 +494,10 @@ async function revokeKey() {
 
 function copyServerUrl() {
   copyToClipboard(mcpUrl.value || 'http://localhost:8000', 'server-url')
+}
+
+function copySnippet() {
+  copyToClipboard(mcpConfigSnippet.value, 'mcp-snippet')
 }
 
 async function copyToClipboard(text: string, field: string) {
