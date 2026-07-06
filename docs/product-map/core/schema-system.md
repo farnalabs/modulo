@@ -130,6 +130,53 @@ CRUD for Schema and SchemaVersion, JSON Schema validation, import, migration, an
 - [x] RLS org scope enforced via set_rls_org on all routes
 - [x] ProgrammingError caught on all DB-backed routes → 501
 
+### Error Handling
+
+- [x] ProgrammingError on list schemas returns 501
+- [x] ProgrammingError on create schema returns 501
+- [x] ProgrammingError on get schema returns 501
+- [x] ProgrammingError on update schema returns 501
+- [x] ProgrammingError on deprecate schema returns 501
+- [x] ProgrammingError on delete schema returns 501
+- [x] ProgrammingError on list schema versions returns 501
+- [x] ProgrammingError on create schema version returns 501
+- [x] ProgrammingError on get schema version returns 501
+- [x] ProgrammingError on list fields returns 501
+- [x] ProgrammingError on infer returns 501
+- [x] ProgrammingError on generate returns 501
+- [x] ProgrammingError on migrate returns 501
+- [x] SQLAlchemyError on list schemas returns 503
+- [x] SQLAlchemyError on create schema returns 503
+- [x] SQLAlchemyError on get schema returns 503
+- [x] SQLAlchemyError on update schema returns 503
+- [x] SQLAlchemyError on deprecate schema returns 503
+- [x] SQLAlchemyError on delete schema returns 503
+- [x] SQLAlchemyError on list schema versions returns 503
+- [x] SQLAlchemyError on create schema version returns 503
+- [x] SQLAlchemyError on get schema version returns 503
+- [x] SQLAlchemyError on list fields returns 503
+- [x] SQLAlchemyError on infer returns 503
+- [x] SQLAlchemyError on generate returns 503
+- [x] SQLAlchemyError on migrate returns 503
+- [x] IntegrityError on create schema (duplicate name) returns 409
+- [x] IntegrityError on create schema version (duplicate) returns 409
+- [x] IntegrityError on update schema (duplicate name) returns 409
+- [x] SchemaDeletionProtectedError on delete with references returns 409
+- [x] All error responses include structured detail message
+
+### Resilience & Integration Robustness
+
+- [x] Logging on all error paths with `logger.exception` (includes exception traceback + method name context)
+- [x] Non-DB endpoints (`/validate`, `/import`, `/migrate/plan`) correctly excluded from error catches (no DB access)
+- [x] `set_rls_org` called inside `session.begin()` on all DB routes — RLS setup is atomic with the transaction
+- [x] Catch order is correct: ProgrammingError → IntegrityError → SQLAlchemyError (most specific first)
+- [ ] No `except Exception` catch-all on DB routes (Python-level errors like TypeError, ValueError propagate to CatchAllMiddleware as opaque 500)
+- [ ] No timeout on ModelBackendHub.initialise call for infer/generate endpoints
+- [ ] No retry logic for connector sampling failures
+- [ ] No retry logic for LLM inference/generation failures
+- [ ] No connection pooling for model backend hub in schema inference
+- [ ] No circuit breaker for external connector sampling
+
 ### Known Gaps
 
 - **No `force=true` BDD scenario verified end-to-end** — unit test exists in `test_schema_programming_error.py` but no Gherkin `.feature` scenario
@@ -148,3 +195,4 @@ CRUD for Schema and SchemaVersion, JSON Schema validation, import, migration, an
 
 - 2026-07-02: Cross-cutting QA — enriched product map from stub to partial, expanded deletion protection to check PipelineSnapshot (schema_pins_json) and LibraryPrimitive (content_json) references, added force=true parameter to delete_schema and delete endpoint, added unit tests for force=true deletion scenario.
 - 2026-07-06: Cross-cutting QA — verified behaviours match code (force delete, deprecation endpoint, ProgrammingError handling on all routes), cleaned up resolved known gaps, added missing PRD gaps (pinned-version edit block, deprecation badge), created website docs stub at `Website/modulo-website/src/docs/schemas/core-schema-system.md`.
+- 2026-07-07: Cross-cutting QA (index 243) — Fixed CRITICAL: added IntegrityError→409 catch to `update_schema_endpoint` (duplicate name on rename previously fell through to SQLAlchemyError→503 with misleading "temporarily unavailable"). Added Error Handling section (31 checkboxes) and Resilience & Integration Robustness section (10 checkboxes). Added test coverage for update, deprecate, list_versions, get_version, and migrate error paths (12 new tests in `test_schema_programming_error.py`). Fixed MAJOR: ~50 hardcoded English strings across SchemaListView.vue and SchemaEditorView.vue wrapped in $t()/t() with 56 new i18n keys. Added `formatApiError` to SchemaEditorView.vue error handlers. Added Resilience section.

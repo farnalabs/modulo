@@ -243,6 +243,12 @@ async def update_schema_endpoint(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Schema management is not available. Run database migrations to enable it.",
         ) from None
+    except IntegrityError:
+        logger.exception("schemas.update_integrity")
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="A schema with this name already exists in your organisation.",
+        ) from None
     except SQLAlchemyError:
         logger.exception("schemas.update_schema")
         raise HTTPException(
