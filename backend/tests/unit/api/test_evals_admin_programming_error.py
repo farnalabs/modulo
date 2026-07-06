@@ -1,8 +1,9 @@
-"""Unit tests: admin eval routes return 501 on ProgrammingError.
+"""Unit tests: admin eval routes return 501 on ProgrammingError, 503 on SQLAlchemyError.
 
 Tests that eval_dashboard and eval_regressions routes gracefully return
 501 Not Implemented when the database raises ProgrammingError
-(e.g. missing table because migrations haven't run yet).
+(e.g. missing table because migrations haven't run yet), and 503 when
+SQLAlchemyError is raised (connection/deadlock failures).
 """
 
 from collections.abc import AsyncGenerator
@@ -10,7 +11,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from fastapi.testclient import TestClient
-from sqlalchemy.exc import ProgrammingError
+from sqlalchemy.exc import ProgrammingError, SQLAlchemyError
 
 from modulo.api.dependencies import _get_engine, get_db_session
 from modulo.api.main import app
@@ -36,6 +37,18 @@ def _make_session_raising_programming_error() -> AsyncMock:
     session = AsyncMock()
     begin_cm = AsyncMock()
     begin_cm.__aenter__ = AsyncMock(side_effect=ProgrammingError("relation does not exist", None, None))
+    begin_cm.__aexit__ = AsyncMock(return_value=False)
+    session.begin = MagicMock(return_value=begin_cm)
+    bind_mock = MagicMock()
+    bind_mock.dialect.name = "postgresql"
+    session.get_bind = AsyncMock(return_value=bind_mock)
+    return session
+
+
+def _make_session_raising_sqlalchemy_error() -> AsyncMock:
+    session = AsyncMock()
+    begin_cm = AsyncMock()
+    begin_cm.__aenter__ = AsyncMock(side_effect=SQLAlchemyError("connection failed", None, None))
     begin_cm.__aexit__ = AsyncMock(return_value=False)
     session.begin = MagicMock(return_value=begin_cm)
     bind_mock = MagicMock()
@@ -76,6 +89,13 @@ class TestEvalDashboardProgrammingError:
         assert resp.status_code == 501
         assert "migrations" in resp.json()["detail"].lower()
 
+    def test_dashboard_returns_503_on_sqlalchemy_error(self, admin_client: TestClient) -> None:
+        session = _make_session_raising_sqlalchemy_error()
+        _override_session(session)
+        resp = admin_client.get(self.URL)
+        assert resp.status_code == 503
+        assert "database" in resp.json()["detail"].lower()
+
 
 class TestEvalRegressionsProgrammingError:
     URL = "/api/v1/admin/evals/regressions"
@@ -86,3 +106,10 @@ class TestEvalRegressionsProgrammingError:
         resp = admin_client.get(self.URL)
         assert resp.status_code == 501
         assert "migrations" in resp.json()["detail"].lower()
+
+    def test_regressions_returns_503_on_sqlalchemy_error(self, admin_client: TestClient) -> None:
+        session = _make_session_raising_sqlalchemy_error()
+        _override_session(session)
+        resp = admin_client.get(self.URL)
+        assert resp.status_code == 503
+        assert "database" in resp.json()["detail"].lower()
