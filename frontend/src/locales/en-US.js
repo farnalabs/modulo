@@ -654,6 +654,7 @@ export default {
       "pipeline_created": "Pipeline created!",
       "primitivename_pipeline_from_template": "Pipeline (from template)",
       "choose_who_this_pipeline_belongs_to_orgwide_pipelines_are_vi": "Choose who this pipeline belongs to. Org-wide pipelines are visible to everyone in the organisation; team pipelines are visible only to team members.",
+      "owner": "Owner",
       "pipeline_created_from_library_template": "Pipeline created from library template"
     },
     "SettingsMcpView": {
