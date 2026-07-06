@@ -35,6 +35,9 @@ primary_region = 'lhr'
   MODULO_USERS = "admin@demo.modulo:admin123,alice@demo.modulo:alice123"
   MODULO_PLUGIN_DISCOVERY = "false"
   MODULO_MAX_LOCAL_CONCURRENCY = "4"
+  # REQUIRED: Upstash Redis instance. Create with:
+  #   fly redis create --name modulo-app-redis -r lhr,ams --enable-eviction
+  # Then set REDIS_URL to the connection string from `fly redis status modulo-app-redis`
   REDIS_URL = ""
   CORS_ORIGINS = "https://modulo.run,http://localhost:5173"
 
