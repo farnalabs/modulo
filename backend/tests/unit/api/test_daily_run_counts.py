@@ -92,12 +92,12 @@ def client() -> Generator[TestClient, None, None]:
 def client_with_data() -> Generator[TestClient, None, None]:
     today = datetime.now(UTC)
     rows = [
-        _MockRow(day=today - timedelta(days=2), status="complete", count=5),
-        _MockRow(day=today - timedelta(days=2), status="failed", count=1),
-        _MockRow(day=today - timedelta(days=1), status="running", count=3),
-        _MockRow(day=today - timedelta(days=1), status="complete", count=7),
-        _MockRow(day=today, status="pending", count=2),
-        _MockRow(day=today, status="complete", count=4),
+        _MockRow(day=today - timedelta(days=2), status="complete", cnt=5),
+        _MockRow(day=today - timedelta(days=2), status="failed", cnt=1),
+        _MockRow(day=today - timedelta(days=1), status="running", cnt=3),
+        _MockRow(day=today - timedelta(days=1), status="complete", cnt=7),
+        _MockRow(day=today, status="pending", cnt=2),
+        _MockRow(day=today, status="complete", cnt=4),
     ]
     mock_session = _make_mock_session(rows=rows)
 

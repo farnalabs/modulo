@@ -118,6 +118,7 @@ def test_pipeline_create_valid_minimal(client: TestClient) -> None:
     pipeline.run_context_defaults = {}
     pipeline.default_autonomy_level = "manual_approval"
     pipeline.created_by = uuid.uuid4()
+    pipeline.account_id = uuid.uuid4()
     pipeline.created_at = datetime(2025, 1, 1, tzinfo=UTC)
     pipeline.updated_at = datetime(2025, 1, 1, tzinfo=UTC)
 
