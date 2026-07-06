@@ -92,15 +92,7 @@ In-memory (and optionally Redis-backed) event pub/sub that pushes resource-chang
 - [x] Frontend: Vitest tests `dispatchToStore` routing
 - [x] Frontend: Vitest tests `dirtyIds` conflict pattern (event dropped when dirty)
 - [x] Frontend: Vitest tests `useDirtyTracker` mark/check/clean
-- [x] BDD: 6 scenarios passing — auth, org isolation, disconnect, resource mutation events
-
-### Error handling
-- [x] Subscriber that throws an exception does not break other subscribers
-- [x] Connection drop (client disconnect) removes subscriber queue cleanly
-- [x] `ProgrammingError` in listener (table doesn't exist yet) is caught — silent no-op
-- [x] No unbounded queue growth — slow subscribers drop events (bounded queue with maxsize)
-- [x] SSE connection health-checked — stale connections cleaned up (2s heartbeat)
-- [x] Redis broadcast failure logged, does not crash publisher
+- [x] BDD: 6 scenarios passing — auth rejection, org isolation, disconnect cleanup, resource mutation (created/updated/deleted) events
 
 ### Security
 - [x] Endpoint requires valid Bearer token (same as all other API routes)
@@ -139,11 +131,12 @@ In-memory (and optionally Redis-backed) event pub/sub that pushes resource-chang
 - [x] Transaction rollback after event listener fires — phantom event sent (best-effort design; REST API is authoritative)
 
 ## Known Gaps
-- **Redis connection leak on publish/subscribe error (fixed):** When a Redis publish or subscribe operation failed, the old connection object was set to `None` in the broker but never explicitly closed — the TCP connection remained open until GC. Fixed in this session: both error handlers now close the old connection before clearing the reference.
 - No event persistence — reconnecting frontend misses events that occurred while disconnected (REST API is authoritative fallback). This is by design per PRD §8.22.
 - No per-event type opt-in from the SSE client (client gets all events for their org)
 - `planStore` and `dashboard` have `registerHandler()` wired; other stores (agents, schemas, connectors, triggers, model_backends, evals, feedback, library) do not yet register SSE sync handlers
 - No website docs page at Website/modulo-website/src/docs/ covering SSE Event Bus
+- `_background_tasks` set has no cleanup mechanism for completed fire-and-forget tasks — the set grows without bound under sustained Redis broadcast volume, leaking memory proportional to event throughput. Should add `task.add_done_callback(set.discard)` or use `asyncio.TaskGroup`.
+- SSE per-org/per-user connection limit rejection has no specified error response — clients receive no structured error body explaining which limit was hit, their current count, or the limit value.
 
 ## QA History
 - 2026-07-02: Cross-cutting QA (index 52). Fixed: frontend EventSource→fetch-based SSE with Bearer auth header (native EventSource can't set custom headers), frontend named event parsing (`event: resource_changed` via SSE protocol parser instead of `onmessage`), per-org monotonically increasing version counter in listeners (was hardcoded `version=0`), created BDD step definitions and verified all 6 scenarios pass. Updated product map: `gap`→`partial`, added `bdd:` and `unit-tests:` frontmatter, marked 40+ behaviours [ ]→[x], added code paths (redis_broker, useSyncStore, syncRegistry). Status: partial (4 known gaps remain).
