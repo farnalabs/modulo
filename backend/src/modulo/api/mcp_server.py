@@ -290,11 +290,28 @@ class McpAuthMiddleware(BaseHTTPMiddleware):
         try:
             claims = decode_oauth_access_token(token, settings.secret_key)
         except JWTError:
-            return Response(
-                '{"error":"unauthorized","detail":"Invalid or expired access token"}',
-                status_code=401,
-                media_type="application/json",
-            )
+            # Fall back to regular JWT access token (used by Remy MCP tool calls).
+            try:
+                from modulo.auth.jwt import decode_principal
+                principal = decode_principal(token, settings.secret_key)
+            except JWTError:
+                return Response(
+                    '{"error":"unauthorized","detail":"Invalid or expired access token"}',
+                    status_code=401,
+                    media_type="application/json",
+                )
+            _ctx_org_id.set(principal.organisation_id)
+            _ctx_role.set(principal.org_role or "runner")
+            _ctx_key_id.set(uuid.UUID(int=0))
+            _ctx_user_id.set(principal.account_id)
+            _ctx_auth_token.set(token)
+            _ctx_auth_type.set("oauth")
+            request.scope["auth_principal"] = {
+                "type": "user",
+                "org_id": str(principal.organisation_id) if principal.organisation_id else "",
+            }
+            resp3: Response = await call_next(request)
+            return resp3
 
         # Verify token family is not blacklisted.
         try:
