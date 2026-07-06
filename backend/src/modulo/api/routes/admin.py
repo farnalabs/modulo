@@ -1319,7 +1319,7 @@ async def request_org_deletion(
         token_expires_at=result["token_expires_at"],
         export_summary={
             "organisation": export.get("organisation", [{}])[0].get("name", "unknown"),
-            "user_count": len(export.get("users", [])),
+            "user_count": len(export.get("memberships", [])),
             "pipeline_count": len(export.get("pipelines", [])),
             "run_count": len(export.get("runs", [])),
             "audit_event_count": len(export.get("audit_events", [])),
