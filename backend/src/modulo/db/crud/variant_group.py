@@ -8,6 +8,7 @@ import uuid
 from typing import Any
 
 from sqlalchemy import func, select
+from sqlalchemy.exc import ProgrammingError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.db.crud.run import count_active_runs_for_pipeline, create_run
@@ -60,7 +61,10 @@ async def list_variant_groups(
         count_q = count_q.where(VariantGroup.pipeline_id == pipeline_id)
 
     offset = (page - 1) * page_size
-    total = (await session.execute(count_q)).scalar_one()
+    try:
+        total = (await session.execute(count_q)).scalar_one()
+    except ProgrammingError:
+        return [], 0
     items = list(
         (await session.execute(q.order_by(VariantGroup.created_at.desc()).offset(offset).limit(page_size))).scalars()
     )

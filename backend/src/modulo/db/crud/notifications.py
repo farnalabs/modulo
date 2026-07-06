@@ -9,7 +9,7 @@ import uuid
 from datetime import datetime
 
 from sqlalchemy import func, select
-from sqlalchemy.exc import IntegrityError
+from sqlalchemy.exc import IntegrityError, ProgrammingError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import aliased
 
@@ -222,8 +222,11 @@ async def count_notifications_for_user(
             )
         )
 
-    result = await session.execute(q)
-    return result.scalar_one()
+    try:
+        result = await session.execute(q)
+        return result.scalar_one()
+    except ProgrammingError:
+        return 0
 
 
 async def dismiss_notification(

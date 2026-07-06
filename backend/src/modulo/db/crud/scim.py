@@ -11,6 +11,7 @@ from sqlalchemy import update as sa_update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.db.crud.account import get_account_by_email, get_account_by_id
+from modulo.db.crud.base import apply_updates
 from modulo.db.crud.org_membership import create_membership, get_membership_by_account_and_org
 from modulo.db.crud.team import create_team, delete_team, get_team, update_team
 from modulo.db.crud.team_membership import (
@@ -88,12 +89,14 @@ async def scim_update_user(
     active: bool | None = None,
     org_role: str | None = None,
 ) -> Account:
+    updates: dict[str, object] = {}
     if email is not None:
-        account.email = email
+        updates["email"] = email
     if display_name is not None:
-        account.display_name = display_name
+        updates["display_name"] = display_name
     if active is not None:
-        account.active = active
+        updates["active"] = active
+    apply_updates(account, updates)
     if org_role is not None:
         await session.execute(
             sa_update(OrgMembership)

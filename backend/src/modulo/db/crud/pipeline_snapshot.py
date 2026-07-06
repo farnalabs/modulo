@@ -7,6 +7,7 @@ from collections.abc import Iterable
 from typing import Any
 
 from sqlalchemy import func, select
+from sqlalchemy.exc import ProgrammingError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.db.models.agent import Agent
@@ -85,12 +86,15 @@ async def create_snapshot_from_live_graph(
         backends = list((await session.execute(select(ModelBackend).where(ModelBackend.id.in_(backend_ids)))).scalars())
     backends_by_id = {backend.id: backend for backend in backends}
 
-    version_result = await session.execute(
-        select(func.coalesce(func.max(PipelineSnapshot.snapshot_version), 0)).where(
-            PipelineSnapshot.pipeline_id == pipeline_id
+    try:
+        version_result = await session.execute(
+            select(func.coalesce(func.max(PipelineSnapshot.snapshot_version), 0)).where(
+                PipelineSnapshot.pipeline_id == pipeline_id
+            )
         )
-    )
-    snapshot_version = int(version_result.scalar_one()) + 1
+        snapshot_version = int(version_result.scalar_one()) + 1
+    except ProgrammingError:
+        return None
 
     connector_bindings: list[dict[str, Any]] = []
     for node in nodes:

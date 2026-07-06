@@ -8,6 +8,7 @@ import uuid
 from typing import Any
 
 from sqlalchemy import func, select
+from sqlalchemy.exc import ProgrammingError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.db.crud.base import PageResult, apply_updates
@@ -57,7 +58,10 @@ async def list_stages(
     if owner_team_id is not None:
         query = query.where(Stage.owner_team_id == owner_team_id)
         count_query = count_query.where(Stage.owner_team_id == owner_team_id)
-    total = (await session.execute(count_query)).scalar_one()
+    try:
+        total = (await session.execute(count_query)).scalar_one()
+    except ProgrammingError:
+        return PageResult(items=[], total=0, page=page, page_size=page_size)
     items = list(
         (
             await session.execute(query.order_by(Stage.position, Stage.name).offset(offset).limit(page_size))
