@@ -74,6 +74,7 @@ COMPLEXITY_REVIEWER: dict[str, Any] = {
             "estimated_tokens": {
                 "type": "integer",
                 "minimum": 0,
+                "maximum": 1000000,
                 "description": "Estimated token count for processing",
             },
             "complexity_reason": {
@@ -88,5 +89,7 @@ COMPLEXITY_REVIEWER: dict[str, Any] = {
         "estimated_tokens",
         "complexity_reason",
     ],
-    "tags": ["context-setter", "canonical", "complexity", "cost"],
+    "tags": ["context-setter", "canonical", "complexity", "cost", "library"],
+    "version": "1.0.0",
+    "author": "Modulo",
 }
