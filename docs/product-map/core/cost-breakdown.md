@@ -14,7 +14,7 @@ unit-tests:
   - backend/tests/integration/crud/test_cost_attribution.py
 bdd:
   - backend/tests/bdd/features/costs/cost_controls.feature
-status: covered
+status: partial
 ---
 
 # Cost Breakdown
