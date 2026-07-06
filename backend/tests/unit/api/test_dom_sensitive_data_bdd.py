@@ -133,6 +133,7 @@ class TestCredentialsMaskedInApiResponse:
         mock_connector.allowed_operations = []
         mock_connector.status = "active"
         mock_connector.visibility = "org"
+        mock_connector.tier = "community"
         mock_connector.created_at = datetime(2025, 1, 1, tzinfo=UTC)
         mock_connector.updated_at = datetime(2025, 1, 1, tzinfo=UTC)
         return mock_connector
