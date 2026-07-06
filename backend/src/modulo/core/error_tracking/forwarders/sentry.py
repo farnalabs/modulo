@@ -52,8 +52,8 @@ class SentryErrorForwarder(BaseForwarder):
             return False
 
         try:
-            sentry_sdk = __import__("sentry_sdk")
-        except ImportError:
+            import sentry_sdk
+        except Exception:
             return await self._forward_via_api(dsn, org_slug, project_slug, org_id, error_group, error_event)
 
         return await self._forward_via_sdk(sentry_sdk, dsn, org_id, error_group, error_event)
@@ -61,9 +61,9 @@ class SentryErrorForwarder(BaseForwarder):
     async def _forward_via_sdk(
         self,
         sentry_sdk: Any,
-        _dsn: str,
+        dsn: str,
         org_id: Any,
-        _error_group: Any,
+        error_group: Any,
         error_event: Any,
     ) -> bool:
         try:
@@ -72,12 +72,15 @@ class SentryErrorForwarder(BaseForwarder):
             source = error_event.source or ""
             environment = error_event.environment or "unknown"
             version = error_event.version or "unknown"
+            fingerprint = [error_group.fingerprint] if error_group and error_group.fingerprint else []
             with sentry_sdk.push_scope() as scope:
                 scope.set_tag("org_id", str(org_id))
                 scope.set_tag("source", source)
                 scope.set_tag("environment", environment)
                 scope.set_tag("version", version)
                 scope.set_level(level)
+                if fingerprint:
+                    scope.fingerprint = fingerprint
                 sentry_sdk.capture_message(message, level=level)
             return True
         except Exception:
@@ -94,7 +97,9 @@ class SentryErrorForwarder(BaseForwarder):
         error_event: Any,
     ) -> bool:
         try:
-            url = f"https://sentry.io/api/0/projects/{org_slug}/{project_slug}/events/"
+            parsed = urlparse(dsn)
+            host = parsed.hostname or "sentry.io"
+            url = f"https://{host}/api/0/projects/{org_slug}/{project_slug}/events/"
             level = _LEVEL_MAP.get(error_event.level, "error")
             auth_token = _parse_dsn_token(dsn)
 
@@ -130,7 +135,7 @@ class SentryErrorForwarder(BaseForwarder):
                     return True
                 _log.warning(
                     "sentry_forwarder.api_error",
-                    extra={"status": resp.status_code, "org_id": str(org_id), "body": resp.text[:500]},
+                    extra={"status": resp.status_code, "org_id": str(org_id)},
                 )
                 return False
         except Exception:

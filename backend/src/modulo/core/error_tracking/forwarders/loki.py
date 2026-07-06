@@ -37,18 +37,21 @@ class LokiErrorForwarder(BaseForwarder):
             return False
 
         try:
+            source = error_event.source or ""
+            level = error_event.level or "error"
             stream_labels = {
                 **labels,
                 "org_id": str(org_id),
-                "source": error_event.source,
-                "level": error_event.level,
+                "source": source,
+                "level": level,
                 "environment": error_event.environment or "unknown",
                 "fingerprint": error_group.fingerprint if error_group else "",
             }
             stream_labels = {k: str(v) for k, v in stream_labels.items()}
 
             log_entry = json.dumps({
-                "message": error_event.message,
+                "message": error_event.message or "",
+                "level": level,
                 "fingerprint": error_group.fingerprint if error_group else "",
                 "count": error_group.count if error_group else 1,
                 "version": error_event.version or "unknown",
