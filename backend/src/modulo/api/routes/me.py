@@ -1,5 +1,6 @@
 """Minimal /api/v1/me endpoint — delegates to auth's /me logic."""
 
+import logging
 import uuid
 from typing import Any
 
@@ -26,6 +27,8 @@ from modulo.core.remy.context_source_service import RemyContextSourceService
 from modulo.db.crud.account import get_account_by_id, update_account_preferences
 from modulo.db.crud.token_family import blacklist_family, list_families_for_account
 from modulo.db.models.remy_skill import RemySkill
+
+_log = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/v1", tags=["user"])
 
@@ -115,25 +118,34 @@ async def change_password(
 ) -> dict[str, str]:
     from modulo.auth.passwords import verify_password
 
-    async with session.begin():
-        account = await get_account_by_id(session, current_user.account_id)
-        if account is None:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Account not found")
+    try:
+        async with session.begin():
+            account = await get_account_by_id(session, current_user.account_id)
+            if account is None:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Account not found")
 
-        if not account.password_hash or not verify_password(req.current_password, account.password_hash):
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Current password is incorrect")
+            if not account.password_hash or not verify_password(req.current_password, account.password_hash):
+                raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Current password is incorrect")
 
-        try:
-            validate_password_strength(req.new_password)
-        except ValueError as exc:
-            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from exc
+            try:
+                validate_password_strength(req.new_password)
+            except ValueError as exc:
+                raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from exc
 
-        account.password_hash = hash_password(req.new_password)
-        session.add(account)
+            account.password_hash = hash_password(req.new_password)
+            session.add(account)
 
-        families = await list_families_for_account(session, current_user.account_id)
-        for family in families:
-            await blacklist_family(session, family.family_id)
+            families = await list_families_for_account(session, current_user.account_id)
+            for family in families:
+                try:
+                    await blacklist_family(session, family.family_id)
+                except Exception:
+                    _log.warning("Failed to blacklist token family %s during password change", family.family_id)
+    except ProgrammingError:
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="Feature is not available. Run database migrations to enable it.",
+        ) from None
 
     return {"detail": "Password changed successfully"}
 
