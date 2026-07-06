@@ -11,7 +11,7 @@ import uuid
 
 import pytest
 from sqlalchemy import delete, event, select, text, update
-from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker
+from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 from sqlalchemy.orm import Session as SASession
 
 from modulo.db.rls import (
@@ -321,6 +321,134 @@ async def test_rls_team_isolation_policies_exist(db_engine: AsyncEngine) -> None
     expected = {"pipelines", "stages", "connector_instances", "model_backends", "library_primitives"}
     missing = expected - tables_with_policy
     assert not missing, f"Tables missing rls_team_isolation policy: {sorted(missing)}"
+
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+
+async def _create_org(db_engine: AsyncEngine, name: str) -> uuid.UUID:
+    org_id = uuid.uuid4()
+    async with db_engine.connect() as conn, conn.begin():
+        await conn.execute(
+            text(
+                "INSERT INTO organisations (id, name, slug, settings_json) "
+                "VALUES (:id, :name, :slug, '{}'::json)",
+            ),
+            {
+                "id": str(org_id),
+                "name": name,
+                "slug": f"{name}-{org_id.hex[:8]}",
+            },
+        )
+    return org_id
+
+
+async def _create_account(db_engine: AsyncEngine, email: str) -> uuid.UUID:
+    account_id = uuid.uuid4()
+    async with db_engine.connect() as conn, conn.begin():
+        await conn.execute(
+            text(
+                "INSERT INTO accounts (id, email, display_name, "
+                "auth_provider, active, password_hash) "
+                "VALUES (:id, :email, :name, 'local', true, 'hash')",
+            ),
+            {
+                "id": str(account_id),
+                "email": email,
+                "name": email.split("@", maxsplit=1)[0],
+            },
+        )
+    return account_id
+
+
+async def _set_rls(session: AsyncSession, org_id: uuid.UUID) -> None:
+    await session.execute(
+        text("SELECT set_config('app.organisation_id', :oid, true)"),
+        {"oid": str(org_id)},
+    )
+
+
+# ---------------------------------------------------------------------------
+# Migration 0060 — rls_team_isolation policy correctness after column rename
+# ---------------------------------------------------------------------------
+
+
+async def test_team_memberships_isolated_by_org_rls(
+    db_engine: AsyncEngine,
+) -> None:
+    """Team membership rows are correctly isolated by org-scoped RLS.
+
+    After the users→accounts+org_memberships migration (0074), the
+    rls_org_isolation policy on team_memberships (org-scoped via OrgScoped)
+    must use ``organisation_id`` to prevent cross-org membership leaks.
+    This test creates accounts in different teams within the same org and
+    verifies that membership queries are scoped to the correct team.
+    """
+    from modulo.db.crud.team import create_team
+    from modulo.db.crud.team_membership import add_team_member, list_team_members
+
+    org = await _create_org(db_engine, f"rls-team-membership-{uuid.uuid4().hex[:8]}")
+    account_admin = await _create_account(db_engine, "admin@rls-membership.com")
+    account_a = await _create_account(db_engine, "member-a@rls-membership.com")
+    account_b = await _create_account(db_engine, "member-b@rls-membership.com")
+
+    factory = async_sessionmaker(db_engine, expire_on_commit=False)
+
+    async with factory() as session, session.begin():
+        await _set_rls(session, org)
+        team_a = await create_team(session, org_id=org, name="RLS Team A", account_id=account_admin)
+        await add_team_member(session, org_id=org, team_id=team_a.id, account_id=account_a, role="viewer")
+
+    async with factory() as session, session.begin():
+        await _set_rls(session, org)
+        team_b = await create_team(session, org_id=org, name="RLS Team B", account_id=account_admin)
+        await add_team_member(session, org_id=org, team_id=team_b.id, account_id=account_b, role="operator")
+
+    # Member A should see only Team A's members
+    async with factory() as session, session.begin():
+        await _set_rls(session, org)
+        await session.execute(
+            text("SELECT set_config('app.user_id', :uid, true)"),
+            {"uid": str(account_a)},
+        )
+        await session.execute(
+            text("SELECT set_config('app.org_role', :role, true)"),
+            {"role": "viewer"},
+        )
+        members_a = await list_team_members(session, team_id=team_a.id, page=1, page_size=50)
+        assert len(members_a.items) == 1, "Member A should see exactly 1 member in Team A"
+        assert members_a.items[0].account_id == account_a
+
+    # Member B should see only Team B's members
+    async with factory() as session, session.begin():
+        await _set_rls(session, org)
+        await session.execute(
+            text("SELECT set_config('app.user_id', :uid, true)"),
+            {"uid": str(account_b)},
+        )
+        await session.execute(
+            text("SELECT set_config('app.org_role', :role, true)"),
+            {"role": "operator"},
+        )
+        members_b = await list_team_members(session, team_id=team_b.id, page=1, page_size=50)
+        assert len(members_b.items) == 1, "Member B should see exactly 1 member in Team B"
+        assert members_b.items[0].account_id == account_b
+
+    # Admin sees all members
+    async with factory() as session, session.begin():
+        await _set_rls(session, org)
+        await session.execute(
+            text("SELECT set_config('app.user_id', :uid, true)"),
+            {"uid": str(account_admin)},
+        )
+        await session.execute(
+            text("SELECT set_config('app.org_role', :role, true)"),
+            {"role": "admin"},
+        )
+        members_admin_a = await list_team_members(session, team_id=team_a.id, page=1, page_size=50)
+        assert len(members_admin_a.items) == 1, "Admin should see 1 member in Team A"
 
 
 # ---------------------------------------------------------------------------
