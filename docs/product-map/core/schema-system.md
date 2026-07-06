@@ -132,19 +132,19 @@ CRUD for Schema and SchemaVersion, JSON Schema validation, import, migration, an
 
 ### Known Gaps
 
-- **force=true**: parameter exists but BDD test for force deletion is not yet verified
-- **No PipelineSnapshot schema reference check in deletion protection** (just added)
-- **No LibraryPrimitive schema reference check in deletion protection** (just added)
+- **No `force=true` BDD scenario verified end-to-end** — unit test exists in `test_schema_programming_error.py` but no Gherkin `.feature` scenario
 - **No graph validation warning for deprecated schemas** — no alert when a pipeline uses a deprecated schema
 - **No admin UI listing pipelines pinned to deprecated schemas**
 - **No pre-run compatibility check** between node input/output schemas before pipeline execution
 - **No major/minor semver compatibility enforcement** — schema versions are not checked for breaking changes
 - **No draft version editing** — unpublished versions cannot be edited freely (only "New version" pattern)
-- **No `force=true` BDD scenario verified end-to-end**
 - **No frontend unit tests** for SchemaEditorView or SchemaListView
 - **Unique constraint**: org + schema name enforced at DB level but no graceful duplicate-name error in API
 - **Abstract schemas**: abstract_name field exists but no dedicated endpoint to list or filter by abstract schemas
+- **Pinned-version edit block**: PRD §8.3 specifies that editing an existing version's fields is blocked if the version is pinned by any agent — no enforcement exists yet
+- **Deprecation warning in schema picker**: PRD §8.3 specifies deprecated schema versions should show a deprecation badge in the picker — not yet implemented
 
 ### QA History
 
 - 2026-07-02: Cross-cutting QA — enriched product map from stub to partial, expanded deletion protection to check PipelineSnapshot (schema_pins_json) and LibraryPrimitive (content_json) references, added force=true parameter to delete_schema and delete endpoint, added unit tests for force=true deletion scenario.
+- 2026-07-06: Cross-cutting QA — verified behaviours match code (force delete, deprecation endpoint, ProgrammingError handling on all routes), cleaned up resolved known gaps, added missing PRD gaps (pinned-version edit block, deprecation badge), created website docs stub at `Website/modulo-website/src/docs/schemas/core-schema-system.md`.
