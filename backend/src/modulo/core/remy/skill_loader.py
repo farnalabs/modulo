@@ -79,7 +79,6 @@ class SkillLoader:
             result = await self._session.execute(stmt)
             return [self._to_entry(s) for s in result.scalars().all()]
         except SQLAlchemyError:
-            await self._session.rollback()
             logger.exception("Failed to query skills with filters %s", filters)
             return []
 
@@ -121,8 +120,8 @@ class SkillLoader:
             org = org_result.scalar_one_or_none()
 
             lines = [f"{_SECTION_USER_PROFILE}\n"]
-            lines.append(f"- **Name:** {account.display_name}")
-            lines.append(f"- **Email:** {account.email}")
+            lines.append(f"- **Name:** {account.display_name or '—'}")
+            lines.append(f"- **Email:** {account.email or '—'}")
             if membership:
                 lines.append(f"- **Role:** {membership.role}")
             if org:
@@ -246,10 +245,9 @@ class SkillLoader:
         always_on_user = self._filter_always_on(user_skills)
         self._append_skills_block(parts, always_on_user, _SECTION_USER_SKILLS)
 
-        if include_ui_tools_text:
+        if include_ui_tools_text and self._ui_tools_text_fn:
             try:
-                fn = self._ui_tools_text_fn or build_tool_definitions_for_text
-                tools_text = fn()
+                tools_text = self._ui_tools_text_fn()
             except Exception:
                 logger.exception("Failed to build UI tools text")
                 tools_text = None
@@ -308,8 +306,3 @@ class SkillLoader:
             frontmatter=fm,
             source_mode=skill.source_mode,
         )
-
-
-def build_tool_definitions_for_text() -> str:
-    from modulo.api.ui_tools import build_tool_definitions_for_text as _api_fn
-    return _api_fn()
