@@ -41,6 +41,10 @@ async def get_overdue_claims(
         raise ValueError(f"warning_hours must be non-negative, got {warning_hours}")
     if escalation_hours < 0:
         raise ValueError(f"escalation_hours must be non-negative, got {escalation_hours}")
+    if escalation_hours <= warning_hours:
+        raise ValueError(
+            f"escalation_hours ({escalation_hours}) must exceed warning_hours ({warning_hours})"
+        )
 
     now = datetime.now(UTC)
     warning_cutoff = now - timedelta(hours=warning_hours)
