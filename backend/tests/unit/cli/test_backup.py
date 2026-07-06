@@ -8,17 +8,22 @@ from datetime import UTC, datetime
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
+import shutil
 import pytest
 from click.testing import CliRunner
 
 from modulo.cli.backup import (
     _export_checkpoint_blobs_sync,
+    _export_checkpoint_writes_sync,
+    _export_checkpoints_sync,
     _export_credentials_references_sync,
     _fernet_key_hash,
     _human_size,
     _re_encrypt_credentials_sync,
     _resolve_url,
     _restore_checkpoint_blobs_sync,
+    _restore_checkpoint_writes_sync,
+    _restore_checkpoints_sync,
     _run_pg_dump,
     _run_psql,
     _serialise_for_json,
@@ -189,8 +194,10 @@ class TestWriteJson:
 
 
 class TestRunPgDump:
+    @patch.object(shutil, "which")
     @patch("modulo.cli.backup.subprocess.run")
-    def test_success(self, mock_run: MagicMock, tmp_path: Path) -> None:
+    def test_success(self, mock_run: MagicMock, mock_which: MagicMock, tmp_path: Path) -> None:
+        mock_which.return_value = "pg_dump"
         mock_process = MagicMock()
         mock_process.returncode = 0
         mock_run.return_value = mock_process
@@ -209,8 +216,10 @@ class TestRunPgDump:
         assert output.name in str(mock_run.call_args[1]["stdout"])
         assert mock_run.call_args[1]["timeout"] == 300
 
+    @patch.object(shutil, "which")
     @patch("modulo.cli.backup.subprocess.run")
-    def test_failure_raises_runtime_error(self, mock_run: MagicMock, tmp_path: Path) -> None:
+    def test_failure_raises_runtime_error(self, mock_run: MagicMock, mock_which: MagicMock, tmp_path: Path) -> None:
+        mock_which.return_value = "pg_dump"
         mock_process = MagicMock()
         mock_process.returncode = 1
         mock_process.stderr.decode.return_value = "connection to server failed"
@@ -220,8 +229,10 @@ class TestRunPgDump:
         with pytest.raises(RuntimeError, match="pg_dump failed: connection to server failed"):
             _run_pg_dump("postgresql://user:pass@localhost/db", output)
 
+    @patch.object(shutil, "which")
     @patch("modulo.cli.backup.subprocess.run")
-    def test_custom_timeout(self, mock_run: MagicMock, tmp_path: Path) -> None:
+    def test_custom_timeout(self, mock_run: MagicMock, mock_which: MagicMock, tmp_path: Path) -> None:
+        mock_which.return_value = "pg_dump"
         mock_process = MagicMock()
         mock_process.returncode = 0
         mock_run.return_value = mock_process
@@ -236,8 +247,10 @@ class TestRunPgDump:
 
 
 class TestRunPsql:
+    @patch.object(shutil, "which")
     @patch("modulo.cli.backup.subprocess.run")
-    def test_success(self, mock_run: MagicMock, tmp_path: Path) -> None:
+    def test_success(self, mock_run: MagicMock, mock_which: MagicMock, tmp_path: Path) -> None:
+        mock_which.return_value = "psql"
         mock_process = MagicMock()
         mock_process.returncode = 0
         mock_run.return_value = mock_process
@@ -255,8 +268,10 @@ class TestRunPsql:
         assert "ON_ERROR_STOP=1" in cmd
         assert mock_run.call_args[1]["timeout"] == 600
 
+    @patch.object(shutil, "which")
     @patch("modulo.cli.backup.subprocess.run")
-    def test_failure_raises_runtime_error(self, mock_run: MagicMock, tmp_path: Path) -> None:
+    def test_failure_raises_runtime_error(self, mock_run: MagicMock, mock_which: MagicMock, tmp_path: Path) -> None:
+        mock_which.return_value = "psql"
         mock_process = MagicMock()
         mock_process.returncode = 1
         mock_process.stderr.decode.return_value = "syntax error at line 1"
@@ -268,8 +283,10 @@ class TestRunPsql:
         with pytest.raises(RuntimeError, match="psql restore failed: syntax error at line 1"):
             _run_psql("postgresql://user:pass@localhost/db", input_path)
 
+    @patch.object(shutil, "which")
     @patch("modulo.cli.backup.subprocess.run")
-    def test_custom_timeout(self, mock_run: MagicMock, tmp_path: Path) -> None:
+    def test_custom_timeout(self, mock_run: MagicMock, mock_which: MagicMock, tmp_path: Path) -> None:
+        mock_which.return_value = "psql"
         mock_process = MagicMock()
         mock_process.returncode = 0
         mock_run.return_value = mock_process
@@ -349,6 +366,156 @@ class TestExportCheckpointBlobsSync:
         result = _export_checkpoint_blobs_sync("postgresql://localhost/db")
 
         assert result[0]["blob"] == "abcd"
+
+
+# ── _export_checkpoints_sync ──────────────────────────────────────────────────
+
+
+class TestExportCheckpointsSync:
+    @patch("psycopg.connect")
+    def test_returns_formatted_rows(self, mock_connect: MagicMock) -> None:
+        mock_conn = MagicMock()
+        mock_cur = MagicMock()
+        mock_conn.cursor.return_value.__enter__.return_value = mock_cur
+        mock_connect.return_value.__enter__.return_value = mock_conn
+
+        checkpoint_id = uuid.uuid4()
+        org_id = uuid.UUID("00000000-0000-0000-0000-000000000001")
+        row = {
+            "organisation_id": org_id,
+            "thread_id": "thread-1",
+            "checkpoint_ns": "ns1",
+            "checkpoint_id": str(checkpoint_id),
+            "parent_checkpoint_id": None,
+            "checkpoint": {"configurable": {"temperature": 0.7}},
+            "metadata": {"source": "test"},
+        }
+        mock_cur.__iter__.return_value = [row]
+
+        result = _export_checkpoints_sync("postgresql://localhost/db")
+
+        assert len(result) == 1
+        assert result[0]["organisation_id"] == str(org_id)
+        assert result[0]["thread_id"] == "thread-1"
+        assert result[0]["checkpoint_id"] == str(checkpoint_id)
+        assert result[0]["checkpoint"] == {"configurable": {"temperature": 0.7}}
+        assert result[0]["metadata"] == {"source": "test"}
+
+        mock_connect.assert_called_once()
+        mock_cur.execute.assert_called_once()
+        sql = mock_cur.execute.call_args[0][0]
+        assert "checkpoints" in sql
+        assert "ORDER BY" in sql
+
+    @patch("psycopg.connect")
+    def test_handles_none_organisation_id(self, mock_connect: MagicMock) -> None:
+        mock_conn = MagicMock()
+        mock_cur = MagicMock()
+        mock_conn.cursor.return_value.__enter__.return_value = mock_cur
+        mock_connect.return_value.__enter__.return_value = mock_conn
+
+        row = {
+            "organisation_id": None,
+            "thread_id": "t1",
+            "checkpoint_ns": "ns",
+            "checkpoint_id": "cp1",
+            "parent_checkpoint_id": None,
+            "checkpoint": None,
+            "metadata": None,
+        }
+        mock_cur.__iter__.return_value = [row]
+
+        result = _export_checkpoints_sync("postgresql://localhost/db")
+
+        assert result[0]["organisation_id"] is None
+        assert result[0]["checkpoint"] is None
+
+
+# ── _export_checkpoint_writes_sync ────────────────────────────────────────────
+
+
+class TestExportCheckpointWritesSync:
+    @patch("psycopg.connect")
+    def test_returns_formatted_rows(self, mock_connect: MagicMock) -> None:
+        mock_conn = MagicMock()
+        mock_cur = MagicMock()
+        mock_conn.cursor.return_value.__enter__.return_value = mock_cur
+        mock_connect.return_value.__enter__.return_value = mock_conn
+
+        org_id = uuid.UUID("00000000-0000-0000-0000-000000000001")
+        row = {
+            "organisation_id": org_id,
+            "thread_id": "thread-1",
+            "checkpoint_ns": "ns1",
+            "checkpoint_id": "cp1",
+            "task_id": "task1",
+            "idx": 0,
+            "channel": "default",
+            "type": "json",
+            "blob": b"\xab\xcd",
+        }
+        mock_cur.__iter__.return_value = [row]
+
+        result = _export_checkpoint_writes_sync("postgresql://localhost/db")
+
+        assert len(result) == 1
+        assert result[0]["organisation_id"] == str(org_id)
+        assert result[0]["thread_id"] == "thread-1"
+        assert result[0]["blob"] == "abcd"
+
+        mock_connect.assert_called_once()
+        mock_cur.execute.assert_called_once()
+        sql = mock_cur.execute.call_args[0][0]
+        assert "checkpoint_writes" in sql
+        assert "ORDER BY" in sql
+
+    @patch("psycopg.connect")
+    def test_handles_null_blob(self, mock_connect: MagicMock) -> None:
+        mock_conn = MagicMock()
+        mock_cur = MagicMock()
+        mock_conn.cursor.return_value.__enter__.return_value = mock_cur
+        mock_connect.return_value.__enter__.return_value = mock_conn
+
+        row = {
+            "organisation_id": None,
+            "thread_id": "t1",
+            "checkpoint_ns": "ns",
+            "checkpoint_id": "cp1",
+            "task_id": "task1",
+            "idx": 0,
+            "channel": "default",
+            "type": "json",
+            "blob": None,
+        }
+        mock_cur.__iter__.return_value = [row]
+
+        result = _export_checkpoint_writes_sync("postgresql://localhost/db")
+
+        assert result[0]["blob"] is None
+
+    @patch("psycopg.connect")
+    def test_handles_memoryview_blob(self, mock_connect: MagicMock) -> None:
+        mock_conn = MagicMock()
+        mock_cur = MagicMock()
+        mock_conn.cursor.return_value.__enter__.return_value = mock_cur
+        mock_connect.return_value.__enter__.return_value = mock_conn
+
+        row = {
+            "organisation_id": None,
+            "thread_id": "t1",
+            "checkpoint_ns": "ns",
+            "checkpoint_id": "cp1",
+            "task_id": "task1",
+            "idx": 0,
+            "channel": "default",
+            "type": "json",
+            "blob": memoryview(b"\xca\xfe"),
+        }
+        mock_cur.__iter__.return_value = [row]
+
+        result = _export_checkpoint_writes_sync("postgresql://localhost/db")
+
+        assert result[0]["blob"] == "cafe"
 
 
 # ── _export_credentials_references_sync ───────────────────────────────────────
@@ -461,7 +628,7 @@ class TestRestoreCheckpointBlobsSync:
         result = _restore_checkpoint_blobs_sync("postgresql://localhost/db", blobs)
 
         assert result == 1
-        mock_cur.execute.assert_any_call("TRUNCATE TABLE checkpoint_blobs")
+        mock_cur.execute.assert_any_call("TRUNCATE TABLE checkpoint_blobs CASCADE")
         insert_call = mock_cur.execute.call_args_list[1]
         assert "INSERT INTO checkpoint_blobs" in insert_call[0][0]
         mock_conn.commit.assert_called_once()
@@ -533,6 +700,145 @@ class TestRestoreCheckpointBlobsSync:
 
         assert result == 3
         assert mock_cur.execute.call_count == 4  # 1 TRUNCATE + 3 INSERT
+
+
+# ── _restore_checkpoints_sync ─────────────────────────────────────────────────
+
+
+class TestRestoreCheckpointsSync:
+    @patch("psycopg.connect")
+    def test_truncates_and_inserts(self, mock_connect: MagicMock) -> None:
+        mock_conn = MagicMock()
+        mock_cur = MagicMock()
+        mock_conn.cursor.return_value.__enter__.return_value = mock_cur
+        mock_connect.return_value.__enter__.return_value = mock_conn
+
+        checkpoints = [
+            {
+                "organisation_id": "00000000-0000-0000-0000-000000000001",
+                "thread_id": "t1",
+                "checkpoint_ns": "ns",
+                "checkpoint_id": "cp1",
+                "parent_checkpoint_id": None,
+                "checkpoint": {"key": "val"},
+                "metadata": {"src": "test"},
+            },
+        ]
+
+        result = _restore_checkpoints_sync("postgresql://localhost/db", checkpoints)
+
+        assert result == 1
+        mock_cur.execute.assert_any_call("TRUNCATE TABLE checkpoints CASCADE")
+        insert_call = mock_cur.execute.call_args_list[1]
+        assert "INSERT INTO checkpoints" in insert_call[0][0]
+        mock_conn.commit.assert_called_once()
+
+    @patch("psycopg.connect")
+    def test_handles_null_org_id(self, mock_connect: MagicMock) -> None:
+        mock_conn = MagicMock()
+        mock_cur = MagicMock()
+        mock_conn.cursor.return_value.__enter__.return_value = mock_cur
+        mock_connect.return_value.__enter__.return_value = mock_conn
+
+        checkpoints = [
+            {
+                "organisation_id": None,
+                "thread_id": "t1",
+                "checkpoint_ns": "ns",
+                "checkpoint_id": "cp1",
+                "parent_checkpoint_id": None,
+                "checkpoint": None,
+                "metadata": None,
+            },
+        ]
+
+        result = _restore_checkpoints_sync("postgresql://localhost/db", checkpoints)
+
+        assert result == 1
+        insert_call = mock_cur.execute.call_args_list[1]
+        params = insert_call[0][1]
+        assert params[0] is None
+
+    @patch("psycopg.connect")
+    def test_returns_count(self, mock_connect: MagicMock) -> None:
+        mock_conn = MagicMock()
+        mock_cur = MagicMock()
+        mock_conn.cursor.return_value.__enter__.return_value = mock_cur
+        mock_connect.return_value.__enter__.return_value = mock_conn
+
+        checkpoints = [
+            {"organisation_id": None, "thread_id": "t1", "checkpoint_ns": "ns", "checkpoint_id": "cp1",
+             "parent_checkpoint_id": None, "checkpoint": None, "metadata": None},
+            {"organisation_id": None, "thread_id": "t2", "checkpoint_ns": "ns", "checkpoint_id": "cp2",
+             "parent_checkpoint_id": None, "checkpoint": None, "metadata": None},
+        ]
+
+        result = _restore_checkpoints_sync("postgresql://localhost/db", checkpoints)
+
+        assert result == 2
+        assert mock_cur.execute.call_count == 3  # 1 TRUNCATE + 2 INSERT
+
+
+# ── _restore_checkpoint_writes_sync ───────────────────────────────────────────
+
+
+class TestRestoreCheckpointWritesSync:
+    @patch("psycopg.connect")
+    def test_truncates_and_inserts(self, mock_connect: MagicMock) -> None:
+        mock_conn = MagicMock()
+        mock_cur = MagicMock()
+        mock_conn.cursor.return_value.__enter__.return_value = mock_cur
+        mock_connect.return_value.__enter__.return_value = mock_conn
+
+        writes = [
+            {
+                "organisation_id": "00000000-0000-0000-0000-000000000001",
+                "thread_id": "t1",
+                "checkpoint_ns": "ns",
+                "checkpoint_id": "cp1",
+                "task_id": "task1",
+                "idx": 0,
+                "channel": "ch",
+                "type": "json",
+                "blob": "abcd",
+            },
+        ]
+
+        result = _restore_checkpoint_writes_sync("postgresql://localhost/db", writes)
+
+        assert result == 1
+        mock_cur.execute.assert_any_call("TRUNCATE TABLE checkpoint_writes CASCADE")
+        insert_call = mock_cur.execute.call_args_list[1]
+        assert "INSERT INTO checkpoint_writes" in insert_call[0][0]
+        mock_conn.commit.assert_called_once()
+
+    @patch("psycopg.connect")
+    def test_handles_null_blob(self, mock_connect: MagicMock) -> None:
+        mock_conn = MagicMock()
+        mock_cur = MagicMock()
+        mock_conn.cursor.return_value.__enter__.return_value = mock_cur
+        mock_connect.return_value.__enter__.return_value = mock_conn
+
+        writes = [
+            {
+                "organisation_id": "00000000-0000-0000-0000-000000000001",
+                "thread_id": "t1",
+                "checkpoint_ns": "ns",
+                "checkpoint_id": "cp1",
+                "task_id": "task1",
+                "idx": 0,
+                "channel": "ch",
+                "type": "json",
+                "blob": None,
+            },
+        ]
+
+        result = _restore_checkpoint_writes_sync("postgresql://localhost/db", writes)
+
+        assert result == 1
+        insert_call = mock_cur.execute.call_args_list[1]
+        params = insert_call[0][1]
+        assert params[-1] is None
 
 
 # ── _re_encrypt_credentials_sync ──────────────────────────────────────────────
@@ -651,6 +957,8 @@ class TestReEncryptCredentialsSync:
 
 class TestBackupCli:
     @patch("modulo.cli.backup._print_size")
+    @patch("modulo.cli.backup._export_checkpoint_writes_sync")
+    @patch("modulo.cli.backup._export_checkpoints_sync")
     @patch("modulo.cli.backup._export_credentials_references_sync")
     @patch("modulo.cli.backup._export_checkpoint_blobs_sync")
     @patch("modulo.cli.backup._run_pg_dump")
@@ -665,6 +973,8 @@ class TestBackupCli:
         mock_pg_dump: MagicMock,
         mock_export_blobs: MagicMock,
         mock_export_creds: MagicMock,
+        mock_export_cp: MagicMock,
+        mock_export_cw: MagicMock,
         mock_print_size: MagicMock,
         tmp_path: Path,
     ) -> None:
@@ -673,6 +983,8 @@ class TestBackupCli:
         mock_get_schema_versions.return_value = ["abc123def456"]
         mock_export_blobs.return_value = []
         mock_export_creds.return_value = {"connector_instances": [], "model_backends": []}
+        mock_export_cp.return_value = []
+        mock_export_cw.return_value = []
 
         runner = CliRunner()
         backup_dir = tmp_path / "mybackup"
@@ -687,9 +999,13 @@ class TestBackupCli:
         mock_pg_dump.assert_called_once()
         mock_export_blobs.assert_called_once()
         mock_export_creds.assert_called_once()
+        mock_export_cp.assert_called_once()
+        mock_export_cw.assert_called_once()
         mock_print_size.assert_called_once()
 
     @patch("modulo.cli.backup._print_size")
+    @patch("modulo.cli.backup._export_checkpoint_writes_sync")
+    @patch("modulo.cli.backup._export_checkpoints_sync")
     @patch("modulo.cli.backup._export_credentials_references_sync")
     @patch("modulo.cli.backup._export_checkpoint_blobs_sync")
     @patch("modulo.cli.backup._run_pg_dump")
@@ -704,6 +1020,8 @@ class TestBackupCli:
         mock_pg_dump: MagicMock,
         mock_export_blobs: MagicMock,
         mock_export_creds: MagicMock,
+        mock_export_cp: MagicMock,
+        mock_export_cw: MagicMock,
         mock_print_size: MagicMock,
         tmp_path: Path,
     ) -> None:
@@ -713,6 +1031,8 @@ class TestBackupCli:
         mock_get_schema_versions.return_value = ["rev123"]
         mock_export_blobs.return_value = []
         mock_export_creds.return_value = {"connector_instances": [], "model_backends": []}
+        mock_export_cp.return_value = []
+        mock_export_cw.return_value = []
 
         runner = CliRunner()
         backup_dir = tmp_path / "backup"
@@ -741,6 +1061,8 @@ class TestBackupCli:
         assert isinstance(result.exception, SystemExit)
 
     @patch("modulo.cli.backup._print_size")
+    @patch("modulo.cli.backup._export_checkpoint_writes_sync")
+    @patch("modulo.cli.backup._export_checkpoints_sync")
     @patch("modulo.cli.backup._export_credentials_references_sync")
     @patch("modulo.cli.backup._export_checkpoint_blobs_sync")
     @patch("modulo.cli.backup._run_pg_dump")
@@ -755,6 +1077,8 @@ class TestBackupCli:
         mock_pg_dump: MagicMock,
         mock_export_blobs: MagicMock,
         mock_export_creds: MagicMock,
+        mock_export_cp: MagicMock,
+        mock_export_cw: MagicMock,
         mock_print_size: MagicMock,
         tmp_path: Path,
     ) -> None:
@@ -786,6 +1110,8 @@ class TestBackupCli:
         }
         mock_export_blobs.return_value = sample_blobs
         mock_export_creds.return_value = sample_creds
+        mock_export_cp.return_value = []
+        mock_export_cw.return_value = []
 
         runner = CliRunner()
         backup_dir = tmp_path / "backup"
@@ -803,6 +1129,8 @@ class TestBackupCli:
         assert len(loaded_creds["connector_instances"]) == 1
 
     @patch("modulo.cli.backup._print_size")
+    @patch("modulo.cli.backup._export_checkpoint_writes_sync")
+    @patch("modulo.cli.backup._export_checkpoints_sync")
     @patch("modulo.cli.backup._export_credentials_references_sync")
     @patch("modulo.cli.backup._export_checkpoint_blobs_sync")
     @patch("modulo.cli.backup._run_pg_dump")
@@ -817,6 +1145,8 @@ class TestBackupCli:
         mock_pg_dump: MagicMock,
         mock_export_blobs: MagicMock,
         mock_export_creds: MagicMock,
+        mock_export_cp: MagicMock,
+        mock_export_cw: MagicMock,
         mock_print_size: MagicMock,
         tmp_path: Path,
     ) -> None:
@@ -825,6 +1155,8 @@ class TestBackupCli:
         mock_get_schema_versions.return_value = ["rev1"]
         mock_export_blobs.return_value = []
         mock_export_creds.return_value = {"connector_instances": [], "model_backends": []}
+        mock_export_cp.return_value = []
+        mock_export_cw.return_value = []
 
         runner = CliRunner()
         backup_dir = tmp_path / "backup"
@@ -850,6 +1182,8 @@ class TestBackupCli:
 
 
 class TestRestoreCli:
+    @patch("modulo.cli.backup._restore_checkpoint_writes_sync")
+    @patch("modulo.cli.backup._restore_checkpoints_sync")
     @patch("modulo.cli.backup._re_encrypt_credentials_sync")
     @patch("modulo.cli.backup._restore_checkpoint_blobs_sync")
     @patch("modulo.cli.backup._run_psql")
@@ -860,11 +1194,15 @@ class TestRestoreCli:
         mock_psql: MagicMock,
         mock_restore_blobs: MagicMock,
         mock_re_encrypt: MagicMock,
+        mock_restore_cp: MagicMock,
+        mock_restore_cw: MagicMock,
         tmp_path: Path,
     ) -> None:
         fernet_key = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
         mock_settings.return_value.fernet_key = fernet_key
         mock_restore_blobs.return_value = 5
+        mock_restore_cp.return_value = 3
+        mock_restore_cw.return_value = 7
         mock_re_encrypt.return_value = {}
 
         manifest = {
@@ -877,6 +1215,8 @@ class TestRestoreCli:
         (tmp_path / "backup-info.json").write_text(json.dumps(manifest), encoding="utf-8")
         (tmp_path / "database.sql").write_text("-- SQL dump", encoding="utf-8")
         (tmp_path / "checkpoint_blobs.json").write_text("[]", encoding="utf-8")
+        (tmp_path / "checkpoints.json").write_text("[]", encoding="utf-8")
+        (tmp_path / "checkpoint_writes.json").write_text("[]", encoding="utf-8")
         (tmp_path / "credentials_references.json").write_text(
             '{"connector_instances": [], "model_backends": []}', encoding="utf-8"
         )
@@ -891,6 +1231,8 @@ class TestRestoreCli:
 
         mock_psql.assert_called_once()
         mock_restore_blobs.assert_called_once()
+        mock_restore_cp.assert_called_once()
+        mock_restore_cw.assert_called_once()
         mock_re_encrypt.assert_not_called()
 
     def test_restore_missing_manifest(self, tmp_path: Path) -> None:
@@ -900,6 +1242,8 @@ class TestRestoreCli:
         assert result.exit_code != 0
         assert "backup-info.json not found" in result.output
 
+    @patch("modulo.cli.backup._restore_checkpoint_writes_sync")
+    @patch("modulo.cli.backup._restore_checkpoints_sync")
     @patch("modulo.cli.backup._re_encrypt_credentials_sync")
     @patch("modulo.cli.backup._restore_checkpoint_blobs_sync")
     @patch("modulo.cli.backup._run_psql")
@@ -910,6 +1254,8 @@ class TestRestoreCli:
         mock_psql: MagicMock,
         mock_restore_blobs: MagicMock,
         mock_re_encrypt: MagicMock,
+        mock_restore_cp: MagicMock,
+        mock_restore_cw: MagicMock,
         tmp_path: Path,
     ) -> None:
         fernet_key = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
@@ -933,6 +1279,8 @@ class TestRestoreCli:
         assert "No database.sql found" in result.output
         mock_psql.assert_not_called()
 
+    @patch("modulo.cli.backup._restore_checkpoint_writes_sync")
+    @patch("modulo.cli.backup._restore_checkpoints_sync")
     @patch("modulo.cli.backup._re_encrypt_credentials_sync")
     @patch("modulo.cli.backup._restore_checkpoint_blobs_sync")
     @patch("modulo.cli.backup._run_psql")
@@ -943,12 +1291,16 @@ class TestRestoreCli:
         mock_psql: MagicMock,
         mock_restore_blobs: MagicMock,
         mock_re_encrypt: MagicMock,
+        mock_restore_cp: MagicMock,
+        mock_restore_cw: MagicMock,
         tmp_path: Path,
     ) -> None:
         new_fernet_key = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
         old_fernet_key = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
         mock_settings.return_value.fernet_key = new_fernet_key
         mock_restore_blobs.return_value = 0
+        mock_restore_cp.return_value = 0
+        mock_restore_cw.return_value = 0
 
         manifest = {
             "timestamp": "2024-01-01T00:00:00+00:00",
@@ -959,6 +1311,8 @@ class TestRestoreCli:
         }
         (tmp_path / "backup-info.json").write_text(json.dumps(manifest), encoding="utf-8")
         (tmp_path / "database.sql").write_text("-- SQL", encoding="utf-8")
+        (tmp_path / "checkpoints.json").write_text("[]", encoding="utf-8")
+        (tmp_path / "checkpoint_writes.json").write_text("[]", encoding="utf-8")
         (tmp_path / "credentials_references.json").write_text('{"connector_instances": []}', encoding="utf-8")
 
         runner = CliRunner()
@@ -967,6 +1321,8 @@ class TestRestoreCli:
         assert result.exit_code != 0
         assert "--previous-fernet-key" in result.output
 
+    @patch("modulo.cli.backup._restore_checkpoint_writes_sync")
+    @patch("modulo.cli.backup._restore_checkpoints_sync")
     @patch("modulo.cli.backup._re_encrypt_credentials_sync")
     @patch("modulo.cli.backup._restore_checkpoint_blobs_sync")
     @patch("modulo.cli.backup._run_psql")
@@ -977,12 +1333,16 @@ class TestRestoreCli:
         mock_psql: MagicMock,
         mock_restore_blobs: MagicMock,
         mock_re_encrypt: MagicMock,
+        mock_restore_cp: MagicMock,
+        mock_restore_cw: MagicMock,
         tmp_path: Path,
     ) -> None:
         new_fernet_key = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
         old_fernet_key = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
         mock_settings.return_value.fernet_key = new_fernet_key
         mock_restore_blobs.return_value = 0
+        mock_restore_cp.return_value = 0
+        mock_restore_cw.return_value = 0
         mock_re_encrypt.return_value = {"connector_instances": 2, "model_backends": 1}
 
         manifest = {
@@ -994,6 +1354,8 @@ class TestRestoreCli:
         }
         (tmp_path / "backup-info.json").write_text(json.dumps(manifest), encoding="utf-8")
         (tmp_path / "database.sql").write_text("-- SQL", encoding="utf-8")
+        (tmp_path / "checkpoints.json").write_text("[]", encoding="utf-8")
+        (tmp_path / "checkpoint_writes.json").write_text("[]", encoding="utf-8")
         (tmp_path / "credentials_references.json").write_text(
             '{"connector_instances": [], "model_backends": []}', encoding="utf-8"
         )
@@ -1019,6 +1381,8 @@ class TestRestoreCli:
         assert args[2] == old_fernet_key  # previous ferret key
         assert args[3] == new_fernet_key  # current ferret key
 
+    @patch("modulo.cli.backup._restore_checkpoint_writes_sync")
+    @patch("modulo.cli.backup._restore_checkpoints_sync")
     @patch("modulo.cli.backup._re_encrypt_credentials_sync")
     @patch("modulo.cli.backup._restore_checkpoint_blobs_sync")
     @patch("modulo.cli.backup._run_psql")
@@ -1029,11 +1393,15 @@ class TestRestoreCli:
         mock_psql: MagicMock,
         mock_restore_blobs: MagicMock,
         mock_re_encrypt: MagicMock,
+        mock_restore_cp: MagicMock,
+        mock_restore_cw: MagicMock,
         tmp_path: Path,
     ) -> None:
         fernet_key = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
         mock_settings.return_value.fernet_key = fernet_key
         mock_restore_blobs.return_value = 0
+        mock_restore_cp.return_value = 0
+        mock_restore_cw.return_value = 0
 
         manifest = {
             "timestamp": "2024-01-01T00:00:00+00:00",
@@ -1044,6 +1412,8 @@ class TestRestoreCli:
         }
         (tmp_path / "backup-info.json").write_text(json.dumps(manifest), encoding="utf-8")
         (tmp_path / "database.sql").write_text("-- SQL", encoding="utf-8")
+        (tmp_path / "checkpoints.json").write_text("[]", encoding="utf-8")
+        (tmp_path / "checkpoint_writes.json").write_text("[]", encoding="utf-8")
         (tmp_path / "credentials_references.json").write_text('{"connector_instances": []}', encoding="utf-8")
 
         runner = CliRunner()
@@ -1053,6 +1423,8 @@ class TestRestoreCli:
         assert "FERNET_KEY unchanged" in result.output
         mock_re_encrypt.assert_not_called()
 
+    @patch("modulo.cli.backup._restore_checkpoint_writes_sync")
+    @patch("modulo.cli.backup._restore_checkpoints_sync")
     @patch("modulo.cli.backup._re_encrypt_credentials_sync")
     @patch("modulo.cli.backup._restore_checkpoint_blobs_sync")
     @patch("modulo.cli.backup._run_psql")
@@ -1063,11 +1435,15 @@ class TestRestoreCli:
         mock_psql: MagicMock,
         mock_restore_blobs: MagicMock,
         mock_re_encrypt: MagicMock,
+        mock_restore_cp: MagicMock,
+        mock_restore_cw: MagicMock,
         tmp_path: Path,
     ) -> None:
         fernet_key = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
         mock_settings.return_value.fernet_key = fernet_key
         mock_restore_blobs.return_value = 0
+        mock_restore_cp.return_value = 0
+        mock_restore_cw.return_value = 0
 
         manifest = {
             "timestamp": "2024-01-01T00:00:00+00:00",
@@ -1078,6 +1454,8 @@ class TestRestoreCli:
         }
         (tmp_path / "backup-info.json").write_text(json.dumps(manifest), encoding="utf-8")
         (tmp_path / "database.sql").write_text("-- SQL", encoding="utf-8")
+        (tmp_path / "checkpoints.json").write_text("[]", encoding="utf-8")
+        (tmp_path / "checkpoint_writes.json").write_text("[]", encoding="utf-8")
 
         runner = CliRunner()
         result = runner.invoke(cli, ["restore", str(tmp_path)], input="y\n")
@@ -1098,6 +1476,8 @@ class TestRestoreCli:
 
         assert result.exit_code != 0
 
+    @patch("modulo.cli.backup._restore_checkpoint_writes_sync")
+    @patch("modulo.cli.backup._restore_checkpoints_sync")
     @patch("modulo.cli.backup._re_encrypt_credentials_sync")
     @patch("modulo.cli.backup._restore_checkpoint_blobs_sync")
     @patch("modulo.cli.backup._run_psql")
@@ -1108,12 +1488,16 @@ class TestRestoreCli:
         mock_psql: MagicMock,
         mock_restore_blobs: MagicMock,
         mock_re_encrypt: MagicMock,
+        mock_restore_cp: MagicMock,
+        mock_restore_cw: MagicMock,
         tmp_path: Path,
     ) -> None:
         new_fernet_key = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
         old_fernet_key = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
         mock_settings.return_value.fernet_key = new_fernet_key
         mock_restore_blobs.return_value = 0
+        mock_restore_cp.return_value = 0
+        mock_restore_cw.return_value = 0
 
         manifest = {
             "timestamp": "2024-01-01T00:00:00+00:00",
@@ -1124,6 +1508,8 @@ class TestRestoreCli:
         }
         (tmp_path / "backup-info.json").write_text(json.dumps(manifest), encoding="utf-8")
         (tmp_path / "database.sql").write_text("-- SQL", encoding="utf-8")
+        (tmp_path / "checkpoints.json").write_text("[]", encoding="utf-8")
+        (tmp_path / "checkpoint_writes.json").write_text("[]", encoding="utf-8")
 
         runner = CliRunner()
         result = runner.invoke(
