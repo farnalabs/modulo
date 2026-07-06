@@ -124,8 +124,7 @@ def _serialise_row(row: Any) -> dict[str, Any]:
     cols: dict[str, Any] = {}
     for c in row.__table__.columns:
         val = getattr(row, c.name)
-        if val is not None:
-            cols[c.name] = _serialise(val)
+        cols[c.name] = _serialise(val) if val is not None else None
     return cols
 
 
@@ -401,7 +400,7 @@ def cmd_export(args: argparse.Namespace) -> None:
     bundle = asyncio.run(_do_export(org_id, output))
     _write_bundle(bundle, output, force=force)
 
-    total = sum(len(v) for k, v in bundle.items() if isinstance(v, list))
+    _ = sum(len(v) for k, v in bundle.items() if isinstance(v, list))
 
 
 def cmd_import(args: argparse.Namespace) -> None:
@@ -410,9 +409,9 @@ def cmd_import(args: argparse.Namespace) -> None:
     strategy: ConflictStrategy = args.conflict
 
     bundle = _load_bundle(input_path)
-    total_loaded = sum(len(v) for k, v in bundle.items() if isinstance(v, list))
+    _ = sum(len(v) for k, v in bundle.items() if isinstance(v, list))
 
-    counts = asyncio.run(_do_import(bundle, org_id, strategy))
+    asyncio.run(_do_import(bundle, org_id, strategy))
 
 
 def main(argv: list[str] | None = None) -> None:
