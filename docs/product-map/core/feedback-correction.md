@@ -69,7 +69,7 @@ Correction run spawning, linking, and post-correction evaluation for the Feedbac
 ### Edge cases
 
 - [x] Error with empty correction_run payload (missing producing_node_id, rejection_reason)
-- [ ] Double-correction: submitting a second correction for same record returns error or idempotent?
+- [x] Double-correction: link_correction_run raises ConcurrentModificationError on re-link
 - [ ] Correction run fails to start — linking stays in "correcting" status
 - [ ] Post-correction eval fails — correction run succeeded, eval is missing
 
@@ -85,11 +85,22 @@ Correction run spawning, linking, and post-correction evaluation for the Feedbac
 - [x] Invalid review action returns 422
 - [x] Double-correction guard — link_correction_run allows re-linking with concurrent-status check
 - [x] Feedback with no run_id rejects create_correction_run with 422
-- [ ] Eval engine failure during post-correction eval — error propagates or falls back?
+- [x] Eval engine failure during post-correction eval — error caught, record escalated, returns structured error dict
+
+### Resilience
+
+- [x] Correction run with no output — escalated to human review with structured error response
+- [x] Eval engine failure in run_post_correction_eval — caught, logged, record escalated, caller receives structured fallback
+- [x] ConcurrentModificationError on status transition — retry-safe, expected/actual status logged
+- [x] RLS setup failure — logged with org_id and method name, re-raised
+- [x] Empty eval_suite during gap detection — logged warning, true returned (assumes gap)
+- [x] Malformed eval_def in gap detection — logged warning, skipped gracefully
+- [x] Correction run on feedback with no run_id — rejected with 422 before DB access
+- [x] All 9 API routes wrapped in except ProgrammingError for migrations-not-run safety
 
 ## QA History (index 75 — cross-cutting)
 
-### Findings fixed
+### Findings fixed (index 75)
 - Added ProgrammingError→501 catch to all 9 feedback API route handlers
 - Added 9 unit tests for ProgrammingError handling (test_feedback_programming_error.py)
 - Updated frontmatter: unit-tests populated with 4 real test file refs
@@ -97,10 +108,17 @@ Correction run spawning, linking, and post-correction evaluation for the Feedbac
 - Added Error Handling section with 8 behaviour checkboxes
 - Added feedback-routing.md dependency noted as stub gap
 
+### Findings fixed (index 76 — cross-cutting verification)
+- Verified all 9 ProgrammingError→501 catches present in feedback.py (confirmed from code)
+- Checked eval engine failure item: code catches Exception in run_post_correction_eval, escalates record, returns structured dict — marked [x]
+- Checked double-correction guard: link_correction_run raises ConcurrentModificationError — marked [x], removed stale Known Gap
+- Added Resilience section with 8 verified behaviour checkboxes
+- Created website docs stub at feedback/correction.md
+- Known Gap "No guard against double-correction" removed (now guarded)
+
 ## Known Gaps
 
 - No BDD feature files for the correction error paths — only happy-path BDD scenarios exist
 - No integration test for full correction lifecycle: reject → spawn → run → eval → resolve
-- No guard against double-correction on same feedback record
 - No frontend UI for viewing correction runs linked to a feedback record
 - Correction run checkpoint pre-seeding is not implemented
