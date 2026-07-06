@@ -1,6 +1,7 @@
 export type { EventBusEvent, ResourceType } from './events'
-export type { ChatSession, ChatMessage, PageContext, SkillItem, UserSkill, ContextSourceItem, ContextSourceUpdate, ContextSourceMode } from './remy'
+export type { ChatSession, ChatMessage, PageContext, SkillBase, SkillItem, UserSkill, ContextSourceItem, ContextSourceUpdate, ContextSourceMode } from './remy'
 export type {
+  TargetInjection,
   ParameterPortType, ParameterPort,
-  SchemaField, CompositeDefinition, PipelineNodeCompositeData,
+  SchemaField, CompositeDefinition,
 } from './pipeline'
