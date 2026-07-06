@@ -52,7 +52,7 @@ Redis-backed sliding window and in-memory token bucket rate limiting for POST/PU
 - [x] Redis-backed sliding window (ZADD + ZREMRANGEBYSCORE) as primary
 - [x] In-memory token bucket fallback when Redis unavailable
 - [x] Startup warning logged when running in-memory mode
-- [x] Rate limiting disabled entirely in SQLite mode (in-memory only, no Redis connection)
+- [ ] Rate limiting uses in-memory token bucket in SQLite mode (no Redis — per-process counters only)
 - [x] Rate limit rules configurable at runtime via `PUT /api/v1/admin/rate-limits`
 - [x] Only admin users can read/update rate limit rules
 - [x] Bypass token (`MODULO_RATELIMIT_BYPASS_TOKEN`) skips rate limiting
@@ -115,6 +115,7 @@ Redis-backed sliding window and in-memory token bucket rate limiting for POST/PU
 - [x] Counter resets after successful login (AuthRateLimiter.record_success)
 - [x] In-memory fallback when Redis unavailable (get_auth_rate_limiter lines 203-204)
 - [x] Configurable via modulo_auth_max_attempts, modulo_auth_window_seconds settings
+- [x] Disabling via `modulo_auth_rate_limit_enabled=False` skips rate limiting entirely (get_auth_rate_limiter returns None)
 
 ## Known Gaps
 - BDD feature file at `backend/tests/bdd/features/model_backends/rate_limiting.feature` — 11 real scenarios written covering PRD §7.18 endpoints. Step definition path was fixed in this QA iteration (2026-07-04: path mismatch resolved, step definitions now load correctly).
@@ -122,8 +123,8 @@ Redis-backed sliding window and in-memory token bucket rate limiting for POST/PU
 - No integration/E2E test that exercises Redis sliding window against a real Redis
 - MCP-specific rate limit rules (`trigger_pipeline` vs general MCP calls) are not differentiated in middleware — all `/mcp` paths share 200 req/min rule (trigger_pipeline has a separate 60/min limit at the application level in `mcp_server.py`)
 - HITL review rate limit (20/min per PRD §7.18) is not enforced as a separate rule — `/api/v1/runs` catch-all covers HITL paths at 60/min instead of the specified 20/min
-- Auth rate limiting (§6.10) has no unit tests for AuthRateLimiter or AuthRateLimitMiddleware classes directly.
 
 ## QA History
 - 2026-07-04: Cross-cutting QA (index 153). Fixed 2 pre-existing test bugs (response format mismatch with ProblemDetail RFC 9457). Fixed BDD step definitions path. Marked 9 stale [ ]→[x] behaviour checkboxes. Added Error Handling section (7 checkboxes). Added Auth Rate Limiting section (5 checkboxes). Consolidated duplicate Known Gaps. All 59 tests pass.
 - 2026-07-05: QA-iterate (prodmap auth). Fixed TokenBucket `rate`/`burst` computation to use configured params instead of hardcoded defaults. Moved FIXED item from Known Gaps to QA History.
+- 2026-07-08: Cross-cutting QA (index 257). Fixed CRITICAL — `get_auth_rate_limiter` created an in-memory limiter when `modulo_auth_rate_limit_enabled=False` instead of disabling rate limiting entirely. Fixed CRITICAL — `_client_key()` had a None `.host` access path when `request.client` is truthy but `host` is None. Fixed MAJOR — product map incorrectly claimed "Rate limiting disabled entirely in SQLite mode" (code uses in-memory fallback, not disabled). Created `test_auth_rate_limiter.py` with 10 unit tests covering AuthRateLimiter disabled-flag behavior, AuthRateLimitMiddleware None-handler dispatch, and `_client_key` None-host edge case. Fixed 1 known gap removed from Known Gaps (auth rate limiter test coverage now exists).

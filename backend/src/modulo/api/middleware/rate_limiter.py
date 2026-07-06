@@ -159,7 +159,12 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
 
         # 3. Fallback to IP-based keying
         forwarded = request.headers.get("X-Forwarded-For", "")
-        ip = forwarded.split(",")[0].strip() if forwarded else request.client.host if request.client else "unknown"
+        if forwarded:
+            ip = forwarded.split(",")[0].strip()
+        elif request.client and request.client.host:
+            ip = request.client.host
+        else:
+            ip = "unknown"
         return f"ip:{ip}:{path}"
 
 
@@ -170,8 +175,12 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
 _auth_rate_limiter: AuthRateLimiterCls | None = None
 
 
-def get_auth_rate_limiter(settings: Settings | None = None) -> AuthRateLimiterCls:
-    """Return the singleton auth rate limiter, creating it if necessary."""
+def get_auth_rate_limiter(settings: Settings | None = None) -> AuthRateLimiterCls | None:
+    """Return the singleton auth rate limiter, creating it if necessary.
+
+    Returns None when ``modulo_auth_rate_limit_enabled`` is False —
+    callers should skip rate limiting entirely.
+    """
     global _auth_rate_limiter
     if _auth_rate_limiter is not None:
         return _auth_rate_limiter
@@ -181,12 +190,8 @@ def get_auth_rate_limiter(settings: Settings | None = None) -> AuthRateLimiterCl
     window_s = resolved.modulo_auth_window_seconds
 
     if not resolved.modulo_auth_rate_limit_enabled:
-        _auth_rate_limiter = AuthRateLimiterCls(
-            redis_client=None,
-            max_attempts=max_attempts,
-            window_s=window_s,
-        )
-        return _auth_rate_limiter
+        _auth_rate_limiter = None
+        return None
 
     if resolved.redis_url:
         try:
@@ -233,6 +238,9 @@ class AuthRateLimitMiddleware(BaseHTTPMiddleware):
         if not self._should_rate_limit(request):
             return await call_next(request)
 
+        if self._rate_limiter is None:
+            return await call_next(request)
+
         ip = self._client_ip(request)
         allowed, retry_after = await self._rate_limiter.check_login(ip)
         if not allowed:
@@ -257,7 +265,7 @@ class AuthRateLimitMiddleware(BaseHTTPMiddleware):
         forwarded = request.headers.get("X-Forwarded-For", "")
         if forwarded:
             return forwarded.split(",")[0].strip()
-        if request.client:
+        if request.client and request.client.host:
             return request.client.host
         return "unknown"
 
