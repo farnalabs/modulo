@@ -20,6 +20,18 @@
       </div>
       <div class="flex items-center gap-1">
         <button
+          v-if="store.activeSessionId && store.messages.length > 0"
+          class="remy-titlebar-btn"
+          @click="exportTranscript"
+          title="Export Transcript"
+        >
+          <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+            <polyline points="7 10 12 15 17 10" />
+            <line x1="12" y1="15" x2="12" y2="3" />
+          </svg>
+        </button>
+        <button
           v-if="store.activeSessionId"
           class="remy-titlebar-btn"
           @click="store.resetSessionPermissions()"
@@ -54,6 +66,18 @@
           >
             <rect x="3" y="3" width="18" height="18" rx="2" />
             <line x1="9" y1="3" x2="9" y2="21" />
+          </svg>
+        </button>
+        <button
+          v-if="store.panelState === 'docked'"
+          class="remy-titlebar-btn"
+          @click="store.setPanelState('floating')"
+          title="Undock"
+        >
+          <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <rect x="3" y="3" width="18" height="18" rx="2" />
+            <path d="M15 3l6 0 0 6" />
+            <path d="M21 3l-9 9" />
           </svg>
         </button>
         <button
@@ -227,6 +251,9 @@ const chatRef = ref<InstanceType<typeof RemyChat> | null>(null);
 const showSidebar = ref(false);
 const activeTab = ref<"chat" | "skills" | "sessions" | "sources">("chat");
 
+const DOCKED_MIN_WIDTH = 320
+const DOCKED_MAX_WIDTH = 800
+
 const panelClasses = computed(() => ({
   "remy-floating": store.panelState === "floating",
   "remy-docked": store.panelState === "docked",
@@ -236,7 +263,8 @@ const panelClasses = computed(() => ({
 const panelStyle = computed(() => {
   if (store.panelState === "maximised") return {};
   if (store.panelState === "docked") {
-    return { width: "400px", height: "100vh" };
+    const clamped = Math.min(Math.max(store.panelSize.width, DOCKED_MIN_WIDTH), DOCKED_MAX_WIDTH)
+    return { width: `${clamped}px`, height: "100vh" };
   }
   return {
     left: `${store.panelPosition.x}px`,
@@ -292,10 +320,57 @@ function startResize(e: MouseEvent) {
 
 function onResize(e: MouseEvent) {
   if (!resizing.value) return;
+  const maxW = store.panelState === "docked" ? DOCKED_MAX_WIDTH : window.innerWidth - 16
   store.updateSize({
-    width: Math.min(Math.max(320, resizeStart.value.w + (e.clientX - resizeStart.value.x)), window.innerWidth - 16),
+    width: Math.min(Math.max(DOCKED_MIN_WIDTH, resizeStart.value.w + (e.clientX - resizeStart.value.x)), maxW),
     height: Math.min(Math.max(400, resizeStart.value.h + (e.clientY - resizeStart.value.y)), window.innerHeight - 40),
   });
+}
+
+function formatTranscript(): string {
+  const session = store.activeSession
+  const sessionName = session?.name || (session?.session_number ? `Session #${session.session_number}` : "Remy Chat")
+  const date = new Date().toISOString().split("T")[0]
+  const lines: string[] = [
+    `# ${sessionName}`,
+    `Exported: ${date}`,
+    `Messages: ${store.messages.length}`,
+    "---",
+    "",
+  ]
+  for (const msg of store.messages) {
+    const roleLabels: Record<string, string> = {
+      user: "**You:**",
+      assistant: "**Remy:**",
+      tool_use: "**Tool Use:**",
+      tool_result: "**Tool Result:**",
+      summary: "",
+    }
+    const label = roleLabels[msg.role] ?? `**${msg.role}:**`
+    const content = msg.content ?? ""
+    if (label) lines.push(label)
+    if (content) lines.push("", content, "")
+    if (msg.tool_results_json) {
+      lines.push("", "```json", JSON.stringify(msg.tool_results_json, null, 2), "```", "")
+    }
+    lines.push("---", "")
+  }
+  return lines.join("\n")
+}
+
+function exportTranscript() {
+  const text = formatTranscript()
+  const session = store.activeSession
+  const filename = `remy-transcript-${session?.session_number ?? session?.id ?? "chat"}-${new Date().toISOString().split("T")[0]}.md`
+  const blob = new Blob([text], { type: "text/markdown;charset=utf-8" })
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement("a")
+  a.href = url
+  a.download = filename
+  document.body.appendChild(a)
+  a.click()
+  document.body.removeChild(a)
+  URL.revokeObjectURL(url)
 }
 
 function stopResize() {

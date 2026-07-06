@@ -120,7 +120,10 @@
       />
     </aside>
 
-    <main class="flex-1 overflow-auto bg-background pt-14 md:pt-0">
+    <main
+      class="flex-1 overflow-auto bg-background pt-14 md:pt-0"
+      :style="remyDockedStyle"
+    >
       <Breadcrumb class="px-6 pt-4 pb-3" />
       <router-view v-slot="{ Component, route }">
         <transition name="page">
@@ -168,6 +171,10 @@ const mobileSidebarRef = ref<HTMLElement | null>(null);
 const mobileButtonRef = ref<HTMLElement | null>(null);
 
 const isLight = ref(document.documentElement.classList.contains("light"));
+
+const remyDockedStyle = computed(() =>
+  remyStore.panelState === "docked" ? { paddingRight: `${remyStore.panelSize.width}px` } : undefined,
+);
 
 function toggleTheme() {
   const root = document.documentElement;
