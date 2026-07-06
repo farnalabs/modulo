@@ -63,12 +63,31 @@ disclosure; In-Dev items are hidden from the UI entirely. See ADR 010.
 
 ### Server-side enforcement
 
-- [ ] `in_dev` items are NOT filtered server-side on any list endpoint — `list_connectors_endpoint`, `list_model_backends_endpoint`, and the library `list_primitives` route all return every tier regardless of caller; only the frontend hides `preview`/`in_dev` rows from view. A user calling the API directly (or reading network responses) can see In-Dev entries and their full config. This is a genuine gap, not just an unverified checkbox.
+- [x] `in_dev` items ARE filtered server-side: `list_connector_instances` and `list_model_backends` CRUD both default to `excluded_tiers=["in_dev"]` and exclude `in_dev` rows from total/item queries. The library `list_primitives` service applies the same exclusion to org, modulo, and community items. Every list endpoint silently filters `in_dev` via the CRUD/service layer — no caller override is exposed through the API.
+- [ ] No API query parameter exists for admins to bypass the `in_dev` exclusion — any operator who needs to see In-Dev items must query the DB directly.
+
+### Error Handling
+
+- [x] All three route files (`connectors.py`, `model_backends.py`, `library.py`) wrap every DB operation in `try/except ProgrammingError` returning 501 Not Implemented with a migration hint
+- [x] All three route files also wrap in `except SQLAlchemyError` returning 503 Service Unavailable with a descriptive message
+- [x] The `create_connector_endpoint` has a separate `ProgrammingError` catch for the DB insert, distinct from the GitHub scope verification which raises 422
+- [x] `list_library_primitives_endpoint` has nested `try/except` blocks: the outer block catches `HTTPException` (re-raises) and generic `Exception` (500), while inner blocks catch `ProgrammingError` (501) and `model_validate` failures (500 with schema-sync message)
+- [x] `model_backends.py` CRUD `list_model_backends` wraps the `total_query` in `try/except ProgrammingError` returning an empty `PageResult` (graceful degradation when table doesn't exist yet)
+- [ ] `library_primitive.py` CRUD `list_library_primitives` catches `SQLAlchemyError` on both count and items queries but does NOT catch `ProgrammingError` separately — the route-level catch handles it, but with less specific messaging
+
+### Edge Cases
+
+- [x] `model_backend.py` route `create_model_backend_endpoint` already validates `tier` via `Literal["native", "preview", "in_dev"]` — Pydantic rejects invalid values with 422 before reaching the handler body
+- [x] `ConnectorUpdate` makes `tier` optional (`None = None`) so PATCH without `tier` leaves the existing value unchanged
+- [x] `ConnectorResponse.tier` is typed as plain `str` (not `Literal`) — the Pydantic model accepts any string value from the DB, so an invalid DB value (e.g. from a direct SQL insert) would serialize but fail to re-parse if sent back to a Create/Update endpoint
+- [ ] `copy_to_adapt` in `library_primitive.py` CRUD does NOT propagate `tier` — copied primitives lose their tier classification and get `native` (server_default). This means a `preview` primitive copied via copy-to-adapt becomes `native` in the target org with no indication of changed status.
+- [ ] No test exercises the `excluded_tiers` parameter of `list_connector_instances`, `list_model_backends`, or `list_library_primitives` to verify that `in_dev` items are actually excluded from queries
 
 ## Known Gaps
 
-- **No server-side tier filtering.** In-Dev items are visible to any authenticated caller via direct API calls (`GET /api/v1/connectors`, `GET /api/v1/model-backends`, `GET /api/v1/libraries`) even though the UI hides them. There is no automated tier-based access control beyond client-side UI visibility.
+- **No API override for In-Dev visibility.** Server-side filtering of `in_dev` items is hardcoded in the CRUD/service layer — there is no query parameter (`?include_in_dev=true`) that an admin could use to reveal In-Dev entries for testing. The frontend has no debug toggle either (ADR 010 open question).
 - **No tier promotion/demotion workflow.** Changing a connector/backend/primitive from `preview` to `native` (or vice versa) is a raw `PATCH` with no approval process, audit trail, or changelog entry — flagged as an open question in ADR 010.
-- **No admin-visible debug toggle for In-Dev items.** ADR 010 leaves this as an open question; currently there is no way for an admin to reveal In-Dev entries even for internal testing — they are fully hidden with no override.
+- **`copy_to_adapt` does not propagate tier.** The CRUD function creates a copy without setting `tier`, so the copy silently falls back to `"native"` via server_default. A user copying a `preview` primitive gets a `native` copy with no indication that the tier changed.
 - **No BDD coverage yet.** A parallel effort (branch `test/bdd-tiering-community`) is adding BDD scenarios for tiering; none exist in this worktree at the time of writing.
 - **No dedicated migration rollback test** — `0062_add_integration_tier` has a `downgrade()` but no automated test exercises drop-and-recreate of the `tier` column/constraint.
+- **`ConnectorResponse.tier` is typed as `str` not `Literal`.** An invalid DB value would serialize to JSON correctly but a subsequent PATCH round-trip would fail Pydantic validation with 422. Consider using `Literal` on response models or adding a `@field_validator`.
