@@ -302,8 +302,8 @@ async function loadPipelines() {
     if (!err && data) {
       pipelines.value = data.items
     }
-  } catch {
-    // Non-critical
+  } catch (err) {
+    console.warn('Failed to load pipelines:', err)
   }
 }
 

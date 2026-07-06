@@ -310,6 +310,7 @@
 <script setup lang="ts">
 import { ref, reactive, computed, onMounted } from 'vue'
 import { api } from '../lib/api/client'
+import { formatApiError } from '../lib/api/formatError'
 import type { components } from '../lib/api/client'
 import LoadingSpinner from '../components/shared/LoadingSpinner.vue'
 import ErrorAlert from '../components/shared/ErrorAlert.vue'
@@ -367,7 +368,7 @@ async function loadConnectors() {
   try {
     const { data, error: err } = await api.GET('/api/v1/connectors')
     if (err) {
-      error.value = `Failed to load connectors: ${err}`
+      error.value = `Failed to load connectors: ${formatApiError(err)}`
     } else if (data) {
       connectors.value = data.items
     }

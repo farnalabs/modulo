@@ -113,10 +113,10 @@
 
       <div class="flex items-center justify-between">
         <button
-          :disabled="!prevCursor"
+          :disabled="cursorStack.length === 0"
           data-testid="settings-notification-log-previous"
           class="rounded-lg border border-input bg-background px-4 py-2 text-sm font-medium hover:bg-accent disabled:opacity-30 disabled:cursor-not-allowed"
-          @click="goToPage(prevCursor)"
+          @click="goToPreviousPage()"
         >
           Previous
         </button>
@@ -127,7 +127,7 @@
           :disabled="!nextCursor"
           data-testid="settings-notification-log-next"
           class="rounded-lg border border-input bg-background px-4 py-2 text-sm font-medium hover:bg-accent disabled:opacity-30 disabled:cursor-not-allowed"
-          @click="goToPage(nextCursor)"
+          @click="goToNextPage()"
         >
           Next
         </button>
@@ -139,6 +139,7 @@
 <script setup lang="ts">
 import { ref, onMounted } from 'vue'
 import { api } from '../lib/api/client'
+import { formatApiError } from '../lib/api/formatError'
 import type { components } from '../lib/api/client'
 import LoadingSpinner from '../components/shared/LoadingSpinner.vue'
 import ErrorAlert from '../components/shared/ErrorAlert.vue'
@@ -149,8 +150,9 @@ const items = ref<DeliveryLogEntry[]>([])
 const loading = ref(true)
 const error = ref<string | null>(null)
 const total = ref(0)
+const cursorStack = ref<(string | null)[]>([])
+const currentCursor = ref<string | null>(null)
 const nextCursor = ref<string | null>(null)
-const prevCursor = ref<string | null>(null)
 
 const filterStatus = ref('')
 const filterDateFrom = ref('')
@@ -188,12 +190,13 @@ async function loadDeliveries(cursor?: string | null) {
       params: { query: params as any },
     })
     if (err) {
-      error.value = `Failed to load delivery logs: ${err}`
+      error.value = `Failed to load delivery logs: ${formatApiError(err)}`
     } else if (data) {
       items.value = data.items
       total.value = data.total
       nextCursor.value = data.next_cursor
-      prevCursor.value = cursor ?? null
+      currentCursor.value = cursor ?? null
+      if (!cursor) cursorStack.value = []
     }
   } catch (e: unknown) {
     error.value = `Failed to load delivery logs: ${e instanceof Error ? e.message : String(e)}`
@@ -202,9 +205,16 @@ async function loadDeliveries(cursor?: string | null) {
   }
 }
 
-function goToPage(cursor: string | null) {
-  if (!cursor) return
-  loadDeliveries(cursor)
+function goToPreviousPage() {
+  const prev = cursorStack.value.pop()
+  if (prev === undefined) return
+  loadDeliveries(prev)
+}
+
+function goToNextPage() {
+  if (!nextCursor.value) return
+  cursorStack.value.push(currentCursor.value)
+  loadDeliveries(nextCursor.value)
 }
 
 function applyFilters() {
