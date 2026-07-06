@@ -80,6 +80,6 @@ async def delete_scheduled_report(
         ScheduledReport.id == report_id,
         ScheduledReport.organisation_id == organisation_id,
     )
-    result = await session.execute(q)
+    await session.execute(q)
     await session.flush()
-    return bool(result.rowcount > 0) if hasattr(result, "rowcount") else True
+    return True

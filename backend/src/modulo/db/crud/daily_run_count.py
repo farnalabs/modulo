@@ -102,4 +102,4 @@ async def get_org_spend_total(
         q = q.where(OrgDailyRunCount.run_date >= since)
 
     result = await session.execute(q)
-    return result.scalar_one() or Decimal(0)
+    return result.scalar_one_or_none() or Decimal(0)
