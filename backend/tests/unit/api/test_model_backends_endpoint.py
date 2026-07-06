@@ -557,3 +557,25 @@ def test_get_model_backend_empty_fallback_ids_round_trips(client: TestClient) ->
         resp = client.get(f"/api/v1/model-backends/{_BACKEND_ID}")
     assert resp.status_code == 200
     assert resp.json()["fallback_backend_ids"] == []
+
+
+def test_create_model_backend_integrity_error_returns_409(client: TestClient) -> None:
+    """IntegrityError (FK/unique violation) on create returns 409."""
+    from sqlalchemy.exc import IntegrityError as IE
+
+    with (
+        patch("modulo.api.routes.model_backends.set_rls_org"),
+        patch("modulo.api.routes.model_backends.set_rls_user_context"),
+        patch("modulo.api.routes.model_backends.create_model_backend", side_effect=IE("mock", "mock", "mock")),
+    ):
+        resp = client.post(
+            "/api/v1/model-backends",
+            json={
+                "name": "x",
+                "display_name": "x",
+                "provider": "openai",
+                "model_id": "gpt-4",
+                "api_key": "sk-test",
+            },
+        )
+    assert resp.status_code == 409
