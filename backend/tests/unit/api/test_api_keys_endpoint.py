@@ -296,10 +296,13 @@ def test_create_api_key_with_team_id_returns_team_id(client: TestClient) -> None
 
 
 def test_create_api_key_with_team_id_requires_admin(operator_client: TestClient) -> None:
-    resp = operator_client.post(
-        "/api/v1/api-keys",
-        json={"name": "Team Key", "role": "operator", "team_id": str(_TEAM_ID)},
-    )
+    mock_plan = MagicMock()
+    mock_plan.feature_enabled.return_value = True
+    with patch("modulo.api.routes.api_keys.resolve_plan_context", return_value=mock_plan):
+        resp = operator_client.post(
+            "/api/v1/api-keys",
+            json={"name": "Team Key", "role": "operator", "team_id": str(_TEAM_ID)},
+        )
     assert resp.status_code == 403
 
 
@@ -349,10 +352,13 @@ def test_update_api_key_with_team_id_returns_team_id(client: TestClient) -> None
 
 
 def test_update_api_key_with_team_id_requires_admin(operator_client: TestClient) -> None:
-    resp = operator_client.put(
-        f"/api/v1/api-keys/{_KEY_ID}",
-        json={"name": "k", "team_id": str(_TEAM_ID)},
-    )
+    mock_plan = MagicMock()
+    mock_plan.feature_enabled.return_value = True
+    with patch("modulo.api.routes.api_keys.resolve_plan_context", return_value=mock_plan):
+        resp = operator_client.put(
+            f"/api/v1/api-keys/{_KEY_ID}",
+            json={"name": "k", "team_id": str(_TEAM_ID)},
+        )
     assert resp.status_code == 403
 
 
