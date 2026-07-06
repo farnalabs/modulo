@@ -98,7 +98,7 @@
           </div>
 
           <button
-            class="w-full px-3 py-2 bg-primary text-primary-foreground text-sm font-medium rounded-lg border border-primary/30 hover:border-primary/60 hover:brightness-110 transition-all"
+            class="w-full px-3 py-2 mt-auto bg-primary text-primary-foreground text-sm font-medium rounded-lg border border-primary/30 hover:border-primary/60 hover:brightness-110 transition-all"
             @click="openUseDialog(tpl)"
             data-testid="template-gallery-use-btn"
           >
