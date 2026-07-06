@@ -23,8 +23,10 @@ from modulo.db.models.audit_event import AuditChainHead, AuditEvent
 _log = logging.getLogger(__name__)
 
 APPEND_MAX_RETRIES = 3
+RETRY_BASE_DELAY_S = 0.1
 VERIFY_MAX_EVENTS = 10000
 EXPORT_DEFAULT_PAGE_SIZE = 100
+EXPORT_MAX_PAGE_SIZE = 1000
 LIST_MIN_LIMIT = 1
 LIST_MAX_LIMIT = 1000
 BATCH_MAX_SIZE = 100
@@ -209,7 +211,7 @@ async def append_audit_event(
                     APPEND_MAX_RETRIES, org_id, event_type,
                 )
                 raise
-            await asyncio.sleep(0.1 * (attempt + 1))
+            await asyncio.sleep(RETRY_BASE_DELAY_S * (attempt + 1))
         except ProgrammingError:
             _log.error(
                 "append_audit_event: ProgrammingError (missing table) for org=%s event_type=%s",
@@ -222,7 +224,7 @@ async def append_audit_event(
                 org_id, event_type,
             )
             raise
-    raise RuntimeError("append_audit_event: exhausted retries")
+    raise RuntimeError("append_audit_event: unexpected fallthrough")
 
 
 async def _get_chain_head_locked(session: AsyncSession, org_id: uuid.UUID) -> AuditChainHead | None:
@@ -325,29 +327,19 @@ async def verify_chain(
         event_id=events[-1].id,
         organisation_id=events[-1].organisation_id,
         created_at=events[-1].created_at.isoformat() if events[-1].created_at else "",
-    ) if events else None
-    if expected_prev is None:
-        return _make_verify_result(
-            total_events=total_events,
-            checked_events=0,
-            truncated=truncated,
-            valid=True,
-        )
+    )
 
     head = await get_chain_head(session, org_id)
 
     if head:
         chain_head_match = head.last_event_hash == expected_prev
         count_mismatch = head.event_count is not None and head.event_count != total_events
-    elif total_events > 0:
-        chain_head_match = None
-        count_mismatch = None
     else:
         chain_head_match = None
         count_mismatch = None
 
     no_head_corruption = head is not None or total_events == 0
-    valid = not truncated and (chain_head_match is not False) and no_head_corruption and not (count_mismatch or False)
+    valid = not truncated and (chain_head_match is not False) and no_head_corruption and not count_mismatch
 
     return _make_verify_result(
         total_events=total_events,
@@ -398,7 +390,7 @@ async def export_chain(
 ) -> dict[str, Any]:
     """Export audit events as paginated JSON lines with optional filters."""
     safe_page = max(1, page)
-    safe_page_size = max(1, page_size)
+    safe_page_size = max(1, min(page_size, EXPORT_MAX_PAGE_SIZE))
 
     query = _apply_filters(
         select(AuditEvent), org_id,
@@ -501,11 +493,18 @@ async def list_audit_events(
     items = [_audit_event_to_dict(e) for e in events]
 
     last_event = events[-1] if events else None
-    next_cursor = (
-        json.dumps({"c": last_event.created_at.isoformat(), "i": str(last_event.id)}, separators=(",", ":"))
-        if last_event and has_more and last_event.created_at is not None
-        else None
-    )
+    next_cursor = None
+    if last_event and has_more:
+        if last_event.created_at is not None:
+            next_cursor = json.dumps(
+                {"c": last_event.created_at.isoformat(), "i": str(last_event.id)},
+                separators=(",", ":"),
+            )
+        else:
+            _log.warning(
+                "list_audit_events: last event %s has null created_at — cannot produce next cursor",
+                last_event.id,
+            )
 
     return {
         "items": items,
