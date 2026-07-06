@@ -111,6 +111,17 @@ async def update_provider(
     if "scopes" in updates and updates["scopes"] is not None and not isinstance(updates["scopes"], str):
         updates["scopes"] = json.dumps(updates["scopes"])
 
+    if "name" in updates and updates["name"] is not None:
+        result = await session.execute(
+            select(SsoProvider).where(
+                SsoProvider.name == updates["name"],
+                SsoProvider.organisation_id == provider.organisation_id,
+                SsoProvider.id != provider_id,
+            ).with_for_update().limit(1)
+        )
+        if result.scalar_one_or_none() is not None:
+            raise ValueError(f"An SSO provider with name '{updates['name']}' already exists in this organisation")
+
     filtered = {k: v for k, v in updates.items() if k in _UPDATABLE_SSO_FIELDS}
     apply_updates(provider, filtered)
 
