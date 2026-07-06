@@ -175,6 +175,23 @@ async def trigger_run(
             detail="Feature is not available. Run database migrations to enable it.",
         )
 
+    except HTTPException:
+        raise
+    except SQLAlchemyError:
+        _log.warning("route.db_error")
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Database temporarily unavailable.",
+        ) from None
+
+    except HTTPException:
+        raise
+    except Exception:
+        _log.exception("pipeline_execution.unexpected_error")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="An unexpected error occurred.",
+        ) from None
     if pipeline is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -216,6 +233,23 @@ async def trigger_run(
             detail="Feature is not available. Run database migrations to enable it.",
         )
 
+    except HTTPException:
+        raise
+    except SQLAlchemyError:
+        _log.warning("route.db_error")
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Database temporarily unavailable.",
+        ) from None
+
+    except HTTPException:
+        raise
+    except Exception:
+        _log.exception("pipeline_execution.unexpected_error")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="An unexpected error occurred.",
+        ) from None
     executor = PipelineExecutor(
         engine,
         checkpointer_conn_string=pg_connection_string(str(engine.url)),
@@ -248,6 +282,23 @@ async def get_run_stats_endpoint(
         )
 
 
+    except HTTPException:
+        raise
+    except SQLAlchemyError:
+        _log.warning("route.db_error")
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Database temporarily unavailable.",
+        ) from None
+
+    except HTTPException:
+        raise
+    except Exception:
+        _log.exception("pipeline_execution.unexpected_error")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="An unexpected error occurred.",
+        ) from None
 @router.get("/stats/heatmap", response_model=list[dict[str, Any]])
 async def get_run_heatmap_endpoint(
     year: int = Query(default=2026, ge=2020, le=2100),
@@ -266,6 +317,23 @@ async def get_run_heatmap_endpoint(
         )
 
 
+    except HTTPException:
+        raise
+    except SQLAlchemyError:
+        _log.warning("route.db_error")
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Database temporarily unavailable.",
+        ) from None
+
+    except HTTPException:
+        raise
+    except Exception:
+        _log.exception("pipeline_execution.unexpected_error")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="An unexpected error occurred.",
+        ) from None
 @router.get("/{run_id}", response_model=RunResponse)
 async def get_run_status(
     run_id: uuid.UUID,
@@ -282,6 +350,23 @@ async def get_run_status(
             detail="Feature is not available. Run database migrations to enable it.",
         )
 
+    except HTTPException:
+        raise
+    except SQLAlchemyError:
+        _log.warning("route.db_error")
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Database temporarily unavailable.",
+        ) from None
+
+    except HTTPException:
+        raise
+    except Exception:
+        _log.exception("pipeline_execution.unexpected_error")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="An unexpected error occurred.",
+        ) from None
     if run is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Run not found")
 
@@ -321,6 +406,23 @@ async def cancel_run(
             detail="Feature is not available. Run database migrations to enable it.",
         )
 
+    except HTTPException:
+        raise
+    except SQLAlchemyError:
+        _log.warning("route.db_error")
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Database temporarily unavailable.",
+        ) from None
+
+    except HTTPException:
+        raise
+    except Exception:
+        _log.exception("pipeline_execution.unexpected_error")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="An unexpected error occurred.",
+        ) from None
     return {"status": "accepted"}
 
 
@@ -421,6 +523,23 @@ async def get_run_io_endpoint(
             detail="Feature is not available. Run database migrations to enable it.",
         )
 
+    except HTTPException:
+        raise
+    except SQLAlchemyError:
+        _log.warning("route.db_error")
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Database temporarily unavailable.",
+        ) from None
+
+    except HTTPException:
+        raise
+    except Exception:
+        _log.exception("pipeline_execution.unexpected_error")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="An unexpected error occurred.",
+        ) from None
     if result is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Run not found")
 
@@ -462,6 +581,23 @@ async def export_run_fixture(
             detail="Feature is not available. Run database migrations to enable it.",
         )
 
+    except HTTPException:
+        raise
+    except SQLAlchemyError:
+        _log.warning("route.db_error")
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Database temporarily unavailable.",
+        ) from None
+
+    except HTTPException:
+        raise
+    except Exception:
+        _log.exception("pipeline_execution.unexpected_error")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="An unexpected error occurred.",
+        ) from None
     graph_json = snapshot.graph_json if snapshot else {}
 
     masked_input = _mask_output_value(run.input_payload) if run.input_payload else None
@@ -505,6 +641,23 @@ async def get_run_workspace_lease(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
         )
+    except HTTPException:
+        raise
+    except SQLAlchemyError:
+        _log.warning("route.db_error")
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Database temporarily unavailable.",
+        ) from None
+
+    except HTTPException:
+        raise
+    except Exception:
+        _log.exception("pipeline_execution.unexpected_error")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="An unexpected error occurred.",
+        ) from None
     if lease is None:
         return None
     return {
@@ -546,6 +699,23 @@ async def get_run_workspace_events(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
         )
+    except HTTPException:
+        raise
+    except SQLAlchemyError:
+        _log.warning("route.db_error")
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Database temporarily unavailable.",
+        ) from None
+
+    except HTTPException:
+        raise
+    except Exception:
+        _log.exception("pipeline_execution.unexpected_error")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="An unexpected error occurred.",
+        ) from None
     return [
         {
             "event": evt.event_type.replace("workspace_", ""),
@@ -613,6 +783,23 @@ async def get_run_node_output(
             detail="Feature is not available. Run database migrations to enable it.",
         )
 
+    except HTTPException:
+        raise
+    except SQLAlchemyError:
+        _log.warning("route.db_error")
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Database temporarily unavailable.",
+        ) from None
+
+    except HTTPException:
+        raise
+    except Exception:
+        _log.exception("pipeline_execution.unexpected_error")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="An unexpected error occurred.",
+        ) from None
     if run is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Run not found")
 
@@ -668,6 +855,23 @@ async def observe_run_node(
             detail="Feature is not available. Run database migrations to enable it.",
         )
 
+    except HTTPException:
+        raise
+    except SQLAlchemyError:
+        _log.warning("route.db_error")
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Database temporarily unavailable.",
+        ) from None
+
+    except HTTPException:
+        raise
+    except Exception:
+        _log.exception("pipeline_execution.unexpected_error")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="An unexpected error occurred.",
+        ) from None
     if run is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Run not found")
 
@@ -687,6 +891,23 @@ async def observe_run_node(
             detail="Feature is not available. Run database migrations to enable it.",
         )
 
+    except HTTPException:
+        raise
+    except SQLAlchemyError:
+        _log.warning("route.db_error")
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Database temporarily unavailable.",
+        ) from None
+
+    except HTTPException:
+        raise
+    except Exception:
+        _log.exception("pipeline_execution.unexpected_error")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="An unexpected error occurred.",
+        ) from None
     return ObserveNodeResponse(
         run_id=run_id,
         node_id=node_id,
@@ -765,6 +986,23 @@ async def recover_run_node(
             detail="Feature is not available. Run database migrations to enable it.",
         )
 
+    except HTTPException:
+        raise
+    except SQLAlchemyError:
+        _log.warning("route.db_error")
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Database temporarily unavailable.",
+        ) from None
+
+    except HTTPException:
+        raise
+    except Exception:
+        _log.exception("pipeline_execution.unexpected_error")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="An unexpected error occurred.",
+        ) from None
     action = "skip" if req.input_data is None else "replay"
 
     # Resume the graph with the recovery data.
@@ -1110,6 +1348,23 @@ async def diff_node_output(
             detail="Feature is not available. Run database migrations to enable it.",
         )
 
+    except HTTPException:
+        raise
+    except SQLAlchemyError:
+        _log.warning("route.db_error")
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Database temporarily unavailable.",
+        ) from None
+
+    except HTTPException:
+        raise
+    except Exception:
+        _log.exception("pipeline_execution.unexpected_error")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="An unexpected error occurred.",
+        ) from None
     if run_a is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
