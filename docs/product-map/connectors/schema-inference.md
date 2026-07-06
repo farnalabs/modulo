@@ -11,6 +11,7 @@ unit-tests:
   - backend/tests/unit/core/test_schema_migration.py
   - backend/tests/unit/core/test_schema_validation.py
   - backend/tests/unit/api/test_schema_infer_programming_error.py
+  - backend/tests/unit/api/test_schema_generate_endpoint.py
 code:
   - backend/src/modulo/core/connector_hub/__init__.py
   - backend/src/modulo/core/schema_registry/inference.py
@@ -76,9 +77,11 @@ LLM-assisted schema draft generation from connected tool data (issue trackers, g
 - [x] Sampling failure → 502 with original error message (tested)
 - [x] Inference LLM failure → 502 with descriptive error (tested)
 - [x] ProgrammingError (missing DB table) → 501 Not Implemented (coded, untested)
-- [ ] Schema generation: no model backends → 400 (tested)
-- [ ] Schema generation: ProgrammingError → 501 Not Implemented (coded, untested)
-- [ ] Schema generation: GenerationError → 502 (tested)
+- [x] Schema generation: no model backends → 400 (tested)
+- [x] Schema generation: ProgrammingError → 501 Not Implemented (coded, tested)
+- [x] Schema generation: GenerationError → 502 (tested)
+- [x] Schema inference: unguarded `create_secrets_backend` → 500 with descriptive detail (coded, tested)
+- [x] Schema generation: unguarded `create_secrets_backend` → 500 with descriptive detail (coded, tested)
 
 ### Security and Data Isolation
 
@@ -111,3 +114,4 @@ LLM-assisted schema draft generation from connected tool data (issue trackers, g
 ## QA History
 
 - 2026-07-03: Cross-cutting QA (index 111). Fixed stale checkboxes (audit event [ ]→[x], connector-type validation confirmed). Added Error Handling section (11 behaviour checkboxes covering all error paths). Added 30s timeout on connector sampling step. Added ProgrammingError→501 unit tests (infer + generate endpoints). Updated Known Gaps: removed 2 stale gaps (connector-type validation, audit event dispatch), added 9 new gaps. Created website docs stub. Status: partial (17 known gaps remain).
+- 2026-07-08: Cross-cutting QA (index 269). Fixed CRITICAL — added `try/except Exception→500` guard around `create_secrets_backend()` in both `infer_schema_endpoint` and `generate_schema_endpoint` (previously unguarded — bad Fernet key or unexpected error from `create_secrets_backend` would propagate to CatchAllMiddleware as opaque 500). Corrected 3 stale `[ ]`→`[x]` Error Handling checkboxes for schema generation (no backends→400, ProgrammingError→501, GenerationError→502). Added 2 new Error Handling checkboxes. Added `test_schema_generate_endpoint.py` to unit-tests. Added 2 new tests for Exception→500 on both endpoints. All new tests pass. Pre-existing: `test_generate_schema_generation_failure_returns_502` asserts 502 but CatchAllMiddleware returns 500 — systemic CatchAllMiddleware bug intercepting HTTPException before FastAPI's exception handler. Status: partial.
