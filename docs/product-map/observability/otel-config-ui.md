@@ -2,7 +2,8 @@
 id: feat-observability-otel-config-ui
 prd: 6.6
 delivery-tasks: [task-nv9-otel-config-ui]
-bdd: backend/tests/bdd/features/observability/otel_traces.feature
+bdd:
+  - backend/tests/bdd/features/observability/otel_traces.feature
 code:
   - backend/src/modulo/api/routes/observability.py
   - backend/src/modulo/db/crud/observability.py
@@ -126,10 +127,6 @@ Settings page at `/settings/observability`.
 ## Known Gaps
 
 - **BDD step definitions are mock-only:** `otel_traces.feature` has 4 real scenarios and matching step definitions, but they use mock/patch rather than real DB or OTel exporter integration
-- **ExportPreview not wired:** `GET /api/v1/settings/observability/preview` endpoint exists but frontend never calls it — no "preview config" button or display
-- **SimpleSpanProcessor:** Uses synchronous per-span export instead of production-grade BatchSpanProcessor with buffering, batching, and backpressure
-- **No sampling config:** No UI field or DB schema for trace sampling rate — every span is either exported or not
-- **Per-org telemetry control:** LangSmith toggle exists but the core OTLP enable/disable is global env-var-only at startup, not per-org through the UI
 - **Frontend i18n gap:** SettingsObservabilityView.vue has ~20+ hardcoded English strings not using `$t()` (page title, section headings, labels, button text, placeholders, status messages, aria-labels)
 - **API error formatting:** `saveSettings()` and `loadSettings()` embed `${err}` directly in template literals instead of using `formatApiError(err)` — `openapi-fetch` returns error objects, causing `[object Object]` in user-facing error messages
 - **No website docs:** No observability/otel page exists under `Website/modulo-website/src/docs/`
