@@ -101,9 +101,7 @@ async def test_query_issues(connector):
 async def test_query_issues_with_query_filter(connector):
     issues = [{"id": "1-1", "idReadable": "PRJ-1", "summary": "Bug found"}]
     respx.get(f"{_BASE}/issues").mock(return_value=httpx.Response(200, json=issues))
-    result = await connector.query(
-        ConnectorQuery(resource="issues", filters={"query": "project: PRJ-1"})
-    )
+    result = await connector.query(ConnectorQuery(resource="issues", filters={"query": "project: PRJ-1"}))
     assert result.total == 1
     assert result.records[0]["summary"] == "Bug found"
 
@@ -112,9 +110,7 @@ async def test_query_issues_with_query_filter(connector):
 async def test_query_issues_with_pagination(connector):
     issues = [{"id": "1-1", "idReadable": "PRJ-1", "summary": "First"}]
     respx.get(f"{_BASE}/issues").mock(return_value=httpx.Response(200, json=issues))
-    result = await connector.query(
-        ConnectorQuery(resource="issues", filters={"skip": 10, "top": 5}, limit=5)
-    )
+    result = await connector.query(ConnectorQuery(resource="issues", filters={"skip": 10, "top": 5}, limit=5))
     assert result.total == 1
 
 
@@ -122,9 +118,7 @@ async def test_query_issues_with_pagination(connector):
 async def test_query_issues_with_fields(connector):
     issues = [{"id": "1-1", "idReadable": "PRJ-1"}]
     respx.get(f"{_BASE}/issues").mock(return_value=httpx.Response(200, json=issues))
-    result = await connector.query(
-        ConnectorQuery(resource="issues", filters={"fields": "id,idReadable,summary"})
-    )
+    result = await connector.query(ConnectorQuery(resource="issues", filters={"fields": "id,idReadable,summary"}))
     assert result.total == 1
 
 
@@ -267,9 +261,7 @@ async def test_write_update_issue(connector):
 
 async def test_write_update_issue_missing_id(connector):
     with pytest.raises(ValueError, match="Missing 'id' in issue_update"):
-        await connector.write(
-            ConnectorPayload(resource="issue_update", data={"summary": "Orphan"})
-        )
+        await connector.write(ConnectorPayload(resource="issue_update", data={"summary": "Orphan"}))
 
 
 # ---------------------------------------------------------------------------
@@ -292,9 +284,7 @@ async def test_write_comment(connector):
 
 async def test_write_comment_missing_fields(connector):
     with pytest.raises(ValueError, match="comment requires 'issue_id' and 'text'"):
-        await connector.write(
-            ConnectorPayload(resource="comment", data={"issue_id": "PRJ-42"})
-        )
+        await connector.write(ConnectorPayload(resource="comment", data={"issue_id": "PRJ-42"}))
 
 
 # ---------------------------------------------------------------------------

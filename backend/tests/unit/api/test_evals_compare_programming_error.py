@@ -64,7 +64,6 @@ def _override_session(session) -> None:
 
 
 class TestCompareEvalsProgrammingError:
-
     def test_compare_returns_501_on_programming_error(self, admin_client: TestClient) -> None:
         session = _make_session_raising_programming_error()
         _override_session(session)

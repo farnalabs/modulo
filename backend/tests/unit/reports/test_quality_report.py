@@ -155,12 +155,14 @@ class TestFormatTrendBlock:
         trend = []
         for i in range(7):
             d = today - timedelta(days=6 - i)
-            trend.append({
-                "date": d.isoformat(),
-                "run_count": i * 10,
-                "eval_pass_rate": 80.0 + i,
-                "token_spend_usd": float(i * 5),
-            })
+            trend.append(
+                {
+                    "date": d.isoformat(),
+                    "run_count": i * 10,
+                    "eval_pass_rate": 80.0 + i,
+                    "token_spend_usd": float(i * 5),
+                }
+            )
         block = _format_trend_block(trend)
         assert block["type"] == "section"
         for entry in trend:
@@ -556,9 +558,9 @@ class TestGenerateQualityReport:
             side_effect=[
                 _weekly_result(),  # current weekly
                 _weekly_result(),  # previous weekly
-                _eval_result(),    # current eval
-                _eval_result(),    # previous eval
-                _daily_result(),   # daily rows
+                _eval_result(),  # current eval
+                _eval_result(),  # previous eval
+                _daily_result(),  # daily rows
                 _daily_eval_result(),  # daily eval rows
             ]
         )

@@ -10,8 +10,12 @@ from modulo.db.models.agent import Agent
 from modulo.db.models.base import Base
 
 _AGENT_TABLE_NAMES = {
-    "organisations", "users", "model_backends", "schema_versions",
-    "library_primitives", "agents",
+    "organisations",
+    "users",
+    "model_backends",
+    "schema_versions",
+    "library_primitives",
+    "agents",
 }
 
 

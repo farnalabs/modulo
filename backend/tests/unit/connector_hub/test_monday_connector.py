@@ -60,9 +60,7 @@ async def test_health_check_no_user(connector):
 @respx.mock
 async def test_query_boards(connector):
     respx.post(_MONDAY_API).mock(
-        return_value=_mock_response(
-            {"boards": [{"id": "1", "name": "Board A"}, {"id": "2", "name": "Board B"}]}
-        ),
+        return_value=_mock_response({"boards": [{"id": "1", "name": "Board A"}, {"id": "2", "name": "Board B"}]}),
     )
     result = await connector.query(ConnectorQuery(resource="boards"))
     assert result.total == 2
@@ -90,9 +88,7 @@ async def test_query_board(connector):
             }
         ),
     )
-    result = await connector.query(
-        ConnectorQuery(resource="board", filters={"board_id": 10})
-    )
+    result = await connector.query(ConnectorQuery(resource="board", filters={"board_id": 10}))
     assert result.total == 1
     assert result.records[0]["id"] == "10"
 
@@ -123,9 +119,7 @@ async def test_query_items(connector):
             }
         ),
     )
-    result = await connector.query(
-        ConnectorQuery(resource="items", filters={"board_id": 10})
-    )
+    result = await connector.query(ConnectorQuery(resource="items", filters={"board_id": 10}))
     assert result.total == 2
     assert result.records[0]["name"] == "Item One"
 
@@ -143,17 +137,9 @@ async def test_query_items_missing_board_id(connector):
 @respx.mock
 async def test_query_item(connector):
     respx.post(_MONDAY_API).mock(
-        return_value=_mock_response(
-            {
-                "items": [
-                    {"id": "201", "name": "Single Item", "column_values": []}
-                ]
-            }
-        ),
+        return_value=_mock_response({"items": [{"id": "201", "name": "Single Item", "column_values": []}]}),
     )
-    result = await connector.query(
-        ConnectorQuery(resource="item", filters={"item_id": 201})
-    )
+    result = await connector.query(ConnectorQuery(resource="item", filters={"item_id": 201}))
     assert result.total == 1
     assert result.records[0]["name"] == "Single Item"
 
@@ -223,9 +209,7 @@ async def test_query_unsupported_resource(connector):
 @respx.mock
 async def test_write_create_item(connector):
     respx.post(_MONDAY_API).mock(
-        return_value=_mock_response(
-            {"create_item": {"id": "301", "name": "New Task"}}
-        ),
+        return_value=_mock_response({"create_item": {"id": "301", "name": "New Task"}}),
     )
     result = await connector.write(
         ConnectorPayload(
@@ -240,9 +224,7 @@ async def test_write_create_item(connector):
 @respx.mock
 async def test_write_create_item_with_column_values(connector):
     respx.post(_MONDAY_API).mock(
-        return_value=_mock_response(
-            {"create_item": {"id": "302", "name": "Task With Values"}}
-        ),
+        return_value=_mock_response({"create_item": {"id": "302", "name": "Task With Values"}}),
     )
     result = await connector.write(
         ConnectorPayload(
@@ -259,9 +241,7 @@ async def test_write_create_item_with_column_values(connector):
 
 async def test_write_create_item_missing_fields(connector):
     with pytest.raises(ValueError, match="'board_id' and 'item_name'"):
-        await connector.write(
-            ConnectorPayload(resource="item", data={"board_id": 10})
-        )
+        await connector.write(ConnectorPayload(resource="item", data={"board_id": 10}))
 
 
 # ---------------------------------------------------------------------------
@@ -292,9 +272,7 @@ async def test_write_item_update(connector):
 
 async def test_write_item_update_missing_fields(connector):
     with pytest.raises(ValueError, match="'item_id' and 'column_values'"):
-        await connector.write(
-            ConnectorPayload(resource="item_update", data={"item_id": 301})
-        )
+        await connector.write(ConnectorPayload(resource="item_update", data={"item_id": 301}))
 
 
 # ---------------------------------------------------------------------------
@@ -305,9 +283,7 @@ async def test_write_item_update_missing_fields(connector):
 @respx.mock
 async def test_write_column_value(connector):
     respx.post(_MONDAY_API).mock(
-        return_value=_mock_response(
-            {"change_simple_column_value": {"id": "301", "name": "Task"}}
-        ),
+        return_value=_mock_response({"change_simple_column_value": {"id": "301", "name": "Task"}}),
     )
     result = await connector.write(
         ConnectorPayload(
@@ -336,9 +312,7 @@ async def test_write_column_value_missing_fields(connector):
 @respx.mock
 async def test_write_update(connector):
     respx.post(_MONDAY_API).mock(
-        return_value=_mock_response(
-            {"create_update": {"id": "up1", "text": "Update body text"}}
-        ),
+        return_value=_mock_response({"create_update": {"id": "up1", "text": "Update body text"}}),
     )
     result = await connector.write(
         ConnectorPayload(
@@ -351,9 +325,7 @@ async def test_write_update(connector):
 
 async def test_write_update_missing_fields(connector):
     with pytest.raises(ValueError, match="'item_id' and 'body'"):
-        await connector.write(
-            ConnectorPayload(resource="update", data={"item_id": 301})
-        )
+        await connector.write(ConnectorPayload(resource="update", data={"item_id": 301}))
 
 
 # ---------------------------------------------------------------------------
@@ -399,8 +371,6 @@ async def test_graphql_errors(connector):
 
 @respx.mock
 async def test_query_boards_http_error(connector):
-    respx.post(_MONDAY_API).mock(
-        return_value=httpx.Response(500, text="Internal Server Error")
-    )
+    respx.post(_MONDAY_API).mock(return_value=httpx.Response(500, text="Internal Server Error"))
     with pytest.raises(httpx.HTTPStatusError):
         await connector.query(ConnectorQuery(resource="boards"))

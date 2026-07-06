@@ -242,15 +242,17 @@ class TestAuthorizeEndpoint:
 
             from modulo.api.mcp_server import _oauth_authorize
 
-            request = self._make_request({
-                "response_type": "code",
-                "client_id": "oauth_client_1",
-                "redirect_uri": "https://app.example.com/callback",
-                "scope": "trigger:run",
-                "code_challenge": "E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM",
-                "code_challenge_method": "S256",
-                "state": "xyz",
-            })
+            request = self._make_request(
+                {
+                    "response_type": "code",
+                    "client_id": "oauth_client_1",
+                    "redirect_uri": "https://app.example.com/callback",
+                    "scope": "trigger:run",
+                    "code_challenge": "E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM",
+                    "code_challenge_method": "S256",
+                    "state": "xyz",
+                }
+            )
             response = asyncio.run(_oauth_authorize(request))
 
         assert response.status_code == 200
@@ -336,13 +338,15 @@ class TestRedirectUriValidation:
 
             from modulo.api.mcp_server import _oauth_authorize
 
-            body_bytes = json_module.dumps({
-                "response_type": "code",
-                "client_id": "oauth_client_1",
-                "redirect_uri": "https://evil.com/phish",
-                "scope": "trigger:run",
-                "state": "xyz",
-            }).encode()
+            body_bytes = json_module.dumps(
+                {
+                    "response_type": "code",
+                    "client_id": "oauth_client_1",
+                    "redirect_uri": "https://evil.com/phish",
+                    "scope": "trigger:run",
+                    "state": "xyz",
+                }
+            ).encode()
             received = [False]
 
             async def receive() -> dict:
@@ -410,11 +414,13 @@ class TestAuthorizeErrors:
             mock_sf.return_value = _make_mock_session_factory()
             from modulo.api.mcp_server import _oauth_authorize
 
-            request = self._make_request({
-                "response_type": "token",
-                "client_id": "oauth_client_1",
-                "redirect_uri": "https://app.example.com/callback",
-            })
+            request = self._make_request(
+                {
+                    "response_type": "token",
+                    "client_id": "oauth_client_1",
+                    "redirect_uri": "https://app.example.com/callback",
+                }
+            )
             response = asyncio.run(_oauth_authorize(request))
 
         assert response.status_code == 400
@@ -429,11 +435,13 @@ class TestAuthorizeErrors:
             mock_sf.return_value = _make_mock_session_factory()
             from modulo.api.mcp_server import _oauth_authorize
 
-            request = self._make_request({
-                "response_type": "code",
-                "client_id": "",
-                "redirect_uri": "",
-            })
+            request = self._make_request(
+                {
+                    "response_type": "code",
+                    "client_id": "",
+                    "redirect_uri": "",
+                }
+            )
             response = asyncio.run(_oauth_authorize(request))
 
         assert response.status_code == 400
@@ -448,11 +456,13 @@ class TestAuthorizeErrors:
             mock_sf.return_value = _make_mock_session_factory()
             from modulo.api.mcp_server import _oauth_authorize
 
-            request = self._make_request({
-                "response_type": "code",
-                "client_id": "oauth_client_1",
-                "redirect_uri": "",
-            })
+            request = self._make_request(
+                {
+                    "response_type": "code",
+                    "client_id": "oauth_client_1",
+                    "redirect_uri": "",
+                }
+            )
             response = asyncio.run(_oauth_authorize(request))
 
         assert response.status_code == 400
@@ -468,11 +478,13 @@ class TestAuthorizeErrors:
             mock_sf.return_value = _make_mock_session_factory()
             from modulo.api.mcp_server import _oauth_authorize
 
-            request = self._make_request({
-                "response_type": "code",
-                "client_id": "nonexistent_client",
-                "redirect_uri": "https://app.example.com/callback",
-            })
+            request = self._make_request(
+                {
+                    "response_type": "code",
+                    "client_id": "nonexistent_client",
+                    "redirect_uri": "https://app.example.com/callback",
+                }
+            )
             response = asyncio.run(_oauth_authorize(request))
 
         assert response.status_code == 400
@@ -710,9 +722,7 @@ class TestRefreshTokenRotation:
             mock_validate.return_value = _make_mock_client()
             mock_check.return_value = True
             mock_decode.return_value = mock_decoded
-            mock_rotate.side_effect = Exception(
-                "Token family rotated out of order — possible token theft"
-            )
+            mock_rotate.side_effect = Exception("Token family rotated out of order — possible token theft")
 
             resp = admin_client.post(
                 self.ENDPOINT,
@@ -790,6 +800,4 @@ class TestDeleteOAuthClientBDD:
             resp = admin_client.delete(f"{self.ENDPOINT}/oauth_client_1")
 
         assert resp.status_code == 200
-        mock_delete.assert_called_once_with(
-            ANY, client_id="oauth_client_1", org_id=_ORG_ID
-        )
+        mock_delete.assert_called_once_with(ANY, client_id="oauth_client_1", org_id=_ORG_ID)

@@ -38,9 +38,7 @@ def _sign_license_payload(payload: dict, private_key: str = _TEST_PRIV) -> str:
     sig_hex = sign_primitive(payload, private_key)
     sig_bytes = bytes.fromhex(sig_hex)
     payload_b64 = (
-        base64.urlsafe_b64encode(
-            json.dumps(payload, separators=(",", ":"), sort_keys=True).encode()
-        )
+        base64.urlsafe_b64encode(json.dumps(payload, separators=(",", ":"), sort_keys=True).encode())
         .decode()
         .rstrip("=")
     )
@@ -170,9 +168,7 @@ class TestInvalidSignature:
         key = _sign_license_payload(payload)
         parts = key.split(".")
         tampered_b64 = (
-            base64.urlsafe_b64encode(
-                json.dumps({"tier": "community"}, separators=(",", ":"), sort_keys=True).encode()
-            )
+            base64.urlsafe_b64encode(json.dumps({"tier": "community"}, separators=(",", ":"), sort_keys=True).encode())
             .decode()
             .rstrip("=")
         )
@@ -197,9 +193,7 @@ class TestExpiredLicense:
     URL = "/api/v1/admin/license"
 
     def test_expired_license_rejected(self, admin_client: TestClient) -> None:
-        payload = _valid_payload(
-            expires_at=(datetime.now(UTC) - timedelta(days=1)).isoformat()
-        )
+        payload = _valid_payload(expires_at=(datetime.now(UTC) - timedelta(days=1)).isoformat())
         key = _sign_license_payload(payload)
         resp = admin_client.post(self.URL, json={"license_key": key})
         assert resp.status_code == 422

@@ -23,9 +23,7 @@ def test_connector_type(connector: SentryConnector) -> None:
 
 @respx.mock
 async def test_health_check_ok(connector: SentryConnector) -> None:
-    respx.get(f"{_BASE}/").mock(
-        return_value=httpx.Response(200, json={})
-    )
+    respx.get(f"{_BASE}/").mock(return_value=httpx.Response(200, json={}))
     result = await connector.health_check()
     assert result.ok is True
     assert result.detail == "Sentry API token validated"
@@ -33,9 +31,7 @@ async def test_health_check_ok(connector: SentryConnector) -> None:
 
 @respx.mock
 async def test_health_check_invalid_token(connector: SentryConnector) -> None:
-    respx.get(f"{_BASE}/").mock(
-        return_value=httpx.Response(401, text="Unauthorized")
-    )
+    respx.get(f"{_BASE}/").mock(return_value=httpx.Response(401, text="Unauthorized"))
     result = await connector.health_check()
     assert result.ok is False
     assert "Invalid" in result.detail
@@ -43,9 +39,7 @@ async def test_health_check_invalid_token(connector: SentryConnector) -> None:
 
 @respx.mock
 async def test_health_check_network_error(connector: SentryConnector) -> None:
-    respx.get(f"{_BASE}/").mock(
-        side_effect=httpx.ConnectError("connection refused")
-    )
+    respx.get(f"{_BASE}/").mock(side_effect=httpx.ConnectError("connection refused"))
     result = await connector.health_check()
     assert result.ok is False
     assert "connection refused" in result.detail
@@ -57,12 +51,8 @@ async def test_query_issues(connector: SentryConnector) -> None:
         {"id": "1", "title": "Crash in login", "status": "unresolved"},
         {"id": "2", "title": "Memory leak", "status": "resolved"},
     ]
-    respx.get(f"{_BASE}/projects/{ORG}/project-alpha/issues/").mock(
-        return_value=httpx.Response(200, json=issues)
-    )
-    result = await connector.query(
-        ConnectorQuery(resource="issues", filters={"project": "project-alpha"})
-    )
+    respx.get(f"{_BASE}/projects/{ORG}/project-alpha/issues/").mock(return_value=httpx.Response(200, json=issues))
+    result = await connector.query(ConnectorQuery(resource="issues", filters={"project": "project-alpha"}))
     assert len(result.records) == 2
     assert result.records[0]["title"] == "Crash in login"
 
@@ -92,12 +82,8 @@ async def test_query_issues_with_filters(connector: SentryConnector) -> None:
 @respx.mock
 async def test_query_events(connector: SentryConnector) -> None:
     events = [{"id": "e1", "eventID": "abc123", "message": "TypeError"}]
-    respx.get(f"{_BASE}/projects/{ORG}/project-alpha/events/").mock(
-        return_value=httpx.Response(200, json=events)
-    )
-    result = await connector.query(
-        ConnectorQuery(resource="events", filters={"project": "project-alpha"})
-    )
+    respx.get(f"{_BASE}/projects/{ORG}/project-alpha/events/").mock(return_value=httpx.Response(200, json=events))
+    result = await connector.query(ConnectorQuery(resource="events", filters={"project": "project-alpha"}))
     assert len(result.records) == 1
     assert result.records[0]["eventID"] == "abc123"
 
@@ -108,9 +94,7 @@ async def test_query_projects(connector: SentryConnector) -> None:
         {"id": "p1", "slug": "project-alpha"},
         {"id": "p2", "slug": "project-beta"},
     ]
-    respx.get(f"{_BASE}/projects/").mock(
-        return_value=httpx.Response(200, json=projects)
-    )
+    respx.get(f"{_BASE}/projects/").mock(return_value=httpx.Response(200, json=projects))
     result = await connector.query(ConnectorQuery(resource="projects"))
     assert len(result.records) == 2
     assert result.records[0]["slug"] == "project-alpha"
@@ -119,9 +103,7 @@ async def test_query_projects(connector: SentryConnector) -> None:
 @respx.mock
 async def test_query_releases(connector: SentryConnector) -> None:
     releases = [{"id": "r1", "version": "1.0.0"}]
-    respx.get(f"{_BASE}/organizations/{ORG}/releases/").mock(
-        return_value=httpx.Response(200, json=releases)
-    )
+    respx.get(f"{_BASE}/organizations/{ORG}/releases/").mock(return_value=httpx.Response(200, json=releases))
     result = await connector.query(ConnectorQuery(resource="releases"))
     assert len(result.records) == 1
     assert result.records[0]["version"] == "1.0.0"
@@ -130,9 +112,7 @@ async def test_query_releases(connector: SentryConnector) -> None:
 @respx.mock
 async def test_query_teams(connector: SentryConnector) -> None:
     teams = [{"id": "t1", "slug": "engineering"}]
-    respx.get(f"{_BASE}/organizations/{ORG}/teams/").mock(
-        return_value=httpx.Response(200, json=teams)
-    )
+    respx.get(f"{_BASE}/organizations/{ORG}/teams/").mock(return_value=httpx.Response(200, json=teams))
     result = await connector.query(ConnectorQuery(resource="teams"))
     assert len(result.records) == 1
     assert result.records[0]["slug"] == "engineering"
@@ -141,12 +121,8 @@ async def test_query_teams(connector: SentryConnector) -> None:
 @respx.mock
 async def test_query_issue_events(connector: SentryConnector) -> None:
     issue_events = [{"id": "ie1", "eventID": "def456"}]
-    respx.get(f"{_BASE}/issues/42/events/").mock(
-        return_value=httpx.Response(200, json=issue_events)
-    )
-    result = await connector.query(
-        ConnectorQuery(resource="issue_events", filters={"issue_id": "42"})
-    )
+    respx.get(f"{_BASE}/issues/42/events/").mock(return_value=httpx.Response(200, json=issue_events))
+    result = await connector.query(ConnectorQuery(resource="issue_events", filters={"issue_id": "42"}))
     assert len(result.records) == 1
     assert result.records[0]["eventID"] == "def456"
 
@@ -159,9 +135,7 @@ async def test_query_issue_events_missing_issue_id(connector: SentryConnector) -
 
 @respx.mock
 async def test_write_issue_status(connector: SentryConnector) -> None:
-    respx.put(f"{_BASE}/issues/42/").mock(
-        return_value=httpx.Response(200, json={"id": "42", "status": "resolved"})
-    )
+    respx.put(f"{_BASE}/issues/42/").mock(return_value=httpx.Response(200, json={"id": "42", "status": "resolved"}))
     result = await connector.write(
         ConnectorPayload(
             resource="issue_status",
@@ -174,17 +148,13 @@ async def test_write_issue_status(connector: SentryConnector) -> None:
 @respx.mock
 async def test_write_issue_status_missing_issue_id(connector: SentryConnector) -> None:
     with pytest.raises(ValueError, match="Sentry issue_status write requires 'issue_id'"):
-        await connector.write(
-            ConnectorPayload(resource="issue_status", data={"status": "resolved"})
-        )
+        await connector.write(ConnectorPayload(resource="issue_status", data={"status": "resolved"}))
 
 
 @respx.mock
 async def test_write_issue_status_missing_status(connector: SentryConnector) -> None:
     with pytest.raises(ValueError, match="Sentry issue_status write requires 'status'"):
-        await connector.write(
-            ConnectorPayload(resource="issue_status", data={"issue_id": "42"})
-        )
+        await connector.write(ConnectorPayload(resource="issue_status", data={"issue_id": "42"}))
 
 
 @respx.mock
@@ -205,17 +175,13 @@ async def test_write_event_comment(connector: SentryConnector) -> None:
 @respx.mock
 async def test_write_event_comment_missing_issue_id(connector: SentryConnector) -> None:
     with pytest.raises(ValueError, match="Sentry event_comment write requires 'issue_id'"):
-        await connector.write(
-            ConnectorPayload(resource="event_comment", data={"text": "comment"})
-        )
+        await connector.write(ConnectorPayload(resource="event_comment", data={"text": "comment"}))
 
 
 @respx.mock
 async def test_write_event_comment_missing_text(connector: SentryConnector) -> None:
     with pytest.raises(ValueError, match="Sentry event_comment write requires 'text'"):
-        await connector.write(
-            ConnectorPayload(resource="event_comment", data={"issue_id": "42"})
-        )
+        await connector.write(ConnectorPayload(resource="event_comment", data={"issue_id": "42"}))
 
 
 @respx.mock
@@ -249,9 +215,7 @@ async def test_write_release_with_optional_fields(connector: SentryConnector) ->
 @respx.mock
 async def test_write_release_missing_version(connector: SentryConnector) -> None:
     with pytest.raises(ValueError, match="Sentry release write requires 'version'"):
-        await connector.write(
-            ConnectorPayload(resource="release", data={"ref": "main"})
-        )
+        await connector.write(ConnectorPayload(resource="release", data={"ref": "main"}))
 
 
 async def test_query_invalid_resource(connector: SentryConnector) -> None:
@@ -299,9 +263,7 @@ async def test_query_projects_with_cursor(connector: SentryConnector) -> None:
     respx.get(f"{_BASE}/projects/", params={"cursor": "next-page"}).mock(
         return_value=httpx.Response(200, json=projects)
     )
-    result = await connector.query(
-        ConnectorQuery(resource="projects", cursor="next-page")
-    )
+    result = await connector.query(ConnectorQuery(resource="projects", cursor="next-page"))
     assert len(result.records) == 1
 
 
@@ -311,9 +273,7 @@ async def test_query_http_401(connector: SentryConnector) -> None:
         return_value=httpx.Response(401, text="Unauthorized")
     )
     with pytest.raises(httpx.HTTPStatusError):
-        await connector.query(
-            ConnectorQuery(resource="issues", filters={"project": "project-alpha"})
-        )
+        await connector.query(ConnectorQuery(resource="issues", filters={"project": "project-alpha"}))
 
 
 @respx.mock
@@ -322,6 +282,4 @@ async def test_query_http_500(connector: SentryConnector) -> None:
         return_value=httpx.Response(500, text="Internal Server Error")
     )
     with pytest.raises(httpx.HTTPStatusError):
-        await connector.query(
-            ConnectorQuery(resource="issues", filters={"project": "project-alpha"})
-        )
+        await connector.query(ConnectorQuery(resource="issues", filters={"project": "project-alpha"}))

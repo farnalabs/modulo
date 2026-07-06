@@ -92,15 +92,12 @@ def test_polling_types_are_valid_connectors():
     ]
     for type_id, config, creds in test_cases:
         connector = _build_polling_connector(type_id, config, creds)
-        assert isinstance(connector, ConnectorBase), (
-            f"{type_id} should return a ConnectorBase instance"
-        )
+        assert isinstance(connector, ConnectorBase), f"{type_id} should return a ConnectorBase instance"
 
 
 def test_hub_has_minimum_types():
     """Sanity check — the hub should have more types than polling supports."""
     hub_types = _get_hub_connector_types()
     assert len(hub_types) >= 20, (
-        f"Expected at least 20 hub connector types, got {len(hub_types)}. "
-        "Has the hub been refactored?"
+        f"Expected at least 20 hub connector types, got {len(hub_types)}. Has the hub been refactored?"
     )

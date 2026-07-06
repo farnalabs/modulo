@@ -67,14 +67,16 @@ def _oidc_settings(license_key: str = "test-license-key") -> Settings:
         modulo_license_key=license_key,
         modulo_csrf_enabled=False,
         modulo_public_url="http://localhost:8000",
-        modulo_oidc_providers=json.dumps([
-            {
-                "provider_id": "google",
-                "client_id": "google-client-id",
-                "client_secret": "google-client-secret",
-                "discovery_url": "https://accounts.google.com/.well-known/openid-configuration",
-            },
-        ]),
+        modulo_oidc_providers=json.dumps(
+            [
+                {
+                    "provider_id": "google",
+                    "client_id": "google-client-id",
+                    "client_secret": "google-client-secret",
+                    "discovery_url": "https://accounts.google.com/.well-known/openid-configuration",
+                },
+            ]
+        ),
     )
 
 
@@ -96,18 +98,10 @@ def _saml_settings(license_key: str = "test-license-key") -> Settings:
 def _make_saml_response(email: str, display_name: str, groups: list[str] | None = None) -> str:
     groups_xml = ""
     if groups:
-        values = "".join(
-            f'        <saml:AttributeValue>{g}</saml:AttributeValue>'
-            for g in groups
-        )
-        groups_xml = (
-            '      <saml:Attribute Name="groups">\n'
-            f"{values}\n"
-            '      </saml:Attribute>'
-        )
+        values = "".join(f"        <saml:AttributeValue>{g}</saml:AttributeValue>" for g in groups)
+        groups_xml = f'      <saml:Attribute Name="groups">\n{values}\n      </saml:Attribute>'
     xml = (
-        _SAML_RESPONSE_XML
-        .replace("__EMAIL__", email)
+        _SAML_RESPONSE_XML.replace("__EMAIL__", email)
         .replace("__DISPLAY_NAME__", display_name)
         .replace("__GROUPS_XML__", groups_xml)
     )
@@ -118,14 +112,13 @@ def _make_id_token(email: str, name: str, groups: list[str] | None = None, sub: 
     claims: dict[str, Any] = {"email": email, "name": name, "sub": sub}
     if groups:
         claims["groups"] = groups
-    payload = base64.urlsafe_b64encode(
-        json.dumps(claims).encode()
-    ).rstrip(b"=").decode()
+    payload = base64.urlsafe_b64encode(json.dumps(claims).encode()).rstrip(b"=").decode()
     return f"eyJhbGciOiJSUzI1NiJ9.{payload}.signature"
 
 
 def _sign_state(provider_id: str, secret_key: str = _VALID_32) -> str:
     from modulo.auth.sso import sign_state
+
     return sign_state(f"{provider_id}:{uuid.uuid4().hex}", secret_key)
 
 
@@ -381,7 +374,9 @@ class TestOidcGroupMapping:
             }
             mock_ex.return_value = {"id_token": id_token}
             mock_verify.return_value = {
-                "email": "bob@example.com", "name": "Bob", "sub": "bob123",
+                "email": "bob@example.com",
+                "name": "Bob",
+                "sub": "bob123",
             }
             user_mock = MagicMock()
             user_mock.email = "bob@example.com"
@@ -419,7 +414,9 @@ class TestOidcGroupMapping:
             }
             mock_ex.return_value = {"id_token": id_token}
             mock_verify.return_value = {
-                "email": "carol@example.com", "name": "Carol", "sub": "carol123",
+                "email": "carol@example.com",
+                "name": "Carol",
+                "sub": "carol123",
                 "groups": ["engineering"],
             }
             user_mock = MagicMock()

@@ -196,18 +196,12 @@ class TestBDDAdminViewsAsTeam:
         user = _make_user()
         plan_ctx = _make_mock_plan_context()
         return {
-            "get_organisation": patch(
-                "modulo.api.routes.viewmodel.get_organisation", return_value=org
-            ),
-            "get_account_by_id": patch(
-                "modulo.api.routes.viewmodel.get_account_by_id", return_value=user
-            ),
+            "get_organisation": patch("modulo.api.routes.viewmodel.get_organisation", return_value=org),
+            "get_account_by_id": patch("modulo.api.routes.viewmodel.get_account_by_id", return_value=user),
             "list_team_memberships_for_account": patch(
                 "modulo.api.routes.viewmodel.list_team_memberships_for_account", return_value=[]
             ),
-            "resolve_plan_context": patch(
-                "modulo.api.routes.viewmodel.resolve_plan_context", return_value=plan_ctx
-            ),
+            "resolve_plan_context": patch("modulo.api.routes.viewmodel.resolve_plan_context", return_value=plan_ctx),
         }
 
     def test_admin_view_as_team_returns_200(self, client: TestClient) -> None:
@@ -381,9 +375,7 @@ class TestBDDInvalidTeam:
         # Team query returns None → 404
         mock_session.execute.return_value.scalar_one_or_none = AsyncMock(return_value=None)
         # But org and user queries need to succeed for the viewmodel handler
-        mock_session.execute.return_value.scalars = MagicMock(
-            return_value=MagicMock(all=MagicMock(return_value=[]))
-        )
+        mock_session.execute.return_value.scalars = MagicMock(return_value=MagicMock(all=MagicMock(return_value=[])))
 
         async def override_session():
             yield mock_session
@@ -401,8 +393,8 @@ class TestBDDInvalidTeam:
         try:
             with (
                 patch("modulo.api.routes.viewmodel.get_organisation", return_value=_make_org()),
-            patch("modulo.api.routes.viewmodel.get_account_by_id", return_value=_make_user()),
-            patch("modulo.api.routes.viewmodel.list_team_memberships_for_account", return_value=[]),
+                patch("modulo.api.routes.viewmodel.get_account_by_id", return_value=_make_user()),
+                patch("modulo.api.routes.viewmodel.list_team_memberships_for_account", return_value=[]),
                 patch("modulo.api.routes.viewmodel.resolve_plan_context", return_value=_make_mock_plan_context()),
             ):
                 resp = c.get(self.URL, params={"view_as_team": str(nonexistent_id)})

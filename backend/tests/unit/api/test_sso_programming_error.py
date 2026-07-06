@@ -1,4 +1,5 @@
 """Unit tests: ProgrammingError on SSO admin routes returns 501."""
+
 import uuid
 from collections.abc import AsyncGenerator, Generator
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -116,7 +117,9 @@ class TestTestConnectionProgrammingError:
 
 
 class TestSetGroupMappingsProgrammingError:
-    @patch("modulo.api.routes.admin_sso.set_group_mappings", new=AsyncMock(side_effect=ProgrammingError("mock", {}, "")))
+    @patch(
+        "modulo.api.routes.admin_sso.set_group_mappings", new=AsyncMock(side_effect=ProgrammingError("mock", {}, ""))
+    )
     def test_set_group_mappings_returns_501(self, client: TestClient) -> None:
         resp = client.put(
             f"/api/v1/admin/sso/providers/{_PROVIDER_ID}/group-mappings",

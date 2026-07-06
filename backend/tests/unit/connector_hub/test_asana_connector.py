@@ -99,9 +99,7 @@ async def test_query_projects(connector):
 async def test_query_projects_with_archived(connector):
     projects = {"data": [{"gid": "p3", "name": "Archived", "archived": True}]}
     respx.get(f"{_BASE}/projects").mock(return_value=httpx.Response(200, json=projects))
-    result = await connector.query(
-        ConnectorQuery(resource="projects", filters={"workspace": "w1", "archived": True})
-    )
+    result = await connector.query(ConnectorQuery(resource="projects", filters={"workspace": "w1", "archived": True}))
     assert result.total == 1
     assert result.records[0]["archived"] is True
 
@@ -219,9 +217,7 @@ async def test_query_unsupported_resource(connector):
 async def test_write_create_task(connector):
     created = {"data": {"gid": "t_new", "name": "New Task", "resource_type": "task"}}
     respx.post(f"{_BASE}/tasks").mock(return_value=httpx.Response(201, json=created))
-    result = await connector.write(
-        ConnectorPayload(resource="task", data={"name": "New Task", "projects": ["p1"]})
-    )
+    result = await connector.write(ConnectorPayload(resource="task", data={"name": "New Task", "projects": ["p1"]}))
     assert result["gid"] == "t_new"
     assert result["name"] == "New Task"
 
@@ -235,9 +231,7 @@ async def test_write_create_task(connector):
 async def test_write_update_task(connector):
     updated = {"data": {"gid": "t1", "name": "Updated Name", "completed": True}}
     respx.put(f"{_BASE}/tasks/t1").mock(return_value=httpx.Response(200, json=updated))
-    result = await connector.write(
-        ConnectorPayload(resource="task_update", data={"id": "t1", "name": "Updated Name"})
-    )
+    result = await connector.write(ConnectorPayload(resource="task_update", data={"id": "t1", "name": "Updated Name"}))
     assert result["name"] == "Updated Name"
 
 
@@ -255,9 +249,7 @@ async def test_write_update_task_missing_id(connector):
 async def test_write_create_project(connector):
     created = {"data": {"gid": "p_new", "name": "New Project", "resource_type": "project"}}
     respx.post(f"{_BASE}/projects").mock(return_value=httpx.Response(201, json=created))
-    result = await connector.write(
-        ConnectorPayload(resource="project", data={"name": "New Project"})
-    )
+    result = await connector.write(ConnectorPayload(resource="project", data={"name": "New Project"}))
     assert result["gid"] == "p_new"
     assert result["name"] == "New Project"
 
@@ -271,9 +263,7 @@ async def test_write_create_project(connector):
 async def test_write_create_section(connector):
     created = {"data": {"gid": "s_new", "name": "New Section", "resource_type": "section"}}
     respx.post(f"{_BASE}/sections").mock(return_value=httpx.Response(201, json=created))
-    result = await connector.write(
-        ConnectorPayload(resource="section", data={"project": "p1", "name": "New Section"})
-    )
+    result = await connector.write(ConnectorPayload(resource="section", data={"project": "p1", "name": "New Section"}))
     assert result["gid"] == "s_new"
     assert result["name"] == "New Section"
 
@@ -292,9 +282,7 @@ async def test_write_create_section_missing_project(connector):
 async def test_write_comment(connector):
     comment = {"data": {"gid": "st1", "text": "Nice work!", "resource_type": "story"}}
     respx.post(f"{_BASE}/tasks/t1/stories").mock(return_value=httpx.Response(201, json=comment))
-    result = await connector.write(
-        ConnectorPayload(resource="comment", data={"task_id": "t1", "text": "Nice work!"})
-    )
+    result = await connector.write(ConnectorPayload(resource="comment", data={"task_id": "t1", "text": "Nice work!"}))
     assert result["text"] == "Nice work!"
 
 

@@ -42,7 +42,9 @@ class TestRunOutputValidation:
         ov = OutputValidation(
             eval_definitions=[
                 EvalDefinitionConfig(
-                    id="e1", name="check_positive", type="regex",
+                    id="e1",
+                    name="check_positive",
+                    type="regex",
                     config={"field": "score", "pattern": r"\d+"},
                 ),
             ],
@@ -55,7 +57,9 @@ class TestRunOutputValidation:
         ov = OutputValidation(
             eval_definitions=[
                 EvalDefinitionConfig(
-                    id="e1", name="check_positive", type="regex",
+                    id="e1",
+                    name="check_positive",
+                    type="regex",
                     config={"field": "score", "pattern": r"\d+"},
                 ),
             ],
@@ -69,7 +73,9 @@ class TestRunOutputValidation:
         ov = OutputValidation(
             eval_definitions=[
                 EvalDefinitionConfig(
-                    id="e1", name="field_check", type="regex",
+                    id="e1",
+                    name="field_check",
+                    type="regex",
                     config={"field": "missing", "pattern": r".+"},
                 ),
             ],
@@ -81,7 +87,9 @@ class TestRunOutputValidation:
         ov = OutputValidation(
             eval_definitions=[
                 EvalDefinitionConfig(
-                    id="e1", name="schema_check", type="json_schema",
+                    id="e1",
+                    name="schema_check",
+                    type="json_schema",
                     config={
                         "schema": {
                             "type": "object",
@@ -99,7 +107,9 @@ class TestRunOutputValidation:
         ov = OutputValidation(
             eval_definitions=[
                 EvalDefinitionConfig(
-                    id="e1", name="schema_check", type="json_schema",
+                    id="e1",
+                    name="schema_check",
+                    type="json_schema",
                     config={
                         "schema": {
                             "type": "object",
@@ -118,7 +128,9 @@ class TestRunOutputValidation:
         ov = OutputValidation(
             eval_definitions=[
                 EvalDefinitionConfig(
-                    id="e1", name="field_schema", type="json_schema",
+                    id="e1",
+                    name="field_schema",
+                    type="json_schema",
                     config={
                         "field": "payload",
                         "schema": {"type": "object", "properties": {"x": {"type": "number"}}},
@@ -133,7 +145,9 @@ class TestRunOutputValidation:
         ov = OutputValidation(
             eval_definitions=[
                 EvalDefinitionConfig(
-                    id="e1", name="judge", type="llm_judge",
+                    id="e1",
+                    name="judge",
+                    type="llm_judge",
                     config={"rubric": "check quality"},
                 ),
             ],
@@ -149,7 +163,9 @@ class TestRunOutputValidation:
         ov = OutputValidation(
             eval_definitions=[
                 EvalDefinitionConfig(
-                    id="e1", name="judge", type="llm_judge",
+                    id="e1",
+                    name="judge",
+                    type="llm_judge",
                     config={"rubric": "check quality"},
                 ),
             ],
@@ -166,7 +182,9 @@ class TestRunOutputValidation:
         ov = OutputValidation(
             eval_definitions=[
                 EvalDefinitionConfig(
-                    id="e1", name="judge", type="llm_judge",
+                    id="e1",
+                    name="judge",
+                    type="llm_judge",
                     config={"rubric": "check"},
                 ),
             ],
@@ -178,7 +196,9 @@ class TestRunOutputValidation:
         ov = OutputValidation(
             eval_definitions=[
                 EvalDefinitionConfig.model_construct(
-                    id="e1", name="bad", type="unknown",
+                    id="e1",
+                    name="bad",
+                    type="unknown",
                 ),
             ],
         )
@@ -199,13 +219,16 @@ class TestExecuteCompositeWithRetry:
         ov = OutputValidation(
             eval_definitions=[
                 EvalDefinitionConfig(
-                    id="e1", name="check", type="regex",
+                    id="e1",
+                    name="check",
+                    type="regex",
                     config={"field": "status", "pattern": "ok"},
                 ),
             ],
         )
         result = execute_composite_with_retry(
-            node_def, template,
+            node_def,
+            template,
             parameter_values={},
             input_payload={"status": "ok"},
             output_validation=ov,
@@ -228,7 +251,9 @@ class TestExecuteCompositeWithRetry:
         ov = OutputValidation(
             eval_definitions=[
                 EvalDefinitionConfig(
-                    id="e1", name="check", type="regex",
+                    id="e1",
+                    name="check",
+                    type="regex",
                     config={"field": "status", "pattern": "ok"},
                     failure_behaviour="retry",
                 ),
@@ -247,7 +272,8 @@ class TestExecuteCompositeWithRetry:
 
         try:
             result = execute_composite_with_retry(
-                _node_def(), _template(),
+                _node_def(),
+                _template(),
                 parameter_values={},
                 input_payload={"status": "fail"},
                 output_validation=ov,
@@ -262,7 +288,9 @@ class TestExecuteCompositeWithRetry:
         ov = OutputValidation(
             eval_definitions=[
                 EvalDefinitionConfig(
-                    id="e1", name="check", type="regex",
+                    id="e1",
+                    name="check",
+                    type="regex",
                     config={"field": "status", "pattern": "ok"},
                     failure_behaviour="retry",
                 ),
@@ -271,6 +299,7 @@ class TestExecuteCompositeWithRetry:
         )
 
         import modulo.core.composite_engine.expander as expander_mod
+
         original_expand = expander_mod.expand_composite_node
         expander_mod.expand_composite_node = lambda nd, ct, pv: [
             {"id": str(uuid.uuid4()), "agent_id": str(uuid.uuid4()), "prompt": "Hello"},
@@ -278,13 +307,15 @@ class TestExecuteCompositeWithRetry:
 
         original_validate = expander_mod.run_output_validation
         expander_mod.run_output_validation = lambda mo, ov, ljc=None: ValidationResult(
-            passed=False, failures=["Eval 'check': regex /ok/ did not match field 'status'"],
+            passed=False,
+            failures=["Eval 'check': regex /ok/ did not match field 'status'"],
         )
 
         try:
             with pytest.raises(CompositeValidationError) as exc_info:
                 execute_composite_with_retry(
-                    _node_def(), _template(),
+                    _node_def(),
+                    _template(),
                     parameter_values={},
                     input_payload={"status": "fail"},
                     output_validation=ov,
@@ -298,7 +329,9 @@ class TestExecuteCompositeWithRetry:
         ov = OutputValidation(
             eval_definitions=[
                 EvalDefinitionConfig(
-                    id="e1", name="block_check", type="regex",
+                    id="e1",
+                    name="block_check",
+                    type="regex",
                     config={"field": "status", "pattern": "ok"},
                     failure_behaviour="block",
                 ),
@@ -307,15 +340,18 @@ class TestExecuteCompositeWithRetry:
         )
 
         import modulo.core.composite_engine.expander as expander_mod
+
         original_validate = expander_mod.run_output_validation
         expander_mod.run_output_validation = lambda mo, ov, ljc=None: ValidationResult(
-            passed=False, failures=["Eval 'block_check': regex /ok/ did not match field 'status'"],
+            passed=False,
+            failures=["Eval 'block_check': regex /ok/ did not match field 'status'"],
         )
 
         try:
             with pytest.raises(CompositeValidationError) as exc_info:
                 execute_composite_with_retry(
-                    _node_def(), _template(),
+                    _node_def(),
+                    _template(),
                     parameter_values={},
                     input_payload={"status": "fail"},
                     output_validation=ov,
@@ -328,7 +364,9 @@ class TestExecuteCompositeWithRetry:
         ov = OutputValidation(
             eval_definitions=[
                 EvalDefinitionConfig(
-                    id="e1", name="warn_check", type="regex",
+                    id="e1",
+                    name="warn_check",
+                    type="regex",
                     config={"field": "status", "pattern": "ok"},
                     failure_behaviour="warn",
                 ),
@@ -337,14 +375,17 @@ class TestExecuteCompositeWithRetry:
         )
 
         import modulo.core.composite_engine.expander as expander_mod
+
         original_validate = expander_mod.run_output_validation
         expander_mod.run_output_validation = lambda mo, ov, ljc=None: ValidationResult(
-            passed=False, failures=["Eval 'warn_check': regex /ok/ did not match field 'status'"],
+            passed=False,
+            failures=["Eval 'warn_check': regex /ok/ did not match field 'status'"],
         )
 
         try:
             result = execute_composite_with_retry(
-                _node_def(), _template(),
+                _node_def(),
+                _template(),
                 parameter_values={},
                 input_payload={"status": "fail"},
                 output_validation=ov,

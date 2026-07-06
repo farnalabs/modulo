@@ -24,9 +24,7 @@ def test_connector_type(connector: DatadogConnector) -> None:
 
 @respx.mock
 async def test_health_check_ok(connector: DatadogConnector) -> None:
-    respx.get(f"{_BASE}/api/v1/validate").mock(
-        return_value=httpx.Response(200, json={"valid": True})
-    )
+    respx.get(f"{_BASE}/api/v1/validate").mock(return_value=httpx.Response(200, json={"valid": True}))
     result = await connector.health_check()
     assert result.ok is True
     assert result.detail == "Datadog API key validated"
@@ -34,9 +32,7 @@ async def test_health_check_ok(connector: DatadogConnector) -> None:
 
 @respx.mock
 async def test_health_check_invalid_key(connector: DatadogConnector) -> None:
-    respx.get(f"{_BASE}/api/v1/validate").mock(
-        return_value=httpx.Response(403, text="Forbidden")
-    )
+    respx.get(f"{_BASE}/api/v1/validate").mock(return_value=httpx.Response(403, text="Forbidden"))
     result = await connector.health_check()
     assert result.ok is False
     assert "Invalid" in result.detail
@@ -44,9 +40,7 @@ async def test_health_check_invalid_key(connector: DatadogConnector) -> None:
 
 @respx.mock
 async def test_health_check_network_error(connector: DatadogConnector) -> None:
-    respx.get(f"{_BASE}/api/v1/validate").mock(
-        side_effect=httpx.ConnectError("connection refused")
-    )
+    respx.get(f"{_BASE}/api/v1/validate").mock(side_effect=httpx.ConnectError("connection refused"))
     result = await connector.health_check()
     assert result.ok is False
     assert "connection refused" in result.detail
@@ -58,9 +52,7 @@ async def test_query_monitors(connector: DatadogConnector) -> None:
         {"id": 1, "name": "CPU Load", "status": "Alert"},
         {"id": 2, "name": "Memory Usage", "status": "OK"},
     ]
-    respx.get(f"{_BASE}/api/v1/monitor").mock(
-        return_value=httpx.Response(200, json=monitors)
-    )
+    respx.get(f"{_BASE}/api/v1/monitor").mock(return_value=httpx.Response(200, json=monitors))
     result = await connector.query(ConnectorQuery(resource="monitors"))
     assert len(result.records) == 2
     assert result.records[0]["name"] == "CPU Load"
@@ -90,9 +82,7 @@ async def test_query_monitors_with_filters(connector: DatadogConnector) -> None:
 @respx.mock
 async def test_query_events(connector: DatadogConnector) -> None:
     respx.get(f"{_BASE}/api/v1/events").mock(
-        return_value=httpx.Response(
-            200, json={"events": [{"id": "e1", "title": "Deploy", "text": "v2 deployed"}]}
-        )
+        return_value=httpx.Response(200, json={"events": [{"id": "e1", "title": "Deploy", "text": "v2 deployed"}]})
     )
     result = await connector.query(ConnectorQuery(resource="events"))
     assert len(result.records) == 1
@@ -156,9 +146,7 @@ async def test_query_dashboards_with_filters(connector: DatadogConnector) -> Non
             json={"data": [{"id": "d2", "attributes": {"title": "System Overview"}}]},
         )
     )
-    result = await connector.query(
-        ConnectorQuery(resource="dashboards", filters={"filter": "system"})
-    )
+    result = await connector.query(ConnectorQuery(resource="dashboards", filters={"filter": "system"}))
     assert len(result.records) == 1
 
 
@@ -210,9 +198,7 @@ async def test_query_logs_with_cursor(connector: DatadogConnector) -> None:
             },
         )
     )
-    result = await connector.query(
-        ConnectorQuery(resource="logs", cursor="cursor123")
-    )
+    result = await connector.query(ConnectorQuery(resource="logs", cursor="cursor123"))
     assert len(result.records) == 1
     assert result.next_cursor == "cursor789"
 
@@ -261,17 +247,13 @@ async def test_write_event_with_optional_fields(connector: DatadogConnector) -> 
 @respx.mock
 async def test_write_event_missing_title(connector: DatadogConnector) -> None:
     with pytest.raises(ValueError, match="Datadog event write requires"):
-        await connector.write(
-            ConnectorPayload(resource="event", data={"text": "v2 deployed"})
-        )
+        await connector.write(ConnectorPayload(resource="event", data={"text": "v2 deployed"}))
 
 
 @respx.mock
 async def test_write_monitor(connector: DatadogConnector) -> None:
     respx.post(f"{_BASE}/api/v1/monitor").mock(
-        return_value=httpx.Response(
-            200, json={"id": 42, "name": "Test Monitor", "type": "metric alert"}
-        )
+        return_value=httpx.Response(200, json={"id": 42, "name": "Test Monitor", "type": "metric alert"})
     )
     result = await connector.write(
         ConnectorPayload(
@@ -286,16 +268,12 @@ async def test_write_monitor(connector: DatadogConnector) -> None:
 @respx.mock
 async def test_write_monitor_missing_query(connector: DatadogConnector) -> None:
     with pytest.raises(ValueError, match="Datadog monitor write requires"):
-        await connector.write(
-            ConnectorPayload(resource="monitor", data={"type": "metric alert"})
-        )
+        await connector.write(ConnectorPayload(resource="monitor", data={"type": "metric alert"}))
 
 
 @respx.mock
 async def test_write_monitor_status(connector: DatadogConnector) -> None:
-    respx.put(f"{_BASE}/api/v1/monitor/42").mock(
-        return_value=httpx.Response(200, json={"id": 42, "status": "Muted"})
-    )
+    respx.put(f"{_BASE}/api/v1/monitor/42").mock(return_value=httpx.Response(200, json={"id": 42, "status": "Muted"}))
     result = await connector.write(
         ConnectorPayload(
             resource="monitor_status",
@@ -308,9 +286,7 @@ async def test_write_monitor_status(connector: DatadogConnector) -> None:
 @respx.mock
 async def test_write_monitor_status_missing_id(connector: DatadogConnector) -> None:
     with pytest.raises(ValueError, match="Datadog monitor_status write requires"):
-        await connector.write(
-            ConnectorPayload(resource="monitor_status", data={"status": "Muted"})
-        )
+        await connector.write(ConnectorPayload(resource="monitor_status", data={"status": "Muted"}))
 
 
 async def test_query_invalid_resource(connector: DatadogConnector) -> None:
@@ -345,17 +321,13 @@ def test_constructor_unknown_site() -> None:
 
 @respx.mock
 async def test_query_http_403(connector: DatadogConnector) -> None:
-    respx.get(f"{_BASE}/api/v1/monitor").mock(
-        return_value=httpx.Response(403, text="Forbidden")
-    )
+    respx.get(f"{_BASE}/api/v1/monitor").mock(return_value=httpx.Response(403, text="Forbidden"))
     with pytest.raises(httpx.HTTPStatusError):
         await connector.query(ConnectorQuery(resource="monitors"))
 
 
 @respx.mock
 async def test_query_http_500(connector: DatadogConnector) -> None:
-    respx.get(f"{_BASE}/api/v1/monitor").mock(
-        return_value=httpx.Response(500, text="Internal Server Error")
-    )
+    respx.get(f"{_BASE}/api/v1/monitor").mock(return_value=httpx.Response(500, text="Internal Server Error"))
     with pytest.raises(httpx.HTTPStatusError):
         await connector.query(ConnectorQuery(resource="monitors"))

@@ -43,10 +43,12 @@ async def test_write_429_rate_limit_returns_value_error(connector):
         return_value=httpx.Response(429, text="Rate limit exceeded"),
     )
     with pytest.raises(ValueError, match="GitLab API HTTP 429"):
-        await connector.write(ConnectorPayload(
-            resource="issue",
-            data={"project": "group/project", "title": "Test"},
-        ))
+        await connector.write(
+            ConnectorPayload(
+                resource="issue",
+                data={"project": "group/project", "title": "Test"},
+            )
+        )
 
 
 @respx.mock

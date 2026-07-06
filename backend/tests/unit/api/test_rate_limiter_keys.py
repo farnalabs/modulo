@@ -95,9 +95,7 @@ class TestRateLimitKeyDerivation:
         key = self._get_key(app, headers={"Authorization": f"Bearer {API_KEY_HEADER}"})
         assert "/api/v1/runs" in key
 
-    def test_different_api_keys_have_different_keys(
-        self, spy_registry: MagicMock
-    ) -> None:
+    def test_different_api_keys_have_different_keys(self, spy_registry: MagicMock) -> None:
         self._spy_registry = spy_registry
         app = _make_app(registry=spy_registry)
         with TestClient(app) as client:
@@ -138,9 +136,7 @@ class TestRateLimitKeyDerivation:
         key = self._get_key(app, headers={"Authorization": f"Bearer {jwt}"})
         assert user_id in key
 
-    def test_different_users_get_different_keys(
-        self, spy_registry: MagicMock
-    ) -> None:
+    def test_different_users_get_different_keys(self, spy_registry: MagicMock) -> None:
         self._spy_registry = spy_registry
         app = _make_app(registry=spy_registry)
         jwt1 = _valid_jwt(org_id=str(uuid.uuid4()), user_id=str(uuid.uuid4()))
@@ -178,14 +174,10 @@ class TestRateLimitKeyDerivation:
         key = self._get_key(app)
         assert "/api/v1/runs" in key
 
-    def test_unauthenticated_with_xff_uses_first_ip(
-        self, spy_registry: MagicMock
-    ) -> None:
+    def test_unauthenticated_with_xff_uses_first_ip(self, spy_registry: MagicMock) -> None:
         self._spy_registry = spy_registry
         app = _make_app(registry=spy_registry)
-        key = self._get_key(
-            app, headers={"X-Forwarded-For": "203.0.113.42, 10.0.0.1"}
-        )
+        key = self._get_key(app, headers={"X-Forwarded-For": "203.0.113.42, 10.0.0.1"})
         assert "203.0.113.42" in key
         assert key.startswith("ip:203.0.113.42:")
 
@@ -202,9 +194,7 @@ class TestRateLimitKeyDerivation:
         """If the JWT can't be decoded, fall back to IP."""
         self._spy_registry = spy_registry
         app = _make_app(registry=spy_registry)
-        key = self._get_key(
-            app, headers={"Authorization": "Bearer Not.A.Token.AtAll"}
-        )
+        key = self._get_key(app, headers={"Authorization": "Bearer Not.A.Token.AtAll"})
         assert key.startswith("ip:")
 
     def test_empty_bearer_falls_back_to_ip(self, spy_registry: MagicMock) -> None:
@@ -213,4 +203,3 @@ class TestRateLimitKeyDerivation:
         app = _make_app(registry=spy_registry)
         key = self._get_key(app, headers={"Authorization": "Bearer "})
         assert key.startswith("ip:")
-

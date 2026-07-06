@@ -5,8 +5,7 @@ import pytest
 import respx
 
 from modulo.connectors.base import ConnectorPayload, ConnectorQuery, ConnectorType
-from modulo.connectors.slack import SlackConnector
-from modulo.connectors.slack import _parse_retry_after
+from modulo.connectors.slack import SlackConnector, _parse_retry_after
 
 TOKEN = "xoxb-test-token"
 
@@ -17,6 +16,7 @@ def connector():
 
 
 # -- health_check --
+
 
 @respx.mock
 async def test_health_check_ok(connector):
@@ -71,13 +71,24 @@ async def test_health_check_non_json(connector):
 
 # -- query: channels --
 
+
 @respx.mock
 async def test_query_channels(connector):
     channels = [
-        {"id": "C001", "name": "general", "topic": {"value": "General chat"},
-         "purpose": {"value": ""}, "num_members": 42},
-        {"id": "C002", "name": "random", "topic": {"value": "Random stuff"},
-         "purpose": {"value": ""}, "num_members": 15},
+        {
+            "id": "C001",
+            "name": "general",
+            "topic": {"value": "General chat"},
+            "purpose": {"value": ""},
+            "num_members": 42,
+        },
+        {
+            "id": "C002",
+            "name": "random",
+            "topic": {"value": "Random stuff"},
+            "purpose": {"value": ""},
+            "num_members": 15,
+        },
     ]
     respx.get("https://slack.com/api/conversations.list").mock(
         return_value=httpx.Response(
@@ -128,6 +139,7 @@ async def test_query_channels_http_error(connector):
 
 # -- query: messages --
 
+
 @respx.mock
 async def test_query_messages(connector):
     messages = [
@@ -173,17 +185,22 @@ async def test_query_messages_api_error(connector):
 
 # -- query: users --
 
+
 @respx.mock
 async def test_query_users(connector):
     members = [
-        {"id": "U001", "name": "alice",
-         "profile": {"display_name": "Alice", "real_name": "Alice Smith",
-                      "email": "alice@example.com"},
-         "tz": "America/New_York"},
-        {"id": "U002", "name": "bob",
-         "profile": {"display_name": "Bob", "real_name": "Bob Jones",
-                      "email": "bob@example.com"},
-         "tz": "America/Chicago"},
+        {
+            "id": "U001",
+            "name": "alice",
+            "profile": {"display_name": "Alice", "real_name": "Alice Smith", "email": "alice@example.com"},
+            "tz": "America/New_York",
+        },
+        {
+            "id": "U002",
+            "name": "bob",
+            "profile": {"display_name": "Bob", "real_name": "Bob Jones", "email": "bob@example.com"},
+            "tz": "America/Chicago",
+        },
     ]
     respx.get("https://slack.com/api/users.list").mock(
         return_value=httpx.Response(200, json={"ok": True, "members": members}),
@@ -230,6 +247,7 @@ async def test_query_users_http_error(connector):
 
 # -- query: unsupported resource --
 
+
 async def test_query_unsupported_resource(connector):
     with pytest.raises(ValueError, match="Unsupported Slack resource"):
         await connector.query(ConnectorQuery(resource="unknown"))
@@ -237,12 +255,14 @@ async def test_query_unsupported_resource(connector):
 
 # -- write: unsupported resource --
 
+
 async def test_write_unsupported_resource(connector):
     with pytest.raises(ValueError, match="Unsupported Slack write resource"):
         await connector.write(ConnectorPayload(resource="file", data={}))
 
 
 # -- write: message --
+
 
 @respx.mock
 async def test_write_message(connector):
@@ -286,6 +306,7 @@ async def test_write_message_http_error(connector):
 
 # -- rate limiting (old-style direct raises via ValueError) --
 
+
 @respx.mock
 async def test_query_channels_rate_limited(connector):
     respx.get("https://slack.com/api/conversations.list").mock(
@@ -328,11 +349,13 @@ async def test_write_message_rate_limited(connector):
 
 # -- connector type --
 
+
 def test_connector_type(connector):
     assert connector.connector_type == ConnectorType.SLACK
 
 
 # -- retry/backoff for 429 --
+
 
 @respx.mock
 async def test_429_retry_then_succeed(connector):
@@ -362,6 +385,7 @@ async def test_429_retry_exhausted(connector):
 
 
 # -- connection errors / timeouts --
+
 
 @respx.mock
 async def test_query_channels_connection_error(connector):
@@ -405,10 +429,13 @@ async def test_list_users_connection_error(connector):
 
 # -- verify_scopes --
 
+
 @respx.mock
 async def test_verify_scopes_ok(connector):
     respx.get("https://slack.com/api/auth.test").mock(
-        return_value=httpx.Response(200, json={"ok": True, "user_id": "U001", "team": "T001", "url": "https://example.slack.com"}),
+        return_value=httpx.Response(
+            200, json={"ok": True, "user_id": "U001", "team": "T001", "url": "https://example.slack.com"}
+        ),
     )
     result = await connector.verify_scopes()
     assert result["user_id"] == "U001"
@@ -448,13 +475,17 @@ async def test_health_check_revoked_token(connector):
 
 # -- channel_info --
 
+
 @respx.mock
 async def test_channel_info(connector):
     respx.get("https://slack.com/api/conversations.info").mock(
-        return_value=httpx.Response(200, json={
-            "ok": True,
-            "channel": {"id": "C001", "name": "general", "topic": {"value": "General chat"}, "num_members": 42},
-        }),
+        return_value=httpx.Response(
+            200,
+            json={
+                "ok": True,
+                "channel": {"id": "C001", "name": "general", "topic": {"value": "General chat"}, "num_members": 42},
+            },
+        ),
     )
     result = await connector.query(
         ConnectorQuery(resource="channel_info", filters={"channel": "C001"}),
@@ -483,14 +514,18 @@ async def test_channel_info_api_error(connector):
 
 # -- channel_members --
 
+
 @respx.mock
 async def test_channel_members(connector):
     respx.get("https://slack.com/api/conversations.members").mock(
-        return_value=httpx.Response(200, json={
-            "ok": True,
-            "members": ["U001", "U002", "U003"],
-            "response_metadata": {"next_cursor": ""},
-        }),
+        return_value=httpx.Response(
+            200,
+            json={
+                "ok": True,
+                "members": ["U001", "U002", "U003"],
+                "response_metadata": {"next_cursor": ""},
+            },
+        ),
     )
     result = await connector.query(
         ConnectorQuery(resource="channel_members", filters={"channel": "C001"}),
@@ -503,11 +538,14 @@ async def test_channel_members(connector):
 @respx.mock
 async def test_channel_members_with_cursor(connector):
     respx.get("https://slack.com/api/conversations.members").mock(
-        return_value=httpx.Response(200, json={
-            "ok": True,
-            "members": ["U004", "U005"],
-            "response_metadata": {"next_cursor": "page2"},
-        }),
+        return_value=httpx.Response(
+            200,
+            json={
+                "ok": True,
+                "members": ["U004", "U005"],
+                "response_metadata": {"next_cursor": "page2"},
+            },
+        ),
     )
     result = await connector.query(
         ConnectorQuery(resource="channel_members", filters={"channel": "C001"}, cursor="page1"),
@@ -535,6 +573,7 @@ async def test_channel_members_api_error(connector):
 
 # -- thread_replies --
 
+
 @respx.mock
 async def test_thread_replies(connector):
     replies = [
@@ -542,11 +581,14 @@ async def test_thread_replies(connector):
         {"ts": "123456.000002", "text": "Reply 1", "user": "U002"},
     ]
     respx.get("https://slack.com/api/conversations.replies").mock(
-        return_value=httpx.Response(200, json={
-            "ok": True,
-            "messages": replies,
-            "response_metadata": {"next_cursor": ""},
-        }),
+        return_value=httpx.Response(
+            200,
+            json={
+                "ok": True,
+                "messages": replies,
+                "response_metadata": {"next_cursor": ""},
+            },
+        ),
     )
     result = await connector.query(
         ConnectorQuery(resource="thread_replies", filters={"channel": "C001", "thread_ts": "123456.000001"}),
@@ -584,15 +626,21 @@ async def test_thread_replies_api_error(connector):
 
 # -- thread_reply (write) --
 
+
 @respx.mock
 async def test_thread_reply_write(connector):
     respx.post("https://slack.com/api/chat.postMessage").mock(
         return_value=httpx.Response(200, json={"ok": True, "ts": "888777", "channel": "C001"}),
     )
     result = await connector.write(
-        ConnectorPayload(resource="thread_reply", data={
-            "channel": "C001", "thread_ts": "123456.000001", "text": "A reply",
-        }),
+        ConnectorPayload(
+            resource="thread_reply",
+            data={
+                "channel": "C001",
+                "thread_ts": "123456.000001",
+                "text": "A reply",
+            },
+        ),
     )
     assert result["ts"] == "888777"
     assert result["channel"] == "C001"
@@ -621,13 +669,19 @@ async def test_thread_reply_api_error(connector):
     )
     with pytest.raises(ValueError, match="invalid_arguments"):
         await connector.write(
-            ConnectorPayload(resource="thread_reply", data={
-                "channel": "C001", "thread_ts": "123456.000001", "text": "Hello",
-            }),
+            ConnectorPayload(
+                resource="thread_reply",
+                data={
+                    "channel": "C001",
+                    "thread_ts": "123456.000001",
+                    "text": "Hello",
+                },
+            ),
         )
 
 
 # -- JSON decode error in query/write --
+
 
 @respx.mock
 async def test_query_channels_json_error(connector):

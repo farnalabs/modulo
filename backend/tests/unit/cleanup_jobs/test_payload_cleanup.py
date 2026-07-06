@@ -89,9 +89,7 @@ class TestCleanupRetainedPayloads:
         select_res_2 = _select_result([BATCH_SIZE + 1])
         update_res_1 = MagicMock()
         update_res_2 = MagicMock()
-        mock_session.execute = AsyncMock(
-            side_effect=[select_res_1, update_res_1, select_res_2, update_res_2]
-        )
+        mock_session.execute = AsyncMock(side_effect=[select_res_1, update_res_1, select_res_2, update_res_2])
 
         count = await cleanup_retained_payloads(mock_session)
 

@@ -51,9 +51,8 @@ def require_feature(feature_name: str):
 
 def pg_connection_string(database_url: str) -> str:
     """Strip SQLAlchemy+asyncpg prefix to get a psycopg-compatible URL."""
-    return (
-        database_url.replace("postgresql+asyncpg://", "postgresql://")
-        .replace("postgresql+psycopg://", "postgresql://")
+    return database_url.replace("postgresql+asyncpg://", "postgresql://").replace(
+        "postgresql+psycopg://", "postgresql://"
     )
 
 
@@ -127,6 +126,7 @@ async def get_db_session(
 async def get_plan_context(
     current_user: AuthenticatedPrincipal = Depends(get_current_user),
     session: AsyncSession = Depends(get_db_session),
+    settings: Settings = Depends(get_settings),
 ) -> PlanContext:
     """FastAPI dependency — resolve plan context per-org.
 
@@ -144,4 +144,4 @@ async def get_plan_context(
     if current_user.organisation_id is not None:
         async with session.begin():
             org = await get_organisation(session, current_user.organisation_id)
-    return await resolve_plan_context(get_settings(), session, org=org)
+    return await resolve_plan_context(settings, session, org=org)

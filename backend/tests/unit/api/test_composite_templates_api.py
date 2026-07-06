@@ -155,7 +155,9 @@ class TestCreateCompositeTemplate:
                             "label": "Prompt",
                             "type": "string",
                             "target_injection": {
-                                "mode": "prompt_replace", "node_id": "n1", "injection_point": "prompt_template",
+                                "mode": "prompt_replace",
+                                "node_id": "n1",
+                                "injection_point": "prompt_template",
                             },
                         }
                     ],

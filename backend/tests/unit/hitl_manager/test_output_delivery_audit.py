@@ -210,9 +210,7 @@ async def test_delivered_at_is_recent():
     with patch("modulo.core.hitl_manager.append_audit_event", new_callable=AsyncMock):
         mgr = HITLManager()
         before = datetime.now(UTC)
-        result = await mgr.approve(
-            session, run_id=_RUN, gate_id=_GATE, org_id=_ORG, claim_token="tok", actor_id=_USER
-        )
+        result = await mgr.approve(session, run_id=_RUN, gate_id=_GATE, org_id=_ORG, claim_token="tok", actor_id=_USER)
         after = datetime.now(UTC)
 
     assert before <= result.delivered_at <= after
@@ -232,9 +230,7 @@ async def test_approve_wrong_token_raises_and_no_audit():
     with patch("modulo.core.hitl_manager.append_audit_event", new_callable=AsyncMock) as mock_audit:
         mgr = HITLManager()
         with pytest.raises(ClaimTokenInvalidError):
-            await mgr.approve(
-                session, run_id=_RUN, gate_id=_GATE, org_id=_ORG, claim_token="wrong", actor_id=_USER
-            )
+            await mgr.approve(session, run_id=_RUN, gate_id=_GATE, org_id=_ORG, claim_token="wrong", actor_id=_USER)
 
     mock_audit.assert_not_awaited()
 
@@ -247,9 +243,7 @@ async def test_approve_expired_token_raises_and_no_audit():
     with patch("modulo.core.hitl_manager.append_audit_event", new_callable=AsyncMock) as mock_audit:
         mgr = HITLManager()
         with pytest.raises(ClaimTokenExpiredError):
-            await mgr.approve(
-                session, run_id=_RUN, gate_id=_GATE, org_id=_ORG, claim_token="tok", actor_id=_USER
-            )
+            await mgr.approve(session, run_id=_RUN, gate_id=_GATE, org_id=_ORG, claim_token="tok", actor_id=_USER)
 
     mock_audit.assert_not_awaited()
 
@@ -260,9 +254,7 @@ async def test_approve_gate_not_found_raises_and_no_audit():
     with patch("modulo.core.hitl_manager.append_audit_event", new_callable=AsyncMock) as mock_audit:
         mgr = HITLManager()
         with pytest.raises(GateNotFoundError):
-            await mgr.approve(
-                session, run_id=_RUN, gate_id=_GATE, org_id=_ORG, claim_token="tok", actor_id=_USER
-            )
+            await mgr.approve(session, run_id=_RUN, gate_id=_GATE, org_id=_ORG, claim_token="tok", actor_id=_USER)
 
     mock_audit.assert_not_awaited()
 
@@ -274,9 +266,7 @@ async def test_approve_already_decided_raises_and_no_audit():
     with patch("modulo.core.hitl_manager.append_audit_event", new_callable=AsyncMock) as mock_audit:
         mgr = HITLManager()
         with pytest.raises(GateAlreadyDecidedError):
-            await mgr.approve(
-                session, run_id=_RUN, gate_id=_GATE, org_id=_ORG, claim_token="tok", actor_id=_USER
-            )
+            await mgr.approve(session, run_id=_RUN, gate_id=_GATE, org_id=_ORG, claim_token="tok", actor_id=_USER)
 
     mock_audit.assert_not_awaited()
 
@@ -341,9 +331,7 @@ async def test_delivery_failure_does_not_set_delivered_at():
     ):
         mgr = HITLManager()
         with pytest.raises(RuntimeError):
-            await mgr.approve(
-                session, run_id=_RUN, gate_id=_GATE, org_id=_ORG, claim_token="tok", actor_id=_USER
-            )
+            await mgr.approve(session, run_id=_RUN, gate_id=_GATE, org_id=_ORG, claim_token="tok", actor_id=_USER)
 
     assert gate_decided.delivered_at is None
 
@@ -365,9 +353,7 @@ async def test_delivery_failure_propagates_original_error():
     ):
         mgr = HITLManager()
         with pytest.raises(ConnectionError, match="database connection lost"):
-            await mgr.approve(
-                session, run_id=_RUN, gate_id=_GATE, org_id=_ORG, claim_token="tok", actor_id=_USER
-            )
+            await mgr.approve(session, run_id=_RUN, gate_id=_GATE, org_id=_ORG, claim_token="tok", actor_id=_USER)
 
 
 async def test_delivery_failure_logged_even_when_failed_event_also_fails():
@@ -387,6 +373,4 @@ async def test_delivery_failure_logged_even_when_failed_event_also_fails():
     ):
         mgr = HITLManager()
         with pytest.raises(RuntimeError, match="first fail"):
-            await mgr.approve(
-                session, run_id=_RUN, gate_id=_GATE, org_id=_ORG, claim_token="tok", actor_id=_USER
-            )
+            await mgr.approve(session, run_id=_RUN, gate_id=_GATE, org_id=_ORG, claim_token="tok", actor_id=_USER)

@@ -250,9 +250,7 @@ async def test_write_update_story(connector):
 
 async def test_write_update_story_missing_id(connector):
     with pytest.raises(ValueError, match="'id' in story_update"):
-        await connector.write(
-            ConnectorPayload(resource="story_update", data={"name": "Orphan"})
-        )
+        await connector.write(ConnectorPayload(resource="story_update", data={"name": "Orphan"}))
 
 
 @respx.mock
@@ -270,14 +268,10 @@ async def test_write_story_comment(connector):
 
 async def test_write_story_comment_missing_fields(connector):
     with pytest.raises(ValueError, match="story_comment requires"):
-        await connector.write(
-            ConnectorPayload(resource="story_comment", data={"story_id": "1"})
-        )
+        await connector.write(ConnectorPayload(resource="story_comment", data={"story_id": "1"}))
 
     with pytest.raises(ValueError, match="story_comment requires"):
-        await connector.write(
-            ConnectorPayload(resource="story_comment", data={"text": "Orphan"})
-        )
+        await connector.write(ConnectorPayload(resource="story_comment", data={"text": "Orphan"}))
 
 
 @respx.mock
@@ -336,6 +330,4 @@ async def test_query_stories_http_error(connector):
 async def test_write_create_story_http_error(connector):
     respx.post(f"{_BASE}/stories").mock(return_value=httpx.Response(400, text="Bad Request"))
     with pytest.raises(httpx.HTTPStatusError):
-        await connector.write(
-            ConnectorPayload(resource="story", data={"name": "Fail Story"})
-        )
+        await connector.write(ConnectorPayload(resource="story", data={"name": "Fail Story"}))

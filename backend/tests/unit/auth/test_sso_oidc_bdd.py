@@ -29,28 +29,30 @@ def _oidc_settings(license_key: str = "test-license-key") -> Settings:
         modulo_license_key=license_key,
         modulo_csrf_enabled=False,
         modulo_public_url="http://localhost:8000",
-        modulo_oidc_providers=json.dumps([
-            {
-                "provider_id": "google",
-                "client_id": "google-client-id",
-                "client_secret": "google-client-secret",
-                "discovery_url": "https://accounts.google.com/.well-known/openid-configuration",
-            },
-            {
-                "provider_id": "github",
-                "client_id": "github-client-id",
-                "client_secret": "github-client-secret",
-                "discovery_url": "https://token.actions.githubusercontent.com/.well-known/openid-configuration",
-            },
-        ]),
+        modulo_oidc_providers=json.dumps(
+            [
+                {
+                    "provider_id": "google",
+                    "client_id": "google-client-id",
+                    "client_secret": "google-client-secret",
+                    "discovery_url": "https://accounts.google.com/.well-known/openid-configuration",
+                },
+                {
+                    "provider_id": "github",
+                    "client_id": "github-client-id",
+                    "client_secret": "github-client-secret",
+                    "discovery_url": "https://token.actions.githubusercontent.com/.well-known/openid-configuration",
+                },
+            ]
+        ),
     )
 
 
 def _make_id_token(email: str, name: str, sub: str = "abc123") -> str:
     header_b64 = base64.urlsafe_b64encode(b'{"alg":"RS256"}').rstrip(b"=").decode()
-    payload_b64 = base64.urlsafe_b64encode(
-        json.dumps({"email": email, "name": name, "sub": sub}).encode()
-    ).rstrip(b"=").decode()
+    payload_b64 = (
+        base64.urlsafe_b64encode(json.dumps({"email": email, "name": name, "sub": sub}).encode()).rstrip(b"=").decode()
+    )
     return f"{header_b64}.{payload_b64}.signature"
 
 

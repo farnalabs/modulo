@@ -5,35 +5,37 @@ from sqlalchemy import CheckConstraint
 from modulo.db.enums import ModelBackendProvider
 from modulo.db.models.model_backend import _PROVIDER_VALUES, ModelBackend
 
-EXPECTED_PROVIDERS = frozenset({
-    "ai21",
-    "anthropic",
-    "azure_openai",
-    "bedrock",
-    "cohere",
-    "custom",
-    "deepseek",
-    "fireworks",
-    "gemini",
-    "grok",
-    "groq",
-    "jan",
-    "llamacpp",
-    "lm_studio",
-    "localai",
-    "mistral",
-    "ollama",
-    "openai",
-    "openrouter",
-    "perplexity",
-    "qwen",
-    "replicate",
-    "tgi",
-    "togetherai",
-    "vertexai",
-    "vllm",
-    "watsonx",
-})
+EXPECTED_PROVIDERS = frozenset(
+    {
+        "ai21",
+        "anthropic",
+        "azure_openai",
+        "bedrock",
+        "cohere",
+        "custom",
+        "deepseek",
+        "fireworks",
+        "gemini",
+        "grok",
+        "groq",
+        "jan",
+        "llamacpp",
+        "lm_studio",
+        "localai",
+        "mistral",
+        "ollama",
+        "openai",
+        "openrouter",
+        "perplexity",
+        "qwen",
+        "replicate",
+        "tgi",
+        "togetherai",
+        "vertexai",
+        "vllm",
+        "watsonx",
+    }
+)
 
 
 class TestModelBackendProviderEnum:

@@ -101,9 +101,7 @@ class TestCleanupOldRuns:
         select_res_2 = _select_result([BATCH_SIZE + 1])
         delete_res_1 = MagicMock()
         delete_res_2 = MagicMock()
-        mock_session.execute = AsyncMock(
-            side_effect=[select_res_1, delete_res_1, select_res_2, delete_res_2]
-        )
+        mock_session.execute = AsyncMock(side_effect=[select_res_1, delete_res_1, select_res_2, delete_res_2])
 
         count = await cleanup_old_runs(mock_session)
 

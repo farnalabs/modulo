@@ -34,7 +34,9 @@ _TOKEN_ENDPOINT = "https://example.com/token"
 
 def _gen_rsa_keypair() -> tuple[rsa.RSAPrivateKey, rsa.RSAPublicKey]:
     private_key = rsa.generate_private_key(
-        public_exponent=65537, key_size=2048, backend=default_backend(),
+        public_exponent=65537,
+        key_size=2048,
+        backend=default_backend(),
     )
     return private_key, private_key.public_key()
 
@@ -102,7 +104,9 @@ def _make_resp(status: int = 200, json_data: object = None) -> MagicMock:
         resp.raise_for_status.return_value = None
     else:
         resp.raise_for_status.side_effect = httpx.HTTPStatusError(
-            "Error", request=MagicMock(), response=resp,
+            "Error",
+            request=MagicMock(),
+            response=resp,
         )
     return resp
 
@@ -163,8 +167,10 @@ def jwks_resp(jwk_data: dict) -> MagicMock:
 
 class TestJwksFetching:
     async def test_fetches_and_caches_jwks(
-        self, keypair: tuple[rsa.RSAPrivateKey, rsa.RSAPublicKey],
-        discovery_resp: MagicMock, jwks_resp: MagicMock,
+        self,
+        keypair: tuple[rsa.RSAPrivateKey, rsa.RSAPublicKey],
+        discovery_resp: MagicMock,
+        jwks_resp: MagicMock,
     ) -> None:
         private_key, _ = keypair
         id_token = _create_id_token(private_key)
@@ -200,7 +206,8 @@ class TestJwksFetching:
                 await verify_id_token_with_discovery("token", _DISCOVERY_URL, "cid")
 
     async def test_raises_on_empty_jwks(
-        self, discovery_resp: MagicMock,
+        self,
+        discovery_resp: MagicMock,
         keypair: tuple[rsa.RSAPrivateKey, rsa.RSAPublicKey],
     ) -> None:
         private_key, _ = keypair
@@ -223,8 +230,10 @@ class TestJwksFetching:
 
 class TestVerifyValidToken:
     async def test_verify_valid_token(
-        self, keypair: tuple[rsa.RSAPrivateKey, rsa.RSAPublicKey],
-        discovery_resp: MagicMock, jwks_resp: MagicMock,
+        self,
+        keypair: tuple[rsa.RSAPrivateKey, rsa.RSAPublicKey],
+        discovery_resp: MagicMock,
+        jwks_resp: MagicMock,
     ) -> None:
         private_key, _ = keypair
         id_token = _create_id_token(private_key)
@@ -241,7 +250,8 @@ class TestVerifyValidToken:
             assert claims["aud"] == _CLIENT_ID
 
     async def test_verify_direct_jwks_uri(
-        self, keypair: tuple[rsa.RSAPrivateKey, rsa.RSAPublicKey],
+        self,
+        keypair: tuple[rsa.RSAPrivateKey, rsa.RSAPublicKey],
         jwks_resp: MagicMock,
     ) -> None:
         private_key, _ = keypair
@@ -278,8 +288,10 @@ class TestVerifyInvalidSignature:
                 await verify_id_token_with_discovery(id_token, _DISCOVERY_URL, _CLIENT_ID)
 
     async def test_fails_with_tampered_token(
-        self, keypair: tuple[rsa.RSAPrivateKey, rsa.RSAPublicKey],
-        discovery_resp: MagicMock, jwks_resp: MagicMock,
+        self,
+        keypair: tuple[rsa.RSAPrivateKey, rsa.RSAPublicKey],
+        discovery_resp: MagicMock,
+        jwks_resp: MagicMock,
     ) -> None:
         private_key, _ = keypair
         id_token = _create_id_token(private_key)
@@ -303,8 +315,10 @@ class TestVerifyInvalidSignature:
 
 class TestClaimValidation:
     async def test_fails_on_wrong_issuer(
-        self, keypair: tuple[rsa.RSAPrivateKey, rsa.RSAPublicKey],
-        discovery_resp: MagicMock, jwks_resp: MagicMock,
+        self,
+        keypair: tuple[rsa.RSAPrivateKey, rsa.RSAPublicKey],
+        discovery_resp: MagicMock,
+        jwks_resp: MagicMock,
     ) -> None:
         private_key, _ = keypair
         id_token = _create_id_token(private_key, issuer="https://evil.com")
@@ -318,8 +332,10 @@ class TestClaimValidation:
                 await verify_id_token_with_discovery(id_token, _DISCOVERY_URL, _CLIENT_ID)
 
     async def test_fails_on_wrong_audience(
-        self, keypair: tuple[rsa.RSAPrivateKey, rsa.RSAPublicKey],
-        discovery_resp: MagicMock, jwks_resp: MagicMock,
+        self,
+        keypair: tuple[rsa.RSAPrivateKey, rsa.RSAPublicKey],
+        discovery_resp: MagicMock,
+        jwks_resp: MagicMock,
     ) -> None:
         private_key, _ = keypair
         id_token = _create_id_token(private_key, audience="wrong-client")
@@ -333,8 +349,10 @@ class TestClaimValidation:
                 await verify_id_token_with_discovery(id_token, _DISCOVERY_URL, _CLIENT_ID)
 
     async def test_fails_on_expired_token(
-        self, keypair: tuple[rsa.RSAPrivateKey, rsa.RSAPublicKey],
-        discovery_resp: MagicMock, jwks_resp: MagicMock,
+        self,
+        keypair: tuple[rsa.RSAPrivateKey, rsa.RSAPublicKey],
+        discovery_resp: MagicMock,
+        jwks_resp: MagicMock,
     ) -> None:
         private_key, _ = keypair
         id_token = _create_id_token(private_key, exp_offset=timedelta(hours=-2))
@@ -355,7 +373,8 @@ class TestClaimValidation:
 
 class TestJwksRotation:
     async def test_retries_with_new_key_after_kid_miss(
-        self, keypair: tuple[rsa.RSAPrivateKey, rsa.RSAPublicKey],
+        self,
+        keypair: tuple[rsa.RSAPrivateKey, rsa.RSAPublicKey],
         discovery_resp: MagicMock,
     ) -> None:
         private_key, _ = keypair
@@ -386,7 +405,8 @@ class TestJwksRotation:
             assert call_count == 2
 
     async def test_retries_after_signature_failure(
-        self, keypair: tuple[rsa.RSAPrivateKey, rsa.RSAPublicKey],
+        self,
+        keypair: tuple[rsa.RSAPrivateKey, rsa.RSAPublicKey],
         discovery_resp: MagicMock,
     ) -> None:
         private_key, _ = keypair
@@ -443,7 +463,8 @@ class TestEdgeCases:
 
 class TestOidcCallbackIntegration:
     async def test_callback_calls_verify(
-        self, keypair: tuple[rsa.RSAPrivateKey, rsa.RSAPublicKey],
+        self,
+        keypair: tuple[rsa.RSAPrivateKey, rsa.RSAPublicKey],
     ) -> None:
         from modulo.auth.sso import oidc_process_callback, sign_state
         from modulo.settings import Settings
@@ -457,12 +478,14 @@ class TestOidcCallbackIntegration:
             secret_key="a" * 32,
             fernet_key="a" * 32,
             modulo_oidc_providers=json.dumps(
-                [{
-                    "provider_id": "testprovider",
-                    "client_id": _CLIENT_ID,
-                    "client_secret": "secret",
-                    "discovery_url": _DISCOVERY_URL,
-                }]
+                [
+                    {
+                        "provider_id": "testprovider",
+                        "client_id": _CLIENT_ID,
+                        "client_secret": "secret",
+                        "discovery_url": _DISCOVERY_URL,
+                    }
+                ]
             ),
         )
 
@@ -489,12 +512,17 @@ class TestOidcCallbackIntegration:
             mock_tok.return_value = {"access_token": "at", "refresh_token": "rt", "token_type": "bearer"}
 
             result = await oidc_process_callback(
-                "auth-code", signed, settings, session, "http://localhost/callback",
+                "auth-code",
+                signed,
+                settings,
+                session,
+                "http://localhost/callback",
             )
             assert result["access_token"] == "at"
 
     async def test_callback_fails_on_bad_signature(
-        self, keypair: tuple[rsa.RSAPrivateKey, rsa.RSAPublicKey],
+        self,
+        keypair: tuple[rsa.RSAPrivateKey, rsa.RSAPublicKey],
     ) -> None:
         from modulo.auth.sso import oidc_process_callback, sign_state
         from modulo.settings import Settings
@@ -509,12 +537,14 @@ class TestOidcCallbackIntegration:
             secret_key="a" * 32,
             fernet_key="a" * 32,
             modulo_oidc_providers=json.dumps(
-                [{
-                    "provider_id": "testprovider",
-                    "client_id": _CLIENT_ID,
-                    "client_secret": "secret",
-                    "discovery_url": _DISCOVERY_URL,
-                }]
+                [
+                    {
+                        "provider_id": "testprovider",
+                        "client_id": _CLIENT_ID,
+                        "client_secret": "secret",
+                        "discovery_url": _DISCOVERY_URL,
+                    }
+                ]
             ),
         )
 
@@ -540,7 +570,11 @@ class TestOidcCallbackIntegration:
 
             with pytest.raises(ValueError, match="ID token verification failed"):
                 await oidc_process_callback(
-                    "auth-code", signed, settings, session, "http://localhost/callback",
+                    "auth-code",
+                    signed,
+                    settings,
+                    session,
+                    "http://localhost/callback",
                 )
 
     async def test_callback_fails_on_discovery_http_error(self) -> None:
@@ -552,12 +586,14 @@ class TestOidcCallbackIntegration:
             secret_key="a" * 32,
             fernet_key="a" * 32,
             modulo_oidc_providers=json.dumps(
-                [{
-                    "provider_id": "testprovider",
-                    "client_id": _CLIENT_ID,
-                    "client_secret": "secret",
-                    "discovery_url": _DISCOVERY_URL,
-                }]
+                [
+                    {
+                        "provider_id": "testprovider",
+                        "client_id": _CLIENT_ID,
+                        "client_secret": "secret",
+                        "discovery_url": _DISCOVERY_URL,
+                    }
+                ]
             ),
         )
 
@@ -573,7 +609,11 @@ class TestOidcCallbackIntegration:
 
             with pytest.raises(ValueError, match="Failed to fetch discovery document"):
                 await oidc_process_callback(
-                    "auth-code", signed, settings, session, "http://localhost/callback",
+                    "auth-code",
+                    signed,
+                    settings,
+                    session,
+                    "http://localhost/callback",
                 )
 
     async def test_callback_fails_on_code_exchange_http_error(self) -> None:
@@ -585,12 +625,14 @@ class TestOidcCallbackIntegration:
             secret_key="a" * 32,
             fernet_key="a" * 32,
             modulo_oidc_providers=json.dumps(
-                [{
-                    "provider_id": "testprovider",
-                    "client_id": _CLIENT_ID,
-                    "client_secret": "secret",
-                    "discovery_url": _DISCOVERY_URL,
-                }]
+                [
+                    {
+                        "provider_id": "testprovider",
+                        "client_id": _CLIENT_ID,
+                        "client_secret": "secret",
+                        "discovery_url": _DISCOVERY_URL,
+                    }
+                ]
             ),
         )
 
@@ -609,7 +651,11 @@ class TestOidcCallbackIntegration:
 
             with pytest.raises(ValueError, match="Failed to exchange authorization code"):
                 await oidc_process_callback(
-                    "auth-code", signed, settings, session, "http://localhost/callback",
+                    "auth-code",
+                    signed,
+                    settings,
+                    session,
+                    "http://localhost/callback",
                 )
 
     async def test_callback_fails_on_provisioning_runtime_error(self) -> None:
@@ -621,12 +667,14 @@ class TestOidcCallbackIntegration:
             secret_key="a" * 32,
             fernet_key="a" * 32,
             modulo_oidc_providers=json.dumps(
-                [{
-                    "provider_id": "testprovider",
-                    "client_id": _CLIENT_ID,
-                    "client_secret": "secret",
-                    "discovery_url": _DISCOVERY_URL,
-                }]
+                [
+                    {
+                        "provider_id": "testprovider",
+                        "client_id": _CLIENT_ID,
+                        "client_secret": "secret",
+                        "discovery_url": _DISCOVERY_URL,
+                    }
+                ]
             ),
         )
 
@@ -657,5 +705,9 @@ class TestOidcCallbackIntegration:
 
             with pytest.raises(ValueError, match="No organisation exists"):
                 await oidc_process_callback(
-                    "auth-code", signed, settings, session, "http://localhost/callback",
+                    "auth-code",
+                    signed,
+                    settings,
+                    session,
+                    "http://localhost/callback",
                 )

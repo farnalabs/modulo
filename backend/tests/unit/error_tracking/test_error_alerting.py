@@ -84,9 +84,7 @@ class TestAlertEngineEvaluate:
         engine = AlertEngine()
         session = AsyncMock()
         session.execute = AsyncMock(
-            return_value=MagicMock(
-                scalars=MagicMock(return_value=MagicMock(all=MagicMock(return_value=[rule])))
-            )
+            return_value=MagicMock(scalars=MagicMock(return_value=MagicMock(all=MagicMock(return_value=[rule]))))
         )
 
         alerts = await engine.evaluate(
@@ -104,9 +102,7 @@ class TestAlertEngineEvaluate:
         engine = AlertEngine()
         session = AsyncMock()
         session.execute = AsyncMock(
-            return_value=MagicMock(
-                scalars=MagicMock(return_value=MagicMock(all=MagicMock(return_value=[rule])))
-            )
+            return_value=MagicMock(scalars=MagicMock(return_value=MagicMock(all=MagicMock(return_value=[rule]))))
         )
 
         alerts = await engine.evaluate(
@@ -125,9 +121,7 @@ class TestAlertEngineEvaluate:
         engine = AlertEngine()
         session = AsyncMock()
         session.execute = AsyncMock(
-            return_value=MagicMock(
-                scalars=MagicMock(return_value=MagicMock(all=MagicMock(return_value=[r1, r2])))
-            )
+            return_value=MagicMock(scalars=MagicMock(return_value=MagicMock(all=MagicMock(return_value=[r1, r2]))))
         )
 
         alerts = await engine.evaluate(
@@ -145,9 +139,7 @@ class TestAlertEngineEvaluate:
         engine = AlertEngine()
         session = AsyncMock()
         session.execute = AsyncMock(
-            return_value=MagicMock(
-                scalars=MagicMock(return_value=MagicMock(all=MagicMock(return_value=[rule])))
-            )
+            return_value=MagicMock(scalars=MagicMock(return_value=MagicMock(all=MagicMock(return_value=[rule]))))
         )
 
         alerts = await engine.evaluate(
@@ -164,9 +156,7 @@ class TestAlertEngineEvaluate:
         engine = AlertEngine()
         session = AsyncMock()
         session.execute = AsyncMock(
-            return_value=MagicMock(
-                scalars=MagicMock(return_value=MagicMock(all=MagicMock(return_value=[])))
-            )
+            return_value=MagicMock(scalars=MagicMock(return_value=MagicMock(all=MagicMock(return_value=[]))))
         )
 
         alerts = await engine.evaluate(
@@ -253,9 +243,7 @@ class TestAlertEngineCooldown:
         engine = AlertEngine()
         session = AsyncMock()
         session.execute = AsyncMock(
-            return_value=MagicMock(
-                scalars=MagicMock(return_value=MagicMock(all=MagicMock(return_value=[r1, r2])))
-            )
+            return_value=MagicMock(scalars=MagicMock(return_value=MagicMock(all=MagicMock(return_value=[r1, r2]))))
         )
 
         # First call — only r1 fires (count=1 < r2's min_count=5)
@@ -290,14 +278,14 @@ class TestDispatchWebhook:
     async def test_slack_format(self) -> None:
         result = _format_slack_payload(
             payload={
-            "rule": "Critical Alert",
-            "group_id": "g-123",
-            "level": "critical",
-            "count": 5,
-            "message": "DB down",
-            "environment": "production",
-            "url": "/admin/errors/g-123",
-        },
+                "rule": "Critical Alert",
+                "group_id": "g-123",
+                "level": "critical",
+                "count": 5,
+                "message": "DB down",
+                "environment": "production",
+                "url": "/admin/errors/g-123",
+            },
             emoji="\U0001f534",
         )
         assert "\U0001f534" in result["text"]
@@ -318,6 +306,7 @@ class TestDispatchWebhook:
         )
 
         from modulo.core.error_tracking.alert_dispatcher import _build_summary
+
         summary = _build_summary(alert, "something went wrong")
         assert "[error]" in summary
         assert "Test Webhook" in summary
@@ -371,9 +360,7 @@ class TestCRUDRules:
 
     async def test_create_rule_webhook_url_validated(self) -> None:
         with pytest.raises(ValidationError, match="webhook_url must start with"):
-            ErrorNotificationRuleCreate(
-                name="Bad", action_type="webhook", webhook_url="ftp://bad.com"
-            )
+            ErrorNotificationRuleCreate(name="Bad", action_type="webhook", webhook_url="ftp://bad.com")
 
     async def test_update_rule_partial(self) -> None:
         body = ErrorNotificationRuleUpdate(name="Renamed")
@@ -394,10 +381,7 @@ class TestCRUDRules:
 
 class TestErrorNotificationRuleModel:
     def test_required_columns_exist(self) -> None:
-        cols = {
-            c.name: c
-            for c in ErrorNotificationRule.__table__.columns
-        }
+        cols = {c.name: c for c in ErrorNotificationRule.__table__.columns}
         assert "name" in cols
         assert "enabled" in cols
         assert "condition_level" in cols

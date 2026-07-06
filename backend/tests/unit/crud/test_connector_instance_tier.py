@@ -75,6 +75,3 @@ async def test_excluded_tiers_preview() -> None:
     result = await list_connector_instances(session, excluded_tiers=["preview"])
 
     assert result.total == 3
-
-
-

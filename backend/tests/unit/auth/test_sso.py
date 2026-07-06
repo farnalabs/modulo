@@ -97,9 +97,7 @@ def _override_settings(**kwargs: str | bool) -> None:
     _app.dependency_overrides[get_settings] = lambda: _override(**kwargs)
     settings = _override(**kwargs)
     _app.dependency_overrides[get_plan_context] = lambda: DbPlanContext(
-        FeatureFlagRegistry(
-            current_tier="team" if settings.modulo_license_key else "community"
-        )
+        FeatureFlagRegistry(current_tier="team" if settings.modulo_license_key else "community")
     )
 
 
@@ -459,7 +457,9 @@ class TestJitProvisioningExtended:
             session.execute.side_effect = [exec_mock1, exec_mock2]
             mock_select.return_value.order_by.return_value.limit.return_value = "query"
 
-            account, actual_org_id, org_role = await jit_provision_user(session, settings, "new@example.com", "New User", "oidc", "google:456")
+            account, actual_org_id, org_role = await jit_provision_user(
+                session, settings, "new@example.com", "New User", "oidc", "google:456"
+            )
 
             assert account.email == "new@example.com"
             assert account.display_name == "New User"
@@ -487,7 +487,9 @@ class TestJitProvisioningExtended:
         with patch("modulo.auth.sso.get_account_by_email", new_callable=AsyncMock) as mock_get:
             mock_get.return_value = existing
 
-            account, _, _ = await jit_provision_user(session, settings, "existing@example.com", "Existing", "oidc", "google:789")
+            account, _, _ = await jit_provision_user(
+                session, settings, "existing@example.com", "Existing", "oidc", "google:789"
+            )
 
             assert account is existing
             assert account.sso_subject == "google:789"

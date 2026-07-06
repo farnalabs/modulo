@@ -216,9 +216,7 @@ class TestBuildParser:
 
     def test_creates_import_org_subcommand(self) -> None:
         parser = build_parser()
-        args = parser.parse_args(
-            ["import-org", "--org-id", str(uuid.uuid4()), "--input", "test.json"]
-        )
+        args = parser.parse_args(["import-org", "--org-id", str(uuid.uuid4()), "--input", "test.json"])
         assert args.command == "import-org"
 
     def test_export_org_requires_org_id(self) -> None:
@@ -238,16 +236,12 @@ class TestBuildParser:
 
     def test_export_org_custom_output(self) -> None:
         parser = build_parser()
-        args = parser.parse_args(
-            ["export-org", "--org-id", str(uuid.uuid4()), "--output", "custom.json"]
-        )
+        args = parser.parse_args(["export-org", "--org-id", str(uuid.uuid4()), "--output", "custom.json"])
         assert args.output == Path("custom.json")
 
     def test_import_org_default_conflict(self) -> None:
         parser = build_parser()
-        args = parser.parse_args(
-            ["import-org", "--org-id", str(uuid.uuid4()), "--input", "data.json"]
-        )
+        args = parser.parse_args(["import-org", "--org-id", str(uuid.uuid4()), "--input", "data.json"])
         assert args.conflict == "skip"
 
     def test_import_org_custom_conflict(self) -> None:
@@ -276,7 +270,5 @@ class TestBuildParser:
         from modulo.cli.migrate_org import cmd_import
 
         parser = build_parser()
-        args = parser.parse_args(
-            ["import-org", "--org-id", str(uuid.uuid4()), "--input", "data.json"]
-        )
+        args = parser.parse_args(["import-org", "--org-id", str(uuid.uuid4()), "--input", "data.json"])
         assert args.func is cmd_import

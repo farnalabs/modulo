@@ -210,7 +210,10 @@ class TestViewModelCurrentErrorPaths:
             patch("modulo.api.routes.viewmodel.list_team_memberships_for_account", return_value=[]),
             patch("modulo.api.routes.viewmodel.list_pipelines"),
             patch("modulo.api.routes.viewmodel.list_runs"),
-            patch("modulo.api.routes.viewmodel.resolve_plan_context", side_effect=ProgrammingError("stmt", "params", "orig")),
+            patch(
+                "modulo.api.routes.viewmodel.resolve_plan_context",
+                side_effect=ProgrammingError("stmt", "params", "orig"),
+            ),
         ):
             resp = client.get("/api/v1/viewmodel/current")
 

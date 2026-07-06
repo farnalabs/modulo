@@ -2,7 +2,7 @@
 
 from collections.abc import Generator
 from typing import Any
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
 import pytest
 from fastapi.testclient import TestClient
@@ -30,6 +30,7 @@ def _make_settings() -> Settings:
 @pytest.fixture(autouse=True)
 def _purge_store() -> Generator[None, None, None]:
     import modulo.core.runtime_config.store as store_mod
+
     store_mod._store = None
     yield
 
@@ -174,9 +175,21 @@ class TestRuntimeConfigRoute:
         resp = admin_client.get("/api/v1/admin/runtime-config")
         data = resp.json()
         items: list[dict[str, Any]] = data["items"]
-        sensitive = {"SECRET_KEY", "FERNET_KEY", "FERNET_KEY_OLD", "MODULO_USERS", "MODULO_ADMIN_PASSWORD",
-                     "VAULT_TOKEN", "AWS_SECRET_ACCESS_KEY", "MODULO_SCIM_TOKEN", "MODULO_RATELIMIT_BYPASS_TOKEN",
-                     "MODULO_E2B_API_KEY", "MODULO_LICENSE_KEY", "MODULO_SAML_SP_PRIVATE_KEY", "DATABASE_URL"}
+        sensitive = {
+            "SECRET_KEY",
+            "FERNET_KEY",
+            "FERNET_KEY_OLD",
+            "MODULO_USERS",
+            "MODULO_ADMIN_PASSWORD",
+            "VAULT_TOKEN",
+            "AWS_SECRET_ACCESS_KEY",
+            "MODULO_SCIM_TOKEN",
+            "MODULO_RATELIMIT_BYPASS_TOKEN",
+            "MODULO_E2B_API_KEY",
+            "MODULO_LICENSE_KEY",
+            "MODULO_SAML_SP_PRIVATE_KEY",
+            "DATABASE_URL",
+        }
         for item in items:
             key = item["key"]
             val = item.get("current_value")

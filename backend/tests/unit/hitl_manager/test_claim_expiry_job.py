@@ -70,8 +70,8 @@ async def test_expire_once_resets_stale_claims() -> None:
 
     execute_results: list[MagicMock] = [
         stale_result,  # SELECT stale claims
-        MagicMock(),    # UPDATE claims
-        MagicMock(),    # UPDATE runs
+        MagicMock(),  # UPDATE claims
+        MagicMock(),  # UPDATE runs
     ]
     execute_call_count = 0
 
@@ -192,8 +192,8 @@ async def test_expire_once_dispatches_notifications() -> None:
 
     execute_results: list[MagicMock] = [
         stale_result,  # SELECT stale claims
-        MagicMock(),    # UPDATE claims
-        MagicMock(),    # UPDATE runs
+        MagicMock(),  # UPDATE claims
+        MagicMock(),  # UPDATE runs
     ]
     execute_call_count = 0
 
