@@ -8,7 +8,10 @@ import logging
 from typing import TYPE_CHECKING, Any, ClassVar
 from urllib.parse import urlparse
 
-import redis.asyncio as aioredis
+try:
+    import redis.asyncio as aioredis
+except ImportError:
+    aioredis = None  # type: ignore[assignment]
 
 if TYPE_CHECKING:
     from redis.asyncio.client import PubSub
@@ -54,10 +57,12 @@ class RedisEventBroker:
         """Return a log-safe URL with the password portion masked."""
         parsed = urlparse(url)
         if parsed.password:
-            return url.replace(parsed.password, "****")
+            return url.replace(f":{parsed.password}@", ":****@")
         return url
 
     def _make_client(self) -> aioredis.Redis:
+        if aioredis is None:
+            raise RuntimeError("redis package is not installed. Install with: pip install modulo[redis]")
         return aioredis.from_url(  # type: ignore[no-untyped-call]
             self._redis_url,
             decode_responses=True,
@@ -69,43 +74,54 @@ class RedisEventBroker:
         async with self._lock:
             if self._pub is not None and self._sub is not None:
                 return
-            pub: aioredis.Redis | None = None
-            sub: aioredis.Redis | None = None
-            try:
-                if self._pub is None:
-                    pub = self._make_client()
-                if self._sub is None:
-                    sub = self._make_client()
-                if pub is not None:
-                    self._pub = pub
-                if sub is not None:
-                    self._sub = sub
-            except Exception:
-                _log.exception("redis_broker.connect_failed", extra={"url": self._redact_url(self._redis_url)})
+            need_pub = self._pub is None
+            need_sub = self._sub is None
+        pub = None
+        sub = None
+        try:
+            if need_pub:
+                pub = self._make_client()
+            if need_sub:
+                sub = self._make_client()
+        except Exception:
+            _log.exception("redis_broker.connect_failed", extra={"url": self._redact_url(self._redis_url)})
+            if pub is not None:
+                await pub.close()
+            if sub is not None:
+                await sub.close()
+            raise
+        async with self._lock:
+            if self._pub is not None and self._sub is not None:
                 if pub is not None:
                     await pub.close()
                 if sub is not None:
                     await sub.close()
-                raise
-            _log.info("RedisEventBroker connected to %s", self._redact_url(self._redis_url))
-
-    async def _ensure_connected(self) -> None:
-        """Ensure both connections are established."""
-        if self._pub is None or self._sub is None:
-            await self.connect()
+                return
+            if pub is not None:
+                self._pub = pub
+            if sub is not None:
+                self._sub = sub
+        _log.info("RedisEventBroker connected to %s", self._redact_url(self._redis_url))
 
     async def publish(self, channel: str, data: dict[str, Any]) -> None:
         """Serialize *data* as JSON and publish to the given *channel*."""
+        if self._pub is None:
+            await self.connect()
         async with self._lock:
-            if self._pub is None:
-                await self.connect()
-            if self._pub is None:
-                _log.error("redis_broker.publish_no_connection", extra={"channel": channel})
-                return
-            try:
-                await self._pub.publish(f"{CHANNEL_PREFIX}{channel}", json.dumps(data))
-            except (ConnectionError, TimeoutError, OSError) as exc:
-                _log.exception("redis_broker.publish_failed", extra={"channel": channel, "error": str(exc)})
+            pub = self._pub
+        if pub is None:
+            _log.error("redis_broker.publish_no_connection", extra={"channel": channel})
+            return
+        try:
+            payload = json.dumps(data)
+        except TypeError:
+            _log.exception("redis_broker.serialize_failed", extra={"channel": channel})
+            return
+        try:
+            await pub.publish(f"{CHANNEL_PREFIX}{channel}", payload)
+        except Exception:
+            _log.exception("redis_broker.publish_failed", extra={"channel": channel})
+            async with self._lock:
                 self._pub = None
 
     async def subscribe(self, channel: str) -> PubSub:
@@ -115,14 +131,23 @@ class RedisEventBroker:
         calling ``await pubsub.unsubscribe()`` / ``await pubsub.close()``
         when done.
         """
+        if self._sub is None:
+            await self.connect()
         async with self._lock:
-            if self._sub is None:
-                await self.connect()
-            if self._sub is None:
-                raise RuntimeError("Redis subscriber connection not established. Call connect() first.")
-            pubsub = self._sub.pubsub()
+            sub = self._sub
+        if sub is None:
+            raise RuntimeError(
+                f"Redis subscriber connection not established for channel {channel}. Call connect() first."
+            )
+        pubsub = sub.pubsub()
+        try:
             await pubsub.subscribe(f"{CHANNEL_PREFIX}{channel}")
-            return pubsub
+        except Exception:
+            _log.exception("redis_broker.subscribe_failed", extra={"channel": channel})
+            async with self._lock:
+                self._sub = None
+            raise
+        return pubsub
 
     async def close(self) -> None:
         """Close both Redis connections."""
@@ -141,4 +166,6 @@ class RedisEventBroker:
                 await sub.close(close_connection_pool=True)
             except Exception:
                 _log.warning("redis_broker.sub_close_failed", exc_info=True)
+        # After releasing the lock, another publish()/subscribe() call may have
+        # created new connections via connect(). That's fine - they're independent.
         _log.info("RedisEventBroker closed for %s", self._redact_url(self._redis_url))

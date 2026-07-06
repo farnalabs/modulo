@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import threading
 from collections import defaultdict
 from collections.abc import Callable
 from typing import Any
@@ -49,24 +50,27 @@ _ACTION_MAP: dict[str, str] = {
 
 _background_tasks: set[asyncio.Task[Any]] = set()
 _version_counters: dict[str, int] = defaultdict(int)
+_version_counter_lock: threading.Lock = threading.Lock()
 _listeners_registered: bool = False
 
 
 def _safe_str_attr(target: Any, attr: str, resource_type: str, action_name: str) -> str | None:
     """Safely extract a string attribute from *target*, logging on failure."""
     try:
-        val = getattr(target, attr)
-    except AttributeError:
+        val = getattr(target, attr, None)
+    except Exception:
         _log.warning(
-            "event_listener.no_%s",
+            "event_listener.attr_error_%s",
             attr.replace(".", "_"),
             extra={"resource_type": resource_type, "action": action_name},
+            exc_info=True,
         )
         return None
     if val is None:
+        attr_name = attr.replace(".", "_")
         _log.warning(
             "event_listener.null_%s",
-            attr.replace(".", "_"),
+            attr_name,
             extra={"resource_type": resource_type, "action": action_name},
         )
         return None
@@ -110,8 +114,9 @@ def _make_listener(action: str) -> Callable[[Any, Any, Any], None]:
         if resource_id is None:
             return
 
-        version = _version_counters[org_id] + 1
-        _version_counters[org_id] = version
+        with _version_counter_lock:
+            version = _version_counters[org_id] + 1
+            _version_counters[org_id] = version
 
         task = loop.create_task(
             get_event_bus().publish(
@@ -127,11 +132,18 @@ def _make_listener(action: str) -> Callable[[Any, Any, Any], None]:
         def _on_task_done(t: asyncio.Task[Any]) -> None:
             _background_tasks.discard(t)
             if t.cancelled():
-                _log.warning("event_listener.task_cancelled")
+                _log.warning(
+                    "event_listener.task_cancelled",
+                    extra={"resource_type": resource_type, "action": action_name, "org_id": org_id},
+                )
                 return
             exc = t.exception()
             if exc is not None:
-                _log.warning("event_listener.publish_failed", exc_info=exc)
+                _log.warning(
+                    "event_listener.publish_failed",
+                    exc_info=exc,
+                    extra={"resource_type": resource_type, "action": action_name, "org_id": org_id},
+                )
 
         task.add_done_callback(_on_task_done)
 
