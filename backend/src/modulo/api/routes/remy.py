@@ -1061,10 +1061,8 @@ async def stream_chat(
 
                     # Handle UI tools
                     if ui_tool_calls:
-                        async with db_session.begin():
-                            await set_rls_org(db_session, principal.organisation_id)
-                            config_service = RemyConfigService(db_session)
-                            config = await config_service.get_config(principal.organisation_id)
+                        config_service = RemyConfigService(db_session)
+                        config = await config_service.get_config(principal.organisation_id)
 
                         approved_calls: list[dict[str, Any]] = []
                         pending_permission_calls: list[dict[str, Any]] = []
