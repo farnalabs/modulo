@@ -94,6 +94,8 @@ Outbound webhook notifications for pipeline lifecycle events, with HMAC signing,
 - [x] Endpoint not found returns 404 across all operations — org_id cross-check on GET/PUT/DELETE/test/re-enable
 - [x] All admin notification routes catch `sqlalchemy.exc.ProgrammingError` and return 501 Not Implemented
 - [x] All admin notification routes catch `sqlalchemy.exc.SQLAlchemyError` and return 503 Service Unavailable
+- [x] All admin notification routes catch unexpected `Exception` and return 500 Internal Server Error with structured detail
+- [x] All admin notification routes propagate `HTTPException` without transformation (except HTTPException: raise)
 
 ### Team-scoped dispatch
 
@@ -159,3 +161,6 @@ Outbound webhook notifications for pipeline lifecycle events, with HMAC signing,
 
 ## QA History (index 154)
 - 2026-07-04: Cross-cutting QA — added top-level try/except to Notifier.dispatch_event (behaviour #44). Added try/except to _record_delivery, _increment_dead_letter, _reset_dead_letter (behaviour #45). Added `_log.warning()` calls with route context to all ProgrammingError catch blocks in admin_notifications.py. Added SQLAlchemyError→503 Service Unavailable catches to all DB-accessing admin notification routes. Marked stale behaviour checkboxes [ ]→[x]. Created website docs stub for notifications/webhooks. Updated known gaps and QA history.
+
+## QA History (index 280)
+- 2026-07-09: Cross-cutting QA — added `except Exception → 500` with `except HTTPException: raise` guards to all 11 DB-accessing route handlers in admin_notifications.py (list_all_deliveries, retry_all_failed_deliveries, list_webhooks, create_webhook, get_webhook, update_webhook, delete_webhook, test_webhook, re_enable_webhook, list_deliveries, retry_delivery). Created test_notifications_exception_guard.py with 12 tests (11× Exception→500 + 1× happy-path). All 36 tests pass (24 existing + 12 new). Status: partial.
