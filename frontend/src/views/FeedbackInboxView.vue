@@ -233,8 +233,10 @@
 
 <script setup lang="ts">
 import { ref, onMounted, onBeforeUnmount } from 'vue'
+import { useI18n } from 'vue-i18n'
 import { api } from '../lib/api/client'
 import type { components } from '../lib/api/client'
+import { formatApiError } from '../lib/api/formatError'
 import LoadingSpinner from '../components/shared/LoadingSpinner.vue'
 import ErrorAlert from '../components/shared/ErrorAlert.vue'
 import {
@@ -246,6 +248,8 @@ import {
 type FeedbackRecordItem = components['schemas']['FeedbackRecordItem']
 type FeedbackRecordDetail = components['schemas']['FeedbackRecordDetail']
 type PipelineItem = components['schemas']['PipelineItem']
+
+const { t } = useI18n()
 
 const records = ref<FeedbackRecordItem[]>([])
 const pipelines = ref<PipelineItem[]>([])
@@ -317,12 +321,12 @@ async function loadFeedback() {
       params: { query: params as any },
     })
     if (err) {
-      error.value = `Failed to load feedback: ${err}`
+      error.value = `${t('views.FeedbackInboxView.failed_to_load_feedback')} ${formatApiError(err)}`
     } else if (data) {
       records.value = data.items
     }
   } catch (e: unknown) {
-    error.value = `Failed to load feedback: ${e instanceof Error ? e.message : String(e)}`
+    error.value = `${t('views.FeedbackInboxView.failed_to_load_feedback')} ${formatApiError(e)}`
   } finally {
     loading.value = false
   }
@@ -336,13 +340,13 @@ async function loadDetail(recordId: string) {
       params: { path: { record_id: recordId } },
     })
     if (err) {
-      detailError.value[recordId] = `Failed to load detail: ${err}`
+      detailError.value[recordId] = `${t('views.FeedbackInboxView.failed_to_load_detail')} ${formatApiError(err)}`
     } else if (data) {
       detailMap.value[recordId] = data
       annotations.value[recordId] = data.annotation || ''
     }
   } catch (e: unknown) {
-    detailError.value[recordId] = `Failed to load detail: ${e instanceof Error ? e.message : String(e)}`
+    detailError.value[recordId] = `${t('views.FeedbackInboxView.failed_to_load_detail')} ${formatApiError(e)}`
   } finally {
     detailLoading.value[recordId] = false
   }
@@ -368,15 +372,15 @@ async function saveAnnotation(recordId: string) {
       body: { action: 'mark_reviewed', annotation: annotations.value[recordId] || null },
     })
     if (err) {
-      annotationMessage.value[recordId] = { type: 'error', text: `Save failed: ${err}` }
+      annotationMessage.value[recordId] = { type: 'error', text: `${t('views.FeedbackInboxView.save_failed')} ${formatApiError(err)}` }
     } else if (data) {
       detailMap.value[recordId] = data
-      annotationMessage.value[recordId] = { type: 'success', text: 'Annotation saved.' }
+      annotationMessage.value[recordId] = { type: 'success', text: t('views.FeedbackInboxView.annotation_saved') }
       if (feedbackTimeouts.value[recordId]) clearTimeout(feedbackTimeouts.value[recordId])
       feedbackTimeouts.value[recordId] = setTimeout(() => { annotationMessage.value[recordId] = null }, 3000)
     }
   } catch (e: unknown) {
-    annotationMessage.value[recordId] = { type: 'error', text: `Save failed: ${e instanceof Error ? e.message : String(e)}` }
+    annotationMessage.value[recordId] = { type: 'error', text: `${t('views.FeedbackInboxView.save_failed')} ${formatApiError(e)}` }
   } finally {
     savingAnnotation.value[recordId] = false
   }
@@ -391,17 +395,17 @@ async function resolveRecord(recordId: string) {
       body: { action: 'mark_reviewed', annotation: annotations.value[recordId] || null },
     })
     if (err) {
-      annotationMessage.value[recordId] = { type: 'error', text: `Resolve failed: ${err}` }
+      annotationMessage.value[recordId] = { type: 'error', text: `${t('views.FeedbackInboxView.resolve_failed')} ${formatApiError(err)}` }
     } else if (data) {
       detailMap.value[recordId] = data
-      annotationMessage.value[recordId] = { type: 'success', text: 'Marked as resolved.' }
+      annotationMessage.value[recordId] = { type: 'success', text: t('views.FeedbackInboxView.marked_as_resolved') }
       const rec = records.value.find(r => r.id === recordId)
       if (rec) rec.status = 'resolved'
       if (feedbackTimeouts.value[recordId]) clearTimeout(feedbackTimeouts.value[recordId])
       feedbackTimeouts.value[recordId] = setTimeout(() => { annotationMessage.value[recordId] = null }, 3000)
     }
   } catch (e: unknown) {
-    annotationMessage.value[recordId] = { type: 'error', text: `Resolve failed: ${e instanceof Error ? e.message : String(e)}` }
+    annotationMessage.value[recordId] = { type: 'error', text: `${t('views.FeedbackInboxView.resolve_failed')} ${formatApiError(e)}` }
   } finally {
     savingAnnotation.value[recordId] = false
   }
@@ -416,17 +420,17 @@ async function triggerCorrection(recordId: string) {
       body: { action: 'create_correction_run', annotation: annotations.value[recordId] || null },
     })
     if (err) {
-      annotationMessage.value[recordId] = { type: 'error', text: `Trigger failed: ${err}` }
+      annotationMessage.value[recordId] = { type: 'error', text: `${t('views.FeedbackInboxView.trigger_failed')} ${formatApiError(err)}` }
     } else if (data) {
       detailMap.value[recordId] = data
-      annotationMessage.value[recordId] = { type: 'success', text: 'Correction run triggered.' }
+      annotationMessage.value[recordId] = { type: 'success', text: t('views.FeedbackInboxView.correction_run_triggered') }
       const rec = records.value.find(r => r.id === recordId)
       if (rec) rec.status = 'correcting'
       if (feedbackTimeouts.value[recordId]) clearTimeout(feedbackTimeouts.value[recordId])
       feedbackTimeouts.value[recordId] = setTimeout(() => { annotationMessage.value[recordId] = null }, 3000)
     }
   } catch (e: unknown) {
-    annotationMessage.value[recordId] = { type: 'error', text: `Trigger failed: ${e instanceof Error ? e.message : String(e)}` }
+    annotationMessage.value[recordId] = { type: 'error', text: `${t('views.FeedbackInboxView.trigger_failed')} ${formatApiError(e)}` }
   } finally {
     triggering.value[recordId] = false
   }
