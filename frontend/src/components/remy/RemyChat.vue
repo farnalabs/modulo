@@ -185,11 +185,13 @@
 
     <div class="remy-input-area border-t p-3">
       <div class="flex gap-2">
-        <input
+        <textarea
           v-model="inputText"
           class="remy-input flex-1"
           :placeholder="$t('components.remy.RemyChat.ask_remy')"
-          @keydown.enter.prevent="handleSend"
+          rows="1"
+          @keydown="onInputKeydown"
+          @input="resizeInput"
           :disabled="store.isStreaming || store.isExecutingUi"
         />
         <Button
@@ -316,6 +318,7 @@ async function handleSend() {
   const text = inputText.value.trim();
   if (!text || store.isStreaming) return;
   inputText.value = "";
+  resizeInput()
   await store.sendMessage(text);
   if (store.activeSessionId) {
     try {
@@ -324,6 +327,25 @@ async function handleSend() {
       console.error("Failed to start Remy stream:", e);
     }
   }
+}
+
+function onInputKeydown(e: KeyboardEvent) {
+  if (e.key === 'Enter' && !e.shiftKey && !e.ctrlKey && !e.metaKey) {
+    e.preventDefault()
+    handleSend()
+  }
+}
+
+const inputRef = ref<HTMLTextAreaElement | null>(null)
+
+function resizeInput() {
+  nextTick(() => {
+    const el = document.querySelector('.remy-input') as HTMLTextAreaElement | null
+    if (el) {
+      el.style.height = 'auto'
+      el.style.height = Math.min(el.scrollHeight, 200) + 'px'
+    }
+  })
 }
 
 function copyMessage(text: string) {
@@ -463,10 +485,14 @@ function renderMarkdown(text: string): string {
   border-color: hsl(var(--border));
 }
 .remy-input {
-  @apply rounded-lg px-3 py-2 text-sm outline-none;
+  @apply rounded-lg px-3 py-2 text-sm outline-none resize-none;
   background-color: hsl(var(--background));
   border: 1px solid hsl(var(--input));
   color: hsl(var(--foreground));
+  overflow-y: auto;
+  min-height: 38px;
+  max-height: 200px;
+  line-height: 1.4;
 }
 .remy-input:focus {
   border-color: hsl(var(--ring));
