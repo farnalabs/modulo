@@ -22,6 +22,9 @@ BASE_URL: str = os.environ.get(
     "https://staging-modulo.fly.dev",
 )
 _HTTP_TIMEOUT: float = 30.0
+_DELETION_REQUEST_PATH: str = "/api/v1/admin/org/deletion-request"
+_HEX_TOKEN_BYTES: int = 8
+_URLSAFE_TOKEN_BYTES: int = 16
 
 
 class IsolatedOrgContext:
@@ -47,7 +50,7 @@ class IsolatedOrgContext:
 
 def _random_slug() -> str:
     """Generate a unique slug for a test org."""
-    suffix = secrets.token_hex(8)
+    suffix = secrets.token_hex(_HEX_TOKEN_BYTES)
     return f"e2e-{suffix}"
 
 
@@ -59,7 +62,7 @@ def _make_client(
     headers = {}
     if token:
         headers["Authorization"] = f"Bearer {token}"
-    verify_ssl = os.environ.get("MODULO_VERIFY_SSL", "0") == "1"
+    verify_ssl = os.environ.get("MODULO_VERIFY_SSL", "0").lower() in ("1", "true", "yes")
     return httpx.AsyncClient(
         base_url=base_url,
         verify=verify_ssl,
@@ -76,8 +79,14 @@ def _raise_on_bad_status(
     """Check HTTP response status and raise if unexpected."""
     if response.status_code != expected:
         raise RuntimeError(
-            f"{action} failed ({response.status_code}): {response.text}",
+            f"{action} failed ({response.status_code}): {response.text[:500]}",
         )
+
+
+def _check_response(response: httpx.Response, expected: int, action: str) -> dict[str, Any]:
+    """Validate status and parse JSON response body."""
+    _raise_on_bad_status(response, expected, action)
+    return _parse_json_response(response, action)
 
 
 def _extract_token(data: dict[str, Any]) -> str:
@@ -85,7 +94,7 @@ def _extract_token(data: dict[str, Any]) -> str:
     token = data.get("access_token") or data.get("token")
     if not token:
         raise RuntimeError(
-            "Auth response missing access_token and token keys",
+            f"Auth response missing access_token and token keys; got keys: {list(data.keys())}",
         )
     return cast(str, token)
 
@@ -93,12 +102,16 @@ def _extract_token(data: dict[str, Any]) -> str:
 def _parse_json_response(response: httpx.Response, action: str) -> dict[str, Any]:
     """Parse JSON from an HTTP response with a descriptive error."""
     try:
-        result: dict[str, Any] = response.json()
-        return result
+        result = response.json()
     except json.JSONDecodeError as exc:
         raise RuntimeError(
-            f"Failed to parse {action} response as JSON ({response.status_code}): {response.text}",
+            f"Failed to parse {action} response as JSON ({response.status_code}): {response.text[:500]}",
         ) from exc
+    if not isinstance(result, dict):
+        raise RuntimeError(
+            f"{action} response is not a JSON object ({type(result).__name__}): {str(result)[:200]}",
+        )
+    return result
 
 
 async def create_isolated_org(
@@ -127,8 +140,7 @@ async def create_isolated_org(
                 "/api/v1/admin/orgs",
                 json={"name": org_name, "slug": slug},
             )
-            _raise_on_bad_status(org_resp, 201, "Org creation")
-            org_data = _parse_json_response(org_resp, "org creation")
+            org_data = _check_response(org_resp, 201, "Org creation")
             org_id = org_data.get("id")
             if not org_id:
                 raise RuntimeError(
@@ -136,7 +148,7 @@ async def create_isolated_org(
                 )
 
             user_email = f"runner-{slug}@e2e.modulo"
-            user_password = secrets.token_urlsafe(16)
+            user_password = secrets.token_urlsafe(_URLSAFE_TOKEN_BYTES)
             user_resp = await client.post(
                 f"/api/v1/admin/orgs/{org_id}/users",
                 json={
@@ -147,7 +159,7 @@ async def create_isolated_org(
                 },
             )
             _raise_on_bad_status(user_resp, 201, "User creation")
-    except Exception:
+    except (httpx.RequestError, RuntimeError):
         if org_id:
             try:
                 async with _make_client(
@@ -155,13 +167,14 @@ async def create_isolated_org(
                     token=admin_token,
                 ) as cleanup_client:
                     await cleanup_client.post(
-                        "/api/v1/admin/org/deletion-request",
+                        _DELETION_REQUEST_PATH,
                         json={"org_id": org_id},
                     )
-            except httpx.RequestError:
+            except Exception:
                 _log.warning(
                     "Cleanup org deletion request failed for %s",
                     org_id,
+                    exc_info=True,
                 )
         raise
 
@@ -183,9 +196,11 @@ async def destroy_isolated_org(ctx: IsolatedOrgContext) -> None:
             token=ctx.admin_token,
         ) as client:
             resp = await client.post(
-                "/api/v1/admin/org/deletion-request",
+                _DELETION_REQUEST_PATH,
                 json={"org_id": ctx.org_id},
             )
+            if resp.status_code == 404:
+                return
             if resp.status_code not in (200, 201, 202, 204):
                 _log.warning(
                     "Org deletion returned %s for %s: %s",
@@ -194,7 +209,11 @@ async def destroy_isolated_org(ctx: IsolatedOrgContext) -> None:
                     resp.text,
                 )
     except httpx.RequestError:
-        _log.warning("Org deletion request failed for %s", ctx.org_id)
+        _log.warning(
+            "Org deletion request failed for %s",
+            ctx.org_id,
+            exc_info=True,
+        )
 
 
 async def get_admin_token(
@@ -209,6 +228,5 @@ async def get_admin_token(
             "/api/v1/auth/login",
             json={"email": email, "password": password},
         )
-        _raise_on_bad_status(resp, 200, "Auth")
-        data = _parse_json_response(resp, "auth")
+        data = _check_response(resp, 200, "Auth")
         return _extract_token(data)
