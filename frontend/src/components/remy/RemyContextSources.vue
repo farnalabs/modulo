@@ -77,7 +77,7 @@
 import { ref, onMounted } from "vue";
 import { api } from "@/lib/api/client";
 import { formatApiError } from "@/lib/api/formatError";
-import Button from "@/components/ui/button/Button.vue";
+import { Button } from "@/components/ui/button";
 import type { ContextSourceItem, ContextSourceMode, ContextSourceUpdate } from "@/types/remy";
 
 const sources = ref<ContextSourceItem[]>([]);
@@ -147,7 +147,7 @@ async function resetToDefaults() {
   try {
     const { error: err } = await (api as any).DELETE("/api/v1/me/remy/context-sources");
     if (err) {
-      error.value = `Failed to reset sources: ${err}`;
+      error.value = `Failed to reset sources: ${formatApiError(err)}`;
       return;
     }
     await fetchSources();

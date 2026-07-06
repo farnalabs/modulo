@@ -63,7 +63,7 @@ import { ref, onMounted } from "vue";
 import { api } from "@/lib/api/client";
 import { usePlanStore } from "@/stores/planStore";
 import FeatureGate from "./FeatureGate.vue";
-import Badge from "./ui/badge/Badge.vue";
+import { Badge } from "./ui/badge";
 import {
   Select,
   SelectContent,
@@ -100,8 +100,8 @@ async function fetchViews() {
     if (data && Array.isArray(data.views)) {
       views.value = data.views;
     }
-  } catch (_e) {
-    // Silently handle
+  } catch (e) {
+    console.warn("Failed to fetch views:", e);
   }
 }
 

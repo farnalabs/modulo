@@ -2,10 +2,7 @@
 import { ref, computed, watch } from 'vue'
 import { useCompositeStore } from '../../../stores/compositeStore'
 import { useApi } from '../../../composables/useApi'
-import Tabs from '../../ui/tabs/Tabs.vue'
-import TabsList from '../../ui/tabs/TabsList.vue'
-import TabsTrigger from '../../ui/tabs/TabsTrigger.vue'
-import TabsContent from '../../ui/tabs/TabsContent.vue'
+import { Tabs, TabsList, TabsTrigger, TabsContent } from '../../ui/tabs'
 import FieldMappingPair from './FieldMappingPair.vue'
 import type { SchemaField } from '../../../types/pipeline'
 
@@ -45,7 +42,8 @@ async function loadSchemaFields(schemaId: string): Promise<SchemaField[]> {
   try {
     const data = await get<{ fields: SchemaField[] }>(`/api/v1/schemas/${schemaId}/fields`)
     return data.fields ?? []
-  } catch {
+  } catch (e) {
+    console.warn(`Failed to load schema fields for ${schemaId}:`, e)
     return []
   }
 }
