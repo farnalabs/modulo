@@ -11,7 +11,6 @@ from modulo.db.models.base import OrgScoped
 
 class EnvironmentProfile(OrgScoped):
     __tablename__ = "environment_profiles"
-    __table_args__ = ()
 
     name: Mapped[str] = mapped_column(String(255), nullable=False)
     description: Mapped[str | None] = mapped_column(Text)

@@ -2,16 +2,13 @@ from __future__ import annotations
 
 import uuid
 from datetime import datetime
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
 from sqlalchemy import JSON, Boolean, CheckConstraint, DateTime, String, Uuid, func
 from sqlalchemy import text as sa_text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from modulo.db.models.base import Base
-
-if TYPE_CHECKING:
-    pass
 
 
 class Account(Base):
