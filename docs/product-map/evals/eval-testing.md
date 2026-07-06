@@ -117,6 +117,20 @@ Discovered from 1 completed delivery task (task-nv2-eval-bdd-tests). Tests valid
 - [x] Run not found returns 404
 - [x] Compare with no shared results returns empty results list
 
+### JSON Schema eval
+- [x] JSON Schema validation passes for valid data matching schema
+- [x] JSON Schema validation fails for data not matching schema
+- [x] JSON Schema scorer dispatches correctly for json_schema eval_type
+- [x] JSON Schema eval with block behaviour raises EvalBlockedError on mismatch
+- [ ] JSON Schema eval config stores schema ref and validates against output field
+
+### Custom function eval
+- [x] Custom function scorer executes correctly for configured function path
+- [x] Custom function returns score 0-1 and passed bool
+- [x] Unknown eval type raises error
+- [x] Custom function with missing config returns passed=false, score=0.0
+- [ ] Custom function registered via modulo.evals entry-point group
+
 ### Eval coverage
 - [x] GET /api/v1/evals/coverage returns node-level eval coverage with has_evals flag per node, covered/uncovered counts, coverage_pct
 - [x] Pipeline not found returns 404
@@ -144,10 +158,16 @@ Discovered from 1 completed delivery task (task-nv2-eval-bdd-tests). Tests valid
 
 ### Error Handling
 - [x] All 9 CRUD routes in evals.py catch ProgrammingError→501
+- [x] All 9 CRUD routes in evals.py catch SQLAlchemyError→503
 - [x] Compare endpoint catches ProgrammingError in both session blocks
+- [x] Compare endpoint catches SQLAlchemyError in both session blocks
 - [x] OKR progress endpoint catches ProgrammingError→501
+- [x] OKR progress endpoint catches SQLAlchemyError→503
 - [x] Eval dashboard endpoint catches ProgrammingError→501 (admin.py)
+- [x] Eval dashboard endpoint catches SQLAlchemyError→503 (admin.py)
 - [x] Eval regressions endpoint catches ProgrammingError→501 (admin.py)
+- [x] Eval regressions endpoint catches TimeoutError→503 (admin.py)
+- [x] Eval regressions endpoint catches SQLAlchemyError→503 (admin.py)
 - [x] Engine-internal errors (invalid regex, custom function exception, LLM judge failure) return failed EvalResult, not 500
 - [x] ContentTooLongError caught in LLM judge → returned as failed EvalResult
 - [x] Missing eval type raises ValueError (propagated as 500 — deferred fix)
@@ -167,10 +187,26 @@ Discovered from 1 completed delivery task (task-nv2-eval-bdd-tests). Tests valid
 - [x] Suite not found in DB returns 404
 - [x] Suite_id with special characters — endpoint handles encoding
 
+### Resilience & Integration Robustness
+- [x] All 9 CRUD routes in evals.py catch ProgrammingError→501 and SQLAlchemyError→503
+- [x] Compare endpoint catches ProgrammingError/SQLAlchemyError in both session blocks
+- [x] Eval dashboard endpoint catches ProgrammingError→501 and SQLAlchemyError→503
+- [x] Eval regressions endpoint catches ProgrammingError→501, TimeoutError→503, SQLAlchemyError→503
+- [x] OKR progress endpoint catches ProgrammingError→501 and SQLAlchemyError→503
+- [x] Engine-internal errors (invalid regex, custom function exception, LLM judge failure) return failed EvalResult, not 500
+- [x] ContentTooLongError caught in LLM judge → returned as failed EvalResult
+- [ ] Eval results UI placeholder scenario — no Playwright test for eval results display
+- [ ] No integration test for eval blocking in pipeline run lifecycle
+- [ ] No retry/backoff on eval engine DB queries
+- [ ] No circuit breaker on repeated eval engine failures
+
+### QA History
+- 2026-07-06: Cross-cutting QA (index 229). Fixed CRITICAL — eval_dashboard route in admin.py was missing SQLAlchemyError→503 catch (connection/deadlock failures propagated as 500). Fixed CRITICAL — okr_progress route in admin.py was missing SQLAlchemyError→503 catch (same pattern). Added except SQLAlchemyError handlers + 4 new tests (dashboard + regressions + okr_progress SQLAlchemyError→503, okr_progress ProgrammingError→501). Added json_schema and custom_function eval type behaviour sections to product map. Added Resilience section. Status: partial.
+
 ## Known Gaps
 - **eval_scorer.feature is a placeholder**: 6 abstract scenarios — not executable without concrete step values.
 - **eval_dashboard.feature is a placeholder**: 4 UI scenarios with no concrete selectors, routes, or assertions.
 - **eval_run.feature "results UI" scenario is a placeholder**: navigation step references eval_dashboard which is stub-only.
-- **No dashboard regression alert unit test**: 2 ProgrammingError→501 catches added at index 119 but no corresponding unit test for eval_dashboard or eval_regressions.
+- **Missing eval_dashboard SQLAlchemyError test (resolved)**: eval_dashboard route had only ProgrammingError catch — SQLAlchemyError→503 added at index 229 with test coverage. eval_regressions already had full catch chain.
 - **Missing eval_type ValueError propagates as 500**: unknown eval type raises ValueError which is not caught at the route handler level, producing a raw 500 traceback instead of a structured 422.
 - **No integration test for eval blocking in pipelines**: eval gate enforcement tested at BDD level (eval_block.feature) but no end-to-end pipeline run → eval block → eval_failed lifecycle test.
