@@ -340,7 +340,7 @@ function buildUpdateBody(): SsoProviderUpdate {
 
   const body: SsoProviderUpdate = {
     name: formData.name.trim() || null,
-    auto_provision: formData.auto_provision || null,
+    auto_provision: formData.auto_provision ?? null,
     default_role: formData.default_role || null,
   }
 

@@ -446,7 +446,7 @@ async function createKey() {
       body: { name: createKeyName.value.trim(), role: createKeyRole.value },
     })
     if (err) {
-      createKeyError.value = err
+      createKeyError.value = formatApiError(err)
     } else if (data) {
       const created = data as ApiKeyCreatedResponse
       createdKeyValue.value = created.key_value
@@ -457,7 +457,7 @@ async function createKey() {
       await loadAll()
     }
   } catch (e: unknown) {
-    createKeyError.value = e
+    createKeyError.value = formatApiError(e)
   } finally {
     creatingKey.value = false
   }
@@ -479,14 +479,14 @@ async function revokeKey() {
       body: { is_active: false },
     })
     if (err) {
-      revokeKeyError.value = err
+      revokeKeyError.value = formatApiError(err)
     } else {
       revokeKeyDialogOpen.value = false
       revokeKeyTarget.value = null
       await loadAll()
     }
   } catch (e: unknown) {
-    revokeKeyError.value = e
+    revokeKeyError.value = formatApiError(e)
   } finally {
     revokingKey.value = false
   }

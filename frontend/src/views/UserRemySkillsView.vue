@@ -126,6 +126,7 @@
 <script setup lang="ts">
 import { ref, onMounted } from 'vue'
 import { api } from '../lib/api/client'
+import { formatApiError } from '../lib/api/formatError'
 import LoadingSpinner from '../components/shared/LoadingSpinner.vue'
 import ErrorAlert from '../components/shared/ErrorAlert.vue'
 import RemySkillDialog from '../components/remy/RemySkillDialog.vue'
@@ -151,7 +152,7 @@ async function loadSkills() {
   try {
     const { data, error: err } = await (api as any).GET('/api/v1/me/remy/skills')
     if (err) {
-      loadError.value = `Failed to load skills: ${err}`
+      loadError.value = `Failed to load skills: ${formatApiError(err)}`
     } else if (data) {
       skills.value = (data as { items: SkillItem[] }).items || (data as SkillItem[])
     }
@@ -173,7 +174,7 @@ async function toggleSkillActive(skill: SkillItem) {
       body: { active: newActive },
     })
     if (err) {
-      skillToggleError.value = `Failed to toggle skill: ${err}`
+      skillToggleError.value = `Failed to toggle skill: ${formatApiError(err)}`
       return
     }
     if (data) {

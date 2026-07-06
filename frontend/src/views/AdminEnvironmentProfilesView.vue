@@ -318,6 +318,7 @@
 <script setup lang="ts">
 import { ref, reactive, onMounted } from 'vue'
 import { api } from '../lib/api/client'
+import { formatApiError } from '../lib/api/formatError'
 import type { components } from '../lib/api/client'
 import LoadingSpinner from '../components/shared/LoadingSpinner.vue'
 import ErrorAlert from '../components/shared/ErrorAlert.vue'
@@ -388,7 +389,7 @@ async function loadProfiles() {
   try {
     const { data, error: err } = await api.GET('/api/v1/environments')
     if (err) {
-      error.value = `Failed to load profiles: ${err}`
+      error.value = `Failed to load profiles: ${formatApiError(err)}`
     } else if (data) {
       profiles.value = data.items
     }

@@ -120,6 +120,7 @@
 <script setup lang="ts">
 import { ref, computed, onMounted } from 'vue'
 import { api } from '../lib/api/client'
+import { formatApiError } from '../lib/api/formatError'
 import { usePlanStore } from '../stores/planStore'
 import FeatureGate from '../components/FeatureGate.vue'
 import LoadingSpinner from '../components/shared/LoadingSpinner.vue'
@@ -176,7 +177,7 @@ async function loadData() {
       params: { query: { group_by: 'team', period: 'month' } },
     })
     if (err) {
-      loadError.value = `Failed to load cost report: ${err}`
+      loadError.value = `Failed to load cost report: ${formatApiError(err)}`
     } else if (data) {
       items.value = (data as CostReportResponse).items ?? []
     }
@@ -193,7 +194,7 @@ async function loadAnomalies() {
   try {
     const { data, error: err } = await (api as any).GET('/api/v1/admin/costs/anomalies')
     if (err) {
-      anomaliesError.value = `Failed to load anomalies: ${err}`
+      anomaliesError.value = `Failed to load anomalies: ${formatApiError(err)}`
     } else if (data) {
       anomalies.value = (data as AnomalyResponse[]) ?? []
     }
@@ -209,7 +210,7 @@ const dismissLoading = ref<Record<string, boolean>>({})
 async function dismissAnomaly(id: string) {
   dismissLoading.value[id] = true
   try {
-    await (api as any).GET(`/api/v1/admin/costs/anomalies/dismiss/${id}`)
+    await (api as any).POST(`/api/v1/admin/costs/anomalies/dismiss/${id}`)
     await loadAnomalies()
   } catch {
     anomaliesError.value = 'Failed to dismiss anomaly'

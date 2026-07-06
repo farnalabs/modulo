@@ -119,6 +119,7 @@
 <script setup lang="ts">
 import { ref, onMounted, computed } from 'vue'
 import { api } from '../lib/api/client'
+import { formatApiError } from '../lib/api/formatError'
 import { usePlanStore } from '../stores/planStore'
 import FeatureGate from '../components/FeatureGate.vue'
 import LoadingSpinner from '../components/shared/LoadingSpinner.vue'
@@ -186,7 +187,7 @@ async function loadData() {
   try {
     const { data, error: err } = await (api as any).GET('/api/v1/admin/costs/limits')
     if (err) {
-      loadError.value = `Failed to load spend limits: ${err}`
+      loadError.value = `Failed to load spend limits: ${formatApiError(err)}`
     } else if (data) {
       const resp = data as SpendLimitData
       orgLimit.value = resp.org_daily_limit_usd
@@ -210,7 +211,7 @@ async function loadCosts() {
   try {
     const { data, error: err } = await (api as any).GET('/api/v1/admin/costs')
     if (err) {
-      costsError.value = `Failed to load costs: ${err}`
+      costsError.value = `Failed to load costs: ${formatApiError(err)}`
     } else if (data) {
       const resp = data as CostReportData
       orgTotalCost.value = resp.org_total_usd ?? 0
@@ -232,7 +233,7 @@ async function saveOrgLimit() {
       body: { daily_limit_usd: orgLimit.value },
     })
     if (err) {
-      orgSaveError.value = `Failed to save: ${err}`
+      orgSaveError.value = `Failed to save: ${formatApiError(err)}`
     } else {
       orgSaveSuccess.value = true
     }
@@ -251,7 +252,7 @@ async function saveTeamLimit(team: TeamRow) {
       body: { daily_limit_usd: team.editingLimit },
     })
     if (err) {
-      team.saveError = `Failed to save: ${err}`
+      team.saveError = `Failed to save: ${formatApiError(err)}`
     } else {
       team.daily_limit_usd = team.editingLimit
     }

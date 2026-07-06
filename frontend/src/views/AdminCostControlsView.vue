@@ -234,6 +234,7 @@
 <script setup lang="ts">
 import { ref, computed, onMounted } from 'vue'
 import { api } from '../lib/api/client'
+import { formatApiError } from '../lib/api/formatError'
 import { usePlanStore } from '../stores/planStore'
 import FeatureGate from '../components/FeatureGate.vue'
 import LoadingSpinner from '../components/shared/LoadingSpinner.vue'
@@ -354,7 +355,7 @@ async function loadCosts() {
   try {
     const { data, error: err } = await (api as any).GET('/api/v1/admin/costs')
     if (err) {
-      costsError.value = `Failed to load costs: ${err}`
+      costsError.value = `Failed to load costs: ${formatApiError(err)}`
     } else if (data) {
       const resp = data as CostReportData
       totalSpend.value = resp.org_total_usd ?? 0
@@ -386,8 +387,8 @@ async function loadLimits() {
         saveError: null,
       }))
     }
-  } catch {
-    // non-fatal
+  } catch (err) {
+    console.warn('Failed to load team limits:', err)
   }
 }
 
@@ -400,8 +401,8 @@ async function loadSettings() {
     } else if (data) {
       settings.value = { ...settings.value, ...data }
     }
-  } catch {
-    // use defaults
+  } catch (err) {
+    console.warn('Failed to load settings, using defaults:', err)
   }
 }
 
@@ -413,7 +414,7 @@ async function saveTeamBudget(team: TeamBudgetRow) {
       body: { daily_limit_usd: team.editingBudget },
     })
     if (err) {
-      team.saveError = `Failed to save: ${err}`
+      team.saveError = `Failed to save: ${formatApiError(err)}`
     } else {
       budgetSaveSuccess.value = true
       setTimeout(() => { budgetSaveSuccess.value = false }, 3000)
@@ -434,7 +435,7 @@ async function saveBudget() {
       body: { budget: settings.value.budget },
     })
     if (err) {
-      budgetSaveError.value = `Failed to save: ${err}`
+      budgetSaveError.value = `Failed to save: ${formatApiError(err)}`
     } else {
       budgetSaveSuccess.value = true
     }

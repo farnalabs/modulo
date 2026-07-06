@@ -101,6 +101,7 @@
 <script setup lang="ts">
 import { ref, onMounted } from 'vue'
 import { api } from '../lib/api/client'
+import { formatApiError } from '../lib/api/formatError'
 import { shortId } from '../utils/format'
 import { useApi } from '../composables/useApi'
 import LoadingSpinner from '../components/shared/LoadingSpinner.vue'
@@ -172,7 +173,7 @@ async function loadProposals() {
   try {
     const { data, error: err } = await api.GET('/api/v1/feedback/proposals', { params: {} as any })
     if (err) {
-      pageError.value = `Failed to load proposals: ${err}`
+      pageError.value = `Failed to load proposals: ${formatApiError(err)}`
     } else if (data) {
       proposals.value = (data as unknown as ProposalsResponse).items
     }
