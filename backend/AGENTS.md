@@ -115,3 +115,11 @@
 ### Connectors: use `key in dict` for required filter validation, not `dict.get(key)` with falsy check
 
 - `if not value` after `dict.get(key)` rejects falsy-but-valid values (empty string `""`, integer `0`, boolean `False`). For required fields validation, use `if key not in filters` / `if key not in data` instead. This matches the GitLab connector's correct pattern and avoids introducing subtle bugs when a valid field value is falsy.
+
+### AsyncSession must always pass `autobegin=False`
+
+The DI factory in `dependencies.py:93` creates sessions with `autobegin=False`. Any code that manually constructs an `AsyncSession` (e.g. `AsyncSession(engine)` or `AsyncSession(session.bind)`) MUST pass `autobegin=False` to match.
+
+With the default `autobegin=True`, `Session.commit()` auto-starts a new implicit transaction. The next `async with session.begin():` then raises `InvalidRequestError: A transaction is already begun on this Session.` because the implicit transaction is already active. This is enforced by semgrep rule `async-session-missing-autobegin`.
+
+Found in `remy.py`: the `event_generator` created `AsyncSession(session.bind)` without `autobegin=False`, causing every Remy streaming request to fail with "Database error. Please try again later."
