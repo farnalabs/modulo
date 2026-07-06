@@ -5,12 +5,13 @@ from __future__ import annotations
 import base64
 import hashlib
 import json
+import logging
 from datetime import datetime
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, Field
-from sqlalchemy.exc import ProgrammingError
+from sqlalchemy.exc import ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.api.dependencies import get_db_session
@@ -42,6 +43,8 @@ from modulo.registry.crypto import (
 from modulo.registry.crypto import (
     verify_trust_anchor,
 )
+
+_log = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/v1/registry", tags=["registry"])
 
@@ -298,6 +301,12 @@ async def download_registry_primitive_endpoint(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
         )
+    except SQLAlchemyError:
+        _log.warning("DB error in download_registry_primitive_endpoint for slug=%s", slug)
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Database operation failed. Please try again.",
+        )
 
     return PullResponse(
         entry=RegistryEntryResponse.model_validate(entry),
@@ -547,6 +556,15 @@ async def verify_registry_primitive_v2(
             raise HTTPException(
                 status_code=status.HTTP_501_NOT_IMPLEMENTED,
                 detail="Feature is not available. Run database migrations to enable it.",
+            )
+        except SQLAlchemyError:
+            _log.warning(
+                "DB error in verify_registry_primitive_v2: public_key_hex path, slug=%s, fp=%s",
+                slug, entry.signing_key_fingerprint,
+            )
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="Database operation failed. Please try again.",
             )
     else:
         verified = verify_primitive_signature(entry)
