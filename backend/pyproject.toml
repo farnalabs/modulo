@@ -10,7 +10,7 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [project]
-name = "modulo"
+name = "farnalabs-modulo"
 version = "0.3.214"
 description = "Governed orchestration for your agentic SDLC"
 license = "MIT"
