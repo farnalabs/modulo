@@ -17,6 +17,7 @@ code:
 unit-tests:
   - backend/tests/unit/core/test_pipeline_engine.py
   - backend/tests/unit/api/test_pipeline_execution_programming_error.py
+  - backend/tests/unit/api/test_stage_programming_error.py
 depends-on: [feat-core-agent-model, feat-core-schema-system, feat-core-trigger-system]
 status: partial
 ---
@@ -110,6 +111,12 @@ StateGraph-based pipeline executor. Compiles pipeline config into a LangGraph gr
 - [x] `ProgrammingError` on run CRUD routes → all 14 routes in `runs.py` now have `ProgrammingError→501` handling (verified against code at `backend/src/modulo/api/routes/runs.py`).
 - [x] `ProgrammingError` on pipeline CRUD routes → all 16 routes in `pipelines.py` now have `ProgrammingError→501` handling (verified against code at `backend/src/modulo/api/routes/pipelines.py`).
 - [x] `ProgrammingError` on stage CRUD routes → all 5 routes in `stages.py` have the catch.
+- [x] `SQLAlchemyError→503` on run CRUD routes → all 14 routes in `runs.py` now catch `SQLAlchemyError` with 503 response (previously only caught `ProgrammingError`).
+- [x] `Exception→500` on run CRUD routes → all 14 routes in `runs.py` now have generic `except Exception→500` guard with `except HTTPException: raise` re-raise.
+- [x] `Exception→500` on pipeline CRUD routes → all 18 routes in `pipelines.py` now have generic `except Exception→500` guard.
+- [x] `Exception→500` on stage CRUD routes → all 5 routes in `stages.py` now have generic `except Exception→500` guard.
+- [x] `SQLAlchemyError→503` on `save_as_composite` endpoint → fixed incorrect `501→503` response for SQLAlchemyError (was returning 501 "run migrations" instead of 503 "temporarily unavailable").
+
 - [ ] Empty pipeline (no nodes) produces raw HTTP 500 instead of structured 422 → `graph_cache.py` raises `ValueError` which becomes 500 in `execute()`. Pre-run validation (`GraphValidator._check_topology`) catches this and returns `TOPOLOGY_NO_NODES` error, but `graph_cache` exception still fires if validation is somehow bypassed.
 - [ ] Node retry policy referenced in pipeline config schema but NOT implemented in pipeline engine → no retry loop exists in `node_runner.py` or `executor.py`.
 
@@ -144,3 +151,4 @@ StateGraph-based pipeline executor. Compiles pipeline config into a LangGraph gr
 |---|---|---|---|
 | 2026-07-04 | Cross-cutting QA (6 lenses) | Behaviour completeness, edge case audit, error path audit, cross-module contract check, gap freshness, resilience auditing | [x] 30 behaviours verified [x] 33 error/edge case checkboxes added [x] 21 ProgrammingError catch sites added [x] 2 unit test files created [x] Known Gaps refreshed |
 | 2026-07-05 | Cross-cutting QA — code verification pass | Verify stale product map claims against actual code; check ProgrammingError catches, executor error handling, frontend i18n | [x] All 14 run routes confirmed with ProgrammingError catches (product map was stale — claimed 13/14 missing) [x] All 16 pipeline routes confirmed with ProgrammingError catches (product map was stale — claimed 8/16 missing) [x] Executor error handling verified: NodeInterrupt→awaiting_human, EvalBlockedError→eval_failed, OutputRejectedError→output_rejected, RunCancelledError→cancelled, RunawayRunError→failed/runaway, TimeoutError→failed/node_timeout [x] 5 frontend run views audited for i18n [ ] Frontend i18n gaps documented (5 views, ~149 hardcoded strings) |
+| 2026-07-08 | Cross-cutting QA — exception guard audit (index 271) | Fixed CRITICAL — added missing `except SQLAlchemyError→503` catches to all 14 run routes in runs.py (previously only caught ProgrammingError, allowing connection/deadlock failures to propagate as raw 500). Fixed CRITICAL — added missing `except Exception→500` catches with `except HTTPException: raise` guard to all 14 routes in runs.py, all 18 routes in pipelines.py, and all 5 routes in stages.py — Python-level errors (TypeError, KeyError, ValueError) previously propagated to CatchAllMiddleware as opaque 500 on all these routes. Fixed MINOR — `save_as_composite_endpoint` in pipelines.py returned 501 for SQLAlchemyError instead of 503 (wrong status code for connection/deadlock failures). Added 15 new unit tests covering SQLAlchemyError→503 and Exception→500 for run, pipeline, and stage routes in `test_pipeline_execution_programming_error.py`. | [x] 8 new error handling checkboxes [x] 15 new unit tests [x] 37 guarded routes [x] Matching guard test classes [ ] Frontend i18n gaps unchanged (5 views) |
