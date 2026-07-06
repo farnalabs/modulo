@@ -91,15 +91,15 @@ status: partial
 - [x] Snapshot creation fails if a referenced agent, connector, schema, or model backend is missing
 - [x] Concurrent snapshot creation for the same pipeline is serialised via row lock
 - [x] Missing or null environment_profile_id is handled (field is nullable)
-- [ ] All snapshot CRUD routes (list, detail, tag, delete, rollback, diff) return 501 if pipeline_snapshots table does not exist
+- [x] All snapshot CRUD routes (list, detail, tag, delete, rollback, diff) return 501 if pipeline_snapshots table does not exist
 
 ## Error Handling
 
-- [ ] Snapshot list returns 501 if pipeline_snapshots table does not exist
-- [ ] Snapshot detail returns 501 if pipeline_snapshots table does not exist
-- [ ] Snapshot CRUD (tag, delete, rollback, diff) returns 501 if table does not exist
-- [ ] Auth 401/403 for snapshot endpoints
-- [ ] 422 validation for snapshot input (pagination bounds, invalid UUID)
+- [x] Snapshot list returns 501 if pipeline_snapshots table does not exist
+- [x] Snapshot detail returns 501 if pipeline_snapshots table does not exist
+- [x] Snapshot CRUD (tag, delete, rollback, diff) returns 501 if table does not exist
+- [x] Auth 401/403 for snapshot endpoints
+- [x] 422 validation for snapshot input (pagination bounds, invalid UUID)
 
 ## QA History
 
