@@ -195,6 +195,7 @@ class SessionKeyStore:
                 await self._redis.setex(f"error_hmac_key:{account_id}", _HMAC_KEY_TTL, key)
             except Exception:
                 _log.exception("session_key_store.redis_set_failed", extra={"account_id": account_id})
+                self._memory[account_id] = _SessionKeyEntry(key)
         else:
             self._memory[account_id] = _SessionKeyEntry(key)
         return key
@@ -206,7 +207,6 @@ class SessionKeyStore:
                 return val.decode() if isinstance(val, bytes) else val
             except Exception:
                 _log.exception("session_key_store.redis_get_failed", extra={"account_id": account_id})
-                return None
         entry = self._memory.get(account_id)
         if entry is None or entry.expired:
             self._memory.pop(account_id, None)
