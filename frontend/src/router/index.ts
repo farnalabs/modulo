@@ -38,6 +38,7 @@ function decodeJwtPayload(token: string): Record<string, unknown> | null {
   try {
     return JSON.parse(atob(token.split('.')[1].replace(/-/g, '+').replace(/_/g, '/')))
   } catch {
+    console.warn('[router] failed to decode JWT payload')
     return null
   }
 }
@@ -405,39 +406,29 @@ const router = createRouter({
       redirect: '/',
     },
   ],
-  scrollBehavior() {
+  scrollBehavior(_to, _from, savedPosition) {
+    if (savedPosition) return savedPosition
     return { top: 0 }
   },
 })
 
 router.beforeEach((to) => {
   const routeName = to.name
-  if (typeof routeName !== 'string') return
-  const entry = manifestByName.get(routeName)
-  if (entry) {
-    to.meta.breadcrumb = entry.breadcrumb
-    to.meta.testid = entry.testid
-    to.meta.requiredRoles = entry.required_roles ?? undefined
-    to.meta.requiredTier = entry.required_tier
-    to.meta.requiredPermissions = entry.required_permissions ?? undefined
-    to.meta.featureFlag = entry.feature_flag ?? undefined
-    if (entry.parent) {
-      const parentEntry = manifestByName.get(entry.parent)
-      to.meta.parent = parentEntry?.name ?? entry.parent
-    } else {
-      to.meta.parent = undefined
+  if (typeof routeName === 'string') {
+    const entry = manifestByName.get(routeName)
+    if (entry) {
+      to.meta.breadcrumb = entry.breadcrumb
+      to.meta.testid = entry.testid
+      to.meta.requiredRoles = entry.required_roles ?? undefined
+      to.meta.requiredTier = entry.required_tier
+      to.meta.requiredPermissions = entry.required_permissions ?? undefined
+      to.meta.featureFlag = entry.feature_flag ?? undefined
+      to.meta.parent = entry.parent
+        ? (manifestByName.get(entry.parent)?.name ?? entry.parent)
+        : undefined
     }
   }
-})
 
-router.onError((err) => {
-  console.error('[router] navigation error:', err)
-  if (err instanceof Error && err.message.includes('Failed to fetch dynamically imported module')) {
-    window.location.reload()
-  }
-})
-
-router.beforeEach((to) => {
   const token = getAccessToken()
   if (to.name === 'login' && token) {
     return { name: 'dashboard' }
@@ -446,10 +437,19 @@ router.beforeEach((to) => {
     return { name: 'login' }
   }
   if (to.meta?.requiresSystemAdmin) {
-    const payload = decodeJwtPayload(token!)
+    if (!token) return { name: 'login' }
+    const payload = decodeJwtPayload(token)
     if (!payload || payload.is_system_admin !== true) {
       return { name: 'dashboard' }
     }
+  }
+})
+
+router.onError((err) => {
+  console.error('[router] navigation error:', err)
+  const msg = err instanceof Error ? err.message : String(err)
+  if (/Failed to fetch|error loading dynamically|ChunkLoadError/i.test(msg)) {
+    window.location.reload()
   }
 })
 
