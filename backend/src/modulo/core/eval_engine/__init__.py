@@ -152,6 +152,27 @@ def _fail_result(
     )
 
 
+def _log_and_fail(
+    eval_def: EvalDefinition,
+    run_id: UUID,
+    detail: str,
+    *,
+    level: int = logging.WARNING,
+    exc_info: bool = False,
+) -> EvalResult:
+    """Log a warning/error and return a failed EvalResult.
+
+    Saves ~3 lines per call site vs. manual _log.warning + _fail_result.
+    """
+    _log.log(level, "Eval %s (%s): %s", eval_def.id, eval_def.name, detail, exc_info=exc_info)
+    return _fail_result(
+        run_id=run_id,
+        node_id=eval_def.node_id or "",
+        eval_id=eval_def.id,
+        detail=detail,
+    )
+
+
 def _result_from_dict(
     raw: dict[str, Any],
     run_id: UUID,
@@ -166,13 +187,15 @@ def _result_from_dict(
             score = float(raw["score"])
         except (ValueError, TypeError):
             score = None
+    raw_detail = raw.get("detail")
+    detail = "" if raw_detail is None else str(raw_detail)
     return EvalResult(
         run_id=run_id,
         node_id=node_id,
         eval_id=eval_id,
         passed=bool(raw.get("passed", False)),
         score=score,
-        detail=str(raw.get("detail", "")),
+        detail=detail,
     )
 
 
@@ -237,15 +260,16 @@ class EvalEngine:
         eval_def: EvalDefinition,
         run_id: UUID,
     ) -> EvalResult:
-        pattern_str = eval_def.config.get("pattern", "")
-        if not pattern_str:
-            _log.warning("Regex eval %s missing pattern", eval_def.id)
+        pattern_raw = eval_def.config.get("pattern")
+        if not isinstance(pattern_raw, str) or not pattern_raw:
+            _log.warning("Regex eval %s missing or invalid pattern", eval_def.id)
             return _fail_result(
                 run_id=run_id,
                 node_id=eval_def.node_id or "",
                 eval_id=eval_def.id,
-                detail="Regex eval missing 'pattern' in config",
+                detail="Regex eval missing or invalid 'pattern' in config",
             )
+        pattern_str: str = pattern_raw
         if len(pattern_str) > _MAX_REGEX_PATTERN_LENGTH:
             return _fail_result(
                 run_id=run_id,
@@ -283,7 +307,7 @@ class EvalEngine:
         try:
             passed = bool(re.search(pattern_str, value, flags))
         except re.error as exc:
-            _log.warning("Regex eval %s invalid pattern: %s", eval_def.id, exc)
+            _log.warning("Regex eval %s invalid pattern: %s", eval_def.id, exc, exc_info=True)
             return _fail_result(
                 run_id=run_id,
                 node_id=eval_def.node_id or "",
@@ -338,7 +362,7 @@ class EvalEngine:
                 detail="JSON Schema validation passed",
             )
         except jsonschema.ValidationError as e:
-            _log.warning("JSON Schema eval %s validation failed: %s", eval_def.id, e.message)
+            _log.warning("JSON Schema eval %s validation failed: %s", eval_def.id, e.message, exc_info=True)
             return _fail_result(
                 run_id=run_id,
                 node_id=eval_def.node_id or "",
@@ -346,12 +370,52 @@ class EvalEngine:
                 detail=f"JSON Schema validation failed: {e.message}",
             )
         except jsonschema.SchemaError as e:
-            _log.warning("JSON Schema eval %s malformed: %s", eval_def.id, e.message)
+            _log.warning("JSON Schema eval %s malformed: %s", eval_def.id, e.message, exc_info=True)
             return _fail_result(
                 run_id=run_id,
                 node_id=eval_def.node_id or "",
                 eval_id=eval_def.id,
                 detail=f"JSON Schema definition is malformed: {e.message}",
+            )
+
+    @staticmethod
+    def _run_callable_and_parse(
+        callable_fn: Any,  # (dict, EvalDefinition) -> dict or (dict, dict) -> dict
+        callable_args: tuple[Any, ...],
+        *,
+        eval_def: EvalDefinition,
+        run_id: UUID,
+        log_prefix: str,
+        callable_name: str,
+    ) -> EvalResult:
+        """Call *callable_fn* with *callable_args* and parse the result.
+
+        Shared helper for ``_evaluate_custom`` and ``_evaluate_llm``.
+        """
+        try:
+            raw = callable_fn(*callable_args)
+        except (KeyboardInterrupt, SystemExit):
+            raise
+        except Exception as exc:
+            _log.warning("%s eval %s %s raised: %s", log_prefix, eval_def.id, callable_name, exc, exc_info=True)
+            return _fail_result(
+                run_id=run_id,
+                node_id=eval_def.node_id or "",
+                eval_id=eval_def.id,
+                detail=f"{callable_name} raised: {exc}",
+            )
+        try:
+            return _result_from_dict(raw, run_id, eval_def.node_id or "", eval_def.id)
+        except TypeError:
+            _log.warning(
+                "%s eval %s %s returned non-dict: %s", log_prefix, eval_def.id, callable_name, type(raw).__name__,
+                exc_info=True,
+            )
+            return _fail_result(
+                run_id=run_id,
+                node_id=eval_def.node_id or "",
+                eval_id=eval_def.id,
+                detail=f"{callable_name} returned non-dict value",
             )
 
     def _evaluate_custom(
@@ -367,7 +431,7 @@ class EvalEngine:
         The callable receives ``(output: dict, config: dict)`` and must return
         a dict with keys ``passed`` (bool), ``score`` (float|None), ``detail`` (str).
         """
-        fn_name = eval_def.config.get("function", "")
+        fn_name: str | None = eval_def.config.get("function")
         if not fn_name:
             _log.warning("Custom eval %s missing function name", eval_def.id)
             return _fail_result(
@@ -387,28 +451,14 @@ class EvalEngine:
                 eval_id=eval_def.id,
                 detail=f"Custom function {fn_name!r} not found in registry",
             )
-        try:
-            raw = fn(output, eval_def.config.get("function_config", {}))
-        except (KeyboardInterrupt, SystemExit):
-            raise
-        except Exception as exc:
-            _log.warning("Custom eval %s function %r raised: %s", eval_def.id, fn_name, exc)
-            return _fail_result(
-                run_id=run_id,
-                node_id=eval_def.node_id or "",
-                eval_id=eval_def.id,
-                detail=f"Custom function {fn_name!r} raised: {exc}",
-            )
-        try:
-            return _result_from_dict(raw, run_id, eval_def.node_id or "", eval_def.id)
-        except TypeError:
-            _log.warning("Custom eval %s function %r returned non-dict: %s", eval_def.id, fn_name, type(raw).__name__)
-            return _fail_result(
-                run_id=run_id,
-                node_id=eval_def.node_id or "",
-                eval_id=eval_def.id,
-                detail=f"Custom function {fn_name!r} returned non-dict value",
-            )
+        return self._run_callable_and_parse(
+            fn,
+            (output, eval_def.config.get("function_config", {})),
+            eval_def=eval_def,
+            run_id=run_id,
+            log_prefix="Custom",
+            callable_name=f"function {fn_name!r}",
+        )
 
     @staticmethod
     def _build_safe_judge_input(
@@ -469,28 +519,14 @@ class EvalEngine:
                 eval_id=eval_def.id,
                 detail=str(exc),
             )
-        try:
-            raw = llm_judge_callable(safe_output, safe_eval_def)
-        except (KeyboardInterrupt, SystemExit):
-            raise
-        except Exception as exc:
-            _log.warning("LLM judge eval %s raised: %s", eval_def.id, exc)
-            return _fail_result(
-                run_id=run_id,
-                node_id=eval_def.node_id or "",
-                eval_id=eval_def.id,
-                detail=f"LLM judge raised: {exc}",
-            )
-        try:
-            return _result_from_dict(raw, run_id, eval_def.node_id or "", eval_def.id)
-        except TypeError:
-            _log.warning("LLM judge eval %s returned non-dict: %s", eval_def.id, type(raw).__name__)
-            return _fail_result(
-                run_id=run_id,
-                node_id=eval_def.node_id or "",
-                eval_id=eval_def.id,
-                detail="LLM judge returned non-dict value",
-            )
+        return self._run_callable_and_parse(
+            llm_judge_callable,
+            (safe_output, safe_eval_def),
+            eval_def=eval_def,
+            run_id=run_id,
+            log_prefix="LLM judge",
+            callable_name="callable",
+        )
 
     # ------------------------------------------------------------------
     # Standalone evaluate() path for Feedback System (§8.20)

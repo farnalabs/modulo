@@ -11,7 +11,7 @@ from datetime import UTC, datetime, timedelta
 from typing import Literal
 from uuid import UUID
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlalchemy import text
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -26,7 +26,7 @@ class OkrSuite(BaseModel):
 
     id: str
     name: str
-    pass_threshold: float  # 0.0-1.0
+    pass_threshold: float = Field(ge=0.0, le=1.0)  # 0.0-1.0
     eval_definition_ids: list[UUID]
     target_date: str | None = None  # ISO 8601 date e.g. "2026-09-30"
     owner: str | None = None
@@ -65,15 +65,20 @@ def _trend_point(period: str, total: int, passed: int) -> OkrTrendPoint:
 def _compute_trend_direction(trend: list[OkrTrendPoint], threshold: float = 0.05) -> TrendDirection:
     """Determine trend direction from sequential trend points.
 
-    Compares the most recent two non-empty periods.  A change of less than
-    *threshold* (default 0.05) is considered stable.
+    Compares the most recent two non-empty, non-overlapping windows.
+    Excludes ``overall`` (which overlaps with all windows). A change of
+    less than *threshold* (default 0.05) is considered stable.
     """
-    points_with_data = [p for p in trend if p.total_evals > 0]
-    if len(points_with_data) < 2:
-        return "stable"
-
-    latest = points_with_data[-1].pass_rate
-    previous = points_with_data[-2].pass_rate
+    discrete = [p for p in trend if p.total_evals > 0 and p.period != "overall"]
+    if len(discrete) >= 2:
+        latest = discrete[-1].pass_rate
+        previous = discrete[-2].pass_rate
+    else:
+        points_with_data = [p for p in trend if p.total_evals > 0]
+        if len(points_with_data) < 2:
+            return "stable"
+        latest = points_with_data[-1].pass_rate
+        previous = points_with_data[-2].pass_rate
     delta = latest - previous
 
     if delta <= -threshold:
@@ -92,7 +97,7 @@ def _days_between(from_date: datetime, target_date_str: str | None) -> int | Non
         delta = target - from_date
         return max(0, delta.days)
     except ValueError:
-        _log.warning("okr.days_between_invalid_date", extra={"target_date": target_date_str})
+        _log.warning("Invalid target date for OKR days calculation: %s", target_date_str)
         return None
 
 
@@ -184,10 +189,10 @@ async def track_okr_progress(
         }
         trend_row = (await session.execute(trend_q, trend_params)).first()
     except TimeoutError:
-        _log.error("okr.track_progress_timeout", extra={"suite_id": suite_id, "org_id": str(org_id)})
+        _log.error("OKR progress query timed out for suite %s (org %s)", suite_id, org_id)
         raise
     except SQLAlchemyError:
-        _log.exception("okr.track_progress_db_error", extra={"suite_id": suite_id, "org_id": str(org_id)})
+        _log.exception("OKR progress DB error for suite %s (org %s)", suite_id, org_id)
         raise
 
     total_7d = trend_row.total_7d or 0 if trend_row else 0
@@ -206,7 +211,9 @@ async def track_okr_progress(
         _trend_point("overall", total_all, passed_all),
     ]
 
-    current_score = trend[0].pass_rate if total_7d > 0 else trend[3].pass_rate
+    # Use the most recent non-empty discrete window; fall back to overall
+    scored = [t for t in trend if t.total_evals > 0 and t.period != "overall"]
+    current_score = scored[0].pass_rate if scored else trend[3].pass_rate
     trend_direction = _compute_trend_direction(trend)
     days_to_target = _days_between(as_of, target_date)
     breach = alert_on_breach(pass_threshold, current_score) if pass_threshold is not None else False
