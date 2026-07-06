@@ -871,6 +871,106 @@ elements:
       label: Filter Audit Log
       dynamic_testid: false
 
+  /notifications:
+    - testid: notifications-list
+      type: section
+      label: Notifications List
+      dynamic_testid: false
+    - testid: notifications-mark-read
+      type: button
+      label: Mark All Read
+      dynamic_testid: false
+
+  /pipelines:
+    - testid: pipelines-table
+      type: table
+      label: Pipelines Table
+      dynamic_testid: false
+    - testid: pipelines-create
+      type: button
+      label: Create Pipeline
+      dynamic_testid: false
+
+  /library:
+    - testid: library-grid
+      type: section
+      label: Library Grid
+      dynamic_testid: false
+    - testid: library-filter
+      type: input
+      label: Filter Library
+      dynamic_testid: false
+
+  /templates:
+    - testid: templates-grid
+      type: section
+      label: Templates Grid
+      dynamic_testid: false
+
+  /stages:
+    - testid: stages-board
+      type: section
+      label: Stages Board
+      dynamic_testid: false
+
+  /schemas:
+    - testid: schemas-table
+      type: table
+      label: Schemas Table
+      dynamic_testid: false
+    - testid: schemas-create
+      type: button
+      label: Create Schema
+      dynamic_testid: false
+
+  /evals/editor:
+    - testid: evals-editor
+      type: section
+      label: Eval Editor
+      dynamic_testid: false
+    - testid: evals-run
+      type: button
+      label: Run Eval
+      dynamic_testid: false
+
+  /settings/mcp:
+    - testid: mcp-config-form
+      type: section
+      label: MCP Configuration
+      dynamic_testid: false
+
+  /settings/triggers:
+    - testid: triggers-list
+      type: section
+      label: Triggers List
+      dynamic_testid: false
+    - testid: triggers-add
+      type: button
+      label: Add Trigger
+      dynamic_testid: false
+
+  /settings/hitl-review:
+    - testid: hitl-review-list
+      type: section
+      label: HITL Review List
+      dynamic_testid: false
+
+  /admin/model-backends:
+    - testid: model-backends-table
+      type: table
+      label: Model Backends Table
+      dynamic_testid: false
+    - testid: model-backends-add
+      type: button
+      label: Add Model Backend
+      dynamic_testid: false
+
+  /feedback/inbox:
+    - testid: feedback-inbox-list
+      type: section
+      label: Feedback Inbox
+      dynamic_testid: false
+
 sidebar_groups:
   core:
     label: Core
