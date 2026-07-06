@@ -52,9 +52,8 @@ async def test_user(db_engine: AsyncEngine, test_org: uuid.UUID) -> uuid.UUID:
 async def rls_session(db_engine: AsyncEngine, test_org: uuid.UUID) -> AsyncGenerator[AsyncSession, None]:
     factory = async_sessionmaker(db_engine, expire_on_commit=False)
     async with factory() as session:
-        await session.execute(
-            text("SELECT set_config('app.organisation_id', :oid, true)"),
-            {"oid": str(test_org)},
-        )
+        await session.execute(text("SELECT 1"))
+        from modulo.db.rls import set_rls_org
+        await set_rls_org(session, test_org)
         yield session
         await session.rollback()

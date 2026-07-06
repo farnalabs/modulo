@@ -6,6 +6,7 @@ Also proves that RLS policies actually filter rows when the connection acts
 as a non-superuser role.
 """
 
+import contextlib
 import uuid
 
 import pytest
@@ -47,15 +48,13 @@ async def test_set_local_resets_after_rollback(db_engine: AsyncEngine) -> None:
     org_id = uuid.uuid4()
 
     async with db_engine.connect() as conn:
-        try:
-            async with conn.begin():
-                await conn.execute(
-                    text("SELECT set_config('app.organisation_id', :oid, true)"),
-                    {"oid": str(org_id)},
-                )
-                raise RuntimeError("forced rollback")
-        except RuntimeError:
-            pass
+        # Use a savepoint to force a clean rollback without catching RuntimeError
+        savepoint = await conn.begin_nested()
+        await conn.execute(
+            text("SELECT set_config('app.organisation_id', :oid, true)"),
+            {"oid": str(org_id)},
+        )
+        await savepoint.rollback()
 
         post_rollback = (await conn.execute(text("SELECT current_setting('app.organisation_id', true)"))).scalar()
         assert post_rollback in (None, ""), f"org_id leaked after rollback: {post_rollback!r}"
@@ -359,10 +358,8 @@ async def test_orm_tenant_filter_select_update_delete(monkeypatch: pytest.Monkey
         await conn.run_sync(_TenantTestBase.metadata.create_all)
 
     # Register tenant filter directly (bypass register_tenant_filter which needs env vars)
-    try:
+    with contextlib.suppress(Exception):
         event.remove(SASession, "do_orm_execute", _inject_tenant_filter)
-    except Exception:
-        pass
     event.listen(SASession, "do_orm_execute", _inject_tenant_filter)
 
     factory = async_sessionmaker(engine, expire_on_commit=False)
