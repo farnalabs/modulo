@@ -341,7 +341,7 @@ class HITLManager:
 
         Raises on missing token, expired token, or decided gate.
         Sets ``delivered_at`` on the claim after successful audit logging.
-        If audit logging fails, logs ``hitl.output_delivery_failed`` instead.
+        On audit failure the exception propagates and the transaction rolls back.
         """
         gate = await self._decide(
             session,
@@ -415,7 +415,7 @@ class HITLManager:
 
         Raises on missing token, expired token, or decided gate.
         Sets ``delivered_at`` on the claim after successful audit logging.
-        If audit logging fails, logs ``hitl.output_delivery_failed`` instead.
+        On audit failure the exception propagates and the transaction rolls back.
         """
         gate = await self._decide(
             session,

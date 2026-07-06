@@ -120,6 +120,7 @@ Immutable SHA-256-linked audit event chain per organisation. Each event records 
 - [x] `hitl.output_delivered` — run_id, gate_id, user_id, output_hash
 - [x] `hitl.output_delivery_failed` — run_id, gate_id, error
 - [x] `hitl.manual_delivery` — run_id, gate_id, user_id
+- [x] `hitl.output_rejected` — run_id, gate_id, user_id, reason, reject_target
 - [x] `hitl.claim_expired` — run_id, gate_id, claim_token
 - [x] `node.recovery` — run_id, node_id, recovery_strategy
 - [x] `pipeline.node.convert_to_agent` — pipeline_id, node_id, agent_id
@@ -184,19 +185,26 @@ Immutable SHA-256-linked audit event chain per organisation. Each event records 
 - No event schema versioning (payload structure could change between event types)
 - **PRD-vs-implementation divergence**: all 18 PRD-specified event types (`run_started`, `hitl_approved`, `team_created`, etc.) are NOT dispatched. Production code uses 19 different dot-notation event types (`pipeline.autonomy_level_changed`, `hitl.output_delivered`, etc.) with no overlap to the PRD table. The naming convention, granularity, and payload structure differ entirely.
 - **No `run_started` event**: pipeline runs start without an audit event. The `run_started` PRD event is not dispatched anywhere.
-- **No `hitl_claimed`/`hitl_approved`/`hitl_rejected` events**: HITL lifecycle decisions are not recorded in the audit trail. HITL-related events in production are limited to output delivery (`hitl.output_delivered`, `hitl.output_delivery_failed`, `hitl.output_modified`, `hitl.manual_delivery`) and claim expiry (`hitl.claim_expired`).
+- **No `hitl_claimed` audit event**: Claim acquisition is not recorded in the audit trail (`hitl.claim_expired` is dispatched, but the initial claim itself is not).
 - **No team CRUD audit events**: team creation, rename, deletion, membership changes, and role changes are not audited.
 - **No permission change audit**: `user_permission_changed` event not dispatched.
 - **No API key audit**: `api_key_created`/`api_key_revoked` not dispatched.
 - **No auth event audit**: login, logout, and failed auth attempts not recorded.
 - **BDD placeholder steps**: Scenarios 'Audit events have cryptographic chaining', 'Claim expiry is audited', 'HITL output delivery is audited', 'Org deletion request is audited' have @then step implementations at `backend/tests/bdd/steps/test_alpha_audit.py` that were placeholders (pass). Not a functional bug (the scenarios verify existence at code level) but serve as regression safety net. **[Now fixed: assertions added for event_type matching and gate metadata.]**
 - **BDD feature file uses wrong event types** (resolved): `event_recording.feature` previously referenced `pipeline.created`, `pipeline.deleted`, `run.created`, `hitl.approved` — none of which match either the PRD table or the actual dispatched event types. **[RESOLVED]** — Feature file now uses correct event types matching actual dispatched events (`pipeline.autonomy_level_changed`, `hitl.output_delivered`, `hitl.claim_expired`, `org_deletion_requested`).
-- **No `hitl.rejected` audit event**: HITL `reject()` records decision in DB but does not dispatch any audit event (unlike `approve()` which dispatches `hitl.output_delivered`)
+- **`hitl.output_rejected` was already dispatched** (product map was stale — claimed no audit event). However, `reject_gate` route was missing `actor_id=principal.account_id`, so the audit event had `actor_id=None`. Fixed in index 246 cross-cutting QA.
 - **No API key audit events**: `api_keys.py` has zero audit dispatches — PRD specifies `api_key_created` and `api_key_revoked`
 - **No `run_started` audit event**: Pipeline runs start without an audit event
 - **8 unguarded audit dispatch calls fixed**: All previously uncovered dispatch calls now have error handling protection (expiry_job, recovery, sso_provider, admin team deletion, run_purge transaction scoping, rotation deadlock)
 
 ## QA History
+
+### Cross-cutting QA (index 246)
+**Findings discovered and fixed:**
+- CRITICAL: `reject_gate` route (hitl.py:325) was missing `actor_id=principal.account_id` — every `hitl.output_rejected` audit event had `actor_id=None`. Now passes the authenticated user's account_id.
+- MAJOR: `append_audit_event` (audit_logger/__init__.py:152) only caught `IntegrityError`, allowing `ProgrammingError` and `SQLAlchemyError` to propagate as raw 500s from all 13 call sites. Added `except ProgrammingError` and `except SQLAlchemyError` with structured logging.
+- Fixed 3 stale product map claims: "No hitl.rejected audit event" was wrong (code dispatched `hitl.output_rejected`); "No hitl_claimed/hitl_approved/hitl_rejected" was partially wrong; added `hitl.output_rejected` to implemented event types list.
+- Status: partial (14 remaining gaps — PRD event type divergence, team CRUD audit missing, API key audit, run_started, actor_id fix applied)
 
 ### Cross-cutting QA (index 142)
 **Findings discovered and fixed:**
@@ -206,4 +214,4 @@ Immutable SHA-256-linked audit event chain per organisation. Each event records 
 - All 21 implemented event types verified against code (19 unique dispatched + 2 paths)
 - Confirmed all 4 API routes have ProgrammingError→501 catches
 - All BDD feature files have real step implementations (not placeholders)
-- Status: partial (PRD event type divergence remains, team CRUD audit missing, API key audit missing, run_started missing, HITL reject not audited)
+- Status: partial (PRD event type divergence remains, team CRUD audit missing, API key audit missing, run_started missing, reject_gate actor_id fixed)

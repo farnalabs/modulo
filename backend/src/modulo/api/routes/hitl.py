@@ -327,6 +327,7 @@ async def reject_gate(
                     run_id=run_id,
                     gate_id=gate_id,
                     org_id=principal.organisation_id,
+                    actor_id=principal.account_id,
                     claim_token=req.claim_token,
                 )
             except GateNotFoundError as exc:

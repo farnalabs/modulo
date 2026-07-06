@@ -15,7 +15,7 @@ from datetime import UTC, datetime
 from typing import Any
 
 from sqlalchemy import func, select
-from sqlalchemy.exc import IntegrityError
+from sqlalchemy.exc import IntegrityError, ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.db.models.audit_event import AuditChainHead, AuditEvent
@@ -210,6 +210,18 @@ async def append_audit_event(
                 )
                 raise
             await asyncio.sleep(0.1 * (attempt + 1))
+        except ProgrammingError:
+            _log.error(
+                "append_audit_event: ProgrammingError (missing table) for org=%s event_type=%s",
+                org_id, event_type,
+            )
+            raise
+        except SQLAlchemyError:
+            _log.exception(
+                "append_audit_event: SQLAlchemyError for org=%s event_type=%s",
+                org_id, event_type,
+            )
+            raise
     raise RuntimeError("append_audit_event: exhausted retries")
 
 

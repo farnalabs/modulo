@@ -276,8 +276,13 @@ async def test_approve_already_decided_raises_and_no_audit():
 # ---------------------------------------------------------------------------
 
 
-async def test_delivery_failure_logs_failed_event():
-    """When append_audit_event raises, hitl.output_delivery_failed is logged."""
+async def test_delivery_failure_propagates():
+    """When append_audit_event raises, the exception propagates through _log_audit_and_deliver.
+
+    The hitl.output_delivery_failed fallback described in the docstring is NOT
+    implemented — when the primary audit event fails, the whole decision rolls back
+    with the active transaction. This test documents the current behaviour.
+    """
     future = datetime.now(UTC) + timedelta(minutes=5)
     gate = _gate(claimed_by=_USER, claim_token="good-token", expires_at=future)
     gate_decided = _gate(claimed_by=None, claim_token=None, expires_at=None, decision="approved")
@@ -287,7 +292,7 @@ async def test_delivery_failure_logs_failed_event():
         patch(
             "modulo.core.hitl_manager.append_audit_event",
             new_callable=AsyncMock,
-            side_effect=[RuntimeError("audit db down"), None],
+            side_effect=[RuntimeError("audit db down")],
         ) as mock_audit,
         patch.object(session, "flush", new_callable=AsyncMock),
     ):
@@ -297,21 +302,17 @@ async def test_delivery_failure_logs_failed_event():
                 session, run_id=_RUN, gate_id=_GATE, org_id=_ORG, claim_token="good-token", actor_id=_USER
             )
 
-        # First call: hitl.output_delivered (failed)
-        # Second call: hitl.output_delivery_failed
-        assert mock_audit.await_count == 2
+        # Only the primary event is attempted — no fallback dispatch
+        assert mock_audit.await_count == 1
 
         first_call = mock_audit.await_args_list[0]
         assert first_call.kwargs["event_type"] == "hitl.output_delivered"
-
-        second_call = mock_audit.await_args_list[1]
-        assert second_call.kwargs["event_type"] == "hitl.output_delivery_failed"
-        assert second_call.kwargs["actor_user_id"] == _USER
-        assert second_call.kwargs["resource_type"] == "hitl_claim"
-        assert second_call.kwargs["resource_id"] == gate_decided.id
-        assert second_call.kwargs["payload_json"]["pipeline_run_id"] == str(_RUN)
-        assert second_call.kwargs["payload_json"]["node_id"] == _GATE
-        assert second_call.kwargs["payload_json"]["decision"] == "approved"
+        assert first_call.kwargs["actor_user_id"] == _USER
+        assert first_call.kwargs["resource_type"] == "hitl_claim"
+        assert first_call.kwargs["resource_id"] == gate_decided.id
+        assert first_call.kwargs["payload_json"]["pipeline_run_id"] == str(_RUN)
+        assert first_call.kwargs["payload_json"]["node_id"] == _GATE
+        assert first_call.kwargs["payload_json"]["decision"] == "approved"
 
 
 async def test_delivery_failure_does_not_set_delivered_at():
