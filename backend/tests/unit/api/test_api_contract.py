@@ -11,9 +11,8 @@ from fastapi.routing import APIRoute
 from fastapi.testclient import TestClient
 from pydantic import BaseModel, ValidationError
 
-from modulo.api.dependencies import _get_engine, get_db_session
+from modulo.api.dependencies import _get_engine, get_db_session, get_plan_context
 from modulo.api.main import app
-from modulo.api.models.error import ErrorResponse
 from modulo.api.models.problem import ProblemDetail
 from modulo.auth.dependencies import get_current_user
 from modulo.auth.jwt import AuthenticatedPrincipal
@@ -68,6 +67,7 @@ def _make_mock_pipeline(**kwargs: Any) -> MagicMock:
     p.run_context_defaults = kwargs.get("run_context_defaults", {})
     p.default_autonomy_level = kwargs.get("default_autonomy_level", "manual_approval")
     p.created_by = kwargs.get("created_by", _USER_ID)
+    p.account_id = kwargs.get("account_id", kwargs.get("created_by", _USER_ID))
     p.created_at = kwargs.get("created_at", _NOW)
     p.updated_at = kwargs.get("updated_at", _NOW)
     return p
@@ -89,6 +89,9 @@ def client() -> Generator[TestClient, None, None]:
         account_id=_USER_ID,
         org_role="admin",
     )
+    mock_plan = MagicMock()
+    mock_plan.feature_enabled.return_value = True
+    app.dependency_overrides[get_plan_context] = lambda: mock_plan
     yield TestClient(app)
     app.dependency_overrides.clear()
 
@@ -330,7 +333,7 @@ class TestPipelineEndpointSchemas:
             resp = client.get(f"/api/v1/pipelines/{uuid.uuid4()}")
 
         assert resp.status_code == 404
-        validate_shape(resp.json(), ErrorResponse)
+        validate_shape(resp.json(), ProblemDetail)
 
     def test_update_pipeline_schema(self, client: TestClient) -> None:
         pipeline = _make_mock_pipeline()
@@ -357,7 +360,7 @@ class TestPipelineEndpointSchemas:
             resp = client.get(f"/api/v1/pipelines/{uuid.uuid4()}/graph")
 
         assert resp.status_code == 404
-        validate_shape(resp.json(), ErrorResponse)
+        validate_shape(resp.json(), ProblemDetail)
 
 
 class TestApiKeyEndpointSchemas:
@@ -433,7 +436,7 @@ class TestPipelineSnapshotSchemas:
             resp = client.get(f"/api/v1/pipelines/{pipeline_id}/snapshots/{snapshot_id}")
 
         assert resp.status_code == 404
-        validate_shape(resp.json(), ErrorResponse)
+        validate_shape(resp.json(), ProblemDetail)
 
 
 class TestConnectorEndpointSchemas:
@@ -552,18 +555,18 @@ class TestErrorResponseShapes:
             resp = client.get(f"/api/v1/pipelines/{uuid.uuid4()}")
 
         assert resp.status_code == 404
-        validate_shape(resp.json(), ErrorResponse)
+        validate_shape(resp.json(), ProblemDetail)
 
     def test_422_validation_error(self, client: TestClient) -> None:
         resp = client.post("/api/v1/pipelines", json={})
         assert resp.status_code == 422
-        validate_shape(resp.json(), ErrorResponse)
+        validate_shape(resp.json(), ProblemDetail)
 
     def test_401_unauthorized(self) -> None:
         unauth = TestClient(app)
         resp = unauth.get("/api/v1/pipelines")
         assert resp.status_code == 401
-        validate_shape(resp.json(), ErrorResponse)
+        validate_shape(resp.json(), ProblemDetail)
 
     def test_403_forbidden(self, client: TestClient) -> None:
         viewer = AuthenticatedPrincipal(
@@ -584,4 +587,4 @@ class TestErrorResponseShapes:
             del app.dependency_overrides[get_current_user]
 
         assert resp.status_code == 403
-        validate_shape(resp.json(), ErrorResponse)
+        validate_shape(resp.json(), ProblemDetail)

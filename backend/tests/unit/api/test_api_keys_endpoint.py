@@ -8,7 +8,7 @@ from unittest.mock import ANY, AsyncMock, MagicMock, patch
 import pytest
 from fastapi.testclient import TestClient
 
-from modulo.api.dependencies import _get_engine, get_db_session
+from modulo.api.dependencies import _get_engine, get_db_session, get_plan_context
 from modulo.api.main import app
 from modulo.auth.dependencies import get_current_user
 from modulo.auth.jwt import AuthenticatedPrincipal
@@ -69,6 +69,9 @@ def client() -> Generator[TestClient, None, None]:
         account_id=_USER_ID,
         org_role="admin",
     )
+    mock_plan = MagicMock()
+    mock_plan.feature_enabled.return_value = True
+    app.dependency_overrides[get_plan_context] = lambda: mock_plan
     yield TestClient(app)
     app.dependency_overrides.clear()
 
@@ -76,6 +79,9 @@ def client() -> Generator[TestClient, None, None]:
 @pytest.fixture()
 def unauth_client() -> Generator[TestClient, None, None]:
     app.dependency_overrides[get_settings] = _make_settings
+    mock_plan = MagicMock()
+    mock_plan.feature_enabled.return_value = True
+    app.dependency_overrides[get_plan_context] = lambda: mock_plan
     yield TestClient(app)
     app.dependency_overrides.clear()
 
@@ -96,6 +102,9 @@ def operator_client() -> Generator[TestClient, None, None]:
         account_id=_USER_ID,
         org_role="operator",
     )
+    mock_plan = MagicMock()
+    mock_plan.feature_enabled.return_value = True
+    app.dependency_overrides[get_plan_context] = lambda: mock_plan
     yield TestClient(app)
     app.dependency_overrides.clear()
 
@@ -277,10 +286,13 @@ def test_update_api_key_not_found_returns_404(client: TestClient) -> None:
 def test_create_api_key_with_team_id_returns_team_id(client: TestClient) -> None:
     key = _make_key()
     key.team_id = _TEAM_ID
+    mock_plan = MagicMock()
+    mock_plan.feature_enabled.return_value = True
     with (
         patch("modulo.api.routes.api_keys.create_api_key", return_value=(key, "mk_team_key")),
         patch("modulo.api.routes.api_keys.set_rls_org"),
         patch("modulo.api.routes.api_keys.set_rls_user_context"),
+        patch("modulo.api.routes.api_keys.resolve_plan_context", return_value=mock_plan),
     ):
         resp = client.post(
             "/api/v1/api-keys",
@@ -293,10 +305,13 @@ def test_create_api_key_with_team_id_returns_team_id(client: TestClient) -> None
 
 
 def test_create_api_key_with_team_id_requires_admin(operator_client: TestClient) -> None:
-    resp = operator_client.post(
-        "/api/v1/api-keys",
-        json={"name": "Team Key", "role": "operator", "team_id": str(_TEAM_ID)},
-    )
+    mock_plan = MagicMock()
+    mock_plan.feature_enabled.return_value = True
+    with patch("modulo.api.routes.api_keys.resolve_plan_context", return_value=mock_plan):
+        resp = operator_client.post(
+            "/api/v1/api-keys",
+            json={"name": "Team Key", "role": "operator", "team_id": str(_TEAM_ID)},
+        )
     assert resp.status_code == 403
 
 
@@ -327,10 +342,13 @@ def test_update_api_key_with_team_id_returns_team_id(client: TestClient) -> None
     key = _make_key()
     key.name = "Team Key Updated"
     key.team_id = _TEAM_ID
+    mock_plan = MagicMock()
+    mock_plan.feature_enabled.return_value = True
     with (
         patch("modulo.api.routes.api_keys.update_api_key", return_value=key),
         patch("modulo.api.routes.api_keys.set_rls_org"),
         patch("modulo.api.routes.api_keys.set_rls_user_context"),
+        patch("modulo.api.routes.api_keys.resolve_plan_context", return_value=mock_plan),
     ):
         resp = client.put(
             f"/api/v1/api-keys/{_KEY_ID}",
@@ -343,10 +361,13 @@ def test_update_api_key_with_team_id_returns_team_id(client: TestClient) -> None
 
 
 def test_update_api_key_with_team_id_requires_admin(operator_client: TestClient) -> None:
-    resp = operator_client.put(
-        f"/api/v1/api-keys/{_KEY_ID}",
-        json={"name": "k", "team_id": str(_TEAM_ID)},
-    )
+    mock_plan = MagicMock()
+    mock_plan.feature_enabled.return_value = True
+    with patch("modulo.api.routes.api_keys.resolve_plan_context", return_value=mock_plan):
+        resp = operator_client.put(
+            f"/api/v1/api-keys/{_KEY_ID}",
+            json={"name": "k", "team_id": str(_TEAM_ID)},
+        )
     assert resp.status_code == 403
 
 
