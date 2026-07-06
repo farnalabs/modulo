@@ -117,7 +117,7 @@ Org-level and team-level role hierarchy with privilege cap, team membership mana
 
 ### Team-scoped API keys
 - [x] API keys carry an optional team_id
-- [x] A team-scoped API key is restricted to resources accessible to that team
+- [ ] A team-scoped API key is restricted to resources accessible to that team
 - [ ] An org-wide API key (no team_id) respects org-level role only
 - [ ] Team-scoped API keys cannot access resources outside their team boundary
 

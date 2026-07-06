@@ -41,7 +41,7 @@ WebSocket auth tokens, algorithm pinning, and SECRET_KEY entropy enforcement (PR
 
 ### Refresh Tokens
 - [x] Refresh token returned on successful login alongside access token
-- [x] Refresh token has 24-hour expiry (DEV NOTE: PRD §7.10 says 7 days — code currently has 24h; code changed to 168h in this QA pass)
+- [x] Refresh token has 7-day (168-hour) expiry (PRD §7.10)
 - [x] Refresh token contains `token_family` and `token_sequence` claims
 - [x] Refresh token has `purpose: refresh` claim
 - [x] Refresh endpoint accepts refresh token and returns new token pair
@@ -82,7 +82,7 @@ WebSocket auth tokens, algorithm pinning, and SECRET_KEY entropy enforcement (PR
 - [x] SECRET_KEY longer than 32 bytes passes validation
 
 ### Auth Rate Limiting
-- See [rate-limiting.md](rate-limiting.md#auth-rate-limiting) for login rate limiting behaviour
+- See [rate-limiting.md](rate-limiting.md#auth-rate-limiting-610) for login rate limiting behaviour
 - [ ] Auth rate limiting covered by BDD feature scenario (covered by unit tests only: `test_auth_rate_limiter.py`)
 
 ### Claim Tokens (HITL gates)
