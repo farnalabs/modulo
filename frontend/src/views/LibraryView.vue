@@ -92,7 +92,7 @@
         <div
           v-for="prim in nativePrimitives"
           :key="prim.id"
-          class="card card-hover p-5"
+          class="card card-hover p-5 flex flex-col"
           :data-testid="`library-item-${prim.id}`"
         >
           <div class="flex items-start justify-between mb-3">
@@ -114,7 +114,7 @@
             </div>
           </div>
 
-          <p v-if="prim.description" class="text-sm text-muted-foreground mb-4 line-clamp-2">
+          <p v-if="prim.description" class="text-sm text-muted-foreground flex-1 mb-4 line-clamp-2">
             {{ prim.description }}
           </p>
 
@@ -149,7 +149,7 @@
             </button>
           </div>
 
-          <div class="flex items-center gap-2">
+          <div class="flex items-center gap-2 mt-auto">
             <button
               v-if="prim.primitive_type === 'pipeline_template' || prim.primitive_type === 'composite'"
               class="flex-1 px-3 py-2 bg-primary text-primary-foreground text-sm font-medium rounded-lg border border-primary/30 hover:border-primary/60 hover:brightness-110 transition-all"
@@ -177,7 +177,7 @@
           <div
             v-for="prim in previewPrimitives"
             :key="prim.id"
-            class="card card-hover p-5"
+            class="card card-hover p-5 flex flex-col"
             :data-testid="`library-item-${prim.id}`"
           >
             <div class="flex items-start justify-between mb-3">
@@ -190,11 +190,11 @@
               <span class="badge badge-context-amber text-xs">{{ $t('views.LibraryView.preview_badge') }}</span>
             </div>
 
-            <p v-if="prim.description" class="text-sm text-muted-foreground mb-4 line-clamp-2">
+            <p v-if="prim.description" class="text-sm text-muted-foreground flex-1 mb-4 line-clamp-2">
               {{ prim.description }}
             </p>
 
-            <div class="flex items-center gap-2">
+            <div class="flex items-center gap-2 mt-auto">
               <button
                 v-if="prim.primitive_type === 'pipeline_template' || prim.primitive_type === 'composite'"
                 class="flex-1 px-3 py-2 bg-primary text-primary-foreground text-sm font-medium rounded-lg border border-primary/30 hover:border-primary/60 hover:brightness-110 transition-all"
@@ -219,7 +219,7 @@
         <div
           v-for="prim in communityPrimitives"
           :key="prim.id"
-          class="card card-hover p-5"
+          class="card card-hover p-5 flex flex-col"
           :data-testid="`library-item-${prim.id}`"
         >
           <div class="flex items-start justify-between mb-3">
@@ -237,7 +237,7 @@
             </div>
           </div>
 
-          <p v-if="prim.description" class="text-sm text-muted-foreground mb-4 line-clamp-2">
+          <p v-if="prim.description" class="text-sm text-muted-foreground flex-1 mb-4 line-clamp-2">
             {{ prim.description }}
           </p>
 
@@ -254,7 +254,7 @@
             </span>
           </div>
 
-          <div class="flex items-center gap-2">
+          <div class="flex items-center gap-2 mt-auto">
             <button
               v-if="prim.primitive_type === 'pipeline_template' || prim.primitive_type === 'composite'"
               class="flex-1 px-3 py-2 bg-primary text-primary-foreground text-sm font-medium rounded-lg border border-primary/30 hover:border-primary/60 hover:brightness-110 transition-all"
