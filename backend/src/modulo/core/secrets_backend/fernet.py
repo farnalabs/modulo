@@ -93,19 +93,34 @@ class FernetSecretsBackend(SecretsBackend):
         operation that creates rows with an ``organisation_id`` FK.
 
         The org ID is cached after the first read to avoid redundant queries.
+
+        On non-Postgres backends (SQLite, MariaDB), ``current_setting()``
+        is not available — falls back to ``session.info["organisation_id"]``.
         """
         if self._org_id is not None:
             return self._org_id
         if self._session is None:
             raise RuntimeError("FernetSecretsBackend: no DB session set")
-        result = await self._session.execute(text("SELECT current_setting('app.organisation_id', true)"))
-        org_id_str: str | None = result.scalar()
+
+        org_id_str: str | None = None
+
+        try:
+            result = await self._session.execute(text("SELECT current_setting('app.organisation_id', true)"))
+            org_id_str = result.scalar()
+        except Exception:
+            pass
+
+        if not org_id_str:
+            info = getattr(self._session, "info", {})
+            if isinstance(info, dict):
+                org_id_str = info.get("organisation_id")
+
         if not org_id_str:
             raise RuntimeError(
                 "FernetSecretsBackend: RLS organisation context not set. "
                 "Call set_rls_org(session, org_id) before set_secret."
             )
-        self._org_id = uuid.UUID(org_id_str)
+        self._org_id = uuid.UUID(str(org_id_str))
         return self._org_id
 
     async def set_secret(self, key: str, value: str) -> None:

@@ -49,13 +49,15 @@ The `SecretsBackend` ABC defines a uniform interface (`get_secret`, `set_secret`
 - [x] Vault backend: secret path is constructed as `{VAULT_PATH_PREFIX}/{key}`
 - [x] AWS backend: `SecretBinary` decoded as UTF-8 fallback (not just `SecretString`)
 - [x] Fernet backend: `set_session()` can replace the DB session after construction
+- [x] Empty key string raises `ValueError` with "non-empty" message (all three backends, via `validate_key`)
+- [x] Invalid Fernet key at construction raises `ValueError` from `cryptography.fernet.Fernet`
 
 ### Error states
 
 - [x] `get_secret` with a non-existent key raises `KeyError` (all three backends)
 - [x] `get_secret` on corrupted/undecryptable data raises `ValueError` (Fernet backend, `InvalidToken`)
 - [x] Any operation on Fernet backend with missing org session returns error
-- [ ] Vault backend: connection failure raises `VaultError` with detail
+- [x] Vault backend: connection failure wraps as `RuntimeError` with human-readable message
 - [x] AWS backend: `get_secret` on non-existent key raises `KeyError`
 - [x] AWS backend: `delete_secret` on non-existent key is a no-op (same as all other backends)
 - [x] Factory: invalid `backend_name` raises `ValueError` with available backends listed
@@ -75,10 +77,10 @@ The `SecretsBackend` ABC defines a uniform interface (`get_secret`, `set_secret`
 
 ### Edge Cases (additional)
 
-- [ ] Empty key string behaviour (all backends)
+- [x] Empty key string behaviour (all backends) — raises `ValueError("Secret key must be a non-empty string")`
+- [x] Invalid Fernet key at construction (`ValueError` from `cryptography.fernet.Fernet`)
 - [ ] Null bytes in secret values (Fernet encryption round-trip)
 - [ ] Concurrent delete+set race (two concurrent sessions operating on same key)
-- [ ] Invalid Fernet key at construction (`ValueError` from `cryptography.fernet.Fernet`)
 - [ ] Org ID caching expiry / reset on session change
 
 ### Credential-in-state rule (PRD §7.13)
@@ -88,7 +90,30 @@ The `SecretsBackend` ABC defines a uniform interface (`get_secret`, `set_secret`
 - [x] Decrypted credentials never appear in OTel span attributes — `test_observability.py:test_trace_no_credentials` validates no credential fields in spans
 - [x] Connectors receive decrypted credential in-process only via transient context object, used for API call, not serialised
 
+### Resilience & Integration Robustness
+
+- [x] Vault backend: 30s `asyncio.wait_for` timeout on all operations (get/set/delete)
+- [x] AWS backend: 30s `asyncio.wait_for` timeout on all operations (get/set/delete)
+- [x] Vault `_ensure_client()` uses `asyncio.Lock` for thread-safe lazy initialisation (double-checked locking)
+- [x] AWS `_ensure_client()` uses `asyncio.Lock` for thread-safe lazy initialisation (double-checked locking)
+- [x] Fernet backend org_id is cached to avoid redundant `current_setting()` queries after first read
+- [x] Vault/AWS network errors and timeouts wrapped as `RuntimeError` — never raw 500
+- [ ] No retry/backoff on Vault/AWS transient failures (HTTP 429, 503, connection reset)
+- [ ] No circuit breaker pattern for Vault/AWS repeated failures
+- [ ] No fallback chain between backends (Fernet → Vault → AWS)
+- [ ] Fernet backend `with_for_update()` lock is silently ignored on SQLite — no locking on multi-backend deployments
+
 ## QA History
+
+### 2026-07-07 — Cross-cutting QA (improve-architecture index 238)
+
+- **CRITICAL:** Fixed `FernetSecretsBackend._read_org_id_from_session()` — now catches `current_setting()` failure on non-Postgres backends (SQLite/MariaDB) and falls back to `session.info["organisation_id"]`. Previously crashed with raw `OperationalError` on multi-backend deployments.
+- **MAJOR:** Added `validate_key` empty-string test in factory tests + empty-key tests for all three backends.
+- **MAJOR:** Added `test_invalid_fernet_key_at_construction_raises` — verifies `Fernet(bad_key)` raises `ValueError`.
+- **MAJOR:** Removed stale Known Gap "PRD §7.13 credential-in-state rule not tracked" — credential-in-state section now exists with all 4 behaviours verified.
+- **MAJOR:** Corrected product map: Vault error states claim "VaultError" but code uses `RuntimeError` (wrapping preserves the original exception chain).
+- **MINOR:** Added Known Gap: Fernet backend `with_for_update()` silently ignored on SQLite — concurrent upsert race for same key may trigger IntegrityError.
+- **MINOR:** Marked `Empty key string behaviour` [ ]→[x] and `Invalid Fernet key at construction` [ ]→[x].
 
 ### 2026-07-04 — Cross-cutting QA (improve-architecture index 140)
 
@@ -102,7 +127,7 @@ The `SecretsBackend` ABC defines a uniform interface (`get_secret`, `set_secret`
 
 - BDD feature file exists (credential_store.feature, 3 scenarios) but does not exercise the pluggable backend interface — only Fernet. Add Vault/AWS BDD scenarios.
 - No key rotation schedule or automatic re-encryption
-- PRD §7.13 credential-in-state rule (decrypted credentials must never enter LangGraph state, checkpoints, OTel spans) is not tracked in this product map entry.
 - No audit event emitted on secret read/write/delete
 - No secret expiry / TTL support
 - Fernet backend stores encrypted values in the same DB as application data — no HSM or external KMS
+- Fernet backend `set_secret` uses `with_for_update()` which is silently ignored on SQLite — concurrent upserts for the same key may trigger `IntegrityError` on SQLite (mitigated by single-connection SQLite driver)
