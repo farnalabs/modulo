@@ -35,7 +35,7 @@ Outbound webhook notifications for pipeline lifecycle events, with HMAC signing,
 - [x] `run_failed` event dispatches when a pipeline node raises an unhandled exception
 - [x] `claim_expired` event dispatches when a HITL claim expires (via ClaimExpiryJob) — Notifier.dispatch_event called in ClaimExpiryJob._expire_once
 - [ ] `hitl_overdue` event dispatches when a HITL gate passes its configurable threshold — event type constant exists but no background job dispatches it
-- [ ] `budget_exceeded` event type is defined in PRD §8.11 but not yet dispatched — event type constant does not exist in code
+- [ ] `budget_exceeded` event type is defined in PRD §8.11 but not yet dispatched — EVENT_BUDGET_EXCEEDED constant exists in notifier/__init__.py (line 67) but is not in admin_notifications.py's AVAILABLE_EVENTS list, so it cannot be subscribed to via the admin API
 - [ ] `circuit_breaker_tripped` event type is defined in PRD §8.11 but not yet dispatched — event type constant does not exist in code
 - [x] Webhook POST body includes event type, ISO timestamp, and event-specific payload
 - [x] Payload includes `run_id` and `gate_id` for HITL-related events
