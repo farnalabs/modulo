@@ -144,4 +144,11 @@ json_schema, custom_function.
   - Delete-404 → specific "Eval was already deleted" message
   - Config placeholder → i18n key
   - Hardcoded 'Invalid JSON' → t() call
+
+### 2026-07-06 — Cross-cutting QA follow-up
+
+**Covered:**
+- Verified all user-facing strings use `$t()` / `t()` — no hardcoded text
+- Verified no `${err}` template literals in error handling
+- Verified backend error handling: all eval routes catch `ProgrammingError` (501) and `SQLAlchemyError` (503) with structured responses
 - Website docs stub created at `Website/modulo-website/src/docs/evals/eval-editor.md`
