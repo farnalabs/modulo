@@ -14,17 +14,27 @@ export interface UiCommandResult {
   error?: string
 }
 
-let currentAbort: AbortController | null = null
+const _abortControllers = new Set<AbortController>()
 const _navHistory: string[] = []
 
+const HIGHLIGHT_OUTLINE = '2px solid #3b82f6'
+const HIGHLIGHT_BG = 'rgba(59, 130, 246, 0.1)'
+
 export function abortUiCommands() {
-  currentAbort?.abort()
+  for (const ac of _abortControllers) ac.abort()
+  _abortControllers.clear()
 }
+
+const PER_COMMAND_TIMEOUT_MS = 30000
 
 export async function executeCommandBatch(commands: UiCommand[]): Promise<UiCommandResult[]> {
   const abort = new AbortController()
-  currentAbort = abort
+  _abortControllers.add(abort)
   const results: UiCommandResult[] = []
+
+  const cleanup = () => {
+    _abortControllers.delete(abort)
+  }
 
   for (const cmd of commands) {
     if (abort.signal.aborted) {
@@ -52,11 +62,33 @@ export async function executeCommandBatch(commands: UiCommand[]): Promise<UiComm
       }
     }
 
-    const result = await executeSingle(cmd)
+    const result = await executeWithTimeout(cmd, abort.signal)
     results.push(result)
   }
 
+  cleanup()
   return results
+}
+
+async function executeWithTimeout(cmd: UiCommand, signal: AbortSignal): Promise<UiCommandResult> {
+  const result = await Promise.race([
+    executeSingle(cmd),
+    new Promise<UiCommandResult>(resolve => {
+      const timer = setTimeout(() => {
+        resolve({ id: cmd.id, name: cmd.name, success: false, error: 'command_timeout' })
+      }, PER_COMMAND_TIMEOUT_MS)
+      const checkAbort = () => {
+        clearTimeout(timer)
+        resolve({ id: cmd.id, name: cmd.name, success: false, error: 'cancelled_by_user' })
+      }
+      if (signal.aborted) {
+        checkAbort()
+      } else {
+        signal.addEventListener('abort', checkAbort, { once: true })
+      }
+    }),
+  ])
+  return result
 }
 
 async function executeSingle(cmd: UiCommand): Promise<UiCommandResult> {
@@ -88,15 +120,20 @@ async function executeSingle(cmd: UiCommand): Promise<UiCommandResult> {
         return { id: cmd.id, name: cmd.name, success: false, error: `Unknown command: ${cmd.name}` }
     }
   } catch (e) {
-    return { id: cmd.id, name: cmd.name, success: false, error: String(e) }
+    return { id: cmd.id, name: cmd.name, success: false, error: e instanceof Error ? e.message : String(e) }
   }
 }
 
 async function navigate(path: string): Promise<UiCommandResult> {
-  _navHistory.push(location.pathname + location.search)
-  await router.push(path)
-  await waitForDomStable()
-  return { id: `nav-${Date.now()}`, name: 'navigate', success: true, result: { url: location.href } }
+  const prevUrl = location.pathname + location.search
+  try {
+    await router.push(path)
+    await waitForDomStable()
+    _navHistory.push(prevUrl)
+    return { id: `nav-${Date.now()}`, name: 'navigate', success: true, result: { url: location.href } }
+  } catch (e) {
+    return { id: `nav-${Date.now()}`, name: 'navigate', success: false, error: e instanceof Error ? e.message : String(e) }
+  }
 }
 
 async function click(selector: string): Promise<UiCommandResult> {
@@ -128,11 +165,18 @@ async function fill(selector: string, value: string): Promise<UiCommandResult> {
   if (role === 'combobox' || el.closest('[data-shadcn-select]') || el.closest('[role="listbox"]')) {
     ;(el as HTMLElement).click()
     await new Promise(r => setTimeout(r, 300))
-    const commandInput = document.querySelector<HTMLInputElement>('[role="combobox"] input, [data-shadcn-command-input]')
+    const commandInput = el.querySelector<HTMLInputElement>('[role="combobox"] input, [data-shadcn-command-input]')
     if (commandInput) {
       commandInput.value = value
       commandInput.dispatchEvent(new Event('input', { bubbles: true }))
       commandInput.dispatchEvent(new Event('change', { bubbles: true }))
+    } else {
+      const globalInput = document.querySelector<HTMLInputElement>('[role="combobox"] input, [data-shadcn-command-input]')
+      if (globalInput) {
+        globalInput.value = value
+        globalInput.dispatchEvent(new Event('input', { bubbles: true }))
+        globalInput.dispatchEvent(new Event('change', { bubbles: true }))
+      }
     }
     return { id: `fill-${Date.now()}`, name: 'fill', success: true }
   }
@@ -305,9 +349,9 @@ function highlightElement(el: Element, duration = 500) {
   const htmlEl = el as HTMLElement
   const origOutline = htmlEl.style.outline
   const origBg = htmlEl.style.backgroundColor
-  htmlEl.style.outline = '2px solid #3b82f6'
+  htmlEl.style.outline = HIGHLIGHT_OUTLINE
   htmlEl.style.outlineOffset = '2px'
-  htmlEl.style.backgroundColor = 'rgba(59, 130, 246, 0.1)'
+  htmlEl.style.backgroundColor = HIGHLIGHT_BG
   setTimeout(() => {
     htmlEl.style.outline = origOutline
     htmlEl.style.backgroundColor = origBg
