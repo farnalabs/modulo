@@ -14,6 +14,7 @@ from pydantic import BaseModel, ValidationError
 from modulo.api.dependencies import _get_engine, get_db_session
 from modulo.api.main import app
 from modulo.api.models.error import ErrorResponse
+from modulo.api.models.problem import ProblemDetail
 from modulo.auth.dependencies import get_current_user
 from modulo.auth.jwt import AuthenticatedPrincipal
 from modulo.settings import Settings, get_settings
@@ -244,7 +245,7 @@ class TestAuthEndpointSchemas:
             )
 
         assert resp.status_code == 401
-        validate_shape(resp.json(), ErrorResponse)
+        validate_shape(resp.json(), ProblemDetail)
 
     def test_me_schema(self, client: TestClient) -> None:
         account = _make_mock_account()
