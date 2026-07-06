@@ -155,12 +155,24 @@ to an intermediate LangGraph gate node at runtime.
 - [x] Gate lifecycle routes claim/approve/reject return typed errors (GateNotFoundError, AlreadyClaimedError, GateAlreadyDecidedError)
 - [x] Claim token validation errors return ClaimTokenExpiredError / ClaimTokenInvalidError
 - [x] Non-team-member claim returns NotTeamMemberError
-- [ ] Missing DB table (ProgrammingError) on HITL claim/approve/reject routes returns 501 Not Implemented
+- [x] Missing DB table (ProgrammingError) on HITL claim/approve/reject routes returns 501 Not Implemented
+- [x] Claim/approve/reject/deliver-manual/submit-manual routes: SQLAlchemyError (connection/deadlock) returns 503 SERVICE_UNAVAILABLE
+- [x] Non-team-member claim via HTTP returns 403 Forbidden
+- [x] Expired claim token on approve/reject/deliver-manual/submit-manual returns 410 Gone
 - [ ] Auth 401/403 documented and tested for HITL claim/approve/reject endpoints
+
+## Resilience & Integration Robustness
+
+- [x] Pipeline name lookups inside session.begin() transaction for RLS consistency
+- [x] All 7 route handlers have except ProgrammingError → 501
+- [x] All 7 route handlers have except SQLAlchemyError → 503
+- [ ] claim_gate notifies on NotTeamMemberError (403) consistently logged
+- [ ] PipelineExecutor.resume() exceptions not caught in route handlers (propagates as 500)
+- [ ] No retry/backoff on HITL DB operations
 
 ## QA History
 
-- 2026-07-05: Prodmap pipelines QA: Added Error Handling and QA History sections. Initial QA pass.
+- 2026-07-06: feat-pipelines-hitl-gates cross-cutting QA (arch-230): Fixed CRITICAL — claim_gate route missing NotTeamMemberError→403 catch (non-member team-scoped claim returned 500 instead of 403). Fixed CRITICAL — all 7 route handlers added SQLAlchemyError→503 catches (connection/deadlock failures propagated as 500). Fixed MAJOR — submit_manual_output returned 403 for expired tokens instead of 410 (inconsistent with all other HITL decision routes). Fixed MAJOR — pipeline name lookups moved inside session.begin() in list_run_pending_gates and list_org_pending_gates. Updated product map: marked 2 [ ]→[x], added Resilience section (6 checkboxes: 4 [x] + 2 [ ]). Added 14 SQLAlchemyError→503 + NotTeamMemberError→403 tests.
 
 ## Known Gaps
 

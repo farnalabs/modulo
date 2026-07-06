@@ -16,7 +16,7 @@ from typing import Any
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, Field
 from sqlalchemy import select
-from sqlalchemy.exc import ProgrammingError
+from sqlalchemy.exc import ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession
 
 from modulo.api.dependencies import _get_engine, get_db_session
@@ -29,6 +29,7 @@ from modulo.core.hitl_manager import (
     GateAlreadyDecidedError,
     GateNotFoundError,
     HITLManager,
+    NotTeamMemberError,
 )
 from modulo.core.pipeline_engine.executor import PipelineExecutor
 from modulo.db.crud.run import get_run, update_run_status
@@ -132,6 +133,8 @@ async def claim_gate(
                 raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
             except AlreadyClaimedError as exc:
                 raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+            except NotTeamMemberError as exc:
+                raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)) from exc
 
             # Update run status to "claimed".
             await update_run_status(session, run_id, "claimed")
@@ -139,6 +142,11 @@ async def claim_gate(
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
+        ) from exc
+    except SQLAlchemyError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Database error. Please try again.",
         ) from exc
 
     if gate.claim_token is None or gate.expires_at is None:
@@ -197,6 +205,11 @@ async def approve_gate(
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
+        ) from exc
+    except SQLAlchemyError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Database error. Please try again.",
         ) from exc
 
     resume_data: dict[str, Any] = {"action": "approved"}
@@ -263,6 +276,11 @@ async def approve_gate_with_modification(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
         ) from exc
+    except SQLAlchemyError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Database error. Please try again.",
+        ) from exc
 
     resume_data: dict[str, Any] = {
         "action": "approved",
@@ -323,6 +341,11 @@ async def reject_gate(
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
+        ) from exc
+    except SQLAlchemyError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Database error. Please try again.",
         ) from exc
 
     # Resume the graph with rejection data so the gate router picks the
@@ -394,6 +417,11 @@ async def deliver_manual_output(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
         ) from exc
+    except SQLAlchemyError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Database error. Please try again.",
+        ) from exc
 
     resume_data: dict[str, Any] = {"action": "deliver_manual", "output": req.output}
     executor = PipelineExecutor(engine)
@@ -441,12 +469,21 @@ async def submit_manual_output(
                 raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
             except GateAlreadyDecidedError as exc:
                 raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
-            except (ClaimTokenInvalidError, ClaimTokenExpiredError) as exc:
+            except ClaimTokenInvalidError as exc:
+                raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)) from exc
+            except ClaimTokenExpiredError as exc:
+                raise HTTPException(status_code=status.HTTP_410_GONE, detail=str(exc)) from exc
+            except NotTeamMemberError as exc:
                 raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)) from exc
     except ProgrammingError as exc:
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
+        ) from exc
+    except SQLAlchemyError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Database error. Please try again.",
         ) from exc
 
     resume_data: dict[str, Any] = {"action": "manual_output", "output": req.output}
@@ -491,14 +528,19 @@ async def list_run_pending_gates(
             )
             gates = list(result.scalars())
 
-        pipeline_name: str | None = None
-        if gates:
-            pipeline = await session.get(Pipeline, gates[0].pipeline_id)
-            pipeline_name = pipeline.name if pipeline else None
+            pipeline_name: str | None = None
+            if gates:
+                pipeline = await session.get(Pipeline, gates[0].pipeline_id)
+                pipeline_name = pipeline.name if pipeline else None
     except ProgrammingError as exc:
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
+        ) from exc
+    except SQLAlchemyError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Database error. Please try again.",
         ) from exc
 
     return PendingGatesResponse(
@@ -521,18 +563,23 @@ async def list_org_pending_gates(
             await set_rls_org(session, principal.organisation_id)
             gates = await mgr.list_pending(session, principal.organisation_id)
 
-        pipeline_ids = list({g.pipeline_id for g in gates})
-        pipeline_map: dict[uuid.UUID, str] = {}
-        if pipeline_ids:
-            pipeline_rows = await session.execute(
-                select(Pipeline.id, Pipeline.name).where(Pipeline.id.in_(pipeline_ids))
-            )
-            for pid, pname in pipeline_rows.all():
-                pipeline_map[pid] = pname
+            pipeline_ids = list({g.pipeline_id for g in gates})
+            pipeline_map: dict[uuid.UUID, str] = {}
+            if pipeline_ids:
+                pipeline_rows = await session.execute(
+                    select(Pipeline.id, Pipeline.name).where(Pipeline.id.in_(pipeline_ids))
+                )
+                for pid, pname in pipeline_rows.all():
+                    pipeline_map[pid] = pname
     except ProgrammingError as exc:
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
+        ) from exc
+    except SQLAlchemyError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Database error. Please try again.",
         ) from exc
 
     return PendingGatesResponse(
