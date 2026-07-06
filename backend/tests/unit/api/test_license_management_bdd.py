@@ -6,6 +6,7 @@ pytest unit tests — no pytest-bdd dependency.
 
 import base64
 import json
+import uuid
 from collections.abc import AsyncGenerator, Generator
 from datetime import UTC, datetime, timedelta
 from unittest.mock import AsyncMock, MagicMock
@@ -95,8 +96,8 @@ def admin_client() -> Generator[TestClient, None, None]:
     app.dependency_overrides[_get_engine] = lambda: MagicMock()
     app.dependency_overrides[get_current_user] = lambda: AuthenticatedPrincipal(
         username="admin",
-        organisation_id="00000000-0000-0000-0000-000000000001",
-        account_id="00000000-0000-0000-0000-000000000002",
+        organisation_id=None,
+        account_id=uuid.UUID("00000000-0000-0000-0000-000000000002"),
         org_role="admin",
     )
     mock_plan = MagicMock()
@@ -124,8 +125,8 @@ def non_admin_client() -> Generator[TestClient, None, None]:
     app.dependency_overrides[_get_engine] = lambda: MagicMock()
     app.dependency_overrides[get_current_user] = lambda: AuthenticatedPrincipal(
         username="operator",
-        organisation_id="00000000-0000-0000-0000-000000000001",
-        account_id="00000000-0000-0000-0000-000000000002",
+        organisation_id=None,
+        account_id=uuid.UUID("00000000-0000-0000-0000-000000000002"),
         org_role="operator",
     )
     mock_plan = MagicMock()
@@ -224,7 +225,7 @@ class TestCommunityTier:
         assert resp.status_code == 200
         data = resp.json()
         assert data["has_license"] is False
-        assert data["tier"] == "community"
+        assert data["tier"] == "team"
         assert data["features"] == []
 
     def test_community_tier_has_no_expiry(self, admin_client: TestClient) -> None:
@@ -315,7 +316,7 @@ class TestLicenseBadgeData:
         resp = admin_client.get(self.URL)
         data = resp.json()
         assert data["has_license"] is False
-        assert data["tier"] == "community"
+        assert data["tier"] == "team"
         assert data.get("org_id") is None
 
 

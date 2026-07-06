@@ -174,7 +174,7 @@ def test_schema_create_valid(client: TestClient) -> None:
     mock_schema.name = "Test"
     mock_schema.description = None
     mock_schema.abstract_name = None
-    mock_schema.created_by = uuid.uuid4()
+    mock_schema.account_id = uuid.uuid4()
     mock_schema.created_at = datetime(2025, 1, 1, tzinfo=UTC)
     mock_schema.updated_at = datetime(2025, 1, 1, tzinfo=UTC)
 
@@ -249,10 +249,10 @@ def test_audit_list_long_event_type(client: TestClient) -> None:
 
 def test_audit_list_long_cursor(client: TestClient) -> None:
     with (
-        patch("modulo.api.routes.audit.list_audit_events"),
+        patch("modulo.api.routes.audit.list_audit_events", return_value={"items": [], "total": 0, "page": 1, "page_size": 20, "total_pages": 0}),
         patch("modulo.api.routes.audit.set_rls_org"),
     ):
-        resp = client.get("/api/v1/admin/audit?cursor=" + "x" * 100)
+        resp = client.get("/api/v1/admin/audit?cursor=" + "x" * 300)
     assert resp.status_code == 422
 
 
