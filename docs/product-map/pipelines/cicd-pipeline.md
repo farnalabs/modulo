@@ -184,9 +184,10 @@ and checkpoint resume.
 - [x] Node timeout via asyncio.wait_for — "failed" with error_code="node_timeout"
 - [x] Runaway run (max steps/duration) — terminates with error_code
 - [x] Eval suite threshold not met — "failed" with error_code="eval_suite_blocked"
-- [ ] Pipeline CRUD routes catch ProgrammingError → 501 for missing DB tables
-- [ ] Auth 401/403 documented for run lifecycle, cancellation, event-streaming endpoints
-- [ ] 422 validation errors documented for run trigger input validation
+- [x] Pipeline CRUD routes catch ProgrammingError → 501 for missing DB tables
+- [x] Auth 401/403 documented for run lifecycle, cancellation, event-streaming endpoints
+- [x] 422 validation errors documented for run trigger input validation
+- [x] Run creation routes catch IntegrityError → 409 for unique constraint violations
 
 ## Known Gaps
 
@@ -218,6 +219,14 @@ and checkpoint resume.
 - Stage board kanban with search/filter/sort — not covered by pipeline feature tests
 
 ## QA History
+
+### Index 282 (2026-07-09): Cross-cutting QA
+- Fixed MAJOR — runs.py all 14 route handlers had duplicated `except HTTPException: raise` blocks (redundant pattern). Standardized to single `except HTTPException: raise` at the end of each try/except chain, matching pipelines.py convention.
+- Fixed MAJOR — added `IntegrityError → 409` catch to `trigger_run` and `observe_run_node` routes (unique constraint violations previously fell through to `SQLAlchemyError→503` with misleading "temporarily unavailable" message).
+- Added 2 new unit tests (`TestTriggerRunIntegrityError`, `TestObserveRunNodeIntegrityError`) verifying IntegrityError→409 return.
+- Verified 3 stale `[ ]`→`[x]` Error Handling checkboxes (ProgrammingError→501, Auth 401/403, 422 validation — all already implemented).
+- Added IntegrityError→409 behaviour checkbox to Error Handling section.
+- Status: partial (same 8 known gaps unchanged).
 
 ### Index 61 (2026-07-02): Cross-cutting QA
 - Marked 60+ implemented behaviours [ ]→[x] across all sections (CRUD, Validation, Run Lifecycle, Concurrency, Cancellation, Checkpoint/Resume, HITL Gate, Manual Node, Node Types, Execution Controls, Graph Compilation, Event Streaming, Token/Cost, Eval Suites, Multi-Tenant, WebSocket Patch, Error Paths)
