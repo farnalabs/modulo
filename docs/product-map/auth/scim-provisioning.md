@@ -164,7 +164,6 @@ SCIM-provisioned groups map to Team entities; memberships map to TeamMembership.
 - **Re-provisioning IDP user**: If user exists in another org (same email), `scim_create_user` adds a new membership but preserves the existing account — this re-membership path is undocumented in spec
 - **`_get_base_url` fallback**: URL hardcoded as `localhost:8000` when `modulo_public_url` is unset — should raise 500 for proper diagnosis
 - **SCIM bypasses Team CRUD REST validation**: Calls `create_team` directly rather than Team CRUD API — no duplicate name validation at CRUD level beyond DB constraint
-- **Fixed**: Redundant `_license_gate` call in `create_group` — `_require_team` dependency already gates
 
 ## QA History
 

@@ -10,7 +10,7 @@ code:
   - backend/src/modulo/auth/oauth.py
   - backend/src/modulo/db/models/oauth_client.py
   - backend/src/modulo/db/models/oauth_token.py
-depends-on: [feat-core-oidc-integration]
+depends-on: [feat-core-oidc-integration, feat-auth-jwt-auth]
 status: partial
 ---
 # MCP OAuth 2.0 Authorization Code Flow
@@ -118,12 +118,12 @@ OAuth 2.0 authorization code grant for MCP client authentication, with client re
 - [x] Token exchange: expired code returns error — unit test exists but no BDD scenario (needs precise datetime mocking for expiry)
 
 ## Error Handling
-- [ ] POST /api/v1/mcp/oauth/clients returns 501 if DB migration not run (ProgrammingError)
-- [ ] GET /api/v1/mcp/oauth/clients returns 501 if DB migration not run (ProgrammingError)
-- [ ] DELETE /api/v1/mcp/oauth/clients/{id} returns 501 if DB migration not run (ProgrammingError)
-- [ ] POST /api/v1/mcp/oauth/clients returns 503 on SQLAlchemyError (DB connection failure)
-- [ ] GET /api/v1/mcp/oauth/clients returns 503 on SQLAlchemyError
-- [ ] DELETE /api/v1/mcp/oauth/clients/{id} returns 503 on SQLAlchemyError
+- [x] POST /api/v1/mcp/oauth/clients returns 501 if DB migration not run (ProgrammingError)
+- [x] GET /api/v1/mcp/oauth/clients returns 501 if DB migration not run (ProgrammingError)
+- [x] DELETE /api/v1/mcp/oauth/clients/{id} returns 501 if DB migration not run (ProgrammingError)
+- [x] POST /api/v1/mcp/oauth/clients returns 503 on SQLAlchemyError (DB connection failure)
+- [x] GET /api/v1/mcp/oauth/clients returns 503 on SQLAlchemyError
+- [x] DELETE /api/v1/mcp/oauth/clients/{id} returns 503 on SQLAlchemyError
 - [ ] _oauth_authorize catches JSON decode error → 400 invalid_request
 - [ ] _oauth_token catches JSON decode error → 400 invalid_request
 - [ ] _oauth_authorize broad except Exception → 400 with error detail

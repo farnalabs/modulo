@@ -23,7 +23,7 @@ unit-tests:
   - backend/tests/bdd/steps/test_sso_oidc.py
   - backend/tests/bdd/steps/test_sso_saml.py
   - backend/tests/bdd/steps/test_sso_team_mapping.py
-depends-on: [feat-core-oidc-integration, feat-core-saml-integration]
+depends-on: [feat-core-oidc-integration, feat-core-saml-integration, feat-auth-team-rbac]
 status: partial
 ---
 # SSO Provider UI
