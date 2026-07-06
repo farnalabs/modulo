@@ -256,7 +256,7 @@ class TestUpdateStatus:
 
 class TestDetectEvalGap:
     def test_detects_eval_gap(self, client: TestClient) -> None:
-        mock_record = _make_mock_record()
+        mock_record = _make_mock_record(run_id=None)
 
         with (
             patch("modulo.api.routes.feedback.set_rls_org"),
@@ -431,7 +431,7 @@ class TestReviewFeedback:
 
 class TestListEvalProposals:
     def test_returns_proposals(self, client: TestClient) -> None:
-        mock_record = _make_mock_record(eval_gap=True)
+        mock_record = _make_mock_record(eval_gap=True, run_id=None)
 
         with (
             patch("modulo.api.routes.feedback.set_rls_org"),

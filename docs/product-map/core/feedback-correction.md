@@ -97,8 +97,12 @@ Correction run spawning, linking, and post-correction evaluation for the Feedbac
 - [x] Malformed eval_def in gap detection — logged warning, skipped gracefully
 - [x] Correction run on feedback with no run_id — rejected with 422 before DB access
 - [x] All 9 API routes wrapped in except ProgrammingError for migrations-not-run safety
+- [x] All DB queries in get_inbox_item run inside session.begin() with RLS context — fixed cross-tenant leak
+- [x] "dismiss" action uses "resolved" status — no longer rejected by DB CHECK constraint
+- [x] detect_eval_gap uses single transaction — no stale read risk between two transactions
+- [x] _VALID_STATUS_TRANSITIONS aligned with DB CHECK constraint and PRD §8.20 — no "dismissed" orphan state
 
-## QA History (index 75 — cross-cutting)
+## QA History
 
 ### Findings fixed (index 75)
 - Added ProgrammingError→501 catch to all 9 feedback API route handlers
@@ -116,9 +120,16 @@ Correction run spawning, linking, and post-correction evaluation for the Feedbac
 - Created website docs stub at feedback/correction.md
 - Known Gap "No guard against double-correction" removed (now guarded)
 
+### Findings fixed (index 248 — cross-cutting QA)
+- CRITICAL — `get_inbox_item` route ran pipeline name queries (Run + Pipeline) outside `session.begin()` transaction block, after `SET LOCAL app.organisation_id` had expired. On Postgres, `set_config(..., true)` is transaction-scoped, so subsequent queries lacked RLS context — cross-tenant data leak. Fixed: moved all DB queries inside the transaction block.
+- CRITICAL — "dismiss" review action used `update_status(record_id, "dismissed")` which was rejected by DB CHECK constraint `ck_feedback_records_status` (only allows 'pending', 'routing', 'correcting', 'resolved', 'escalated'). The `_VALID_STATUS_TRANSITIONS` state machine included "dismissed" but the DB constraint didn't — every dismiss action silently failed with a DB error. Fixed: changed "dismiss" action to set status "resolved" (same terminal state as "mark_reviewed"), removed "dismissed" from `_VALID_STATUS_TRANSITIONS`, added "resolved" to pending transitions.
+- MAJOR — `detect_eval_gap` route used two separate `async with session.begin()` blocks. Between the two transactions, the feedback record's status or data could change (stale read risk). Fixed: merged into single transaction block with early-exit 404 for missing record.
+- MAJOR — `_VALID_STATUS_TRANSITIONS` included "dismissed" which was inconsistent with DB CHECK constraint. Removed "dismissed" from state machine entirely — the "dismiss" action now resolves to "resolved". State machine is now fully aligned with DB constraint and PRD §8.20 spec (pending→routing→correcting→resolved|escalated).
+
 ## Known Gaps
 
 - No BDD feature files for the correction error paths — only happy-path BDD scenarios exist
 - No integration test for full correction lifecycle: reject → spawn → run → eval → resolve
 - No frontend UI for viewing correction runs linked to a feedback record
 - Correction run checkpoint pre-seeding is not implemented
+- Frontend `FeedbackInboxView.vue` not reviewed for i18n or error handling

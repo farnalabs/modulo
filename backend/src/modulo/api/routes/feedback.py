@@ -363,24 +363,11 @@ async def detect_eval_gap(
             await set_rls_org(session, principal.organisation_id)
             mgr = FeedbackManager(session, principal.organisation_id)
             record = await mgr.get_feedback_record(record_id)
-    except ProgrammingError:
-        raise HTTPException(
-            status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="Feedback system is not available. Run database migrations to enable this feature.",
-        )
-    except SQLAlchemyError:
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Database error occurred. Please try again later.",
-        )
 
-    if record is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Feedback record not found")
-
-    try:
-        async with session.begin():
-            await set_rls_org(session, principal.organisation_id)
-            mgr = FeedbackManager(session, principal.organisation_id)
+            if record is None:
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND, detail="Feedback record not found"
+                )
 
             eval_suite: list[EvalDefinition] = []
             if record.run_id:
@@ -419,11 +406,21 @@ async def get_inbox_item(
     session: AsyncSession = Depends(get_db_session),
     principal: AuthenticatedPrincipal = Depends(get_current_user),
 ) -> dict[str, Any]:
+    pipeline_name: str | None = None
     try:
         async with session.begin():
             await set_rls_org(session, principal.organisation_id)
             mgr = FeedbackManager(session, principal.organisation_id)
             record = await mgr.get_feedback_record(record_id)
+
+            if record is not None and record.run_id:
+                run_row = (await session.execute(select(Run).where(Run.id == record.run_id))).scalar_one_or_none()
+                if run_row:
+                    from modulo.db.models.pipeline import Pipeline
+
+                    pipeline = await session.get(Pipeline, run_row.pipeline_id)
+                    if pipeline:
+                        pipeline_name = pipeline.name
     except ProgrammingError:
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
@@ -437,16 +434,6 @@ async def get_inbox_item(
 
     if record is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Feedback record not found")
-
-    pipeline_name: str | None = None
-    if record.run_id:
-        run_row = (await session.execute(select(Run).where(Run.id == record.run_id))).scalar_one_or_none()
-        if run_row:
-            from modulo.db.models.pipeline import Pipeline
-
-            pipeline = await session.get(Pipeline, run_row.pipeline_id)
-            if pipeline:
-                pipeline_name = pipeline.name
 
     return _serialise_record(record, pipeline_name=pipeline_name)
 
@@ -480,7 +467,7 @@ async def review_feedback(
                 record = await mgr.update_status(record_id, "resolved")
 
             elif req.action == "dismiss":
-                record = await mgr.update_status(record_id, "dismissed")
+                record = await mgr.update_status(record_id, "resolved")
 
             elif req.action == "create_correction_run":
                 if not record.run_id:
