@@ -2,8 +2,9 @@ import { defineStore } from "pinia";
 import { ref, computed } from "vue";
 import { useI18n } from "vue-i18n";
 import { api } from "../lib/api/client";
+import { withTimeout } from "../lib/asyncUtils";
 import { registerHandler } from "./syncRegistry";
-import { type ProblemDetail } from "../lib/api/formatError";
+import { formatApiError, type ProblemDetail } from "../lib/api/formatError";
 import type { EventBusEvent } from "@/types/events";
 
 interface TeamMetrics {
@@ -131,37 +132,33 @@ export const useDashboardStore = defineStore("dashboard", () => {
   const { t } = useI18n();
   const summary = ref<DashboardSummary | null>(null);
   const loading = ref(false);
-  const error = ref<string | ProblemDetail | null>(null);
+  const summaryError = ref<string | ProblemDetail | null>(null);
   const syncingIds = ref(new Set<string>());
   const unsubHandlers: (() => void)[] = [];
 
   const totalSpend = computed(() => {
     if (!Array.isArray(summary.value?.trend)) return 0;
-    return summary.value.trend.reduce((sum, d) => sum + d.token_spend_usd, 0);
+    return summary.value.trend.reduce((sum, d) => sum + (d.token_spend_usd || 0), 0);
   });
 
   async function fetchSummary() {
     if (loading.value) return;
     loading.value = true;
-    error.value = null;
+    summaryError.value = null;
     try {
-      const { data: result, error: err } = await Promise.race([
+      const { data: result, error: err } = await withTimeout(
         api.GET("/api/v1/dashboard/summary"),
-        new Promise<never>((_, reject) =>
-          setTimeout(
-            () => reject(new Error("Dashboard data request timed out after 15s")),
-            15000,
-          ),
-        ),
-      ]);
-        if (err) {
-          error.value = typeof err === "object" && "detail" in err ? String(err.detail) : String(err);
-        } else {
-          summary.value = validateDashboardSummary(result);
-          if (!summary.value) error.value = t("views.DashboardView.invalid_dashboard_data");
-        }
+        15000,
+        "Dashboard summary request",
+      );
+      if (err) {
+        summaryError.value = formatApiError(err);
+      } else {
+        summary.value = validateDashboardSummary(result);
+        if (!summary.value) summaryError.value = t("views.DashboardView.invalid_dashboard_data");
+      }
     } catch (e: unknown) {
-      error.value = e instanceof Error ? e.message : String(e);
+      summaryError.value = formatApiError(e);
     } finally {
       loading.value = false;
     }
@@ -169,6 +166,8 @@ export const useDashboardStore = defineStore("dashboard", () => {
 
   const trends = ref<TrendsResponse | null>(null);
   const trendsLoading = ref(false);
+  const trendsError = ref<string | ProblemDetail | null>(null);
+  const error = computed(() => summaryError.value || trendsError.value);
 
   const TRENDS_REQUIRED_KEYS = [
     "run_counts", "eval_pass_rates", "token_spend",
@@ -187,31 +186,28 @@ export const useDashboardStore = defineStore("dashboard", () => {
   async function fetchTrends(days: number) {
     if (trendsLoading.value) return;
     if (!Number.isInteger(days) || days <= 0) {
-      error.value = t("views.DashboardView.invalid_days_parameter");
+      trendsError.value = t("views.DashboardView.invalid_days_parameter");
       return;
     }
     trendsLoading.value = true;
+    trendsError.value = null;
     try {
-      const { data: result, error: err } = await Promise.race([
+      const { data: result, error: err } = await withTimeout(
         api.GET("/api/v1/dashboard/trends", {
           params: { query: { days } },
         } as any),
-        new Promise<never>((_, reject) =>
-          setTimeout(
-            () => reject(new Error("Dashboard trends request timed out after 15s")),
-            15000,
-          ),
-        ),
-      ]);
+        15000,
+        "Dashboard trends request",
+      );
       if (err) {
-        error.value = typeof err === "object" && "detail" in err ? String(err.detail) : String(err);
+        trendsError.value = formatApiError(err);
       } else if (validateTrendsResponse(result)) {
         trends.value = result;
       } else {
-        error.value = t("views.DashboardView.invalid_trends_data");
+        trendsError.value = t("views.DashboardView.invalid_trends_data");
       }
     } catch (e: unknown) {
-      error.value = e instanceof Error ? e.message : String(e);
+      trendsError.value = formatApiError(e);
     } finally {
       trendsLoading.value = false;
     }
@@ -248,6 +244,8 @@ export const useDashboardStore = defineStore("dashboard", () => {
     loading,
     trendsLoading,
     error,
+    summaryError,
+    trendsError,
     totalSpend,
     fetchSummary,
     fetchTrends,
