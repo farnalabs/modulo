@@ -19,7 +19,7 @@
           </p>
           <p class="mt-1 text-xs text-muted-foreground">{{ tooltipText }}</p>
           <a
-            href="https://modulo.run/pricing"
+            :href="pricingUrl"
             target="_blank"
             rel="noopener noreferrer"
             class="mt-2 inline-block text-xs font-semibold text-primary hover:underline"
@@ -43,7 +43,7 @@
           <p class="text-sm text-muted-foreground">{{ tooltipText }}</p>
         </div>
         <a
-          href="https://modulo.run/pricing"
+          :href="pricingUrl"
           target="_blank"
           rel="noopener noreferrer"
           class="btn-glow inline-flex items-center gap-2 rounded-lg bg-primary px-4 py-2 text-sm font-semibold text-primary-foreground border border-primary/30 hover:border-primary/60 hover:brightness-110 transition-all duration-150"
@@ -64,11 +64,14 @@ import LockIcon from "./LockIcon.vue";
 
 const { t } = useI18n();
 
-const props = defineProps<{
+const props = withDefaults(defineProps<{
   featureName: string;
   requiredTier?: string;
   showDisabled?: boolean;
-}>();
+  pricingUrl?: string;
+}>(), {
+  pricingUrl: "https://modulo.run/pricing",
+});
 
 const planStore = usePlanStore();
 

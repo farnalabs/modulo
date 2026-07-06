@@ -40,9 +40,8 @@ const props = withDefaults(
   },
 );
 
-let gradientCounter = 0;
 const gradientId = computed(
-  () => `sparkline-${++gradientCounter}`,
+  () => `sparkline-${props.data.join("-")}-${props.color}`,
 );
 
 const normalizedData = computed(() =>

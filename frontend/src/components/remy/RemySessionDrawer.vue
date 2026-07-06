@@ -94,7 +94,7 @@
 <script setup lang="ts">
 import { shortId } from "@/utils/format";
 import { useRemyStore } from "@/composables/useRemyStore";
-import Button from "@/components/ui/button/Button.vue";
+import { Button } from "@/components/ui/button";
 
 const emit = defineEmits<{
   close: [];
@@ -109,14 +109,22 @@ function selectSession(id: string) {
 }
 
 async function handleNewSession() {
-  const session = await store.createSession();
-  if (session) {
-    emit("selectSession");
+  try {
+    const session = await store.createSession();
+    if (session) {
+      emit("selectSession");
+    }
+  } catch (e) {
+    console.error("Failed to create session:", e);
   }
 }
 
 async function handleDelete(id: string) {
-  await store.deleteSession(id);
+  try {
+    await store.deleteSession(id);
+  } catch (e) {
+    console.error("Failed to delete session:", e);
+  }
 }
 
 function formatTime(iso: string): string {

@@ -174,7 +174,7 @@ import { ref, watch, nextTick, computed } from "vue";
 import { useRemyStore } from "@/composables/useRemyStore";
 import { useRemyStream } from "@/composables/useRemyStream";
 import { abortUiCommands } from "@/composables/useUiCommandExecutor";
-import Button from "@/components/ui/button/Button.vue";
+import { Button } from "@/components/ui/button";
 import { getAccessToken } from "@/lib/api/client";
 import { ShieldAlertIcon, LoaderIcon } from "@lucide/vue";
 
@@ -274,9 +274,12 @@ function renderMarkdown(text: string): string {
   if (!text) return "";
   let html = escapeHtml(text);
 
+  const codeBlocks: string[] = [];
   html = html.replace(/```(\w*)\n([\s\S]*?)```/g, (_, lang, code) => {
     const langAttr = lang ? ` data-lang="${escapeHtml(lang)}"` : "";
-    return `<pre${langAttr}><code class="remy-code-block">${code}</code></pre>`;
+    const placeholder = `\x00CODE_BLOCK_${codeBlocks.length}\x00`;
+    codeBlocks.push(`<pre${langAttr}><code class="remy-code-block">${code}</code></pre>`);
+    return placeholder;
   });
 
   html = html.replace(/`([^`]+)`/g, '<code class="remy-inline-code">$1</code>');
@@ -298,6 +301,8 @@ function renderMarkdown(text: string): string {
   html = html.replace(/\n/g, "<br/>");
 
   html = '<p class="remy-p">' + html + "</p>";
+
+  html = html.replace(/\x00CODE_BLOCK_(\d+)\x00/g, (_, i) => codeBlocks[Number(i)] ?? "");
 
   return html;
 }
