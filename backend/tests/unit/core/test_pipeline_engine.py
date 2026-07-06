@@ -1,6 +1,5 @@
 """Tests for pipeline execution core logic."""
 
-import uuid
 from datetime import UTC, datetime
 
 import pytest
@@ -12,7 +11,7 @@ from modulo.core.pipeline_engine.runaway_protection import RunawayGuard, Runaway
 class TestMapLgEvent:
     def test_node_start_event(self) -> None:
         event = {"event": "on_chain_start", "name": "node-1"}
-        result = _map_lg_event(event, uuid.uuid4(), {"node-1"})
+        result = _map_lg_event(event, {"node-1"})
         assert result is not None
         event_type, payload = result
         assert event_type == "node_started"
@@ -20,7 +19,7 @@ class TestMapLgEvent:
 
     def test_node_complete_event(self) -> None:
         event = {"event": "on_chain_end", "name": "node-1"}
-        result = _map_lg_event(event, uuid.uuid4(), {"node-1"})
+        result = _map_lg_event(event, {"node-1"})
         assert result is not None
         event_type, payload = result
         assert event_type == "node_completed"
@@ -28,7 +27,7 @@ class TestMapLgEvent:
 
     def test_node_error_event(self) -> None:
         event = {"event": "on_chain_error", "name": "node-1", "data": {"error": "something broke"}}
-        result = _map_lg_event(event, uuid.uuid4(), {"node-1"})
+        result = _map_lg_event(event, {"node-1"})
         assert result is not None
         event_type, payload = result
         assert event_type == "node_failed"
@@ -36,12 +35,12 @@ class TestMapLgEvent:
 
     def test_unknown_event_kind_returns_none(self) -> None:
         event = {"event": "on_custom_event", "name": "node-1"}
-        result = _map_lg_event(event, uuid.uuid4(), {"node-1"})
+        result = _map_lg_event(event, {"node-1"})
         assert result is None
 
     def test_unknown_node_returns_none(self) -> None:
         event = {"event": "on_chain_start", "name": "unknown-node"}
-        result = _map_lg_event(event, uuid.uuid4(), {"known-node"})
+        result = _map_lg_event(event, {"known-node"})
         assert result is None
 
 
