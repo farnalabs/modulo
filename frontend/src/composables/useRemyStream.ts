@@ -106,14 +106,26 @@ export function useRemyStream() {
             try {
               const results = await executeCommandBatch(commands)
               store.isExecutingUi = false
-              await fetch(`/api/v1/remy/sessions/${sessionId}/ui-command-results`, {
-                method: 'POST',
-                headers: {
-                  'Content-Type': 'application/json',
-                  ...headers,
-                },
-                body: JSON.stringify({ results }),
-              })
+              const body = JSON.stringify({ results })
+              let retries = 0
+              const maxRetries = 3
+              while (true) {
+                const resp = await fetch(`/api/v1/remy/sessions/${sessionId}/ui-command-results`, {
+                  method: 'POST',
+                  headers: {
+                    'Content-Type': 'application/json',
+                    ...headers,
+                  },
+                  body,
+                })
+                if (resp.ok) break
+                retries++
+                if (retries >= maxRetries) {
+                  store.error = `Failed to submit UI command results (${resp.status})`
+                  break
+                }
+                await new Promise(r => setTimeout(r, 500 * retries))
+              }
             } catch (e) {
               store.error = e instanceof Error ? e.message : 'UI command execution failed'
               store.isExecutingUi = false
