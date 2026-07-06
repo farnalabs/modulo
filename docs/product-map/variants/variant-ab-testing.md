@@ -41,16 +41,6 @@ status: partial
 - [x] Weight ge 0 (zero-weight variants accepted)
 - [x] Variants stored as JSON column on VariantGroup
 
-### Weighted Selection
-
-- [x] Empty variants returns None
-- [x] Single variant returned directly (short-circuit, no random)
-- [x] Weighted random selection respects proportional weights
-- [x] All-zero weights falls back to uniform random choice
-- [x] Missing weight key defaults to 1.0
-- [x] Weighted selection can reach any variant given sufficient trials (distribution test)
-- [x] Weighted selection dominates over low-weight variants (100:1 ratio heavily favours higher weight)
-
 ### Running Variants
 
 - [x] Run endpoint selects weighted variant, merges run_context_overrides into input_payload, creates a run
@@ -68,20 +58,6 @@ status: partial
 - [x] `check_pipeline_run_quota` returns False when at or over limit
 - [x] N variants creates N runs, each counted individually against pipeline limits
 
-### Eval Coverage Gaps
-
-- [x] Detect which variants lack eval definitions (missing eval_definition_ids)
-- [x] Return list of gaps with variant reference and missing eval IDs
-- [x] Return empty list when all pipeline evals are referenced by all variants
-- [x] Coverage gap endpoint accessible via API
-
-### Prompt Version Comparison
-
-- [x] Compare prompt_pins_json across variant snapshots
-- [x] Identify agent-level prompt version hash differences between base and comparison variants
-- [x] Skip pairs where a snapshot is missing (graceful)
-- [x] Prompt diff endpoint accessible via API
-
 ### PRD Behaviours (not yet implemented)
 
 - [ ] Comparison view UI: eval scores per node per variant side by side
@@ -98,10 +74,10 @@ status: partial
 
 ## Error Handling
 
-- [x] `except ProgrammingError → 501 Not Implemented` on all 7 route handlers (create, list, get, update, delete, run, coverage-gaps, prompt-diffs)
-- [x] `except SQLAlchemyError → 503 Service Unavailable` on all 7 route handlers
+- [x] `except ProgrammingError → 501 Not Implemented` on all 8 route handlers (create, list, get, update, delete, run, coverage-gaps, prompt-diffs)
+- [x] `except SQLAlchemyError → 503 Service Unavailable` on all 8 route handlers
 - [x] `except IntegrityError → 409 Conflict` on create, update, delete, and run endpoints
-- [x] `except Exception → 500 Internal Server Error` on all 7 route handlers (guards against Python-level errors)
+- [x] `except Exception → 500 Internal Server Error` on all 8 route handlers (guards against Python-level errors)
 - [x] Group not found → 404 on get, update, delete, run, coverage-gaps, prompt-diffs
 - [x] Pipeline quota exceeded → 429 on run
 - [x] Empty variants list → 429 on run
@@ -140,4 +116,5 @@ status: partial
 
 ## QA History
 
-- 2026-07-08: improve-architecture (index 261) — Fixed CRITICAL: added `except Exception → 500` catches to all 7 route handlers (previously missing generic exception guard — Python-level errors like KeyError, TypeError, ValueError propagated as raw 500). Fixed MAJOR: `run_variant_weighted` changed `variant["snapshot_id"]` to `variant.get("snapshot_id")` with None guard to prevent KeyError crash on missing snapshot_id. Fixed MAJOR: `get_prompt_diffs` dict comprehensions changed from bare `p["agent_id"]`/`p["prompt_version_hash"]` to `p.get(...)` with guard to prevent KeyError on malformed `prompt_pins_json`. Added Error Handling section (10 checkboxes), Edge Cases section (9 checkboxes), Resilience & Integration Robustness section (6 checkboxes) to product map. Added 9 new unit tests covering `except Exception → 500` for all 7 route handlers (9 test classes) and 1 CRUD-level test for missing snapshot_id. All 20 variant tests pass (10 new + 10 existing). Merged to main at v0.3.241. Status: partial.
+- 2026-07-08: improve-architecture (index 261) — Fixed CRITICAL: added `except Exception → 500` catches to all 8 route handlers (previously missing generic exception guard — Python-level errors like KeyError, TypeError, ValueError propagated as raw 500). Fixed MAJOR: `run_variant_weighted` changed `variant["snapshot_id"]` to `variant.get("snapshot_id")` with None guard to prevent KeyError crash on missing snapshot_id. Fixed MAJOR: `get_prompt_diffs` dict comprehensions changed from bare `p["agent_id"]`/`p["prompt_version_hash"]` to `p.get(...)` with guard to prevent KeyError on malformed `prompt_pins_json`. Added Error Handling section (10 checkboxes), Edge Cases section (9 checkboxes), Resilience & Integration Robustness section (6 checkboxes) to product map. Added 9 new unit tests covering `except Exception → 500` for all 8 route handlers (9 test classes) and 1 CRUD-level test for missing snapshot_id. All 20 variant tests pass (10 new + 10 existing). Merged to main at v0.3.241. Status: partial.
+- 2026-07-06: qa-iterate — Fixed CRITICAL: corrected "all 7 route handlers" → "all 8 route handlers" (the code has 8 route handlers, not 7). Fixed MAJOR: removed duplicated Weighted Selection, Eval Coverage Gaps, and Prompt Version Comparison sections (canonical versions in variant-groups.md). Status: partial.

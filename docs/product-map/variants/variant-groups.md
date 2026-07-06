@@ -77,6 +77,10 @@ A/B test variant management — named sets of runs against the same pipeline tha
 
 ### Error handling
 
+- [x] `except ProgrammingError → 501 Not Implemented` on all 8 route handlers (create, list, get, update, delete, run, coverage-gaps, prompt-diffs)
+- [x] `except SQLAlchemyError → 503 Service Unavailable` on all 8 route handlers
+- [x] `except IntegrityError → 409 Conflict` on create, update, delete, and run endpoints
+- [x] `except Exception → 500 Internal Server Error` on all 8 route handlers (guards against Python-level errors)
 - [x] 404 on GET/PUT/DELETE for unknown group_id
 - [x] 204 No Content on successful DELETE
 - [x] 404 on run_variant when group not found
@@ -87,17 +91,6 @@ A/B test variant management — named sets of runs against the same pipeline tha
 ### Pipeline limits
 
 - [x] Concurrent run limit enforced per pipeline per variant group via `check_pipeline_run_quota` (`active < max_concurrent_runs`)
-
-### Error handling (programming error)
-
-- [x] POST create_variant_group → 501 ProgrammingError
-- [x] GET list_variant_groups → 501 ProgrammingError
-- [x] GET get_variant_group → 501 ProgrammingError
-- [x] PUT update_variant_group → 501 ProgrammingError
-- [x] DELETE delete_variant_group → 501 ProgrammingError
-- [x] POST run_variant → 501 ProgrammingError
-- [x] GET coverage_gaps → 501 ProgrammingError
-- [x] GET prompt_diffs → 501 ProgrammingError
 
 ### Resilience
 
@@ -136,6 +129,10 @@ A/B test variant management — named sets of runs against the same pipeline tha
 
 - [x] Unit tests exist for `run_variant_weighted` (5 test methods in `test_variant_group.py`)
 - [x] Unit tests exist for `get_prompt_diffs` (4 test methods in `test_variant_group.py`)
+
+## QA History
+
+- 2026-07-06: qa-iterate — Fixed CRITICAL: consolidated error handling sections into one complete section with all exception types (ProgrammingError→501, SQLAlchemyError→503, IntegrityError→409, Exception→500). Fixed MAJOR: designated this file as canonical for weighted selection, coverage gap, and prompt diff behaviours; removed duplicate copies from variant-execution.md and variant-ab-testing.md. Status: partial.
 
 ## Known Gaps
 
