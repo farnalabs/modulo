@@ -271,7 +271,7 @@ class TestPublishV2:
         entry = _make_entry(slug="signeduser/signed-flow")
         keypair = {"private_key": "bb" * 32}
         with (
-            patch("modulo.api.routes.registry.publish_primitive", return_value=entry),
+            patch("modulo.api.routes.registry.publish_primitive", new_callable=AsyncMock, return_value=entry),
             patch("modulo.api.routes.registry.crypto_pem_verify", return_value=True),
             patch("modulo.api.routes.registry.crypto_generate_keypair", return_value=keypair),
             patch("modulo.api.routes.registry.verify_trust_anchor", return_value=True),
