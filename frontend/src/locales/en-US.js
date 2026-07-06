@@ -838,7 +838,21 @@ export default {
       "failed_to_promote_variant": "Failed to promote variant:",
       "variant_a": "Variant A",
       "failed_to_run_ab_test": "Failed to run A/B test:",
-      "eg_claude_vs_gpt4o": "e.g. claude vs gpt-4o"
+      "eg_claude_vs_gpt4o": "e.g. claude vs gpt-4o",
+      "description": "Description",
+      "using_snapshot": "Using snapshot:",
+      "variants_title": "Variants",
+      "variant_prefix": "Variant",
+      "remove": "Remove",
+      "name_label": "Name",
+      "save_group": "Save Group",
+      "results_title": "Results",
+      "metric": "Metric",
+      "cost": "Cost",
+      "tokens": "Tokens",
+      "promote_as_default": "Promote \"{name}\" as default",
+      "select_pipeline_hint": "Select a pipeline and configure variants to run an A/B test.",
+      "no_pipelines_found": "No pipelines found. Create a pipeline first to set up A/B testing."
     },
     "AdminUsersView": {
       "create_user": "Create User",
