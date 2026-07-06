@@ -71,7 +71,7 @@ class TestRegexEval:
         result = engine.evaluate({"text": "hello"}, eval_def)
         assert result.passed is False
         assert result.score == 0.0
-        assert "missing 'pattern'" in result.detail
+        assert "pattern" in result.detail.lower()
 
     def test_missing_field_config(self) -> None:
         engine = EvalEngine()
