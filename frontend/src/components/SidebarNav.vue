@@ -28,7 +28,7 @@ import { computed } from "vue";
 import { useRoute } from "vue-router";
 import SidebarLink from "./SidebarLink.vue";
 import SidebarGroup from "./SidebarGroup.vue";
-import { navGroups, canSeeItem } from "../config/navigation";
+import { getNavGroups, canSeeItem } from "../config/navigation";
 import { useSidebar } from "../composables/useSidebar";
 import { usePlanStore } from "../stores/planStore";
 
@@ -63,7 +63,7 @@ const activeGroupIds = computed(() => {
 const tierInfoLoaded = computed(() => Object.keys(planStore.tierRanks).length > 0);
 
 const visibleSidebarGroups = computed(() =>
-  navGroups
+  getNavGroups()
     .filter(
       (g) =>
         (g.simpleMode || viewMode.value === "advanced") &&

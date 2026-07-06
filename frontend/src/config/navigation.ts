@@ -112,15 +112,31 @@ interface Manifest {
   sidebar_groups: Record<string, ManifestSidebarGroup>
 }
 
-function isManifestRoute(route: ManifestRoute): route is ManifestRoute & { sidebar_group: string; sidebar_order: number } {
+function isManifestRoute(
+  route: ManifestRoute,
+): route is ManifestRoute & { sidebar_group: string; sidebar_order: number } {
   return typeof route.sidebar_group === 'string' && typeof route.sidebar_order === 'number'
 }
 
+function isManifest(obj: unknown): obj is Manifest {
+  if (typeof obj !== 'object' || obj === null) return false
+  const m = obj as Record<string, unknown>
+  return (
+    typeof m.routes === 'object' && m.routes !== null
+    && typeof m.sidebar_groups === 'object' && m.sidebar_groups !== null
+  )
+}
+
 function buildSidebarGroups(): NavGroup[] {
-  const m = manifest as unknown as Manifest
+  if (!isManifest(manifest)) {
+    console.error('[navigation] manifest is invalid — missing routes or sidebar_groups')
+    return []
+  }
+
+  const m: Manifest = manifest
   const itemsByGroup: Record<string, NavItem[]> = {}
 
-  for (const [path, route] of Object.entries(m.routes || {})) {
+  for (const [path, route] of Object.entries(m.routes)) {
     if (!route.sidebar_group) continue
     if (route.type === 'detail_page') continue
     if (!isManifestRoute(route)) continue
@@ -131,16 +147,11 @@ function buildSidebarGroups(): NavGroup[] {
       continue
     }
 
-    if (!itemsByGroup[route.sidebar_group]) {
-      itemsByGroup[route.sidebar_group] = []
-    }
-
-    const rc = routeConfigMap[route.name]
-    itemsByGroup[route.sidebar_group].push({
+    ;(itemsByGroup[route.sidebar_group] ??= []).push({
       to: path,
-      icon: rc?.icon || 'File',
+      icon: routeConfigMap[route.name]?.icon || 'File',
       label: route.breadcrumb || route.name,
-      labelKey: rc?.labelKey || `nav.${route.name}`,
+      labelKey: routeConfigMap[route.name]?.labelKey || `nav.${route.name}`,
       exact: route.exact || undefined,
       requiredRoles: route.required_roles || null,
       requiredTier: route.required_tier || null,
@@ -156,22 +167,17 @@ function buildSidebarGroups(): NavGroup[] {
     })
   }
 
-  const groups = Object.entries(m.sidebar_groups || {})
+  return Object.entries(m.sidebar_groups)
     .sort(([, a], [, b]) => a.order - b.order)
-    .map(([id, sg]) => {
-      const items = itemsByGroup[id] || []
-      return {
-        id,
-        label: sg.label,
-        labelKey: sg.labelKey || groupLabelKeyMap[id] || `components.SidebarNav.group_${id}`,
-        items,
-        defaultCollapsed: !sg.default_expanded,
-        simpleMode: sg.simple_mode,
-      }
-    })
+    .map(([id, sg]) => ({
+      id,
+      label: sg.label,
+      labelKey: sg.labelKey || groupLabelKeyMap[id] || `components.SidebarNav.group_${id}`,
+      items: itemsByGroup[id] || [],
+      defaultCollapsed: !sg.default_expanded,
+      simpleMode: sg.simple_mode,
+    }))
     .filter((g) => g.items.length > 0)
-
-  return groups
 }
 
 export function canSeeItem(
@@ -181,29 +187,18 @@ export function canSeeItem(
 ): boolean {
   if (item.requiredRoles && item.requiredRoles.length > 0 && !item.requiredRoles.includes(user.role)) return false
   if (item.requiredTier && !plan.isAtMinimumTier(item.requiredTier)) return false
-  if (item.requiredPermissions && item.requiredPermissions.length > 0 && user.permissions) {
-    const hasPermission = item.requiredPermissions.some((p) => user.permissions!.includes(p))
-    if (!hasPermission) return false
+  if (item.requiredPermissions && item.requiredPermissions.length > 0) {
+    if (!user.permissions || user.permissions.length === 0) return false
+    if (!item.requiredPermissions.some((p) => user.permissions.includes(p))) return false
   }
   return true
 }
 
-function validateManifest(m: Manifest): void {
-  if (typeof m.routes !== 'object' || m.routes === null) {
-    console.error('[navigation] manifest.routes is missing or invalid')
-  }
-  if (typeof m.sidebar_groups !== 'object' || m.sidebar_groups === null) {
-    console.error('[navigation] manifest.sidebar_groups is missing or invalid')
-  }
-}
+let _cachedGroups: NavGroup[] | null = null
 
-let _navGroups: NavGroup[] = []
-try {
-  validateManifest(manifest as unknown as Manifest)
-  _navGroups = buildSidebarGroups()
-} catch (e) {
-  console.error('[navigation] Failed to build sidebar groups:', e)
-  _navGroups = []
+export function getNavGroups(): NavGroup[] {
+  if (_cachedGroups === null) {
+    _cachedGroups = buildSidebarGroups()
+  }
+  return _cachedGroups
 }
-
-export const navGroups: NavGroup[] = _navGroups
