@@ -2,15 +2,14 @@
 id: feat-core-stale-tags
 prd: 13
 delivery-tasks: [task-nv12-stale-tags]
-code:
+bdd:
   - backend/tests/features/personas/priya-platform-engineer.feature
   - backend/tests/features/personas/marcus-ciso.feature
   - backend/tests/features/personas/jordan-community-contributor.feature
   - backend/tests/features/personas/elena-engineering-director.feature
   - backend/tests/features/personas/duncan-solo-developer.feature
   - backend/tests/features/personas/alice-devx-sme.feature
-  - backend/tests/bdd/steps/test_personas.py
-bdd: []
+code: []
 depends-on: []
 unit-tests: []
 status: partial
