@@ -957,11 +957,6 @@ export default {
       "hmac_failed": "HMAC Failed",
       "schema_validation_failed": "Schema Validation Failed"
     },
-    "VariantCompareView": {
-      "failed_to_load_variant_groups": "Failed to load variant groups:",
-      "failed_to_run_variants": "Failed to run variants:",
-      "failed_to_load_variant_group": "Failed to load variant group:"
-    },
     "variantCompare": {
       "title": "Variant Comparison",
       "subtitle": "Side-by-side eval scores, token costs, and output diffs across A/B test variants",
