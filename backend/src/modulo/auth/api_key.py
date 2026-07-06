@@ -24,7 +24,7 @@ import uuid
 from datetime import UTC, datetime
 from typing import Any
 
-from sqlalchemy import select, update
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.db.models.api_key import OrgApiKey
@@ -130,23 +130,20 @@ async def validate_api_key(
     result = await session.execute(
         select(OrgApiKey).where(*filters)
     )
-    key = result.scalar_one_or_none()
-    if key is None:
+    keys = list(result.scalars())
+    if not keys:
         _log.info("api_key.not_found", extra={"prefix": prefix, "org_id": str(org_id) if org_id else None})
         raise ApiKeyInvalidError()
-    if key.expires_at is not None and key.expires_at < now:
-        _log.info("api_key.expired", extra={"key_id": str(key.id)})
-        raise ApiKeyInvalidError()
 
-    # Constant-time compare to prevent timing attacks
-    expected = key.hashed_secret
-    actual = _hash_key(full_key)
-    if not hmac.compare_digest(expected, actual):
-        raise ApiKeyInvalidError()
+    actual_hash = _hash_key(full_key)
+    for key in keys:
+        if key.expires_at is not None and key.expires_at < now:
+            continue
+        if hmac.compare_digest(key.hashed_secret, actual_hash):
+            key.last_used_at = datetime.now(UTC)
+            return key
 
-    # Update last_used_at
-    await session.execute(update(OrgApiKey).where(OrgApiKey.id == key.id).values(last_used_at=datetime.now(UTC)))
-    return key
+    raise ApiKeyInvalidError()
 
 
 async def revoke_api_key(
