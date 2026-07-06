@@ -258,6 +258,24 @@ class TestRunVariantWeighted:
 
 
 @pytest.mark.asyncio
+class TestGetPromptDiffsMissingSnapshotId:
+    async def test_skips_variants_without_snapshot_id(self) -> None:
+        session = AsyncMock()
+        group = MagicMock()
+        group.variants = [
+            {"name": "variant-without-sid"},
+            {"name": "variant-with-sid", "snapshot_id": str(uuid.uuid4())},
+        ]
+
+        exec_result = MagicMock()
+        exec_result.scalars.return_value = []
+        session.execute.return_value = exec_result
+
+        result = await get_prompt_diffs(session, group, base_snapshot_ids=[uuid.uuid4()])
+
+        assert result == []
+
+
 class TestGetPromptDiffs:
     async def test_returns_empty_when_no_snapshots(self) -> None:
         session = AsyncMock()
