@@ -38,7 +38,7 @@ primary_region = 'lhr'
   # REQUIRED: Upstash Redis instance. Create with:
   #   fly redis create --name modulo-app-redis -r lhr,ams --enable-eviction
   # Then set REDIS_URL to the connection string from `fly redis status modulo-app-redis`
-  REDIS_URL = ""
+  REDIS_URL = "redis://default:30a066ca47a448bbba0ce80e7863a19c@fly-modulo-app-redis.upstash.io:6379"
   CORS_ORIGINS = "https://modulo.run,http://localhost:5173"
 
 [[vm]]
