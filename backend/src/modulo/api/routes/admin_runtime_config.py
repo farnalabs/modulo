@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import os
 from dataclasses import asdict
 from typing import Any
@@ -12,6 +13,8 @@ from modulo.api.middleware.sensitive_mask import is_sensitive_env_key, mask_sens
 from modulo.auth.dependencies import get_current_user
 from modulo.auth.jwt import AuthenticatedPrincipal
 from modulo.core.runtime_config.store import KNOWN_KEYS, RuntimeConfigStore, get_runtime_config_store
+
+_log = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/v1/admin/runtime-config", tags=["admin-runtime-config"])
 
@@ -56,7 +59,16 @@ def get_runtime_config(
     current_user: AuthenticatedPrincipal = Depends(get_current_user),
 ) -> dict[str, Any]:
     _require_admin(current_user)
-    return _build_response(get_runtime_config_store())
+    try:
+        return _build_response(get_runtime_config_store())
+    except HTTPException:
+        raise
+    except Exception as exc:
+        _log.exception("Failed to list runtime config")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to list runtime configuration",
+        ) from exc
 
 
 @router.put("")
@@ -65,46 +77,55 @@ def set_runtime_config_overrides(
     current_user: AuthenticatedPrincipal = Depends(get_current_user),
 ) -> dict[str, Any]:
     _require_admin(current_user)
-    store = get_runtime_config_store()
+    try:
+        store = get_runtime_config_store()
 
-    overrides = req.get("overrides", {})
-    if not isinstance(overrides, dict):
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="'overrides' must be a dict",
-        )
-    validated_overrides: list[tuple[str, str]] = []
-    for key, value in overrides.items():
-        _validate_known_key(key, "override")
-        if not isinstance(value, str):
+        overrides = req.get("overrides", {})
+        if not isinstance(overrides, dict):
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail=f"Override value for '{key}' must be a string, got {type(value).__name__}",
+                detail="'overrides' must be a dict",
             )
-        validated_overrides.append((key, value))
+        validated_overrides: list[tuple[str, str]] = []
+        for key, value in overrides.items():
+            _validate_known_key(key, "override")
+            if not isinstance(value, str):
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=f"Override value for '{key}' must be a string, got {type(value).__name__}",
+                )
+            validated_overrides.append((key, value))
 
-    clear_keys = req.get("clear", [])
-    if not isinstance(clear_keys, list):
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="'clear' must be a list",
-        )
-    validated_clear: list[str] = []
-    for key in clear_keys:
-        if not isinstance(key, str):
+        clear_keys = req.get("clear", [])
+        if not isinstance(clear_keys, list):
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail=f"Clear key must be a string, got {type(key).__name__}",
+                detail="'clear' must be a list",
             )
-        _validate_known_key(key, "clear")
-        validated_clear.append(key)
+        validated_clear: list[str] = []
+        for key in clear_keys:
+            if not isinstance(key, str):
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=f"Clear key must be a string, got {type(key).__name__}",
+                )
+            _validate_known_key(key, "clear")
+            validated_clear.append(key)
 
-    for key, value in validated_overrides:
-        store.set_override(key, value)
-    for key in validated_clear:
-        store.clear_override(key)
+        for key, value in validated_overrides:
+            store.set_override(key, value)
+        for key in validated_clear:
+            store.clear_override(key)
 
-    return _build_response(store)
+        return _build_response(store)
+    except HTTPException:
+        raise
+    except Exception as exc:
+        _log.exception("Failed to set runtime config overrides")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to update runtime configuration",
+        ) from exc
 
 
 @router.post("/reload")
@@ -112,6 +133,15 @@ def reload_runtime_config(
     current_user: AuthenticatedPrincipal = Depends(get_current_user),
 ) -> dict[str, Any]:
     _require_admin(current_user)
-    store = get_runtime_config_store()
-    store.reload()
-    return _build_response(store)
+    try:
+        store = get_runtime_config_store()
+        store.reload()
+        return _build_response(store)
+    except HTTPException:
+        raise
+    except Exception as exc:
+        _log.exception("Failed to reload runtime config")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to reload runtime configuration",
+        ) from exc
