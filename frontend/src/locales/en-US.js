@@ -191,7 +191,7 @@ export default {
       "configure_currency_and_billing_period": "Configure currency and billing period for cost tracking",
       "currency": "Currency",
       "billing_period": "Billing Period",
-      "monthly_budget": "Monthly Budget ({{ currency }})",
+      "monthly_budget": "Monthly Budget ({currency})",
       "budget_updated": "Budget updated."
     },
     "LoginView": {
