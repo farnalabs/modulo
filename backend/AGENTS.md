@@ -135,3 +135,17 @@ The DI factory in `dependencies.py:93` creates sessions with `autobegin=False`. 
 With the default `autobegin=True`, `Session.commit()` auto-starts a new implicit transaction. The next `async with session.begin():` then raises `InvalidRequestError: A transaction is already begun on this Session.` because the implicit transaction is already active. This is enforced by semgrep rule `async-session-missing-autobegin`.
 
 Found in `remy.py`: the `event_generator` created `AsyncSession(session.bind)` without `autobegin=False`, causing every Remy streaming request to fail with "Database error. Please try again later."
+
+### Redis is required for production deployments
+
+Modulo assumes Redis is present in production. The startup sequence in `main.py` hard-errors if `REDIS_URL` is not set and `settings.debug` is false. All three Fly tiers set `REDIS_URL = ""` by default — they MUST be provisioned with Upstash Redis before deploying:
+
+```powershell
+fly redis create --name modulo-app-redis -r lhr,ams --enable-eviction
+```
+
+Then set `REDIS_URL` in the corresponding `fly.*.toml` to the connection string from `fly redis status <name>`.
+
+In-memory fallbacks exist at many call sites (rate limiter `core/rate_limiter.py`, dashboard cache `api/routes/dashboard.py`, error tracking keys `core/error_tracking/__init__.py`, alert cooldowns `alerting.py`, EventBus `event_bus.py`, WS tokens `auth.py:315`, Celery scheduler `celery_app.py`) — these are acceptable in debug mode but silently lose state in production on deploy or scale-up. The eventual goal is to remove all fallbacks and hard-require Redis.
+
+The Remy in-memory event registries (`_pending_ui_results`, `_pending_permissions`, `_session_approvals` in `remy.py:93-97`) have NO fallback at all — they are process-local `asyncio.Event` objects. Any deploy restart destroys in-flight Remy conversations. A Redis pub/sub replacement for these registries is the highest-priority follow-up.
