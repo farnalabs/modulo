@@ -4,7 +4,7 @@ import base64
 import json
 from collections.abc import Generator
 from datetime import UTC, datetime, timedelta
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from fastapi.testclient import TestClient
@@ -65,6 +65,12 @@ def _make_valid_payload(**overrides: object) -> dict:
 # ── Fixtures ──────────────────────────────────────────────────────────────
 
 
+def _mock_org(settings_json: dict | None = None) -> MagicMock:
+    org = MagicMock()
+    org.settings_json = settings_json
+    return org
+
+
 @pytest.fixture(autouse=True)
 def _reset_license_state() -> Generator[None, None, None]:
     clear_license()
@@ -73,10 +79,19 @@ def _reset_license_state() -> Generator[None, None, None]:
     clear_license()
 
 
+def _make_mock_session() -> AsyncMock:
+    session = AsyncMock()
+    begin_cm = AsyncMock()
+    begin_cm.__aenter__ = AsyncMock(return_value=None)
+    begin_cm.__aexit__ = AsyncMock(return_value=False)
+    session.begin = MagicMock(return_value=begin_cm)
+    return session
+
+
 @pytest.fixture()
 def client() -> Generator[TestClient, None, None]:
     app.dependency_overrides[get_settings] = _make_settings
-    app.dependency_overrides[get_db_session] = lambda: MagicMock()
+    app.dependency_overrides[get_db_session] = _make_mock_session
     app.dependency_overrides[_get_engine] = lambda: MagicMock()
     app.dependency_overrides[get_current_user] = lambda: AuthenticatedPrincipal(
         username="admin",
@@ -98,7 +113,7 @@ def unauth_client() -> Generator[TestClient, None, None]:
 @pytest.fixture()
 def operator_client() -> Generator[TestClient, None, None]:
     app.dependency_overrides[get_settings] = _make_settings
-    app.dependency_overrides[get_db_session] = lambda: MagicMock()
+    app.dependency_overrides[get_db_session] = _make_mock_session
     app.dependency_overrides[_get_engine] = lambda: MagicMock()
     app.dependency_overrides[get_current_user] = lambda: AuthenticatedPrincipal(
         username="operator",
@@ -208,7 +223,9 @@ class TestGetLicense:
     URL = "/api/v1/admin/license"
 
     def test_returns_no_license_when_none_set(self, client: TestClient) -> None:
-        resp = client.get(self.URL)
+        org = _mock_org(settings_json=None)
+        with patch("modulo.api.routes.admin_license.get_organisation", new=AsyncMock(return_value=org)):
+            resp = client.get(self.URL)
         assert resp.status_code == 200
         data = resp.json()
         assert data["has_license"] is False
@@ -222,7 +239,9 @@ class TestGetLicense:
         assert result.license_data is not None
         store_license(key, result.license_data)
 
-        resp = client.get(self.URL)
+        org = _mock_org(settings_json={})
+        with patch("modulo.api.routes.admin_license.get_organisation", new=AsyncMock(return_value=org)):
+            resp = client.get(self.URL)
         assert resp.status_code == 200
         data = resp.json()
         assert data["has_license"] is True
@@ -259,7 +278,9 @@ class TestUploadLicense:
         resp = client.post(self.URL, json={"license_key": key})
         assert resp.status_code == 200
 
-        resp2 = client.get(self.URL)
+        org = _mock_org(settings_json={})
+        with patch("modulo.api.routes.admin_license.get_organisation", new=AsyncMock(return_value=org)):
+            resp2 = client.get(self.URL)
         assert resp2.status_code == 200
         data2 = resp2.json()
         assert data2["has_license"] is True
