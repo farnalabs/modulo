@@ -1063,6 +1063,12 @@ async def create_pipeline_from_template_endpoint(
             detail=f"Primitive {primitive_id} not found",
         )
 
+    if primitive.primitive_type != "pipeline_template":
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Primitive type '{primitive.primitive_type}' is not a pipeline_template",
+        )
+
     name, description, graph_nodes, edges, agent_count, edge_count = _build_pipeline_from_template(
         primitive, req.name, req.description,
     )
