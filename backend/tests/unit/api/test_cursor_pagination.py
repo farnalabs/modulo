@@ -161,6 +161,7 @@ class TestPipelinesEndpointCursor:
         pipeline.default_autonomy_level = "manual_approval"
         pipeline.snapshot_count = 0
         pipeline.created_by = uuid.uuid4()
+        pipeline.account_id = uuid.uuid4()
         pipeline.created_at = _NOW
         pipeline.updated_at = _NOW
 
