@@ -7,13 +7,22 @@ from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-from fastapi.testclient import TestClient
 from pytest_bdd import given, parsers, scenarios, then, when
 
-from modulo.api.main import app
-from modulo.auth.jwt import AuthenticatedPrincipal
-from modulo.settings import get_settings
 from tests.bdd.conftest import ORG_ID, USER_ID, make_settings
+
+# ── Lazy-import helper — avoids MCP/server startup at module-import time ──
+
+
+def _make_client():
+    from fastapi.testclient import TestClient
+    from modulo.api.main import app
+    from modulo.settings import get_settings
+
+    client = TestClient(app)
+    app.dependency_overrides[get_settings] = make_settings
+    return client
+
 
 # ── Load scenarios from feature files ──────────────────────────────────
 
@@ -95,46 +104,6 @@ def _make_mock_skill(**overrides: Any) -> MagicMock:
     s.created_at = _NOW
     s.updated_at = _NOW
     return s
-
-
-def _get_session_response(s: MagicMock, message_count: int = 0) -> dict[str, Any]:
-    return {
-        "id": str(s.id),
-        "user_id": str(s.user_id),
-        "name": s.name,
-        "provider": s.provider,
-        "model": s.model,
-        "context_window_tokens": s.context_window_tokens,
-        "system_prompt_hash": s.system_prompt_hash,
-        "message_count": message_count,
-        "created_at": s.created_at if isinstance(s.created_at, str) else s.created_at.isoformat(),
-        "updated_at": s.updated_at if isinstance(s.updated_at, str) else s.updated_at.isoformat(),
-    }
-
-
-def _get_message_response(m: MagicMock) -> dict[str, Any]:
-    return {
-        "id": str(m.id),
-        "session_id": str(m.session_id),
-        "role": m.role,
-        "content": m.content,
-        "tool_calls_json": m.tool_calls_json,
-        "tool_results_json": m.tool_results_json,
-        "token_count": m.token_count,
-        "parent_id": str(m.parent_id) if m.parent_id else None,
-        "created_at": m.created_at if isinstance(m.created_at, str) else m.created_at.isoformat(),
-    }
-
-
-def _make_session_scalar_result(sessions: list[MagicMock], total: int | None = None) -> MagicMock:
-    """Create a mock execute result that returns sessions from .scalars().all()"""
-    scalars_mock = MagicMock()
-    scalars_mock.all = MagicMock(return_value=sessions)
-    result = MagicMock()
-    result.scalars = MagicMock(return_value=scalars_mock)
-    result.scalar = MagicMock(return_value=total if total is not None else len(sessions))
-    result.scalar_one_or_none = MagicMock(return_value=sessions[0] if sessions else None)
-    return result
 
 
 # ── Given steps ─────────────────────────────────────────────────────────
@@ -304,8 +273,7 @@ def create_remy_session(provider: str, model: str, request, ctx) -> None:
         inst.updated_at = _NOW
         mock_cls.return_value = inst
 
-        client = TestClient(app)
-        app.dependency_overrides[get_settings] = make_settings
+        client = _make_client()
         app.dependency_overrides = {}
         resp = client.post(
             "/api/v1/remy/sessions",
@@ -349,8 +317,7 @@ def list_remy_sessions(request, ctx) -> None:
 
         mock_get_db.return_value = mock_session_inst
 
-        client = TestClient(app)
-        app.dependency_overrides[get_settings] = make_settings
+        client = _make_client()
         resp = client.get("/api/v1/remy/sessions")
         request.node._resp = resp
 
@@ -378,8 +345,7 @@ def get_remy_session(request, ctx) -> None:
         mock_session_inst.execute = AsyncMock(return_value=mock_exec)
         mock_get_db.return_value = mock_session_inst
 
-        client = TestClient(app)
-        app.dependency_overrides[get_settings] = make_settings
+        client = _make_client()
         resp = client.get(f"/api/v1/remy/sessions/{ses.id}")
         request.node._resp = resp
 
@@ -399,8 +365,7 @@ def get_remy_session_by_id(session_id: str, request, ctx) -> None:
         mock_session_inst.get = AsyncMock(return_value=None)
         mock_get_db.return_value = mock_session_inst
 
-        client = TestClient(app)
-        app.dependency_overrides[get_settings] = make_settings
+        client = _make_client()
         resp = client.get(f"/api/v1/remy/sessions/{session_id}")
         request.node._resp = resp
 
@@ -422,8 +387,7 @@ def rename_remy_session(request, ctx) -> None:
         mock_session_inst.get = AsyncMock(return_value=ses)
         mock_get_db.return_value = mock_session_inst
 
-        client = TestClient(app)
-        app.dependency_overrides[get_settings] = make_settings
+        client = _make_client()
         resp = client.patch(f"/api/v1/remy/sessions/{ses.id}", json={"name": "My renamed chat"})
         request.node._resp = resp
 
@@ -445,8 +409,7 @@ def delete_remy_session(request, ctx) -> None:
         mock_session_inst.get = AsyncMock(return_value=ses)
         mock_get_db.return_value = mock_session_inst
 
-        client = TestClient(app)
-        app.dependency_overrides[get_settings] = make_settings
+        client = _make_client()
         resp = client.delete(f"/api/v1/remy/sessions/{ses.id}")
         request.node._resp = resp
 
@@ -468,8 +431,7 @@ def get_other_users_session(request, ctx) -> None:
         mock_session_inst.get = AsyncMock(return_value=other_user_ses)
         mock_get_db.return_value = mock_session_inst
 
-        client = TestClient(app)
-        app.dependency_overrides[get_settings] = make_settings
+        client = _make_client()
         resp = client.get(f"/api/v1/remy/sessions/{other_user_ses.id}")
         request.node._resp = resp
 
@@ -498,8 +460,7 @@ def append_message(role: str, request, ctx, content: str = "Hello") -> None:
         mock_session_inst.get = AsyncMock(return_value=ses)
         mock_get_db.return_value = mock_session_inst
 
-        client = TestClient(app)
-        app.dependency_overrides[get_settings] = make_settings
+        client = _make_client()
 
         resp = client.post(
             f"/api/v1/remy/sessions/{ses.id}/messages",
@@ -526,8 +487,7 @@ def append_message_with_parent(role: str, content: str, request, ctx) -> None:
         mock_session_inst.get = AsyncMock(return_value=ses)
         mock_get_db.return_value = mock_session_inst
 
-        client = TestClient(app)
-        app.dependency_overrides[get_settings] = make_settings
+        client = _make_client()
         resp = client.post(
             f"/api/v1/remy/sessions/{ses.id}/messages",
             json={"role": role, "content": content, "parent_id": str(parent_id)},
@@ -550,8 +510,7 @@ def append_message_to_session_id(role: str, session_id: str, request, ctx) -> No
         mock_session_inst.get = AsyncMock(return_value=None)
         mock_get_db.return_value = mock_session_inst
 
-        client = TestClient(app)
-        app.dependency_overrides[get_settings] = make_settings
+        client = _make_client()
         resp = client.post(
             f"/api/v1/remy/sessions/{session_id}/messages",
             json={"role": role, "content": "Hello"},
@@ -588,8 +547,7 @@ def list_messages_for_session(request, ctx) -> None:
         mock_session_inst.execute = AsyncMock(return_value=mock_exec)
         mock_get_db.return_value = mock_session_inst
 
-        client = TestClient(app)
-        app.dependency_overrides[get_settings] = make_settings
+        client = _make_client()
         resp = client.get(f"/api/v1/remy/sessions/{ses.id}/messages")
         request.node._resp = resp
 
@@ -609,8 +567,7 @@ def list_messages_for_session_id(session_id: str, request, ctx) -> None:
         mock_session_inst.get = AsyncMock(return_value=None)
         mock_get_db.return_value = mock_session_inst
 
-        client = TestClient(app)
-        app.dependency_overrides[get_settings] = make_settings
+        client = _make_client()
         resp = client.get(f"/api/v1/remy/sessions/{session_id}/messages")
         request.node._resp = resp
 
@@ -635,8 +592,7 @@ def append_message_with_tool_calls(request, ctx) -> None:
         mock_session_inst.get = AsyncMock(return_value=ses)
         mock_get_db.return_value = mock_session_inst
 
-        client = TestClient(app)
-        app.dependency_overrides[get_settings] = make_settings
+        client = _make_client()
         resp = client.post(
             f"/api/v1/remy/sessions/{ses.id}/messages",
             json={
@@ -679,6 +635,7 @@ def get_admin_remy_config(request, ctx) -> None:
         mock_get_db.return_value = mock_session_inst
 
         from modulo.auth.dependencies import get_current_user
+        from modulo.auth.jwt import AuthenticatedPrincipal
 
         viewer_auth = getattr(request.node, "_viewer_auth", False)
         if viewer_auth:
@@ -691,8 +648,7 @@ def get_admin_remy_config(request, ctx) -> None:
         else:
             app.dependency_overrides.pop(get_current_user, None)
 
-        client = TestClient(app)
-        app.dependency_overrides[get_settings] = make_settings
+        client = _make_client()
         resp = client.get("/api/v1/admin/remy/config")
         request.node._resp = resp
 
@@ -761,14 +717,14 @@ def _update_remy_config(request: Any, ctx: dict, updates: dict) -> None:
         mock_get_db.return_value = mock_session_inst
 
         from modulo.auth.dependencies import get_current_user
+        from modulo.auth.jwt import AuthenticatedPrincipal
         app.dependency_overrides[get_current_user] = lambda: AuthenticatedPrincipal(
             username="testuser",
             organisation_id=ORG_ID,
             account_id=USER_ID,
             org_role="admin",
         )
-        client = TestClient(app)
-        app.dependency_overrides[get_settings] = make_settings
+        client = _make_client()
         resp = client.put("/api/v1/admin/remy/config", json=updates)
         request.node._resp = resp
 
@@ -800,8 +756,7 @@ def create_skill(name: str, body: str, request, ctx) -> None:
         mock_session_inst.begin.return_value = begin_cm
         mock_get_db.return_value = mock_session_inst
 
-        client = TestClient(app)
-        app.dependency_overrides[get_settings] = make_settings
+        client = _make_client()
         resp = client.post(
             "/api/v1/admin/remy/skills",
             json={"name": name, "body": body},
@@ -830,8 +785,7 @@ def list_org_skills(request, ctx) -> None:
         mock_session_inst.execute = AsyncMock(return_value=mock_exec)
         mock_get_db.return_value = mock_session_inst
 
-        client = TestClient(app)
-        app.dependency_overrides[get_settings] = make_settings
+        client = _make_client()
         resp = client.get("/api/v1/admin/remy/skills")
         request.node._resp = resp
 
@@ -853,8 +807,7 @@ def update_org_skill(request, ctx) -> None:
         mock_session_inst.get = AsyncMock(return_value=skill)
         mock_get_db.return_value = mock_session_inst
 
-        client = TestClient(app)
-        app.dependency_overrides[get_settings] = make_settings
+        client = _make_client()
         resp = client.put(f"/api/v1/admin/remy/skills/{skill.id}", json={"name": "code-review-v2"})
         request.node._resp = resp
 
@@ -876,8 +829,7 @@ def delete_org_skill(request, ctx) -> None:
         mock_session_inst.get = AsyncMock(return_value=skill)
         mock_get_db.return_value = mock_session_inst
 
-        client = TestClient(app)
-        app.dependency_overrides[get_settings] = make_settings
+        client = _make_client()
         resp = client.delete(f"/api/v1/admin/remy/skills/{skill.id}")
         request.node._resp = resp
 
@@ -902,8 +854,7 @@ def list_user_skills(request, ctx) -> None:
         mock_session_inst.begin.return_value = begin_cm
         mock_get_db.return_value = mock_session_inst
 
-        client = TestClient(app)
-        app.dependency_overrides[get_settings] = make_settings
+        client = _make_client()
         resp = client.get("/api/v1/me/remy/skills")
         request.node._resp = resp
 
@@ -923,8 +874,7 @@ def update_org_skill_by_id(skill_id: str, name: str, request, ctx) -> None:
         mock_session_inst.get = AsyncMock(return_value=None)
         mock_get_db.return_value = mock_session_inst
 
-        client = TestClient(app)
-        app.dependency_overrides[get_settings] = make_settings
+        client = _make_client()
         resp = client.put(f"/api/v1/admin/remy/skills/{skill_id}", json={"name": name})
         request.node._resp = resp
 
@@ -944,8 +894,7 @@ def delete_org_skill_by_id(skill_id: str, request, ctx) -> None:
         mock_session_inst.get = AsyncMock(return_value=None)
         mock_get_db.return_value = mock_session_inst
 
-        client = TestClient(app)
-        app.dependency_overrides[get_settings] = make_settings
+        client = _make_client()
         resp = client.delete(f"/api/v1/admin/remy/skills/{skill_id}")
         request.node._resp = resp
 
@@ -1180,6 +1129,7 @@ def config_has_additional_guidance(guidance: str, request) -> None:
 @when("I GET available providers")
 def get_available_providers(request, ctx) -> None:
     from modulo.auth.dependencies import get_current_user
+    from modulo.auth.jwt import AuthenticatedPrincipal
 
     viewer_auth = getattr(request.node, "_viewer_auth", False)
     if viewer_auth:
@@ -1195,8 +1145,7 @@ def get_available_providers(request, ctx) -> None:
         account_id=USER_ID,
         org_role="admin",
     )
-    client = TestClient(app)
-    app.dependency_overrides[get_settings] = make_settings
+    client = _make_client()
     resp = client.get("/api/v1/admin/remy/available-providers")
     request.node._resp = resp
 
@@ -1383,6 +1332,7 @@ def llm_emits_tool_call(tool_name: str, request, ctx, selector: str = "", value:
         viewer_auth = getattr(request.node, "_viewer_auth", False)
         if viewer_auth:
             from modulo.auth.dependencies import get_current_user
+            from modulo.auth.jwt import AuthenticatedPrincipal
             app.dependency_overrides[get_current_user] = lambda: AuthenticatedPrincipal(
                 username="viewer",
                 organisation_id=ORG_ID,
@@ -1390,8 +1340,7 @@ def llm_emits_tool_call(tool_name: str, request, ctx, selector: str = "", value:
                 org_role="viewer",
             )
 
-        client = TestClient(app)
-        app.dependency_overrides[get_settings] = make_settings
+        client = _make_client()
 
         req_id = str(uuid.uuid4())
         ctx["last_request_id"] = req_id
@@ -1457,8 +1406,7 @@ def user_approves_action(request, ctx) -> None:
         mock_session_inst.get = AsyncMock(return_value=mock_chat_session)
         mock_get_db.return_value = mock_session_inst
 
-        client = TestClient(app)
-        app.dependency_overrides[get_settings] = make_settings
+        client = _make_client()
 
         resp = client.post(
             f"/api/v1/remy/sessions/{ses.id}/permission-response",

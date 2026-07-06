@@ -7,8 +7,7 @@ import pytest
 from fastapi.testclient import TestClient
 from pytest_bdd import given, parsers, scenarios, then, when
 
-from modulo.api.main import app
-from modulo.settings import get_settings
+
 from tests.bdd.conftest import make_settings
 
 try:
@@ -100,6 +99,9 @@ def i_am_member(team_name: str, ctx) -> None:
     parsers.parse('I add user "{username}" to team "{team_name}" with role "{role}"')
 )
 def add_user_to_team(username: str, team_name: str, role: str, request, ctx) -> None:
+    from modulo.api.main import app
+    from modulo.settings import get_settings
+
     client = TestClient(app)
     app.dependency_overrides[get_settings] = make_settings
     app.dependency_overrides = {}
@@ -156,6 +158,8 @@ def add_user_to_team_existing(membership_key, request, ctx):
 
 @when(parsers.parse('I remove user "{username}" from team "{team_name}"'))
 def remove_user_from_team(username: str, team_name: str, request, ctx) -> None:
+    from modulo.api.main import app
+    from modulo.settings import get_settings
     client = TestClient(app)
     app.dependency_overrides[get_settings] = make_settings
     app.dependency_overrides = {}
@@ -175,6 +179,8 @@ def remove_user_from_team(username: str, team_name: str, request, ctx) -> None:
 
 @when(parsers.parse("I request my profile"))
 def request_my_profile(request) -> None:
+    from modulo.api.main import app
+    from modulo.settings import get_settings
     client = TestClient(app)
     app.dependency_overrides[get_settings] = make_settings
     app.dependency_overrides = {}
