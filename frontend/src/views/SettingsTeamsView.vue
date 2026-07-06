@@ -398,8 +398,8 @@ async function loadUsers() {
         userMap.value[user.id] = user
       }
     }
-  } catch {
-    // Non-critical - user list is a convenience for member management
+  } catch (err) {
+    console.warn('Failed to load users:', err)
   }
 }
 

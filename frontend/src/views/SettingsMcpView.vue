@@ -510,8 +510,8 @@ async function copyToClipboard(text: string, field: string) {
         copiedField.value = null
       }
     }, 2000)
-  } catch {
-    // Clipboard access denied
+  } catch (err) {
+    console.warn('Clipboard write failed:', err)
   }
 }
 

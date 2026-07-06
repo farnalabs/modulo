@@ -190,7 +190,7 @@ async function loadDeliveries(cursor?: string | null) {
       params: { query: params as any },
     })
     if (err) {
-      error.value = `Failed to load delivery logs: ${err}`
+      error.value = `Failed to load delivery logs: ${formatApiError(err)}`
     } else if (data) {
       items.value = data.items
       total.value = data.total
