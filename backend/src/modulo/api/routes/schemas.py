@@ -861,7 +861,15 @@ async def migrate_data_endpoint(
             detail="Schema management is temporarily unavailable.",
         ) from None
 
-    plan = create_migration(from_sv.definition_json, to_sv.definition_json)
+    try:
+        plan = create_migration(from_sv.definition_json, to_sv.definition_json)
+    except Exception:
+        logger.exception("schemas.migrate_create_plan")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to compute migration plan.",
+        ) from None
+
     plan_dict = {
         "field_additions": plan.field_additions,
         "field_removals": plan.field_removals,
@@ -876,7 +884,14 @@ async def migrate_data_endpoint(
             plan=plan_dict,
         )
 
-    migrated = apply_migration(req.data, plan)
+    try:
+        migrated = apply_migration(req.data, plan)
+    except Exception:
+        logger.exception("schemas.migrate_apply")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to apply migration to data.",
+        ) from None
 
     return SchemaMigrationResponse(
         migrated_data=migrated,
@@ -972,13 +987,14 @@ async def validate_schema_endpoint(
     try:
         Draft202012Validator.check_schema(req.definition)
     except (ValidationError, JsSchemaError) as exc:
-        path_parts = str(exc.path.popleft()) if exc.path else ""
+        path_copy = list(exc.path)
+        path_parts = str(path_copy[0]) if path_copy else ""
         line, col = _find_json_location(raw, req.definition, path_parts)
         errors.append(
             SchemaValidationError(
                 line=line,
                 column=col,
-                path=".".join(str(p) for p in exc.path) if exc.path else "(root)",
+                path=".".join(str(p) for p in path_copy) if path_copy else "(root)",
                 message=exc.message,
                 schema_path=".".join(str(p) for p in exc.schema_path) if exc.schema_path else None,
             )

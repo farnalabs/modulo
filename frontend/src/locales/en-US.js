@@ -1241,6 +1241,7 @@ export default {
       "group_core": "Core",
       "group_pipelines": "Pipelines",
       "group_runs_evaluation": "Runs & Evaluation",
+      "group_analysis": "Analysis",
       "group_schemas": "Schemas",
       "group_remy": "Remy",
       "group_settings": "Settings",
