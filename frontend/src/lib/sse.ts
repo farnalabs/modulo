@@ -16,7 +16,12 @@ export async function* parseSSEStream(
     if (done) break
 
     buffer += decoder.decode(value, { stream: true })
-    if (buffer.length > maxBufferSize) break
+    if (buffer.length > maxBufferSize) {
+      if (currentEvent) {
+        yield { event: currentEvent, data: '' }
+      }
+      break
+    }
 
     const lines = buffer.split('\n')
     buffer = lines.pop() ?? ''
