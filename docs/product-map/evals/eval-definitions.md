@@ -24,6 +24,7 @@ unit-tests:
   - backend/tests/unit/api/test_evals_admin_programming_error.py
   - backend/tests/unit/api/test_evals_dashboard.py
   - backend/tests/unit/api/test_evals_okr_progress_programming_error.py
+  - backend/tests/unit/api/test_evals_exception_guard.py
   - backend/tests/unit/core/test_eval_engine.py
   - backend/tests/unit/core/test_eval_suite.py
   - backend/tests/unit/core/test_eval_regressions.py
@@ -164,21 +165,39 @@ Eval definitions describe automated quality checks that run as a post-node step 
 
 ### Error Handling
 - [x] All DB-accessing routes (CRUD, coverage, compare, from-run, run-evals) catch ProgrammingError and return 501 with migration instructions
+- [x] All DB-accessing routes catch SQLAlchemyError and return 503 with retry suggestion
+- [x] All DB-accessing routes catch IntegrityError and return 409 for FK constraint violations
+- [x] All route handlers catch generic Exception and return 500 with structured detail (not raw 500 to CatchAllMiddleware)
 - [x] Auth checks return 403 with specific, actionable messages per operation
 - [x] 404 errors include the specific entity name ("Run not found", "Eval definition not found", "Pipeline not found")
 - [x] Eval engine errors are captured as structured EvalResult detail, not propagated as exceptions (except block/warn behaviour)
-- [x] No bare except blocks in API routes — every try/except catches specific exceptions (ProgrammingError, HTTPException)
+- [x] No bare except blocks in API routes — every try/except catches specific exceptions (HTTPException, IntegrityError, ProgrammingError, SQLAlchemyError, Exception)
 - [x] Custom function eval errors are caught at the callable boundary and returned as structured results
 - [x] LLM judge callable exceptions are caught and returned as structured results with error detail
+- [x] compare_evals second transaction block sets RLS context for cross-tenant safety
 
 ### Edge Cases
-- [ ] pass_threshold has no DB CHECK constraint or Pydantic Field range validation (0.0–1.0) on CreateEvalRequest or UpdateEvalRequest — user can set -1.0 or 2.0
+- [x] pass_threshold has Pydantic Field range validation (ge=0.0, le=1.0) on CreateEvalRequest and UpdateEvalRequest
 - [ ] No uniqueness constraint on eval definition name per pipeline — duplicate eval names possible
 - [ ] EvalResult DB model has no `created_at` timestamp from base (uses `evaluated_at` instead)
 - [ ] Multiple evals with same suite_id but mixed failure_behaviour — block evals are checked before warn evals per the engine's evaluate() call order
 - [ ] Concurrent eval definition creation has no advisory lock — two admins creating the same eval simultaneously may create duplicates
 
+### Frontend Error Handling
+- [x] EvalEditorView.vue uses formatApiError(err) instead of bare `String(e)` / `e instanceof Error ? e.message : String(e)` in all catch blocks
+- [x] No empty catch {} blocks — every catch path sets an error state with user-facing message
+- [x] ErrorAlert component used for page-level errors with retry callback
+
 ### QA History
+- **2026-07-08**: Cross-cutting architecture QA (index 264) by Worker sub-agent (worktree arch-264)
+  - **Fixed CRITICAL** — Added `except Exception → 500` catches to all 9 eval route handlers with `except HTTPException: raise` guard (create, list, get, update, delete, coverage, list_run_evals, compare with 2 blocks, from-run with 2 blocks) — previously only caught ProgrammingError→501 and SQLAlchemyError→503, allowing Python-level errors (TypeError, KeyError, AttributeError) to propagate as raw 500 to CatchAllMiddleware
+  - **Fixed CRITICAL** — `compare_evals` second transaction block (line 593) missing `set_rls_org()` and `set_rls_user_context()` calls — eval definitions query ran without RLS context on non-Postgres backends. Added both calls.
+  - **Added IntegrityError→409** — create, update, and from-run routes now catch FK violations with specific "does not exist" messages (previously fell through to SQLAlchemyError→503 with misleading "temporarily unavailable")
+  - **Added pass_threshold range validation** — `Field(ge=0.0, le=1.0)` on both CreateEvalRequest and UpdateEvalRequest (was unvalidated, accepting -1.0 or 2.0)
+  - **Fixed MAJOR** — EvalEditorView.vue replaced `e instanceof Error ? e.message : String(e)` with `formatApiError(err)` in 5 catch blocks (loadPipelines, saveEval, deleteEval, loadAll) and simplified 404 detection
+  - **Created 18 new tests** in `test_evals_exception_guard.py` covering Exception→500 for all 9 route handlers, IntegrityError→409 for create/update/from-run, pass_threshold out-of-range→422, and second-block IntegrityError
+  - **Updated product map** — added Error Handling checkboxes (3 new), Edge Cases (pass_threshold [ ]→[x]), Frontend Error Handling section (3 checkboxes), unit-tests updated
+
 - **2026-07-04**: Cross-cutting architecture QA by Worker sub-agent (worktree qa-eval-definitions-150)
   - **Verified [x] claims (82 of 82 checked):** All 82 claimed behaviours confirmed against code and tests. No false claims found.
   - **Updated from [ ]→[x]:** 7 edge case/behaviour checkboxes confirmed implemented and tested.

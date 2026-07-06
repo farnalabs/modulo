@@ -15,7 +15,7 @@ from typing import Any
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, Field
 from sqlalchemy import select
-from sqlalchemy.exc import ProgrammingError, SQLAlchemyError
+from sqlalchemy.exc import IntegrityError, ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.api.dependencies import get_db_session
@@ -44,7 +44,7 @@ class CreateEvalRequest(BaseModel):
     eval_type: str = Field(pattern=r"^(llm_judge|regex|json_schema|custom_function)$")
     config_json: dict[str, Any] = {}
     failure_behaviour: str = "warn"
-    pass_threshold: float | None = None
+    pass_threshold: float | None = Field(None, ge=0.0, le=1.0)
     suite_id: str | None = None
 
 
@@ -98,7 +98,7 @@ class UpdateEvalRequest(BaseModel):
     eval_type: str | None = Field(None, pattern=r"^(llm_judge|regex|json_schema|custom_function)$")
     config_json: dict[str, Any] | None = None
     failure_behaviour: str | None = None
-    pass_threshold: float | None = None
+    pass_threshold: float | None = Field(None, ge=0.0, le=1.0)
     suite_id: str | None = None
 
 
@@ -148,6 +148,13 @@ async def create_eval_definition(
             )
             session.add(eval_def)
             await session.flush()
+    except HTTPException:
+        raise
+    except IntegrityError:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Eval definition references a resource that does not exist.",
+        )
     except ProgrammingError:
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
@@ -158,6 +165,12 @@ async def create_eval_definition(
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database operation failed. Please try again later.",
+        )
+    except Exception:
+        _log.exception("evals.create_eval_definition_error", extra={"org_id": str(principal.organisation_id)})
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="An unexpected error occurred while creating the eval definition.",
         )
 
     return _eval_def_to_dict(eval_def)
@@ -199,6 +212,8 @@ async def list_eval_definitions(
                 .limit(page_size)
             )
             rows = (await session.execute(q)).scalars().all()
+    except HTTPException:
+        raise
     except ProgrammingError:
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
@@ -209,6 +224,12 @@ async def list_eval_definitions(
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database operation failed. Please try again later.",
+        )
+    except Exception:
+        _log.exception("evals.list_eval_definitions_error", extra={"org_id": str(principal.organisation_id)})
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="An unexpected error occurred while listing eval definitions.",
         )
 
     return EvalDefinitionListResponse(
@@ -262,6 +283,8 @@ async def eval_coverage(
                 .scalars()
                 .all()
             )
+    except HTTPException:
+        raise
     except ProgrammingError:
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
@@ -272,6 +295,12 @@ async def eval_coverage(
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database operation failed. Please try again later.",
+        )
+    except Exception:
+        _log.exception("evals.eval_coverage_error", extra={"org_id": str(principal.organisation_id)})
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="An unexpected error occurred while computing eval coverage.",
         )
 
     eval_count_by_node: dict[str, int] = {}
@@ -329,6 +358,8 @@ async def get_eval_definition(
                 )
             )
             eval_def = result.scalar_one_or_none()
+    except HTTPException:
+        raise
     except ProgrammingError:
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
@@ -339,6 +370,12 @@ async def get_eval_definition(
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database operation failed. Please try again later.",
+        )
+    except Exception:
+        _log.exception("evals.get_eval_definition_error", extra={"org_id": str(principal.organisation_id)})
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="An unexpected error occurred while fetching the eval definition.",
         )
     if eval_def is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Eval definition not found")
@@ -374,6 +411,13 @@ async def update_eval_definition(
             for key, value in updates.items():
                 setattr(eval_def, key, value)
             await session.flush()
+    except HTTPException:
+        raise
+    except IntegrityError:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Update would violate a constraint. Check that the referenced pipeline or suite exists.",
+        )
     except ProgrammingError:
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
@@ -384,6 +428,12 @@ async def update_eval_definition(
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database operation failed. Please try again later.",
+        )
+    except Exception:
+        _log.exception("evals.update_eval_definition_error", extra={"org_id": str(principal.organisation_id)})
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="An unexpected error occurred while updating the eval definition.",
         )
 
     return _eval_def_to_dict(eval_def)
@@ -413,6 +463,8 @@ async def delete_eval_definition(
             if eval_def is None:
                 raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Eval definition not found")
             await session.delete(eval_def)
+    except HTTPException:
+        raise
     except ProgrammingError:
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
@@ -423,6 +475,12 @@ async def delete_eval_definition(
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database operation failed. Please try again later.",
+        )
+    except Exception:
+        _log.exception("evals.delete_eval_definition_error", extra={"org_id": str(principal.organisation_id)})
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="An unexpected error occurred while deleting the eval definition.",
         )
 
 
@@ -475,6 +533,8 @@ async def list_run_evals(
                 .limit(page_size)
             )
             rows = (await session.execute(q)).scalars().all()
+    except HTTPException:
+        raise
     except ProgrammingError:
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
@@ -485,6 +545,12 @@ async def list_run_evals(
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database operation failed. Please try again later.",
+        )
+    except Exception:
+        _log.exception("evals.list_run_evals_error", extra={"org_id": str(principal.organisation_id)})
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="An unexpected error occurred while listing run eval results.",
         )
 
     return {
@@ -574,6 +640,8 @@ async def compare_evals(
             results_b = (
                 (await session.execute(select(EvalResult).where(EvalResult.run_id == req.run_id_b))).scalars().all()
             )
+    except HTTPException:
+        raise
     except ProgrammingError:
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
@@ -585,17 +653,27 @@ async def compare_evals(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database operation failed. Please try again later.",
         )
+    except Exception:
+        _log.exception("evals.compare_evals_first_block_error", extra={"org_id": str(principal.organisation_id)})
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="An unexpected error occurred while comparing eval results.",
+        )
 
     eval_ids = {r.eval_id for r in results_a} | {r.eval_id for r in results_b}
     eval_defs = {}
     if eval_ids:
         try:
             async with session.begin():
+                await set_rls_org(session, principal.organisation_id)
+                await set_rls_user_context(session, principal.account_id, principal.org_role)
                 defs_rows = (
                     (await session.execute(select(EvalDefinition).where(EvalDefinition.id.in_(eval_ids)))).scalars().all()
                 )
                 for d in defs_rows:
                     eval_defs[d.id] = d
+        except HTTPException:
+            raise
         except ProgrammingError:
             raise HTTPException(
                 status_code=status.HTTP_501_NOT_IMPLEMENTED,
@@ -606,6 +684,12 @@ async def compare_evals(
             raise HTTPException(
                 status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
                 detail="Database operation failed. Please try again later.",
+            )
+        except Exception:
+            _log.exception("evals.compare_evals_second_block_error", extra={"org_id": str(principal.organisation_id)})
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="An unexpected error occurred while comparing eval results.",
             )
 
     results_by_eval_a: dict[uuid.UUID, Any] = {}
@@ -707,6 +791,8 @@ async def create_eval_from_run(
             node_output = outputs.get(str(req.node_id)) or outputs.get(req.node_id.hex) or {}
 
             sample_output = node_output if isinstance(node_output, dict) else {"output": str(node_output)}
+    except HTTPException:
+        raise
     except ProgrammingError:
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
@@ -717,6 +803,12 @@ async def create_eval_from_run(
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database operation failed. Please try again later.",
+        )
+    except Exception:
+        _log.exception("evals.create_eval_from_run_first_block_error", extra={"org_id": str(principal.organisation_id)})
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="An unexpected error occurred while creating an eval from run output.",
         )
 
     config_json: dict[str, Any] = {}
@@ -755,6 +847,13 @@ async def create_eval_from_run(
             )
             session.add(eval_def)
             await session.flush()
+    except HTTPException:
+        raise
+    except IntegrityError:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Eval definition references a resource that does not exist.",
+        )
     except ProgrammingError:
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
@@ -765,6 +864,12 @@ async def create_eval_from_run(
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database operation failed. Please try again later.",
+        )
+    except Exception:
+        _log.exception("evals.create_eval_from_run_second_block_error", extra={"org_id": str(principal.organisation_id)})
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="An unexpected error occurred while creating an eval from run output.",
         )
 
     result = _eval_def_to_dict(eval_def)

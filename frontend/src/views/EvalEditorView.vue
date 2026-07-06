@@ -267,6 +267,7 @@ import { useApi } from '../composables/useApi'
 import LoadingSpinner from '../components/shared/LoadingSpinner.vue'
 import ErrorAlert from '../components/shared/ErrorAlert.vue'
 import { shortId } from '../utils/format'
+import { formatApiError } from '../lib/api/formatError'
 import { usePlanStore } from '../stores/planStore'
 import FeatureGate from '../components/FeatureGate.vue'
 import PageTabs from "../components/PageTabs.vue"
@@ -384,7 +385,7 @@ async function loadPipelines() {
     const data = await get<{ items: PipelineItem[]; total: number; page: number; page_size: number }>('/api/v1/pipelines')
     pipelines.value = data.items ?? []
   } catch (e: unknown) {
-    pageError.value = `${t('views.EvalEditorView.failed_to_load_pipelines')} ${e instanceof Error ? e.message : String(e)}`
+    pageError.value = `${t('views.EvalEditorView.failed_to_load_pipelines')} ${formatApiError(e)}`
   }
 }
 
@@ -472,7 +473,7 @@ async function saveEval() {
     await loadEvals()
     setTimeout(() => { formSuccess.value = null }, 2000)
   } catch (e: unknown) {
-    formError.value = e instanceof Error ? e.message : String(e)
+    formError.value = formatApiError(e)
   } finally {
     saving.value = false
   }
@@ -502,10 +503,11 @@ async function deleteEval(id: string) {
     evals.value = evals.value.filter(e => e.id !== id)
     deletingEvalId.value = null
   } catch (e: unknown) {
-    if (e instanceof Error && (e.message === 'Not found' || e.message.includes('404'))) {
+    const errMsg = formatApiError(e)
+    if (errMsg.toLowerCase().includes('not found') || errMsg.includes('404')) {
       formError.value = t('views.EvalEditorView.eval_already_deleted')
     } else {
-      formError.value = e instanceof Error ? e.message : String(e)
+      formError.value = errMsg
     }
   } finally {
     deleting.value = false
@@ -518,7 +520,7 @@ async function loadAll() {
   try {
     await loadPipelines()
   } catch (e: unknown) {
-    pageError.value = `${t('views.EvalEditorView.failed_to_load')} ${e instanceof Error ? e.message : String(e)}`
+    pageError.value = `${t('views.EvalEditorView.failed_to_load')} ${formatApiError(e)}`
   } finally {
     loading.value = false
   }
