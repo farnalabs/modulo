@@ -669,6 +669,14 @@ async def infer_schema_endpoint(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Schema management is temporarily unavailable.",
         ) from None
+    except HTTPException:
+        raise
+    except Exception:
+        logger.exception("schemas.infer.unexpected")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Schema inference failed due to an unexpected error.",
+        ) from None
 
     try:
         secrets_backend = create_secrets_backend(fernet_key=settings.fernet_key)
@@ -821,6 +829,14 @@ async def generate_schema_endpoint(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Schema management is temporarily unavailable.",
         ) from None
+    except HTTPException:
+        raise
+    except Exception:
+        logger.exception("schemas.generate.unexpected")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Schema generation failed due to an unexpected error.",
+        ) from None
 
     try:
         secrets_backend = create_secrets_backend(fernet_key=settings.fernet_key)
@@ -861,12 +877,12 @@ async def generate_schema_endpoint(
                 description=req.description,
                 examples=req.examples or None,
             )
-        except SchemaGenerationError:
+        except SchemaGenerationError as exc:
             logger.exception("schemas.generate.failed")
             raise HTTPException(
                 status_code=status.HTTP_502_BAD_GATEWAY,
-                detail="Schema generation failed.",
-            )
+                detail=f"Schema generation failed: {exc}",
+            ) from exc
 
     try:
         async with session.begin():
