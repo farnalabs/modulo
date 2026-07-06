@@ -6,15 +6,20 @@ and designed for Locust's gevent-based execution model.
 """
 
 import logging
+import random
 import time
 from typing import Any
-from urllib.parse import quote
+from urllib.parse import quote, urlparse, urlunparse
 
 _log = logging.getLogger(__name__)
 
 DEFAULT_BASE_URL = "http://localhost:8000/api/v1"
 DEFAULT_TIMEOUT = 30.0
+DEFAULT_ADMIN_EMAIL = "admin@modulo.test"
+DEFAULT_ADMIN_PASSWORD = "test-password-123"
 _TERMINAL_STATUSES = frozenset({"complete", "failed", "cancelled", "eval_failed"})
+_MIN_POLL_INTERVAL = 0.1
+_HITL_CLAIM_EXPIRY_MINUTES = 15
 
 
 def _auth_headers(token: str) -> dict[str, str]:
@@ -108,7 +113,9 @@ def wait_for_run(
             _log.warning("Run %s response missing 'status' key: %s", run_id, run)
         elif status in _TERMINAL_STATUSES:
             return run
-        time.sleep(max(poll_interval, 0.1))
+        effective_poll = max(poll_interval, _MIN_POLL_INTERVAL)
+        jitter = random.uniform(0, effective_poll * 0.5)
+        time.sleep(effective_poll + jitter)
     raise TimeoutError(f"Run {run_id} did not reach terminal state within {timeout}s")
 
 
@@ -130,18 +137,11 @@ def build_ws_url(
     ws_token: str,
     since_event_seq: int = 0,
 ) -> str:
-    """Build a WebSocket URL for the run event stream.
-
-    Converts http:// → ws:// and https:// → wss:// for the scheme.
-    Strips the ``/api/v1`` prefix from *base_url* since the WebSocket
-    route includes it in its router prefix.
-    """
-    scheme = "wss" if base_url.startswith("https") else "ws"
-    host_part = base_url.replace("http://", "").replace("https://", "")
-    host_part = host_part.replace("/api/v1", "")
-    host_part = host_part.rstrip("/")
+    """Build a WebSocket URL for the run event stream."""
+    parsed = urlparse(base_url)
+    ws_scheme = "wss" if parsed.scheme == "https" else "ws"
     qs = quote(ws_token, safe="")
-    return f"{scheme}://{host_part}/api/v1/runs/{run_id}/ws?token={qs}&since_event_seq={since_event_seq}"
+    return urlunparse((ws_scheme, parsed.netloc, f"/api/v1/runs/{run_id}/ws", "", f"token={qs}&since_event_seq={since_event_seq}", ""))
 
 
 def get_pending_hitl(
@@ -154,7 +154,7 @@ def get_pending_hitl(
     headers = _auth_headers(token)
     resp = client.get(f"{base_url}/runs/{run_id}/hitl/pending", headers=headers, timeout=DEFAULT_TIMEOUT)
     resp.raise_for_status()
-    return resp.json()["gates"]
+    return resp.json().get("gates", [])
 
 
 def _hitl_action(
@@ -193,7 +193,7 @@ def claim_hitl(
     headers = _auth_headers(token)
     resp = client.post(
         f"{base_url}/runs/{run_id}/hitl/{gate_id}/claim",
-        json={"expiry_minutes": 15},
+        json={"expiry_minutes": _HITL_CLAIM_EXPIRY_MINUTES},
         headers=headers,
         timeout=DEFAULT_TIMEOUT,
     )
