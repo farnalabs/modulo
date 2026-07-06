@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { ref, computed } from 'vue'
 import type { SchemaField } from '../../../types/pipeline'
-import Button from '../../ui/button/Button.vue'
+import { Button } from '../../ui/button'
 
 const props = defineProps<{
   sourceFields: SchemaField[]

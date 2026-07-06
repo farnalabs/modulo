@@ -1,11 +1,7 @@
 ﻿<script setup lang="ts">
 import { onMounted } from "vue";
 import { useCompositeStore } from "../../../stores/compositeStore";
-import Card from "../../ui/card/Card.vue";
-import CardContent from "../../ui/card/CardContent.vue";
-import CardHeader from "../../ui/card/CardHeader.vue";
-import CardTitle from "../../ui/card/CardTitle.vue";
-import CardDescription from "../../ui/card/CardDescription.vue";
+import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "../../ui/card";
 
 const emit = defineEmits<{
   (e: "add", compositeId: string): void;

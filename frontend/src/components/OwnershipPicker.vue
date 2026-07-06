@@ -65,13 +65,18 @@ function selectTeam(team: TeamItem) {
 async function loadTeams() {
   loading.value = true;
   fetchError.value = null;
-  const { data, error } = await api.GET("/api/v1/admin/teams");
-  if (error) {
-    fetchError.value = t("components.OwnershipPicker.failed_to_load_teams");
-  } else if (data) {
-    teams.value = data.items;
+  try {
+    const { data, error } = await api.GET("/api/v1/admin/teams");
+    if (error) {
+      fetchError.value = t("components.OwnershipPicker.failed_to_load_teams");
+    } else if (data) {
+      teams.value = data.items;
+    }
+  } catch (e: unknown) {
+    fetchError.value = e instanceof Error ? e.message : t("components.OwnershipPicker.failed_to_load_teams");
+  } finally {
+    loading.value = false;
   }
-  loading.value = false;
 }
 
 onMounted(loadTeams);

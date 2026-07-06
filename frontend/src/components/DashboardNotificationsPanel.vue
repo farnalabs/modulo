@@ -84,8 +84,8 @@ function toggleCollapsed() {
   collapsed.value = !collapsed.value;
   try {
     localStorage.setItem("notif-panel-collapsed", String(collapsed.value));
-  } catch {
-    // storage unavailable - preference not persisted
+  } catch (e) {
+    console.warn("Failed to persist collapsed state:", e);
   }
 }
 

@@ -1,8 +1,8 @@
 ﻿<script setup lang="ts">
 import { ref, computed } from "vue";
-import Button from "../../ui/button/Button.vue";
-import Input from "../../ui/input/Input.vue";
-import Badge from "../../ui/badge/Badge.vue";
+import { Button } from "../../ui/button";
+import { Input } from "../../ui/input";
+import { Badge } from "../../ui/badge";
 
 interface EvalConfig {
   id: string;
@@ -209,7 +209,7 @@ const evalCount = computed(() => props.evalDefinitions.length);
                     schema: JSON.parse((e.target as HTMLTextAreaElement).value),
                   });
                 } catch {
-                  // invalid JSON — keep current
+                  console.warn("Invalid JSON schema, keeping current value");
                 }
               }
             "

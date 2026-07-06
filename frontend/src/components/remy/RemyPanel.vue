@@ -242,7 +242,7 @@ import { ref, computed, watch, onMounted, onUnmounted } from "vue";
 import { shortId } from "@/utils/format";
 import { useRemyStore } from "@/composables/useRemyStore";
 import { useRemyContext } from "@/composables/useRemyContext";
-import Button from "@/components/ui/button/Button.vue";
+import { Button } from "@/components/ui/button";
 import RemyChat from "./RemyChat.vue";
 import RemySessionDrawer from "./RemySessionDrawer.vue";
 import RemySkillManager from "./RemySkillManager.vue";
@@ -280,15 +280,15 @@ const panelStyle = computed(() => {
   };
 });
 
-let dragging = false;
-let dragStart = { x: 0, y: 0, posX: 0, posY: 0 };
-let resizing = false;
-let resizeStart = { x: 0, y: 0, w: 0, h: 0 };
+const dragging = ref(false);
+const dragStart = ref({ x: 0, y: 0, posX: 0, posY: 0 });
+const resizing = ref(false);
+const resizeStart = ref({ x: 0, y: 0, w: 0, h: 0 });
 
 function startDrag(e: MouseEvent) {
   if (store.panelState !== "floating") return;
-  dragging = true;
-  dragStart = {
+  dragging.value = true;
+  dragStart.value = {
     x: e.clientX,
     y: e.clientY,
     posX: store.panelPosition.x,
@@ -299,22 +299,22 @@ function startDrag(e: MouseEvent) {
 }
 
 function onDrag(e: MouseEvent) {
-  if (!dragging) return;
+  if (!dragging.value) return;
   store.updatePosition({
-    x: Math.max(8, Math.min(dragStart.posX + (e.clientX - dragStart.x), window.innerWidth - 340)),
-    y: Math.max(8, Math.min(dragStart.posY + (e.clientY - dragStart.y), window.innerHeight - 100)),
+    x: Math.max(8, Math.min(dragStart.value.posX + (e.clientX - dragStart.value.x), window.innerWidth - 340)),
+    y: Math.max(8, Math.min(dragStart.value.posY + (e.clientY - dragStart.value.y), window.innerHeight - 100)),
   });
 }
 
 function stopDrag() {
-  dragging = false;
+  dragging.value = false;
   document.removeEventListener("mousemove", onDrag);
   document.removeEventListener("mouseup", stopDrag);
 }
 
 function startResize(e: MouseEvent) {
-  resizing = true;
-  resizeStart = {
+  resizing.value = true;
+  resizeStart.value = {
     x: e.clientX,
     y: e.clientY,
     w: store.panelSize.width,
@@ -325,24 +325,28 @@ function startResize(e: MouseEvent) {
 }
 
 function onResize(e: MouseEvent) {
-  if (!resizing) return;
+  if (!resizing.value) return;
   store.updateSize({
-    width: Math.min(Math.max(320, resizeStart.w + (e.clientX - resizeStart.x)), window.innerWidth - 16),
-    height: Math.min(Math.max(400, resizeStart.h + (e.clientY - resizeStart.y)), window.innerHeight - 40),
+    width: Math.min(Math.max(320, resizeStart.value.w + (e.clientX - resizeStart.value.x)), window.innerWidth - 16),
+    height: Math.min(Math.max(400, resizeStart.value.h + (e.clientY - resizeStart.value.y)), window.innerHeight - 40),
   });
 }
 
 function stopResize() {
-  resizing = false;
+  resizing.value = false;
   document.removeEventListener("mousemove", onResize);
   document.removeEventListener("mouseup", stopResize);
 }
 
 async function handleNewSession() {
-  const session = await store.createSession();
-  if (session) {
-    store.setPanelState("floating");
-    activeTab.value = "chat";
+  try {
+    const session = await store.createSession();
+    if (session) {
+      store.setPanelState("floating");
+      activeTab.value = "chat";
+    }
+  } catch (e) {
+    console.error("Failed to create session:", e);
   }
 }
 

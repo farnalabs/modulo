@@ -52,7 +52,7 @@
       />
       <div class="flex gap-2 justify-end">
         <Button variant="ghost" size="sm" @click="cancelForm">Cancel</Button>
-        <Button size="sm" :disabled="!form.name.trim()" @click="saveSkill">{{
+        <Button size="sm" :disabled="!form.name.trim() || saving" @click="saveSkill">{{
           editingId ? "Update" : "Create"
         }}</Button>
       </div>
@@ -145,14 +145,15 @@
 import { ref, onMounted } from "vue";
 import { api } from "@/lib/api/client";
 import { formatApiError } from "@/lib/api/formatError";
-import Button from "@/components/ui/button/Button.vue";
+import { Button } from "@/components/ui/button";
 import type { UserSkill } from "@/types/remy";
 
 const skills = ref<UserSkill[]>([]);
 const showForm = ref(false);
 const editingId = ref<string | null>(null);
-const form = ref({ name: "", description: "", triggersText: "", body: "" });
+const form = ref({ name: "", description: "", triggersText: "", body: "", active: true });
 const skillError = ref<string | null>(null);
+const saving = ref(false);
 
 async function fetchSkills() {
   skillError.value = null;
@@ -186,11 +187,14 @@ function editSkill(skill: UserSkill) {
     description: skill.description,
     triggersText: (skill.triggers ?? []).join(", "),
     body: skill.body,
+    active: skill.active,
   };
   showForm.value = true;
 }
 
 async function saveSkill() {
+  if (saving.value) return;
+  saving.value = true;
   const payload = {
     name: form.value.name.trim(),
     description: form.value.description.trim(),
@@ -199,6 +203,7 @@ async function saveSkill() {
       .map((s) => s.trim())
       .filter(Boolean),
     body: form.value.body,
+    active: form.value.active,
   };
 
   skillError.value = null;
@@ -230,6 +235,8 @@ async function saveSkill() {
     await fetchSkills();
   } catch (e: unknown) {
     skillError.value = e instanceof Error ? e.message : "Failed to save skill";
+  } finally {
+    saving.value = false;
   }
 }
 

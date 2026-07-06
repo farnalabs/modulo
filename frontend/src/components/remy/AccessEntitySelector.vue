@@ -153,6 +153,7 @@ function remove(id: string) {
 let blurTimer: ReturnType<typeof setTimeout> | null = null
 
 function onBlur() {
+  if (blurTimer) clearTimeout(blurTimer)
   blurTimer = setTimeout(() => { isOpen.value = false }, 180)
 }
 
