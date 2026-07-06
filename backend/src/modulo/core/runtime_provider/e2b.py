@@ -76,11 +76,15 @@ class E2BRuntimeProvider(RuntimeProvider):
             _log.exception("Failed to create E2B sandbox with template %s", template_id)
             raise
 
-        self._sandboxes[sandbox.sandbox_id] = sandbox
-
-        repo_url = spec.labels.get("repo_url", "")
+        repo_url = (spec.labels or {}).get("repo_url", "")
         if repo_url:
-            await self._clone_repo(sandbox, repo_url, spec.labels)
+            try:
+                await self._clone_repo(sandbox, repo_url, spec.labels or {})
+            except Exception:
+                await sandbox.kill()
+                raise
+
+        self._sandboxes[sandbox.sandbox_id] = sandbox
 
         return str(sandbox.sandbox_id)
 
@@ -109,13 +113,13 @@ class E2BRuntimeProvider(RuntimeProvider):
                 stderr=getattr(proc, "stderr", "") or "",
                 duration_ms=duration,
             )
-        except Exception:
+        except Exception as exc:
             duration = int((time.monotonic() - start) * 1000)
             _log.exception("exec_command failed in sandbox %s", provider_ref)
             return ExecResult(
                 exit_code=-1,
                 stdout="",
-                stderr="Command execution failed",
+                stderr=f"Command execution failed: {exc}",
                 duration_ms=duration,
             )
 
