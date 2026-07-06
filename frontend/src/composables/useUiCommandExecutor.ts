@@ -62,7 +62,11 @@ export async function executeCommandBatch(commands: UiCommand[]): Promise<UiComm
       }
     }
 
-    const result = await executeWithTimeout(cmd, abort.signal)
+    let result = await executeWithTimeout(cmd, abort.signal)
+    if (!result.success && cmd.name === 'navigate') {
+      await new Promise(r => setTimeout(r, 1000))
+      result = await executeWithTimeout(cmd, abort.signal)
+    }
     results.push(result)
   }
 
