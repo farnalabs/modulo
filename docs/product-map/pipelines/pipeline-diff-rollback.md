@@ -14,6 +14,7 @@ unit-tests:
   - backend/tests/unit/pipelines/test_snapshot_versioning.py
   - backend/tests/unit/pipelines/test_snapshot_backward_compat.py
   - backend/tests/unit/pipelines/test_snapshot_crud.py
+  - backend/tests/unit/pipelines/test_snapshot_programming_error.py
 depends-on: [feat-pipelines-pipeline-versioning]
 status: partial
 ---
@@ -43,10 +44,10 @@ status: partial
 
 ### Auth & Permissions
 
-- [ ] Unauthenticated requests return 401
+- [x] Unauthenticated requests return 401 (via `get_current_user` FastAPI dependency)
 - [x] Delete snapshot requires admin or owner role — operator or runner gets 403
-- [ ] Snapshot access is scoped to the authenticated org via RLS
-- [ ] Cross-org snapshot access returns 404 (not 403) to avoid leaking existence
+- [x] Snapshot access is scoped to the authenticated org via RLS
+- [x] Cross-org snapshot access returns 404 (not 403) to avoid leaking existence
 
 ### State & Lifecycle
 
@@ -92,10 +93,11 @@ status: partial
 
 ## Error Handling
 
-- [ ] Snapshot list/detail/tag/delete/rollback/diff endpoints catch ProgrammingError → 501
-- [ ] Auth 401/403 for snapshot endpoints
-- [ ] 422 for invalid UUID, page parameter bounds
-- [ ] Cross-org snapshot access returns 404 (not 403)
+- [x] Snapshot list/detail/tag/delete/rollback/diff endpoints catch ProgrammingError → 501
+- [x] Auth 401/403 for snapshot endpoints
+- [x] 422 for invalid UUID, page parameter bounds
+- [x] Cross-org snapshot access returns 404 (not 403)
+- [x] Snapshot list/detail/tag/delete/rollback/diff endpoints catch SQLAlchemyError → 503
 
 ## Known Gaps
 
@@ -109,4 +111,5 @@ status: partial
 
 ## QA History
 
+- 2026-07-06: Cross-cutting QA (index 231): Fixed CRITICAL — added SQLAlchemyError→503 catches to all 6 snapshot route handlers (list, detail, tag, rollback, delete, diff) with _log.warning calls. Corrected 7 product map behaviours [ ]→[x] across Auth & Permissions (401, RLS scoping, cross-org 404) and Error Handling (ProgrammingError→501, auth 401/403, 422 validation, cross-org 404, SQLAlchemyError→503). Added 12 tests (test_snapshot_programming_error.py) covering ProgrammingError→501 + SQLAlchemyError→503 for all 6 endpoints. 6 known gaps remain. Status: partial.
 - 2026-07-02: Cross-cutting QA (index 60): Marked 40 behaviours [ ]→[x] across Happy Path, Request Validation, Auth, State & Lifecycle, Edge Cases, Concurrency, Error Handling, and Backward Compatibility sections. Added 10 unit tests for rollback, delete, tag, detail, and empty-list edge cases (test_snapshot_crud.py). 30/30 unit tests pass. Status: partial (6 known gaps remain + 3 untested edge cases).

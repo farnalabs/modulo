@@ -989,6 +989,12 @@ async def list_snapshot_endpoint(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Pipeline snapshot feature requires database migrations.",
         )
+    except SQLAlchemyError:
+        _log.warning("Database error listing snapshots for pipeline %s", pipeline_id)
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Database error listing snapshots. Please try again.",
+        )
     return SnapshotListResponse(
         items=[_snapshot_to_response(s) for s in snapshots],
         total=total,
@@ -1011,6 +1017,12 @@ async def get_snapshot_detail_endpoint(
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Pipeline snapshot feature requires database migrations.",
+        )
+    except SQLAlchemyError:
+        _log.warning("Database error getting snapshot %s", snapshot_id)
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Database error getting snapshot. Please try again.",
         )
     if snapshot is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Snapshot not found")
@@ -1035,6 +1047,12 @@ async def tag_snapshot_endpoint(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Pipeline snapshot feature requires database migrations.",
         )
+    except SQLAlchemyError:
+        _log.warning("Database error tagging snapshot %s", snapshot_id)
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Database error tagging snapshot. Please try again.",
+        )
     if snapshot is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Snapshot not found")
     return _snapshot_to_response(snapshot)
@@ -1056,6 +1074,12 @@ async def rollback_snapshot_endpoint(
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Pipeline snapshot feature requires database migrations.",
+        )
+    except SQLAlchemyError:
+        _log.warning("Database error rolling back to snapshot %s", snapshot_id)
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Database error rolling back snapshot. Please try again.",
         )
     if new_snapshot is None:
         raise HTTPException(
@@ -1087,6 +1111,12 @@ async def delete_snapshot_endpoint(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Pipeline snapshot feature requires database migrations.",
         )
+    except SQLAlchemyError:
+        _log.warning("Database error deleting snapshot %s", snapshot_id)
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Database error deleting snapshot. Please try again.",
+        )
     if not deleted:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -1110,6 +1140,12 @@ async def diff_snapshot_endpoint(
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Pipeline snapshot feature requires database migrations.",
+        )
+    except SQLAlchemyError:
+        _log.warning("Database error diffing snapshots %s and %s", req.snapshot_a_id, req.snapshot_b_id)
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Database error diffing snapshots. Please try again.",
         )
     if result is None:
         raise HTTPException(
