@@ -486,3 +486,74 @@ def test_delete_model_backend_sqlalchemy_error_returns_503(client: TestClient) -
     ):
         resp = client.delete(f"/api/v1/model-backends/{uuid.uuid4()}")
     assert resp.status_code == 503
+
+
+def test_list_model_backends_exception_returns_500(client: TestClient) -> None:
+    with (
+        patch("modulo.api.routes.model_backends.list_model_backends", side_effect=TypeError("unexpected None")),
+        patch("modulo.api.routes.model_backends.set_rls_org"),
+        patch("modulo.api.routes.model_backends.set_rls_user_context"),
+    ):
+        resp = client.get("/api/v1/model-backends")
+    assert resp.status_code == 500
+    assert "unexpected" in resp.json()["detail"].lower()
+
+
+def test_create_model_backend_exception_returns_500(client: TestClient) -> None:
+    with (
+        patch("modulo.api.routes.model_backends.create_model_backend", side_effect=KeyError("missing_field")),
+        patch("modulo.api.routes.model_backends.set_rls_org"),
+        patch("modulo.api.routes.model_backends.set_rls_user_context"),
+    ):
+        resp = client.post(
+            "/api/v1/model-backends",
+            json={
+                "name": "x", "display_name": "x", "provider": "openai",
+                "model_id": "gpt-4", "api_key": "sk-test",
+            },
+        )
+    assert resp.status_code == 500
+
+
+def test_get_model_backend_exception_returns_500(client: TestClient) -> None:
+    with (
+        patch("modulo.api.routes.model_backends.get_model_backend", side_effect=ValueError("bad state")),
+        patch("modulo.api.routes.model_backends.set_rls_org"),
+        patch("modulo.api.routes.model_backends.set_rls_user_context"),
+    ):
+        resp = client.get(f"/api/v1/model-backends/{uuid.uuid4()}")
+    assert resp.status_code == 500
+
+
+def test_update_model_backend_exception_returns_500(client: TestClient) -> None:
+    with (
+        patch("modulo.api.routes.model_backends.update_model_backend", side_effect=AttributeError("no attribute")),
+        patch("modulo.api.routes.model_backends.set_rls_org"),
+        patch("modulo.api.routes.model_backends.set_rls_user_context"),
+    ):
+        resp = client.patch(f"/api/v1/model-backends/{uuid.uuid4()}", json={"name": "x"})
+    assert resp.status_code == 500
+
+
+def test_delete_model_backend_exception_returns_500(client: TestClient) -> None:
+    with (
+        patch("modulo.api.routes.model_backends.delete_model_backend", side_effect=RuntimeError("unexpected")),
+        patch("modulo.api.routes.model_backends.set_rls_org"),
+        patch("modulo.api.routes.model_backends.set_rls_user_context"),
+    ):
+        resp = client.delete(f"/api/v1/model-backends/{uuid.uuid4()}")
+    assert resp.status_code == 500
+
+
+def test_get_model_backend_empty_fallback_ids_round_trips(client: TestClient) -> None:
+    """Empty fallback_backend_ids list should round-trip as [], not None."""
+    backend = _make_backend()
+    backend.fallback_backend_ids = []
+    with (
+        patch("modulo.api.routes.model_backends.get_model_backend", return_value=backend),
+        patch("modulo.api.routes.model_backends.set_rls_org"),
+        patch("modulo.api.routes.model_backends.set_rls_user_context"),
+    ):
+        resp = client.get(f"/api/v1/model-backends/{_BACKEND_ID}")
+    assert resp.status_code == 200
+    assert resp.json()["fallback_backend_ids"] == []
