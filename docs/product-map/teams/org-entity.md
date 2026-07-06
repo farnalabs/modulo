@@ -3,10 +3,10 @@ id: feat-teams-org-entity
 prd: 9.1, 6.2
 delivery-tasks: []
 bdd:
-  - backend/tests/bdd/features/organisation/rls_isolation.feature
-  - backend/tests/bdd/features/organisation/org_deletion.feature
-  - backend/tests/bdd/features/organisation/org_scoping.feature
-  - backend/tests/bdd/features/organisation/multi_backend.feature
+  - backend/tests/features/organisation/rls_isolation.feature
+  - backend/tests/features/organisation/org_deletion.feature
+  - backend/tests/features/organisation/org_scoping.feature
+  - backend/tests/features/organisation/multi_backend.feature
 code:
   - backend/src/modulo/db/models/organisation.py
   - backend/src/modulo/db/models/org_membership.py
@@ -167,3 +167,4 @@ The Organisation entity is the root tenant entity in Modulo's multi-tenant archi
 - **No `modulo-cloud` integration**: The modulo-cloud service layer (§6.2) is V3-deferred. Organisation lifecycle, plan enforcement, and subdomain routing are stubs.
 - **No Frontend smoke test for AdminOrgSettingsView**: The view has vitest tests but no Playwright E2E coverage.
 - **Website docs**: No docs page exists at Website/modulo-website/src/docs/organisation.md (stub created).
+- **Export summary key mismatch**: The `request_org_deletion` route in `admin.py` references `export.get("users", [])` for `user_count`, but CRUD `_collect_org_export` in `org_deletion.py` returns the key as `"memberships"`. Fixed in 2026-07-06 QA pass — previously `user_count` was always 0 in the deletion response.
