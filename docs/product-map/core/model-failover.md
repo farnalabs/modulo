@@ -95,12 +95,15 @@ audit event. API creates/updates/reads `fallback_backend_ids` on the entity.
 - [x] Update returns 501 when model_backends table does not exist (ProgrammingError)
 - [x] Delete returns 501 when model_backends table does not exist (ProgrammingError)
 - [x] All 5 routes catch SQLAlchemyError → 503 Service Unavailable (non-migration DB errors)
+- [x] All 5 routes catch generic Exception → 500 Internal Server Error (Python-level errors)
+- [x] `_validate_provider` logs plugin registry failures instead of silently swallowing them
 
 ### Database
 
 - [x] Migration adds `fallback_backend_ids` JSON column to `model_backends`
 - [x] Column is nullable (backends without fallbacks)
 - [x] Downgrade drops the column
+- [x] Empty fallback_backend_ids list round-trips as `[]` not `None` in API response
 - [ ] Constraint or FK to validate fallback IDs reference existing ModelBackend rows
 - [ ] Deletion protection: deleting a backend referenced as a fallback elsewhere
 
@@ -181,6 +184,7 @@ BDD step definitions exist in `steps/test_model_backends.py` — all 5 feature f
 - ~~3 edge cases lack unit tests: self-referencing fallback ID, empty hub rotation, plugin build failure~~ **RESOLVED** — all 3 now tested
 
 ## QA History
+- 2026-07-08: Cross-cutting QA (index 267) — Fixed CRITICAL — added `except Exception → 500` catches with `except HTTPException: raise` guard to all 5 CRUD routes in model_backends.py (previously missing generic exception guard — Python-level errors like TypeError, KeyError, ValueError from `_to_response` processing propagated as raw 500 to CatchAllMiddleware). Fixed MAJOR — `_validate_provider` bare `except Exception: pass` replaced with `logger.warning` so plugin registry failures are visible in logs (previously silently swallowed). Fixed MAJOR — `_to_response` changed `if raw_fallback_ids:` to `if raw_fallback_ids is not None:` so empty `[]` list round-trips correctly (previously returned `None` for empty lists). Added 6 new unit tests in `test_model_backends_endpoint.py` (5× Exception→500 for all routes + 1× empty fallback_ids round-trip). Updated product map Error Handling section (3 new [x] checkboxes) and Database section (1 new [x] checkbox). All 33 model backend endpoint tests + 13 hub failover tests pass. Merged to main at v0.3.218. Status: partial.
 - 2026-07-05: Cross-cutting QA (index 146) — Fixed 5 stale ProgrammingError→501 checkboxes [ ]→[x]; removed stale Known Gap #1; added 3 missing BDD feature files to frontmatter; documented BDD scenarios from all 5 feature files with coverage status; added duplicate name check (409) and provider validation (422) to create route; added 4 unit tests for duplicate name + provider validation; marked stale Edge Case boxes [x] where unit tests exist; added QA History section.
 - Unhandled ValueError from `_build_backend()` in create route — invalid provider causes 500, not 422
 - No duplicate name check — backend_crud.feature expects 409 but code allows duplicates

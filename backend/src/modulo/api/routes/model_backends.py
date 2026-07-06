@@ -8,12 +8,16 @@ import uuid
 from datetime import datetime
 from typing import Any, Literal
 
+import logging
+
 from cryptography.fernet import Fernet
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.exc import ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
+
+logger = logging.getLogger(__name__)
 
 from modulo.api.dependencies import get_db_session
 from modulo.auth.dependencies import get_current_user
@@ -89,7 +93,7 @@ class ModelBackendListResponse(BaseModel):
 def _to_response(mb: Any) -> ModelBackendResponse:
     raw_fallback_ids = getattr(mb, "fallback_backend_ids", None)
     fallback_ids: list[uuid.UUID] | None = None
-    if raw_fallback_ids:
+    if raw_fallback_ids is not None:
         fallback_ids = [uuid.UUID(fid) if isinstance(fid, str) else fid for fid in raw_fallback_ids]
     return ModelBackendResponse(
         id=mb.id,
@@ -131,6 +135,14 @@ async def list_model_backends_endpoint(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database error while listing model backends.",
         ) from None
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.exception("Unexpected error listing model backends: %s", exc)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="An unexpected error occurred while listing model backends.",
+        ) from None
     return ModelBackendListResponse(
         items=[_to_response(mb) for mb in result.items],
         total=result.total,
@@ -155,8 +167,8 @@ def _validate_provider(provider: str) -> None:
         registry = get_plugin_registry()
         if registry.has_model_backend(provider):
             return
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.warning("Plugin registry check failed for provider %r: %s", provider, exc)
     raise HTTPException(
         status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
         detail=[
@@ -224,6 +236,14 @@ async def create_model_backend_endpoint(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database error while creating model backend.",
         ) from None
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.exception("Unexpected error creating model backend: %s", exc)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="An unexpected error occurred while creating model backend.",
+        ) from None
     return _to_response(mb)
 
 
@@ -247,6 +267,14 @@ async def get_model_backend_endpoint(
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database error while fetching model backend.",
+        ) from None
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.exception("Unexpected error fetching model backend: %s", exc)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="An unexpected error occurred while fetching model backend.",
         ) from None
     if mb is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Model backend not found")
@@ -280,6 +308,14 @@ async def update_model_backend_endpoint(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database error while updating model backend.",
         ) from None
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.exception("Unexpected error updating model backend: %s", exc)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="An unexpected error occurred while updating model backend.",
+        ) from None
     if mb is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Model backend not found")
     return _to_response(mb)
@@ -305,6 +341,14 @@ async def delete_model_backend_endpoint(
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database error while deleting model backend.",
+        ) from None
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.exception("Unexpected error deleting model backend: %s", exc)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="An unexpected error occurred while deleting model backend.",
         ) from None
     if not deleted:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Model backend not found")
