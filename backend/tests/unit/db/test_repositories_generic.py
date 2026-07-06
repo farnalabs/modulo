@@ -37,7 +37,7 @@ class TestGenericRepository:
 
     async def test_set_org_context_calls_set_rls_org(self, repo: GenericRepository) -> None:
         session = AsyncMock(spec=AsyncSession)
-        with patch("modulo.db.repositories.generic.set_rls_org") as mock_set_rls_org:
+        with patch("modulo.db.repositories.base.set_rls_org") as mock_set_rls_org:
             await repo.set_org_context(session, _ORG_ID)
             mock_set_rls_org.assert_awaited_once_with(session, _ORG_ID)
 
