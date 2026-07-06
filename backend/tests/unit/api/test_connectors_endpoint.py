@@ -177,6 +177,7 @@ def test_update_connector_returns_200(client: TestClient) -> None:
     connector = _make_connector()
     connector.name = "Updated"
     with (
+        patch("modulo.api.routes.connectors.get_connector_instance", return_value=connector),
         patch("modulo.api.routes.connectors.update_connector_instance", return_value=connector),
         patch("modulo.api.routes.connectors.set_rls_org"),
         patch("modulo.api.routes.connectors.set_rls_user_context"),
@@ -188,6 +189,7 @@ def test_update_connector_returns_200(client: TestClient) -> None:
 
 def test_update_connector_not_found_returns_404(client: TestClient) -> None:
     with (
+        patch("modulo.api.routes.connectors.get_connector_instance", return_value=None),
         patch("modulo.api.routes.connectors.update_connector_instance", return_value=None),
         patch("modulo.api.routes.connectors.set_rls_org"),
         patch("modulo.api.routes.connectors.set_rls_user_context"),
