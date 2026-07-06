@@ -113,8 +113,8 @@ LLM-driven prompt improvement from eval failures, with full version history, rol
 ### Resilience & Integration Robustness
 
 - [x] LLM call failures (network, timeout) propagate to caller for optimize endpoint
-- [ ] LLM call timeout can hang indefinitely (no configurable timeout on backend.invoke)
-- [ ] No retry/backoff on LLM call failure in optimize endpoint
+- [x] LLM call timeout (configurable _LLM_TIMEOUT=60s with asyncio.wait_for)
+- [x] Retry/backoff on LLM call failure (3 retries, exponential backoff + jitter)
 - [ ] No retry/backoff on credential decryption failure in optimize endpoint
 - [ ] No circuit breaker if the LLM backend is persistently unavailable
 
@@ -127,6 +127,12 @@ LLM-driven prompt improvement from eval failures, with full version history, rol
 - No website docs stub for prompt optimization
 
 ## QA History
+
+### 2026-07-08 — Cross-cutting QA (improve-architecture index 260)
+- Fixed CRITICAL — `OptimizationFailedError` from `PromptOptimizer` after LLM retry exhaustion propagated uncaught to `CatchAllMiddleware`, producing a generic 500 with no structured detail. Added `except OptimizationFailedError → 500` with `"Prompt optimization failed: LLM call failed after retries"` and `except Exception → 500` with `"Prompt optimization failed unexpectedly"` in the optimize endpoint.
+- Fixed MAJOR — product map Resilience checkboxes for `LLM call timeout` and `retry/backoff` were `[ ]` but both are fully implemented (`_LLM_TIMEOUT=60s` with `asyncio.wait_for`, `_MAX_RETRIES=3` with exponential backoff + jitter). Marked both `[x]`.
+- Added 2 new unit tests in `test_prompt_programming_error.py` covering `OptimizationFailedError→500` and unexpected `Exception→500` paths.
+- Status: partial (5 known gaps remain — integration test, perf test, unauthorized access, response length bound check, website docs stub).
 
 ### 2026-07-03 — Cross-cutting QA (improve-architecture index 106)
 - Marked 3 stale Pipeline Integration checkboxes [ ]→[x] (prompt version hash comparison, independent pinning, model_backend_pins_json)
