@@ -68,13 +68,22 @@ See ADR 010 §2.
 
 ## Error Handling
 
-- [x] All DB-backed routes catch `ProgrammingError` and return 501 Not Implemented with a descriptive migration-prompt message (`list_library_primitives_endpoint`, `get_library_primitive_endpoint`, `create_library_primitive_endpoint`, `update_library_primitive_endpoint`, `delete_library_primitive_endpoint`, `copy_to_adapt_endpoint`, `export_pipeline_endpoint`, `_analyse_bundle`, `confirm_import_endpoint`, `create_pipeline_from_template_endpoint`, `community_contribute_endpoint`, `list_community_contributions_endpoint`, `admin_publish_contribution_endpoint`)
+- [x] All DB-backed routes catch `ProgrammingError` and return 501 Not Implemented with a descriptive migration-prompt message
+- [x] All DB-backed routes also catch `SQLAlchemyError` and return 503 Service Unavailable with retry hint — connection/deadlock failures no longer propagate as raw 500
 - [x] `list_community_contributions_endpoint` has an outer `except Exception` catch that returns 500 with a structured message — the only community-specific endpoint that does this (others rely on the CatchAllMiddleware)
 - [x] `_fetch_published_community_from_db` returns `[]` on `ProgrammingError` or any `Exception` — degrades gracefully when the DB is not migrated
 - [x] `get_primitive` in `library_service` returns `None` (not 500) on `ProgrammingError` or `SQLAlchemyError` — fallback to in-memory community items still works when the DB table is missing
 - [x] `CommunityPrimitiveReadOnlyError` → 403 on `copy_to_adapt_endpoint` when `via_mcp=True`
 - [x] `ContributionNotFoundError` → 404, `ContributionInvalidTransitionError` → 400 on `admin_publish_contribution_endpoint`
 - [x] `LookupError` → 404 when the primitive does not exist for copy-to-adapt
+
+## Resilience & Integration Robustness
+
+- [x] All 7 library CRUD routes catch both ProgrammingError→501 and SQLAlchemyError→503
+- [x] `get_primitive` service function catches SQLAlchemyError and returns None — community fallback still works when DB is degraded
+- [x] `_fetch_published_community_from_db` degrades gracefully on any DB error — returns `[]`
+- [x] Community contribution publish uses `_COMMUNITY_CACHE_LOCK` — serialises concurrent publish operations
+- [x] `notify_importers_of_update` catches both ProgrammingError and generic exceptions — never blocks the publish response
 
 ## Edge Cases
 
@@ -93,3 +102,19 @@ See ADR 010 §2.
 - **No moderation/review workflow for community submissions** — because there is no submission mechanism yet, there is also no review, approval, or rejection flow for community content.
 - **No pagination/count semantics documented for merged native+community lists** beyond the unit tests already listed — large community seed growth is untested.
 - **Community DB publish does not backfill the in-memory cache on restart** — items published while the server is running are cached in `_COMMUNITY_PRIMITIVES`, but after a restart, only `_fetch_published_community_from_db` retrieves them (best-effort, no RLS bypass for warm-start). Published items do not survive a full server restart as in-memory primitives.
+
+## QA History
+
+### 2026-07-08 — cross-cutting QA (index 253)
+
+**CRITICAL — Added SQLAlchemyError→503 catches to 7 library route handlers:**
+`list_library_primitives_endpoint`, `get_library_primitive_endpoint`, `create_library_primitive_endpoint`, `update_library_primitive_endpoint`, `delete_library_primitive_endpoint`, `copy_to_adapt_endpoint`, and `export_pipeline_endpoint` previously only caught `ProgrammingError`→501. Connection failures, deadlocks, and transient DB errors propagated as raw 500. All 7 routes now have dual catch: `ProgrammingError`→501 (missing migrations) and `SQLAlchemyError`→503 (transient DB failure).
+
+**MAJOR — ~15 hardcoded English strings in LibraryView.vue wrapped in `$t()`:**
+Tab labels ("Native Library", "Community"), community disclaimer paragraph, "Loading..." spinner, Modulo/community badges, type filter options (Workflows, Agents, Schemas, Integrations, Composites), action buttons (Create Pipeline, View Details), and pagination controls (Previous, Next, Page N of M) all wrapped in `$t()` with 16 new i18n keys added to `en-US.js`.
+
+**Product map updated:**
+- Added Resilience & Integration Robustness section (5 checkboxes)
+- Updated Error Handling section to note SQLAlchemyError→503 coverage
+
+**Status:** partial (same 4 known gaps remain).

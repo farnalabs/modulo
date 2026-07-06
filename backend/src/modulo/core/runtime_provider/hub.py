@@ -55,8 +55,11 @@ class RuntimeProviderHub:
         4. Return None if nothing is registered.
         """
         hint: str | None = getattr(profile, "provider_hint", None)
-        if hint and hint in self._providers:
-            return self._providers[hint]
+        if hint:
+            hint_normalized = hint.lower()
+            if hint_normalized in self._providers:
+                return self._providers[hint_normalized]
+            _log.warning("RuntimeProvider hint '%s' specified but no matching provider registered", hint)
 
         for provider in self._providers.values():
             try:

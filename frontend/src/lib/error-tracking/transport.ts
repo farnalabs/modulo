@@ -125,9 +125,12 @@ export function enqueueError(event: ErrorEventInput): void {
 
 export async function flush(): Promise<void> {
   if (isDisabled() || PENDING.length === 0) return
-  if (isRateLimited()) return
 
   const batch = PENDING.splice(0)
+  if (isRateLimited()) {
+    reQueueWithBackoff(batch)
+    return
+  }
   const body = JSON.stringify({ events: batch.map((b) => b.event) })
 
   try {

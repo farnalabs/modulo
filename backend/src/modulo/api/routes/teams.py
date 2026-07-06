@@ -1,11 +1,14 @@
 """Team management REST routes."""
 
+import logging
 import uuid
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, Field, field_validator
-from sqlalchemy.exc import ProgrammingError
+from sqlalchemy.exc import IntegrityError, ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
+
+_log = logging.getLogger(__name__)
 
 from modulo.api.dependencies import get_db_session, require_feature
 from modulo.auth.dependencies import get_current_user
@@ -128,6 +131,12 @@ async def list_teams_endpoint(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
         ) from None
+    except SQLAlchemyError:
+        _log.warning("list_teams SQLAlchemyError", extra={"org_id": str(current_user.organisation_id)})
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Database temporarily unavailable. Please try again.",
+        ) from None
     except Exception:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -176,25 +185,41 @@ async def create_team_endpoint(
                 account_id=current_user.account_id,
                 description=req.description,
             )
+    except IntegrityError:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="A team with this name already exists in your organisation",
+        ) from None
     except ProgrammingError:
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
         ) from None
+    except SQLAlchemyError:
+        _log.warning("create_team SQLAlchemyError", extra={"org_id": str(current_user.organisation_id)})
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Database temporarily unavailable. Please try again.",
+        ) from None
 
     from modulo.core.audit_logger import append_audit_event
 
-    async with session.begin():
-        await set_rls_org(session, current_user.organisation_id)
-        await append_audit_event(
-            session,
-            org_id=current_user.organisation_id,
-            event_type="team_created",
-            actor_user_id=current_user.account_id,
-            resource_type="team",
-            resource_id=team.id,
-            payload_json={"team_id": str(team.id), "name": team.name},
-        )
+    try:
+        async with session.begin():
+            await set_rls_org(session, current_user.organisation_id)
+            await append_audit_event(
+                session,
+                org_id=current_user.organisation_id,
+                event_type="team_created",
+                actor_user_id=current_user.account_id,
+                resource_type="team",
+                resource_id=team.id,
+                payload_json={"team_id": str(team.id), "name": team.name},
+            )
+    except ProgrammingError:
+        _log.warning("create_team audit event ProgrammingError — team was created", extra={"org_id": str(current_user.organisation_id), "team_id": str(team.id)})
+    except SQLAlchemyError:
+        _log.warning("create_team audit event SQLAlchemyError — team was created", extra={"org_id": str(current_user.organisation_id), "team_id": str(team.id)})
 
     return TeamResponse(
         id=str(team.id),
@@ -220,6 +245,12 @@ async def get_team_endpoint(
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
+        ) from None
+    except SQLAlchemyError:
+        _log.warning("get_team SQLAlchemyError", extra={"org_id": str(current_user.organisation_id), "team_id": str(team_id)})
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Database temporarily unavailable. Please try again.",
         ) from None
 
     if team is None:
@@ -264,23 +295,34 @@ async def update_team_endpoint(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
         ) from None
+    except SQLAlchemyError:
+        _log.warning("update_team SQLAlchemyError", extra={"org_id": str(current_user.organisation_id), "team_id": str(team_id)})
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Database temporarily unavailable. Please try again.",
+        ) from None
 
     if team is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Team not found")
 
     from modulo.core.audit_logger import append_audit_event
 
-    async with session.begin():
-        await set_rls_org(session, current_user.organisation_id)
-        await append_audit_event(
-            session,
-            org_id=current_user.organisation_id,
-            event_type="team_updated",
-            actor_user_id=current_user.account_id,
-            resource_type="team",
-            resource_id=team_id,
-            payload_json={"team_id": str(team_id), "updates": updates},
-        )
+    try:
+        async with session.begin():
+            await set_rls_org(session, current_user.organisation_id)
+            await append_audit_event(
+                session,
+                org_id=current_user.organisation_id,
+                event_type="team_updated",
+                actor_user_id=current_user.account_id,
+                resource_type="team",
+                resource_id=team_id,
+                payload_json={"team_id": str(team_id), "updates": updates},
+            )
+    except ProgrammingError:
+        _log.warning("update_team audit event ProgrammingError — team was updated", extra={"org_id": str(current_user.organisation_id), "team_id": str(team_id)})
+    except SQLAlchemyError:
+        _log.warning("update_team audit event SQLAlchemyError — team was updated", extra={"org_id": str(current_user.organisation_id), "team_id": str(team_id)})
 
     return TeamResponse(
         id=str(team.id),
@@ -336,12 +378,24 @@ async def delete_team_endpoint(
                 )
 
             deleted = await delete_team(session, team_id)
+    except ProgrammingError:
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="Feature is not available. Run database migrations to enable it.",
+        ) from None
+    except SQLAlchemyError:
+        _log.warning("delete_team SQLAlchemyError", extra={"org_id": str(current_user.organisation_id), "team_id": str(team_id)})
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Database temporarily unavailable. Please try again.",
+        ) from None
 
-        if not deleted:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Team not found")
+    if not deleted:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Team not found")
 
-        from modulo.core.audit_logger import append_audit_event
+    from modulo.core.audit_logger import append_audit_event
 
+    try:
         async with session.begin():
             await set_rls_org(session, current_user.organisation_id)
             await append_audit_event(
@@ -354,10 +408,9 @@ async def delete_team_endpoint(
                 payload_json={"team_id": str(team_id)},
             )
     except ProgrammingError:
-        raise HTTPException(
-            status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="Feature is not available. Run database migrations to enable it.",
-        ) from None
+        _log.warning("delete_team audit event ProgrammingError — team was deleted", extra={"org_id": str(current_user.organisation_id), "team_id": str(team_id)})
+    except SQLAlchemyError:
+        _log.warning("delete_team audit event SQLAlchemyError — team was deleted", extra={"org_id": str(current_user.organisation_id), "team_id": str(team_id)})
 
 
 @router.get("/{team_id}/members", response_model=MembershipListResponse)
@@ -372,11 +425,20 @@ async def list_members_endpoint(
         async with session.begin():
             await set_rls_org(session, current_user.organisation_id)
             await set_rls_user_context(session, current_user.account_id, current_user.org_role)
+            team = await get_team(session, team_id)
+            if team is None:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Team not found")
             result = await list_team_members(session, team_id=team_id, page=page, page_size=page_size)
     except ProgrammingError:
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
+        ) from None
+    except SQLAlchemyError:
+        _log.warning("list_members SQLAlchemyError", extra={"org_id": str(current_user.organisation_id), "team_id": str(team_id)})
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Database temporarily unavailable. Please try again.",
         ) from None
 
     return MembershipListResponse(
@@ -459,6 +521,12 @@ async def add_member_endpoint(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
         ) from None
+    except SQLAlchemyError:
+        _log.warning("add_member SQLAlchemyError", extra={"org_id": str(current_user.organisation_id), "team_id": str(team_id)})
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Database temporarily unavailable. Please try again.",
+        ) from None
 
     return MembershipResponse(
         id=str(membership.id),
@@ -493,6 +561,12 @@ async def remove_member_endpoint(
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
+        ) from None
+    except SQLAlchemyError:
+        _log.warning("remove_member SQLAlchemyError", extra={"org_id": str(current_user.organisation_id), "team_id": str(team_id), "membership_id": str(membership_id)})
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Database temporarily unavailable. Please try again.",
         ) from None
 
 
@@ -537,6 +611,12 @@ async def change_member_role_endpoint(
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
+        ) from None
+    except SQLAlchemyError:
+        _log.warning("change_member_role SQLAlchemyError", extra={"org_id": str(current_user.organisation_id), "team_id": str(team_id), "membership_id": str(membership_id)})
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Database temporarily unavailable. Please try again.",
         ) from None
 
     return MembershipResponse(

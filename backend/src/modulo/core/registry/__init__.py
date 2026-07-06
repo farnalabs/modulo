@@ -14,7 +14,6 @@ State of the art:
 from __future__ import annotations
 
 import hashlib
-import json
 import logging
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
@@ -26,6 +25,8 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import (
     Ed25519PrivateKey,
     Ed25519PublicKey,
 )
+
+from modulo.core.registry.crypto import _canonical_json
 
 logger = logging.getLogger(__name__)
 
@@ -88,11 +89,6 @@ def _sha256_digest(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
 
 
-def _canonical_json(obj: Any) -> bytes:
-    """Deterministic JSON serialisation for signing."""
-    return json.dumps(obj, separators=(",", ":"), sort_keys=True).encode()
-
-
 def _entry_payload(
     author: str,
     name: str,
@@ -134,7 +130,10 @@ def sign_manifest(
     private_key: Ed25519PrivateKey,
 ) -> str:
     """Sign a canonical JSON payload, return hex signature."""
-    canonical = _canonical_json(payload)
+    try:
+        canonical = _canonical_json(payload)
+    except ValueError as exc:
+        raise ValueError(str(exc)) from None
     sig = private_key.sign(canonical)
     return sig.hex()
 
@@ -145,10 +144,18 @@ def verify_manifest(
     public_key: Ed25519PublicKey,
 ) -> bool:
     """Verify an Ed25519 signature against canonical JSON of payload."""
-    canonical = _canonical_json(payload)
+    try:
+        canonical = _canonical_json(payload)
+    except ValueError:
+        logger.error("verify_manifest: non-serializable payload")
+        return False
     try:
         public_key.verify(bytes.fromhex(signature_hex), canonical)
-    except (InvalidSignature, ValueError):
+    except InvalidSignature:
+        logger.warning("verify_manifest: invalid signature")
+        return False
+    except ValueError:
+        logger.warning("verify_manifest: bad signature hex")
         return False
     else:
         return True
@@ -161,7 +168,11 @@ def verify_manifest(
 
 def compute_bundle_hash(bundle: dict[str, Any]) -> str:
     """Return the SHA-256 hex digest of a canonical bundle JSON."""
-    return _sha256_digest(_canonical_json(bundle))
+    try:
+        canonical = _canonical_json(bundle)
+    except ValueError as exc:
+        raise ValueError(str(exc)) from None
+    return _sha256_digest(canonical)
 
 
 def verify_bundle_integrity(bundle: dict[str, Any], expected_sha256: str) -> bool:
@@ -431,7 +442,27 @@ def get_registry_primitive(slug: str) -> RegistryEntry | None:
     return _BUILTIN_REGISTRY.get(slug)
 
 
-async def publish_primitive(
+def _validate_registry_inputs(
+    author: str, name: str, primitive_type: str, tags: list[str], content_json: dict[str, Any],
+) -> None:
+    """Validate registry metadata inputs and content serializability."""
+    if not author or not author.strip():
+        raise ValueError("author must be a non-empty string")
+    if not name or not name.strip():
+        raise ValueError("name must be a non-empty string")
+    if not primitive_type or not primitive_type.strip():
+        raise ValueError("primitive_type must be a non-empty string")
+    if not isinstance(tags, list) or any(not isinstance(t, str) for t in tags):
+        raise ValueError("tags must be a list of strings")
+    if not isinstance(content_json, dict):
+        raise ValueError("content_json must be a dict")
+    try:
+        _canonical_json(content_json)
+    except ValueError as exc:
+        raise ValueError(f"content_json is not JSON-serializable: {exc}") from None
+
+
+def publish_primitive(
     author: str,
     name: str,
     primitive_type: str,
@@ -447,6 +478,8 @@ async def publish_primitive(
     In production this would POST to the hosted Modulo registry API.
     The signing key must correspond to the author's registered key.
     """
+    _validate_registry_inputs(author, name, primitive_type, tags, content_json)
+
     try:
         private_bytes = bytes.fromhex(signing_key_hex)
         private_key = Ed25519PrivateKey.from_private_bytes(private_bytes)
@@ -454,8 +487,6 @@ async def publish_primitive(
         raise ValueError("invalid signing key hex") from None
 
     slug = f"{author}/{name}"
-    # Overwrite (last-write-wins) for the in-memory registry.
-    # A hosted production registry would use version pinning instead.
     if slug in _BUILTIN_REGISTRY:
         logger.info("publish_primitive: overwriting existing entry %r", slug)
 
@@ -477,17 +508,21 @@ def resolve_namespaced_slug(slug: str) -> tuple[str, str]:
     """Split ``author/name`` into (author, name).
 
     If no slash is present, default to the ``modulo`` author.
+    Returns ``("modulo", "")`` for empty slugs.
     """
-    if "/" in slug:
-        parts = slug.split("/", 1)
-        if not parts[1]:
-            logger.warning("resolve_namespaced_slug: empty name in slug %r", slug)
-            return parts[0], ""
-        return parts[0], parts[1]
     if not slug:
         logger.warning("resolve_namespaced_slug: empty slug")
         return "modulo", ""
-    return "modulo", slug
+    if "/" not in slug:
+        return "modulo", slug
+    parts = slug.split("/", 1)
+    if not parts[0]:
+        logger.warning("resolve_namespaced_slug: empty author in slug %r, defaulting to modulo", slug)
+        return "modulo", parts[1]
+    if not parts[1]:
+        logger.warning("resolve_namespaced_slug: empty name in slug %r", slug)
+        return parts[0], ""
+    return parts[0], parts[1]
 
 
 def verify_primitive_signature(
@@ -499,17 +534,16 @@ def verify_primitive_signature(
     If a public_key is provided, uses it directly.
     Otherwise falls back to the built-in registry development key.
     """
-    if public_key is None:
-        if entry.signing_key_fingerprint == _registry_fingerprint:
-            pubkey = _registry_public
-        else:
-            logger.warning(
-                "No public_key provided and fingerprint %s does not match registry key",
-                entry.signing_key_fingerprint,
-            )
-            return False
-    else:
+    if public_key is not None:
         pubkey = public_key
+    elif entry.signing_key_fingerprint == _registry_fingerprint:
+        pubkey = _registry_public
+    else:
+        logger.warning(
+            "No public_key provided and fingerprint %s does not match registry key",
+            entry.signing_key_fingerprint,
+        )
+        return False
 
     payload = _entry_payload(
         entry.author, entry.name, entry.version,
@@ -604,6 +638,16 @@ def list_verified_publishers() -> list[Publisher]:
 # ---------------------------------------------------------------------------
 
 
+_DOWNLOAD_WEIGHT = 0.4
+_RATING_WEIGHT = 0.4
+_RECENCY_WEIGHT = 0.2
+_REVIEW_BONUS_MAX = 0.05
+_RECENCY_DAYS = 90.0
+_DOWNLOAD_SCALE = 1000.0
+_MAX_DOWNLOAD_SCORE = 10.0
+_MAX_RATING = 5.0
+
+
 def compute_popularity_score(
     download_count: int,
     average_rating: float | None,
@@ -618,21 +662,18 @@ def compute_popularity_score(
     now = datetime.now(UTC)
     days_since_publish = max((now - published_at).days, 1)
 
-    safe_downloads = max(download_count, 0)
-    safe_review_count = max(review_count, 0)
-
     # Downloads: log-scaled to avoid runaway values
-    download_score = min(safe_downloads / 1000.0, 10.0) / 10.0 * 0.4
+    download_score = min(download_count / _DOWNLOAD_SCALE, _MAX_DOWNLOAD_SCORE) / _MAX_DOWNLOAD_SCORE * _DOWNLOAD_WEIGHT
 
     # Rating: 0-5 scale mapped to 0.0-0.4
-    rating_val = average_rating if average_rating is not None else 0.0
-    rating_score = max(rating_val, 0.0) / 5.0 * 0.4
+    rating_val = max(average_rating if average_rating is not None else 0.0, 0.0)
+    rating_score = min(rating_val, _MAX_RATING) / _MAX_RATING * _RATING_WEIGHT
 
-    # Recency: decay over 90 days
-    recency_score = max(1.0 - (days_since_publish / 90.0), 0.0) * 0.2
+    # Recency: decay over RECENCY_DAYS days
+    recency_score = max(1.0 - (days_since_publish / _RECENCY_DAYS), 0.0) * _RECENCY_WEIGHT
 
     # Review count bonus: small bump for having reviews
-    review_bonus = min(safe_review_count / 10.0, 1.0) * 0.05
+    review_bonus = min(review_count / 10.0, 1.0) * _REVIEW_BONUS_MAX
 
     return download_score + rating_score + recency_score + review_bonus
 
@@ -675,16 +716,13 @@ def list_registry_primitives_ranked(
             },
         )
 
-    if sort_by == "popularity":
-        enriched.sort(key=lambda x: x["popularity_score"], reverse=True)
-    elif sort_by == "recent":
+    if sort_by == "recent":
         enriched.sort(key=lambda x: x["entry"].published_at, reverse=True)
     elif sort_by == "downloads":
         enriched.sort(key=lambda x: x["entry"].download_count, reverse=True)
-    elif sort_by == "rating":
-        enriched.sort(key=lambda x: x["popularity_score"], reverse=True)
     else:
-        logger.warning("Unknown sort_by=%r, falling back to popularity", sort_by)
+        if sort_by != "popularity":
+            logger.warning("Unknown sort_by=%r, falling back to popularity", sort_by)
         enriched.sort(key=lambda x: x["popularity_score"], reverse=True)
 
     return enriched

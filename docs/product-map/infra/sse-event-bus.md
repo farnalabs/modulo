@@ -42,7 +42,7 @@ In-memory (and optionally Redis-backed) event pub/sub that pushes resource-chang
 - [x] `after_insert` / `after_update` / `after_delete` listeners on: Run, Pipeline, Agent, Schema, ConnectorInstance, ModelBackend, Team, Trigger, EvalDefinition, FeedbackRecord, LibraryPrimitive
 - [x] Listeners are registered in a single module (`core/events/listeners.py`)
 - [x] Listeners construct `{type, id, action, version, org_id}` from the model instance
-- [x] `ProgrammingError` is caught — table existence is not assumed (safe during migrations)
+- [x] Listeners fire after successful DB operations — table must exist for INSERT/UPDATE/DELETE to succeed; no `ProgrammingError` catch needed in listener path
 - [x] Listeners fire regardless of the mutation origin (API, MCP, Celery, CLI)
 - [x] `register_listeners()` called during app startup (`main.py:_lifespan`)
 - [x] Unknown model type logged as warning, not crash
@@ -108,7 +108,38 @@ In-memory (and optionally Redis-backed) event pub/sub that pushes resource-chang
 - [x] Event payload contains no sensitive data — just resource type, ID, action, version
 - [x] Per-org and per-user connection limits prevent abuse
 
+## Resilience & Integration Robustness
+
+- [x] In-memory EventBus works independently of Redis — Redis is optional broadcast overlay
+- [x] Redis broadcast failure logged, does not crash in-memory publish
+- [x] Fire-and-forget Redis broadcast via `asyncio.create_task` — publisher never blocks on Redis
+- [x] Background task tracking (`_background_tasks` set) prevents premature GC of fire-and-forget tasks
+- [x] Slow consumer detection — bounded queues (maxsize=256) ejected on QueueFull
+- [x] Cleanup on disconnect — unsubscribe removes queue from EventBus and active set
+- [x] SSE keepalive heartbeat (configurable timeout) detects zombie connections
+- [x] Per-org and per-user connection limits prevent connection exhaustion
+- [x] Redis client connections properly closed on both successful `close()` and error paths (fixed in this session)
+- [x] `EventBus._remove_dead_queues` is idempotent — no crash if queue already removed
+- [x] `_untrack_connection` is idempotent — no crash if queue already removed from active set
+- [x] `RedisEventBroker` double-checked locking prevents duplicate connection creation in concurrent access
+- [x] Module-level reset in tests (`_reset_singleton`) prevents cross-test interference
+- [x] `_test_reset_connections()` clears all tracked SSE connections for test isolation
+
+## Edge Cases
+
+- [x] Empty org returns no events (no subscribers → publish is no-op)
+- [x] Non-existent org ID returns no events (no subscribers → publish is no-op)
+- [x] Event published before any SSE subscription — event is not queued (no buffer for pre-subscription events; designed: REST API is authoritative)
+- [x] Multiple rapid events — bounded queues prevent unbounded memory growth
+- [x] SSE client drops connection between heartbeats — cleanup happens on next `yield` via ASGI CancelledError
+- [x] Redis broker `publish()` failure closes old connection — prevents connection leak (fixed in this session)
+- [x] Redis broker `subscribe()` failure closes old connection — prevents connection leak (fixed in this session)
+- [x] `_pump` generator exception is caught — no 500 response leaked to client
+- [x] `asyncio.CancelledError` in `_pump` is caught — graceful stream termination
+- [x] Transaction rollback after event listener fires — phantom event sent (best-effort design; REST API is authoritative)
+
 ## Known Gaps
+- **Redis connection leak on publish/subscribe error (fixed):** When a Redis publish or subscribe operation failed, the old connection object was set to `None` in the broker but never explicitly closed — the TCP connection remained open until GC. Fixed in this session: both error handlers now close the old connection before clearing the reference.
 - No event persistence — reconnecting frontend misses events that occurred while disconnected (REST API is authoritative fallback). This is by design per PRD §8.22.
 - No per-event type opt-in from the SSE client (client gets all events for their org)
 - `planStore` and `dashboard` have `registerHandler()` wired; other stores (agents, schemas, connectors, triggers, model_backends, evals, feedback, library) do not yet register SSE sync handlers
@@ -116,3 +147,4 @@ In-memory (and optionally Redis-backed) event pub/sub that pushes resource-chang
 
 ## QA History
 - 2026-07-02: Cross-cutting QA (index 52). Fixed: frontend EventSource→fetch-based SSE with Bearer auth header (native EventSource can't set custom headers), frontend named event parsing (`event: resource_changed` via SSE protocol parser instead of `onmessage`), per-org monotonically increasing version counter in listeners (was hardcoded `version=0`), created BDD step definitions and verified all 6 scenarios pass. Updated product map: `gap`→`partial`, added `bdd:` and `unit-tests:` frontmatter, marked 40+ behaviours [ ]→[x], added code paths (redis_broker, useSyncStore, syncRegistry). Status: partial (4 known gaps remain).
+- **2026-07-08**: Cross-cutting QA (improve-architecture index 252). Fixed MINOR — Redis connection leak in `redis_broker.py:publish()` and `subscribe()`: error handlers set `_pub`/`_sub` to `None` but did not close the old connection, leaking TCP connections on Redis failure. Added `close()` calls before clearing references. Added Resilience & Integration Robustness section (15 checkboxes) and Edge Cases section (10 checkboxes) to product map. Corrected inaccurate claim about `ProgrammingError` catch in listeners (listeners fire after successful DB ops — no SQL executed in listener path). Added 4 new unit tests for Redis broker error-path connection cleanup. All existing tests pass.

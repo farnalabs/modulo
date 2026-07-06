@@ -6,7 +6,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from fastapi import HTTPException
-from sqlalchemy.exc import ProgrammingError
+from sqlalchemy.exc import IntegrityError, ProgrammingError, SQLAlchemyError
 
 from modulo.api.routes.variants import (
     _variant_to_response,
@@ -519,6 +519,128 @@ class TestGetGroupProgrammingError:
             assert exc.value.status_code == 501
 
 
+@pytest.mark.asyncio
+class TestCreateGroupSQLAlchemyError:
+    async def test_raises_503_on_sqlalchemy_error(self) -> None:
+        principal = make_mock_principal()
+        mock_session = make_session_mock()
+
+        with patch(
+            "modulo.api.routes.variants.create_variant_group",
+            new_callable=AsyncMock,
+            side_effect=SQLAlchemyError("mock", "mock", "mock"),
+        ):
+            body = MagicMock()
+            body.pipeline_id = uuid.uuid4()
+            body.name = "test"
+            body.description = None
+            body.variants = []
+            body.selection_strategy = "weighted"
+            body.max_concurrent_runs = 5
+            body.degraded_evals = False
+            body.model_dump.return_value = {}
+
+            with pytest.raises(HTTPException) as exc:
+                await create_group(body, mock_session, principal)
+            assert exc.value.status_code == 503
+
+
+@pytest.mark.asyncio
+class TestCreateGroupIntegrityError:
+    async def test_raises_409_on_integrity_error(self) -> None:
+        principal = make_mock_principal()
+        mock_session = make_session_mock()
+
+        with patch(
+            "modulo.api.routes.variants.create_variant_group",
+            new_callable=AsyncMock,
+            side_effect=IntegrityError("mock", "mock", "mock"),
+        ):
+            body = MagicMock()
+            body.pipeline_id = uuid.uuid4()
+            body.name = "test"
+            body.description = None
+            body.variants = []
+            body.selection_strategy = "weighted"
+            body.max_concurrent_runs = 5
+            body.degraded_evals = False
+            body.model_dump.return_value = {}
+
+            with pytest.raises(HTTPException) as exc:
+                await create_group(body, mock_session, principal)
+            assert exc.value.status_code == 409
+
+
+@pytest.mark.asyncio
+class TestRunVariantSQLAlchemyError:
+    async def test_raises_503_on_sqlalchemy_error(self) -> None:
+        principal = make_mock_principal()
+        mock_session = make_session_mock()
+        group_id = uuid.uuid4()
+        body = MagicMock()
+        body.input_payload = {}
+
+        with patch(
+            "modulo.api.routes.variants.get_variant_group",
+            new_callable=AsyncMock,
+            side_effect=SQLAlchemyError("mock", "mock", "mock"),
+        ):
+            with pytest.raises(HTTPException) as exc:
+                await run_variant(group_id, body, mock_session, principal)
+            assert exc.value.status_code == 503
+
+
+@pytest.mark.asyncio
+class TestCoverageGapsSQLAlchemyError:
+    async def test_raises_503_on_sqlalchemy_error(self) -> None:
+        principal = make_mock_principal()
+        mock_session = make_session_mock()
+        group_id = uuid.uuid4()
+
+        with patch(
+            "modulo.api.routes.variants.get_variant_group",
+            new_callable=AsyncMock,
+            side_effect=SQLAlchemyError("mock", "mock", "mock"),
+        ):
+            with pytest.raises(HTTPException) as exc:
+                await coverage_gaps(group_id, mock_session, principal)
+            assert exc.value.status_code == 503
+
+
+@pytest.mark.asyncio
+class TestPromptDiffsSQLAlchemyError:
+    async def test_raises_503_on_sqlalchemy_error(self) -> None:
+        principal = make_mock_principal()
+        mock_session = make_session_mock()
+        group_id = uuid.uuid4()
+
+        with patch(
+            "modulo.api.routes.variants.get_variant_group",
+            new_callable=AsyncMock,
+            side_effect=SQLAlchemyError("mock", "mock", "mock"),
+        ):
+            with pytest.raises(HTTPException) as exc:
+                await prompt_diffs(group_id, mock_session, principal)
+            assert exc.value.status_code == 503
+
+
+@pytest.mark.asyncio
+class TestDeleteGroupSQLAlchemyError:
+    async def test_raises_503_on_sqlalchemy_error(self) -> None:
+        principal = make_mock_principal()
+        mock_session = make_session_mock()
+        group_id = uuid.uuid4()
+
+        with patch(
+            "modulo.api.routes.variants.delete_variant_group",
+            new_callable=AsyncMock,
+            side_effect=SQLAlchemyError("mock", "mock", "mock"),
+        ):
+            with pytest.raises(HTTPException) as exc:
+                await delete_group(group_id, mock_session, principal)
+            assert exc.value.status_code == 503
+
+
 class TestVariantToResponseEmptyRunCount:
     def test_handles_none_run_count(self) -> None:
         group = MagicMock()
@@ -557,3 +679,160 @@ class TestVariantToResponseEmptyRunCount:
 
         result = _variant_to_response(group)
         assert result["run_count"] == 0
+
+
+@pytest.mark.asyncio
+class TestCreateGroupException:
+    async def test_raises_500_on_unexpected_error(self) -> None:
+        principal = make_mock_principal()
+        mock_session = make_session_mock()
+
+        with patch(
+            "modulo.api.routes.variants.create_variant_group",
+            new_callable=AsyncMock,
+            side_effect=ValueError("unexpected"),
+        ):
+            body = MagicMock()
+            body.pipeline_id = uuid.uuid4()
+            body.name = "test"
+            body.description = None
+            body.variants = []
+            body.selection_strategy = "weighted"
+            body.max_concurrent_runs = 5
+            body.degraded_evals = False
+            body.model_dump.return_value = {}
+
+            with pytest.raises(HTTPException) as exc:
+                await create_group(body, mock_session, principal)
+            assert exc.value.status_code == 500
+
+
+@pytest.mark.asyncio
+class TestGetGroupException:
+    async def test_raises_500_on_unexpected_error(self) -> None:
+        principal = make_mock_principal()
+        mock_session = make_session_mock()
+
+        with patch(
+            "modulo.api.routes.variants.get_variant_group",
+            new_callable=AsyncMock,
+            side_effect=KeyError("missing_key"),
+        ):
+            with pytest.raises(HTTPException) as exc:
+                await get_group(uuid.uuid4(), mock_session, principal)
+            assert exc.value.status_code == 500
+
+
+@pytest.mark.asyncio
+class TestListGroupsException:
+    async def test_raises_500_on_unexpected_error(self) -> None:
+        principal = make_mock_principal()
+        mock_session = make_session_mock()
+
+        with patch(
+            "modulo.api.routes.variants.list_variant_groups",
+            new_callable=AsyncMock,
+            side_effect=TypeError("bad type"),
+        ):
+            with pytest.raises(HTTPException) as exc:
+                await list_groups(
+                    pipeline_id=None,
+                    page=1,
+                    page_size=20,
+                    session=mock_session,
+                    principal=principal,
+                )
+            assert exc.value.status_code == 500
+
+
+@pytest.mark.asyncio
+class TestUpdateGroupException:
+    async def test_raises_500_on_unexpected_error(self) -> None:
+        principal = make_mock_principal()
+        mock_session = make_session_mock()
+
+        with patch(
+            "modulo.api.routes.variants.update_variant_group",
+            new_callable=AsyncMock,
+            side_effect=ValueError("unexpected"),
+        ):
+            body = MagicMock()
+            body.name = "test"
+            body.description = None
+            body.variants = []
+            body.selection_strategy = "weighted"
+            body.max_concurrent_runs = 5
+            body.degraded_evals = False
+            body.model_dump.return_value = {}
+            body.pipeline_id = uuid.uuid4()
+
+            with pytest.raises(HTTPException) as exc:
+                await update_group(uuid.uuid4(), body, mock_session, principal)
+            assert exc.value.status_code == 500
+
+
+@pytest.mark.asyncio
+class TestDeleteGroupException:
+    async def test_raises_500_on_unexpected_error(self) -> None:
+        principal = make_mock_principal()
+        mock_session = make_session_mock()
+
+        with patch(
+            "modulo.api.routes.variants.delete_variant_group",
+            new_callable=AsyncMock,
+            side_effect=ValueError("unexpected"),
+        ):
+            with pytest.raises(HTTPException) as exc:
+                await delete_group(uuid.uuid4(), mock_session, principal)
+            assert exc.value.status_code == 500
+
+
+@pytest.mark.asyncio
+class TestRunVariantException:
+    async def test_raises_500_on_unexpected_error(self) -> None:
+        principal = make_mock_principal()
+        mock_session = make_session_mock()
+
+        with patch(
+            "modulo.api.routes.variants.get_variant_group",
+            new_callable=AsyncMock,
+            side_effect=ValueError("unexpected"),
+        ):
+            body = MagicMock()
+            body.input_payload = {}
+
+            with pytest.raises(HTTPException) as exc:
+                await run_variant(uuid.uuid4(), body, mock_session, principal)
+            assert exc.value.status_code == 500
+
+
+@pytest.mark.asyncio
+class TestCoverageGapsException:
+    async def test_raises_500_on_unexpected_error(self) -> None:
+        principal = make_mock_principal()
+        mock_session = make_session_mock()
+
+        with patch(
+            "modulo.api.routes.variants.get_variant_group",
+            new_callable=AsyncMock,
+            side_effect=ValueError("unexpected"),
+        ):
+            with pytest.raises(HTTPException) as exc:
+                await coverage_gaps(uuid.uuid4(), mock_session, principal)
+            assert exc.value.status_code == 500
+
+
+@pytest.mark.asyncio
+class TestPromptDiffsException:
+    async def test_raises_500_on_unexpected_error(self) -> None:
+        principal = make_mock_principal()
+        mock_session = make_session_mock()
+
+        with patch(
+            "modulo.api.routes.variants.get_variant_group",
+            new_callable=AsyncMock,
+            side_effect=ValueError("unexpected"),
+        ):
+            with pytest.raises(HTTPException) as exc:
+                await prompt_diffs(uuid.uuid4(), mock_session, principal)
+            assert exc.value.status_code == 500

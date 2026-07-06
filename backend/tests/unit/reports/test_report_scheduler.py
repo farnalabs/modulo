@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import datetime
 import uuid
+from typing import Self
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -44,7 +45,7 @@ class _MockSession:
         self._execute_mock = AsyncMock(side_effect=execute_side_effect or [])
         self.added: list[object] = []
 
-    async def __aenter__(self) -> _MockSession:
+    async def __aenter__(self) -> Self:
         return self
 
     async def __aexit__(self, *args: object) -> bool:
@@ -492,7 +493,7 @@ class TestDeliverViaConfig:
         with respx.mock:
             respx.post(url).mock(return_value=Response(200, text="ok"))
 
-            results = await _deliver_via_config({"text": "hello"}, config, uuid.uuid4())
+            results = await _deliver_via_config({"text": "hello"}, config)
 
         assert len(results) == 1
         assert results[0]["status"] == "delivered"
@@ -507,7 +508,7 @@ class TestDeliverViaConfig:
         with respx.mock:
             respx.post(url).mock(return_value=Response(200, text="ok"))
 
-            results = await _deliver_via_config({"report": "data"}, config, uuid.uuid4())
+            results = await _deliver_via_config({"report": "data"}, config)
 
         assert len(results) == 1
         assert results[0]["status"] == "delivered"

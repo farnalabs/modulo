@@ -22,6 +22,7 @@ code:
 unit-tests:
   - backend/tests/integration/test_rls_isolation.py
   - backend/tests/integration/test_cross_tenant_isolation.py
+  - backend/tests/integration/crud/test_team_isolation.py
 depends-on: [feat-teams-team-crud]
 status: partial
 ---
@@ -103,7 +104,7 @@ equivalent filtering via an ORM `do_orm_execute` listener. Team-visibility RLS
 ### Migration Column Rename
 
 - [x] `rls_team_isolation` policy correctly references `team_memberships.account_id` (post-migration 0060 fix)
-- [ ] No automated test verifies the RLS policy works after the column rename
+- [x] `test_team_memberships_isolated_by_org_rls` verifies team membership isolation across teams within the same org
 
 ### API Response Inconsistencies
 
@@ -112,6 +113,22 @@ equivalent filtering via an ORM `do_orm_execute` listener. Team-visibility RLS
 ## Known Gaps
 
 - **connector_team_mismatch not implemented in backend code** — BDD scenario exists at `tests/features/teams/cross_team_isolation.feature` but is mocked (MagicMock). Real enforcement at pipeline-save time (checking connector.owner_team_id vs pipeline.owner_team_id) does not exist yet.
-- **No test for cross-org single-resource fetch by ID** — The `test_cross_tenant_isolation.py` tests list-scoped isolation but not single-resource GET by ID from another org. RLS handles this (returns 404 via `None` row), but no test proves it.
-- **Migration 0060 RLS policy fix not tested for correctness** — `test_rls_team_isolation_policies_exist` checks the policy exists on the 5 team-scoped tables, but does not verify the policy actually filters correctly by `account_id` after the column rename.
-- **`list_members_endpoint` used `m.user_id` instead of `m.account_id`** — Fixed in this session. The ORM model only has `account_id` (not `user_id`), so this would have raised `AttributeError` at runtime. The add_member_endpoint correctly uses `m.account_id`.
+
+## QA History
+
+### 2026-07-08 — Cross-cutting QA (improve-architecture index 255)
+
+**Findings fixed:**
+- CRITICAL — `test_cross_tenant_isolation.py` `_seed_user()` inserted into non-existent `users` table (migration 0074 renamed to `accounts`+`org_memberships`). Rewrote to insert into `accounts` + `org_memberships` with correct columns. 7 integration tests (org data isolation, system admin access, cross-org admin, system admin explicit org param) were silently broken — they'd crash at fixture setup with `UndefinedTable` before any assertion ran.
+- CRITICAL — `test_teams_isolated_between_orgs` in `test_team_isolation.py` was `@pytest.mark.skip` with reason "RLS isolation needs investigation". Fixed `_create_user` helper to use `accounts`+`org_memberships` (was using old `accounts` table with `organisation_id` column that doesn't exist). Converted all `session.flush()` patterns to `session.begin()` for proper transaction scoping. Un-skipped the test.
+- MAJOR — `test_team_isolation.py` used bare `session.flush()` without `session.begin()` on 5 test functions (team_name_unique_per_org, memberships_isolated_between_orgs, membership_unique_per_team_user, crud_round_trip, membership_round_trip). `set_config(is_local=true)` only works inside an active transaction — `flush()` does not begin a transaction. Converted all to `async with session.begin():`.
+- MAJOR — Added `test_get_other_org_pipeline_by_id_returns_404` and `test_get_own_org_pipeline_by_id_succeeds` to `test_cross_tenant_isolation.py` — cross-org single-resource fetch test covering the RLS 404-for-None pattern (previously only list-scoped isolation was tested).
+- MAJOR — Added `test_team_memberships_isolated_by_org_rls` to `test_rls_isolation.py` — verifies team membership isolation across teams within the same org: creates accounts in different teams, confirms each account can only see their own team's members, and admin sees all.
+
+**Product map updates:**
+- Marked Migration Column Rename `[ ]` → `[x]` for RLS policy correctness test.
+- Added `test_team_isolation.py` to `unit-tests:` frontmatter.
+- Removed 2 resolved Known Gaps (cross-org single-resource fetch, Migration 0060 not tested).
+- Removed stale Known Gap about `list_members_endpoint` using `m.user_id` — the endpoint correctly uses `m.account_id` mapped to `user_id` response field name.
+
+**Status:** partial (1 known gap remains — connector_team_mismatch not implemented in backend code).

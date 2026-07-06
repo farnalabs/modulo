@@ -31,6 +31,7 @@ from modulo.core.runtime_provider import ExecResult, RuntimeProvider, WorkspaceS
 _log = logging.getLogger(__name__)
 
 _DEFAULT_CMD_TIMEOUT = 300
+_GRACE_KILL_TIMEOUT = 5
 
 
 class LocalRuntimeProvider(RuntimeProvider):
@@ -68,7 +69,7 @@ class LocalRuntimeProvider(RuntimeProvider):
         self._workspaces[ref] = workspace_dir
 
         try:
-            repo_url = spec.labels.get("repo_url", "")
+            repo_url = (spec.labels or {}).get("repo_url", "")
             if repo_url:
                 await self._run_command(
                     ["git", "clone", repo_url, "."],
@@ -141,12 +142,29 @@ class LocalRuntimeProvider(RuntimeProvider):
                 )
             except TimeoutError:
                 proc.kill()
-                await proc.wait()
+                try:
+                    await asyncio.wait_for(proc.wait(), timeout=_GRACE_KILL_TIMEOUT)
+                except TimeoutError:
+                    _log.warning("Process did not exit after kill, detaching")
                 duration = int((time.monotonic() - start) * 1000)
                 return ExecResult(
                     exit_code=-1,
                     stdout="",
                     stderr="Command timed out",
+                    duration_ms=duration,
+                )
+            except Exception:
+                proc.kill()
+                try:
+                    await asyncio.wait_for(proc.wait(), timeout=_GRACE_KILL_TIMEOUT)
+                except TimeoutError:
+                    _log.warning("Process did not exit after signal, detaching")
+                duration = int((time.monotonic() - start) * 1000)
+                _log.exception("exec_command failed")
+                return ExecResult(
+                    exit_code=-1,
+                    stdout="",
+                    stderr="Command execution failed",
                     duration_ms=duration,
                 )
 
@@ -167,6 +185,7 @@ def create_local_provider_from_env() -> LocalRuntimeProvider:
     raw = os.environ.get("MODULO_MAX_LOCAL_CONCURRENCY", "2")
     try:
         max_concurrency = max(1, int(raw))
-    except (ValueError, TypeError):
+    except ValueError:
+        _log.warning("Invalid MODULO_MAX_LOCAL_CONCURRENCY value '%s', falling back to 2", raw)
         max_concurrency = 2
     return LocalRuntimeProvider(max_concurrency=max_concurrency)

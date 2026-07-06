@@ -18,7 +18,6 @@ from modulo.api.dependencies import _get_engine, get_db_session, get_plan_contex
 from modulo.api.main import app
 from modulo.auth.dependencies import get_current_user
 from modulo.auth.jwt import AuthenticatedPrincipal
-from modulo.core.feature_flags import DbPlanContext, FeatureFlagRegistry
 from modulo.settings import Settings, get_settings
 
 _VALID_32 = "a" * 32
@@ -31,9 +30,20 @@ _PROVIDER_ID = uuid.UUID("00000000-0000-0000-0000-000000000010")
 # ── Settings helpers ──────────────────────────────────────────────────────
 
 
-def _team_plan_context() -> DbPlanContext:
-    registry = FeatureFlagRegistry(current_tier="team", has_license_key=True)
-    return DbPlanContext(registry)
+def _team_plan_context() -> MagicMock:
+    ctx = MagicMock()
+    ctx.feature_enabled.return_value = True
+    ctx.tier.return_value = "team"
+    ctx.has_license_key.return_value = True
+    return ctx
+
+
+def _community_plan_context() -> MagicMock:
+    ctx = MagicMock()
+    ctx.feature_enabled.return_value = False
+    ctx.tier.return_value = "community"
+    ctx.has_license_key.return_value = False
+    return ctx
 
 
 def _make_settings(*, license_key: str = "") -> Settings:
@@ -69,11 +79,13 @@ def _make_mock_session() -> AsyncMock:
 def free_client() -> Generator[TestClient, None, None]:
     """Client with no license key — all team features disabled."""
     mock_session = _make_mock_session()
+    plan_ctx = _community_plan_context()
 
     async def override_session() -> AsyncGenerator[AsyncMock, None]:
         yield mock_session
 
     app.dependency_overrides[get_settings] = lambda: _make_settings(license_key="")
+    app.dependency_overrides[get_plan_context] = lambda: plan_ctx
     app.dependency_overrides[get_db_session] = override_session
     app.dependency_overrides[_get_engine] = lambda: MagicMock()
     app.dependency_overrides[get_current_user] = lambda: AuthenticatedPrincipal(
@@ -172,12 +184,11 @@ class TestTeamRbacGating:
 
 
 class TestAuditGating:
-    """Audit viewer endpoints return 402 when no team license is present."""
+    """Audit viewer endpoints — list is community-tier, batch/export require team license."""
 
-    def test_list_audit_returns_402_on_free(self, free_client: TestClient) -> None:
+    def test_list_audit_succeeds_on_free(self, free_client: TestClient) -> None:
         resp = free_client.get("/api/v1/admin/audit")
-        assert resp.status_code == 402
-        assert "audit_viewer" in resp.text.lower()
+        assert resp.status_code == 200
 
     def test_list_audit_succeeds_on_licensed(self, licensed_client: TestClient) -> None:
         with (
@@ -186,6 +197,11 @@ class TestAuditGating:
         ):
             resp = licensed_client.get("/api/v1/admin/audit")
             assert resp.status_code == 200
+
+    def test_batch_detail_returns_402_on_free(self, free_client: TestClient) -> None:
+        resp = free_client.post("/api/v1/admin/audit/batch-detail", json={"event_ids": []})
+        assert resp.status_code == 402
+        assert "audit_viewer" in resp.text.lower()
 
 
 class TestSpendLimitsGating:

@@ -49,6 +49,16 @@ export function toProblemDetail(err: unknown): ProblemDetail {
 
 const MAX_ERROR_LENGTH = 500
 
+/**
+ * Wraps openapi-fetch result.error into a thrown Error.
+ * Use in API-dedicated modules (errors.ts, notifications.ts, etc.)
+ * to let callers use try/catch instead of checking result.error everywhere.
+ */
+export function throwOnError<T>(result: { data?: T; error?: unknown }): T {
+  if (result.error) throw new Error(formatApiError(result.error))
+  return result.data as T
+}
+
 export function formatApiError(err: unknown): string {
   if (isProblemDetail(err)) return err.detail
   if (typeof err === 'string') return err

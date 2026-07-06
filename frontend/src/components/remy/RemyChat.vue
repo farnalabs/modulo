@@ -5,6 +5,36 @@
       class="remy-messages flex-1 overflow-y-auto p-3 space-y-3"
     >
       <div
+        v-if="store.activeSessionId && store.messages.length === 0 && !store.isStreaming"
+        class="remy-msg assistant"
+      >
+        <div class="remy-msg-avatar">
+          <div class="avatar-assistant">
+            <svg
+              xmlns="http://www.w3.org/2000/svg"
+              width="14"
+              height="14"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="2"
+            >
+              <path
+                d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2z"
+              />
+              <path d="M8 14s1.5 2 4 2 4-2 4-2" />
+              <line x1="9" y1="9" x2="9.01" y2="9" />
+              <line x1="15" y1="9" x2="15.01" y2="9" />
+            </svg>
+          </div>
+        </div>
+        <div class="remy-msg-content">
+          <div class="remy-markdown">
+            <p class="remy-p">Hi! I'm Remy, your Modulo AI assistant. I can help you build pipelines, run evaluations, manage your workspace, and answer questions about your data. What would you like help with?</p>
+          </div>
+        </div>
+      </div>
+      <div
         v-for="msg in store.messages"
         :key="msg.id"
       >
@@ -15,6 +45,21 @@
           <div class="remy-turn-line" />
           <span class="remy-turn-label">{{ msg.content }}</span>
           <div class="remy-turn-line" />
+        </div>
+        <div
+          v-else-if="msg.role === 'tool_result' && msg.tool_results_json"
+          class="remy-tool-card"
+        >
+          <button class="remy-tool-header" @click="toggleToolExpand(msg.id)">
+            <span class="remy-tool-name">🛠 Tool Called: {{ (msg.tool_results_json as any).tool_name }}</span>
+            <span class="tool-badge" :class="(msg.tool_results_json as any).success ? 'success' : 'failed'">
+              {{ (msg.tool_results_json as any).success ? 'Completed' : 'Failed' }}
+            </span>
+            <span class="tool-chevron" :class="{ expanded: expandedTools.has(msg.id) }">▼</span>
+          </button>
+          <div v-if="expandedTools.has(msg.id)" class="remy-tool-details">
+            <pre>{{ formatToolDetails(msg.tool_results_json as any) }}</pre>
+          </div>
         </div>
         <div
           v-else
@@ -140,11 +185,13 @@
 
     <div class="remy-input-area border-t p-3">
       <div class="flex gap-2">
-        <input
+        <textarea
           v-model="inputText"
           class="remy-input flex-1"
           :placeholder="$t('components.remy.RemyChat.ask_remy')"
-          @keydown.enter.prevent="handleSend"
+          rows="1"
+          @keydown="onInputKeydown"
+          @input="resizeInput"
           :disabled="store.isStreaming || store.isExecutingUi"
         />
         <Button
@@ -182,6 +229,29 @@ const store = useRemyStore();
 const { connectStream } = useRemyStream();
 const scrollRef = ref<HTMLDivElement | null>(null);
 const inputText = ref("");
+
+const expandedTools = ref(new Set<string>())
+
+function toggleToolExpand(id: string) {
+  if (expandedTools.value.has(id)) {
+    expandedTools.value.delete(id)
+  } else {
+    expandedTools.value.add(id)
+  }
+  expandedTools.value = new Set(expandedTools.value)
+}
+
+function formatToolDetails(tc: { tool_call_id: string; tool_name: string; success: boolean; result?: unknown; error?: string }): string {
+  const lines: string[] = [`Tool: ${tc.tool_name}`, `ID: ${tc.tool_call_id}`, `Status: ${tc.success ? 'Completed' : 'Failed'}`, '']
+  if (tc.result !== undefined) {
+    const resultStr = typeof tc.result === 'object' ? JSON.stringify(tc.result, null, 2) : String(tc.result)
+    lines.push('Result:', resultStr)
+  }
+  if (tc.error) {
+    lines.push('Error:', tc.error)
+  }
+  return lines.join('\n')
+}
 
 const userEmail = computed(() => {
   const token = getAccessToken();
@@ -248,6 +318,7 @@ async function handleSend() {
   const text = inputText.value.trim();
   if (!text || store.isStreaming) return;
   inputText.value = "";
+  resizeInput()
   await store.sendMessage(text);
   if (store.activeSessionId) {
     try {
@@ -256,6 +327,25 @@ async function handleSend() {
       console.error("Failed to start Remy stream:", e);
     }
   }
+}
+
+function onInputKeydown(e: KeyboardEvent) {
+  if (e.key === 'Enter' && !e.shiftKey && !e.ctrlKey && !e.metaKey) {
+    e.preventDefault()
+    handleSend()
+  }
+}
+
+const inputRef = ref<HTMLTextAreaElement | null>(null)
+
+function resizeInput() {
+  nextTick(() => {
+    const el = document.querySelector('.remy-input') as HTMLTextAreaElement | null
+    if (el) {
+      el.style.height = 'auto'
+      el.style.height = Math.min(el.scrollHeight, 200) + 'px'
+    }
+  })
 }
 
 function copyMessage(text: string) {
@@ -395,10 +485,14 @@ function renderMarkdown(text: string): string {
   border-color: hsl(var(--border));
 }
 .remy-input {
-  @apply rounded-lg px-3 py-2 text-sm outline-none;
+  @apply rounded-lg px-3 py-2 text-sm outline-none resize-none;
   background-color: hsl(var(--background));
   border: 1px solid hsl(var(--input));
   color: hsl(var(--foreground));
+  overflow-y: auto;
+  min-height: 38px;
+  max-height: 200px;
+  line-height: 1.4;
 }
 .remy-input:focus {
   border-color: hsl(var(--ring));
@@ -441,5 +535,47 @@ function renderMarkdown(text: string): string {
   @apply flex items-center gap-2 rounded-lg border px-3 py-2 text-sm;
   background-color: hsl(var(--muted));
   border-color: hsl(var(--border));
+}
+.remy-tool-card {
+  @apply rounded-lg border text-sm overflow-hidden;
+  background-color: hsl(var(--card));
+  border-color: hsl(var(--border));
+}
+.remy-tool-header {
+  @apply flex items-center gap-2 w-full px-3 py-2 text-left cursor-pointer;
+  background-color: hsl(var(--muted));
+  color: hsl(var(--foreground));
+}
+.remy-tool-header:hover {
+  background-color: hsl(var(--accent));
+}
+.remy-tool-name {
+  @apply flex-1 font-medium;
+}
+.tool-badge {
+  @apply text-xs font-medium px-2 py-0.5 rounded-full;
+}
+.tool-badge.success {
+  background-color: hsl(142 76% 36% / 0.15);
+  color: hsl(142 76% 36%);
+}
+.tool-badge.failed {
+  background-color: hsl(0 72% 51% / 0.15);
+  color: hsl(0 72% 51%);
+}
+.tool-chevron {
+  @apply text-xs transition-transform duration-200;
+  color: hsl(var(--muted-foreground));
+}
+.tool-chevron.expanded {
+  transform: rotate(180deg);
+}
+.remy-tool-details {
+  @apply border-t px-3 py-2;
+  border-color: hsl(var(--border));
+}
+.remy-tool-details pre {
+  @apply text-xs leading-relaxed whitespace-pre-wrap;
+  color: hsl(var(--muted-foreground));
 }
 </style>

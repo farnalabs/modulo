@@ -39,6 +39,8 @@ class DockerRuntimeProvider(RuntimeProvider):
         self,
         docker_host: str | None = None,
         default_image: str = _DEFAULT_IMAGE,
+        create_timeout: int = 120,
+        start_timeout: int = 30,
     ) -> None:
         self._docker_host = (
             docker_host
@@ -46,7 +48,10 @@ class DockerRuntimeProvider(RuntimeProvider):
             or os.environ.get("DOCKER_HOST")
         )
         self._default_image = default_image
+        self._create_timeout = create_timeout
+        self._start_timeout = start_timeout
         self._client: aiodocker.Docker | None = None
+        self._client_lock = asyncio.Lock()
         self._workspaces: dict[str, str] = {}
 
     # ------------------------------------------------------------------
@@ -87,19 +92,22 @@ class DockerRuntimeProvider(RuntimeProvider):
                 env.append(entry)
 
         try:
-            container = await client.containers.create(
-                config={
-                    "Image": image,
-                    "Cmd": ["sleep", "infinity"],
-                    "Env": env,
-                    "HostConfig": {
-                        "AutoRemove": True,
-                        "Memory": memory_mb * 1024 * 1024,
+            container = await asyncio.wait_for(
+                client.containers.create(
+                    config={
+                        "Image": image,
+                        "Cmd": ["sleep", "infinity"],
+                        "Env": env,
+                        "HostConfig": {
+                            "AutoRemove": True,
+                            "Memory": memory_mb * 1024 * 1024,
+                        },
                     },
-                },
-                name=container_name,
+                    name=container_name,
+                ),
+                timeout=self._create_timeout,
             )
-            await container.start()
+            await asyncio.wait_for(container.start(), timeout=self._start_timeout)
         except Exception:
             _log.exception("Failed to create container for workspace %s", ref)
             raise
@@ -122,10 +130,20 @@ class DockerRuntimeProvider(RuntimeProvider):
 
         async def _run_exec() -> tuple[bytes, bytes, int]:
             stream: Any = await exec_instance.start(detach=False)  # type: ignore[misc]
-            stdout_bytes, stderr_bytes = await stream.read_out()
+            stdout_chunks: list[bytes] = []
+            stderr_chunks: list[bytes] = []
+            while True:
+                frame = await stream.read_out()
+                if frame is None:
+                    break
+                out, err = frame
+                if out:
+                    stdout_chunks.append(out)
+                if err:
+                    stderr_chunks.append(err)
             info = await exec_instance.inspect()
             exit_code = info.get("ExitCode", -1)
-            return stdout_bytes or b"", stderr_bytes or b"", exit_code
+            return b"".join(stdout_chunks), b"".join(stderr_chunks), exit_code
 
         start = time.monotonic()
         try:
@@ -197,7 +215,9 @@ class DockerRuntimeProvider(RuntimeProvider):
 
     async def _get_client(self) -> aiodocker.Docker:
         if self._client is None:
-            self._client = aiodocker.Docker(url=self._docker_host)
+            async with self._client_lock:
+                if self._client is None:
+                    self._client = aiodocker.Docker(url=self._docker_host)
         return self._client
 
     def _get_container_id(self, provider_ref: str) -> str:

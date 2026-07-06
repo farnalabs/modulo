@@ -38,7 +38,7 @@ class BatchDetailRequest(BaseModel):
     event_ids: list[str]
 
 
-@router.get("", response_model=dict[str, object], dependencies=[require_feature("audit_viewer")])
+@router.get("", response_model=dict[str, object])
 async def list_audit_events_endpoint(
     cursor: str | None = Query(None, max_length=256, description="Cursor: JSON {c:created_at, i:id}"),
     limit: int = Query(50, ge=1, le=200, description="Number of events per page"),

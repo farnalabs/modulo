@@ -30,6 +30,7 @@ code:
 unit-tests:
   - backend/tests/unit/api/test_stages.py
   - backend/tests/unit/api/test_pipelines_endpoint.py
+  - backend/tests/unit/api/test_stage_programming_error.py
   - backend/tests/unit/test_pipeline_node_conversion.py
 depends-on: []
 status: partial
@@ -232,11 +233,19 @@ frontend-side integration:
 
 ## Error Handling
 
-- [x] Stage CRUD routes catch ProgrammingError → 501 (fixed in this session)
-- [x] Pipeline graph routes catch ProgrammingError where applicable
+- [x] Stage CRUD routes catch ProgrammingError → 501
+- [x] Stage CRUD routes catch SQLAlchemyError → 503
+- [x] Pipeline CRUD routes catch ProgrammingError → 501
+- [x] Pipeline CRUD routes catch SQLAlchemyError → 503
+- [x] Pipeline clone route catches ProgrammingError → 501 and SQLAlchemyError → 503
 - [x] Node conversion routes catch ProgrammingError → 501
+- [x] Node conversion routes catch SQLAlchemyError → 503
+- [x] Node conversion routes catch IntegrityError → 409 (separate from ProgrammingError)
+- [x] Pipeline graph routes catch ProgrammingError where applicable
+- [x] Save-as-composite route moved all DB queries inside session.begin() — RLS leak fixed
 - [x] GraphValidator errors propagate with specific error codes (TOPOLOGY_*, SCHEMA_*, CONNECTOR_*, MODEL_BACKEND_*, ENV_*, COMPOSITE_*)
 - [x] Graph validation errors surfaced in PipelineGraphResponse.validation_issues — returned to frontend, not lost
+- [x] 10 new unit tests covering ProgrammingError→501 and SQLAlchemyError→503 for all 5 stage routes
 - [ ] Stage DELETE with pipelines still assigned — no test for FK constraint behaviour
 - [ ] Stage create with non-existent owner_team_id — no explicit test (FK constraint at DB level)
 
@@ -281,5 +290,6 @@ frontend-side integration:
 
 ## QA History
 
+- 2026-07-08: Cross-cutting QA (index 254): Fixed CRITICAL — RLS leak in save_as_composite_endpoint (3 DB queries outside session.begin() — Agent lookup, PipelineEdge fetch, create_composite_template — missing RLS context on Postgres; all moved inside transaction). Fixed CRITICAL — added SQLAlchemyError→503 catches to all 5 stage routes (previously only ProgrammingError→501). Fixed CRITICAL — added SQLAlchemyError→503 catches to 8 pipeline CRUD + clone routes. Fixed CRITICAL — combined `except (IntegrityError, ProgrammingError, SQLAlchemyError)` in convert-to-agent/revert-to-manual split into separate handlers with correct status codes (409/501/503). Fixed MAJOR — added `populate_by_name=True` to StageResponse. Fixed MAJOR — replaced 10 `e instanceof Error ? e.message : String(e)` handlers with `formatApiError(e)` in 4 frontend views (PipelineEditorView, StageBoardView, PipelineListView, PipelineTemplateGallery). Created backend/tests/unit/api/test_stage_programming_error.py with 10 tests covering all 5 stage routes × 2 error types. Fixed 2 pre-existing test failures (license tier assertion, AsyncMock for publish_primitive). Merged to main at v0.3.227. Status: partial.
 - 2026-07-05: Prodmap pipelines QA: Fixed depends-on direction (core → cicd was inverted). Fixed false Known Gap about missing `test_graph_validator.py`. Fixed website docs path prefix. Updated delivery-tasks note.
 

@@ -8,7 +8,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from fastapi.testclient import TestClient
 
-from modulo.api.dependencies import _get_engine, get_db_session
+from modulo.api.dependencies import _get_engine, get_db_session, get_plan_context
 from modulo.api.main import app
 from modulo.auth.dependencies import get_current_user
 from modulo.auth.jwt import AuthenticatedPrincipal
@@ -81,6 +81,9 @@ def client() -> Generator[TestClient, None, None]:
         account_id=_USER_ID,
         org_role="admin",
     )
+    mock_plan = MagicMock()
+    mock_plan.feature_enabled.return_value = True
+    app.dependency_overrides[get_plan_context] = lambda: mock_plan
     yield TestClient(app)
     app.dependency_overrides.clear()
 
@@ -201,7 +204,7 @@ class TestPublishPrimitive:
     def test_publish_v1_creates_entry(self, client: TestClient) -> None:
         entry = _make_entry(slug="communityuser/my-workflow")
         with (
-            patch("modulo.api.routes.registry.publish_primitive", return_value=entry),
+            patch("modulo.api.routes.registry.publish_primitive", new_callable=AsyncMock, return_value=entry),
             patch("modulo.api.routes.registry.verify_primitive_signature"),
             patch("modulo.api.routes.registry.get_publisher_status"),
         ):
@@ -268,7 +271,7 @@ class TestPublishV2:
         entry = _make_entry(slug="signeduser/signed-flow")
         keypair = {"private_key": "bb" * 32}
         with (
-            patch("modulo.api.routes.registry.publish_primitive", return_value=entry),
+            patch("modulo.api.routes.registry.publish_primitive", new_callable=AsyncMock, return_value=entry),
             patch("modulo.api.routes.registry.crypto_pem_verify", return_value=True),
             patch("modulo.api.routes.registry.crypto_generate_keypair", return_value=keypair),
             patch("modulo.api.routes.registry.verify_trust_anchor", return_value=True),

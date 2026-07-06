@@ -143,3 +143,52 @@ async def test_close_is_idempotent():
     broker._pub = None
     broker._sub = None
     await broker.close()  # must not raise
+
+
+# ---------------------------------------------------------------------------
+# Error-path connection cleanup
+# ---------------------------------------------------------------------------
+
+
+async def test_publish_error_closes_old_connection(broker, mock_redis):
+    """When pub.publish() raises, the old connection must be closed before clearing _pub."""
+    mock_redis.publish.side_effect = ConnectionError("Redis connection lost")
+    mock_redis.close = AsyncMock()
+
+    await broker.publish("run:abc", {"event": "test"})
+
+    mock_redis.close.assert_awaited_once_with(close_connection_pool=True)
+    assert broker._pub is None
+
+
+async def test_publish_error_on_serialization_does_not_close_connection(broker, mock_redis):
+    """A json.dumps TypeError should not close the connection or clear _pub."""
+    mock_redis.close = AsyncMock()
+
+    await broker.publish("run:abc", {"event": object()})  # non-serializable
+
+    mock_redis.close.assert_not_called()
+    assert broker._pub is mock_redis
+
+
+async def test_subscribe_error_closes_old_connection(broker, mock_redis):
+    """When sub.pubsub().subscribe() raises, the old connection must be closed before clearing _sub."""
+    mock_pubsub = MagicMock()
+    mock_pubsub.subscribe = AsyncMock(side_effect=ConnectionError("Redis connection lost"))
+    mock_redis.pubsub.return_value = mock_pubsub
+    mock_redis.close = AsyncMock()
+
+    with pytest.raises(ConnectionError):
+        await broker.subscribe("run:xyz")
+
+    mock_redis.close.assert_awaited_once_with(close_connection_pool=True)
+    assert broker._sub is None
+
+
+async def test_publish_error_on_no_connection_propagates(broker, mock_redis):
+    """When _pub is None and connect() fails, the error should propagate."""
+    with patch.object(RedisEventBroker, "connect", side_effect=ConnectionError("Redis unavailable")):
+        broker._pub = None
+        broker._sub = MagicMock()
+        with pytest.raises(ConnectionError):
+            await broker.publish("test", {"msg": "hello"})

@@ -46,18 +46,18 @@ TOOL_SCOPE_REQUIREMENTS: dict[str, str] = {
 }
 
 _VALID_ROLES = frozenset(ORG_ROLE_HIERARCHY)
-for _tool, _role in TOOL_SCOPE_REQUIREMENTS.items():
-    if _role not in _VALID_ROLES:
+for tool, role in TOOL_SCOPE_REQUIREMENTS.items():
+    if role not in _VALID_ROLES:
         raise MCPConfigurationError(
-            f"Misconfigured scope requirement for '{_tool}': "
-            f"role '{_role}' is not in the role hierarchy",
+            f"Misconfigured scope requirement for '{tool}': "
+            f"role '{role}' is not in the role hierarchy",
         )
 
 
-def _sanitize(value: str) -> str:
+def _sanitize(value: str, name: str = "value") -> str:
     stripped = value.strip().lower()
     if not stripped:
-        raise MCPAuthorizationError("Value is empty or whitespace-only")
+        raise MCPAuthorizationError(f"{name} is empty or whitespace-only")
     return stripped
 
 
@@ -74,14 +74,14 @@ def check_tool_scope(
         _log.error("Scope check failed: tool_name is not a string (type=%s)", type(tool_name).__name__)
         raise MCPAuthorizationError("Tool name must be a string")
 
-    name = _sanitize(tool_name)
+    normalized = _sanitize(tool_name, name="tool_name")
 
     if action is not None:
         if not isinstance(action, str):
             _log.error("Scope check failed: action is not a string (type=%s)", type(action).__name__)
             raise MCPAuthorizationError("Action must be a string")
-        act = _sanitize(action)
-        key = f"{name}:{act}"
+        act = _sanitize(action, name="action")
+        key = f"{normalized}:{act}"
         required = TOOL_SCOPE_REQUIREMENTS.get(key)
         if required is None:
             _log.warning("Unknown action '%s' for tool '%s'", action, tool_name)
@@ -89,7 +89,7 @@ def check_tool_scope(
                 f"Unknown action '{action}' for tool '{tool_name}'",
             )
     else:
-        required = TOOL_SCOPE_REQUIREMENTS.get(name)
+        required = TOOL_SCOPE_REQUIREMENTS.get(normalized)
         if required is None:
             return
 

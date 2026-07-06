@@ -27,12 +27,11 @@
           >
             <option value="">{{ $t('views.AdminNotificationDeliveryLogView.all_types') }}</option>
             <option value="pipeline_template">{{ $t('views.LibraryView.pipeline_templates') }}</option>
-            <option value="workflow">Workflows</option>
-            <option value="agent">Agents</option>
-            <option value="schema">Schemas</option>
-            <option value="integration">Integrations</option>
-            <option value="test_fixture">{{ $t('views.LibraryView.test_fixtures') }}</option>
-            <option value="composite">Composites</option>
+            <option value="workflow">{{ $t('views.LibraryView.type_workflows') }}</option>
+            <option value="agent">{{ $t('views.LibraryView.type_agents') }}</option>
+            <option value="schema">{{ $t('views.LibraryView.type_schemas') }}</option>
+            <option value="integration">{{ $t('views.LibraryView.type_integrations') }}</option>
+            <option value="composite">{{ $t('views.LibraryView.type_composites') }}</option>
           </select>
         </div>
       </div>
@@ -49,7 +48,7 @@
           data-testid="library-section-native"
           @click="switchSection('native')"
         >
-          Native Library
+          {{ $t('views.LibraryView.native_library') }}
         </button>
         <button
           type="button"
@@ -60,15 +59,15 @@
           data-testid="library-section-community"
           @click="switchSection('community')"
         >
-          Community
+          {{ $t('views.LibraryView.community_tab') }}
         </button>
       </div>
 
       <p v-if="section === 'community'" class="text-sm text-muted-foreground" data-testid="library-community-disclaimer">
-        Contributed by users. Not maintained or verified by Modulo — use your judgment.
+        {{ $t('views.LibraryView.community_disclaimer') }}
       </p>
 
-      <div v-if="loading" class="text-center py-12 text-muted-foreground">Loading...</div>
+      <div v-if="loading" class="text-center py-12 text-muted-foreground">{{ $t('views.LibraryView.loading') }}</div>
 
       <div v-else-if="error" class="rounded-lg border border-destructive/50 bg-destructive/10 p-4 text-destructive">
         {{ error }}
@@ -103,14 +102,14 @@
               <h3 class="mt-2 text-base font-medium text-foreground">{{ prim.name }}</h3>
             </div>
             <div v-if="prim.source === 'modulo'" class="text-xs text-primary font-medium bg-primary/10 px-2 py-0.5 rounded">
-              Modulo
+              {{ $t('views.LibraryView.modulo_badge') }}
             </div>
             <div
               v-else-if="prim.source === 'community'"
               class="text-xs text-muted-foreground font-medium bg-muted px-2 py-0.5 rounded"
               data-testid="library-community-badge"
             >
-              Community — not verified
+              {{ $t('views.LibraryView.community_badge') }}
             </div>
           </div>
 
@@ -195,21 +194,21 @@
             </p>
 
             <div class="flex items-center gap-2 mt-auto">
-              <button
-                v-if="prim.primitive_type === 'pipeline_template' || prim.primitive_type === 'composite'"
-                class="flex-1 px-3 py-2 bg-primary text-primary-foreground text-sm font-medium rounded-lg border border-primary/30 hover:border-primary/60 hover:brightness-110 transition-all"
-                @click="createPipeline(prim)"
-                data-testid="library-create-pipeline"
-              >
-                Create Pipeline
-              </button>
-              <button
-                class="flex-1 px-3 py-2 border border-border bg-background text-foreground text-sm font-medium rounded-lg hover:bg-accent transition-colors"
-                @click="viewPrimitive(prim)"
-                data-testid="library-view-details"
-              >
-                View Details
-              </button>
+            <button
+              v-if="prim.primitive_type === 'pipeline_template' || prim.primitive_type === 'composite'"
+              class="flex-1 px-3 py-2 bg-primary text-primary-foreground text-sm font-medium rounded-lg border border-primary/30 hover:border-primary/60 hover:brightness-110 transition-all"
+              @click="createPipeline(prim)"
+              data-testid="library-create-pipeline"
+            >
+              {{ $t('views.LibraryView.create_pipeline') }}
+            </button>
+            <button
+              class="flex-1 px-3 py-2 border border-border bg-background text-foreground text-sm font-medium rounded-lg hover:bg-accent transition-colors"
+              @click="viewPrimitive(prim)"
+              data-testid="library-view-details"
+            >
+              {{ $t('views.LibraryView.view_details') }}
+            </button>
             </div>
           </div>
         </div>
@@ -281,10 +280,10 @@
           @click="prevPage"
           data-testid="library-previous-page"
         >
-          Previous
+          {{ $t('views.LibraryView.previous_page') }}
         </button>
         <span class="px-4 py-2 text-sm text-muted-foreground">
-          Page {{ page }} of {{ Math.ceil(total / pageSize) }}
+          {{ $t('views.LibraryView.page_of', { page: page, total: Math.ceil(total / pageSize) }) }}
         </span>
         <button
           :disabled="page >= Math.ceil(total / pageSize)"
@@ -292,7 +291,7 @@
           @click="nextPage"
           data-testid="library-next-page"
         >
-          Next
+          {{ $t('views.LibraryView.next_page') }}
         </button>
       </div>
     </main>

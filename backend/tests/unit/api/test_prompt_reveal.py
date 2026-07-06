@@ -11,7 +11,7 @@ import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from modulo.api.dependencies import _get_engine, get_db_session
+from modulo.api.dependencies import _get_engine, get_db_session, get_plan_context
 from modulo.api.main import app
 from modulo.api.middleware.sensitive_mask import SENSITIVE_VALUE_MASK
 from modulo.auth.dependencies import get_current_user
@@ -111,6 +111,9 @@ def client() -> Generator[TestClient, None, None]:
         org_role="admin",
     )
 
+    mock_plan = MagicMock()
+    mock_plan.feature_enabled.return_value = True
+    app.dependency_overrides[get_plan_context] = lambda: mock_plan
     yield TestClient(app)
 
     app.dependency_overrides.clear()
@@ -119,6 +122,9 @@ def client() -> Generator[TestClient, None, None]:
 @pytest.fixture()
 def unauth_client() -> Generator[TestClient, None, None]:
     app.dependency_overrides[get_settings] = _make_settings
+    mock_plan = MagicMock()
+    mock_plan.feature_enabled.return_value = True
+    app.dependency_overrides[get_plan_context] = lambda: mock_plan
     yield TestClient(app)
     app.dependency_overrides.clear()
 

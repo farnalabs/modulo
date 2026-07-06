@@ -131,7 +131,7 @@ async def _collect_org_data(
     bundle["organisation"] = _serialise_row(org)
 
     if pipelines_only and users_only:
-        _log.warning("Both --pipelines-only and --users-only set. Using --pipelines-only.")
+        raise click.ClickException("--pipelines-only and --users-only are mutually exclusive")
     tables_to_fetch = list(_MODEL_MAP.items())
     if pipelines_only:
         tables_to_fetch = [(n, m) for n, m in tables_to_fetch if n == "pipelines"]
@@ -242,9 +242,10 @@ async def _import_org_data(
 ) -> dict[str, int]:
     counts: dict[str, int] = {"created": 0, "skipped": 0, "overwritten": 0, "errors": 0}
     groups = _group_records(records)
+    id_map: dict[str, str] = {}
 
     if pipelines_only and users_only:
-        _log.warning("Both --pipelines-only and --users-only set. Using --pipelines-only.")
+        raise click.ClickException("--pipelines-only and --users-only are mutually exclusive")
     tables_to_import = list(groups.items())
     if pipelines_only:
         tables_to_import = [(n, r) for n, r in tables_to_import if n == "pipelines"]
@@ -262,40 +263,43 @@ async def _import_org_data(
             counts["errors"] += 1
             continue
 
+        pk_cols = list(model_cls.__table__.primary_key.columns.keys())  # type: ignore[attr-defined]
+        pk_col = pk_cols[0] if pk_cols else "id"
+        skip_cols = {"id", pk_col, "created_at", "organisation_id"}
+
         for rec in tqdm(recs, desc=f"  {table_name}", unit="row", leave=False):
-            row_data = dict(rec.get("data", {}))
-            if not row_data and not rec.get("data"):
-                _log.warning("Record missing 'data' key, skipping: %s", rec.get("id", "?"))
+            raw_data = rec.get("data")
+            if raw_data is None or not isinstance(raw_data, dict):
+                _log.warning("Record missing or invalid 'data' key, skipping: %s", rec.get("id", "?"))
                 counts["errors"] += 1
                 continue
+            row_data = dict(raw_data)
             row_data.pop("organisation_id", None)
             row_id = row_data.get("id")
+            old_id_str = str(row_id) if row_id else None
+            _remap_fk_row(row_data, id_map)
 
-            pk_cols = list(model_cls.__table__.primary_key.columns.keys())  # type: ignore[attr-defined]
-            pk_col = pk_cols[0] if pk_cols else "id"
             try:
-                existing = None
-                if row_id:
-                    stmt: Any = select(model_cls).where(getattr(model_cls, pk_col) == uuid.UUID(row_id))
-                    existing = (await session.execute(stmt)).scalar_one_or_none()
+                existing = await _find_existing_row(session, model_cls, pk_col, row_id, org_id)
 
                 if existing is not None and strategy == "skip":
+                    if old_id_str and hasattr(existing, pk_col):
+                        id_map[old_id_str] = str(getattr(existing, pk_col))
                     counts["skipped"] += 1
                     continue
 
                 async with session.begin_nested():
                     if existing is not None and strategy in ("overwrite", "merge"):
-                        skip_cols = {"id", pk_col, "created_at", "organisation_id"}
                         for col, val in row_data.items():
-                            if col in skip_cols:
-                                continue
-                            if not hasattr(existing, col):
+                            if col in skip_cols or not hasattr(existing, col):
                                 continue
                             if strategy == "merge":
                                 current = getattr(existing, col)
                                 if current is not None:
                                     continue
                             setattr(existing, col, val)
+                        if old_id_str and hasattr(existing, pk_col):
+                            id_map[old_id_str] = str(getattr(existing, pk_col))
                         counts["overwritten"] += 1
                         continue
 
@@ -303,7 +307,11 @@ async def _import_org_data(
                         row_data.pop("id", None)
                         if hasattr(model_cls, "organisation_id"):
                             row_data["organisation_id"] = org_id
-                        session.add(model_cls(**row_data))
+                        new_obj = model_cls(**row_data)
+                        session.add(new_obj)
+                        await session.flush()
+                        if old_id_str and hasattr(new_obj, pk_col):
+                            id_map[old_id_str] = str(getattr(new_obj, pk_col))
                         counts["created"] += 1
 
             except Exception as exc:
@@ -317,6 +325,31 @@ async def _import_org_data(
             raise
 
     return counts
+
+
+def _remap_fk_row(row_data: dict[str, Any], id_map: dict[str, str]) -> None:
+    for key, val in list(row_data.items()):
+        if key in ("id", "organisation_id", "created_at", "updated_at"):
+            continue
+        if val is not None:
+            mapped = id_map.get(str(val))
+            if mapped is not None:
+                row_data[key] = uuid.UUID(mapped)
+
+
+async def _find_existing_row(
+    session: Any,
+    model_cls: type,
+    pk_col: str,
+    row_id: str | None,
+    org_id: uuid.UUID,
+) -> Any:
+    if not row_id:
+        return None
+    stmt: Any = select(model_cls).where(getattr(model_cls, pk_col) == uuid.UUID(row_id))
+    if hasattr(model_cls, "organisation_id"):
+        stmt = stmt.where(model_cls.organisation_id == org_id)
+    return (await session.execute(stmt)).scalar_one_or_none()
 
 
 # ── Verify helpers ──────────────────────────────────────────────────────────────
@@ -468,11 +501,10 @@ async def _async_import_org(
     _meta, records = await _read_jsonl(input_path)
     click.echo(f"Loaded {len(records)} records from {input_path}")
 
-    if _meta.get("export_hash"):
-        if not _verify_export(_meta, records):
-            raise click.ClickException(
-                "Import aborted: hash verification failed — file may be corrupted"
-            )
+    if _meta.get("export_hash") and not _verify_export(_meta, records):
+        raise click.ClickException(
+            "Import aborted: hash verification failed — file may be corrupted"
+        )
 
     try:
         async with AsyncSessionLocal() as session:

@@ -6,17 +6,22 @@ All functions assume an active transaction with RLS org context set by the calle
 from __future__ import annotations
 
 import json
+import logging
 import uuid
 from datetime import UTC, date, datetime, timedelta
 from typing import Any
 
 from sqlalchemy import case, func, select
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.db.models.daily_run_count import OrgDailyRunCount
 from modulo.db.models.eval_result import EvalResult
 
+_log = logging.getLogger(__name__)
+
 _REPORT_PERIOD_DAYS = 7
+_WEEK_OVER_WEEK_THRESHOLD = 5.0
 
 
 async def generate_quality_report(
@@ -34,63 +39,70 @@ async def generate_quality_report(
 
     Returns a structured dict with report data.
     """
-    today = datetime.now(UTC).date()
-    current_start = today - timedelta(days=_REPORT_PERIOD_DAYS - 1)
-    previous_start = today - timedelta(days=2 * _REPORT_PERIOD_DAYS - 1)
-    previous_end = today - timedelta(days=_REPORT_PERIOD_DAYS)
+    try:
+        today = datetime.now(UTC).date()
+        current_start = today - timedelta(days=_REPORT_PERIOD_DAYS - 1)
+        previous_start = today - timedelta(days=2 * _REPORT_PERIOD_DAYS - 1)
+        previous_end = today - timedelta(days=_REPORT_PERIOD_DAYS)
 
-    current_weekly = await _query_weekly_agg(session, org_id, current_start, today)
-    previous_weekly = await _query_weekly_agg(session, org_id, previous_start, previous_end)
+        current_weekly = await _query_weekly_agg(session, org_id, current_start, today)
+        previous_weekly = await _query_weekly_agg(session, org_id, previous_start, previous_end)
 
-    current_eval = await _query_eval_summary(session, org_id, current_start, today)
-    previous_eval = await _query_eval_summary(session, org_id, previous_start, previous_end)
+        current_eval = await _query_eval_summary(session, org_id, current_start, today)
+        previous_eval = await _query_eval_summary(session, org_id, previous_start, previous_end)
 
-    daily_query = (
-        select(
-            OrgDailyRunCount.run_date,
-            func.sum(OrgDailyRunCount.run_count).label("run_count"),
-            func.sum(OrgDailyRunCount.total_spend_usd).label("total_spend"),
+        daily_query = (
+            select(
+                OrgDailyRunCount.run_date,
+                func.sum(OrgDailyRunCount.run_count).label("run_count"),
+                func.sum(OrgDailyRunCount.total_spend_usd).label("total_spend"),
+            )
+            .where(
+                OrgDailyRunCount.organisation_id == org_id,
+                OrgDailyRunCount.run_date >= current_start,
+            )
+            .group_by(OrgDailyRunCount.run_date)
+            .order_by(OrgDailyRunCount.run_date)
         )
-        .where(
-            OrgDailyRunCount.organisation_id == org_id,
-            OrgDailyRunCount.run_date >= current_start,
-        )
-        .group_by(OrgDailyRunCount.run_date)
-        .order_by(OrgDailyRunCount.run_date)
-    )
-    daily_rows = (await session.execute(daily_query)).all()
-    daily_map: dict[date, tuple[int, float]] = {}
-    for row in daily_rows:
-        daily_map[row.run_date] = (
-            int(row.run_count) if row.run_count else 0,
-            float(row.total_spend) if row.total_spend else 0.0,
-        )
+        daily_rows = (await session.execute(daily_query)).all()
+        daily_map: dict[date, tuple[int, float]] = {}
+        for row in daily_rows:
+            daily_map[row.run_date] = (
+                int(row.run_count) if row.run_count else 0,
+                float(row.total_spend) if row.total_spend else 0.0,
+            )
 
-    daily_eval = await _query_daily_eval_rates(session, org_id, current_start, today)
-    daily_eval_map: dict[date, float | None] = {}
-    for d, total, passed in daily_eval:
-        daily_eval_map[d] = round(passed / total * 100, 1) if total > 0 else None
+        daily_eval = await _query_daily_eval_rates(session, org_id, current_start, today)
+        daily_eval_map: dict[date, float | None] = {}
+        for d, total, passed in daily_eval:
+            daily_eval_map[d] = round(passed / total * 100, 1) if total > 0 else None
 
-    trend: list[dict[str, Any]] = []
-    for i in range(_REPORT_PERIOD_DAYS):
-        d = current_start + timedelta(days=i)
-        rc, sp = daily_map.get(d, (0, 0.0))
-        trend.append(
-            {
-                "date": d.isoformat(),
-                "run_count": rc,
-                "eval_pass_rate": daily_eval_map.get(d),
-                "token_spend_usd": sp,
-            }
-        )
+        trend: list[dict[str, Any]] = []
+        for i in range(_REPORT_PERIOD_DAYS):
+            d = current_start + timedelta(days=i)
+            rc, sp = daily_map.get(d, (0, 0.0))
+            trend.append(
+                {
+                    "date": d.isoformat(),
+                    "run_count": rc,
+                    "eval_pass_rate": daily_eval_map.get(d),
+                    "token_spend_usd": sp,
+                }
+            )
 
-    current_runs = current_weekly["run_count"]
-    previous_runs = previous_weekly["run_count"]
-    current_cost = current_weekly["total_spend"]
-    previous_cost = previous_weekly["total_spend"]
+        current_runs = current_weekly["run_count"]
+        previous_runs = previous_weekly["run_count"]
+        current_cost = current_weekly["total_spend"]
+        previous_cost = previous_weekly["total_spend"]
 
-    current_avg_rate = current_eval["pass_rate"]
-    previous_avg_rate = previous_eval["pass_rate"]
+        current_avg_rate = current_eval["pass_rate"]
+        previous_avg_rate = previous_eval["pass_rate"]
+    except SQLAlchemyError:
+        _log.exception("Failed to query report data for org %s", org_id)
+        raise
+    except Exception:
+        _log.exception("Unexpected error generating quality report for org %s", org_id)
+        raise
 
     return {
         "period": {
@@ -228,14 +240,9 @@ _TREND_FLAT = "\u2192"
 
 
 def _trend_symbol(delta_pct: float | None) -> str:
-    if delta_pct is None:
+    if delta_pct is None or abs(delta_pct) <= _WEEK_OVER_WEEK_THRESHOLD:
         return _TREND_FLAT
-    threshold = 5.0
-    if delta_pct > threshold:
-        return _TREND_UP
-    if delta_pct < -threshold:
-        return _TREND_DOWN
-    return _TREND_FLAT
+    return _TREND_UP if delta_pct > 0 else _TREND_DOWN
 
 
 def _format_summary_block(summary: dict[str, Any]) -> dict[str, Any]:
