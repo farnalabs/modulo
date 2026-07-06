@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
+import threading
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
@@ -15,7 +16,7 @@ _log = logging.getLogger(__name__)
 type _SubscriberMap = dict[str, list[asyncio.Queue[dict[str, Any]]]]
 
 _background_tasks: set[asyncio.Task[Any]] = set()
-_bus_init_lock: asyncio.Lock = asyncio.Lock()
+_bus_init_lock: threading.Lock = threading.Lock()
 
 
 class EventBus:
@@ -61,7 +62,7 @@ class EventBus:
         for q in queues:
             try:
                 q.put_nowait(event)
-            except (asyncio.QueueFull, ValueError):
+            except asyncio.QueueFull:
                 dead.append(q)
         await self._remove_dead_queues(org_id, dead)
         await self._redis_broadcast_if_configured(org_id, event)
@@ -87,27 +88,15 @@ class EventBus:
         broker = self._redis_broker
         if broker is None:
             return
-        try:
-            asyncio.get_running_loop()
-        except RuntimeError:
-            _log.warning(
-                "event_bus.no_running_loop",
-                extra={
-                    "org_id": org_id,
-                    "resource_type": event.get("type"),
-                    "action": event.get("action"),
-                },
-            )
-        else:
-            task = asyncio.create_task(self._redis_broadcast(broker, org_id, event))
-            _background_tasks.add(task)
-            task.add_done_callback(_background_tasks.discard)
+        task = asyncio.create_task(self._redis_broadcast(broker, org_id, event))
+        _background_tasks.add(task)
+        task.add_done_callback(_background_tasks.discard)
 
     async def _redis_broadcast(self, broker: RedisEventBroker, org_id: str, event: dict[str, Any]) -> None:
         """Fire-and-forget: publish event to Redis channel (best-effort)."""
         try:
             await broker.publish(f"resource:{org_id}", event)
-        except (ConnectionError, TimeoutError, OSError):
+        except Exception:
             _log.exception("event_bus.redis_broadcast_failed", extra={"org_id": org_id})
 
     async def subscribe(self, org_id: str, maxsize: int = 256) -> asyncio.Queue[dict[str, Any]]:
@@ -150,7 +139,9 @@ def _set_event_bus(bus: EventBus | None) -> None:
 def get_event_bus() -> EventBus:
     """Return the module-level EventBus singleton (lazy init)."""
     if _event_bus is None:
-        _set_event_bus(EventBus())
+        with _bus_init_lock:
+            if _event_bus is None:
+                _set_event_bus(EventBus())
     return _event_bus  # type: ignore[return-value]
 
 
@@ -160,10 +151,14 @@ async def configure_event_bus(redis_broker: RedisEventBroker | None = None) -> N
     Call during application startup (before any events are published) to
     enable cross-worker event broadcasting via Redis.
     """
-    if _event_bus is None:
-        _set_event_bus(EventBus(redis_broker=redis_broker))
-    else:
-        old = _event_bus._redis_broker
-        if old is not None and old is not redis_broker:
+    with _bus_init_lock:
+        if _event_bus is None:
+            _set_event_bus(EventBus(redis_broker=redis_broker))
+            return
+    old = _event_bus._redis_broker
+    if old is not None and old is not redis_broker:
+        try:
             await old.close()
-        _event_bus._redis_broker = redis_broker
+        except Exception:
+            _log.warning("event_bus.close_old_broker_failed", exc_info=True)
+    _event_bus._redis_broker = redis_broker
