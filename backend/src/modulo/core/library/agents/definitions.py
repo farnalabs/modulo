@@ -199,7 +199,7 @@ DEPENDENCY_ANALYZER: dict[str, Any] = {
                     "required": ["package", "severity", "advisory"],
                     "properties": {
                         "package": {"type": "string"},
-                        "severity": {"type": "string"},
+                        "severity": {"type": "string", "enum": ["low", "medium", "high", "critical"]},
                         "advisory": {"type": "string"},
                     },
                 },
@@ -691,7 +691,9 @@ PROMPT_IMPROVER: dict[str, Any] = {
             "actual_output": {"type": "string", "description": "Actual output produced"},
             "eval_score": {
                 "type": "number",
-                "description": "Evaluation score (0-1 or percentage)",
+                "minimum": 0,
+                "maximum": 1,
+                "description": "Evaluation score (0-1 range)",
             },
         },
     },
@@ -714,7 +716,7 @@ PROMPT_IMPROVER: dict[str, Any] = {
             "suggested_prompt": {"type": "string", "description": "Revised prompt template"},
         },
     },
-    "tags": ["improver", "canonical", "library", "prompt", "optimisation"],
+    "tags": ["improver", "canonical", "library", "prompt", "optimization"],
     "version": "1.0.0",
     "author": "Modulo",
 }
@@ -818,7 +820,7 @@ FEEDBACK_ANALYZER: dict[str, Any] = {
                     "type": "object",
                     "required": ["comment"],
                     "properties": {
-                        "rating": {"type": "number"},
+                        "rating": {"type": "number", "minimum": 0, "maximum": 5},
                         "comment": {"type": "string", "minLength": 1},
                         "category": {"type": "string"},
                     },
@@ -1332,7 +1334,7 @@ CODE_REVIEWER: dict[str, Any] = {
                     "required": ["file", "line", "severity", "message", "category"],
                     "properties": {
                         "file": {"type": "string"},
-                        "line": {"type": "integer", "minimum": 0},
+                        "line": {"type": "integer", "minimum": 1},
                         "severity": {"type": "string", "enum": ["info", "warning", "error"]},
                         "message": {"type": "string"},
                         "category": {
@@ -1440,8 +1442,11 @@ SPEC_IMPLEMENTER: dict[str, Any] = {
     "prompt_template": (
         "You are an AI software engineer implementing a specification.\n\n"
         "SPECIFICATION:\n{spec_text}\n\n"
-        "Read the specification above, understand the codebase at the code path, "
-        "implement the required changes, run the test command to validate the changes, "
+        "Code path: {code_path}\n"
+        "Test command: {test_command}\n"
+        "Auto-commit: {auto_commit}\n\n"
+        "Read the specification above, implement the required changes in the "
+        "specified code path, run the test command to validate the changes, "
         "and fix any test failures. "
         "If auto-commit is enabled and the project is a git repository, stage all "
         "changes and commit them with a descriptive message.\n\n"
