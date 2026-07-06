@@ -14,21 +14,22 @@
         </router-link>
       </div>
 
-      <ViewModeToggle
-        :model-value="viewMode"
-        :options="[{ label: 'Essentials', value: 'simple' }, { label: 'All Features', value: 'advanced' }]"
-        @update:model-value="setViewMode"
-      />
-
-      <SidebarNav class="flex-1 overflow-y-auto min-h-0" :is-system-admin="isSystemAdmin" :user-role="userRole" />
-
       <SidebarFooter
+        compact
         :user-email="userEmail"
         :user-initial="userInitial"
         :is-light="isLight"
         @toggle-theme="toggleTheme"
         @logout="logout"
       />
+
+      <ViewModeToggle
+        :model-value="viewMode"
+        :options="[{ label: 'Essentials', value: 'simple' }, { label: 'All Features', value: 'advanced' }]"
+        @update:model-value="setViewMode"
+      />
+
+      <SidebarNav class="flex-1" :is-system-admin="isSystemAdmin" :user-role="userRole" />
     </aside>
 
     <!-- Mobile header -->
