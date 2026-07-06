@@ -49,7 +49,7 @@
       <template v-if="selectedPipelineId">
         <section class="space-y-4 rounded-lg border bg-card p-6">
           <h2 class="text-lg font-semibold tracking-tight">
-            {{ selectedGroupId ? 'Edit Variant Group' : 'New Variant Group' }}
+            {{ $t(selectedGroupId ? 'views.ABTestModelsView.edit_variant_group' : 'views.ABTestModelsView.new_variant_group') }}
           </h2>
           <div class="grid gap-4 sm:grid-cols-2">
             <div>
@@ -63,7 +63,7 @@
               />
             </div>
             <div>
-              <label class="mb-1 block text-sm font-medium text-muted-foreground">Description</label>
+              <label class="mb-1 block text-sm font-medium text-muted-foreground">{{ $t('views.ABTestModelsView.description') }}</label>
               <input
                 v-model="groupDescription"
                 data-testid="ab-test-models-group-description"
@@ -75,13 +75,13 @@
           </div>
 
           <div v-if="!selectedGroupId && availableSnapshotId" class="text-xs text-muted-foreground">
-            Using snapshot: <code class="rounded bg-muted px-1.5 py-0.5 font-mono">{{ shortId(availableSnapshotId) }}…</code>
+            {{ $t('views.ABTestModelsView.using_snapshot') }} <code class="rounded bg-muted px-1.5 py-0.5 font-mono">{{ shortId(availableSnapshotId) }}…</code>
             <span v-if="availableSnapshotTag" class="ml-1">({{ availableSnapshotTag }})</span>
           </div>
 
           <div class="space-y-3">
             <div class="flex items-center justify-between">
-              <h3 class="text-sm font-medium text-muted-foreground">Variants</h3>
+              <h3 class="text-sm font-medium text-muted-foreground">{{ $t('views.ABTestModelsView.variants_title') }}</h3>
               <button
                 :disabled="modelBackends.length === 0"
                 data-testid="ab-test-models-add-variant"
@@ -102,18 +102,18 @@
               class="rounded-lg border bg-muted p-4"
             >
               <div class="mb-3 flex items-center justify-between">
-                <span class="text-xs font-medium text-muted-foreground">Variant {{ i + 1 }}</span>
+                <span class="text-xs font-medium text-muted-foreground">{{ $t('views.ABTestModelsView.variant_prefix') }} {{ i + 1 }}</span>
                 <button
                   :data-testid="`ab-test-models-remove-variant-${i}`"
                   class="text-xs text-destructive hover:underline"
                   @click="removeVariant(i)"
                 >
-                  Remove
+                  {{ $t('views.ABTestModelsView.remove') }}
                 </button>
               </div>
               <div class="grid gap-3 sm:grid-cols-3">
                 <div>
-                  <label class="mb-1 block text-xs font-medium text-muted-foreground">Name</label>
+                  <label class="mb-1 block text-xs font-medium text-muted-foreground">{{ $t('views.ABTestModelsView.name_label') }}</label>
                   <input
                     v-model="v.name"
                     :data-testid="`ab-test-models-variant-name-${i}`"
@@ -165,26 +165,26 @@
               @click="saveAndRun"
             >
               <span v-if="running" class="inline-block h-4 w-4 animate-spin rounded-full border-2 border-current border-t-transparent" />
-              {{ running ? 'Running…' : 'Run A/B Test' }}
+              {{ running ? $t('views.ABTestModelsView.running') : $t('views.ABTestModelsView.run_ab_test') }}
             </button>
             <button
               data-testid="ab-test-models-save-group"
               class="inline-flex items-center gap-2 rounded-lg border border-input bg-background px-5 py-2 text-sm font-medium hover:bg-muted/50"
               @click="saveGroup"
             >
-              Save Group
+              {{ $t('views.ABTestModelsView.save_group') }}
             </button>
           </div>
         </section>
 
         <section v-if="runEntries.size > 0" class="space-y-4">
-          <h2 class="text-xl font-semibold tracking-tight">Results</h2>
+          <h2 class="text-xl font-semibold tracking-tight">{{ $t('views.ABTestModelsView.results_title') }}</h2>
 
           <div class="overflow-x-auto rounded-lg border bg-card">
             <table class="w-full text-left text-sm">
               <thead>
                 <tr class="border-b bg-muted/50">
-                  <th class="px-4 py-3 font-semibold text-muted-foreground">Metric</th>
+                  <th class="px-4 py-3 font-semibold text-muted-foreground">{{ $t('views.ABTestModelsView.metric') }}</th>
                   <th
                     v-for="s in summaryByVariant"
                     :key="s.name"
@@ -223,7 +223,7 @@
                   </td>
                 </tr>
                 <tr class="border-b hover:bg-muted/30">
-                  <td class="px-4 py-3 font-medium text-muted-foreground">Cost</td>
+                  <td class="px-4 py-3 font-medium text-muted-foreground">{{ $t('views.ABTestModelsView.cost') }}</td>
                   <td
                     v-for="s in summaryByVariant"
                     :key="`cost-${s.name}`"
@@ -234,7 +234,7 @@
                   </td>
                 </tr>
                 <tr class="hover:bg-muted/30">
-                  <td class="px-4 py-3 font-medium text-muted-foreground">Tokens</td>
+                  <td class="px-4 py-3 font-medium text-muted-foreground">{{ $t('views.ABTestModelsView.tokens') }}</td>
                   <td
                     v-for="s in summaryByVariant"
                     :key="`tokens-${s.name}`"
@@ -261,7 +261,7 @@
               @click="promoteWinner(s.name)"
             >
               <span v-if="promotingName === s.name" class="inline-block h-4 w-4 animate-spin rounded-full border-2 border-current border-t-transparent" />
-              Promote "{{ s.name }}" as default
+              {{ $t('views.ABTestModelsView.promote_as_default', { name: s.name }) }}
             </button>
           </div>
         </section>
@@ -270,7 +270,7 @@
           v-else-if="!selectedPipelineId"
           class="rounded-lg border bg-card p-8 text-center text-muted-foreground"
         >
-          Select a pipeline and configure variants to run an A/B test.
+          {{ $t('views.ABTestModelsView.select_pipeline_hint') }}
         </div>
       </template>
 
@@ -278,7 +278,7 @@
         v-else-if="!loading && pipelines.length === 0"
         class="rounded-lg border bg-card p-8 text-center text-muted-foreground"
       >
-        No pipelines found. Create a pipeline first to set up A/B testing.
+        {{ $t('views.ABTestModelsView.no_pipelines_found') }}
       </div>
     </template>
   </div>
