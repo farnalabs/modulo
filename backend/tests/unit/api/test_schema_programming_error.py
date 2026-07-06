@@ -168,3 +168,139 @@ class TestSchemaDeleteErrors:
         ):
             resp = client.delete(f"/api/v1/schemas/{self.SCHEMA_ID}")
         assert resp.status_code == 503
+
+
+class TestSchemaUpdateErrors:
+    SCHEMA_ID = str(uuid.UUID("00000000-0000-0000-0000-000000000099"))
+    SCHEMA_UPDATE_JSON = {"name": "RenamedSchema"}
+
+    def test_update_schema_programming_error_returns_501(self, client: TestClient) -> None:
+        mock_update = AsyncMock(side_effect=ProgrammingError("stmt", "params", "table missing"))
+        with (
+            patch("modulo.api.routes.schemas.update_schema", mock_update),
+            patch("modulo.api.routes.schemas.set_rls_org"),
+        ):
+            resp = client.patch(f"/api/v1/schemas/{self.SCHEMA_ID}", json=self.SCHEMA_UPDATE_JSON)
+        assert resp.status_code == 501
+
+    def test_update_schema_sqlalchemy_error_returns_503(self, client: TestClient) -> None:
+        mock_update = AsyncMock(side_effect=SQLAlchemyError("connection failed"))
+        with (
+            patch("modulo.api.routes.schemas.update_schema", mock_update),
+            patch("modulo.api.routes.schemas.set_rls_org"),
+        ):
+            resp = client.patch(f"/api/v1/schemas/{self.SCHEMA_ID}", json=self.SCHEMA_UPDATE_JSON)
+        assert resp.status_code == 503
+
+    def test_update_schema_integrity_error_returns_409(self, client: TestClient) -> None:
+        mock_update = AsyncMock(side_effect=IntegrityError("stmt", "params", "duplicate name"))
+        with (
+            patch("modulo.api.routes.schemas.update_schema", mock_update),
+            patch("modulo.api.routes.schemas.set_rls_org"),
+        ):
+            resp = client.patch(f"/api/v1/schemas/{self.SCHEMA_ID}", json=self.SCHEMA_UPDATE_JSON)
+        assert resp.status_code == 409
+        assert "already exists" in resp.json()["detail"].lower()
+
+
+class TestSchemaDeprecateErrors:
+    SCHEMA_ID = str(uuid.UUID("00000000-0000-0000-0000-000000000099"))
+
+    def test_deprecate_schema_programming_error_returns_501(self, client: TestClient) -> None:
+        mock_deprecate = AsyncMock(side_effect=ProgrammingError("stmt", "params", "table missing"))
+        with (
+            patch("modulo.api.routes.schemas.deprecate_schema", mock_deprecate),
+            patch("modulo.api.routes.schemas.set_rls_org"),
+        ):
+            resp = client.patch(f"/api/v1/schemas/{self.SCHEMA_ID}/deprecate")
+        assert resp.status_code == 501
+
+    def test_deprecate_schema_sqlalchemy_error_returns_503(self, client: TestClient) -> None:
+        mock_deprecate = AsyncMock(side_effect=SQLAlchemyError("connection failed"))
+        with (
+            patch("modulo.api.routes.schemas.deprecate_schema", mock_deprecate),
+            patch("modulo.api.routes.schemas.set_rls_org"),
+        ):
+            resp = client.patch(f"/api/v1/schemas/{self.SCHEMA_ID}/deprecate")
+        assert resp.status_code == 503
+
+
+class TestSchemaVersionListErrors:
+    SCHEMA_ID = str(uuid.UUID("00000000-0000-0000-0000-000000000099"))
+
+    def test_list_versions_programming_error_returns_501(self, client: TestClient) -> None:
+        mock_list = AsyncMock(side_effect=ProgrammingError("stmt", "params", "table missing"))
+        with (
+            patch("modulo.api.routes.schemas.list_schema_versions", mock_list),
+            patch("modulo.api.routes.schemas.set_rls_org"),
+        ):
+            resp = client.get(f"/api/v1/schemas/{self.SCHEMA_ID}/versions")
+        assert resp.status_code == 501
+
+    def test_list_versions_sqlalchemy_error_returns_503(self, client: TestClient) -> None:
+        mock_list = AsyncMock(side_effect=SQLAlchemyError("connection failed"))
+        with (
+            patch("modulo.api.routes.schemas.list_schema_versions", mock_list),
+            patch("modulo.api.routes.schemas.set_rls_org"),
+        ):
+            resp = client.get(f"/api/v1/schemas/{self.SCHEMA_ID}/versions")
+        assert resp.status_code == 503
+
+
+class TestSchemaVersionGetErrors:
+    SCHEMA_ID = str(uuid.UUID("00000000-0000-0000-0000-000000000099"))
+
+    def test_get_version_programming_error_returns_501(self, client: TestClient) -> None:
+        mock_get = AsyncMock(side_effect=ProgrammingError("stmt", "params", "table missing"))
+        with (
+            patch("modulo.api.routes.schemas.get_schema_version", mock_get),
+            patch("modulo.api.routes.schemas.set_rls_org"),
+        ):
+            resp = client.get(f"/api/v1/schemas/{self.SCHEMA_ID}/versions/1.0.0")
+        assert resp.status_code == 501
+
+    def test_get_version_sqlalchemy_error_returns_503(self, client: TestClient) -> None:
+        mock_get = AsyncMock(side_effect=SQLAlchemyError("connection failed"))
+        with (
+            patch("modulo.api.routes.schemas.get_schema_version", mock_get),
+            patch("modulo.api.routes.schemas.set_rls_org"),
+        ):
+            resp = client.get(f"/api/v1/schemas/{self.SCHEMA_ID}/versions/1.0.0")
+        assert resp.status_code == 503
+
+
+class TestSchemaMigrateErrors:
+    SCHEMA_ID = str(uuid.UUID("00000000-0000-0000-0000-000000000099"))
+    SCHEMA_TARGET_ID = str(uuid.UUID("00000000-0000-0000-0000-000000000100"))
+
+    def test_migrate_programming_error_returns_501(self, client: TestClient) -> None:
+        mock_get = AsyncMock(side_effect=ProgrammingError("stmt", "params", "table missing"))
+        with (
+            patch("modulo.api.routes.schemas.get_schema", mock_get),
+            patch("modulo.api.routes.schemas.set_rls_org"),
+        ):
+            resp = client.post(
+                "/api/v1/schemas/migrate",
+                json={
+                    "from_schema_id": self.SCHEMA_ID,
+                    "to_schema_id": self.SCHEMA_TARGET_ID,
+                    "data": {},
+                },
+            )
+        assert resp.status_code == 501
+
+    def test_migrate_sqlalchemy_error_returns_503(self, client: TestClient) -> None:
+        mock_get = AsyncMock(side_effect=SQLAlchemyError("connection failed"))
+        with (
+            patch("modulo.api.routes.schemas.get_schema", mock_get),
+            patch("modulo.api.routes.schemas.set_rls_org"),
+        ):
+            resp = client.post(
+                "/api/v1/schemas/migrate",
+                json={
+                    "from_schema_id": self.SCHEMA_ID,
+                    "to_schema_id": self.SCHEMA_TARGET_ID,
+                    "data": {},
+                },
+            )
+        assert resp.status_code == 503
