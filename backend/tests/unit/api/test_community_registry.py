@@ -204,7 +204,7 @@ class TestPublishPrimitive:
     def test_publish_v1_creates_entry(self, client: TestClient) -> None:
         entry = _make_entry(slug="communityuser/my-workflow")
         with (
-            patch("modulo.api.routes.registry.publish_primitive", return_value=entry),
+            patch("modulo.api.routes.registry.publish_primitive", new_callable=AsyncMock, return_value=entry),
             patch("modulo.api.routes.registry.verify_primitive_signature"),
             patch("modulo.api.routes.registry.get_publisher_status"),
         ):
