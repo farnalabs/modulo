@@ -6,6 +6,7 @@ pytest unit tests — no pytest-bdd dependency.
 
 import base64
 import json
+import uuid
 from collections.abc import AsyncGenerator, Generator
 from datetime import UTC, datetime, timedelta
 from unittest.mock import AsyncMock, MagicMock
