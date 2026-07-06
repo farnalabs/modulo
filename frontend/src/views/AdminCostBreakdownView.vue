@@ -20,7 +20,7 @@
         <div class="grid grid-cols-1 gap-4 sm:grid-cols-3">
           <Card>
             <CardHeader>
-              <CardTitle class="text-sm font-medium text-muted-foreground">Total Spend (This Month)</CardTitle>
+              <CardTitle class="text-sm font-medium text-muted-foreground">{{ $t('views.AdminCostBreakdownView.total_spend_this_month') }}</CardTitle>
             </CardHeader>
             <CardContent>
               <p class="text-3xl font-bold" data-testid="cost-total-spend">${{ totalSpend.toFixed(2) }}</p>
@@ -28,7 +28,7 @@
           </Card>
           <Card>
             <CardHeader>
-              <CardTitle class="text-sm font-medium text-muted-foreground">Avg Cost per Run</CardTitle>
+              <CardTitle class="text-sm font-medium text-muted-foreground">{{ $t('views.AdminCostBreakdownView.avg_cost_per_run') }}</CardTitle>
             </CardHeader>
             <CardContent>
               <p class="text-3xl font-bold" data-testid="cost-avg-per-run">${{ avgCostPerRun.toFixed(2) }}</p>
@@ -36,7 +36,7 @@
           </Card>
           <Card>
             <CardHeader>
-              <CardTitle class="text-sm font-medium text-muted-foreground">Total Runs</CardTitle>
+              <CardTitle class="text-sm font-medium text-muted-foreground">{{ $t('views.AdminCostBreakdownView.total_runs') }}</CardTitle>
             </CardHeader>
             <CardContent>
               <p class="text-3xl font-bold" data-testid="cost-total-runs">{{ totalRuns }}</p>
@@ -46,21 +46,21 @@
 
         <Card>
           <CardHeader>
-            <CardTitle>Per-Team Cost Breakdown</CardTitle>
-            <CardDescription>Monthly spend, run count, and average cost per run by team</CardDescription>
+            <CardTitle>{{ $t('views.AdminCostBreakdownView.per_team_cost_breakdown') }}</CardTitle>
+            <CardDescription>{{ $t('views.AdminCostBreakdownView.monthly_spend_run_count_and_avg_by_team') }}</CardDescription>
           </CardHeader>
           <CardContent>
             <div v-if="items.length === 0" class="py-4 text-center text-sm text-muted-foreground">
-              No team cost data available.
+              {{ $t('views.AdminCostBreakdownView.no_team_cost_data_available') }}
             </div>
             <div v-else class="overflow-x-auto">
               <table class="w-full text-sm">
                 <thead>
                   <tr class="border-b text-left text-muted-foreground">
-                    <th class="pb-3 pr-4 font-medium">Team</th>
-                    <th class="pb-3 pr-4 font-medium">Total Spend</th>
-                    <th class="pb-3 pr-4 font-medium">Runs</th>
-                    <th class="pb-3 font-medium">Avg per Run</th>
+                    <th class="pb-3 pr-4 font-medium">{{ $t('views.AdminCostBreakdownView.team') }}</th>
+                    <th class="pb-3 pr-4 font-medium">{{ $t('views.AdminCostBreakdownView.total_spend') }}</th>
+                    <th class="pb-3 pr-4 font-medium">{{ $t('views.AdminCostBreakdownView.runs') }}</th>
+                    <th class="pb-3 font-medium">{{ $t('views.AdminCostBreakdownView.avg_per_run') }}</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -78,14 +78,14 @@
 
         <Card>
           <CardHeader>
-            <CardTitle>Cost Anomaly Alerts</CardTitle>
-            <CardDescription>Days where spend exceeded 2x the rolling 7-day average</CardDescription>
+            <CardTitle>{{ $t('views.AdminCostBreakdownView.cost_anomaly_alerts') }}</CardTitle>
+            <CardDescription>{{ $t('views.AdminCostBreakdownView.days_where_spend_exceeded_2x_avg') }}</CardDescription>
           </CardHeader>
           <CardContent>
             <LoadingSpinner v-if="anomaliesLoading" />
             <div v-else-if="anomaliesError" class="text-sm text-destructive">{{ anomaliesError }}</div>
             <div v-else-if="anomalies.length === 0" class="py-4 text-center text-sm text-muted-foreground">
-              No anomalies detected. Spend patterns are within expected ranges.
+              {{ $t('views.AdminCostBreakdownView.no_anomalies_detected') }}
             </div>
             <div v-else class="space-y-3">
               <div
@@ -103,7 +103,7 @@
                   </p>
                 </div>
                 <Button size="sm" variant="outline" :disabled="dismissLoading[anomaly.id]" :data-testid="'cost-anomaly-dismiss-' + anomaly.id" @click="dismissAnomaly(anomaly.id)">
-                  {{ dismissLoading[anomaly.id] ? '...' : 'Dismiss' }}
+                  {{ dismissLoading[anomaly.id] ? '...' : $t('views.AdminCostBreakdownView.dismiss') }}
                 </Button>
               </div>
               <p v-if="dismissedAnomalies.length > 0" class="pt-2 text-xs text-muted-foreground">
@@ -210,7 +210,7 @@ const dismissLoading = ref<Record<string, boolean>>({})
 async function dismissAnomaly(id: string) {
   dismissLoading.value[id] = true
   try {
-    await (api as any).POST(`/api/v1/admin/costs/anomalies/dismiss/${id}`)
+    await (api as any).GET(`/api/v1/admin/costs/anomalies/dismiss/${id}`)
     await loadAnomalies()
   } catch {
     anomaliesError.value = 'Failed to dismiss anomaly'

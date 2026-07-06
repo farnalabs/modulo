@@ -118,6 +118,25 @@ Discovered from 1 completed delivery tasks.
 - [x] ProgrammingError on DELETE /api/v1/admin/costs/reports/{id} returns 501
 - [x] ProgrammingError on GET /api/v1/admin/costs/anomalies returns 501
 - [x] ProgrammingError on GET /api/v1/admin/costs/anomalies/dismiss/{id} returns 501
+- [x] SQLAlchemyError on GET /api/v1/admin/costs returns 503
+- [x] SQLAlchemyError on GET /api/v1/admin/costs/limits returns 503
+- [x] SQLAlchemyError on PUT /api/v1/admin/costs/limits/org returns 503
+- [x] SQLAlchemyError on PUT /api/v1/admin/costs/limits/teams/{id} returns 503
+- [x] SQLAlchemyError on GET /api/v1/admin/costs/controls returns 503
+- [x] SQLAlchemyError on PUT /api/v1/admin/costs/controls returns 503
+- [x] SQLAlchemyError on GET /api/v1/admin/costs/export returns 503
+- [x] SQLAlchemyError on POST /api/v1/admin/costs/reports returns 503
+- [x] SQLAlchemyError on GET /api/v1/admin/costs/reports returns 503
+- [x] SQLAlchemyError on DELETE /api/v1/admin/costs/reports/{id} returns 503
+- [x] SQLAlchemyError on GET /api/v1/admin/costs/anomalies returns 503
+- [x] SQLAlchemyError on GET /api/v1/admin/costs/anomalies/dismiss/{id} returns 503
+- [x] Warning logged with org_id context on every SQLAlchemyError path
+
+### Resilience & Integration Robustness
+
+- [x] All route handlers catch both ProgrammingError→501 and SQLAlchemyError→503
+- [x] Warning log with org_id context on all DB error paths
+- [x] 12 unit tests covering SQLAlchemyError→503 for all cost routes
 
 ### PRD — Missing from code (future scope)
 
@@ -137,4 +156,9 @@ Discovered from 1 completed delivery tasks.
 - `config/model_pricing.yaml` does not exist yet
 - Token-level accumulation via LLM callback not wired up
 - Anomalies route uses GET for dismiss action (should be POST/PATCH per REST conventions)
-- Integration tests skipped (awaiting fixture repair) 
+- Integration tests skipped (awaiting fixture repair)
+- `get_cost_controls` and `update_cost_controls` return hardcoded defaults for alert_thresholds, circuit_breaker_enabled, currency, billing_period — never persisted to DB
+
+## QA History
+
+- 2026-07-07: feat-core-cost-breakdown → partial, cross-cutting QA (index 241): Fixed CRITICAL — added SQLAlchemyError→503 catches to all 12 cost route handlers (previously only caught ProgrammingError→501). Fixed CRITICAL — frontend AdminCostControlsView.vue read/wrote wrong field names (`daily_limit_usd`→`daily_spend_limit`, `teams`→`team_limits`, `org_daily_limit_usd`→`org_daily_spend_limit`) making team budget editing non-functional. Fixed CRITICAL — frontend AdminCostBreakdownView.vue called POST for dismiss anomaly but backend uses GET (405 Method Not Allowed). Fixed MAJOR — ~35 hardcoded English strings across both cost views wrapped in $t() with 33 new i18n keys. Added Resilience & Integration Robustness section to product map with 3 checkboxes. Added SQLAlchemyError→503 error handling section (12 checkboxes). Added 12 unit tests for SQLAlchemyError→503. Created test_costs_sqlalchemy_error.py. All tests pass. Merged to main. Status: partial.
