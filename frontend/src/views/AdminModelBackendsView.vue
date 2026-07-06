@@ -518,8 +518,8 @@ function buildDefaultParams(): Record<string, unknown> {
       if (typeof parsed === 'object' && parsed !== null) {
         Object.assign(params, parsed)
       }
-    } catch {
-      // pass through as string
+    } catch (err) {
+      console.warn('Failed to parse default params JSON:', err)
     }
   }
   if (formData.base_url.trim()) {

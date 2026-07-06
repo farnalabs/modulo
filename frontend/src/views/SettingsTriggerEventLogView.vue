@@ -130,10 +130,10 @@
 
       <div class="flex items-center justify-between">
         <button
-          :disabled="!prevCursor"
+          :disabled="cursorStack.length === 0"
           data-testid="settings-trigger-event-log-previous"
           class="rounded-lg border border-input bg-background px-4 py-2 text-sm font-medium hover:bg-accent disabled:opacity-30 disabled:cursor-not-allowed"
-          @click="goToPage(prevCursor)"
+          @click="goToPreviousPage()"
         >
           Previous
         </button>
@@ -144,7 +144,7 @@
           :disabled="!nextCursor"
           data-testid="settings-trigger-event-log-next"
           class="rounded-lg border border-input bg-background px-4 py-2 text-sm font-medium hover:bg-accent disabled:opacity-30 disabled:cursor-not-allowed"
-          @click="goToPage(nextCursor)"
+          @click="goToNextPage()"
         >
           Next
         </button>
@@ -156,6 +156,7 @@
 <script setup lang="ts">
 import { ref, onMounted } from 'vue'
 import { api } from '../lib/api/client'
+import { formatApiError } from '../lib/api/formatError'
 import type { components } from '../lib/api/client'
 import LoadingSpinner from '../components/shared/LoadingSpinner.vue'
 import ErrorAlert from '../components/shared/ErrorAlert.vue'
@@ -167,8 +168,9 @@ const items = ref<TriggerEventItem[]>([])
 const loading = ref(true)
 const error = ref<string | null>(null)
 const total = ref(0)
+const cursorStack = ref<(string | null)[]>([])
+const currentCursor = ref<string | null>(null)
 const nextCursor = ref<string | null>(null)
-const prevCursor = ref<string | null>(null)
 
 const filterTriggerType = ref('')
 const filterResult = ref('')
@@ -220,7 +222,8 @@ async function loadEvents(cursor?: string | null) {
       items.value = data.items
       total.value = data.total
       nextCursor.value = data.next_cursor
-      prevCursor.value = cursor ?? null
+      currentCursor.value = cursor ?? null
+      if (!cursor) cursorStack.value = []
     }
   } catch (e: unknown) {
     error.value = `Failed to load trigger events: ${e instanceof Error ? e.message : String(e)}`
@@ -229,9 +232,16 @@ async function loadEvents(cursor?: string | null) {
   }
 }
 
-function goToPage(cursor: string | null) {
-  if (!cursor) return
-  loadEvents(cursor)
+function goToPreviousPage() {
+  const prev = cursorStack.value.pop()
+  if (prev === undefined) return
+  loadEvents(prev)
+}
+
+function goToNextPage() {
+  if (!nextCursor.value) return
+  cursorStack.value.push(currentCursor.value)
+  loadEvents(nextCursor.value)
 }
 
 function applyFilters() {

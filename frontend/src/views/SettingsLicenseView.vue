@@ -171,6 +171,7 @@
 <script setup lang="ts">
 import { ref, computed, onMounted } from 'vue'
 import { api } from '../lib/api/client'
+import { formatApiError } from '../lib/api/formatError'
 import { usePlanStore } from '../stores/planStore'
 import LoadingSpinner from '../components/shared/LoadingSpinner.vue'
 import ErrorAlert from '../components/shared/ErrorAlert.vue'
@@ -317,7 +318,7 @@ async function applyKey() {
       body: { license_key: newLicenseKey.value.trim() },
     })
     if (err) {
-      verifyResult.value = { valid: false, message: `Failed to apply: ${err}` }
+      verifyResult.value = { valid: false, message: `Failed to apply: ${formatApiError(err)}` }
     } else {
       applyDialogOpen.value = false
       verifyResult.value = null
@@ -341,7 +342,7 @@ async function removeLicense() {
   try {
     const { error: err } = await (api as any).DELETE('/api/v1/admin/license')
     if (err) {
-      verifyResult.value = { valid: false, message: `Failed to remove: ${err}` }
+      verifyResult.value = { valid: false, message: `Failed to remove: ${formatApiError(err)}` }
     } else {
       removeDialogOpen.value = false
       await planStore.fetchPlan()

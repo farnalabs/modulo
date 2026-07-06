@@ -745,8 +745,8 @@ async function fetchPipelines() {
     if (listResp.items.length > 0 && !selectedPipelineId.value) {
       selectedPipelineId.value = listResp.items[0].id
     }
-  } catch {
-    // Non-critical
+  } catch (err) {
+    console.warn('Failed to fetch pipelines:', err)
   }
 }
 
@@ -755,8 +755,8 @@ async function fetchVariantGroups() {
     const { data, error: err } = await api.GET('/api/v1/variant-groups')
     if (err) return
     variantGroups.value = (Array.isArray(data) ? data : (data as any)?.items ?? []) as unknown as VariantGroup[]
-  } catch {
-    // Non-critical
+  } catch (err) {
+    console.warn('Failed to fetch variant groups:', err)
   }
 }
 
@@ -766,8 +766,8 @@ async function fetchModelBackends() {
     if (err) return
     const resp = data as unknown as { items: ModelBackend[]; total: number; page: number; page_size: number }
     modelBackends.value = resp.items ?? []
-  } catch {
-    // Non-critical
+  } catch (err) {
+    console.warn('Failed to fetch model backends:', err)
   }
 }
 
@@ -782,8 +782,8 @@ async function fetchSnapshotForPipeline(pipelineId: string) {
         snapshotId.value = resp.items[0].id
       }
     }
-  } catch {
-    // Non-critical
+  } catch (err) {
+    console.warn('Failed to fetch snapshot for pipeline:', err)
   }
 }
 

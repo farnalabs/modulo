@@ -362,6 +362,7 @@
 <script setup lang="ts">
 import { ref, onMounted } from 'vue'
 import { api } from '../lib/api/client'
+import { formatApiError } from '../lib/api/formatError'
 import type { components } from '../lib/api/client'
 import LoadingSpinner from '../components/shared/LoadingSpinner.vue'
 import ErrorAlert from '../components/shared/ErrorAlert.vue'
@@ -521,7 +522,6 @@ async function saveTrigger() {
     return
   }
 
-  saving.value = true
   try {
     const triggerType = editingId.value ? editingType.value : form.value.trigger_type
     const configJson: Record<string, unknown> = {}
@@ -560,6 +560,8 @@ async function saveTrigger() {
       if (form.value.signal_source_node) configJson.source_node_id = form.value.signal_source_node
     }
 
+    saving.value = true
+
     if (editingId.value) {
       const body: Record<string, unknown> = {
         active: form.value.active,
@@ -574,7 +576,7 @@ async function saveTrigger() {
         body: body as any,
       })
       if (err) {
-        formError.value = `Failed to update trigger: ${err}`
+        formError.value = `Failed to update trigger: ${formatApiError(err)}`
         return
       }
     } else {
@@ -592,7 +594,7 @@ async function saveTrigger() {
         body: body as any,
       })
       if (err) {
-        formError.value = `Failed to create trigger: ${err}`
+        formError.value = `Failed to create trigger: ${formatApiError(err)}`
         return
       }
     }
@@ -614,7 +616,7 @@ async function deleteTrigger() {
       params: { path: { trigger_id: deleteTarget.value.id } },
     })
     if (err) {
-      error.value = `Failed to delete trigger: ${err}`
+      error.value = `Failed to delete trigger: ${formatApiError(err)}`
       return
     }
     deleteDialogOpen.value = false
@@ -636,7 +638,7 @@ async function toggleActive(trigger: TriggerItem) {
       params: { path: { trigger_id: trigger.id } },
     })
     if (err) {
-      error.value = `Failed to toggle trigger: ${err}`
+      error.value = `Failed to toggle trigger: ${formatApiError(err)}`
       return
     }
     await loadTriggers()
@@ -653,7 +655,7 @@ async function loadTriggers() {
       params: { query: { page: 1, page_size: 100 } },
     })
     if (err) {
-      error.value = `Failed to load triggers: ${err}`
+      error.value = `Failed to load triggers: ${formatApiError(err)}`
     } else if (data) {
       items.value = data.items
     }

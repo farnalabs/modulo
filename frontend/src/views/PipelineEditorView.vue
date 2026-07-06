@@ -641,8 +641,8 @@ async function loadCatalog() {
     modelBackends.value = mb.items || []
     schemas.value = s.items || []
     snapshots.value = (snaps.items || []).filter((sn: any) => sn.snapshot_version > 0)
-  } catch {
-    // Initial load may fail silently; data stays empty
+  } catch (err) {
+    console.warn('Failed to load pipeline data:', err)
   }
 }
 
