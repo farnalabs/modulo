@@ -30,6 +30,8 @@ primary_region = 'lhr'
   MODULO_PUBLIC_URL = "https://staging.modulo.run"
   MODULO_PLUGIN_DISCOVERY = "false"
   MODULO_MAX_LOCAL_CONCURRENCY = "4"
+  # REQUIRED: Upstash Redis instance. Create with:
+  #   fly redis create --name modulo-staging-redis -r lhr,ams --enable-eviction
   REDIS_URL = ""
   CORS_ORIGINS = "https://modulo.run,http://localhost:5173"
 
