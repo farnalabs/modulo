@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { mount } from '@vue/test-utils'
+import { mount, flushPromises } from '@vue/test-utils'
 import { createRouter, createWebHistory } from 'vue-router'
 import { nextTick } from 'vue'
 
@@ -28,10 +28,6 @@ beforeEach(() => {
   vi.clearAllMocks()
   mockResponses['/api/v1/pipelines?page_size=100'] = { items: [], total: 0, page: 1, page_size: 100 }
 })
-
-function flushPromises() {
-  return new Promise(resolve => setTimeout(resolve, 0))
-}
 
 describe('PipelineListView', () => {
   it('renders without crashing', async () => {

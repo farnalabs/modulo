@@ -1,10 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { mount } from '@vue/test-utils'
+import { mount, flushPromises } from '@vue/test-utils'
 import { nextTick } from 'vue'
-
-function flushPromises(): Promise<void> {
-  return new Promise(resolve => setTimeout(resolve, 0))
-}
 
 vi.mock('../lib/api/client', () => {
   const schemas = [
