@@ -30,18 +30,19 @@ export interface PageContext {
   entities: string[]
 }
 
-export interface SkillItem {
+export interface SkillBase {
   id: string
   name: string
   description: string | null
   triggers: string[] | null
   body: string | null
+}
+
+export interface SkillItem extends SkillBase {
   active: boolean
 }
 
-export interface UserSkill {
-  id: string
-  name: string
+export interface UserSkill extends SkillBase {
   description: string
   triggers: string[]
   body: string

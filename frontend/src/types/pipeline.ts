@@ -40,9 +40,4 @@ export interface CompositeDefinition {
   updated_at: string
 }
 
-export interface PipelineNodeCompositeData {
-  compositeRef?: string
-  compositeParameterValues?: Record<string, unknown>
-  compositeInputMapping?: Record<string, string>
-  compositeOutputMapping?: Record<string, string>
-}
+
