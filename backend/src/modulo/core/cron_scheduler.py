@@ -133,20 +133,33 @@ class CronFireTask(Task):  # type: ignore[misc]
     ) -> dict[str, Any]:
         """Fire a cron trigger — creates a run in the database.
 
-        This is a synchronous task because Celery classic tasks are sync.
-        We use ``asyncio.run()`` to drive the async DB operations.
+        Handles both sync Celery classic pool (``asyncio.run()``) and
+        async Celery pool (``asyncio.run_coroutine_threadsafe()``),
+        matching the pattern in ``PollingFireTask.run()``.
         """
         import asyncio
 
-        return asyncio.run(
-            fire_cron_trigger(
-                trigger_id=uuid.UUID(trigger_id),
-                org_id=uuid.UUID(org_id),
-                pipeline_id=uuid.UUID(pipeline_id),
-                snapshot_id=uuid.UUID(snapshot_id),
-                cron_expression=cron_expression,
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            return asyncio.run(
+                fire_cron_trigger(
+                    trigger_id=uuid.UUID(trigger_id),
+                    org_id=uuid.UUID(org_id),
+                    pipeline_id=uuid.UUID(pipeline_id),
+                    snapshot_id=uuid.UUID(snapshot_id),
+                    cron_expression=cron_expression,
+                )
             )
+        coro = fire_cron_trigger(
+            trigger_id=uuid.UUID(trigger_id),
+            org_id=uuid.UUID(org_id),
+            pipeline_id=uuid.UUID(pipeline_id),
+            snapshot_id=uuid.UUID(snapshot_id),
+            cron_expression=cron_expression,
         )
+        future = asyncio.run_coroutine_threadsafe(coro, loop)
+        return future.result()
 
 
 async def fire_cron_trigger(
@@ -442,11 +455,20 @@ class DatabaseCronScheduler(Scheduler):  # type: ignore[misc]
 
 
 async def _set_rls_org(session: AsyncSession, org_id: uuid.UUID) -> None:
-    """Set RLS organisation context inside the current transaction."""
-    await session.execute(
-        text("SELECT set_config('app.organisation_id', :val, true)"),
-        {"val": str(org_id)},
-    )
+    """Set RLS organisation context inside the current transaction.
+
+    Uses ``set_config`` on Postgres (native RLS) and falls back to
+    ``session.info`` for SQLite/MariaDB backends — matching the pattern
+    in ``polling.py:_set_rls_org``.
+    """
+    dialect = session.get_bind().dialect.name
+    if dialect == "postgresql":
+        await session.execute(
+            text("SELECT set_config('app.organisation_id', :val, true)"),
+            {"val": str(org_id)},
+        )
+    else:
+        session.info["organisation_id"] = org_id
 
 
 async def _count_active_runs(session: AsyncSession, pipeline_id: uuid.UUID) -> int:
