@@ -1,12 +1,11 @@
 """Schema generation service — uses an LLM to generate JSON Schema from description + examples."""
 
-import json
 import logging
 from typing import Any
 
 from langchain_core.messages import BaseMessage, HumanMessage, SystemMessage
 
-from modulo.core.schema_registry._common import invoke_and_parse
+from modulo.core.schema_registry._common import _safe_json_dumps, invoke_and_parse
 from modulo.model_backends.base import ModelBackendBase
 
 _log = logging.getLogger(__name__)
@@ -41,12 +40,7 @@ def _build_generate_prompt(
     parts = [f"Description:\n{description}\n"]
     if examples:
         display = examples[:max_examples]
-        try:
-            sample_text = json.dumps(display, indent=2, default=str)
-        except (ValueError, TypeError) as exc:
-            raise ValueError(
-                f"Example data contains non-serializable values (e.g. circular references): {exc}"
-            ) from exc
+        sample_text = _safe_json_dumps(display)
         parts.append(f"Example records ({len(display)}):\n```\n{sample_text}\n```\n")
     parts.append("Return ONLY the JSON Schema object.")
     return [

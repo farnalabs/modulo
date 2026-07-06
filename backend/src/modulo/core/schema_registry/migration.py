@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import threading
+from collections import deque
 from collections.abc import Callable
 from copy import deepcopy
 from dataclasses import dataclass, field
@@ -224,10 +225,10 @@ class MigrationRegistry:
                 adj.setdefault(mf.source_version, []).append(mf)
 
         visited: set[str] = set()
-        queue: list[tuple[str, list[SchemaMigration]]] = [(source_version, [])]
+        queue: deque[tuple[str, list[SchemaMigration]]] = deque([(source_version, [])])
 
         while queue:
-            current_version, path = queue.pop(0)
+            current_version, path = queue.popleft()
             if current_version == target_version:
                 return path
             if current_version in visited:
@@ -256,9 +257,9 @@ class MigrationRegistry:
             migrations_copy = dict(self._migrations)
 
         reachable: set[str] = set()
-        q: list[str] = [source_version]
+        q: deque[str] = deque([source_version])
         while q:
-            cur = q.pop(0)
+            cur = q.popleft()
             if cur in reachable:
                 continue
             reachable.add(cur)
@@ -269,18 +270,23 @@ class MigrationRegistry:
         if len(reachable) == 1:
             return [f"No outgoing migration from {source_version}"]
 
-        def _longest_path(ver: str, visited: set[str]) -> list[str]:
-            best = [ver]
-            for (src, tgt) in migrations_copy:
-                if src == ver and tgt not in visited:
-                    visited.add(tgt)
-                    sub = _longest_path(tgt, visited)
-                    if len(sub) + 1 > len(best):
-                        best = [ver, *sub]
-                    visited.discard(tgt)
+        def _longest_path(start: str) -> list[str]:
+            best: list[str] = [start]
+            stack: list[tuple[str, list[str], int]] = [(start, [start], 0)]
+            while stack:
+                ver, path, idx = stack.pop()
+                items = [(s, t) for (s, t) in migrations_copy if s == ver]
+                if idx < len(items):
+                    stack.append((ver, path, idx + 1))
+                    _, tgt = items[idx]
+                    if tgt not in path:
+                        new_path = [*path, tgt]
+                        if len(new_path) > len(best):
+                            best = new_path
+                        stack.append((tgt, new_path, 0))
             return best
 
-        longest = _longest_path(source_version, {source_version})
+        longest = _longest_path(source_version)
         last = longest[-1]
 
         if last == source_version:
