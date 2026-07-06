@@ -224,37 +224,34 @@ async def update_connector_endpoint(
     settings: Settings = Depends(get_settings),
 ) -> ConnectorResponse:
     updates: dict[str, Any] = req.model_dump(exclude_unset=True)
-    if "credentials" in updates:
+    credentials_updated = "credentials" in updates
+    if credentials_updated:
         new_credentials = updates.pop("credentials")
-        # Fetch current connector to check type
-        async with session.begin():
-            await set_rls_org(session, principal.organisation_id)
-            await set_rls_user_context(session, principal.account_id, principal.org_role)
-            existing = await get_connector_instance(session, connector_id)
-        if existing is not None and existing.connector_type_id == "github":
-            temp = GitHubConnector(token=new_credentials)
-            try:
-                missing = await temp.verify_scopes()
-            except (HTTPStatusError, RequestError, ValueError):
-                raise HTTPException(
-                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-                    detail="Cannot verify GitHub token — API call failed",
-                ) from None
-            if missing:
-                raise HTTPException(
-                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-                    detail=(
-                        f"GitHub token is missing required OAuth scopes: "
-                        f"{', '.join(sorted(missing))}. "
-                        f"Required: {', '.join(sorted(GITHUB_REQUIRED_SCOPES))}"
-                    ),
-                )
         _ct = _encrypt(new_credentials, settings.fernet_key)
         updates["credentials_ciphertext"] = _ct  # nosemgrep: credential-not-in-state
     try:
         async with session.begin():
             await set_rls_org(session, principal.organisation_id)
             await set_rls_user_context(session, principal.account_id, principal.org_role)
+            existing = await get_connector_instance(session, connector_id)
+            if existing is not None and existing.connector_type_id == "github" and credentials_updated:
+                temp = GitHubConnector(token=new_credentials)
+                try:
+                    missing = await temp.verify_scopes()
+                except (HTTPStatusError, RequestError, ValueError):
+                    raise HTTPException(
+                        status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                        detail="Cannot verify GitHub token — API call failed",
+                    ) from None
+                if missing:
+                    raise HTTPException(
+                        status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                        detail=(
+                            f"GitHub token is missing required OAuth scopes: "
+                            f"{', '.join(sorted(missing))}. "
+                            f"Required: {', '.join(sorted(GITHUB_REQUIRED_SCOPES))}"
+                        ),
+                    )
             ci = await update_connector_instance(session, connector_id, updates)
     except ProgrammingError:
         raise HTTPException(
