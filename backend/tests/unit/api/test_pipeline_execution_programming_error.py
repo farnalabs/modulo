@@ -8,11 +8,11 @@ run yet, connection failures, unexpected Python-level errors).
 
 import uuid
 from collections.abc import AsyncGenerator
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from fastapi.testclient import TestClient
-from sqlalchemy.exc import ProgrammingError, SQLAlchemyError
+from sqlalchemy.exc import IntegrityError, ProgrammingError, SQLAlchemyError
 
 from modulo.api.dependencies import _get_engine, get_db_session
 from modulo.api.main import app
@@ -385,3 +385,72 @@ class TestCreateStageException:
         resp = admin_client.post("/api/v1/stages", json={"name": "Test Stage"})
         assert resp.status_code == 500
         assert "migrations" in resp.json()["detail"].lower()
+
+
+# ---------------------------------------------------------------------------
+# IntegrityError→409 for creation routes
+# ---------------------------------------------------------------------------
+
+def _make_session_successful() -> AsyncMock:
+    session = AsyncMock()
+    begin_cm = AsyncMock()
+    begin_cm.__aenter__ = AsyncMock(return_value=None)
+    begin_cm.__aexit__ = AsyncMock(return_value=False)
+    session.begin = MagicMock(return_value=begin_cm)
+    bind_mock = MagicMock()
+    bind_mock.dialect.name = "postgresql"
+    session.get_bind = AsyncMock(return_value=bind_mock)
+    return session
+
+
+class TestTriggerRunIntegrityError:
+    def test_trigger_run_returns_409_on_integrity_error(self, admin_client: TestClient) -> None:
+        pipeline = MagicMock()
+        pipeline.id = _PIPELINE_ID
+        snapshot = MagicMock()
+        snapshot.id = _SNAPSHOT_ID
+        snapshot.graph_json = {
+            "nodes": [{"id": str(_NODE_ID)}],
+            "edges": [],
+        }
+
+        session = _make_session_successful()
+        _override_session(session)
+        with (
+            patch("modulo.api.routes.runs.get_pipeline", return_value=pipeline),
+            patch(
+                "modulo.api.routes.runs.create_snapshot_from_live_graph",
+                return_value=snapshot,
+            ),
+            patch(
+                "modulo.api.routes.runs.create_run",
+                side_effect=IntegrityError("duplicate key", None, None),
+            ),
+            patch("modulo.api.routes.runs.set_rls_org"),
+            patch("modulo.api.routes.runs.PipelineExecutor"),
+        ):
+            resp = admin_client.post(
+                "/api/v1/runs",
+                json={"pipeline_id": str(_PIPELINE_ID), "input_payload": {}},
+            )
+        assert resp.status_code == 409
+
+
+class TestObserveRunNodeIntegrityError:
+    def test_observe_node_returns_409_on_integrity_error(self, admin_client: TestClient) -> None:
+        run = MagicMock()
+        run.id = _RUN_ID
+        run.status = "running"
+
+        session = _make_session_successful()
+        _override_session(session)
+        with (
+            patch("modulo.api.routes.runs.get_run", return_value=run),
+            patch(
+                "modulo.api.routes.runs.observe_node",
+                side_effect=IntegrityError("duplicate key", None, None),
+            ),
+            patch("modulo.api.routes.runs.set_rls_org"),
+        ):
+            resp = admin_client.post(f"/api/v1/runs/{_RUN_ID}/nodes/{_NODE_ID}/observe")
+        assert resp.status_code == 409
