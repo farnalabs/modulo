@@ -10,7 +10,7 @@ code:
   - backend/src/modulo/core/library_service/__init__.py
   - backend/src/modulo/api/routes/contributions.py
 
-depends-on: []
+depends-on: [feat-core-db-abstraction-core]
 unit-tests:
   - backend/tests/unit/api/test_contributions.py
   - backend/tests/unit/core/library_service/test_contribute.py

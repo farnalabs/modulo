@@ -6,7 +6,7 @@ code:
   - backend/src/modulo/cli/migrate.py
   - backend/src/modulo/cli/migrate_org.py
 bdd: []
-depends-on: []
+depends-on: [feat-core-db-abstraction-core]
 unit-tests:
   - backend/tests/unit/cli/test_migrate.py
 status: partial

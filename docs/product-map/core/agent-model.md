@@ -7,12 +7,11 @@ code:
   - backend/src/modulo/db/models/agent.py
   - backend/src/modulo/db/crud/agent.py
   - backend/src/modulo/api/routes/agents.py
-depends-on: []
+depends-on: [feat-core-schema-system, feat-core-db-abstraction-core]
 bdd:
   - backend/tests/features/agents/configure.feature
   - backend/tests/features/agents/prompt_versioning.feature
   - backend/tests/features/agents/schema_assignment.feature
-  - backend/tests/bdd/steps/test_alpha_agents.py
 unit-tests:
   - backend/tests/unit/api/test_agents_endpoint.py
   - backend/tests/unit/api/test_agent_prompt_versioning.py

@@ -19,7 +19,7 @@ code:
   - backend/src/modulo/core/schema_registry/migration.py
   - backend/src/modulo/api/routes/schemas.py
 
-depends-on: []
+depends-on: [feat-core-schema-system, feat-core-db-abstraction-core]
 status: partial
 ---
 

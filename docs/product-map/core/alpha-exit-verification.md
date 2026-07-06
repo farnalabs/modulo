@@ -7,7 +7,7 @@ code:
   - scripts/verify-alpha-exit.ps1
   - .github/workflows/alpha-exit-report.yml
 unit-tests: []
-depends-on: []
+depends-on: [feat-core-pipeline-execution, feat-core-run-context]
 status: partial
 ---
 

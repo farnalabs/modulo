@@ -30,7 +30,7 @@ code:
   - backend/src/modulo/core/schema_registry/migration.py
   - backend/src/modulo/core/schema_registry/_common.py
 delivery-tasks: []
-depends-on: []
+depends-on: [feat-core-db-abstraction-core]
 status: partial
 ---
 

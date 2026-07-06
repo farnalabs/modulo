@@ -18,7 +18,7 @@ code:
   - frontend/src/router/index.ts
 
 bdd: []
-depends-on: []
+depends-on: [feat-core-db-abstraction-core]
 unit-tests:
   - backend/tests/unit/api/test_admin_feature_flags.py
   - backend/tests/unit/core/test_feature_flag_registration.py

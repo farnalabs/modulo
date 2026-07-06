@@ -18,7 +18,7 @@ code:
 unit-tests:
   - backend/tests/unit/celery_app/test_celery_import_guard.py
   - backend/tests/unit/in_process_scheduler/test_in_process_scheduler.py
-depends-on: []
+depends-on: [feat-core-trigger-system, feat-core-pipeline-execution, feat-core-db-abstraction-core]
 status: partial
 ---
 

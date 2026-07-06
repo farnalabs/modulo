@@ -23,7 +23,7 @@ unit-tests:
   - backend/tests/integration/crud/test_schema.py
   - backend/tests/integration/crud/test_schema_inference_integration.py
 
-depends-on: []
+depends-on: [feat-core-schema-system, feat-core-db-abstraction-core]
 status: partial
 ---
 
