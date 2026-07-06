@@ -27,10 +27,15 @@ class GenericRepository(BaseRepository):
             raise ValueError("org_id must not be None")
         if not isinstance(org_id, uuid.UUID):
             raise TypeError(f"org_id must be a uuid.UUID, got {type(org_id).__name__}")
+        seen: set[int] = set()
         for desc in stmt.column_descriptions:
             entity = desc.get("entity")
             if entity is None or entity is object:
                 continue
             if hasattr(entity, _TENANT_COLUMN):
+                entity_id = id(entity)
+                if entity_id in seen:
+                    continue
+                seen.add(entity_id)
                 stmt = stmt.where(getattr(entity, _TENANT_COLUMN) == org_id)
         return stmt
