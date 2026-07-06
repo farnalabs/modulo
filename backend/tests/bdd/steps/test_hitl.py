@@ -297,22 +297,6 @@ def run_status_unchanged(ctx):
 # ============================================================================
 
 
-def _make_mock_hitl_gate(**kwargs) -> MagicMock:
-    """Build a mock HitlClaim row."""
-    gate = MagicMock()
-    gate.run_id = kwargs.get("run_id", uuid.uuid4())
-    gate.gate_id = kwargs.get("gate_id", "gate-1")
-    gate.pipeline_id = kwargs.get("pipeline_id", uuid.uuid4())
-    gate.organisation_id = kwargs.get("org_id", uuid.UUID("00000000-0000-0000-0000-000000000001"))
-    gate.claimed_by = kwargs.get("claimed_by")
-    gate.claimed_at = kwargs.get("claimed_at")
-    gate.claim_token = kwargs.get("claim_token")
-    gate.expires_at = kwargs.get("expires_at")
-    gate.decision = kwargs.get("decision")
-    gate.decision_at = kwargs.get("decision_at")
-    return gate
-
-
 # ============================================================================
 # Feedback Handler (§8.20)
 # ============================================================================

@@ -260,11 +260,6 @@ def _response_has_primitive_type(ctx: dict[str, Any], expected_type: str) -> Non
 # ============================================================================
 
 
-@given("the organisation exists")
-def _org_exists() -> None:
-    pass
-
-
 @given(parsers.parse('a community primitive "{name}" exists'))
 def _community_primitive_named_exists(ctx: dict[str, Any], name: str) -> None:
     # The built-in community primitive PRD Input Schema has id PRIMITIVE_10
@@ -276,11 +271,7 @@ def _request_adapt(client, community_primitive_id: str, ctx: dict[str, Any]) -> 
     ctx["response"] = client.post(f"/api/v1/libraries/{community_primitive_id}/adapt", json={})
 
 
-@then("the response status is 201")
-def _response_status_201(ctx: dict[str, Any]) -> None:
-    assert ctx["response"].status_code == 201, (
-        f"Expected 201, got {ctx['response'].status_code}: {ctx['response'].text}"
-    )
+
 
 
 @then("a new library primitive is created in the org")
@@ -353,11 +344,7 @@ def _request_adapt_by_id(client, primitive_id: str, ctx: dict[str, Any]) -> None
     ctx["response"] = client.post(f"/api/v1/libraries/{primitive_id}/adapt", json={})
 
 
-@then("the response status is 404")
-def _response_status_404(ctx: dict[str, Any]) -> None:
-    assert ctx["response"].status_code == 404, (
-        f"Expected 404, got {ctx['response'].status_code}: {ctx['response'].text}"
-    )
+
 
 
 # ============================================================================
