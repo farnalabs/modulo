@@ -170,7 +170,8 @@ class TestCompositeEditor:
             },
         )
         with (
-            patch("modulo.api.routes.composite_templates.update_composite_template", return_value=template),
+            patch("modulo.api.routes.composite_templates.get_composite_template", return_value=template),
+            patch("modulo.api.routes.composite_templates.update_composite_template", new=AsyncMock(return_value=template)),
             patch("modulo.api.routes.composite_templates.set_rls_org"),
         ):
             resp = client.put(
@@ -186,7 +187,7 @@ class TestCompositeEditor:
 
     def test_save_editor_404(self, client: TestClient) -> None:
         with (
-            patch("modulo.api.routes.composite_templates.update_composite_template", return_value=None),
+            patch("modulo.api.routes.composite_templates.get_composite_template", return_value=None),
             patch("modulo.api.routes.composite_templates.set_rls_org"),
         ):
             resp = client.put(

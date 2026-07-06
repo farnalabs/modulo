@@ -8,6 +8,7 @@ Import contract (enforced by import-linter):
   eval_engine. It is a pure instrumentation adapter with no business logic.
 """
 
+import contextlib
 import logging
 import threading
 from typing import Any
@@ -84,34 +85,23 @@ class LangGraphOtelBridge(BaseCallbackHandler):
         # End any existing span for this run_id before creating a new one
         with self._lock:
             existing = self._spans.pop(str(run_id), None)
+            ctx = self._parent_context(parent_run_id)
+            org_id = self._org_id
+            pipeline_id = self._pipeline_id
         if existing is not None:
-            try:
+            with contextlib.suppress(Exception):
                 existing.set_status(Status(StatusCode.OK))
-            except Exception:  # noqa: S110
-                pass  # orphaned span; nothing useful to log
-            try:
+            with contextlib.suppress(Exception):
                 existing.end()
-            except Exception:  # noqa: S110
-                pass  # orphaned span; nothing useful to log
 
-        ctx = self._parent_context(parent_run_id)
         attrs = dict(attributes or {})
-        if self._org_id is not None:
-            attrs["organisation_id"] = self._org_id
-        if self._pipeline_id is not None:
-            attrs["pipeline_id"] = self._pipeline_id
+        if org_id is not None:
+            attrs["organisation_id"] = org_id
+        if pipeline_id is not None:
+            attrs["pipeline_id"] = pipeline_id
         span = self._tracer.start_span(name, context=ctx, attributes=attrs)
         self._set_tags(span, tags)
         with self._lock:
-            if existing is not None:
-                try:
-                    existing.set_status(Status(StatusCode.OK))
-                except Exception:  # noqa: S110
-                    pass  # orphaned span; nothing useful to log
-                try:
-                    existing.end()
-                except Exception:  # noqa: S110
-                    pass  # orphaned span; nothing useful to log
             self._spans[str(run_id)] = span
 
     def _end_span(self, run_id: UUID, *, error: BaseException | None = None) -> None:
@@ -150,7 +140,7 @@ class LangGraphOtelBridge(BaseCallbackHandler):
     @staticmethod
     def _set_tags(span: Span, tags: list[str] | None) -> None:
         if tags:
-            span.set_attribute("langgraph.tags", list(tags))
+            span.set_attribute("langgraph.tags", tags)
 
     @staticmethod
     def _record_token_usage(span: Span, llm_output: dict[str, Any] | None) -> None:
@@ -248,10 +238,20 @@ class LangGraphOtelBridge(BaseCallbackHandler):
         **kwargs: Any,
     ) -> None:
         with self._lock:
-            span = self._spans.get(str(run_id))
+            span = self._spans.pop(str(run_id), None)
         if span is not None:
             self._record_token_usage(span, response.llm_output)
-        self._end_span(run_id)
+            try:
+                span.set_status(Status(StatusCode.OK))
+            except Exception:
+                _log.exception("Failed to set status on LLM span %s", run_id)
+            finally:
+                try:
+                    span.end()
+                except Exception:
+                    _log.exception("Failed to end LLM span %s", run_id)
+        else:
+            _log.warning("No active span found for run_id %s", run_id)
 
     def on_llm_error(
         self,
@@ -303,10 +303,20 @@ class LangGraphOtelBridge(BaseCallbackHandler):
         **kwargs: Any,
     ) -> None:
         with self._lock:
-            span = self._spans.get(str(run_id))
+            span = self._spans.pop(str(run_id), None)
         if span is not None:
             self._record_token_usage(span, response.llm_output)
-        self._end_span(run_id)
+            try:
+                span.set_status(Status(StatusCode.OK))
+            except Exception:
+                _log.exception("Failed to set status on chat model span %s", run_id)
+            finally:
+                try:
+                    span.end()
+                except Exception:
+                    _log.exception("Failed to end chat model span %s", run_id)
+        else:
+            _log.warning("No active span found for run_id %s", run_id)
 
     def on_chat_model_error(
         self,
