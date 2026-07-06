@@ -6,6 +6,7 @@ bdd:
   - backend/tests/bdd/features/connectors/slack_connector.feature
 unit-tests:
   - backend/tests/unit/connectors/test_slack.py
+  - backend/tests/unit/connectors/test_slack_resilience.py
 code:
   - backend/src/modulo/connectors/slack/__init__.py
   - backend/src/modulo/connectors/base.py
@@ -107,6 +108,13 @@ Async Slack Web API connector implementing `ConnectorBase`. Provides read/write 
 - [x] `httpx.HTTPStatusError` wrapped as `ValueError("Slack API HTTP {status}: {body}")`
 - [x] `httpx.TimeoutException` wrapped as `ValueError("Slack API timeout")` after 3 retries
 - [x] `httpx.ConnectError` wrapped as `ValueError("Slack API connection error")` after 3 retries
+- [x] `_compute_retry_delay()` helper extracted — retry delay calculation defined once, not repeated 3 times
+- [x] `_check_slack_ok()` helper extracted — `ok: false` check defined once, not repeated 8 times
+- [x] Health check differentiates network errors from token errors during `verify_scopes` — connection errors, timeouts, and HTTP errors during `auth.test` return "network error" detail instead of misleading "Token is invalid or revoked"
+- [x] Empty channel list returns empty `ConnectorResult.records` (not an error)
+- [x] Empty message history returns empty `ConnectorResult.records` (not an error)
+- [x] Empty user list returns empty `ConnectorResult.records` (not an error)
+- [x] `api.test` returning `{"ok": false}` with no `error` field handled — returns `"unknown"` detail
 - [ ] Domain-specific exception types (e.g. `SlackRateLimitError`, `SlackAuthError`)
 
 ## Known Gaps
@@ -123,4 +131,5 @@ Async Slack Web API connector implementing `ConnectorBase`. Provides read/write 
 - [ ] **No scheduling**: `chat.scheduleMessage` not implemented
 
 ## QA History
+- 2026-07-08: Cross-cutting QA (index 259). Fixed CRITICAL — health check misleadingly reported "Token is invalid or revoked" for network errors (connection errors, timeouts, HTTP errors during `verify_scopes` now return "network error" detail). Fixed MAJOR — extracted `_compute_retry_delay()` helper (retry delay calculation defined once instead of 3 times). Fixed MAJOR — extracted `_check_slack_ok()` helper (8 `if not body.get("ok")` patterns consolidated). Created `test_slack_resilience.py` with 8 new tests covering verify_scopes network error differentiation (3), empty response edge cases (3), `ok:false` no error field (1), connector type constant (1). All 57 existing + 8 new tests pass.
 - 2026-07-05: Cross-cutting QA (improve-architecture). Fixed: added retry/backoff for 429 (exponential backoff, max 3 retries); added `_call_api` centralised error handler with ConnectError/TimeoutException/HTTPStatusError coverage; added `_parse_json` for safe JSON decoding; added `verify_scopes()` via `auth.test` to detect revoked tokens; added health check scope verification; added `query("channel_info")`, `query("channel_members")`, `query("thread_replies")`, `write("thread_reply")` resources. Added 57 unit tests (from 30 originally). Updated Known Gaps.
