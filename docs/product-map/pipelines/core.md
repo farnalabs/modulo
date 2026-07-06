@@ -179,7 +179,7 @@ copy-to-adapt (save-as-composite), node conversion, and ownership/visibility.
 - [x] Validation returns issues as list — warnings (TOPOLOGY_UNREACHABLE) and errors (blocks save)
 - [x] Validation issues returned in PipelineGraphResponse.validation_issues
 - [x] Deep schema compatibility (field-level) — only used in validate_for_run, not on-save
-- [ ] No unit tests for GraphValidator methods — no test_graph_validator.py found
+- [ ] GraphValidator unit tests are thin — test_graph_validator.py exists but covers only HITL gate config validation; topology, connector, model backend, and composite validation have no unit coverage
 - [ ] Pre-run validation (validate_for_run) also checks input payload — covered in feat-pipelines-cicd-pipeline run lifecycle
 
 ### Real-Time Run Progress (WebSocket Events)
