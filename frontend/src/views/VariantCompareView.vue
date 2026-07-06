@@ -234,6 +234,7 @@ import type { components } from '../lib/api/client'
 import LoadingSpinner from '../components/shared/LoadingSpinner.vue'
 import ErrorAlert from '../components/shared/ErrorAlert.vue'
 import PageTabs from "../components/PageTabs.vue"
+import { formatApiError } from '../lib/api/formatError'
 
 const { t } = useI18n()
 
@@ -410,7 +411,7 @@ async function fetchGroups() {
   try {
     const { data, error: err } = await api.GET('/api/v1/variant-groups')
     if (err) {
-      error.value = `${t('views.variantCompare.failedToLoadGroups')} ${JSON.stringify(err)}`
+      error.value = `${t('views.variantCompare.failedToLoadGroups')} ${formatApiError(err)}`
       return
     }
     const list = (data ?? []) as unknown as VariantGroup[]
@@ -432,7 +433,7 @@ async function fetchGroupDetail(id: string) {
       params: { path: { group_id: id } },
     })
     if (err) {
-      error.value = `${t('views.variantCompare.failedToLoadGroup')} ${JSON.stringify(err)}`
+      error.value = `${t('views.variantCompare.failedToLoadGroup')} ${formatApiError(err)}`
       return
     }
     selectedGroup.value = data as unknown as VariantGroup
@@ -453,7 +454,7 @@ async function runVariants() {
     })
 
     if (err) {
-      error.value = `${t('views.variantCompare.runFailed')} ${JSON.stringify(err)}`
+      error.value = `${t('views.variantCompare.runFailed')} ${formatApiError(err)}`
       return
     }
 

@@ -15,6 +15,7 @@ unit-tests:
   - backend/tests/unit/db/crud/test_variant_group.py
   - backend/tests/integration/crud/test_variant_group.py
   - frontend/src/__tests__/VariantCompareView.spec.ts
+  - docs: Website/modulo-website/src/docs/evals/variant-compare-ui.md
 depends-on: [feat-evals-eval-engine, feat-variants-variant-execution]
 status: partial
 ---
@@ -129,7 +130,7 @@ Side-by-side eval scores, token costs, and output diffs across A/B test variants
 - [x] 429 when no variant selected or quota exceeded in run_variant_weighted
 - [x] API errors surfaced as inline ErrorAlert in the UI
 - [x] Network errors caught with try/catch and friendly error messages
-- [ ] Frontend error messages use JSON.stringify which can produce [object Object] for some error shapes
+- [x] Frontend error messages use JSON.stringify which can produce [object Object] for some error shapes — fixed: replaced with formatApiError(err)
 
 ## Known Gaps
 
@@ -147,3 +148,4 @@ Side-by-side eval scores, token costs, and output diffs across A/B test variants
 ## QA History
 
 - 2026-07-05 (improve-architecture index 137): Cross-cutting QA pass 1. Marked 32 behaviour checkboxes [ ]→[x] after verifying against code (all comparison table, run variants, output diff, error state, pass rate, and variant group selection behaviours were implemented but not checked). Fixed i18n violations: replaced ~30 hardcoded strings in VariantCompareView.vue with `$t()`/`t()` wrappers. Added 32 i18n keys to `en-US.js` under `views.variantCompare`. Added Error Handling section (7 behaviour checkboxes). Refined Known Gaps: removed stale "BDD placeholder" gap (replaced with accurate gap count), added HITL hardcoded-to-zero gap, added no-comparison-endpoint gap, added i18n-fixed note. Updated frontmatter: added frontend smoke test to unit-tests. 1/1 frontend smoke test passes. Status: partial.
+- 2026-07-06 (Cross-cutting QA): Fixed `JSON.stringify(err)` → `formatApiError(err)` in 3 error handlers. Removed unused `VariantCompareView` locale keys from en-US.js. Created website docs stub at `evals/variant-compare-ui.md`. Added docs path to product map code field. Status: partial.
