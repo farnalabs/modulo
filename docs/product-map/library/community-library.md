@@ -2,7 +2,12 @@
 id: feat-community-library
 prd: 15
 delivery-tasks: []
-bdd: []
+bdd:
+  - backend/tests/bdd/features/library/browse.feature
+  - backend/tests/bdd/features/library/copy_to_adapt.feature
+  - backend/tests/bdd/features/library/contribute.feature
+  - backend/tests/bdd/features/library/ratings.feature
+  - backend/tests/bdd/features/library/auto_update.feature
 code:
   - backend/src/modulo/db/migrations/versions/0063_library_community_source.py
   - backend/src/modulo/core/library_service/__init__.py
@@ -61,9 +66,30 @@ See ADR 010 §2.
 - [x] Within the Native section, the existing tier split (native/preview/in-dev) still applies; the Community section bypasses tiering entirely (community items aren't tiered)
 - [x] Auto-update toggle (from `feat-library-auto-update`) is not shown for community primitives — they are read-only in the UI context
 
+## Error Handling
+
+- [x] All DB-backed routes catch `ProgrammingError` and return 501 Not Implemented with a descriptive migration-prompt message (`list_library_primitives_endpoint`, `get_library_primitive_endpoint`, `create_library_primitive_endpoint`, `update_library_primitive_endpoint`, `delete_library_primitive_endpoint`, `copy_to_adapt_endpoint`, `export_pipeline_endpoint`, `_analyse_bundle`, `confirm_import_endpoint`, `create_pipeline_from_template_endpoint`, `community_contribute_endpoint`, `list_community_contributions_endpoint`, `admin_publish_contribution_endpoint`)
+- [x] `list_community_contributions_endpoint` has an outer `except Exception` catch that returns 500 with a structured message — the only community-specific endpoint that does this (others rely on the CatchAllMiddleware)
+- [x] `_fetch_published_community_from_db` returns `[]` on `ProgrammingError` or any `Exception` — degrades gracefully when the DB is not migrated
+- [x] `get_primitive` in `library_service` returns `None` (not 500) on `ProgrammingError` or `SQLAlchemyError` — fallback to in-memory community items still works when the DB table is missing
+- [x] `CommunityPrimitiveReadOnlyError` → 403 on `copy_to_adapt_endpoint` when `via_mcp=True`
+- [x] `ContributionNotFoundError` → 404, `ContributionInvalidTransitionError` → 400 on `admin_publish_contribution_endpoint`
+- [x] `LookupError` → 404 when the primitive does not exist for copy-to-adapt
+
+## Edge Cases
+
+- [x] **Concurrent community list mutations use `_COMMUNITY_CACHE_LOCK`** — the `_update_community_cache` function acquires `_COMMUNITY_CACHE_LOCK` (module-level `asyncio.Lock`) before appending to `_COMMUNITY_PRIMITIVES` and updating the ID/slug index dicts. Prevents race conditions between concurrent publish operations.
+- [x] **Cross-tenant community DB fetch strips the caller's RLS org_id** — `_fetch_published_community_from_db` temporarily saves and removes `session.info["org_id"]` to query published community items across all orgs, then restores it. Without this, RLS filtering would restrict to only the caller's org — community items must be visible to every org.
+- [x] **Community items are never returned in the "Native" tab** — `LibraryView.vue` filters `section === 'native'` items with `prim.source !== 'community'` as a client-side belt-and-braces measure, even though the API query with `source=modulo` already excludes community items server-side.
+- [x] **No auto-update toggle for community primitives** — the auto-update toggle only renders for items with `prim.forked_from`, which community primitives never have (they are in-memory constants, not DB rows).
+- [x] **Community contribution publish adds to both DB and in-memory cache** — `publish_contribution` calls `_update_community_cache` to add the published item to `_COMMUNITY_PRIMITIVES`, `_COMMUNITY_BY_ID`, and `_COMMUNITY_BY_SLUG`, so the in-memory cache stays consistent even across server restart warm-start.
+- [x] **Slug collision protection** — community `get_primitive_by_slug` returns the in-memory community match only after exhausting org DB and modulo in-memory lookups (`_MODULO_BY_SLUG.get(...) or _COMMUNITY_BY_SLUG.get(...)`), so an org-local primitive with the same slug takes priority.
+- [ ] **No pagination/count semantics documented for merged native+community lists** beyond the unit tests already listed — large community seed growth is untested.
+- [ ] **Community DB publish after server restart** — the in-memory cache is the primary mechanism. `_fetch_published_community_from_db` supplements it for warm-start scenarios but has no backfill into the in-memory cache: published items are only added to the in-memory cache at publish time, not on server restart. Items published between restarts won't appear in the in-memory list until another publish triggers cache refresh.
+
 ## Known Gaps
 
 - **No external contribution mechanism exists yet.** Community items are currently a fixed, hardcoded in-memory seed list (`_COMMUNITY_PRIMITIVES`) — there is no UI or API path for an outside user to submit a new community primitive. This is explicitly called out in ADR 010 as a go-to-market sequencing item, not a built feature: the database should not be marketed as "community-driven" until real external contributions exist.
 - **No moderation/review workflow for community submissions** — because there is no submission mechanism yet, there is also no review, approval, or rejection flow for community content.
-- **No BDD coverage yet.** A parallel effort (branch `test/bdd-tiering-community`) is adding BDD scenarios for the community library; none exist in this worktree at the time of writing.
 - **No pagination/count semantics documented for merged native+community lists** beyond the unit tests already listed — large community seed growth is untested.
+- **Community DB publish does not backfill the in-memory cache on restart** — items published while the server is running are cached in `_COMMUNITY_PRIMITIVES`, but after a restart, only `_fetch_published_community_from_db` retrieves them (best-effort, no RLS bypass for warm-start). Published items do not survive a full server restart as in-memory primitives.
