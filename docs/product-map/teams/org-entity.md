@@ -141,6 +141,7 @@ The Organisation entity is the root tenant entity in Modulo's multi-tenant archi
 - [x] No pending deletion → 409 on cancel
 - [x] Invalid license key → 422
 - [x] ProgrammingError → 501 on all 15 DB-accessing route handlers
+- [x] SQLAlchemyError → 503 on all 15 DB-accessing route handlers
 - [x] ViewModel current: missing org → 400, missing account → 404, team not found → 404
 
 ## Edge Cases
@@ -167,4 +168,21 @@ The Organisation entity is the root tenant entity in Modulo's multi-tenant archi
 - **No `modulo-cloud` integration**: The modulo-cloud service layer (§6.2) is V3-deferred. Organisation lifecycle, plan enforcement, and subdomain routing are stubs.
 - **No Frontend smoke test for AdminOrgSettingsView**: The view has vitest tests but no Playwright E2E coverage.
 - **Website docs**: No docs page exists at Website/modulo-website/src/docs/organisation.md (stub created).
-- **Export summary key mismatch**: The `request_org_deletion` route in `admin.py` references `export.get("users", [])` for `user_count`, but CRUD `_collect_org_export` in `org_deletion.py` returns the key as `"memberships"`. Fixed in 2026-07-06 QA pass — previously `user_count` was always 0 in the deletion response.
+- **Export summary key mismatch**: The `request_org_deletion` route in `admin.py` now uses `export.get("memberships", [])` for `user_count`, matching the CRUD export key. Fixed in 2026-07-06 QA pass.
+
+## QA History
+
+### 2026-07-08 — Cross-cutting QA (improve-architecture index 263)
+
+**CRITICAL fix — missing SQLAlchemyError→503 catches on 8 routes in admin.py:**
+- `admin_get_org`, `admin_update_org`, `admin_regenerate_api_key`, `request_org_deletion`, `confirm_org_deletion`, `cancel_org_deletion`, `export_org_data`, `delete_org_immediate` — all caught ProgrammingError→501 but allowed SQLAlchemyError (connection/deadlock failures) to propagate as raw 500.
+- Added `except SQLAlchemyError → 503` with descriptive `_log.warning` detail messages to all 8 routes.
+
+**Test coverage added:**
+- Added 8 new SQLAlchemyError→503 tests in `test_org_programming_error.py` (3 test classes: `TestAdminOrgsSQLAlchemyError` with 7 routes, `TestAdminOrgProfileSQLAlchemyError` with 3 routes, `TestOrgDeletionSQLAlchemyError` with 5 routes).
+
+**Product map updates:**
+- Added `SQLAlchemyError → 503 on all 15 DB-accessing route handlers` checkbox to Error Handling.
+- Added QA History section.
+
+All 23 org programming-error tests pass (15 ProgrammingError→501 + 8 SQLAlchemyError→503).
