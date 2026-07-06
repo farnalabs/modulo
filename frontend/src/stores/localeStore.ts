@@ -2,12 +2,15 @@ import { defineStore } from 'pinia'
 import { ref } from 'vue'
 import i18n, { detectBrowserLocale, isSupportedLocale, loadLocaleMessages, type SupportedLocale, SUPPORTED_LOCALES } from '../i18n'
 import { api, getAccessToken } from '../lib/api/client'
+import { withTimeout } from '../lib/asyncUtils'
 
 const STORAGE_KEY = 'modulo_locale'
+const DEFAULT_LOCALE: SupportedLocale = 'en-US'
 
 export const useLocaleStore = defineStore('locale', () => {
   const locale = ref<SupportedLocale>('en-US')
   const initialized = ref(false)
+  const error = ref<string | null>(null)
   let initPromise: Promise<void> | null = null
 
   function persist(code: SupportedLocale): void {
@@ -24,7 +27,13 @@ export const useLocaleStore = defineStore('locale', () => {
       await loadLocaleMessages(code)
     } catch (err) {
       console.warn(`[locale] Failed to load messages for ${code}, falling back to en-US`, err)
-      code = 'en-US'
+      code = DEFAULT_LOCALE
+      try {
+        await loadLocaleMessages(code)
+      } catch {
+        error.value = 'Failed to load locale messages'
+        return
+      }
     }
     locale.value = code
     i18n.global.locale.value = code
@@ -36,9 +45,11 @@ export const useLocaleStore = defineStore('locale', () => {
   async function syncToBackend(code: SupportedLocale): Promise<void> {
     if (!getAccessToken()) return
     try {
-      await api.PUT('/api/v1/me/settings', {
-        locale: code,
-      } as any)
+      await withTimeout(
+        api.PUT('/api/v1/me/settings', { locale: code } as any),
+        10000,
+        'Locale sync request',
+      )
     } catch (err) {
       console.warn('[locale] Failed to sync locale to backend', err)
     }
@@ -49,14 +60,17 @@ export const useLocaleStore = defineStore('locale', () => {
     if (initPromise) return initPromise
 
     initPromise = (async () => {
-      let detected: SupportedLocale = 'en-US'
+      let detected: SupportedLocale = DEFAULT_LOCALE
 
       // 1. Try backend preferences (returns flat account.preferences dict)
       try {
-        const res = await api.GET('/api/v1/me/settings')
+        const res = await withTimeout(
+          api.GET('/api/v1/me/settings'),
+          10000,
+          'Locale fetch request',
+        )
         if (res.data) {
-          const prefs = res.data as Record<string, unknown>
-          const backendLocale = prefs?.locale as string | undefined
+          const backendLocale = (res.data as Record<string, unknown>).locale as string | undefined
           if (backendLocale && isSupportedLocale(backendLocale)) {
             detected = backendLocale
           }
@@ -66,7 +80,7 @@ export const useLocaleStore = defineStore('locale', () => {
       }
 
       // 2. Try localStorage
-      if (detected === 'en-US') {
+      if (detected === DEFAULT_LOCALE) {
         try {
           const stored = localStorage.getItem(STORAGE_KEY)
           if (stored && isSupportedLocale(stored)) {
@@ -78,7 +92,7 @@ export const useLocaleStore = defineStore('locale', () => {
       }
 
       // 3. Try browser language
-      if (detected === 'en-US') {
+      if (detected === DEFAULT_LOCALE) {
         detected = detectBrowserLocale()
       }
 
@@ -86,8 +100,15 @@ export const useLocaleStore = defineStore('locale', () => {
         await loadLocaleMessages(detected)
       } catch (err) {
         console.warn(`[locale] Failed to load messages for ${detected}, falling back to en-US`, err)
-        detected = 'en-US'
-        await loadLocaleMessages(detected)
+        detected = DEFAULT_LOCALE
+        try {
+          await loadLocaleMessages(detected)
+        } catch (fallbackErr) {
+          error.value = 'Failed to load locale messages'
+          console.warn('[locale] Failed to load even fallback locale', fallbackErr)
+          initPromise = null
+          return
+        }
       }
       await setLocale(detected)
       initialized.value = true
@@ -100,6 +121,7 @@ export const useLocaleStore = defineStore('locale', () => {
   return {
     locale,
     initialized,
+    error,
     SUPPORTED_LOCALES,
     setLocale,
     initLocale,

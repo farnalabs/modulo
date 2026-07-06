@@ -1,6 +1,7 @@
 import { defineStore } from "pinia";
 import { ref, computed } from "vue";
 import { useApi } from "../composables/useApi";
+import { withTimeout, asErrorMessage } from "../lib/asyncUtils";
 import type { CompositeDefinition } from "../types/pipeline";
 
 export const useCompositeStore = defineStore("composite", () => {
@@ -25,16 +26,15 @@ export const useCompositeStore = defineStore("composite", () => {
     loading.value = true;
     error.value = null;
     try {
-      const result = await Promise.race([
+      const result = await withTimeout(
         get<{ items: CompositeDefinition[] }>("/api/v1/composites"),
-        new Promise<never>((_, reject) =>
-          setTimeout(() => reject(new Error("Composites request timed out after 15s")), 15000),
-        ),
-      ]);
+        15000,
+        "Composites request",
+      );
       composites.value = result.items || [];
       hasLoadedOnce = true;
     } catch (e: unknown) {
-      error.value = e instanceof Error ? e.message : String(e);
+      error.value = asErrorMessage(e);
       if (!hasLoadedOnce) composites.value = [];
     } finally {
       loading.value = false;
@@ -49,6 +49,12 @@ export const useCompositeStore = defineStore("composite", () => {
     composites.value = [];
     error.value = null;
     hasLoadedOnce = false;
+  }
+
+  if (import.meta.hot) {
+    import.meta.hot.dispose(() => {
+      disposeHandlers();
+    });
   }
 
   return {
