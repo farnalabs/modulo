@@ -62,6 +62,7 @@ async def run_websocket(
     # Try opaque single-use token first, fall back to JWT for backward compat.
     principal: AuthenticatedPrincipal | None = None
     if settings.redis_url:
+        redis: Redis | None = None
         try:
             from redis.asyncio import Redis
 
@@ -76,6 +77,9 @@ async def run_websocket(
                 )
         except Exception as exc:
             _log.warning("ws_token.consume_failed", extra={"error": str(exc)})
+        finally:
+            if redis is not None:
+                await redis.aclose()
 
     if principal is None:
         try:

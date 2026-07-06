@@ -417,7 +417,7 @@ async def test_polling_condition(
 class TriggerCreate(BaseModel):
     trigger_type: str = Field(..., pattern=r"^(manual|webhook|cron|polling)$")
     active: bool = True
-    max_concurrent_runs: int = 1
+    max_concurrent_runs: int = Field(default=1, ge=1)
     config_json: dict[str, Any] = Field(default_factory=dict)
     cron_expression: str | None = None
     cron_timezone: str | None = None
@@ -483,7 +483,7 @@ async def create_trigger(
 
 class TriggerUpdate(BaseModel):
     active: bool | None = None
-    max_concurrent_runs: int | None = None
+    max_concurrent_runs: int | None = Field(None, ge=1)
     config_json: dict[str, Any] | None = None
     cron_expression: str | None = None
     cron_timezone: str | None = None
