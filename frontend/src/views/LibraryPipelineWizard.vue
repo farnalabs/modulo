@@ -104,7 +104,7 @@
         <div class="card p-6 mb-6">
           <h3 class="text-base font-medium text-foreground mb-4">Ownership</h3>
           <p class="text-sm text-muted-foreground mb-4">{{ $t('views.LibraryPipelineWizard.choose_who_this_pipeline_belongs_to_orgwide_pipelines_are_vi') }}</p>
-          <OwnershipPicker v-model="ownership" label="Owner" />
+          <OwnershipPicker v-model="ownership" :label="$t('views.LibraryPipelineWizard.owner')" />
         </div>
 
         <div v-if="templateAgents.length > 0" class="card p-6 mb-6">
