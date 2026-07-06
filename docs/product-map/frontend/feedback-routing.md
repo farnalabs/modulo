@@ -128,15 +128,15 @@ status: partial
 - [x] `review_feedback`: `mark_reviewed` on terminal status → 409
 - [x] `review_feedback`: `dismiss` on terminal status → 409
 
-### ValueError propagation (FeedbackManager → 404)
-- [x] `spawn_correction_run`: record not found → ValueError → 404
-- [x] `spawn_correction_run`: original run not found → ValueError → 404
-- [ ] `update_status`: invalid transition → ValueError → not caught in review handler (propagates as 500)
-- [ ] `update_status`: concurrent modification → ValueError → not caught in review handler (propagates as 500)
+### Exception propagation (FeedbackManager → HTTP)
+- [x] `spawn_correction_run`: record not found → FeedbackRecordNotFoundError → 404
+- [x] `spawn_correction_run`: original run not found → FeedbackManagerError → 404
+- [x] `update_status`: invalid transition → InvalidTransitionError → 409 Conflict in review handler
+- [x] `update_status`: concurrent modification → ConcurrentModificationError → 409 Conflict in review handler
 
 ### Missing error handling
-- [ ] `run_post_correction_eval` ValueErrors (record not found, wrong status, no linked run) not caught at API level
-- [ ] Date parsing in `list_feedback_inbox`: invalid `date_from`/`date_to` format raises uncaught `ValueError` → 500
+- [ ] `run_post_correction_eval` exceptions (record not found, wrong status, no linked run) not caught at API level (method not yet wired into run completion lifecycle)
+- [x] Date parsing in `list_feedback_inbox`: invalid `date_from`/`date_to` format caught → 422
 
 ## QA History
 
@@ -148,6 +148,15 @@ status: partial
 - **Added**: Error Handling section with audited error paths.
 - **Added**: Annotation serialisation in `_serialise_record()`.
 - **Not fixed (requires separate task)**: `reject_routing_conflict` validation, AI correction agent primitive, eval proposals UI, checkpoint seeding, eval suite population for `detect_eval_gap`.
+
+### 2026-07-06 — Cross-cutting QA (this session)
+- **Fixed**: Backend `list_feedback_inbox` — invalid `date_from`/`date_to` ISO format now returns 422 instead of uncaught ValueError → 500.
+- **Fixed**: Backend `review_feedback` — `InvalidTransitionError` and `ConcurrentModificationError` from `update_status` caught and returned as 409 instead of propagating as 500.
+- **Fixed**: Backend `review_feedback` — `spawn_correction_run` exception handler changed from dead `except ValueError` to `except (FeedbackRecordNotFoundError, FeedbackManagerError)` → 404.
+- **Fixed**: Frontend `FeedbackInboxView` — all error/success messages now use `$t()` / `t()` i18n keys instead of hardcoded English strings.
+- **Fixed**: Frontend `FeedbackInboxView` — `openapi-fetch` error objects now rendered via `formatApiError()` instead of raw `${err}` (was producing `[object Object]`).
+- **Added**: Website docs stub for feedback routing at `Website/modulo-website/src/docs/feedback-routing.md`.
+- **Updated**: Product map entries for fixed error handling gaps.
 
 ## Known Gaps
 

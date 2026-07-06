@@ -25,7 +25,13 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from modulo.api.dependencies import get_db_session
 from modulo.auth.dependencies import get_current_user
 from modulo.auth.jwt import AuthenticatedPrincipal
-from modulo.core.feedback_manager import FeedbackManager
+from modulo.core.feedback_manager import (
+    ConcurrentModificationError,
+    FeedbackManager,
+    FeedbackManagerError,
+    FeedbackRecordNotFoundError,
+    InvalidTransitionError,
+)
 from modulo.db.models.eval_definition import EvalDefinition
 from modulo.db.models.pipeline_snapshot import PipelineSnapshot
 from modulo.db.models.run import Run
@@ -169,9 +175,21 @@ async def list_feedback_inbox(
     date_from_dt: datetime | None = None
     date_to_dt: datetime | None = None
     if date_from:
-        date_from_dt = datetime.fromisoformat(date_from).replace(tzinfo=UTC)
+        try:
+            date_from_dt = datetime.fromisoformat(date_from).replace(tzinfo=UTC)
+        except ValueError:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=f"Invalid date_from format: '{date_from}'. Use ISO 8601 format (e.g. 2024-01-01T00:00:00).",
+            )
     if date_to:
-        date_to_dt = datetime.fromisoformat(date_to).replace(tzinfo=UTC)
+        try:
+            date_to_dt = datetime.fromisoformat(date_to).replace(tzinfo=UTC)
+        except ValueError:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=f"Invalid date_to format: '{date_to}'. Use ISO 8601 format (e.g. 2024-01-01T00:00:00).",
+            )
 
     try:
         async with session.begin():
@@ -415,19 +433,9 @@ async def review_feedback(
 
             if req.action == "mark_reviewed":
                 record = await mgr.update_status(record_id, "resolved")
-                if record is None:
-                    raise HTTPException(
-                        status_code=status.HTTP_409_CONFLICT,
-                        detail="Cannot transition feedback to resolved",
-                    )
 
             elif req.action == "dismiss":
                 record = await mgr.update_status(record_id, "dismissed")
-                if record is None:
-                    raise HTTPException(
-                        status_code=status.HTTP_409_CONFLICT,
-                        detail="Cannot dismiss feedback",
-                    )
 
             elif req.action == "create_correction_run":
                 if not record.run_id:
@@ -438,7 +446,7 @@ async def review_feedback(
 
                 try:
                     new_run_id = await mgr.spawn_correction_run(record_id)
-                except ValueError as exc:
+                except (FeedbackRecordNotFoundError, FeedbackManagerError) as exc:
                     raise HTTPException(
                         status_code=status.HTTP_404_NOT_FOUND,
                         detail=str(exc),
@@ -462,6 +470,11 @@ async def review_feedback(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feedback system is not available. Run database migrations to enable this feature.",
         )
+    except (InvalidTransitionError, ConcurrentModificationError) as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=str(exc),
+        ) from exc
 
     return {
         "id": str(record.id),
