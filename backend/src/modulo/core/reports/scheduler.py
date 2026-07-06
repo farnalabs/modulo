@@ -19,6 +19,7 @@ Report generators are registered via ``register_report_type()``.
 
 from __future__ import annotations
 
+import asyncio
 import datetime
 import logging
 import uuid
@@ -28,6 +29,7 @@ from typing import Any
 import httpx
 from croniter import croniter  # type: ignore[import-untyped]
 from sqlalchemy import select, update
+from sqlalchemy.exc import DBAPIError
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker, create_async_engine
 
 from modulo.db.models.scheduled_report import ScheduledReport
@@ -46,6 +48,9 @@ except ImportError:
     Task = object  # type: ignore[misc]
     ScheduleEntry = object  # type: ignore[misc]
     Scheduler = object  # type: ignore[misc]
+
+
+
 
 _log = logging.getLogger(__name__)
 
@@ -144,12 +149,9 @@ def compute_next_send(cron_expression: str, after: datetime.datetime | None = No
 
 
 async def _set_rls_org(session: AsyncSession, org_id: uuid.UUID) -> None:
-    from sqlalchemy import text
+    from modulo.db.rls import set_rls_org as _set_rls
 
-    await session.execute(
-        text("SELECT set_config('app.organisation_id', :val, true)"),
-        {"val": str(org_id)},
-    )
+    await _set_rls(session, org_id)
 
 
 # ---------------------------------------------------------------------------
@@ -172,13 +174,11 @@ class ReportFireTask(Task):
     """Task that fires a single scheduled report — generates and delivers."""
 
     name = "modulo.reports.fire_report"
-    autoretry_for = (Exception,)
+    autoretry_for = (httpx.RequestError, DBAPIError, TimeoutError)
     max_retries = 3
     default_retry_delay = 60
 
     def run(self, report_id: str, org_id: str) -> dict[str, Any]:
-        import asyncio
-
         return asyncio.run(
             _fire_scheduled_report(
                 report_id=uuid.UUID(report_id),
@@ -199,11 +199,13 @@ async def _fire_scheduled_report(
     async with factory() as session, session.begin():
         await _set_rls_org(session, org_id)
 
+        now = datetime.datetime.now(datetime.UTC)
         result = await session.execute(
             select(ScheduledReport)
             .where(
                 ScheduledReport.id == report_id,
                 ScheduledReport.organisation_id == org_id,
+                ScheduledReport.next_send_at <= now,
             )
             .with_for_update()
         )
@@ -216,26 +218,29 @@ async def _fire_scheduled_report(
             _log.warning("No generator registered for report type %s", report.report_type)
             return {"status": "failed", "reason": f"no_generator_for_{report.report_type}"}
 
-        config = report.config_json or {}
-        report_data = await generator(session, org_id, config)
+        try:
+            config = report.config_json or {}
+            report_data = await generator(session, org_id, config)
 
-        formatter = get_formatter(report.report_type)
-        payload: Any = report_data
-        if formatter is not None:
-            payload = formatter(report_data)
+            formatter = get_formatter(report.report_type)
+            payload: Any = report_data
+            if formatter is not None:
+                payload = formatter(report_data)
 
-        deliverer = get_deliverer(report.report_type)
-        recipient_config = report.recipient_config or {}
-        delivery_results: list[dict[str, Any]] = []
-        if deliverer is not None:
-            delivery_results = await deliverer(payload, recipient_config)
-        else:
-            delivery_results = await _deliver_via_config(payload, recipient_config, org_id)
+            deliverer = get_deliverer(report.report_type)
+            recipient_config = report.recipient_config or {}
+            delivery_results: list[dict[str, Any]] = []
+            if deliverer is not None:
+                delivery_results = await deliverer(payload, recipient_config)
+            else:
+                delivery_results = await _deliver_via_config(payload, recipient_config)
+        except Exception:
+            _log.exception("Report %s (%s) generation or delivery failed", report_id, report.report_type)
+            return {"status": "failed", "reason": "generation_or_delivery_failed"}
 
-        now = datetime.datetime.now(datetime.UTC)
         try:
             next_send = compute_next_send(report.cron_expression, after=now)
-        except (ValueError, TypeError) as exc:
+        except (ValueError, TypeError, KeyError) as exc:
             _log.error(
                 "Invalid cron expression '%s' for report %s: %s",
                 report.cron_expression, report_id, exc,
@@ -277,7 +282,6 @@ async def _fire_scheduled_report(
 async def _deliver_via_config(
     payload: Any,
     recipient_config: dict[str, Any],
-    org_id: uuid.UUID,
 ) -> list[dict[str, Any]]:
     """Deliver a report payload based on recipient_config type."""
     config_type = recipient_config.get("type", "webhook")
@@ -290,34 +294,88 @@ async def _deliver_via_config(
     return await _deliver_webhook(payload, recipient_config)
 
 
+_REPORT_HTTP_TIMEOUT = 30.0
+_REPORT_MAX_RETRIES = 3
+_REPORT_BACKOFF_BASE = 2.0
+_REPORT_MAX_BACKOFF = 30.0
+
+
 async def _deliver_to_urls(
     urls: list[str],
     body: dict[str, Any] | list[Any],
     headers: dict[str, str] | None = None,
 ) -> list[dict[str, Any]]:
-    """POST JSON body to each URL, returning per-URL results."""
+    """POST JSON body to each URL, returning per-URL results.
+
+    Retries transient failures (5xx, connection errors, 429) per URL
+    with exponential backoff. Non-transient 4xx errors are not retried.
+    """
     results: list[dict[str, Any]] = []
-    async with httpx.AsyncClient(timeout=30.0) as client:
+    async with httpx.AsyncClient(timeout=_REPORT_HTTP_TIMEOUT) as client:
         for url in urls:
-            try:
-                resp = await client.post(url, json=body, headers=headers or {})
-                if not resp.is_success:
-                    _log.warning("Delivery to %s returned %d: %.200s", url, resp.status_code, resp.text)
-                results.append({
-                    "url": url,
-                    "status": "delivered" if resp.is_success else "failed",
-                    "status_code": resp.status_code,
-                    "error": None if resp.is_success else resp.text[:200],
-                })
-            except (httpx.RequestError, TypeError) as exc:
-                _log.warning("Delivery to %s failed: %s", url, exc)
-                results.append({
-                    "url": url,
-                    "status": "failed",
-                    "status_code": None,
-                    "error": str(exc),
-                })
+            result: dict[str, Any] = {"url": url, "status": "failed", "status_code": None, "error": None}
+            last_resp_or_exc: httpx.Response | Exception | None = None
+            for attempt in range(_REPORT_MAX_RETRIES):
+                try:
+                    resp = await client.post(url, json=body, headers=headers or {})
+                    last_resp_or_exc = resp
+                    if resp.is_success:
+                        result.update({"status": "delivered", "status_code": resp.status_code, "error": None})
+                        break
+                    if resp.status_code == 429:
+                        retry_after = _parse_retry_after(resp)
+                        _log.warning(
+                            "Delivery to %s rate-limited (429), retrying after %.0fs (attempt %d/%d)",
+                            url, retry_after, attempt + 1, _REPORT_MAX_RETRIES,
+                        )
+                        await asyncio.sleep(retry_after)
+                        continue
+                    if resp.status_code >= 500:
+                        _log.warning(
+                            "Delivery to %s returned %d, retrying (attempt %d/%d)",
+                            url, resp.status_code, attempt + 1, _REPORT_MAX_RETRIES,
+                        )
+                        delay = min(_REPORT_BACKOFF_BASE ** attempt, _REPORT_MAX_BACKOFF)
+                        await asyncio.sleep(delay)
+                        continue
+                    result.update({
+                        "status": "failed",
+                        "status_code": resp.status_code,
+                        "error": resp.text[:200],
+                    })
+                    break
+                except (httpx.RequestError, TypeError) as exc:
+                    _log.warning(
+                        "Delivery to %s failed: %s (attempt %d/%d)",
+                        url, exc, attempt + 1, _REPORT_MAX_RETRIES,
+                    )
+                    last_resp_or_exc = exc
+                    if attempt < _REPORT_MAX_RETRIES - 1:
+                        delay = min(_REPORT_BACKOFF_BASE ** attempt, _REPORT_MAX_BACKOFF)
+                        await asyncio.sleep(delay)
+            else:
+                if isinstance(last_resp_or_exc, Exception):
+                    result.update({"status": "failed", "status_code": None, "error": str(last_resp_or_exc)})
+                elif last_resp_or_exc is not None:
+                    err_text = getattr(last_resp_or_exc, "text", None) or "max_retries_exceeded"
+                    result.update({
+                        "status": "failed",
+                        "status_code": last_resp_or_exc.status_code,
+                        "error": err_text[:200],
+                    })
+                else:
+                    result.update({"status": "failed", "error": "max_retries_exceeded"})
+            results.append(result)
     return results
+
+
+def _parse_retry_after(resp: httpx.Response) -> float:
+    """Extract Retry-After header value, defaulting to 5 seconds."""
+    raw = resp.headers.get("Retry-After", "5")
+    try:
+        return float(raw)
+    except (ValueError, TypeError):
+        return 5.0
 
 
 async def _deliver_slack_webhook(payload: Any, webhook_urls: list[str]) -> list[dict[str, Any]]:
@@ -412,13 +470,10 @@ class DatabaseReportScheduler(Scheduler):
 
     def _sync_with_db(self) -> None:
         """Query the database and update the in-memory schedule."""
-        import asyncio
-
         rows = asyncio.run(self._fetch_due_reports())
 
         current_ids = set(self._schedule.keys())
         db_ids: set[str] = set()
-        had_rows = bool(rows)
 
         for row in rows:
             entry_id = f"report-{row['report_id']}"
@@ -437,10 +492,9 @@ class DatabaseReportScheduler(Scheduler):
             )
             self._schedule[entry_id] = entry
 
-        if had_rows:
-            stale = current_ids - db_ids
-            for sid in stale:
-                self._schedule.pop(sid, None)
+        stale = current_ids - db_ids
+        for sid in stale:
+            self._schedule.pop(sid, None)
 
     async def _fetch_due_reports(self) -> list[dict[str, Any]]:
         """Async query for scheduled reports due to fire."""
