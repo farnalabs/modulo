@@ -504,9 +504,7 @@ def test_import_schema_invalid_json_returns_400(client: TestClient) -> None:
 def test_import_schema_invalid_schema_returns_422(client: TestClient) -> None:
     resp = client.post(
         "/api/v1/schemas/import",
-        json={
-            "content": json.dumps({"type": 123})
-        },
+        json={"content": json.dumps({"type": 123})},
     )
     assert resp.status_code == 422
     assert "Invalid JSON Schema" in resp.json()["detail"]

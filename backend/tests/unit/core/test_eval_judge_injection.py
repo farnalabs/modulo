@@ -36,6 +36,7 @@ def _capturing_callable(captured: list) -> Callable:
     def callable(output: dict, eval_def: EvalDefinition) -> dict:
         captured.append((output, eval_def))
         return {"passed": True, "score": 0.95, "detail": "ok"}
+
     return callable
 
 

@@ -35,9 +35,17 @@ class TestUIToolDefinitions:
 
     def test_required_tools_exist(self):
         required = {
-            "navigate", "click", "fill", "select", "extract",
-            "extract_all", "get_page_interactables", "wait",
-            "go_back", "get_url", "press",
+            "navigate",
+            "click",
+            "fill",
+            "select",
+            "extract",
+            "extract_all",
+            "get_page_interactables",
+            "wait",
+            "go_back",
+            "get_url",
+            "press",
         }
         assert required == UI_TOOL_NAMES
 
@@ -329,17 +337,19 @@ class TestGetAllToolDefinitions:
 
         tools = []
         for name, schema in _UI_TOOLS.items():
-            tools.append({
-                "type": "function",
-                "function": {
-                    "name": name,
-                    "description": schema["description"],
-                    "parameters": {
-                        "type": "object",
-                        "properties": schema["parameters"],
+            tools.append(
+                {
+                    "type": "function",
+                    "function": {
+                        "name": name,
+                        "description": schema["description"],
+                        "parameters": {
+                            "type": "object",
+                            "properties": schema["parameters"],
+                        },
                     },
-                },
-            })
+                }
+            )
         return tools
 
     def test_returns_list_of_dicts(self):
@@ -476,8 +486,12 @@ class TestAgenticLoopRouting:
     def test_mcp_tools_are_never_in_ui_tool_set(self):
         """Ensure common MCP tool names are not accidentally in UI_TOOL_NAMES."""
         mcp_tools = {
-            "list_pipelines", "get_pipeline", "trigger_run",
-            "search_agents", "list_schemas", "read_audit_log",
+            "list_pipelines",
+            "get_pipeline",
+            "trigger_run",
+            "search_agents",
+            "list_schemas",
+            "read_audit_log",
         }
         intersection = mcp_tools & UI_TOOL_NAMES
         assert intersection == set(), f"MCP tool names leaked into UI tools: {intersection}"
@@ -492,6 +506,7 @@ class TestAgenticLoopRouting:
         tools_param = None
         if getattr(backend, "supports_tools", False):
             from modulo.api.routes.remy import _get_all_tool_definitions
+
             tools_param = _get_all_tool_definitions()
 
         assert tools_param is None

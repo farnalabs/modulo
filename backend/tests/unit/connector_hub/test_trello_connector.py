@@ -135,9 +135,7 @@ async def test_query_cards_missing_filter(connector):
 async def test_query_cards_with_fields(connector):
     cards = [{"id": "c1", "name": "Card One"}]
     respx.get(f"{_BASE}/boards/b1/cards").mock(return_value=httpx.Response(200, json=cards))
-    result = await connector.query(
-        ConnectorQuery(resource="cards", filters={"board_id": "b1", "fields": "id,name"})
-    )
+    result = await connector.query(ConnectorQuery(resource="cards", filters={"board_id": "b1", "fields": "id,name"}))
     assert result.total == 1
 
 
@@ -227,9 +225,7 @@ async def test_write_update_card(connector):
 
 async def test_write_update_card_missing_id(connector):
     with pytest.raises(ValueError, match="'id' in data"):
-        await connector.write(
-            ConnectorPayload(resource="card_update", data={"name": "Orphan"})
-        )
+        await connector.write(ConnectorPayload(resource="card_update", data={"name": "Orphan"}))
 
 
 # ---------------------------------------------------------------------------
@@ -252,9 +248,7 @@ async def test_write_comment(connector):
 
 async def test_write_comment_missing_card_id(connector):
     with pytest.raises(ValueError, match="'card_id' in data"):
-        await connector.write(
-            ConnectorPayload(resource="comment", data={"text": "Orphan"})
-        )
+        await connector.write(ConnectorPayload(resource="comment", data={"text": "Orphan"}))
 
 
 # ---------------------------------------------------------------------------

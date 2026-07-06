@@ -24,6 +24,7 @@ def local_connector():
 
 # --- health_check ---
 
+
 @respx.mock
 async def test_health_check_green(connector):
     respx.get(f"{API_BASE}/system/health").mock(
@@ -93,6 +94,7 @@ async def test_health_check_localhost_default(local_connector):
 
 # --- query: projects ---
 
+
 @respx.mock
 async def test_query_projects(connector):
     projects = [
@@ -100,10 +102,13 @@ async def test_query_projects(connector):
         {"key": "com.example:other", "name": "Other", "qualifier": "TRK", "visibility": "private"},
     ]
     respx.get(f"{API_BASE}/projects/search").mock(
-        return_value=httpx.Response(200, json={
-            "components": projects,
-            "paging": {"pageIndex": 1, "pageSize": 100, "total": 2},
-        }),
+        return_value=httpx.Response(
+            200,
+            json={
+                "components": projects,
+                "paging": {"pageIndex": 1, "pageSize": 100, "total": 2},
+            },
+        ),
     )
     result = await connector.query(ConnectorQuery(resource="projects", limit=100))
     assert len(result.records) == 2
@@ -114,24 +119,34 @@ async def test_query_projects(connector):
 @respx.mock
 async def test_query_projects_with_search(connector):
     respx.get(f"{API_BASE}/projects/search").mock(
-        return_value=httpx.Response(200, json={
-            "components": [{"key": "com.example:my-app", "name": "My App"}],
-            "paging": {"pageIndex": 1, "pageSize": 100, "total": 1},
-        }),
+        return_value=httpx.Response(
+            200,
+            json={
+                "components": [{"key": "com.example:my-app", "name": "My App"}],
+                "paging": {"pageIndex": 1, "pageSize": 100, "total": 1},
+            },
+        ),
     )
-    result = await connector.query(ConnectorQuery(
-        resource="projects", filters={"search": "my-app"}, limit=100,
-    ))
+    result = await connector.query(
+        ConnectorQuery(
+            resource="projects",
+            filters={"search": "my-app"},
+            limit=100,
+        )
+    )
     assert len(result.records) == 1
 
 
 @respx.mock
 async def test_query_projects_empty(connector):
     respx.get(f"{API_BASE}/projects/search").mock(
-        return_value=httpx.Response(200, json={
-            "components": [],
-            "paging": {"pageIndex": 1, "pageSize": 100, "total": 0},
-        }),
+        return_value=httpx.Response(
+            200,
+            json={
+                "components": [],
+                "paging": {"pageIndex": 1, "pageSize": 100, "total": 0},
+            },
+        ),
     )
     result = await connector.query(ConnectorQuery(resource="projects", limit=100))
     assert len(result.records) == 0
@@ -140,17 +155,25 @@ async def test_query_projects_empty(connector):
 
 # --- query: project_analyses ---
 
+
 @respx.mock
 async def test_query_project_analyses(connector):
     respx.get(f"{API_BASE}/project_analyses/search").mock(
-        return_value=httpx.Response(200, json={
-            "analyses": [{"key": "A1", "date": "2024-01-01", "project": "proj1"}],
-            "paging": {"pageIndex": 1, "pageSize": 100, "total": 1},
-        }),
+        return_value=httpx.Response(
+            200,
+            json={
+                "analyses": [{"key": "A1", "date": "2024-01-01", "project": "proj1"}],
+                "paging": {"pageIndex": 1, "pageSize": 100, "total": 1},
+            },
+        ),
     )
-    result = await connector.query(ConnectorQuery(
-        resource="project_analyses", filters={"project": "proj1"}, limit=100,
-    ))
+    result = await connector.query(
+        ConnectorQuery(
+            resource="project_analyses",
+            filters={"project": "proj1"},
+            limit=100,
+        )
+    )
     assert len(result.records) == 1
     assert result.records[0]["key"] == "A1"
 
@@ -163,22 +186,29 @@ async def test_query_project_analyses_missing_project(connector):
 
 # --- query: measures ---
 
+
 @respx.mock
 async def test_query_measures(connector):
     respx.get(f"{API_BASE}/measures/component").mock(
-        return_value=httpx.Response(200, json={
-            "component": {
-                "key": "proj1",
-                "measures": [
-                    {"metric": "coverage", "value": "85.3"},
-                    {"metric": "bugs", "value": "12"},
-                ],
+        return_value=httpx.Response(
+            200,
+            json={
+                "component": {
+                    "key": "proj1",
+                    "measures": [
+                        {"metric": "coverage", "value": "85.3"},
+                        {"metric": "bugs", "value": "12"},
+                    ],
+                },
             },
-        }),
+        ),
     )
-    result = await connector.query(ConnectorQuery(
-        resource="measures", filters={"component": "proj1", "metricKeys": "coverage,bugs"},
-    ))
+    result = await connector.query(
+        ConnectorQuery(
+            resource="measures",
+            filters={"component": "proj1", "metricKeys": "coverage,bugs"},
+        )
+    )
     assert len(result.records) == 2
     assert result.records[0]["metric"] == "coverage"
 
@@ -197,17 +227,24 @@ async def test_query_measures_missing_metric_keys(connector):
 
 # --- query: issues ---
 
+
 @respx.mock
 async def test_query_issues(connector):
     respx.get(f"{API_BASE}/issues/search").mock(
-        return_value=httpx.Response(200, json={
-            "issues": [{"key": "ISSUE1", "component": "proj1", "status": "OPEN"}],
-            "paging": {"pageIndex": 1, "pageSize": 100, "total": 1},
-        }),
+        return_value=httpx.Response(
+            200,
+            json={
+                "issues": [{"key": "ISSUE1", "component": "proj1", "status": "OPEN"}],
+                "paging": {"pageIndex": 1, "pageSize": 100, "total": 1},
+            },
+        ),
     )
-    result = await connector.query(ConnectorQuery(
-        resource="issues", filters={"component": "proj1", "status": "OPEN", "types": "BUG"},
-    ))
+    result = await connector.query(
+        ConnectorQuery(
+            resource="issues",
+            filters={"component": "proj1", "status": "OPEN", "types": "BUG"},
+        )
+    )
     assert len(result.records) == 1
     assert result.records[0]["key"] == "ISSUE1"
 
@@ -215,33 +252,48 @@ async def test_query_issues(connector):
 @respx.mock
 async def test_query_issues_with_all_filters(connector):
     respx.get(f"{API_BASE}/issues/search").mock(
-        return_value=httpx.Response(200, json={
-            "issues": [],
-            "paging": {"pageIndex": 1, "pageSize": 100, "total": 0},
-        }),
+        return_value=httpx.Response(
+            200,
+            json={
+                "issues": [],
+                "paging": {"pageIndex": 1, "pageSize": 100, "total": 0},
+            },
+        ),
     )
-    result = await connector.query(ConnectorQuery(
-        resource="issues", filters={
-            "component": "proj1", "status": "OPEN", "types": "BUG",
-            "severities": "CRITICAL", "resolved": "false",
-            "assignee": "admin", "tags": "security",
-            "createdAfter": "2024-01-01", "createdBefore": "2024-12-31",
-        },
-    ))
+    result = await connector.query(
+        ConnectorQuery(
+            resource="issues",
+            filters={
+                "component": "proj1",
+                "status": "OPEN",
+                "types": "BUG",
+                "severities": "CRITICAL",
+                "resolved": "false",
+                "assignee": "admin",
+                "tags": "security",
+                "createdAfter": "2024-01-01",
+                "createdBefore": "2024-12-31",
+            },
+        )
+    )
     assert len(result.records) == 0
 
 
 # --- query: quality_gates ---
 
+
 @respx.mock
 async def test_query_quality_gates(connector):
     respx.get(f"{API_BASE}/qualitygates/list").mock(
-        return_value=httpx.Response(200, json={
-            "qualitygates": [
-                {"id": 1, "name": "Sonar way"},
-                {"id": 2, "name": "My Gate"},
-            ],
-        }),
+        return_value=httpx.Response(
+            200,
+            json={
+                "qualitygates": [
+                    {"id": 1, "name": "Sonar way"},
+                    {"id": 2, "name": "My Gate"},
+                ],
+            },
+        ),
     )
     result = await connector.query(ConnectorQuery(resource="quality_gates"))
     assert len(result.records) == 2
@@ -259,17 +311,25 @@ async def test_query_quality_gates_empty(connector):
 
 # --- query: quality_gate ---
 
+
 @respx.mock
 async def test_query_quality_gate_by_id(connector):
     respx.get(f"{API_BASE}/qualitygates/show").mock(
-        return_value=httpx.Response(200, json={
-            "id": 1, "name": "Sonar way",
-            "conditions": [{"metric": "coverage", "op": "LT", "error": "80.0"}],
-        }),
+        return_value=httpx.Response(
+            200,
+            json={
+                "id": 1,
+                "name": "Sonar way",
+                "conditions": [{"metric": "coverage", "op": "LT", "error": "80.0"}],
+            },
+        ),
     )
-    result = await connector.query(ConnectorQuery(
-        resource="quality_gate", filters={"id": "1"},
-    ))
+    result = await connector.query(
+        ConnectorQuery(
+            resource="quality_gate",
+            filters={"id": "1"},
+        )
+    )
     assert len(result.records) == 1
     assert result.records[0]["name"] == "Sonar way"
 
@@ -282,16 +342,20 @@ async def test_query_quality_gate_missing_id(connector):
 
 # --- query: metrics ---
 
+
 @respx.mock
 async def test_query_metrics(connector):
     respx.get(f"{API_BASE}/metrics/search").mock(
-        return_value=httpx.Response(200, json={
-            "metrics": [
-                {"key": "coverage", "name": "Coverage", "type": "PERCENT"},
-                {"key": "bugs", "name": "Bugs", "type": "INT"},
-            ],
-            "paging": {"pageIndex": 1, "pageSize": 100, "total": 2},
-        }),
+        return_value=httpx.Response(
+            200,
+            json={
+                "metrics": [
+                    {"key": "coverage", "name": "Coverage", "type": "PERCENT"},
+                    {"key": "bugs", "name": "Bugs", "type": "INT"},
+                ],
+                "paging": {"pageIndex": 1, "pageSize": 100, "total": 2},
+            },
+        ),
     )
     result = await connector.query(ConnectorQuery(resource="metrics"))
     assert len(result.records) == 2
@@ -299,14 +363,18 @@ async def test_query_metrics(connector):
 
 # --- query: plugins ---
 
+
 @respx.mock
 async def test_query_plugins(connector):
     respx.get(f"{API_BASE}/plugins/installed").mock(
-        return_value=httpx.Response(200, json={
-            "plugins": [
-                {"key": "python", "name": "Python", "version": "1.0"},
-            ],
-        }),
+        return_value=httpx.Response(
+            200,
+            json={
+                "plugins": [
+                    {"key": "python", "name": "Python", "version": "1.0"},
+                ],
+            },
+        ),
     )
     result = await connector.query(ConnectorQuery(resource="plugins"))
     assert len(result.records) == 1
@@ -315,17 +383,24 @@ async def test_query_plugins(connector):
 
 # --- query: hotspots ---
 
+
 @respx.mock
 async def test_query_hotspots(connector):
     respx.get(f"{API_BASE}/hotspots/search").mock(
-        return_value=httpx.Response(200, json={
-            "hotspots": [{"key": "H1", "component": "proj1", "status": "TO_REVIEW"}],
-            "paging": {"pageIndex": 1, "pageSize": 100, "total": 1},
-        }),
+        return_value=httpx.Response(
+            200,
+            json={
+                "hotspots": [{"key": "H1", "component": "proj1", "status": "TO_REVIEW"}],
+                "paging": {"pageIndex": 1, "pageSize": 100, "total": 1},
+            },
+        ),
     )
-    result = await connector.query(ConnectorQuery(
-        resource="hotspots", filters={"project": "proj1"},
-    ))
+    result = await connector.query(
+        ConnectorQuery(
+            resource="hotspots",
+            filters={"project": "proj1"},
+        )
+    )
     assert len(result.records) == 1
 
 
@@ -337,6 +412,7 @@ async def test_query_hotspots_missing_project(connector):
 
 # --- query: unsupported resource ---
 
+
 async def test_query_unsupported_resource(connector):
     with pytest.raises(ValueError, match="Unsupported SonarQube resource"):
         await connector.query(ConnectorQuery(resource="unknown"))
@@ -344,39 +420,51 @@ async def test_query_unsupported_resource(connector):
 
 # --- write: issue_comment ---
 
+
 @respx.mock
 async def test_write_issue_comment(connector):
     respx.post(f"{API_BASE}/issues/add_comment").mock(
-        return_value=httpx.Response(200, json={
-            "issue": {"key": "ISSUE1"},
-        }),
+        return_value=httpx.Response(
+            200,
+            json={
+                "issue": {"key": "ISSUE1"},
+            },
+        ),
     )
-    result = await connector.write(ConnectorPayload(
-        resource="issue_comment",
-        data={"issue": "ISSUE1", "text": "Looking into this"},
-    ))
+    result = await connector.write(
+        ConnectorPayload(
+            resource="issue_comment",
+            data={"issue": "ISSUE1", "text": "Looking into this"},
+        )
+    )
     assert result["issue"]["key"] == "ISSUE1"
 
 
 @respx.mock
 async def test_write_issue_comment_missing_fields(connector):
     with pytest.raises(ValueError, match="requires 'issue' and 'text'"):
-        await connector.write(ConnectorPayload(
-            resource="issue_comment", data={"issue": "ISSUE1"},
-        ))
+        await connector.write(
+            ConnectorPayload(
+                resource="issue_comment",
+                data={"issue": "ISSUE1"},
+            )
+        )
 
 
 # --- write: issue_status ---
+
 
 @respx.mock
 async def test_write_issue_status_confirm(connector):
     respx.post(f"{API_BASE}/issues/do_transition").mock(
         return_value=httpx.Response(200, json={"transition": "confirm"}),
     )
-    result = await connector.write(ConnectorPayload(
-        resource="issue_status",
-        data={"issue": "ISSUE1", "transition": "confirm"},
-    ))
+    result = await connector.write(
+        ConnectorPayload(
+            resource="issue_status",
+            data={"issue": "ISSUE1", "transition": "confirm"},
+        )
+    )
     assert result["transition"] == "confirm"
 
 
@@ -385,51 +473,66 @@ async def test_write_issue_status_resolve(connector):
     respx.post(f"{API_BASE}/issues/do_transition").mock(
         return_value=httpx.Response(200, json={"transition": "resolve"}),
     )
-    result = await connector.write(ConnectorPayload(
-        resource="issue_status",
-        data={"issue": "ISSUE1", "transition": "resolve"},
-    ))
+    result = await connector.write(
+        ConnectorPayload(
+            resource="issue_status",
+            data={"issue": "ISSUE1", "transition": "resolve"},
+        )
+    )
     assert result["transition"] == "resolve"
 
 
 @respx.mock
 async def test_write_issue_status_invalid_transition(connector):
     with pytest.raises(ValueError, match="Invalid SonarQube transition"):
-        await connector.write(ConnectorPayload(
-            resource="issue_status",
-            data={"issue": "ISSUE1", "transition": "invalid"},
-        ))
+        await connector.write(
+            ConnectorPayload(
+                resource="issue_status",
+                data={"issue": "ISSUE1", "transition": "invalid"},
+            )
+        )
 
 
 async def test_write_issue_status_missing_fields(connector):
     with pytest.raises(ValueError, match="requires 'issue' and 'transition'"):
-        await connector.write(ConnectorPayload(
-            resource="issue_status", data={"issue": "ISSUE1"},
-        ))
+        await connector.write(
+            ConnectorPayload(
+                resource="issue_status",
+                data={"issue": "ISSUE1"},
+            )
+        )
 
 
 # --- write: gate ---
+
 
 @respx.mock
 async def test_write_create_quality_gate(connector):
     respx.post(f"{API_BASE}/qualitygates/create").mock(
         return_value=httpx.Response(200, json={"id": 10, "name": "Strict Gate"}),
     )
-    result = await connector.write(ConnectorPayload(
-        resource="gate", data={"name": "Strict Gate"},
-    ))
+    result = await connector.write(
+        ConnectorPayload(
+            resource="gate",
+            data={"name": "Strict Gate"},
+        )
+    )
     assert result["name"] == "Strict Gate"
     assert result["id"] == 10
 
 
 async def test_write_create_quality_gate_missing_name(connector):
     with pytest.raises(ValueError, match="requires 'name' in data"):
-        await connector.write(ConnectorPayload(
-            resource="gate", data={},
-        ))
+        await connector.write(
+            ConnectorPayload(
+                resource="gate",
+                data={},
+            )
+        )
 
 
 # --- write: unsupported resource ---
+
 
 async def test_write_unsupported_resource(connector):
     with pytest.raises(ValueError, match="Unsupported SonarQube write resource"):
@@ -437,6 +540,7 @@ async def test_write_unsupported_resource(connector):
 
 
 # --- connector_type ---
+
 
 def test_connector_type(connector):
     assert connector.connector_type == ConnectorType.SONARQUBE

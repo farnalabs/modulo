@@ -1,4 +1,5 @@
 """Unit tests for user offboarding routes — error handling and validation."""
+
 import uuid
 from collections.abc import AsyncGenerator, Generator
 from unittest.mock import AsyncMock, MagicMock

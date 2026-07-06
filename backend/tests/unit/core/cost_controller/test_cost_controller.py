@@ -260,9 +260,7 @@ class TestCheckAndRecordSpend:
             ]
         )
 
-        approved, reason = await check_and_record_spend(
-            mock_session, org_id=_ORG_ID, cost_usd=Decimal(0), team_id=None
-        )
+        approved, reason = await check_and_record_spend(mock_session, org_id=_ORG_ID, cost_usd=Decimal(0), team_id=None)
 
         assert approved is True
         assert reason is None

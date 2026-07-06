@@ -122,7 +122,9 @@ class TestPublicIngestEndpoint:
         assert resp.status_code == 422
 
     def test_invalid_json_returns_422(self, client):
-        resp = client.post("/api/v1/errors/ingest/public", content=b"not json", headers={"Content-Type": "application/json"})
+        resp = client.post(
+            "/api/v1/errors/ingest/public", content=b"not json", headers={"Content-Type": "application/json"}
+        )
         assert resp.status_code == 422
 
     def test_empty_events_list_returns_422(self, client):

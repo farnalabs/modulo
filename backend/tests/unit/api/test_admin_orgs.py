@@ -162,7 +162,10 @@ async def test_create_org_slug_collision(client_system_admin):
     import modulo.api.routes.admin_orgs as admin_orgs
 
     existing = Organisation(
-        id=uuid4(), name="Existing", slug="taken", status="active",
+        id=uuid4(),
+        name="Existing",
+        slug="taken",
+        status="active",
         created_at=datetime.now(UTC),
     )
     original = admin_orgs.get_organisation_by_slug
@@ -184,7 +187,10 @@ async def test_create_org_duplicate_slug_orig(client_system_admin):
     import modulo.api.routes.admin_orgs as admin_orgs
 
     existing_org = Organisation(
-        id=uuid4(), name="Existing", slug="dup-slug", status="active",
+        id=uuid4(),
+        name="Existing",
+        slug="dup-slug",
+        status="active",
         created_at=datetime.now(UTC),
     )
     original = admin_orgs.get_organisation_by_slug
@@ -212,7 +218,10 @@ async def test_create_org_user_success(client_system_admin):
     target_org_id = uuid4()
 
     target_org = Organisation(
-        id=target_org_id, name="Target Org", slug="target", status="active",
+        id=target_org_id,
+        name="Target Org",
+        slug="target",
+        status="active",
         created_at=datetime.now(UTC),
     )
 

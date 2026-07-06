@@ -7,13 +7,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 _MIGRATION_PATH = (
-    Path(__file__).resolve().parents[3]
-    / "src"
-    / "modulo"
-    / "db"
-    / "migrations"
-    / "versions"
-    / "0049_remy_tables.py"
+    Path(__file__).resolve().parents[3] / "src" / "modulo" / "db" / "migrations" / "versions" / "0049_remy_tables.py"
 )
 
 
@@ -88,9 +82,7 @@ class TestMigration0049Upgrade:
                     with patch.object(migration, "op", mock_op, create=True):
                         migration.upgrade()
 
-        chat_sessions_call = next(
-            c for c in mock_op.create_table.call_args_list if c[0][0] == "chat_sessions"
-        )
+        chat_sessions_call = next(c for c in mock_op.create_table.call_args_list if c[0][0] == "chat_sessions")
         columns = chat_sessions_call[0][1:]
         col_names = [c.name for c in columns]
         assert "id" in col_names

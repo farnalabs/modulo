@@ -117,8 +117,7 @@ _KNOWN_FLAGS: list[FeatureFlag] = [
     FeatureFlag(
         name="view_modes",
         description=(
-            "Multiple named UI views with admin-defined feature visibility"
-            " per view and user/team/role assignment"
+            "Multiple named UI views with admin-defined feature visibility per view and user/team/role assignment"
         ),
         tier="team",
     ),
@@ -315,7 +314,9 @@ async def resolve_plan_context(settings: Any, session: Any, org: Any | None = No
                 validation = parse_and_verify(org_license_key)
                 if validation.valid and validation.license_data is not None:
                     return await DbPlanContext.from_db(
-                        session, validation.license_data.tier, has_license_key=True,
+                        session,
+                        validation.license_data.tier,
+                        has_license_key=True,
                         license_features=set(validation.license_data.features),
                     )
             except Exception:
@@ -325,7 +326,9 @@ async def resolve_plan_context(settings: Any, session: Any, org: Any | None = No
     lic = get_license()
     if lic is not None:
         return await DbPlanContext.from_db(
-            session, lic.tier, has_license_key=True,
+            session,
+            lic.tier,
+            has_license_key=True,
             license_features=set(lic.features),
         )
 
@@ -336,7 +339,9 @@ async def resolve_plan_context(settings: Any, session: Any, org: Any | None = No
             validation = parse_and_verify(raw_key)
             if validation.valid and validation.license_data is not None:
                 return await DbPlanContext.from_db(
-                    session, validation.license_data.tier, has_license_key=True,
+                    session,
+                    validation.license_data.tier,
+                    has_license_key=True,
                     license_features=set(validation.license_data.features),
                 )
         except Exception:
@@ -372,7 +377,8 @@ class FeatureFlagRegistry:
         from modulo.db.crud.tier_catalog import list_feature_flags, list_tiers
 
         db_tiers = await list_tiers(session)
-        self._tier_rank = {t["tier_id"]: t["rank"] for t in db_tiers}
+        if db_tiers:
+            self._tier_rank = {t["tier_id"]: t["rank"] for t in db_tiers}
 
         db_flags = await list_feature_flags(session)
         if db_flags:
@@ -472,4 +478,3 @@ async def get_plan_for_org(
         return str(config.value)
 
     return "community"
-

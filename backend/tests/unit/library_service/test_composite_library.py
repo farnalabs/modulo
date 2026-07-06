@@ -253,8 +253,13 @@ def test_modulo_primitives_include_composites():
     composites = [p for p in _MODULO_PRIMITIVES if p.primitive_type == "composite"]
     assert len(composites) == 7
     assert {p.slug for p in composites} == {
-        "approver", "booleaner", "devils-advocate", "triage", "llm-council",
-        "structured-output-enforcer", "complexity-estimator",
+        "approver",
+        "booleaner",
+        "devils-advocate",
+        "triage",
+        "llm-council",
+        "structured-output-enforcer",
+        "complexity-estimator",
     }
 
 
@@ -262,6 +267,11 @@ def test_filter_modulo_composite_returns_composites():
     results = _filter_modulo(primitive_type="composite", search=None)
     assert len(results) == 7
     assert {p.slug for p in results} == {
-        "approver", "booleaner", "devils-advocate", "triage", "llm-council",
-        "structured-output-enforcer", "complexity-estimator",
+        "approver",
+        "booleaner",
+        "devils-advocate",
+        "triage",
+        "llm-council",
+        "structured-output-enforcer",
+        "complexity-estimator",
     }

@@ -37,9 +37,7 @@ def test_connector_type(bk_runner):
 
 @respx.mock
 async def test_health_check_ok(bk_runner):
-    respx.get(f"{_BUILDKITE_API}/user").mock(
-        return_value=httpx.Response(200, json={"id": "test-user"})
-    )
+    respx.get(f"{_BUILDKITE_API}/user").mock(return_value=httpx.Response(200, json={"id": "test-user"}))
     result = await bk_runner.health_check()
     assert result.ok is True
 
@@ -448,7 +446,5 @@ async def test_double_query(bk_double):
 
 
 async def test_double_write(bk_double):
-    result = await bk_double.write(
-        ConnectorPayload(resource="build", data={"organization": "my-org"})
-    )
+    result = await bk_double.write(ConnectorPayload(resource="build", data={"organization": "my-org"}))
     assert result == {}

@@ -1,4 +1,5 @@
 """Unit tests: ProgrammingError on schema inference/generation endpoints returns 501."""
+
 import uuid
 from collections.abc import AsyncGenerator, Generator
 from unittest.mock import AsyncMock, MagicMock

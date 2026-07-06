@@ -1,4 +1,5 @@
 """Unit tests: SQLAlchemyError on SSO admin/auth routes returns 503."""
+
 import uuid
 from collections.abc import AsyncGenerator, Generator
 from unittest.mock import AsyncMock, MagicMock, patch

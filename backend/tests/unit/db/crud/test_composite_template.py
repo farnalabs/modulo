@@ -106,9 +106,7 @@ class TestGetCompositeTemplate:
         assert result.id == _TEMPLATE_ID
 
     async def test_returns_none_when_not_found(self, mock_session: AsyncMock) -> None:
-        mock_session.execute = AsyncMock(
-            return_value=MagicMock(scalar_one_or_none=MagicMock(return_value=None))
-        )
+        mock_session.execute = AsyncMock(return_value=MagicMock(scalar_one_or_none=MagicMock(return_value=None)))
 
         from modulo.db.crud.composite_template import get_composite_template
 
@@ -145,9 +143,7 @@ class TestListCompositeTemplates:
 class TestUpdateCompositeTemplate:
     async def test_updates_and_returns_template(self, mock_session: AsyncMock) -> None:
         template = _make_template(name="Updated")
-        mock_session.execute = AsyncMock(
-            return_value=MagicMock(scalar_one_or_none=MagicMock(return_value=template))
-        )
+        mock_session.execute = AsyncMock(return_value=MagicMock(scalar_one_or_none=MagicMock(return_value=template)))
 
         from modulo.db.crud.composite_template import update_composite_template
 
@@ -157,9 +153,7 @@ class TestUpdateCompositeTemplate:
         mock_session.flush.assert_awaited_once()
 
     async def test_returns_none_when_not_found(self, mock_session: AsyncMock) -> None:
-        mock_session.execute = AsyncMock(
-            return_value=MagicMock(scalar_one_or_none=MagicMock(return_value=None))
-        )
+        mock_session.execute = AsyncMock(return_value=MagicMock(scalar_one_or_none=MagicMock(return_value=None)))
 
         from modulo.db.crud.composite_template import update_composite_template
 
@@ -170,9 +164,7 @@ class TestUpdateCompositeTemplate:
 class TestDeleteCompositeTemplate:
     async def test_deletes_and_returns_true(self, mock_session: AsyncMock) -> None:
         template = _make_template()
-        mock_session.execute = AsyncMock(
-            return_value=MagicMock(scalar_one_or_none=MagicMock(return_value=template))
-        )
+        mock_session.execute = AsyncMock(return_value=MagicMock(scalar_one_or_none=MagicMock(return_value=template)))
 
         from modulo.db.crud.composite_template import delete_composite_template
 
@@ -182,9 +174,7 @@ class TestDeleteCompositeTemplate:
         mock_session.flush.assert_awaited_once()
 
     async def test_returns_false_when_not_found(self, mock_session: AsyncMock) -> None:
-        mock_session.execute = AsyncMock(
-            return_value=MagicMock(scalar_one_or_none=MagicMock(return_value=None))
-        )
+        mock_session.execute = AsyncMock(return_value=MagicMock(scalar_one_or_none=MagicMock(return_value=None)))
 
         from modulo.db.crud.composite_template import delete_composite_template
 

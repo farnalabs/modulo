@@ -47,6 +47,7 @@ def _make_mock_session() -> AsyncMock:
 class _EnterprisePlan:
     def feature_enabled(self, name: str) -> bool:
         return True
+
     def list_enabled_features(self) -> list:
         return []
 

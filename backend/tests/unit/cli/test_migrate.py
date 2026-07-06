@@ -102,7 +102,6 @@ class TestReadJsonl:
             + json.dumps({"__table__": "users", "id": "2", "data": {"name": "b"}})
             + "\n"
         )
-        import asyncio
 
         meta, records = asyncio.run(_read_jsonl(path))
         assert meta["version"] == 1
@@ -112,7 +111,6 @@ class TestReadJsonl:
     def test_empty_file(self, tmp_path: Path) -> None:
         path = tmp_path / "empty.jsonl"
         path.write_text("")
-        import asyncio
 
         meta, records = asyncio.run(_read_jsonl(path))
         assert meta == {}

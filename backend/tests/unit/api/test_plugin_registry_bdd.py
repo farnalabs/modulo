@@ -167,9 +167,7 @@ class TestDiscoverInstalledPlugins:
 
     def test_lists_two_plugins(self, client: TestClient) -> None:
         mock_registry = _make_mock_registry([PLUGIN_SLACK, PLUGIN_GITHUB])
-        with patch(
-            "modulo.api.routes.plugins.get_plugin_registry", return_value=mock_registry
-        ):
+        with patch("modulo.api.routes.plugins.get_plugin_registry", return_value=mock_registry):
             resp = client.get("/api/v1/plugins")
 
         assert resp.status_code == 200
@@ -179,9 +177,7 @@ class TestDiscoverInstalledPlugins:
 
     def test_each_plugin_has_required_fields(self, client: TestClient) -> None:
         mock_registry = _make_mock_registry([PLUGIN_SLACK])
-        with patch(
-            "modulo.api.routes.plugins.get_plugin_registry", return_value=mock_registry
-        ):
+        with patch("modulo.api.routes.plugins.get_plugin_registry", return_value=mock_registry):
             resp = client.get("/api/v1/plugins")
 
         assert resp.status_code == 200
@@ -193,9 +189,7 @@ class TestDiscoverInstalledPlugins:
 
     def test_empty_when_no_plugins(self, client: TestClient) -> None:
         mock_registry = _make_mock_registry([])
-        with patch(
-            "modulo.api.routes.plugins.get_plugin_registry", return_value=mock_registry
-        ):
+        with patch("modulo.api.routes.plugins.get_plugin_registry", return_value=mock_registry):
             resp = client.get("/api/v1/plugins")
 
         assert resp.status_code == 200
@@ -211,9 +205,7 @@ class TestGetPluginDetail:
 
     def test_returns_plugin_detail(self, client: TestClient) -> None:
         mock_registry = _make_mock_registry([PLUGIN_SLACK])
-        with patch(
-            "modulo.api.routes.plugins.get_plugin_registry", return_value=mock_registry
-        ):
+        with patch("modulo.api.routes.plugins.get_plugin_registry", return_value=mock_registry):
             resp = client.get("/api/v1/plugins/modulo-connector-slack")
 
         # Currently returns 404 — route does not exist
@@ -222,18 +214,14 @@ class TestGetPluginDetail:
     @pytest.mark.parametrize("plugin_id", ["modulo-connector-slack", "modulo-backend-github"])
     def test_returns_full_manifest(self, client: TestClient, plugin_id: str) -> None:
         mock_registry = _make_mock_registry([PLUGIN_SLACK, PLUGIN_GITHUB])
-        with patch(
-            "modulo.api.routes.plugins.get_plugin_registry", return_value=mock_registry
-        ):
+        with patch("modulo.api.routes.plugins.get_plugin_registry", return_value=mock_registry):
             resp = client.get(f"/api/v1/plugins/{plugin_id}")
 
         assert resp.status_code in (200, 404)
 
     def test_unknown_plugin_returns_404(self, client: TestClient) -> None:
         mock_registry = _make_mock_registry([PLUGIN_SLACK])
-        with patch(
-            "modulo.api.routes.plugins.get_plugin_registry", return_value=mock_registry
-        ):
+        with patch("modulo.api.routes.plugins.get_plugin_registry", return_value=mock_registry):
             resp = client.get("/api/v1/plugins/unknown-plugin")
 
         assert resp.status_code == 404
@@ -244,9 +232,7 @@ class TestPluginHealthCheck:
 
     def test_returns_health_for_known_plugin(self, client: TestClient) -> None:
         mock_registry = _make_mock_registry([PLUGIN_SLACK])
-        with patch(
-            "modulo.api.routes.plugins.get_plugin_registry", return_value=mock_registry
-        ):
+        with patch("modulo.api.routes.plugins.get_plugin_registry", return_value=mock_registry):
             resp = client.get("/api/v1/plugins/modulo-connector-slack/health")
 
         assert resp.status_code == 200
@@ -257,9 +243,7 @@ class TestPluginHealthCheck:
 
     def test_health_ok_true_for_loaded_plugin(self, client: TestClient) -> None:
         mock_registry = _make_mock_registry([PLUGIN_SLACK])
-        with patch(
-            "modulo.api.routes.plugins.get_plugin_registry", return_value=mock_registry
-        ):
+        with patch("modulo.api.routes.plugins.get_plugin_registry", return_value=mock_registry):
             resp = client.get("/api/v1/plugins/modulo-connector-slack/health")
 
         assert resp.status_code == 200
@@ -267,9 +251,7 @@ class TestPluginHealthCheck:
 
     def test_health_has_detail_string(self, client: TestClient) -> None:
         mock_registry = _make_mock_registry([PLUGIN_SLACK])
-        with patch(
-            "modulo.api.routes.plugins.get_plugin_registry", return_value=mock_registry
-        ):
+        with patch("modulo.api.routes.plugins.get_plugin_registry", return_value=mock_registry):
             resp = client.get("/api/v1/plugins/modulo-connector-slack/health")
 
         assert resp.status_code == 200
@@ -281,18 +263,14 @@ class TestPluginNotFound:
 
     def test_unknown_plugin_returns_404(self, client: TestClient) -> None:
         mock_registry = _make_mock_registry([PLUGIN_SLACK])
-        with patch(
-            "modulo.api.routes.plugins.get_plugin_registry", return_value=mock_registry
-        ):
+        with patch("modulo.api.routes.plugins.get_plugin_registry", return_value=mock_registry):
             resp = client.get("/api/v1/plugins/unknown-plugin/health")
 
         assert resp.status_code == 404
 
     def test_detail_contains_plugin_not_found(self, client: TestClient) -> None:
         mock_registry = _make_mock_registry([PLUGIN_SLACK])
-        with patch(
-            "modulo.api.routes.plugins.get_plugin_registry", return_value=mock_registry
-        ):
+        with patch("modulo.api.routes.plugins.get_plugin_registry", return_value=mock_registry):
             resp = client.get("/api/v1/plugins/unknown-plugin/health")
 
         assert resp.status_code == 404
@@ -301,9 +279,7 @@ class TestPluginNotFound:
 
     def test_empty_registry_returns_404_for_any(self, client: TestClient) -> None:
         mock_registry = _make_mock_registry([])
-        with patch(
-            "modulo.api.routes.plugins.get_plugin_registry", return_value=mock_registry
-        ):
+        with patch("modulo.api.routes.plugins.get_plugin_registry", return_value=mock_registry):
             resp = client.get("/api/v1/plugins/any-plugin/health")
 
         assert resp.status_code == 404
@@ -329,12 +305,8 @@ class TestPluginDiscoveryOnStartup:
         mock_ep.dist = mock_dist
         mock_ep.load.return_value = lambda cfg, creds: None
 
-        with patch(
-            "modulo.core.plugin_registry.importlib.metadata.entry_points"
-        ) as mock_eps:
-            mock_eps.side_effect = lambda group=None: (
-                [mock_ep] if group == "modulo.connectors" else []
-            )
+        with patch("modulo.core.plugin_registry.importlib.metadata.entry_points") as mock_eps:
+            mock_eps.side_effect = lambda group=None: [mock_ep] if group == "modulo.connectors" else []
             discovered = registry.discover_plugins()
 
         assert len(discovered) == 1
@@ -357,12 +329,8 @@ class TestPluginDiscoveryOnStartup:
         mock_ep.dist = mock_dist
         mock_ep.load.return_value = lambda api_key, model_id, **kw: None
 
-        with patch(
-            "modulo.core.plugin_registry.importlib.metadata.entry_points"
-        ) as mock_eps:
-            mock_eps.side_effect = lambda group=None: (
-                [mock_ep] if group == "modulo.model_backends" else []
-            )
+        with patch("modulo.core.plugin_registry.importlib.metadata.entry_points") as mock_eps:
+            mock_eps.side_effect = lambda group=None: [mock_ep] if group == "modulo.model_backends" else []
             registry.discover_plugins()
 
         plugins = registry.list_plugins()
@@ -374,9 +342,7 @@ class TestPluginDiscoveryOnStartup:
 
         registry = PluginRegistry()
 
-        with patch(
-            "modulo.core.plugin_registry.importlib.metadata.entry_points"
-        ) as mock_eps:
+        with patch("modulo.core.plugin_registry.importlib.metadata.entry_points") as mock_eps:
             mock_eps.side_effect = lambda group=None: []
             discovered = registry.discover_plugins()
 
@@ -396,12 +362,8 @@ class TestPluginManifestValidation:
         mock_ep.name = "slack"
         mock_ep.dist = None  # No distribution metadata
 
-        with patch(
-            "modulo.core.plugin_registry.importlib.metadata.entry_points"
-        ) as mock_eps:
-            mock_eps.side_effect = lambda group=None: (
-                [mock_ep] if group == "modulo.connectors" else []
-            )
+        with patch("modulo.core.plugin_registry.importlib.metadata.entry_points") as mock_eps:
+            mock_eps.side_effect = lambda group=None: [mock_ep] if group == "modulo.connectors" else []
             discovered = registry.discover_plugins()
 
         assert discovered == []
@@ -424,12 +386,8 @@ class TestPluginManifestValidation:
         mock_ep.dist = mock_dist
         mock_ep.load.side_effect = ImportError("Missing dependency: slack-sdk")
 
-        with patch(
-            "modulo.core.plugin_registry.importlib.metadata.entry_points"
-        ) as mock_eps:
-            mock_eps.side_effect = lambda group=None: (
-                [mock_ep] if group == "modulo.connectors" else []
-            )
+        with patch("modulo.core.plugin_registry.importlib.metadata.entry_points") as mock_eps:
+            mock_eps.side_effect = lambda group=None: [mock_ep] if group == "modulo.connectors" else []
             discovered = registry.discover_plugins()
 
         assert discovered == []
@@ -456,16 +414,10 @@ class TestPluginManifestValidation:
         mock_ep.load.return_value = lambda cfg, creds: None
 
         with (
-            patch(
-                "modulo.core.plugin_registry.importlib.metadata.entry_points"
-            ) as mock_eps,
-            patch(
-                "modulo.core.plugin_registry.importlib.metadata.metadata"
-            ) as mock_metadata,
+            patch("modulo.core.plugin_registry.importlib.metadata.entry_points") as mock_eps,
+            patch("modulo.core.plugin_registry.importlib.metadata.metadata") as mock_metadata,
         ):
-            mock_eps.side_effect = lambda group=None: (
-                [mock_ep] if group == "modulo.connectors" else []
-            )
+            mock_eps.side_effect = lambda group=None: [mock_ep] if group == "modulo.connectors" else []
             mock_metadata.return_value = {"Name": "Slack Connector"}
             registry.discover_plugins()
 
@@ -476,47 +428,31 @@ class TestPluginManifestValidation:
 class TestPluginCapabilitiesAdvertised:
     """Mirrors: Plugin capabilities advertised in list response."""
 
-    def test_connector_plugin_has_connector_type_capability(
-        self, client: TestClient
-    ) -> None:
+    def test_connector_plugin_has_connector_type_capability(self, client: TestClient) -> None:
         mock_registry = _make_mock_registry([PLUGIN_SLACK])
-        with patch(
-            "modulo.api.routes.plugins.get_plugin_registry", return_value=mock_registry
-        ):
+        with patch("modulo.api.routes.plugins.get_plugin_registry", return_value=mock_registry):
             resp = client.get("/api/v1/plugins")
 
         assert resp.status_code == 200
         body = resp.json()
-        slack = next(
-            (p for p in body if p["PLUGIN_ID"] == "modulo-connector-slack"), None
-        )
+        slack = next((p for p in body if p["PLUGIN_ID"] == "modulo-connector-slack"), None)
         assert slack is not None
         assert "connector_type" in slack["capabilities"]
 
-    def test_model_backend_plugin_has_model_backend_capability(
-        self, client: TestClient
-    ) -> None:
+    def test_model_backend_plugin_has_model_backend_capability(self, client: TestClient) -> None:
         mock_registry = _make_mock_registry([PLUGIN_GITHUB])
-        with patch(
-            "modulo.api.routes.plugins.get_plugin_registry", return_value=mock_registry
-        ):
+        with patch("modulo.api.routes.plugins.get_plugin_registry", return_value=mock_registry):
             resp = client.get("/api/v1/plugins")
 
         assert resp.status_code == 200
         body = resp.json()
-        gh = next(
-            (p for p in body if p["PLUGIN_ID"] == "modulo-backend-github"), None
-        )
+        gh = next((p for p in body if p["PLUGIN_ID"] == "modulo-backend-github"), None)
         assert gh is not None
         assert "model_backend" in gh["capabilities"]
 
-    def test_multiple_plugins_show_their_respective_capabilities(
-        self, client: TestClient
-    ) -> None:
+    def test_multiple_plugins_show_their_respective_capabilities(self, client: TestClient) -> None:
         mock_registry = _make_mock_registry([PLUGIN_SLACK, PLUGIN_GITHUB])
-        with patch(
-            "modulo.api.routes.plugins.get_plugin_registry", return_value=mock_registry
-        ):
+        with patch("modulo.api.routes.plugins.get_plugin_registry", return_value=mock_registry):
             resp = client.get("/api/v1/plugins")
 
         assert resp.status_code == 200

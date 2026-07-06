@@ -72,7 +72,6 @@ class TestSeedState:
         assert "_pipeline_default_autonomy" not in state["run_context"]
 
 
-
 class TestRunawayGuard:
     def test_no_limits_never_raises(self) -> None:
         guard = RunawayGuard()

@@ -54,9 +54,7 @@ async def test_query_repos(connector):
 @respx.mock
 async def test_query_file(connector):
     file_data = {"name": "README.md", "content": "SGVsbG8gV29ybGQ=", "encoding": "base64"}
-    respx.get(f"{_API}/repos/owner/repo/contents/README.md").mock(
-        return_value=httpx.Response(200, json=file_data)
-    )
+    respx.get(f"{_API}/repos/owner/repo/contents/README.md").mock(return_value=httpx.Response(200, json=file_data))
     result = await connector.query(
         ConnectorQuery(
             resource="file",
@@ -107,9 +105,7 @@ async def test_write_file(connector):
 @respx.mock
 async def test_write_pull_request(connector):
     pr_response = {"number": 42, "title": "Add feature", "state": "open"}
-    respx.post(f"{_API}/repos/owner/repo/pulls").mock(
-        return_value=httpx.Response(200, json=pr_response)
-    )
+    respx.post(f"{_API}/repos/owner/repo/pulls").mock(return_value=httpx.Response(200, json=pr_response))
     result = await connector.write(
         ConnectorPayload(
             resource="pull",
@@ -129,9 +125,7 @@ async def test_write_pull_request(connector):
 @respx.mock
 async def test_write_issue(connector):
     issue_response = {"id": 100, "number": 10, "title": "Bug report", "state": "open"}
-    respx.post(f"{_API}/repos/owner/repo/issues").mock(
-        return_value=httpx.Response(200, json=issue_response)
-    )
+    respx.post(f"{_API}/repos/owner/repo/issues").mock(return_value=httpx.Response(200, json=issue_response))
     result = await connector.write(
         ConnectorPayload(
             resource="issue",

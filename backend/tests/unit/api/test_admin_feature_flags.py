@@ -1,4 +1,4 @@
-﻿"""Unit tests for the admin feature-flags API endpoint."""
+"""Unit tests for the admin feature-flags API endpoint."""
 
 from collections.abc import Generator
 from unittest.mock import MagicMock, patch
@@ -276,10 +276,8 @@ class TestCatchAllMiddlewareFallback:
         assert resp.status_code == 500
         body = resp.body
         import json
+
         parsed = json.loads(body)
         assert parsed["detail"] == "An unexpected error occurred"
         assert parsed["type"] == "urn:problem:modulo:internal_error"
         assert parsed["status"] == 500
-
-
-

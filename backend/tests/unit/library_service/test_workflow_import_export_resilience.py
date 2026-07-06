@@ -32,14 +32,16 @@ class TestConfirmImportParameterFix:
         mock_principal.org_role = "admin"
 
         mock_body = MagicMock()
-        mock_body.bundle_json = json.dumps({
-            "format_version": BUNDLE_FORMAT_VERSION,
-            "pipeline": {"name": "Test", "graph_nodes_json": []},
-            "agents": [],
-            "schemas": [],
-            "model_backends": [],
-            "edges": [],
-        })
+        mock_body.bundle_json = json.dumps(
+            {
+                "format_version": BUNDLE_FORMAT_VERSION,
+                "pipeline": {"name": "Test", "graph_nodes_json": []},
+                "agents": [],
+                "schemas": [],
+                "model_backends": [],
+                "edges": [],
+            }
+        )
         mock_body.owner_team_id = None
         mock_body.pipeline_name_override = None
         mock_body.model_backend_overrides = None
@@ -92,7 +94,11 @@ class TestAnalyseBundleSQLAlchemyError:
         from fastapi import HTTPException
 
         with pytest.raises(HTTPException) as exc_info:
-            await _analyse_bundle(mock_session, mock_principal, {"pipeline": {"name": "Test"}, "schemas": [], "agents": [], "model_backends": []})
+            await _analyse_bundle(
+                mock_session,
+                mock_principal,
+                {"pipeline": {"name": "Test"}, "schemas": [], "agents": [], "model_backends": []},
+            )
 
         assert exc_info.value.status_code == status.HTTP_503_SERVICE_UNAVAILABLE
 
@@ -116,14 +122,16 @@ class TestConfirmImportSQLAlchemyError:
         mock_principal.org_role = "admin"
 
         mock_body = MagicMock()
-        mock_body.bundle_json = json.dumps({
-            "format_version": BUNDLE_FORMAT_VERSION,
-            "pipeline": {"name": "Test", "graph_nodes_json": []},
-            "agents": [],
-            "schemas": [],
-            "model_backends": [],
-            "edges": [],
-        })
+        mock_body.bundle_json = json.dumps(
+            {
+                "format_version": BUNDLE_FORMAT_VERSION,
+                "pipeline": {"name": "Test", "graph_nodes_json": []},
+                "agents": [],
+                "schemas": [],
+                "model_backends": [],
+                "edges": [],
+            }
+        )
         mock_body.owner_team_id = None
         mock_body.pipeline_name_override = None
         mock_body.model_backend_overrides = None
@@ -196,7 +204,6 @@ class TestMaterializeInvalidOwnerTeamId:
             "model_backends": [],
             "edges": [],
         }
-
 
         with pytest.raises(ValueError, match=f"Team {fake_team_id} not found in this organisation"):
             await materialize_import(

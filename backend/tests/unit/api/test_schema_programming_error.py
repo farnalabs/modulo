@@ -1,4 +1,5 @@
 """Tests for schema route error handling — ProgrammingError, SQLAlchemyError, IntegrityError."""
+
 import uuid
 from collections.abc import AsyncGenerator, Generator
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -57,16 +58,14 @@ def client() -> Generator[TestClient, None, None]:
 class TestSchemaListProgrammingError:
     def test_list_schemas_programming_error_returns_501(self, client: TestClient) -> None:
         mock_list = AsyncMock(side_effect=ProgrammingError("stmt", "params", "table missing"))
-        with patch("modulo.api.routes.schemas.list_schemas", mock_list), \
-             patch("modulo.api.routes.schemas.set_rls_org"):
+        with patch("modulo.api.routes.schemas.list_schemas", mock_list), patch("modulo.api.routes.schemas.set_rls_org"):
             resp = client.get("/api/v1/schemas")
         assert resp.status_code == 501
         assert "run database migrations" in resp.json()["detail"].lower()
 
     def test_list_schemas_sqlalchemy_error_returns_503(self, client: TestClient) -> None:
         mock_list = AsyncMock(side_effect=SQLAlchemyError("connection failed"))
-        with patch("modulo.api.routes.schemas.list_schemas", mock_list), \
-             patch("modulo.api.routes.schemas.set_rls_org"):
+        with patch("modulo.api.routes.schemas.list_schemas", mock_list), patch("modulo.api.routes.schemas.set_rls_org"):
             resp = client.get("/api/v1/schemas")
         assert resp.status_code == 503
 
@@ -76,22 +75,28 @@ class TestSchemaCreateErrors:
 
     def test_create_schema_programming_error_returns_501(self, client: TestClient) -> None:
         mock_create = AsyncMock(side_effect=ProgrammingError("stmt", "params", "table missing"))
-        with patch("modulo.api.routes.schemas.create_schema", mock_create), \
-             patch("modulo.api.routes.schemas.set_rls_org"):
+        with (
+            patch("modulo.api.routes.schemas.create_schema", mock_create),
+            patch("modulo.api.routes.schemas.set_rls_org"),
+        ):
             resp = client.post("/api/v1/schemas", json=self.SCHEMA_CREATE_JSON)
         assert resp.status_code == 501
 
     def test_create_schema_sqlalchemy_error_returns_503(self, client: TestClient) -> None:
         mock_create = AsyncMock(side_effect=SQLAlchemyError("connection failed"))
-        with patch("modulo.api.routes.schemas.create_schema", mock_create), \
-             patch("modulo.api.routes.schemas.set_rls_org"):
+        with (
+            patch("modulo.api.routes.schemas.create_schema", mock_create),
+            patch("modulo.api.routes.schemas.set_rls_org"),
+        ):
             resp = client.post("/api/v1/schemas", json=self.SCHEMA_CREATE_JSON)
         assert resp.status_code == 503
 
     def test_create_schema_integrity_error_returns_409(self, client: TestClient) -> None:
         mock_create = AsyncMock(side_effect=IntegrityError("stmt", "params", "duplicate name"))
-        with patch("modulo.api.routes.schemas.create_schema", mock_create), \
-             patch("modulo.api.routes.schemas.set_rls_org"):
+        with (
+            patch("modulo.api.routes.schemas.create_schema", mock_create),
+            patch("modulo.api.routes.schemas.set_rls_org"),
+        ):
             resp = client.post("/api/v1/schemas", json=self.SCHEMA_CREATE_JSON)
         assert resp.status_code == 409
         assert "already exists" in resp.json()["detail"].lower()
@@ -102,15 +107,13 @@ class TestSchemaGetErrors:
 
     def test_get_schema_programming_error_returns_501(self, client: TestClient) -> None:
         mock_get = AsyncMock(side_effect=ProgrammingError("stmt", "params", "table missing"))
-        with patch("modulo.api.routes.schemas.get_schema", mock_get), \
-             patch("modulo.api.routes.schemas.set_rls_org"):
+        with patch("modulo.api.routes.schemas.get_schema", mock_get), patch("modulo.api.routes.schemas.set_rls_org"):
             resp = client.get(f"/api/v1/schemas/{self.SCHEMA_ID}")
         assert resp.status_code == 501
 
     def test_get_schema_sqlalchemy_error_returns_503(self, client: TestClient) -> None:
         mock_get = AsyncMock(side_effect=SQLAlchemyError("connection failed"))
-        with patch("modulo.api.routes.schemas.get_schema", mock_get), \
-             patch("modulo.api.routes.schemas.set_rls_org"):
+        with patch("modulo.api.routes.schemas.get_schema", mock_get), patch("modulo.api.routes.schemas.set_rls_org"):
             resp = client.get(f"/api/v1/schemas/{self.SCHEMA_ID}")
         assert resp.status_code == 503
 
@@ -120,16 +123,26 @@ class TestSchemaVersionCreateErrors:
     VERSION_CREATE_JSON = {"version": "1.0.0", "version_number": 1, "definition_json": {"type": "object"}}
 
     def test_create_version_programming_error_returns_501(self, client: TestClient) -> None:
-        with patch("modulo.api.routes.schemas.get_schema", return_value=MagicMock()), \
-             patch("modulo.api.routes.schemas.create_schema_version", AsyncMock(side_effect=ProgrammingError("stmt", "params", "table missing"))), \
-             patch("modulo.api.routes.schemas.set_rls_org"):
+        with (
+            patch("modulo.api.routes.schemas.get_schema", return_value=MagicMock()),
+            patch(
+                "modulo.api.routes.schemas.create_schema_version",
+                AsyncMock(side_effect=ProgrammingError("stmt", "params", "table missing")),
+            ),
+            patch("modulo.api.routes.schemas.set_rls_org"),
+        ):
             resp = client.post(f"/api/v1/schemas/{self.SCHEMA_ID}/versions", json=self.VERSION_CREATE_JSON)
         assert resp.status_code == 501
 
     def test_create_version_integrity_error_returns_409(self, client: TestClient) -> None:
-        with patch("modulo.api.routes.schemas.get_schema", return_value=MagicMock()), \
-             patch("modulo.api.routes.schemas.create_schema_version", AsyncMock(side_effect=IntegrityError("stmt", "params", "duplicate version"))), \
-             patch("modulo.api.routes.schemas.set_rls_org"):
+        with (
+            patch("modulo.api.routes.schemas.get_schema", return_value=MagicMock()),
+            patch(
+                "modulo.api.routes.schemas.create_schema_version",
+                AsyncMock(side_effect=IntegrityError("stmt", "params", "duplicate version")),
+            ),
+            patch("modulo.api.routes.schemas.set_rls_org"),
+        ):
             resp = client.post(f"/api/v1/schemas/{self.SCHEMA_ID}/versions", json=self.VERSION_CREATE_JSON)
         assert resp.status_code == 409
         assert "already exists" in resp.json()["detail"].lower()
@@ -140,14 +153,18 @@ class TestSchemaDeleteErrors:
 
     def test_delete_schema_programming_error_returns_501(self, client: TestClient) -> None:
         mock_delete = AsyncMock(side_effect=ProgrammingError("stmt", "params", "table missing"))
-        with patch("modulo.api.routes.schemas.delete_schema", mock_delete), \
-             patch("modulo.api.routes.schemas.set_rls_org"):
+        with (
+            patch("modulo.api.routes.schemas.delete_schema", mock_delete),
+            patch("modulo.api.routes.schemas.set_rls_org"),
+        ):
             resp = client.delete(f"/api/v1/schemas/{self.SCHEMA_ID}")
         assert resp.status_code == 501
 
     def test_delete_schema_sqlalchemy_error_returns_503(self, client: TestClient) -> None:
         mock_delete = AsyncMock(side_effect=SQLAlchemyError("connection failed"))
-        with patch("modulo.api.routes.schemas.delete_schema", mock_delete), \
-             patch("modulo.api.routes.schemas.set_rls_org"):
+        with (
+            patch("modulo.api.routes.schemas.delete_schema", mock_delete),
+            patch("modulo.api.routes.schemas.set_rls_org"),
+        ):
             resp = client.delete(f"/api/v1/schemas/{self.SCHEMA_ID}")
         assert resp.status_code == 503

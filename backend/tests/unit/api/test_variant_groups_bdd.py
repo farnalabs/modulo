@@ -49,9 +49,7 @@ class TestZeroWeightVariantSelection:
         for _ in range(1000):
             result = pick_variant_weighted(variants)
             assert result is not None
-            assert result["name"] == "control", (
-                f"Zero-weight variant selected: {result}"
-            )
+            assert result["name"] == "control", f"Zero-weight variant selected: {result}"
 
     def test_multiple_positive_weights_exclude_zero(self) -> None:
         variants = [
@@ -136,14 +134,10 @@ class TestCoverageGapDetection:
             },
         ]
 
-        gaps = await get_coverage_gaps(
-            session, group, eval_def_ids=[present_id, missing_id]
-        )
+        gaps = await get_coverage_gaps(session, group, eval_def_ids=[present_id, missing_id])
         assert len(gaps) == 2, f"Expected 2 gaps, got {len(gaps)}: {gaps}"
         for gap in gaps:
-            assert str(missing_id) in gap["missing_evals"], (
-                f"Missing eval not reported in gap: {gap}"
-            )
+            assert str(missing_id) in gap["missing_evals"], f"Missing eval not reported in gap: {gap}"
 
     @pytest.mark.asyncio
     async def test_no_evals_defined_no_gaps(self) -> None:
@@ -199,29 +193,17 @@ class TestBatchRunVariants:
             ]
             mock_get.return_value = mock_group
             mock_batch.return_value = {
-                "runs": [
-                    {"run_id": uuid.uuid4(), "variant_name": "control"}
-                    for _ in range(70)
-                ]
-                + [
-                    {"run_id": uuid.uuid4(), "variant_name": "experiment"}
-                    for _ in range(30)
-                ]
+                "runs": [{"run_id": uuid.uuid4(), "variant_name": "control"} for _ in range(70)]
+                + [{"run_id": uuid.uuid4(), "variant_name": "experiment"} for _ in range(30)]
             }
 
             from modulo.api.routes.variants import batch_run_variants
 
-            result = await batch_run_variants(
-                group_id, count=100, session=mock_session, principal=principal
-            )
+            result = await batch_run_variants(group_id, count=100, session=mock_session, principal=principal)
 
         assert len(result["runs"]) == 100
-        control_count = sum(
-            1 for r in result["runs"] if r["variant_name"] == "control"
-        )
-        assert 50 <= control_count <= 90, (
-            f"Expected ~70 control runs, got {control_count}"
-        )
+        control_count = sum(1 for r in result["runs"] if r["variant_name"] == "control")
+        assert 50 <= control_count <= 90, f"Expected ~70 control runs, got {control_count}"
 
 
 @pytest.mark.skip(reason="awaiting-implementation — run_variant_sequential not yet implemented")
@@ -295,9 +277,7 @@ class TestCompareVariants:
 
             from modulo.api.routes.variants import compare_variants
 
-            result = await compare_variants(
-                group_id, session=mock_session, principal=principal
-            )
+            result = await compare_variants(group_id, session=mock_session, principal=principal)
 
         variants = result.get("variants", [])
         assert len(variants) == 2
@@ -339,9 +319,7 @@ class TestCoverageSignal:
 
             from modulo.api.routes.variants import get_coverage_signal
 
-            result = await get_coverage_signal(
-                group_id, session=mock_session, principal=principal
-            )
+            result = await get_coverage_signal(group_id, session=mock_session, principal=principal)
 
         assert "coverage_warning" in result
         assert "Variants diverged but evals did not differentiate" in result["coverage_warning"]

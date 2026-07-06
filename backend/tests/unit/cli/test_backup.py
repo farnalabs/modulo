@@ -500,12 +500,33 @@ class TestRestoreCheckpointBlobsSync:
         mock_connect.return_value.__enter__.return_value = mock_conn
 
         blobs = [
-            {"organisation_id": "00000000-0000-0000-0000-000000000001", "thread_id": "t1",
-             "checkpoint_ns": "ns", "channel": "ch", "version": 1, "type": "json", "blob": "00"},
-            {"organisation_id": "00000000-0000-0000-0000-000000000002", "thread_id": "t2",
-             "checkpoint_ns": "ns", "channel": "ch", "version": 2, "type": "json", "blob": "ff"},
-            {"organisation_id": "00000000-0000-0000-0000-000000000003", "thread_id": "t3",
-             "checkpoint_ns": "ns", "channel": "ch", "version": 3, "type": "json", "blob": None},
+            {
+                "organisation_id": "00000000-0000-0000-0000-000000000001",
+                "thread_id": "t1",
+                "checkpoint_ns": "ns",
+                "channel": "ch",
+                "version": 1,
+                "type": "json",
+                "blob": "00",
+            },
+            {
+                "organisation_id": "00000000-0000-0000-0000-000000000002",
+                "thread_id": "t2",
+                "checkpoint_ns": "ns",
+                "channel": "ch",
+                "version": 2,
+                "type": "json",
+                "blob": "ff",
+            },
+            {
+                "organisation_id": "00000000-0000-0000-0000-000000000003",
+                "thread_id": "t3",
+                "checkpoint_ns": "ns",
+                "channel": "ch",
+                "version": 3,
+                "type": "json",
+                "blob": None,
+            },
         ]
 
         result = _restore_checkpoint_blobs_sync("postgresql://localhost/db", blobs)
@@ -520,9 +541,7 @@ class TestRestoreCheckpointBlobsSync:
 class TestReEncryptCredentialsSync:
     @patch("modulo.cli.backup.Fernet")
     @patch("psycopg.connect")
-    def test_re_encrypts_rows(
-        self, mock_connect: MagicMock, mock_fernet_cls: MagicMock
-    ) -> None:
+    def test_re_encrypts_rows(self, mock_connect: MagicMock, mock_fernet_cls: MagicMock) -> None:
         mock_conn = MagicMock()
         mock_cur = MagicMock()
         mock_conn.cursor.return_value.__enter__.return_value = mock_cur
@@ -557,9 +576,7 @@ class TestReEncryptCredentialsSync:
 
     @patch("modulo.cli.backup.Fernet")
     @patch("psycopg.connect")
-    def test_skips_rows_with_empty_ciphertext(
-        self, mock_connect: MagicMock, mock_fernet_cls: MagicMock
-    ) -> None:
+    def test_skips_rows_with_empty_ciphertext(self, mock_connect: MagicMock, mock_fernet_cls: MagicMock) -> None:
         mock_conn = MagicMock()
         mock_cur = MagicMock()
         mock_conn.cursor.return_value.__enter__.return_value = mock_cur
@@ -576,9 +593,7 @@ class TestReEncryptCredentialsSync:
             ],
         }
 
-        result = _re_encrypt_credentials_sync(
-            "postgresql://localhost/db", creds, "old-key", "new-key"
-        )
+        result = _re_encrypt_credentials_sync("postgresql://localhost/db", creds, "old-key", "new-key")
 
         assert result == {"connector_instances": 1}
         assert mock_old.decrypt.call_count == 1
@@ -586,9 +601,7 @@ class TestReEncryptCredentialsSync:
 
     @patch("modulo.cli.backup.Fernet")
     @patch("psycopg.connect")
-    def test_processes_multiple_tables(
-        self, mock_connect: MagicMock, mock_fernet_cls: MagicMock
-    ) -> None:
+    def test_processes_multiple_tables(self, mock_connect: MagicMock, mock_fernet_cls: MagicMock) -> None:
         mock_conn = MagicMock()
         mock_cur = MagicMock()
         mock_conn.cursor.return_value.__enter__.return_value = mock_cur
@@ -609,9 +622,7 @@ class TestReEncryptCredentialsSync:
             ],
         }
 
-        result = _re_encrypt_credentials_sync(
-            "postgresql://localhost/db", creds, "old", "new"
-        )
+        result = _re_encrypt_credentials_sync("postgresql://localhost/db", creds, "old", "new")
 
         assert result == {"connector_instances": 1, "model_backends": 1}
         assert mock_cur.execute.call_count == 2  # 2 UPDATEs (one per table)
@@ -619,9 +630,7 @@ class TestReEncryptCredentialsSync:
 
     @patch("modulo.cli.backup.Fernet")
     @patch("psycopg.connect")
-    def test_handles_empty_creds_dict(
-        self, mock_connect: MagicMock, mock_fernet_cls: MagicMock
-    ) -> None:
+    def test_handles_empty_creds_dict(self, mock_connect: MagicMock, mock_fernet_cls: MagicMock) -> None:
         mock_conn = MagicMock()
         mock_cur = MagicMock()
         mock_conn.cursor.return_value.__enter__.return_value = mock_cur
@@ -631,9 +640,7 @@ class TestReEncryptCredentialsSync:
         mock_new = MagicMock()
         mock_fernet_cls.side_effect = [mock_old, mock_new]
 
-        result = _re_encrypt_credentials_sync(
-            "postgresql://localhost/db", {}, "old", "new"
-        )
+        result = _re_encrypt_credentials_sync("postgresql://localhost/db", {}, "old", "new")
 
         assert result == {}
         mock_conn.commit.assert_called_once()
@@ -722,9 +729,7 @@ class TestBackupCli:
         assert "timestamp" in manifest
 
     @patch("modulo.cli.backup.get_settings")
-    def test_backup_failure_raises_click_exception(
-        self, mock_settings: MagicMock, tmp_path: Path
-    ) -> None:
+    def test_backup_failure_raises_click_exception(self, mock_settings: MagicMock, tmp_path: Path) -> None:
         mock_settings.return_value.fernet_key = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
         mock_settings.return_value.database_url = "postgresql://localhost/db"
 
@@ -827,8 +832,10 @@ class TestBackupCli:
             cli,
             [
                 "backup",
-                "--output-dir", str(backup_dir),
-                "--db-url", "postgresql://custom:pass@host/db",
+                "--output-dir",
+                str(backup_dir),
+                "--db-url",
+                "postgresql://custom:pass@host/db",
             ],
         )
 
@@ -952,9 +959,7 @@ class TestRestoreCli:
         }
         (tmp_path / "backup-info.json").write_text(json.dumps(manifest), encoding="utf-8")
         (tmp_path / "database.sql").write_text("-- SQL", encoding="utf-8")
-        (tmp_path / "credentials_references.json").write_text(
-            '{"connector_instances": []}', encoding="utf-8"
-        )
+        (tmp_path / "credentials_references.json").write_text('{"connector_instances": []}', encoding="utf-8")
 
         runner = CliRunner()
         result = runner.invoke(cli, ["restore", str(tmp_path), "--yes"])
@@ -1000,7 +1005,8 @@ class TestRestoreCli:
                 "restore",
                 str(tmp_path),
                 "--yes",
-                "--previous-fernet-key", old_fernet_key,
+                "--previous-fernet-key",
+                old_fernet_key,
             ],
         )
 
@@ -1038,9 +1044,7 @@ class TestRestoreCli:
         }
         (tmp_path / "backup-info.json").write_text(json.dumps(manifest), encoding="utf-8")
         (tmp_path / "database.sql").write_text("-- SQL", encoding="utf-8")
-        (tmp_path / "credentials_references.json").write_text(
-            '{"connector_instances": []}', encoding="utf-8"
-        )
+        (tmp_path / "credentials_references.json").write_text('{"connector_instances": []}', encoding="utf-8")
 
         runner = CliRunner()
         result = runner.invoke(cli, ["restore", str(tmp_path), "--yes"])
@@ -1083,14 +1087,10 @@ class TestRestoreCli:
         assert "Restore complete" in result.output
 
     @patch("modulo.cli.backup.get_settings")
-    def test_restore_failure(
-        self, mock_settings: MagicMock, tmp_path: Path
-    ) -> None:
+    def test_restore_failure(self, mock_settings: MagicMock, tmp_path: Path) -> None:
         mock_settings.return_value.fernet_key = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 
-        (tmp_path / "backup-info.json").write_text(
-            json.dumps({"timestamp": "now"}), encoding="utf-8"
-        )
+        (tmp_path / "backup-info.json").write_text(json.dumps({"timestamp": "now"}), encoding="utf-8")
         (tmp_path / "database.sql").write_text("", encoding="utf-8")
 
         runner = CliRunner()
@@ -1132,7 +1132,8 @@ class TestRestoreCli:
                 "restore",
                 str(tmp_path),
                 "--yes",
-                "--previous-fernet-key", old_fernet_key,
+                "--previous-fernet-key",
+                old_fernet_key,
             ],
         )
 

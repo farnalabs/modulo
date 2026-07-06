@@ -1,4 +1,5 @@
 """Unit tests for category validator."""
+
 from __future__ import annotations
 
 import uuid

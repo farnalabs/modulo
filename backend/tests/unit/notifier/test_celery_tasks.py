@@ -217,7 +217,9 @@ async def test_dispatch_via_celery_calls_enqueue_dispatch() -> None:
         ]
 
         results = await n._dispatch_via_celery(
-            _ORG, "hitl_awaiting", {"run_id": str(_RUN)},
+            _ORG,
+            "hitl_awaiting",
+            {"run_id": str(_RUN)},
         )
 
     assert len(results) == 1
@@ -235,7 +237,9 @@ async def test_dispatch_via_celery_falls_back_on_exception() -> None:
         mock_enqueue.side_effect = RuntimeError("Broker unreachable")
 
         results = await n._dispatch_via_celery(
-            _ORG, "hitl_awaiting", {"run_id": str(_RUN)},
+            _ORG,
+            "hitl_awaiting",
+            {"run_id": str(_RUN)},
         )
 
     assert results == []

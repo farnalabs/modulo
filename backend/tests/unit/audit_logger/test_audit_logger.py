@@ -336,18 +336,23 @@ class TestExportChain:
             call_count += 1
             r = MagicMock()
             if call_count == 1:
-                r.scalars = MagicMock(return_value=[MagicMock(
-                    id=uuid.uuid4(),
-                    organisation_id=org_id,
-                    event_type="test.event",
-                    account_id=None,
-                    resource_type=None,
-                    resource_id=None,
-                    payload_json={"seq": i},
-                    request_id=None,
-                    previous_hash=None,
-                    created_at=MagicMock(isoformat=lambda: "2025-06-01T00:00:00+00:00"),
-                ) for i in range(10)])
+                r.scalars = MagicMock(
+                    return_value=[
+                        MagicMock(
+                            id=uuid.uuid4(),
+                            organisation_id=org_id,
+                            event_type="test.event",
+                            account_id=None,
+                            resource_type=None,
+                            resource_id=None,
+                            payload_json={"seq": i},
+                            request_id=None,
+                            previous_hash=None,
+                            created_at=MagicMock(isoformat=lambda: "2025-06-01T00:00:00+00:00"),
+                        )
+                        for i in range(10)
+                    ]
+                )
             else:
                 r.scalar = MagicMock(return_value=total)
             return r
@@ -378,20 +383,22 @@ class TestGetAuditEventsBatch:
 
         async def _execute(*a, **kw):
             r = MagicMock()
-            r.scalars = MagicMock(return_value=[
-                MagicMock(
-                    id=uuid.UUID(eid1),
-                    organisation_id=org_id,
-                    event_type="test.event",
-                    account_id=None,
-                    resource_type=None,
-                    resource_id=None,
-                    payload_json={"key": "value"},
-                    request_id=None,
-                    previous_hash=None,
-                    created_at=MagicMock(isoformat=lambda: "t"),
-                ),
-            ])
+            r.scalars = MagicMock(
+                return_value=[
+                    MagicMock(
+                        id=uuid.UUID(eid1),
+                        organisation_id=org_id,
+                        event_type="test.event",
+                        account_id=None,
+                        resource_type=None,
+                        resource_id=None,
+                        payload_json={"key": "value"},
+                        request_id=None,
+                        previous_hash=None,
+                        created_at=MagicMock(isoformat=lambda: "t"),
+                    ),
+                ]
+            )
             return r
 
         session.execute = _execute
@@ -482,20 +489,22 @@ class TestListAuditEvents:
             if call_count == 1:
                 r.scalar = MagicMock(return_value=1)
             else:
-                r.scalars = MagicMock(return_value=[
-                    MagicMock(
-                        id=uuid.uuid4(),
-                        organisation_id=org_id,
-                        event_type="pipeline.autonomy_level_changed",
-                        account_id=None,
-                        resource_type="pipeline",
-                        resource_id=uuid.uuid4(),
-                        payload_json={},
-                        request_id=None,
-                        previous_hash=None,
-                        created_at=MagicMock(isoformat=lambda: "t"),
-                    ),
-                ])
+                r.scalars = MagicMock(
+                    return_value=[
+                        MagicMock(
+                            id=uuid.uuid4(),
+                            organisation_id=org_id,
+                            event_type="pipeline.autonomy_level_changed",
+                            account_id=None,
+                            resource_type="pipeline",
+                            resource_id=uuid.uuid4(),
+                            payload_json={},
+                            request_id=None,
+                            previous_hash=None,
+                            created_at=MagicMock(isoformat=lambda: "t"),
+                        ),
+                    ]
+                )
             return r
 
         session.execute = _execute
@@ -519,21 +528,23 @@ class TestListAuditEvents:
                 r.scalar = MagicMock(return_value=10)
             else:
                 # Return limit+1 items to trigger has_more
-                r.scalars = MagicMock(return_value=[
-                    MagicMock(
-                        id=uuid.uuid4(),
-                        organisation_id=org_id,
-                        event_type="test.event",
-                        account_id=None,
-                        resource_type=None,
-                        resource_id=None,
-                        payload_json={},
-                        request_id=None,
-                        previous_hash=None,
-                        created_at=MagicMock(isoformat=lambda: f"t{i}"),
-                    )
-                    for i in range(limit + 1)
-                ])
+                r.scalars = MagicMock(
+                    return_value=[
+                        MagicMock(
+                            id=uuid.uuid4(),
+                            organisation_id=org_id,
+                            event_type="test.event",
+                            account_id=None,
+                            resource_type=None,
+                            resource_id=None,
+                            payload_json={},
+                            request_id=None,
+                            previous_hash=None,
+                            created_at=MagicMock(isoformat=lambda: f"t{i}"),
+                        )
+                        for i in range(limit + 1)
+                    ]
+                )
             return r
 
         session.execute = _execute
@@ -651,20 +662,22 @@ class TestExportEdgeCases:
 
         async def _execute(*a, **kw):
             r = MagicMock()
-            r.scalars = MagicMock(return_value=[
-                MagicMock(
-                    id=uuid.uuid4(),
-                    organisation_id=org_id,
-                    event_type="test.event",
-                    account_id=None,
-                    resource_type=None,
-                    resource_id=None,
-                    payload_json=large_payload,
-                    request_id=None,
-                    previous_hash=None,
-                    created_at=MagicMock(isoformat=lambda: "t"),
-                ),
-            ])
+            r.scalars = MagicMock(
+                return_value=[
+                    MagicMock(
+                        id=uuid.uuid4(),
+                        organisation_id=org_id,
+                        event_type="test.event",
+                        account_id=None,
+                        resource_type=None,
+                        resource_id=None,
+                        payload_json=large_payload,
+                        request_id=None,
+                        previous_hash=None,
+                        created_at=MagicMock(isoformat=lambda: "t"),
+                    ),
+                ]
+            )
             r.scalar = MagicMock(return_value=1)
             return r
 
@@ -679,20 +692,22 @@ class TestExportEdgeCases:
 
         async def _execute(*a, **kw):
             r = MagicMock()
-            r.scalars = MagicMock(return_value=[
-                MagicMock(
-                    id=uuid.uuid4(),
-                    organisation_id=org_id,
-                    event_type="test.event",
-                    account_id=None,
-                    resource_type=None,
-                    resource_id=None,
-                    payload_json={},
-                    request_id=None,
-                    previous_hash=None,
-                    created_at=None,
-                ),
-            ])
+            r.scalars = MagicMock(
+                return_value=[
+                    MagicMock(
+                        id=uuid.uuid4(),
+                        organisation_id=org_id,
+                        event_type="test.event",
+                        account_id=None,
+                        resource_type=None,
+                        resource_id=None,
+                        payload_json={},
+                        request_id=None,
+                        previous_hash=None,
+                        created_at=None,
+                    ),
+                ]
+            )
             r.scalar = MagicMock(return_value=1)
             return r
 

@@ -43,8 +43,12 @@ def test_wrong_key_raises() -> None:
 def test_expired_token_raises() -> None:
     past = int(time.time()) - 3600
     claims = {
-        "sub": "alice", "org_id": _ORG, "account_id": _ACCOUNT,
-        "org_role": "admin", "iat": past - 86400, "exp": past,
+        "sub": "alice",
+        "org_id": _ORG,
+        "account_id": _ACCOUNT,
+        "org_role": "admin",
+        "iat": past - 86400,
+        "exp": past,
     }
     token = jose_jwt.encode(claims, _KEY, algorithm=_ALGORITHM)
     with pytest.raises(JWTError):
@@ -54,8 +58,11 @@ def test_expired_token_raises() -> None:
 def test_none_algorithm_rejected() -> None:
     """Tokens with alg:none must be rejected — not in the allowed algorithms list."""
     claims = {
-        "sub": "alice", "org_id": _ORG, "account_id": _ACCOUNT,
-        "org_role": "admin", "exp": int(time.time()) + 3600,
+        "sub": "alice",
+        "org_id": _ORG,
+        "account_id": _ACCOUNT,
+        "org_role": "admin",
+        "exp": int(time.time()) + 3600,
     }
     # The library may reject alg:none at encode time (preferred) or at decode time
     # Either way the test passes: alg:none must never be accepted

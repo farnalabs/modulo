@@ -32,9 +32,7 @@ def test_constructor_custom_base_url() -> None:
 
 @respx.mock
 async def test_health_check_ok(connector: GrafanaConnector) -> None:
-    respx.get(f"{_BASE}/api/health").mock(
-        return_value=httpx.Response(200, json={"commit": "abc123"})
-    )
+    respx.get(f"{_BASE}/api/health").mock(return_value=httpx.Response(200, json={"commit": "abc123"}))
     result = await connector.health_check()
     assert result.ok is True
     assert result.detail == "Grafana API healthy"
@@ -42,9 +40,7 @@ async def test_health_check_ok(connector: GrafanaConnector) -> None:
 
 @respx.mock
 async def test_health_check_invalid_token(connector: GrafanaConnector) -> None:
-    respx.get(f"{_BASE}/api/health").mock(
-        return_value=httpx.Response(401, text="Unauthorized")
-    )
+    respx.get(f"{_BASE}/api/health").mock(return_value=httpx.Response(401, text="Unauthorized"))
     result = await connector.health_check()
     assert result.ok is False
     assert "Invalid" in result.detail
@@ -53,9 +49,7 @@ async def test_health_check_invalid_token(connector: GrafanaConnector) -> None:
 
 @respx.mock
 async def test_health_check_forbidden(connector: GrafanaConnector) -> None:
-    respx.get(f"{_BASE}/api/health").mock(
-        return_value=httpx.Response(403, text="Forbidden")
-    )
+    respx.get(f"{_BASE}/api/health").mock(return_value=httpx.Response(403, text="Forbidden"))
     result = await connector.health_check()
     assert result.ok is False
     assert "Invalid" in result.detail
@@ -63,9 +57,7 @@ async def test_health_check_forbidden(connector: GrafanaConnector) -> None:
 
 @respx.mock
 async def test_health_check_network_error(connector: GrafanaConnector) -> None:
-    respx.get(f"{_BASE}/api/health").mock(
-        side_effect=httpx.ConnectError("connection refused")
-    )
+    respx.get(f"{_BASE}/api/health").mock(side_effect=httpx.ConnectError("connection refused"))
     result = await connector.health_check()
     assert result.ok is False
     assert "connection refused" in result.detail
@@ -73,9 +65,7 @@ async def test_health_check_network_error(connector: GrafanaConnector) -> None:
 
 @respx.mock
 async def test_health_check_other_status(connector: GrafanaConnector) -> None:
-    respx.get(f"{_BASE}/api/health").mock(
-        return_value=httpx.Response(503, text="Service Unavailable")
-    )
+    respx.get(f"{_BASE}/api/health").mock(return_value=httpx.Response(503, text="Service Unavailable"))
     result = await connector.health_check()
     assert result.ok is False
     assert "503" in result.detail
@@ -87,9 +77,7 @@ async def test_query_dashboards(connector: GrafanaConnector) -> None:
         {"uid": "d1", "title": "System Dashboard", "type": "dash-db"},
         {"uid": "d2", "title": "API Monitoring", "type": "dash-db"},
     ]
-    respx.get(f"{_BASE}/api/search", params={"type": "dash-db"}).mock(
-        return_value=httpx.Response(200, json=dashboards)
-    )
+    respx.get(f"{_BASE}/api/search", params={"type": "dash-db"}).mock(return_value=httpx.Response(200, json=dashboards))
     result = await connector.query(ConnectorQuery(resource="dashboards"))
     assert len(result.records) == 2
     assert result.records[0]["title"] == "System Dashboard"
@@ -127,9 +115,7 @@ async def test_query_dashboards_with_limit(connector: GrafanaConnector) -> None:
             json=[{"uid": "d1", "title": "Only One"}],
         )
     )
-    result = await connector.query(
-        ConnectorQuery(resource="dashboards", limit=1)
-    )
+    result = await connector.query(ConnectorQuery(resource="dashboards", limit=1))
     assert len(result.records) == 1
 
 
@@ -139,12 +125,8 @@ async def test_query_dashboard_by_uid(connector: GrafanaConnector) -> None:
         "dashboard": {"uid": "abc123", "title": "My Dashboard"},
         "meta": {"slug": "my-dashboard"},
     }
-    respx.get(f"{_BASE}/api/dashboards/uid/abc123").mock(
-        return_value=httpx.Response(200, json=dashboard)
-    )
-    result = await connector.query(
-        ConnectorQuery(resource="dashboard", filters={"uid": "abc123"})
-    )
+    respx.get(f"{_BASE}/api/dashboards/uid/abc123").mock(return_value=httpx.Response(200, json=dashboard))
+    result = await connector.query(ConnectorQuery(resource="dashboard", filters={"uid": "abc123"}))
     assert len(result.records) == 1
     assert result.records[0]["dashboard"]["uid"] == "abc123"
     assert result.records[0]["meta"]["slug"] == "my-dashboard"
@@ -162,9 +144,7 @@ async def test_query_alerts(connector: GrafanaConnector) -> None:
         {"id": 1, "name": "CPU High", "state": "alerting"},
         {"id": 2, "name": "Disk Full", "state": "ok"},
     ]
-    respx.get(f"{_BASE}/api/alerts").mock(
-        return_value=httpx.Response(200, json=alerts)
-    )
+    respx.get(f"{_BASE}/api/alerts").mock(return_value=httpx.Response(200, json=alerts))
     result = await connector.query(ConnectorQuery(resource="alerts"))
     assert len(result.records) == 2
     assert result.records[0]["name"] == "CPU High"
@@ -197,9 +177,7 @@ async def test_query_alert_rules(connector: GrafanaConnector) -> None:
         {"uid": "r1", "name": "High CPU Rule"},
         {"uid": "r2", "name": "Memory Rule"},
     ]
-    respx.get(f"{_BASE}/api/v1/provisioning/alert-rules").mock(
-        return_value=httpx.Response(200, json=rules)
-    )
+    respx.get(f"{_BASE}/api/v1/provisioning/alert-rules").mock(return_value=httpx.Response(200, json=rules))
     result = await connector.query(ConnectorQuery(resource="alert_rules"))
     assert len(result.records) == 2
     assert result.records[0]["uid"] == "r1"
@@ -211,9 +189,7 @@ async def test_query_datasources(connector: GrafanaConnector) -> None:
         {"id": 1, "name": "Prometheus", "type": "prometheus"},
         {"id": 2, "name": "Loki", "type": "loki"},
     ]
-    respx.get(f"{_BASE}/api/datasources").mock(
-        return_value=httpx.Response(200, json=datasources)
-    )
+    respx.get(f"{_BASE}/api/datasources").mock(return_value=httpx.Response(200, json=datasources))
     result = await connector.query(ConnectorQuery(resource="datasources"))
     assert len(result.records) == 2
     assert result.records[0]["name"] == "Prometheus"
@@ -225,9 +201,7 @@ async def test_query_folders(connector: GrafanaConnector) -> None:
         {"uid": "f1", "title": "Infrastructure"},
         {"uid": "f2", "title": "Applications"},
     ]
-    respx.get(f"{_BASE}/api/folders").mock(
-        return_value=httpx.Response(200, json=folders)
-    )
+    respx.get(f"{_BASE}/api/folders").mock(return_value=httpx.Response(200, json=folders))
     result = await connector.query(ConnectorQuery(resource="folders"))
     assert len(result.records) == 2
     assert result.records[0]["title"] == "Infrastructure"
@@ -238,12 +212,8 @@ async def test_query_folders_with_limit(connector: GrafanaConnector) -> None:
     respx.get(
         f"{_BASE}/api/folders",
         params={"limit": 1},
-    ).mock(
-        return_value=httpx.Response(200, json=[{"uid": "f1", "title": "Infrastructure"}])
-    )
-    result = await connector.query(
-        ConnectorQuery(resource="folders", limit=1)
-    )
+    ).mock(return_value=httpx.Response(200, json=[{"uid": "f1", "title": "Infrastructure"}]))
+    result = await connector.query(ConnectorQuery(resource="folders", limit=1))
     assert len(result.records) == 1
 
 
@@ -253,9 +223,7 @@ async def test_query_organizations(connector: GrafanaConnector) -> None:
         {"id": 1, "name": "Main Org"},
         {"id": 2, "name": "Dev Org"},
     ]
-    respx.get(f"{_BASE}/api/orgs").mock(
-        return_value=httpx.Response(200, json=orgs)
-    )
+    respx.get(f"{_BASE}/api/orgs").mock(return_value=httpx.Response(200, json=orgs))
     result = await connector.query(ConnectorQuery(resource="organizations"))
     assert len(result.records) == 2
     assert result.records[0]["name"] == "Main Org"
@@ -267,9 +235,7 @@ async def test_query_users(connector: GrafanaConnector) -> None:
         {"id": 1, "login": "admin", "email": "admin@example.com"},
         {"id": 2, "login": "dev", "email": "dev@example.com"},
     ]
-    respx.get(f"{_BASE}/api/users").mock(
-        return_value=httpx.Response(200, json=users)
-    )
+    respx.get(f"{_BASE}/api/users").mock(return_value=httpx.Response(200, json=users))
     result = await connector.query(ConnectorQuery(resource="users"))
     assert len(result.records) == 2
     assert result.records[0]["login"] == "admin"
@@ -286,9 +252,7 @@ async def test_query_users_with_permission_filter(connector: GrafanaConnector) -
             json=[{"id": 1, "login": "admin", "permission": "Admin"}],
         )
     )
-    result = await connector.query(
-        ConnectorQuery(resource="users", filters={"permission": "Admin"})
-    )
+    result = await connector.query(ConnectorQuery(resource="users", filters={"permission": "Admin"}))
     assert len(result.records) == 1
     assert result.records[0]["permission"] == "Admin"
 
@@ -370,9 +334,7 @@ async def test_write_annotation_with_tags_and_time(connector: GrafanaConnector) 
 @respx.mock
 async def test_write_annotation_missing_text(connector: GrafanaConnector) -> None:
     with pytest.raises(ValueError, match="Grafana annotation write requires 'text' in data"):
-        await connector.write(
-            ConnectorPayload(resource="annotation", data={"tags": ["deploy"]})
-        )
+        await connector.write(ConnectorPayload(resource="annotation", data={"tags": ["deploy"]}))
 
 
 @respx.mock
@@ -421,9 +383,7 @@ async def test_write_dashboard_with_optional_fields(connector: GrafanaConnector)
 @respx.mock
 async def test_write_dashboard_missing_dashboard(connector: GrafanaConnector) -> None:
     with pytest.raises(ValueError, match="Grafana dashboard write requires 'dashboard' in data"):
-        await connector.write(
-            ConnectorPayload(resource="dashboard", data={"overwrite": True})
-        )
+        await connector.write(ConnectorPayload(resource="dashboard", data={"overwrite": True}))
 
 
 async def test_query_invalid_resource(connector: GrafanaConnector) -> None:
@@ -456,21 +416,13 @@ async def test_query_http_500(connector: GrafanaConnector) -> None:
 
 @respx.mock
 async def test_write_http_401(connector: GrafanaConnector) -> None:
-    respx.post(f"{_BASE}/api/annotations").mock(
-        return_value=httpx.Response(401, text="Unauthorized")
-    )
+    respx.post(f"{_BASE}/api/annotations").mock(return_value=httpx.Response(401, text="Unauthorized"))
     with pytest.raises(httpx.HTTPStatusError):
-        await connector.write(
-            ConnectorPayload(resource="annotation", data={"text": "test"})
-        )
+        await connector.write(ConnectorPayload(resource="annotation", data={"text": "test"}))
 
 
 @respx.mock
 async def test_write_http_500(connector: GrafanaConnector) -> None:
-    respx.post(f"{_BASE}/api/dashboards/db").mock(
-        return_value=httpx.Response(500, text="Internal Server Error")
-    )
+    respx.post(f"{_BASE}/api/dashboards/db").mock(return_value=httpx.Response(500, text="Internal Server Error"))
     with pytest.raises(httpx.HTTPStatusError):
-        await connector.write(
-            ConnectorPayload(resource="dashboard", data={"dashboard": {"title": "test"}})
-        )
+        await connector.write(ConnectorPayload(resource="dashboard", data={"dashboard": {"title": "test"}}))

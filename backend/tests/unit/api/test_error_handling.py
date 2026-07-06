@@ -165,6 +165,7 @@ class TestProblemModel:
         assert resp.status_code == 404
         body = resp.body
         import json
+
         data = json.loads(body)
         assert data["type"] == "urn:problem:modulo:not_found"
 
