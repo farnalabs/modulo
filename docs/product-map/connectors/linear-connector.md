@@ -109,12 +109,8 @@ Async Linear GraphQL API connector implementing `ConnectorBase`. BDD coverage: 8
 - [ ] Linear API schema changes (field deprecation, new fields) require source code update
 - [ ] Prompt templates may use Linear-specific terminology ("issue", "team", "cycle")
 
-## Known Gaps
+ ## Known Gaps
 
-- [x] **Comment operations**: implemented — `query("issue_comments")` and `write("issue_comment")` added with full GraphQL support
-- [x] **Team/project enumeration**: implemented — `query("teams")`, `query("team_projects")`, `query("team_states")`, `query("team_labels")`, `query("team_cycles")` all available
-- [x] **Pagination**: implemented — cursor-based pagination for `query("search")` with `next_cursor` in `ConnectorResult`
-- [x] **Rate-limit handling**: implemented — 429/502/503/504 retry with exponential backoff + Retry-After support
 - [ ] **State transitions require raw stateId**: no helper to map workflow state names to IDs
 - [ ] **No label management**: cannot create, rename, or delete labels
 - [ ] **No cycle/sprint assignment**: can read cycles but cannot assign an issue to a cycle

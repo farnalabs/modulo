@@ -18,6 +18,7 @@ code:
 depends-on:
   - feat-core-schema-inference
   - feat-connectors-hub
+  - feat-model-backends-hub
 status: partial
 ---
 
