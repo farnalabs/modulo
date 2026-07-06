@@ -13,6 +13,8 @@ Handles NodeInterrupt by transitioning the run to awaiting_human.
 Does NOT handle WebSocket fan-out, HITL claim/approve/reject, or webhook triggers (phases 3+).
 """
 
+from __future__ import annotations
+
 import asyncio
 import logging
 import uuid
@@ -117,7 +119,6 @@ def _seed_state(snapshot: PipelineSnapshot, input_payload: dict[str, Any]) -> di
 
 def _map_lg_event(
     lg_event: dict[str, Any],
-    run_id: uuid.UUID,
     node_ids: set[str],
 ) -> tuple[str, dict[str, Any]] | None:
     """Map a LangGraph astream_events event to (event_type, payload) or None."""
@@ -136,7 +137,6 @@ def _map_lg_event(
         error = data.get("error", "") if isinstance(data, dict) else ""
         return "node_failed", {"node_id": name, "error": str(error)}
     return None
-
 
 
 
@@ -685,7 +685,7 @@ class PipelineExecutor:
                 None,
             )
 
-            suite_result = evaluate_suite(
+            suite_result_raw = evaluate_suite(
                 eval_results=[
                     EngineEvalResult(
                         id=r.id,
@@ -707,9 +707,9 @@ class PipelineExecutor:
                 suite_id=suite_id,
                 total_evals=len(eval_results),
                 passed_evals=sum(1 for r in eval_results if r.passed),
-                aggregate_score=suite_result.aggregate_score,
-                passed=suite_result.passed,
-                blocking_failures=suite_result.blocking_failures,
+                aggregate_score=suite_result_raw.aggregate_score,
+                passed=suite_result_raw.passed,
+                blocking_failures=suite_result_raw.blocking_failures,
             )
             if threshold is not None and not suite_result.passed:
                 raise EvalSuiteBlockedError(suite_id, suite_result.aggregate_score, threshold)
@@ -750,7 +750,7 @@ class PipelineExecutor:
                 if guard is not None:
                     guard.check_duration()
 
-                mapped = _map_lg_event(lg_event, run_id, node_ids)
+                mapped = _map_lg_event(lg_event, node_ids)
                 if mapped is not None:
                     event_type, payload = mapped
                     broker.publish(event_type, payload)

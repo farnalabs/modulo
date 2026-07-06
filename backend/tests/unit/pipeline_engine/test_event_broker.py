@@ -195,10 +195,8 @@ def test_registry_close_unknown_run_is_noop():
 def test_map_lg_event_node_started():
     from modulo.core.pipeline_engine.executor import _map_lg_event
 
-    run_id = uuid.uuid4()
     result = _map_lg_event(
         {"event": "on_chain_start", "name": "node-a"},
-        run_id,
         {"node-a", "node-b"},
     )
     assert result == ("node_started", {"node_id": "node-a"})
@@ -207,10 +205,8 @@ def test_map_lg_event_node_started():
 def test_map_lg_event_node_completed():
     from modulo.core.pipeline_engine.executor import _map_lg_event
 
-    run_id = uuid.uuid4()
     result = _map_lg_event(
         {"event": "on_chain_end", "name": "node-a"},
-        run_id,
         {"node-a"},
     )
     assert result == ("node_completed", {"node_id": "node-a"})
@@ -219,10 +215,8 @@ def test_map_lg_event_node_completed():
 def test_map_lg_event_node_failed():
     from modulo.core.pipeline_engine.executor import _map_lg_event
 
-    run_id = uuid.uuid4()
     result = _map_lg_event(
         {"event": "on_chain_error", "name": "node-a", "data": {"error": "timeout"}},
-        run_id,
         {"node-a"},
     )
     assert result == ("node_failed", {"node_id": "node-a", "error": "timeout"})
@@ -231,10 +225,8 @@ def test_map_lg_event_node_failed():
 def test_map_lg_event_non_node_name_returns_none():
     from modulo.core.pipeline_engine.executor import _map_lg_event
 
-    run_id = uuid.uuid4()
     result = _map_lg_event(
         {"event": "on_chain_start", "name": "LangGraph"},  # graph-level event
-        run_id,
         {"node-a"},
     )
     assert result is None
@@ -243,10 +235,8 @@ def test_map_lg_event_non_node_name_returns_none():
 def test_map_lg_event_unknown_event_kind_returns_none():
     from modulo.core.pipeline_engine.executor import _map_lg_event
 
-    run_id = uuid.uuid4()
     result = _map_lg_event(
         {"event": "on_llm_start", "name": "node-a"},
-        run_id,
         {"node-a"},
     )
     assert result is None
