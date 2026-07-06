@@ -5,6 +5,11 @@ on:
     branches: [main]
     tags: ['v*']
   workflow_dispatch:
+    inputs:
+      publish_docker_hub:
+        description: 'Also push images to Docker Hub'
+        type: boolean
+        default: false
 
 jobs:
   backend:
@@ -14,18 +19,36 @@ jobs:
       packages: write
     steps:
       - uses: actions/checkout@v4
+
       - name: Log in to ghcr.io
         uses: docker/login-action@v3
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
-      - name: Build and push backend
+
+      - name: Build and push backend to ghcr.io
         uses: docker/build-push-action@v6
         with:
           file: Dockerfile.backend
           push: true
           tags: ghcr.io/${{ github.repository }}/backend:latest,ghcr.io/${{ github.repository }}/backend:${{ github.sha }}
+
+      - name: Log in to Docker Hub
+        if: github.event_name == 'workflow_dispatch' && inputs.publish_docker_hub
+        uses: docker/login-action@v3
+        with:
+          registry: docker.io
+          username: ${{ secrets.DOCKER_HUB_USERNAME }}
+          password: ${{ secrets.DOCKER_HUB_TOKEN }}
+
+      - name: Build and push backend to Docker Hub
+        if: github.event_name == 'workflow_dispatch' && inputs.publish_docker_hub
+        uses: docker/build-push-action@v6
+        with:
+          file: Dockerfile.backend
+          push: true
+          tags: docker.io/${{ secrets.DOCKER_HUB_USERNAME }}/modulo-backend:latest,docker.io/${{ secrets.DOCKER_HUB_USERNAME }}/modulo-backend:${{ github.sha }}
 
   frontend:
     runs-on: ubuntu-latest
@@ -34,16 +57,33 @@ jobs:
       packages: write
     steps:
       - uses: actions/checkout@v4
+
       - name: Log in to ghcr.io
         uses: docker/login-action@v3
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
-      - name: Build and push frontend
+
+      - name: Build and push frontend to ghcr.io
         uses: docker/build-push-action@v6
         with:
           file: Dockerfile.frontend
           push: true
           tags: ghcr.io/${{ github.repository }}/frontend:latest,ghcr.io/${{ github.repository }}/frontend:${{ github.sha }}
 
+      - name: Log in to Docker Hub
+        if: github.event_name == 'workflow_dispatch' && inputs.publish_docker_hub
+        uses: docker/login-action@v3
+        with:
+          registry: docker.io
+          username: ${{ secrets.DOCKER_HUB_USERNAME }}
+          password: ${{ secrets.DOCKER_HUB_TOKEN }}
+
+      - name: Build and push frontend to Docker Hub
+        if: github.event_name == 'workflow_dispatch' && inputs.publish_docker_hub
+        uses: docker/build-push-action@v6
+        with:
+          file: Dockerfile.frontend
+          push: true
+          tags: docker.io/${{ secrets.DOCKER_HUB_USERNAME }}/modulo-frontend:latest,docker.io/${{ secrets.DOCKER_HUB_USERNAME }}/modulo-frontend:${{ github.sha }}
