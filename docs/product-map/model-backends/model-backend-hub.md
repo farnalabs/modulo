@@ -68,17 +68,17 @@ management described in `feat-model-backends-management`.
 
 ### Error Handling
 
-- [x] Backend not registered → `BackendNotFoundError(KeyError)` with `.backend_id` attribute
-- [x] Backend (and all fallbacks) unhealthy → `BackendUnavailableError(RuntimeError)` with detail string
+- [x] Backend not registered → `BackendNotFoundError(Exception)` with `.backend_id` attribute
+- [x] Backend (and all fallbacks) unhealthy → `BackendUnavailableError(Exception)` with detail string
 - [x] Credential decrypt failure → `BackendDecryptError(ValueError)` raised from `KeyError` from secrets backend
-- [x] Unknown provider in `_build_backend` → `ValueError("Unknown model backend provider")`
+- [x] Unknown provider in `_build_backend` → `ValueError("Unknown model backend provider: {provider!r}")`
 - [x] Missing `api_key` in credentials dict → `ValueError` at provider construction time
 - [x] Missing `project` in Vertex AI credentials → `ValueError("Missing 'project' in credentials for provider 'vertexai'")`
 - [x] Missing `azure_endpoint` in Azure OpenAI credentials → `ValueError("Missing 'azure_endpoint' in credentials for provider 'azure_openai'")`
 - [x] Missing `project_id` in WatsonX credentials → `ValueError("Missing 'project_id' in credentials for provider 'watsonx'")`
 - [x] Health check on unregistered backend → `HealthResult(ok=False, detail="Backend not registered")`
 - [x] Plugin provider fallback: registered provider → built via plugin registry
-- [x] Plugin provider fallback: not registered → `ValueError("Unknown model backend provider")`
+- [x] Plugin provider fallback: not registered → `ValueError("Unknown model backend provider: {provider!r}")`
 - [x] Missing `aws_access_key_id`/`aws_secret_access_key` in Bedrock credentials → `ValueError("Missing 'aws_access_key_id' in credentials for provider 'bedrock'")` (confirmed in `_build_backend()`) @ 2026-07-05
 
 ### Resilience & Integration Robustness
@@ -92,7 +92,8 @@ management described in `feat-model-backends-management`.
 - [x] `del raw_str, creds` after backend construction — credential sanitisation
 - [ ] No retry with backoff on health check failure — single attempt, no retry
 - [ ] No mid-run monitoring — `mark_unhealthy()` exists but no automatic periodic re-check
-- [ ] No logging in Hub — failover events only surfaced via `audit_logger` callback to `get()`
+- [x] Warning/error logging exists throughout Hub (invalid fallback, backend init failure, fallback skip, audit logger failure) — 11+ `logger.warning()`, `logger.error()`, `logger.exception()` calls
+- [ ] Failover events not surfaced via `audit_logger` callback — `get_with_rotation()` has an `audit_logger` parameter but it's only called on the chosen backend, not on fallback rotation decisions
 - [ ] Hub not yet wired into run execution pipeline — `node_runner.py` `_node()` is a stub
 
 ### Edge Cases
@@ -105,7 +106,7 @@ management described in `feat-model-backends-management`.
 - [x] Health check after `mark_unhealthy` then `health_check` passes → recovery works (tested)
 - [x] Double-invoke of `__aexit__` → dict `.clear()` on already-cleared dicts is a no-op
 - [x] `initialise([])` → no backends registered, no crash
-- [x] Invalid UUID in `fallback_backend_ids` → `uuid.UUID()` raises `ValueError` (not caught)
+- [x] Invalid UUID in `fallback_backend_ids` → `uuid.UUID()` raises `ValueError`, caught and logged as warning, fallback skipped gracefully
 - [ ] Fallback list includes primary ID → primary already known unhealthy, would be skipped; no test
 - [ ] Fallback scan includes unrelated backends (different provider/model) when no fallbacks configured — documented in `get_with_rotation()` docstring
 - [ ] Concurrent unregistration during `get_with_rotation()` scan — iterates `_backends.items()` while another task could modify the dict; not thread-safe by design
@@ -120,12 +121,13 @@ management described in `feat-model-backends-management`.
 - [ ] **No health check result staleness bound**: health checks run each time; no 5-minute cache window.
 - [ ] **No retry with backoff**: health check runs once per call. No retry logic for transient failures.
 - [ ] **No mid-run monitoring**: no periodic health re-check during a run. `mark_unhealthy()` exists but is caller-driven; no automatic detection of unreachability.
-- [ ] **No logging in Hub**: failover events (`audit_logger` callback) require the caller to provide a logger. Hub itself has no `logger.info()` or `logger.warning()` calls.
+- [ ] **Failover events not surfaced via `audit_logger` callback**: Hub has extensive `logger.warning()`, `logger.error()`, and `logger.exception()` calls (11+ sites), but `get_with_rotation()` only calls the `audit_logger` callback on the chosen backend, not on fallback rotation decisions.
 - [ ] **No pricing config integration**: pinned `model_id` cost tracking not implemented.
 - [ ] **`get_with_rotation()` fallback-scan returns unrelated backends**: when no fallbacks are configured and primary is unhealthy, any registered backend (different provider, different model) may be returned.
 
 ## QA History
 
-- 2026-07-04 (improve-architecture index 173): Cross-cutting QA pass 2. Verified all unchecked behaviours against code: marked 13 behaviours [ ]→[x] (agent model_backend_id ref, run-start resolution, ConnectorHub parallel, model_id pinning, entity independence, operator-update-on-new-runs, pre-run health check, named failure, run blocking, non-existent ID validation, all-backends-pass, Hub registration pattern, one-decrypt balance). Added Error Handling (15 items), Resilience & Integration Robustness (10 items), and Edge Cases (10 items) sections. Updated Known Gaps: removed stale "no pre-run health check", "no model_backend_pins_json" (both implemented); added 7 new gaps (typed error codes, staleness bound, retry, mid-run monitoring, Hub logging, Bedrock credential validation, fallback-scan unrelated backends). Created website doc stub.
+- 2026-07-04 (improve-architecture index 173): Cross-cutting QA pass 2. Verified all unchecked behaviours against code: marked 13 behaviours [ ]→[x] (agent model_backend_id ref, run-start resolution, ConnectorHub parallel, model_id pinning, entity independence, operator-update-on-new-runs, pre-run health check, named failure, run blocking, non-existent ID validation, all-backends-pass, Hub registration pattern, one-decrypt balance). Added Error Handling (15 items), Resilience & Integration Robustness (10 items), and Edge Cases (10 items) sections. Updated Known Gaps: removed stale "no pre-run health check", "no model_backend_pins_json" (both implemented); added 7 new gaps (typed error codes, staleness bound, retry, mid-run monitoring, Hub logging, Bedrock credential validation, fallback-scan unrelated backends). Created website doc stub. **Note 2026-07-06**: The "Hub logging" gap actually overstates the issue — Hub has 11+ logger calls (warning/error/exception); the real gap is that `get_with_rotation()` doesn't surface failover events via `audit_logger` callback.
 - 2026-07-02 (improve-architecture index 54): Cross-cutting QA pass 1. Updated frontmatter (added code path for Hub implementation, added 2 unit test file refs). Marked 7 stale [ ]→[x] behaviours (registration, decryption, run-scoped lifecycle, ABC pattern, stub test double). Removed 3 stale known gaps (No Hub implementation, No credential decryption, No unit tests). Updated ConnectorHub pattern gap description to reflect current state. All Hub unit tests pass.
 - 2026-07-05 (qa-iterate prodmap model-backends): Fixed duplicate code path (`base.py` listed twice in `code:` frontmatter). Corrected Bedrock credential validation claim from `[ ]` (uncaught `KeyError`) to `[x]` (handled `ValueError` in `_build_backend()`). Removed stale Known Gap "Bedrock credentials not validated".
+- 2026-07-06 (qa-iterate prodmap model-backends): Code verification pass. Corrected exception base classes (`BackendNotFoundError(KeyError)`→`BackendNotFoundError(Exception)`, `BackendUnavailableError(RuntimeError)`→`BackendUnavailableError(Exception)`). Corrected `_build_backend` error message to `ValueError("Unknown model backend provider: {provider!r}")`. Corrected UUID fallback handling — caught via `try/except ValueError`, logged as warning, not uncaught. Corrected logging claim — Hub has 11+ `logger.warning/error/exception` calls; real gap is failover events not surfaced via `audit_logger` callback.
