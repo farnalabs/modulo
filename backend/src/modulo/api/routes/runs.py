@@ -10,7 +10,7 @@ from typing import Any, Literal
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, status
 from pydantic import BaseModel, Field
 from sqlalchemy import select, text
-from sqlalchemy.exc import ProgrammingError, SQLAlchemyError
+from sqlalchemy.exc import IntegrityError, ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
 from modulo.api.dependencies import (
@@ -175,8 +175,6 @@ async def trigger_run(
             detail="Feature is not available. Run database migrations to enable it.",
         )
 
-    except HTTPException:
-        raise
     except SQLAlchemyError:
         _log.warning("route.db_error")
         raise HTTPException(
@@ -233,8 +231,11 @@ async def trigger_run(
             detail="Feature is not available. Run database migrations to enable it.",
         )
 
-    except HTTPException:
-        raise
+    except IntegrityError:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="A run with the given parameters already exists.",
+        )
     except SQLAlchemyError:
         _log.warning("route.db_error")
         raise HTTPException(
@@ -281,9 +282,6 @@ async def get_run_stats_endpoint(
             detail="Feature is not available. Run database migrations to enable it.",
         )
 
-
-    except HTTPException:
-        raise
     except SQLAlchemyError:
         _log.warning("route.db_error")
         raise HTTPException(
@@ -316,9 +314,6 @@ async def get_run_heatmap_endpoint(
             detail="Feature is not available. Run database migrations to enable it.",
         )
 
-
-    except HTTPException:
-        raise
     except SQLAlchemyError:
         _log.warning("route.db_error")
         raise HTTPException(
@@ -350,8 +345,6 @@ async def get_run_status(
             detail="Feature is not available. Run database migrations to enable it.",
         )
 
-    except HTTPException:
-        raise
     except SQLAlchemyError:
         _log.warning("route.db_error")
         raise HTTPException(
@@ -398,16 +391,12 @@ async def cancel_run(
                 )
 
             await request_cancellation(session, run_id)
-    except HTTPException:
-        raise
     except ProgrammingError:
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
         )
 
-    except HTTPException:
-        raise
     except SQLAlchemyError:
         _log.warning("route.db_error")
         raise HTTPException(
@@ -523,8 +512,6 @@ async def get_run_io_endpoint(
             detail="Feature is not available. Run database migrations to enable it.",
         )
 
-    except HTTPException:
-        raise
     except SQLAlchemyError:
         _log.warning("route.db_error")
         raise HTTPException(
@@ -540,7 +527,7 @@ async def get_run_io_endpoint(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="An unexpected error occurred.",
         ) from None
-    if result is None:
+    if run is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Run not found")
 
     if result.get("outputs_json"):
@@ -581,8 +568,6 @@ async def export_run_fixture(
             detail="Feature is not available. Run database migrations to enable it.",
         )
 
-    except HTTPException:
-        raise
     except SQLAlchemyError:
         _log.warning("route.db_error")
         raise HTTPException(
@@ -641,8 +626,7 @@ async def get_run_workspace_lease(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
         )
-    except HTTPException:
-        raise
+
     except SQLAlchemyError:
         _log.warning("route.db_error")
         raise HTTPException(
@@ -699,8 +683,7 @@ async def get_run_workspace_events(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
         )
-    except HTTPException:
-        raise
+
     except SQLAlchemyError:
         _log.warning("route.db_error")
         raise HTTPException(
@@ -783,8 +766,6 @@ async def get_run_node_output(
             detail="Feature is not available. Run database migrations to enable it.",
         )
 
-    except HTTPException:
-        raise
     except SQLAlchemyError:
         _log.warning("route.db_error")
         raise HTTPException(
@@ -855,8 +836,6 @@ async def observe_run_node(
             detail="Feature is not available. Run database migrations to enable it.",
         )
 
-    except HTTPException:
-        raise
     except SQLAlchemyError:
         _log.warning("route.db_error")
         raise HTTPException(
@@ -891,8 +870,11 @@ async def observe_run_node(
             detail="Feature is not available. Run database migrations to enable it.",
         )
 
-    except HTTPException:
-        raise
+    except IntegrityError:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="A node observation with the given parameters already exists.",
+        )
     except SQLAlchemyError:
         _log.warning("route.db_error")
         raise HTTPException(
@@ -986,8 +968,6 @@ async def recover_run_node(
             detail="Feature is not available. Run database migrations to enable it.",
         )
 
-    except HTTPException:
-        raise
     except SQLAlchemyError:
         _log.warning("route.db_error")
         raise HTTPException(
@@ -1348,8 +1328,6 @@ async def diff_node_output(
             detail="Feature is not available. Run database migrations to enable it.",
         )
 
-    except HTTPException:
-        raise
     except SQLAlchemyError:
         _log.warning("route.db_error")
         raise HTTPException(
