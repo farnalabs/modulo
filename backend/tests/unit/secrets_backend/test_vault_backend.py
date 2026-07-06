@@ -48,6 +48,11 @@ def _make_backend(mock_hvac):
 
 
 class TestVaultSecretsBackend:
+    async def test_empty_key_raises_value_error(self, mock_hvac):
+        backend = _make_backend(mock_hvac)
+        with pytest.raises(ValueError, match="non-empty"):
+            await backend.get_secret("")
+
     async def test_get_secret_reads_from_vault(self, mock_hvac):
         backend = _make_backend(mock_hvac)
         backend._client.secrets.kv.v2.read_secret_version.return_value = {
