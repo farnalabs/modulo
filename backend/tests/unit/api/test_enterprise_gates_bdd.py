@@ -18,7 +18,6 @@ from modulo.api.dependencies import _get_engine, get_db_session, get_plan_contex
 from modulo.api.main import app
 from modulo.auth.dependencies import get_current_user
 from modulo.auth.jwt import AuthenticatedPrincipal
-from modulo.core.feature_flags import DbPlanContext, FeatureFlagRegistry
 from modulo.settings import Settings, get_settings
 
 _VALID_32 = "a" * 32
@@ -31,14 +30,20 @@ _PROVIDER_ID = uuid.UUID("00000000-0000-0000-0000-000000000010")
 # ── Settings helpers ──────────────────────────────────────────────────────
 
 
-def _team_plan_context() -> DbPlanContext:
-    registry = FeatureFlagRegistry(current_tier="team", has_license_key=True)
-    return DbPlanContext(registry)
+def _team_plan_context() -> MagicMock:
+    ctx = MagicMock()
+    ctx.feature_enabled.return_value = True
+    ctx.tier.return_value = "team"
+    ctx.has_license_key.return_value = True
+    return ctx
 
 
-def _community_plan_context() -> DbPlanContext:
-    registry = FeatureFlagRegistry(current_tier="community", has_license_key=False)
-    return DbPlanContext(registry)
+def _community_plan_context() -> MagicMock:
+    ctx = MagicMock()
+    ctx.feature_enabled.return_value = False
+    ctx.tier.return_value = "community"
+    ctx.has_license_key.return_value = False
+    return ctx
 
 
 def _make_settings(*, license_key: str = "") -> Settings:
