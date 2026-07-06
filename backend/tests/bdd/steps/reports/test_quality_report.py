@@ -16,11 +16,11 @@ from tests.bdd.conftest import make_mock_pipeline  # noqa: E402
 def patches():
     collectors: list[Any] = []
     yield collectors
+    import contextlib
+
     for p in reversed(collectors):
-        try:
+        with contextlib.suppress(RuntimeError):
             p.stop()
-        except RuntimeError:
-            pass
 
 
 # ---------------------------------------------------------------------------
