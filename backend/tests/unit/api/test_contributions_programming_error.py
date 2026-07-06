@@ -92,9 +92,9 @@ class TestCreateContributionProgrammingError:
 class TestSubmitForReviewProgrammingError:
     """POST /api/v1/library/contribute/{id}/submit → 501 on ProgrammingError.
 
-    Patches the service function because the route handler passes
-    account_id=... but submit_contribution_for_review expects
-    created_by=... (pre-existing bug in arg name).
+    Patches the service function because submit_contribution_for_review has
+    its own async with session.begin():, so a bare ProgrammingError
+    from the mock session doesn't propagate to the route handler's catch.
     """
 
     def test_submit_for_review_returns_501_on_programming_error(self, admin_client: TestClient) -> None:
