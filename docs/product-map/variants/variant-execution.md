@@ -23,14 +23,6 @@ Weighted random variant selection, run_context_overrides merging, quota enforcem
 
 ## Behaviours
 
-### Weighted selection
-
-- [x] `pick_variant_weighted` selects a variant proportionally to each variant's `weight` key
-- [x] Single-variant group short-circuits — returns the only variant directly (no random call)
-- [x] Empty variants list returns None
-- [x] All-zero weights fall back to `random.choice` (uniform)
-- [x] Missing `weight` key defaults to 1.0
-
 ### Run creation
 
 - [x] `POST /api/v1/variant-groups/{group_id}/run` selects a variant, merges `run_context_overrides` into `input_payload`, and creates a run with the variant's `snapshot_id`
@@ -49,25 +41,6 @@ Weighted random variant selection, run_context_overrides merging, quota enforcem
 - [x] 429 returned when pipeline concurrent run quota exceeded
 - [x] 429 returned when no variant selected or quota exceeded in `run_variant_weighted`
 
-### Coverage gap detection
-
-- [x] `GET /api/v1/variant-groups/{group_id}/coverage-gaps` returns variants whose `eval_definition_ids` don't cover all eval definitions for the pipeline
-- [x] Eval definitions loaded from `EvalDefinition` table filtered by pipeline_id
-- [x] Empty eval definitions list for pipeline yields no gaps
-- [x] All evals present in variant yields no gap
-- [x] 404 if variant group not found
-- [x] RLS enforced
-
-### Prompt diff comparison
-
-- [x] `GET /api/v1/variant-groups/{group_id}/prompt-diffs` compares `prompt_pins_json` across variant snapshots
-- [x] Returns agent-level diffs `{agent_id, base_hash, variant_hash}` when hashes differ
-- [x] Handles `base_snapshot_ids` to explicitly mark base vs comparison variants
-- [x] Missing snapshots are skipped (not a hard error)
-- [x] No snapshots or no variants returns empty list
-- [x] 404 if variant group not found
-- [x] RLS enforced
-
 ### Error Handling
 
 - [x] 501 ProgrammingError catch on create, list, get, update, delete, run, coverage-gaps, prompt-diffs endpoints
@@ -80,6 +53,10 @@ Weighted random variant selection, run_context_overrides merging, quota enforcem
 - [x] 429 with "no variants configured" when variant group has empty variants list
 - [x] `with_for_update()` row lock prevents concurrent quota races in `run_variant_weighted` and `increment_run_count`
 - [x] `_snapshot_uuid` helper safely handles variants without `snapshot_id` in prompt-diffs
+
+## QA History
+
+- 2026-07-06: qa-iterate — Fixed MAJOR: removed duplicated Weighted selection, Coverage gap detection, and Prompt diff comparison behaviours (canonical versions in variant-groups.md). Status: partial.
 
 ## Known Gaps
 
