@@ -310,6 +310,7 @@ class Notifier:
                     headers={
                         "Content-Type": "application/json",
                         "X-Modulo-Signature": signature,
+                        "X-Modulo-Timestamp": datetime.now(UTC).isoformat(),
                         "User-Agent": "Modulo-Notifier/1.0",
                     },
                 )

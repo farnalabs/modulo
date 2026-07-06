@@ -245,6 +245,19 @@ async def _list_deliveries(
 
         rows = list((await session.execute(query)).all())
 
+        total = 0
+        count_query = select(sa_func.count(NotificationDeliveryLog.id)).where(
+            NotificationDeliveryLog.organisation_id == principal.organisation_id,
+        )
+        if status_filter:
+            count_query = count_query.where(NotificationDeliveryLog.status == status_filter)
+        if event_type_filter:
+            count_query = count_query.where(NotificationDeliveryLog.event_type == event_type_filter)
+        if endpoint_id_filter:
+            count_query = count_query.where(NotificationDeliveryLog.endpoint_id == endpoint_id_filter)
+        count_result = await session.execute(count_query)
+        total = count_result.scalar() or 0
+
     has_more = len(rows) > limit
     if has_more:
         rows = rows[:limit]
@@ -252,19 +265,6 @@ async def _list_deliveries(
     next_cursor: str | None = None
     if has_more and rows:
         next_cursor = rows[-1][0].created_at.isoformat() if rows[-1][0].created_at else None
-
-    total = 0
-    count_query = select(sa_func.count(NotificationDeliveryLog.id)).where(
-        NotificationDeliveryLog.organisation_id == principal.organisation_id,
-    )
-    if status_filter:
-        count_query = count_query.where(NotificationDeliveryLog.status == status_filter)
-    if event_type_filter:
-        count_query = count_query.where(NotificationDeliveryLog.event_type == event_type_filter)
-    if endpoint_id_filter:
-        count_query = count_query.where(NotificationDeliveryLog.endpoint_id == endpoint_id_filter)
-    count_result = await session.execute(count_query)
-    total = count_result.scalar() or 0
 
     items = [
         DeliveryLogEntry(
@@ -765,6 +765,15 @@ async def list_deliveries(
             query = query.order_by(NotificationDeliveryLog.created_at.desc()).limit(limit + 1)
 
             rows = list((await session.execute(query)).scalars())
+
+            total = 0
+            count_result = await session.execute(
+                select(sa_func.count(NotificationDeliveryLog.id)).where(
+                    NotificationDeliveryLog.endpoint_id == webhook_id,
+                    NotificationDeliveryLog.organisation_id == principal.organisation_id,
+                )
+            )
+            total = count_result.scalar() or 0
     except ProgrammingError:
         logger.warning("notifications.delivery_table_missing", extra={"route": "list_deliveries", "webhook_id": str(webhook_id)})
         logger.exception("notifications.delivery_table_missing")
@@ -786,15 +795,6 @@ async def list_deliveries(
     next_cursor: str | None = None
     if has_more and rows:
         next_cursor = rows[-1].created_at.isoformat() if rows[-1].created_at else None
-
-    total = 0
-    count_result = await session.execute(
-        select(sa_func.count(NotificationDeliveryLog.id)).where(
-            NotificationDeliveryLog.endpoint_id == webhook_id,
-            NotificationDeliveryLog.organisation_id == principal.organisation_id,
-        )
-    )
-    total = count_result.scalar() or 0
 
     endpoint_url = ep.url
 
