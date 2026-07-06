@@ -79,6 +79,9 @@ def viewer_client() -> Generator[TestClient, None, None]:
         account_id=uuid.uuid4(),
         org_role="viewer",
     )
+    mock_plan = MagicMock()
+    mock_plan.feature_enabled.return_value = True
+    app.dependency_overrides[get_plan_context] = lambda: mock_plan
     yield TestClient(app)
     app.dependency_overrides.clear()
 
