@@ -9,6 +9,8 @@ the event loop — no thundering-herd risk in asyncio. A threading lock is
 kept for correctness if compilation becomes async in the future.
 """
 
+from __future__ import annotations
+
 import threading
 import uuid
 from collections import OrderedDict, defaultdict
