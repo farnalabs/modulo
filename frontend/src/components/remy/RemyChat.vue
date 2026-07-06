@@ -47,6 +47,21 @@
           <div class="remy-turn-line" />
         </div>
         <div
+          v-else-if="msg.role === 'tool_result' && msg.tool_results_json"
+          class="remy-tool-card"
+        >
+          <button class="remy-tool-header" @click="toggleToolExpand(msg.id)">
+            <span class="remy-tool-name">🛠 Tool Called: {{ (msg.tool_results_json as any).tool_name }}</span>
+            <span class="tool-badge" :class="(msg.tool_results_json as any).success ? 'success' : 'failed'">
+              {{ (msg.tool_results_json as any).success ? 'Completed' : 'Failed' }}
+            </span>
+            <span class="tool-chevron" :class="{ expanded: expandedTools.has(msg.id) }">▼</span>
+          </button>
+          <div v-if="expandedTools.has(msg.id)" class="remy-tool-details">
+            <pre>{{ formatToolDetails(msg.tool_results_json as any) }}</pre>
+          </div>
+        </div>
+        <div
           v-else
           class="remy-msg"
           :class="msg.role"
@@ -212,6 +227,29 @@ const store = useRemyStore();
 const { connectStream } = useRemyStream();
 const scrollRef = ref<HTMLDivElement | null>(null);
 const inputText = ref("");
+
+const expandedTools = ref(new Set<string>())
+
+function toggleToolExpand(id: string) {
+  if (expandedTools.value.has(id)) {
+    expandedTools.value.delete(id)
+  } else {
+    expandedTools.value.add(id)
+  }
+  expandedTools.value = new Set(expandedTools.value)
+}
+
+function formatToolDetails(tc: { tool_call_id: string; tool_name: string; success: boolean; result?: unknown; error?: string }): string {
+  const lines: string[] = [`Tool: ${tc.tool_name}`, `ID: ${tc.tool_call_id}`, `Status: ${tc.success ? 'Completed' : 'Failed'}`, '']
+  if (tc.result !== undefined) {
+    const resultStr = typeof tc.result === 'object' ? JSON.stringify(tc.result, null, 2) : String(tc.result)
+    lines.push('Result:', resultStr)
+  }
+  if (tc.error) {
+    lines.push('Error:', tc.error)
+  }
+  return lines.join('\n')
+}
 
 const userEmail = computed(() => {
   const token = getAccessToken();
@@ -471,5 +509,47 @@ function renderMarkdown(text: string): string {
   @apply flex items-center gap-2 rounded-lg border px-3 py-2 text-sm;
   background-color: hsl(var(--muted));
   border-color: hsl(var(--border));
+}
+.remy-tool-card {
+  @apply rounded-lg border text-sm overflow-hidden;
+  background-color: hsl(var(--card));
+  border-color: hsl(var(--border));
+}
+.remy-tool-header {
+  @apply flex items-center gap-2 w-full px-3 py-2 text-left cursor-pointer;
+  background-color: hsl(var(--muted));
+  color: hsl(var(--foreground));
+}
+.remy-tool-header:hover {
+  background-color: hsl(var(--accent));
+}
+.remy-tool-name {
+  @apply flex-1 font-medium;
+}
+.tool-badge {
+  @apply text-xs font-medium px-2 py-0.5 rounded-full;
+}
+.tool-badge.success {
+  background-color: hsl(142 76% 36% / 0.15);
+  color: hsl(142 76% 36%);
+}
+.tool-badge.failed {
+  background-color: hsl(0 72% 51% / 0.15);
+  color: hsl(0 72% 51%);
+}
+.tool-chevron {
+  @apply text-xs transition-transform duration-200;
+  color: hsl(var(--muted-foreground));
+}
+.tool-chevron.expanded {
+  transform: rotate(180deg);
+}
+.remy-tool-details {
+  @apply border-t px-3 py-2;
+  border-color: hsl(var(--border));
+}
+.remy-tool-details pre {
+  @apply text-xs leading-relaxed whitespace-pre-wrap;
+  color: hsl(var(--muted-foreground));
 }
 </style>
