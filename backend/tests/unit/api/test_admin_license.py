@@ -216,8 +216,15 @@ class TestStoreAndGetLicense:
 class TestGetLicense:
     URL = "/api/v1/admin/license"
 
+    def _mock_org(self, settings_json: dict | None = None) -> MagicMock:
+        org = MagicMock()
+        org.settings_json = settings_json
+        return org
+
     def test_returns_no_license_when_none_set(self, client: TestClient) -> None:
-        resp = client.get(self.URL)
+        org = self._mock_org(settings_json=None)
+        with patch("modulo.api.routes.admin_license.get_organisation", new=AsyncMock(return_value=org)):
+            resp = client.get(self.URL)
         assert resp.status_code == 200
         data = resp.json()
         assert data["has_license"] is False
@@ -231,7 +238,9 @@ class TestGetLicense:
         assert result.license_data is not None
         store_license(key, result.license_data)
 
-        resp = client.get(self.URL)
+        org = self._mock_org(settings_json={})
+        with patch("modulo.api.routes.admin_license.get_organisation", new=AsyncMock(return_value=org)):
+            resp = client.get(self.URL)
         assert resp.status_code == 200
         data = resp.json()
         assert data["has_license"] is True
