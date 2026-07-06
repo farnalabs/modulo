@@ -223,7 +223,7 @@ class TestAuthRateLimitMiddleware:
             resp = client.post("/api/v1/auth/login")
         assert resp.status_code == 429
         body = resp.json()
-        assert body["error_code"] == "rate_limit_exceeded"
+        assert body["type"] == "urn:problem:modulo:rate_limited"
 
     def test_retry_after_header_present_on_429(self):
         mock_limiter = MagicMock(spec=AuthRateLimiter)

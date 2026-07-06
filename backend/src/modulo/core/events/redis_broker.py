@@ -122,7 +122,13 @@ class RedisEventBroker:
         except Exception:
             _log.exception("redis_broker.publish_failed", extra={"channel": channel})
             async with self._lock:
+                old = self._pub
                 self._pub = None
+            if old is not None:
+                try:
+                    await old.close(close_connection_pool=True)
+                except Exception:
+                    _log.warning("redis_broker.pub_close_failed_after_error", exc_info=True)
 
     async def subscribe(self, channel: str) -> PubSub:
         """Return a PubSub object subscribed to the given *channel*.
@@ -145,7 +151,13 @@ class RedisEventBroker:
         except Exception:
             _log.exception("redis_broker.subscribe_failed", extra={"channel": channel})
             async with self._lock:
+                old = self._sub
                 self._sub = None
+            if old is not None:
+                try:
+                    await old.close(close_connection_pool=True)
+                except Exception:
+                    _log.warning("redis_broker.sub_close_failed_after_error", exc_info=True)
             raise
         return pubsub
 

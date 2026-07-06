@@ -1,58 +1,41 @@
 """Pipeline draft generator — converts determination findings into an editable pipeline graph."""
 
+from dataclasses import dataclass, field
+
 from modulo.connectors.base import Capability
 from modulo.determination.inference import Finding
 from modulo.determination.scanner import ScanSample
 
 
+@dataclass
 class DraftNode:
     """A node in the draft pipeline."""
 
-    def __init__(
-        self,
-        id: str,
-        node_type: str,
-        label: str,
-        connector_type: str | None = None,
-        required_capabilities: list[str] | None = None,
-    ) -> None:
-        self.id = id
-        self.node_type = node_type
-        self.label = label
-        self.connector_type = connector_type
-        self.required_capabilities = required_capabilities or []
+    id: str
+    node_type: str
+    label: str
+    connector_type: str | None = None
+    required_capabilities: list[str] = field(default_factory=list)
 
 
+@dataclass
 class DraftEdge:
     """An edge in the draft pipeline."""
 
-    def __init__(
-        self,
-        source: str,
-        target: str,
-        edge_type: str = "normal",
-        hitl_gate: bool = False,
-    ) -> None:
-        self.source = source
-        self.target = target
-        self.edge_type = edge_type
-        self.hitl_gate = hitl_gate
+    source: str
+    target: str
+    edge_type: str = "normal"
+    hitl_gate: bool = False
 
 
+@dataclass
 class PipelineDraft:
     """A full draft pipeline generated from determination data."""
 
-    def __init__(
-        self,
-        nodes: list[DraftNode],
-        edges: list[DraftEdge],
-        findings: list[Finding],
-        automation_suggestions: list[dict[str, str]],
-    ) -> None:
-        self.nodes = nodes
-        self.edges = edges
-        self.findings = findings
-        self.automation_suggestions = automation_suggestions
+    nodes: list[DraftNode]
+    edges: list[DraftEdge]
+    findings: list[Finding]
+    automation_suggestions: list[dict[str, str]]
 
 
 def generate_draft(samples: list[ScanSample], findings: list[Finding]) -> PipelineDraft:
@@ -66,7 +49,7 @@ def generate_draft(samples: list[ScanSample], findings: list[Finding]) -> Pipeli
     if not has_data:
         return PipelineDraft(nodes=[], edges=[], findings=findings, automation_suggestions=[])
 
-    stage_nodes = []
+    stage_node_ids: list[str] = []
     has_planning = any(f.category == "stage" and "Planning" in f.finding for f in findings)
     has_development = any(f.category == "stage" and "Development" in f.finding for f in findings)
     has_review = any(f.category == "stage" and "Code review" in f.finding for f in findings)
@@ -82,7 +65,7 @@ def generate_draft(samples: list[ScanSample], findings: list[Finding]) -> Pipeli
             label="Planning (Ticket Triage)",
         )
         nodes.append(n)
-        stage_nodes.append("planning")
+        stage_node_ids.append("planning")
 
         automation_suggestions.append(
             {
@@ -93,7 +76,6 @@ def generate_draft(samples: list[ScanSample], findings: list[Finding]) -> Pipeli
         )
 
     if has_development:
-        # Determine which connector types are available
         git_providers = {s.connector_type.value for s in samples if s.resource in ("repos", "projects")}
         connector_type = next(iter(git_providers), "github")
 
@@ -105,7 +87,7 @@ def generate_draft(samples: list[ScanSample], findings: list[Finding]) -> Pipeli
             required_capabilities=[Capability.READ, Capability.WRITE],
         )
         nodes.append(n)
-        stage_nodes.append("development")
+        stage_node_ids.append("development")
 
         if has_planning:
             edges.append(DraftEdge(source="planning", target="development", hitl_gate=True))
@@ -122,12 +104,12 @@ def generate_draft(samples: list[ScanSample], findings: list[Finding]) -> Pipeli
             required_capabilities=[Capability.READ, Capability.CREATE_PR],
         )
         nodes.append(n)
-        stage_nodes.append("review")
+        stage_node_ids.append("review")
 
         if has_development:
             review_source = "development"
-        elif len(stage_nodes) > 0:
-            review_source = stage_nodes[-2]
+        elif stage_node_ids:
+            review_source = stage_node_ids[-1]
         else:
             review_source = "start"
         edges.append(DraftEdge(source=review_source, target="review", hitl_gate=True))
@@ -148,16 +130,16 @@ def generate_draft(samples: list[ScanSample], findings: list[Finding]) -> Pipeli
             required_capabilities=[Capability.READ],
         )
         nodes.append(n)
-        stage_nodes.append("ci_cd")
+        stage_node_ids.append("ci_cd")
 
-        ci_source = stage_nodes[-2] if len(stage_nodes) > 1 else "start"
+        ci_source = stage_node_ids[-2] if len(stage_node_ids) > 1 else "start"
         edges.append(DraftEdge(source=ci_source, target="ci_cd"))
 
     end_node = DraftNode(id="end", node_type="placeholder", label="End")
     nodes.append(end_node)
 
-    if stage_nodes:
-        last_stage = stage_nodes[-1]
+    if stage_node_ids:
+        last_stage = stage_node_ids[-1]
         edges.append(DraftEdge(source=last_stage, target="end"))
 
     if not edges:

@@ -5,107 +5,66 @@ from __future__ import annotations
 import logging
 import os
 from dataclasses import dataclass
-from threading import Lock
+from threading import Lock, RLock
 
 _log = logging.getLogger(__name__)
 
+
+@dataclass
+class _KeyConfig:
+    default: str | None = None
+    hot_reloadable: bool = False
+
+
+_KEY_CONFIG: dict[str, _KeyConfig] = {
+    "DATABASE_URL": _KeyConfig(),
+    "SECRET_KEY": _KeyConfig(),
+    "FERNET_KEY": _KeyConfig(),
+    "FERNET_KEY_OLD": _KeyConfig(),
+    "REDIS_URL": _KeyConfig(default="redis://localhost:6379/0"),
+    "MODULO_DB": _KeyConfig(default="postgres"),
+    "MODULO_SECRETS_BACKEND": _KeyConfig(default="fernet"),
+    "CORS_ORIGINS": _KeyConfig(default="http://localhost:5173"),
+    "CORS_MAX_AGE": _KeyConfig(default="600"),
+    "MODULO_USERS": _KeyConfig(default=""),
+    "MODULO_ADMIN_PASSWORD": _KeyConfig(default=""),
+    "MODULO_PUBLIC_URL": _KeyConfig(default="http://localhost:8000", hot_reloadable=True),
+    "MODULO_DEMO_MODE": _KeyConfig(default="false", hot_reloadable=True),
+    "MODULO_LICENSE_KEY": _KeyConfig(default=""),
+    "MODULO_OIDC_PROVIDERS": _KeyConfig(default="[]"),
+    "MODULO_SAML_ENABLED": _KeyConfig(default="false"),
+    "MODULO_SAML_IDP_METADATA_URL": _KeyConfig(default=""),
+    "MODULO_SAML_IDP_METADATA_XML": _KeyConfig(default=""),
+    "MODULO_SAML_ENTITY_ID": _KeyConfig(default="modulo"),
+    "MODULO_SAML_SP_PRIVATE_KEY": _KeyConfig(default=""),
+    "MODULO_SAML_SP_X509_CERT": _KeyConfig(default=""),
+    "MODULO_SSO_DEFAULT_ROLE": _KeyConfig(default="runner"),
+    "MODULO_TELEMETRY_ENABLED": _KeyConfig(default="false", hot_reloadable=True),
+    "MODULO_OTEL_SERVICE_NAME": _KeyConfig(default="modulo", hot_reloadable=True),
+    "MODULO_PLUGIN_DISCOVERY": _KeyConfig(default="true", hot_reloadable=True),
+    "MODULO_LOG_LEVEL": _KeyConfig(default="INFO", hot_reloadable=True),
+    "MODULO_MAX_LOCAL_CONCURRENCY": _KeyConfig(default="2", hot_reloadable=True),
+    "MODULO_E2B_API_KEY": _KeyConfig(hot_reloadable=True),
+    "MODULO_RATELIMIT_BYPASS_TOKEN": _KeyConfig(default="", hot_reloadable=True),
+    "MODULO_INACTIVITY_TIMEOUT_MINUTES": _KeyConfig(default="480", hot_reloadable=True),
+    "DEBUG": _KeyConfig(default="false", hot_reloadable=True),
+    "VAULT_ADDR": _KeyConfig(default=""),
+    "VAULT_TOKEN": _KeyConfig(default=""),
+    "VAULT_ROLE_ID": _KeyConfig(default=""),
+    "VAULT_SECRET_ID": _KeyConfig(default=""),
+    "AWS_ACCESS_KEY_ID": _KeyConfig(default=""),
+    "AWS_SECRET_ACCESS_KEY": _KeyConfig(default=""),
+    "AWS_REGION": _KeyConfig(default="us-east-1"),
+    "MODULO_SCIM_TOKEN": _KeyConfig(default="", hot_reloadable=True),
+    "MODULO_SCIM_DEFAULT_ORG_ID": _KeyConfig(default="", hot_reloadable=True),
+}
+
+KNOWN_KEYS: list[str] = list(_KEY_CONFIG.keys())
 HOT_RELOADABLE_KEYS: frozenset[str] = frozenset(
-    {
-        "MODULO_MAX_LOCAL_CONCURRENCY",
-        "MODULO_E2B_API_KEY",
-        "MODULO_LOG_LEVEL",
-        "MODULO_DEMO_MODE",
-        "MODULO_PLUGIN_DISCOVERY",
-        "MODULO_TELEMETRY_ENABLED",
-        "MODULO_OTEL_SERVICE_NAME",
-        "MODULO_PUBLIC_URL",
-        "MODULO_SCIM_TOKEN",
-        "MODULO_SCIM_DEFAULT_ORG_ID",
-        "MODULO_RATELIMIT_BYPASS_TOKEN",
-        "MODULO_INACTIVITY_TIMEOUT_MINUTES",
-        "DEBUG",
-    }
+    k for k, v in _KEY_CONFIG.items() if v.hot_reloadable
 )
-
-KNOWN_KEYS: list[str] = [
-    "DATABASE_URL",
-    "SECRET_KEY",
-    "FERNET_KEY",
-    "FERNET_KEY_OLD",
-    "REDIS_URL",
-    "MODULO_DB",
-    "MODULO_SECRETS_BACKEND",
-    "CORS_ORIGINS",
-    "CORS_MAX_AGE",
-    "MODULO_USERS",
-    "MODULO_ADMIN_PASSWORD",
-    "MODULO_PUBLIC_URL",
-    "MODULO_DEMO_MODE",
-    "MODULO_LICENSE_KEY",
-    "MODULO_OIDC_PROVIDERS",
-    "MODULO_SAML_ENABLED",
-    "MODULO_SAML_IDP_METADATA_URL",
-    "MODULO_SAML_IDP_METADATA_XML",
-    "MODULO_SAML_ENTITY_ID",
-    "MODULO_SAML_SP_PRIVATE_KEY",
-    "MODULO_SAML_SP_X509_CERT",
-    "MODULO_SSO_DEFAULT_ROLE",
-    "MODULO_TELEMETRY_ENABLED",
-    "MODULO_OTEL_SERVICE_NAME",
-    "MODULO_PLUGIN_DISCOVERY",
-    "MODULO_LOG_LEVEL",
-    "MODULO_MAX_LOCAL_CONCURRENCY",
-    "MODULO_E2B_API_KEY",
-    "MODULO_RATELIMIT_BYPASS_TOKEN",
-    "MODULO_INACTIVITY_TIMEOUT_MINUTES",
-    "DEBUG",
-    "VAULT_ADDR",
-    "VAULT_TOKEN",
-    "VAULT_ROLE_ID",
-    "VAULT_SECRET_ID",
-    "AWS_ACCESS_KEY_ID",
-    "AWS_SECRET_ACCESS_KEY",
-    "AWS_REGION",
-    "MODULO_SCIM_TOKEN",
-    "MODULO_SCIM_DEFAULT_ORG_ID",
-]
-
 DEFAULT_VALUES: dict[str, str] = {
-    "REDIS_URL": "redis://localhost:6379/0",
-    "MODULO_DB": "postgres",
-    "MODULO_SECRETS_BACKEND": "fernet",
-    "MODULO_PUBLIC_URL": "http://localhost:8000",
-    "MODULO_DEMO_MODE": "false",
-    "MODULO_PLUGIN_DISCOVERY": "true",
-    "MODULO_TELEMETRY_ENABLED": "false",
-    "MODULO_OTEL_SERVICE_NAME": "modulo",
-    "MODULO_LOG_LEVEL": "INFO",
-    "MODULO_MAX_LOCAL_CONCURRENCY": "2",
-    "MODULO_SSO_DEFAULT_ROLE": "runner",
-    "MODULO_SCIM_TOKEN": "",
-    "MODULO_SCIM_DEFAULT_ORG_ID": "",
-    "CORS_MAX_AGE": "600",
-    "CORS_ORIGINS": "http://localhost:5173",
-    "MODULO_RATELIMIT_BYPASS_TOKEN": "",
-    "MODULO_INACTIVITY_TIMEOUT_MINUTES": "480",
-    "DEBUG": "false",
-    "VAULT_ADDR": "",
-    "VAULT_TOKEN": "",
-    "VAULT_ROLE_ID": "",
-    "VAULT_SECRET_ID": "",
-    "AWS_ACCESS_KEY_ID": "",
-    "AWS_SECRET_ACCESS_KEY": "",
-    "AWS_REGION": "us-east-1",
-    "MODULO_USERS": "",
-    "MODULO_ADMIN_PASSWORD": "",
-    "MODULO_OIDC_PROVIDERS": "[]",
-    "MODULO_SAML_ENABLED": "false",
-    "MODULO_SAML_IDP_METADATA_URL": "",
-    "MODULO_SAML_IDP_METADATA_XML": "",
-    "MODULO_SAML_ENTITY_ID": "modulo",
-    "MODULO_SAML_SP_PRIVATE_KEY": "",
-    "MODULO_SAML_SP_X509_CERT": "",
-    "MODULO_LICENSE_KEY": "",
+    k: v.default for k, v in _KEY_CONFIG.items() if v.default is not None
 }  # nosec B105 — empty-string placeholders, not hardcoded secrets
 
 
@@ -113,6 +72,16 @@ def _validate_key_registries() -> None:
     orphans = HOT_RELOADABLE_KEYS - set(KNOWN_KEYS)
     if orphans:
         _log.warning("HOT_RELOADABLE_KEYS contains keys not in KNOWN_KEYS: %s", orphans)
+    missing_defaults = set(KNOWN_KEYS) - set(DEFAULT_VALUES) - _NO_DEFAULT_KEYS
+    if missing_defaults:
+        _log.warning(
+            "KNOWN_KEYS has entries missing from DEFAULT_VALUES: %s", missing_defaults
+        )
+
+
+_NO_DEFAULT_KEYS: frozenset[str] = frozenset(
+    k for k, v in _KEY_CONFIG.items() if v.default is None
+)
 
 
 @dataclass
@@ -134,20 +103,30 @@ class RuntimeConfigStore:
 
     def __init__(self) -> None:
         self._defaults: dict[str, str | None] = {}
-        self._env_values: dict[str, str | None] = {}
         self._overrides: dict[str, str | None] = {}
-        self._lock = Lock()
+        self._env_values: dict[str, str | None] = {}
+        self._lock = RLock()
 
         for key in KNOWN_KEYS:
             self._defaults[key] = DEFAULT_VALUES.get(key)
-            self._env_values[key] = os.environ.get(key)
+        self._refresh_env_values()
 
         _validate_key_registries()
+
+    @classmethod
+    def reset(cls) -> None:
+        """Reset the module-level singleton (for test isolation)."""
+        import modulo.core.runtime_config.store as store_mod
+
+        store_mod._store = None
 
     def _resolve(self, key: str) -> tuple[str | None, str]:
         """Resolve effective value and provenance for a key.
 
         Returns (value, provenance) with override > env > default priority.
+
+        Caller must hold self._lock. Uses RLock so this is safe even
+        when called from a method that already holds the lock.
         """
         override_val = self._overrides.get(key)
         if override_val is not None:
@@ -159,12 +138,17 @@ class RuntimeConfigStore:
 
     def get(self, key: str) -> str | None:
         """Return the effective value: override > env > default."""
+        if not key:
+            return None
         with self._lock:
             value, _ = self._resolve(key)
             return value
 
     def set_override(self, key: str, value: str) -> None:
         """Set a runtime override that stays in memory until cleared or reloaded."""
+        if not key or key.strip() != key:
+            _log.warning("Runtime config override rejected: invalid key %r", key)
+            return
         if key not in KNOWN_KEYS:
             _log.warning("Runtime config override set for unknown key: %s", key)
         with self._lock:
@@ -174,8 +158,11 @@ class RuntimeConfigStore:
     def clear_override(self, key: str) -> None:
         """Remove a runtime override for a single key."""
         with self._lock:
-            self._overrides.pop(key, None)
-        _log.info("Runtime config override cleared: %s", key)
+            removed = self._overrides.pop(key, None)
+        if removed is not None:
+            _log.info("Runtime config override cleared: %s", key)
+        else:
+            _log.debug("Runtime config override not found (no-op): %s", key)
 
     def clear_all_overrides(self) -> None:
         """Remove all runtime overrides."""
@@ -183,11 +170,15 @@ class RuntimeConfigStore:
             self._overrides.clear()
         _log.info("Runtime config all overrides cleared")
 
+    def _refresh_env_values(self) -> None:
+        """Read all known keys from the process environment."""
+        for key in KNOWN_KEYS:
+            self._env_values[key] = os.environ.get(key)
+
     def reload(self) -> None:
         """Re-read os.environ to detect drift for all known keys."""
         with self._lock:
-            for key in KNOWN_KEYS:
-                self._env_values[key] = os.environ.get(key)
+            self._refresh_env_values()
         _validate_key_registries()
         _log.info("Runtime config reloaded from environment")
 

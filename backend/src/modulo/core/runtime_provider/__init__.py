@@ -93,6 +93,13 @@ def create_default_hub(max_local_concurrency: int = 2) -> RuntimeProviderHub:
     The local provider is registered first, so it becomes the fallback when
     no profile hint or ``supports()`` match is found.
     """
+    if max_local_concurrency < 1:
+        _log.warning(
+            "max_local_concurrency=%d is invalid, falling back to 2",
+            max_local_concurrency,
+        )
+        max_local_concurrency = 2
+
     from modulo.core.runtime_provider.hub import RuntimeProviderHub
     from modulo.core.runtime_provider.local import LocalRuntimeProvider
 

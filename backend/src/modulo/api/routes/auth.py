@@ -8,7 +8,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from fastapi.responses import JSONResponse
 from jose import JWTError
 from pydantic import BaseModel, Field
-from sqlalchemy.exc import ProgrammingError
+from sqlalchemy.exc import IntegrityError, ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.api.dependencies import get_db_session
@@ -121,11 +121,23 @@ async def login(
                 org_role = None
 
             family = await create_family(session, account.id, org_id)
+    except IntegrityError:
+        _log.warning("login.integrity_error")
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Account already has an active session. Try again.",
+        )
     except ProgrammingError:
         _log.warning("login.programming_error")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
+        )
+    except SQLAlchemyError:
+        _log.warning("login.sqlalchemy_error")
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Authentication service is temporarily unavailable. Please try again.",
         )
 
     access_token = create_access_token(
@@ -198,6 +210,12 @@ async def refresh(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
         )
+    except SQLAlchemyError:
+        _log.warning("refresh.sqlalchemy_error")
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Token refresh is temporarily unavailable. Please try again.",
+        )
     if theft_detected:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
@@ -264,6 +282,12 @@ async def logout(
                 raise HTTPException(
                     status_code=status.HTTP_501_NOT_IMPLEMENTED,
                     detail="Feature is not available. Run database migrations to enable it.",
+                )
+            except SQLAlchemyError:
+                _log.warning("logout.sqlalchemy_error")
+                raise HTTPException(
+                    status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                    detail="Logout is temporarily unavailable. Please try again.",
                 )
         except ValueError:
             _log.warning("logout.invalid_token_family", extra={"token_family": family_id_val})
@@ -338,6 +362,12 @@ async def me(
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
+        )
+    except SQLAlchemyError:
+        _log.warning("me.sqlalchemy_error")
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Account service is temporarily unavailable. Please try again.",
         )
     if account is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Account not found")

@@ -57,12 +57,11 @@ class ValidationError(FeedbackManagerError):
     """Raised when input validation fails."""
 
 _VALID_STATUS_TRANSITIONS: dict[str, set[str]] = {
-    "pending": {"routing", "correcting", "dismissed"},
+    "pending": {"routing", "correcting", "resolved"},
     "routing": {"escalated", "correcting", "resolved"},
     "correcting": {"correcting", "resolved", "escalated"},
-    "escalated": {"resolved", "dismissed"},
+    "escalated": {"resolved"},
     "resolved": set(),
-    "dismissed": set(),
 }
 
 

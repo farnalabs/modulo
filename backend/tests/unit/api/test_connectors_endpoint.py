@@ -13,7 +13,7 @@ import pytest
 from cryptography.fernet import Fernet
 from fastapi.testclient import TestClient
 
-from modulo.api.dependencies import _get_engine, get_db_session
+from modulo.api.dependencies import _get_engine, get_db_session, get_plan_context
 from modulo.api.main import app
 from modulo.auth.dependencies import get_current_user
 from modulo.auth.jwt import AuthenticatedPrincipal
@@ -75,6 +75,9 @@ def client() -> Generator[TestClient, None, None]:
     app.dependency_overrides[get_current_user] = lambda: AuthenticatedPrincipal(
         username="testuser", organisation_id=_ORG_ID, account_id=_USER_ID, org_role="admin"
     )
+    mock_plan = MagicMock()
+    mock_plan.feature_enabled.return_value = True
+    app.dependency_overrides[get_plan_context] = lambda: mock_plan
     yield TestClient(app)
     app.dependency_overrides.clear()
 
@@ -82,6 +85,9 @@ def client() -> Generator[TestClient, None, None]:
 @pytest.fixture()
 def unauth_client() -> Generator[TestClient, None, None]:
     app.dependency_overrides[get_settings] = _make_settings
+    mock_plan = MagicMock()
+    mock_plan.feature_enabled.return_value = True
+    app.dependency_overrides[get_plan_context] = lambda: mock_plan
     yield TestClient(app)
     app.dependency_overrides.clear()
 
@@ -167,10 +173,28 @@ def test_get_connector_not_found_returns_404(client: TestClient) -> None:
     assert resp.status_code == 404
 
 
+def _make_ci_mock() -> MagicMock:
+    ci = MagicMock()
+    ci.id = _CONNECTOR_ID
+    ci.organisation_id = _ORG_ID
+    ci.name = "Test Connector"
+    ci.connector_type_id = "filesystem"
+    ci.credentials_ciphertext = b"encrypted"
+    ci.config_json = {}
+    ci.allowed_operations = []
+    ci.status = "active"
+    ci.visibility = "org"
+    ci.tier = "native"
+    ci.created_at = _NOW
+    ci.updated_at = _NOW
+    return ci
+
+
 def test_update_connector_returns_200(client: TestClient) -> None:
     connector = _make_connector()
     connector.name = "Updated"
     with (
+        patch("modulo.api.routes.connectors.get_connector_instance", return_value=connector),
         patch("modulo.api.routes.connectors.update_connector_instance", return_value=connector),
         patch("modulo.api.routes.connectors.set_rls_org"),
         patch("modulo.api.routes.connectors.set_rls_user_context"),
@@ -182,6 +206,7 @@ def test_update_connector_returns_200(client: TestClient) -> None:
 
 def test_update_connector_not_found_returns_404(client: TestClient) -> None:
     with (
+        patch("modulo.api.routes.connectors.get_connector_instance", return_value=None),
         patch("modulo.api.routes.connectors.update_connector_instance", return_value=None),
         patch("modulo.api.routes.connectors.set_rls_org"),
         patch("modulo.api.routes.connectors.set_rls_user_context"),

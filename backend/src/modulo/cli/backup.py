@@ -10,6 +10,8 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import random
+import shutil
 import subprocess
 import uuid
 from datetime import UTC, datetime
@@ -112,7 +114,6 @@ def _get_db_version(raw_url: str) -> str:
 
 
 def _check_tool(name: str) -> None:
-    import shutil
     if shutil.which(name) is None:
         raise RuntimeError(f"Required system tool '{name}' not found on PATH. Install PostgreSQL client tools.")
 
@@ -228,8 +229,9 @@ def _export_credentials_references_sync(raw_url: str) -> dict[str, list[dict[str
         for table in _CREDENTIALS_TABLES:
             rows: list[dict[str, Any]] = []
             with conn.cursor() as cur:
-                assert table in _CREDENTIALS_TABLES, f"Unexpected credentials table: {table}"
-                sql = f"SELECT id, organisation_id, name, credentials_ciphertext FROM {table} ORDER BY id"  # noqa: S608 — guarded by whitelist assertion
+                if table not in _CREDENTIALS_TABLES:
+                    raise RuntimeError(f"Unexpected credentials table: {table}")
+                sql = f"SELECT id, organisation_id, name, credentials_ciphertext FROM {table} ORDER BY id"  # noqa: S608 — guarded by whitelist check above
                 cur.execute(sql)
                 for row in cur:
                     org_id = row.get("organisation_id")
@@ -318,7 +320,7 @@ def _restore_checkpoint_writes_sync(raw_url: str, writes: list[dict[str, Any]]) 
                 blob: bytes | None = None
                 raw_blob = row.get("blob")
                 if raw_blob is not None:
-                    blob = bytes.fromhex(raw_blob)
+                    blob = bytes.fromhex(raw_blob) if raw_blob else b""
                 org_id_raw = row.get("organisation_id")
                 org_uuid = uuid.UUID(org_id_raw) if org_id_raw else None
                 cur.execute(
@@ -379,7 +381,8 @@ def _re_encrypt_credentials_sync(
                     except (ValueError, TypeError):
                         _log.warning("Invalid UUID in credentials row: %s", row.get("id", "?"))
                         continue
-                    assert table in _CREDENTIALS_TABLES, f"Unexpected credentials table: {table}"
+                    if table not in _CREDENTIALS_TABLES:
+                        raise RuntimeError(f"Unexpected credentials table: {table}")
                     cur.execute(
                         f"UPDATE {table} SET credentials_ciphertext = %s WHERE id = %s",  # noqa: S608 — guarded by whitelist assertion
                         (new_ct, row_id),
@@ -446,7 +449,6 @@ def backup(db_url: str | None, output_dir: Path | None) -> None:
         backup_dir = output_dir
         backup_dir.mkdir(parents=True, exist_ok=True)
     else:
-        import random
         suffix = random.randint(1000, 9999)  # noqa: S311 — not crypto, just avoiding directory collision
         backup_dir = Path(f"./modulo-backup-{ts}-{suffix}")
         while backup_dir.exists():

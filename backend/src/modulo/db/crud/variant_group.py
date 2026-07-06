@@ -195,13 +195,16 @@ async def run_variant_weighted(
     if group.degraded_evals:
         merged_payload["_degraded_evals"] = True
 
+    raw_sid = variant.get("snapshot_id")
+    if raw_sid is None:
+        return None
+    snapshot_id = uuid.UUID(str(raw_sid)) if isinstance(raw_sid, str) else raw_sid
+
     run = await create_run(
         session,
         org_id=org_id,
         pipeline_id=group.pipeline_id,
-        snapshot_id=uuid.UUID(str(variant["snapshot_id"]))
-        if isinstance(variant.get("snapshot_id"), str)
-        else variant["snapshot_id"],
+        snapshot_id=snapshot_id,
         trigger_type=trigger_type,
         input_payload=merged_payload,
         account_id=account_id,
@@ -275,23 +278,34 @@ async def get_prompt_diffs(
     result = await session.execute(select(PipelineSnapshot).where(PipelineSnapshot.id.in_(snapshot_ids)))
     snapshots = {s.id: s for s in result.scalars()}
 
-    base_variants = [v for v in group.variants if uuid.UUID(str(v.get("snapshot_id", ""))) in (base_snapshot_ids or [])]
+    def _snapshot_uuid(v: dict[str, Any]) -> uuid.UUID | None:
+        sid = v.get("snapshot_id")
+        if sid is None:
+            return None
+        return uuid.UUID(str(sid)) if isinstance(sid, str) else sid
+
+    base_sids = set(base_snapshot_ids or [])
+    base_variants = [v for v in group.variants if _snapshot_uuid(v) in base_sids]
     comparison_variants = [
-        v for v in group.variants if uuid.UUID(str(v.get("snapshot_id", ""))) not in (base_snapshot_ids or [])
+        v for v in group.variants if _snapshot_uuid(v) not in base_sids
     ]
 
     diffs: list[dict[str, Any]] = []
     for cv in comparison_variants:
-        cv_id = uuid.UUID(str(cv["snapshot_id"]))
-        cv_snapshot = snapshots.get(cv_id)
+        cv_id = _snapshot_uuid(cv)
+        cv_snapshot = snapshots.get(cv_id) if cv_id else None
         for bv in base_variants:
-            bv_id = uuid.UUID(str(bv["snapshot_id"]))
-            bv_snapshot = snapshots.get(bv_id)
+            bv_id = _snapshot_uuid(bv)
+            bv_snapshot = snapshots.get(bv_id) if bv_id else None
             if cv_snapshot is None or bv_snapshot is None:
                 continue
 
-            bv_pins = {p["agent_id"]: p["prompt_version_hash"] for p in bv_snapshot.prompt_pins_json}
-            cv_pins = {p["agent_id"]: p["prompt_version_hash"] for p in cv_snapshot.prompt_pins_json}
+            def _pins(snapshot: Any) -> dict[str, str | None]:
+                return {p.get("agent_id"): p.get("prompt_version_hash")
+                        for p in snapshot.prompt_pins_json if p.get("agent_id")}
+
+            bv_pins = _pins(bv_snapshot)
+            cv_pins = _pins(cv_snapshot)
 
             agent_diffs = []
             for agent_id, cv_hash in cv_pins.items():

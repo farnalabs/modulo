@@ -222,6 +222,31 @@ class TestRunVariantWeighted:
 
         assert result is None
 
+    async def test_returns_none_when_snapshot_id_missing(self) -> None:
+        session = AsyncMock()
+        org_id = uuid.uuid4()
+        group = MagicMock()
+        group.id = uuid.uuid4()
+        group.pipeline_id = uuid.uuid4()
+        group.variants = [{"name": "no-sid-variant", "weight": 1.0}]
+        group.degraded_evals = False
+        group.max_concurrent_runs = 5
+
+        locked = MagicMock()
+        locked.id = group.id
+        locked.pipeline_id = group.pipeline_id
+        locked.variants = group.variants
+        locked.degraded_evals = False
+        locked.max_concurrent_runs = 5
+        exec_result = MagicMock()
+        exec_result.scalar_one_or_none.return_value = locked
+        session.execute.return_value = exec_result
+
+        with patch("modulo.db.crud.variant_group.check_pipeline_run_quota", new_callable=AsyncMock, return_value=True):
+            result = await run_variant_weighted(session, org_id=org_id, group=group)
+
+        assert result is None
+
     async def test_injects_degraded_evals_flag(self) -> None:
         session = AsyncMock()
         org_id = uuid.uuid4()
@@ -258,6 +283,24 @@ class TestRunVariantWeighted:
 
 
 @pytest.mark.asyncio
+class TestGetPromptDiffsMissingSnapshotId:
+    async def test_skips_variants_without_snapshot_id(self) -> None:
+        session = AsyncMock()
+        group = MagicMock()
+        group.variants = [
+            {"name": "variant-without-sid"},
+            {"name": "variant-with-sid", "snapshot_id": str(uuid.uuid4())},
+        ]
+
+        exec_result = MagicMock()
+        exec_result.scalars.return_value = []
+        session.execute.return_value = exec_result
+
+        result = await get_prompt_diffs(session, group, base_snapshot_ids=[uuid.uuid4()])
+
+        assert result == []
+
+
 class TestGetPromptDiffs:
     async def test_returns_empty_when_no_snapshots(self) -> None:
         session = AsyncMock()

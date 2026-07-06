@@ -120,9 +120,8 @@ class TestRemyContextSourceServiceSetUserOverride:
         mock_session.execute.assert_called_once()
         stmt = mock_session.execute.call_args[0][0]
         compiled = str(stmt.compile(compile_kwargs={"literal_binds": True}))
-        assert "ON CONFLICT" in compiled
+        assert "FOR UPDATE" in compiled
         assert "product_docs" in compiled
-        assert "always_on" in compiled
 
 
 class TestRemyContextSourceServiceSetOrgDefault:
@@ -138,14 +137,13 @@ class TestRemyContextSourceServiceSetOrgDefault:
         mock_session: AsyncMock,
         org_id: uuid.UUID,
     ) -> None:
-        await service.set_org_default(org_id, "product_docs", "off")
+        await service.set_org_default(org_id, "product_docs", "disabled")
 
         mock_session.execute.assert_called_once()
         stmt = mock_session.execute.call_args[0][0]
         compiled = str(stmt.compile(compile_kwargs={"literal_binds": True}))
-        assert "ON CONFLICT" in compiled
+        assert "FOR UPDATE" in compiled
         assert "product_docs" in compiled
-        assert "off" in compiled
 
 
 class TestRemyContextSourceServiceResetUserOverrides:

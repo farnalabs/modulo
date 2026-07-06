@@ -7,6 +7,8 @@ import uuid
 from datetime import UTC, datetime, timedelta
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import httpx
+
 from modulo.core.reports.quality_report import (
     _fmt_delta,
     _format_eval_breakdown,
@@ -19,6 +21,73 @@ from modulo.core.reports.quality_report import (
     format_slack_message,
     generate_quality_report,
 )
+
+# ---------------------------------------------------------------------------
+# Shared fixtures
+# ---------------------------------------------------------------------------
+
+_REPORT_WITH_DATA = {
+    "period": {"start": "2026-06-25", "end": "2026-07-01"},
+    "summary": {"total_runs": 100, "avg_eval_pass_rate": 85.0, "total_cost_usd": 50.0},
+    "week_over_week": {
+        "runs_delta_pct": 10.0,
+        "eval_pass_rate_delta_pct": 5.0,
+        "cost_delta_pct": -3.0,
+        "previous_week_runs": 90,
+        "previous_week_avg_pass_rate": 80.0,
+        "previous_week_cost_usd": 51.5,
+    },
+    "trend": [{"date": "2026-07-01", "run_count": 10, "eval_pass_rate": 85.0, "token_spend_usd": 5.0}],
+    "eval_breakdown": {
+        "current_week": {"total_evals": 50, "passed_evals": 40, "pass_rate": 80.0},
+        "previous_week": {"total_evals": 40, "passed_evals": 30, "pass_rate": 75.0},
+    },
+}
+
+_REPORT_EMPTY = {
+    "period": {"start": "2026-06-25", "end": "2026-07-01"},
+    "summary": {"total_runs": 0, "avg_eval_pass_rate": None, "total_cost_usd": 0.0},
+    "week_over_week": {
+        "runs_delta_pct": None,
+        "eval_pass_rate_delta_pct": None,
+        "cost_delta_pct": None,
+        "previous_week_runs": 0,
+        "previous_week_avg_pass_rate": None,
+        "previous_week_cost_usd": 0.0,
+    },
+    "trend": [],
+    "eval_breakdown": {
+        "current_week": {"total_evals": 0, "passed_evals": 0, "pass_rate": None},
+        "previous_week": {"total_evals": 0, "passed_evals": 0, "pass_rate": None},
+    },
+}
+
+_REPORT_DELIVERY = {
+    "period": {"start": "2026-06-25", "end": "2026-07-01"},
+    "summary": {"total_runs": 10, "avg_eval_pass_rate": 90.0, "total_cost_usd": 5.0},
+    "week_over_week": {
+        "runs_delta_pct": None,
+        "eval_pass_rate_delta_pct": None,
+        "cost_delta_pct": None,
+        "previous_week_runs": 0,
+        "previous_week_avg_pass_rate": None,
+        "previous_week_cost_usd": 0.0,
+    },
+    "trend": [],
+    "eval_breakdown": {
+        "current_week": {"total_evals": 0, "passed_evals": 0, "pass_rate": None},
+        "previous_week": {"total_evals": 0, "passed_evals": 0, "pass_rate": None},
+    },
+}
+
+
+def _mock_resp(is_success: bool = True, status_code: int = 200, text: str = "ok") -> MagicMock:
+    resp = MagicMock()
+    resp.is_success = is_success
+    resp.status_code = status_code
+    resp.text = text
+    return resp
+
 
 # ---------------------------------------------------------------------------
 # _pct_delta
@@ -218,46 +287,12 @@ class TestFormatTrendSection:
 
 class TestFormatSlackMessage:
     def test_returns_valid_json(self) -> None:
-        report = {
-            "period": {"start": "2026-06-25", "end": "2026-07-01"},
-            "summary": {"total_runs": 100, "avg_eval_pass_rate": 85.0, "total_cost_usd": 50.0},
-            "week_over_week": {
-                "runs_delta_pct": 10.0,
-                "eval_pass_rate_delta_pct": 5.0,
-                "cost_delta_pct": -3.0,
-                "previous_week_runs": 90,
-                "previous_week_avg_pass_rate": 80.0,
-                "previous_week_cost_usd": 51.5,
-            },
-            "trend": [{"date": "2026-07-01", "run_count": 10, "eval_pass_rate": 85.0, "token_spend_usd": 5.0}],
-            "eval_breakdown": {
-                "current_week": {"total_evals": 50, "passed_evals": 40, "pass_rate": 80.0},
-                "previous_week": {"total_evals": 40, "passed_evals": 30, "pass_rate": 75.0},
-            },
-        }
-        result = format_slack_message(report)
+        result = format_slack_message(_REPORT_WITH_DATA)
         parsed = json.loads(result)
         assert isinstance(parsed, list)
 
     def test_contains_all_expected_block_types(self) -> None:
-        report = {
-            "period": {"start": "2026-06-25", "end": "2026-07-01"},
-            "summary": {"total_runs": 100, "avg_eval_pass_rate": 85.0, "total_cost_usd": 50.0},
-            "week_over_week": {
-                "runs_delta_pct": 10.0,
-                "eval_pass_rate_delta_pct": 5.0,
-                "cost_delta_pct": -3.0,
-                "previous_week_runs": 90,
-                "previous_week_avg_pass_rate": 80.0,
-                "previous_week_cost_usd": 51.5,
-            },
-            "trend": [{"date": "2026-07-01", "run_count": 10, "eval_pass_rate": 85.0, "token_spend_usd": 5.0}],
-            "eval_breakdown": {
-                "current_week": {"total_evals": 50, "passed_evals": 40, "pass_rate": 80.0},
-                "previous_week": {"total_evals": 40, "passed_evals": 30, "pass_rate": 75.0},
-            },
-        }
-        result = format_slack_message(report)
+        result = format_slack_message(_REPORT_WITH_DATA)
         parsed = json.loads(result)
         types = [b["type"] for b in parsed]
         assert "header" in types
@@ -266,24 +301,7 @@ class TestFormatSlackMessage:
         assert "section" in types
 
     def test_contains_weekly_quality_report_header(self) -> None:
-        report = {
-            "period": {"start": "2026-06-25", "end": "2026-07-01"},
-            "summary": {"total_runs": 0, "avg_eval_pass_rate": None, "total_cost_usd": 0.0},
-            "week_over_week": {
-                "runs_delta_pct": None,
-                "eval_pass_rate_delta_pct": None,
-                "cost_delta_pct": None,
-                "previous_week_runs": 0,
-                "previous_week_avg_pass_rate": None,
-                "previous_week_cost_usd": 0.0,
-            },
-            "trend": [],
-            "eval_breakdown": {
-                "current_week": {"total_evals": 0, "passed_evals": 0, "pass_rate": None},
-                "previous_week": {"total_evals": 0, "passed_evals": 0, "pass_rate": None},
-            },
-        }
-        result = format_slack_message(report)
+        result = format_slack_message(_REPORT_EMPTY)
         assert "Weekly Quality Report" in result
 
 
@@ -291,203 +309,112 @@ class TestFormatSlackMessage:
 # deliver_quality_report
 # ---------------------------------------------------------------------------
 
+# Patch _REPORT_MAX_RETRIES down to 1 to avoid retry delays in tests
+_SCHEDULER_PATH = "modulo.core.reports.scheduler"
+
 
 class TestDeliverQualityReport:
     async def test_returns_success_for_2xx(self) -> None:
-        import httpx
-
         url = "https://hooks.slack.com/services/T1/B1/xxx"
-        report_data = {
-            "period": {"start": "2026-06-25", "end": "2026-07-01"},
-            "summary": {"total_runs": 10, "avg_eval_pass_rate": 90.0, "total_cost_usd": 5.0},
-            "week_over_week": {
-                "runs_delta_pct": None,
-                "eval_pass_rate_delta_pct": None,
-                "cost_delta_pct": None,
-                "previous_week_runs": 0,
-                "previous_week_avg_pass_rate": None,
-                "previous_week_cost_usd": 0.0,
-            },
-            "trend": [],
-            "eval_breakdown": {
-                "current_week": {"total_evals": 0, "passed_evals": 0, "pass_rate": None},
-                "previous_week": {"total_evals": 0, "passed_evals": 0, "pass_rate": None},
-            },
-        }
         recipient_config = {"webhook_urls": [url]}
 
-        with patch.object(httpx, "AsyncClient") as mock_client_cls:
+        with (
+            patch(f"{_SCHEDULER_PATH}._REPORT_MAX_RETRIES", 1),
+            patch.object(httpx, "AsyncClient") as mock_client_cls,
+        ):
             mock_client = AsyncMock()
             mock_client_cls.return_value.__aenter__.return_value = mock_client
-            mock_response = MagicMock()
-            mock_response.is_success = True
-            mock_response.status_code = 200
-            mock_response.text = "ok"
-            mock_client.post = AsyncMock(return_value=mock_response)
+            mock_client.post = AsyncMock(return_value=_mock_resp())
 
-            results = await deliver_quality_report(report_data, recipient_config)
+            results = await deliver_quality_report(_REPORT_DELIVERY, recipient_config)
 
         assert len(results) == 1
         assert results[0]["status"] == "delivered"
         assert results[0]["status_code"] == 200
         assert results[0]["error"] is None
 
-    async def test_returns_failure_for_non_2xx(self) -> None:
-        import httpx
-
+    async def test_returns_failure_for_non_2xx_after_exhaustion(self) -> None:
         url = "https://hooks.slack.com/services/T1/B1/xxx"
-        report_data = {
-            "period": {"start": "2026-06-25", "end": "2026-07-01"},
-            "summary": {"total_runs": 10, "avg_eval_pass_rate": 90.0, "total_cost_usd": 5.0},
-            "week_over_week": {
-                "runs_delta_pct": None,
-                "eval_pass_rate_delta_pct": None,
-                "cost_delta_pct": None,
-                "previous_week_runs": 0,
-                "previous_week_avg_pass_rate": None,
-                "previous_week_cost_usd": 0.0,
-            },
-            "trend": [],
-            "eval_breakdown": {
-                "current_week": {"total_evals": 0, "passed_evals": 0, "pass_rate": None},
-                "previous_week": {"total_evals": 0, "passed_evals": 0, "pass_rate": None},
-            },
-        }
         recipient_config = {"webhook_urls": [url]}
 
-        with patch.object(httpx, "AsyncClient") as mock_client_cls:
+        with (
+            patch(f"{_SCHEDULER_PATH}._REPORT_MAX_RETRIES", 1),
+            patch.object(httpx, "AsyncClient") as mock_client_cls,
+        ):
             mock_client = AsyncMock()
             mock_client_cls.return_value.__aenter__.return_value = mock_client
-            mock_response = MagicMock()
-            mock_response.is_success = False
-            mock_response.status_code = 500
-            mock_response.text = "Internal Server Error " + "x" * 300
-            mock_client.post = AsyncMock(return_value=mock_response)
+            mock_client.post = AsyncMock(
+                return_value=_mock_resp(is_success=False, status_code=500, text="error")
+            )
 
-            results = await deliver_quality_report(report_data, recipient_config)
+            results = await deliver_quality_report(_REPORT_DELIVERY, recipient_config)
 
         assert len(results) == 1
         assert results[0]["status"] == "failed"
         assert results[0]["status_code"] == 500
 
     async def test_error_text_truncated_to_200_chars(self) -> None:
-        import httpx
-
         url = "https://hooks.slack.com/services/T1/B1/xxx"
-        report_data = {
-            "period": {"start": "2026-06-25", "end": "2026-07-01"},
-            "summary": {"total_runs": 10, "avg_eval_pass_rate": 90.0, "total_cost_usd": 5.0},
-            "week_over_week": {
-                "runs_delta_pct": None,
-                "eval_pass_rate_delta_pct": None,
-                "cost_delta_pct": None,
-                "previous_week_runs": 0,
-                "previous_week_avg_pass_rate": None,
-                "previous_week_cost_usd": 0.0,
-            },
-            "trend": [],
-            "eval_breakdown": {
-                "current_week": {"total_evals": 0, "passed_evals": 0, "pass_rate": None},
-                "previous_week": {"total_evals": 0, "passed_evals": 0, "pass_rate": None},
-            },
-        }
         recipient_config = {"webhook_urls": [url]}
 
-        with patch.object(httpx, "AsyncClient") as mock_client_cls:
+        with (
+            patch(f"{_SCHEDULER_PATH}._REPORT_MAX_RETRIES", 1),
+            patch.object(httpx, "AsyncClient") as mock_client_cls,
+        ):
             mock_client = AsyncMock()
             mock_client_cls.return_value.__aenter__.return_value = mock_client
-            mock_response = MagicMock()
-            mock_response.is_success = False
-            mock_response.status_code = 500
-            mock_response.text = "x" * 500
-            mock_client.post = AsyncMock(return_value=mock_response)
+            mock_client.post = AsyncMock(
+                return_value=_mock_resp(is_success=False, status_code=500, text="x" * 500)
+            )
 
-            results = await deliver_quality_report(report_data, recipient_config)
+            results = await deliver_quality_report(_REPORT_DELIVERY, recipient_config)
 
         assert len(results) == 1
         assert len(results[0]["error"]) == 200
 
     async def test_single_url_failure_does_not_block_others(self) -> None:
-        import httpx
-
         url1 = "https://hooks.slack.com/services/T1/B1/xxx"
         url2 = "https://hooks.slack.com/services/T1/B2/yyy"
-        report_data = {
-            "period": {"start": "2026-06-25", "end": "2026-07-01"},
-            "summary": {"total_runs": 10, "avg_eval_pass_rate": 90.0, "total_cost_usd": 5.0},
-            "week_over_week": {
-                "runs_delta_pct": None,
-                "eval_pass_rate_delta_pct": None,
-                "cost_delta_pct": None,
-                "previous_week_runs": 0,
-                "previous_week_avg_pass_rate": None,
-                "previous_week_cost_usd": 0.0,
-            },
-            "trend": [],
-            "eval_breakdown": {
-                "current_week": {"total_evals": 0, "passed_evals": 0, "pass_rate": None},
-                "previous_week": {"total_evals": 0, "passed_evals": 0, "pass_rate": None},
-            },
-        }
         recipient_config = {"webhook_urls": [url1, url2]}
 
-        with patch.object(httpx, "AsyncClient") as mock_client_cls:
+        with (
+            patch(f"{_SCHEDULER_PATH}._REPORT_MAX_RETRIES", 1),
+            patch.object(httpx, "AsyncClient") as mock_client_cls,
+        ):
             mock_client = AsyncMock()
             mock_client_cls.return_value.__aenter__.return_value = mock_client
+            mock_client.post = AsyncMock(
+                side_effect=[
+                    _mock_resp(is_success=False, status_code=500, text="fail"),
+                    _mock_resp(),
+                ]
+            )
 
-            resp1 = MagicMock()
-            resp1.is_success = False
-            resp1.status_code = 500
-            resp1.text = "fail"
-            resp2 = MagicMock()
-            resp2.is_success = True
-            resp2.status_code = 200
-            resp2.text = "ok"
-
-            mock_client.post = AsyncMock(side_effect=[resp1, resp2])
-
-            results = await deliver_quality_report(report_data, recipient_config)
+            results = await deliver_quality_report(_REPORT_DELIVERY, recipient_config)
 
         assert len(results) == 2
         assert results[0]["status"] == "failed"
         assert results[1]["status"] == "delivered"
 
     async def test_request_error_caught_per_url(self) -> None:
-        import httpx
-
         url1 = "https://hooks.slack.com/services/T1/B1/xxx"
         url2 = "https://hooks.slack.com/services/T1/B2/yyy"
-        report_data = {
-            "period": {"start": "2026-06-25", "end": "2026-07-01"},
-            "summary": {"total_runs": 10, "avg_eval_pass_rate": 90.0, "total_cost_usd": 5.0},
-            "week_over_week": {
-                "runs_delta_pct": None,
-                "eval_pass_rate_delta_pct": None,
-                "cost_delta_pct": None,
-                "previous_week_runs": 0,
-                "previous_week_avg_pass_rate": None,
-                "previous_week_cost_usd": 0.0,
-            },
-            "trend": [],
-            "eval_breakdown": {
-                "current_week": {"total_evals": 0, "passed_evals": 0, "pass_rate": None},
-                "previous_week": {"total_evals": 0, "passed_evals": 0, "pass_rate": None},
-            },
-        }
         recipient_config = {"webhook_urls": [url1, url2]}
 
-        with patch.object(httpx, "AsyncClient") as mock_client_cls:
+        with (
+            patch(f"{_SCHEDULER_PATH}._REPORT_MAX_RETRIES", 1),
+            patch.object(httpx, "AsyncClient") as mock_client_cls,
+        ):
             mock_client = AsyncMock()
             mock_client_cls.return_value.__aenter__.return_value = mock_client
-
             mock_client.post = AsyncMock(
                 side_effect=[
                     httpx.RequestError("Connection refused"),
-                    MagicMock(is_success=True, status_code=200, text="ok"),
+                    _mock_resp(),
                 ]
             )
 
-            results = await deliver_quality_report(report_data, recipient_config)
+            results = await deliver_quality_report(_REPORT_DELIVERY, recipient_config)
 
         assert len(results) == 2
         assert results[0]["status"] == "failed"
@@ -516,10 +443,7 @@ class TestGenerateQualityReport:
         session.begin = MagicMock(return_value=begin_cm)
 
         def _mock_one(**cols: object) -> MagicMock:
-            row = MagicMock()
-            for k, v in cols.items():
-                setattr(row, k, v)
-            return row
+            return MagicMock(**dict(cols.items()))
 
         def _daily_result() -> MagicMock:
             r = MagicMock()
@@ -548,12 +472,12 @@ class TestGenerateQualityReport:
             return r
 
         # Execution order in generate_quality_report:
-        # 1. _query_weekly_agg (current) → uses .one()
-        # 2. _query_weekly_agg (previous) → uses .one()
-        # 3. _query_eval_summary (current) → uses .one()
-        # 4. _query_eval_summary (previous) → uses .one()
-        # 5. Daily run count query → uses .all()
-        # 6. Daily eval rates query → uses .all()
+        # 1. _query_weekly_agg (current) -> uses .one()
+        # 2. _query_weekly_agg (previous) -> uses .one()
+        # 3. _query_eval_summary (current) -> uses .one()
+        # 4. _query_eval_summary (previous) -> uses .one()
+        # 5. Daily run count query -> uses .all()
+        # 6. Daily eval rates query -> uses .all()
         session.execute = AsyncMock(
             side_effect=[
                 _weekly_result(),  # current weekly
@@ -622,7 +546,7 @@ class TestGenerateQualityReport:
     async def test_missing_dates_in_trend_produce_zero_runs_and_none_pass_rate(self) -> None:
         org_id = uuid.uuid4()
         session = self._make_session(
-            daily_rows=[],  # No daily rows at all
+            daily_rows=[],
             daily_eval_rows=[],
             weekly_row={"run_count": 0, "total_spend": 0.0},
             eval_row={"total_evals": 0, "passed_evals": 0},

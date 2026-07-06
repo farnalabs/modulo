@@ -502,6 +502,11 @@ async def admin_get_org(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
         )
+    except SQLAlchemyError:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Database error while fetching org profile.",
+        )
 
     current_settings = org.settings_json or {}
     return OrgProfileResponse(
@@ -555,6 +560,11 @@ async def admin_update_org(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
         )
+    except SQLAlchemyError:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Database error while updating org profile.",
+        )
 
     current_settings = org.settings_json or {}
     return OrgProfileResponse(
@@ -595,6 +605,11 @@ async def admin_regenerate_api_key(
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
+        )
+    except SQLAlchemyError:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Database error while regenerating API key.",
         )
 
     return {"api_key": raw_key, "lookup_prefix": raw_key[3:11]}
@@ -1313,6 +1328,11 @@ async def request_org_deletion(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
         )
+    except SQLAlchemyError:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Database error while requesting org deletion.",
+        )
 
     export = result["export"]
     return DeletionRequestResponse(
@@ -1370,6 +1390,11 @@ async def confirm_org_deletion(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
         )
+    except SQLAlchemyError:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Database error while confirming org deletion.",
+        )
 
     return ConfirmDeletionResponse(
         message="Organisation has been permanently deleted.",
@@ -1408,6 +1433,11 @@ async def cancel_org_deletion(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
         )
+    except SQLAlchemyError:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Database error while cancelling org deletion.",
+        )
 
     return CancelDeletionResponse(**result)
 
@@ -1433,6 +1463,11 @@ async def export_org_data(
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
+        )
+    except SQLAlchemyError:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Database error while exporting org data.",
         )
 
     org_info = (bundle.get("organisation") or [{}])[0]
@@ -1492,6 +1527,11 @@ async def delete_org_immediate(
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
+        )
+    except SQLAlchemyError:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Database error while deleting org.",
         )
 
     return ConfirmDeletionResponse(

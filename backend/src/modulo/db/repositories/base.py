@@ -21,10 +21,10 @@ _MAX_PAGE_SIZE = 1000
 
 
 def extract_orm_entity(stmt: Select[Any]) -> type | None:
-    """Walk the statement's column descriptions to find the ORM entity.
+    """Return the first ORM entity from the statement's column descriptions.
 
-    Shared utility used by GenericRepository.apply_tenant_filter and
-    rls._inject_tenant_filter to avoid duplicating entity-detection logic.
+    Skips entries where ``entity`` is ``None`` or the raw ``object`` sentinel.
+    Returns ``None`` when no entity is found.
     """
     for desc in stmt.column_descriptions:
         entity = desc.get("entity")

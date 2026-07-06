@@ -15,7 +15,15 @@ logger = logging.getLogger(__name__)
 
 _VALID_SOURCE_MODES = {"always_on", "tool", "opt_in", "disabled"}
 
-_BUILTIN_DEFAULTS: dict[str, str] = RemyConfig().context_sources
+_BUILTIN_DEFAULTS: dict[str, str] = {
+    "page_context": "always_on",
+    "user_profile": "always_on",
+    "product_primer": "always_on",
+    "product_docs": "tool",
+    "integration_status": "tool",
+    "org_config": "tool",
+    "feature_overview": "tool",
+}
 
 
 class RemyContextSourceService:
@@ -44,7 +52,6 @@ class RemyContextSourceService:
             rows = list(result.scalars())
             return {r.source_key: r.source_mode for r in rows}
         except SQLAlchemyError:
-            await self._session.rollback()
             logger.exception("Failed to query context sources for org %s, user %s", org_id, user_id)
             return {}
 
@@ -61,6 +68,8 @@ class RemyContextSourceService:
     async def _upsert_context_source(
         self, org_id: uuid.UUID, source_key: str, source_mode: str, user_id: uuid.UUID | None
     ) -> None:
+        if not source_key:
+            raise ValueError("source_key must not be empty")
         if source_mode not in _VALID_SOURCE_MODES:
             raise ValueError(f"Invalid source_mode '{source_mode}'. Must be one of {sorted(_VALID_SOURCE_MODES)}")
         try:
@@ -69,13 +78,13 @@ class RemyContextSourceService:
                     RemyContextSource.organisation_id == org_id,
                     RemyContextSource.source_key == source_key,
                     RemyContextSource.user_id.is_(None),
-                )
+                ).with_for_update()
             else:
                 stmt = select(RemyContextSource).where(
                     RemyContextSource.organisation_id == org_id,
                     RemyContextSource.source_key == source_key,
                     RemyContextSource.user_id == user_id,
-                )
+                ).with_for_update()
             result = await self._session.execute(stmt)
             existing = result.scalar_one_or_none()
             if existing:

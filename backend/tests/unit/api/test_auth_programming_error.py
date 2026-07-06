@@ -10,7 +10,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from fastapi.testclient import TestClient
-from sqlalchemy.exc import ProgrammingError
+from sqlalchemy.exc import IntegrityError, ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.api.dependencies import _get_engine, get_db_session
@@ -119,9 +119,66 @@ class TestLoginProgrammingError:
         assert resp.status_code == 501
         assert "Run database migrations" in resp.json()["detail"]
 
+    def test_login_integrity_error_returns_409(self, client: TestClient) -> None:
+        exc = IntegrityError("mock", "mock", "mock")
+        mock_account = _make_mock_account()
+        with (
+            patch(
+                "modulo.api.routes.auth.get_account_by_email",
+                new=AsyncMock(return_value=mock_account),
+            ),
+            patch("modulo.api.routes.auth.authenticate_db_user", return_value=True),
+            patch(
+                "modulo.api.routes.auth.update_last_login",
+                new=AsyncMock(),
+            ),
+            patch(
+                "modulo.api.routes.auth.list_memberships_for_account",
+                new=AsyncMock(return_value=[_mock_membership()]),
+            ),
+            patch(
+                "modulo.api.routes.auth.create_family",
+                new=AsyncMock(side_effect=exc),
+            ),
+        ):
+            resp = client.post(
+                "/api/v1/auth/login",
+                json={"email": "admin@example.com", "password": "testpass"},
+            )
+        assert resp.status_code == 409
+        assert "already has an active session" in resp.json()["detail"]
+
+    def test_login_sqlalchemy_error_returns_503(self, client: TestClient) -> None:
+        exc = SQLAlchemyError("mock", "mock", "mock")
+        mock_account = _make_mock_account()
+        with (
+            patch(
+                "modulo.api.routes.auth.get_account_by_email",
+                new=AsyncMock(return_value=mock_account),
+            ),
+            patch("modulo.api.routes.auth.authenticate_db_user", return_value=True),
+            patch(
+                "modulo.api.routes.auth.update_last_login",
+                new=AsyncMock(side_effect=exc),
+            ),
+            patch(
+                "modulo.api.routes.auth.list_memberships_for_account",
+                new=AsyncMock(return_value=[_mock_membership()]),
+            ),
+            patch(
+                "modulo.api.routes.auth.create_family",
+                new=AsyncMock(return_value=_mock_family()),
+            ),
+        ):
+            resp = client.post(
+                "/api/v1/auth/login",
+                json={"email": "admin@example.com", "password": "testpass"},
+            )
+        assert resp.status_code == 503
+
 
 # --------------------------------------------------------------------------
-# Refresh — ProgrammingError on advance_sequence → 501
+# Refresh — ProgrammingError/SQLAlchemyError on advance_sequence → 501/503
 # --------------------------------------------------------------------------
 
 
@@ -152,9 +209,34 @@ class TestRefreshProgrammingError:
         assert resp.status_code == 501
         assert "Run database migrations" in resp.json()["detail"]
 
+    def test_refresh_sqlalchemy_error_returns_503(self, client: TestClient) -> None:
+        from modulo.auth.jwt import create_refresh_token
+
+        family_id = str(uuid.uuid4())
+        refresh_token = create_refresh_token(
+            "admin@example.com",
+            _VALID_32,
+            organisation_id=str(_ORG_ID),
+            account_id=str(_USER_ID),
+            org_role="admin",
+            token_family=family_id,
+            token_sequence=0,
+        )
+
+        exc = SQLAlchemyError("mock", "mock", "mock")
+        with patch(
+            "modulo.api.routes.auth.advance_sequence",
+            new=AsyncMock(side_effect=exc),
+        ):
+            resp = client.post(
+                "/api/v1/auth/refresh",
+                json={"refresh_token": refresh_token},
+            )
+        assert resp.status_code == 503
+
 
 # --------------------------------------------------------------------------
-# Logout — ProgrammingError on blacklist_family → 501 (cookies still cleared)
+# Logout — ProgrammingError/SQLAlchemyError on blacklist_family → 501/503
 # --------------------------------------------------------------------------
 
 
@@ -185,9 +267,34 @@ class TestLogoutProgrammingError:
         assert resp.status_code == 501
         assert "Run database migrations" in resp.json()["detail"]
 
+    def test_logout_sqlalchemy_error_returns_503(self, client: TestClient) -> None:
+        from modulo.auth.jwt import create_refresh_token
+
+        family_id = str(uuid.uuid4())
+        refresh_token = create_refresh_token(
+            "admin@example.com",
+            _VALID_32,
+            organisation_id=str(_ORG_ID),
+            account_id=str(_USER_ID),
+            org_role="admin",
+            token_family=family_id,
+            token_sequence=0,
+        )
+
+        exc = SQLAlchemyError("mock", "mock", "mock")
+        with patch(
+            "modulo.api.routes.auth.blacklist_family",
+            new=AsyncMock(side_effect=exc),
+        ):
+            resp = client.post(
+                "/api/v1/auth/logout",
+                json={"refresh_token": refresh_token},
+            )
+        assert resp.status_code == 503
+
 
 # --------------------------------------------------------------------------
-# Me — ProgrammingError on get_account_by_id → 501
+# Me — ProgrammingError/SQLAlchemyError on get_account_by_id → 501/503
 # --------------------------------------------------------------------------
 
 
@@ -214,6 +321,28 @@ class TestMeProgrammingError:
             )
         assert resp.status_code == 501
         assert "Run database migrations" in resp.json()["detail"]
+
+    def test_me_sqlalchemy_error_returns_503(self, client: TestClient) -> None:
+        from modulo.auth.jwt import create_access_token
+
+        access_token = create_access_token(
+            "admin@example.com",
+            _VALID_32,
+            organisation_id=str(_ORG_ID),
+            account_id=str(_USER_ID),
+            org_role="admin",
+        )
+
+        exc = SQLAlchemyError("mock", "mock", "mock")
+        with patch(
+            "modulo.api.routes.auth.get_account_by_id",
+            new=AsyncMock(side_effect=exc),
+        ):
+            resp = client.get(
+                "/api/v1/auth/me",
+                headers={"Authorization": f"Bearer {access_token}"},
+            )
+        assert resp.status_code == 503
 
 
 # --------------------------------------------------------------------------

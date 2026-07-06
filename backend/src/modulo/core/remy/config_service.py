@@ -23,7 +23,9 @@ def _normalize_uuids(items: list[Any] | None) -> list[uuid.UUID]:
                 result.append(uuid.UUID(item))
             elif isinstance(item, uuid.UUID):
                 result.append(item)
-        except (ValueError, AttributeError, TypeError):
+            else:
+                logger.warning("Skipping unexpected type in UUID list: %s (%s)", item, type(item).__name__)
+        except (ValueError, TypeError):
             logger.warning("Skipping invalid UUID in config access list: %s", item)
     return result
 
@@ -81,6 +83,8 @@ PERMISSION_MODE_PRESETS: dict[str, dict[str, str]] = {
 
 def apply_permission_mode_preset(mode: str, current_overrides: dict[str, str] | None = None) -> dict[str, str]:
     """Apply a permission mode preset. Overrides are only merged when mode is 'custom'."""
+    if mode not in PERMISSION_MODE_PRESETS:
+        logger.warning("Unknown permission mode '%s', treating as empty preset", mode)
     preset = dict(PERMISSION_MODE_PRESETS.get(mode, {}))
     if current_overrides and mode == "custom":
         preset.update(current_overrides)

@@ -8,7 +8,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from fastapi.testclient import TestClient
 
-from modulo.api.dependencies import _get_engine, get_db_session
+from modulo.api.dependencies import _get_engine, get_db_session, get_plan_context
 from modulo.api.main import app
 from modulo.auth.dependencies import get_current_user
 from modulo.auth.jwt import AuthenticatedPrincipal
@@ -76,6 +76,9 @@ def client(mock_session: AsyncMock) -> Generator[TestClient, None, None]:
         org_role="admin",
     )
 
+    mock_plan = MagicMock()
+    mock_plan.feature_enabled.return_value = True
+    app.dependency_overrides[get_plan_context] = lambda: mock_plan
     yield TestClient(app)
 
     app.dependency_overrides.clear()
@@ -96,6 +99,9 @@ def operator_client(mock_session: AsyncMock) -> Generator[TestClient, None, None
         org_role="operator",
     )
 
+    mock_plan = MagicMock()
+    mock_plan.feature_enabled.return_value = True
+    app.dependency_overrides[get_plan_context] = lambda: mock_plan
     yield TestClient(app)
 
     app.dependency_overrides.clear()
@@ -116,6 +122,9 @@ def runner_client(mock_session: AsyncMock) -> Generator[TestClient, None, None]:
         org_role="runner",
     )
 
+    mock_plan = MagicMock()
+    mock_plan.feature_enabled.return_value = True
+    app.dependency_overrides[get_plan_context] = lambda: mock_plan
     yield TestClient(app)
 
     app.dependency_overrides.clear()
@@ -136,6 +145,9 @@ def viewer_client(mock_session: AsyncMock) -> Generator[TestClient, None, None]:
         org_role="viewer",
     )
 
+    mock_plan = MagicMock()
+    mock_plan.feature_enabled.return_value = True
+    app.dependency_overrides[get_plan_context] = lambda: mock_plan
     yield TestClient(app)
 
     app.dependency_overrides.clear()

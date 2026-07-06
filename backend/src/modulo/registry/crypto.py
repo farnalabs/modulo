@@ -9,8 +9,9 @@ from __future__ import annotations
 
 import base64
 import logging
+import threading
 
-from cryptography.exceptions import InvalidSignature
+from cryptography.exceptions import InvalidSignature, UnsupportedAlgorithm
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import (
     Ed25519PrivateKey,
@@ -80,10 +81,19 @@ def sign(private_key_pem: str, data: bytes) -> str:
 
     Returns:
         Base64-encoded signature.
+
+    Raises:
+        TypeError: If the key is not an Ed25519 private key.
+        ValueError: If the PEM is malformed.
+        UnsupportedAlgorithm: If the algorithm is not supported.
     """
-    private_key = _load_private_key(private_key_pem)
-    sig = private_key.sign(data)
-    return base64.b64encode(sig).decode()
+    try:
+        private_key = _load_private_key(private_key_pem)
+        sig = private_key.sign(data)
+        return base64.b64encode(sig).decode()
+    except (TypeError, ValueError, UnsupportedAlgorithm) as exc:
+        logger.warning("Signing failed: %s", exc)
+        raise
 
 
 def _safe_base64_decode(signature: str) -> bytes | None:
@@ -91,7 +101,7 @@ def _safe_base64_decode(signature: str) -> bytes | None:
     try:
         return base64.b64decode(signature)
     except (TypeError, ValueError) as exc:
-        logger.debug("Invalid base64 signature: %s", exc)
+        logger.warning("Invalid base64 signature: %s", exc)
         return None
 
 
@@ -111,8 +121,8 @@ def verify(public_key_pem: str, data: bytes, signature: str) -> bool:
         return True
     except InvalidSignature:
         return False
-    except (TypeError, ValueError) as exc:
-        logger.debug("Signature verification failed: %s", exc)
+    except (TypeError, ValueError, UnsupportedAlgorithm) as exc:
+        logger.warning("Signature verification failed: %s", exc)
         return False
 
 
@@ -121,13 +131,16 @@ def verify(public_key_pem: str, data: bytes, signature: str) -> bool:
 # ---------------------------------------------------------------------------
 
 _trust_anchor: Ed25519PrivateKey | None = None
+_trust_anchor_lock = threading.Lock()
 
 
 def _get_trust_anchor() -> Ed25519PrivateKey:
-    """Return the module-level trust anchor, creating it if needed."""
+    """Return the module-level trust anchor, creating it if needed (thread-safe)."""
     global _trust_anchor
     if _trust_anchor is None:
-        _trust_anchor = Ed25519PrivateKey.generate()
+        with _trust_anchor_lock:
+            if _trust_anchor is None:
+                _trust_anchor = Ed25519PrivateKey.generate()
     return _trust_anchor
 
 
@@ -142,6 +155,9 @@ def sign_with_trust_anchor(public_key_pem: str) -> str:
 
     Returns:
         Base64-encoded signature of the public key.
+
+    Raises:
+        UnsupportedAlgorithm: If the signing algorithm is not supported.
     """
     anchor = _get_trust_anchor()
     sig = anchor.sign(public_key_pem.encode())
@@ -164,5 +180,11 @@ def verify_trust_anchor(
     Returns:
         True if the signature is valid, False otherwise.
     """
-    anchor_pem = trust_anchor_public_key_pem or get_trust_anchor_public_key_pem()
+    if trust_anchor_public_key_pem is None:
+        anchor_pem = get_trust_anchor_public_key_pem()
+    elif not trust_anchor_public_key_pem:
+        logger.warning("Empty trust anchor public key provided, falling back to dev anchor")
+        anchor_pem = get_trust_anchor_public_key_pem()
+    else:
+        anchor_pem = trust_anchor_public_key_pem
     return verify(anchor_pem, public_key_pem.encode(), signature)

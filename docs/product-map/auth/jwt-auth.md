@@ -99,9 +99,14 @@ WebSocket auth tokens, algorithm pinning, and SECRET_KEY entropy enforcement (PR
 
 ### Error Handling
 - [x] login() DB failure returns 501 Not Implemented with migration hint
+- [x] login() SQLAlchemyError returns 503 Service Unavailable
+- [x] login() IntegrityError on token family creation returns 409 Conflict
 - [x] refresh() DB failure returns 501 Not Implemented with migration hint
+- [x] refresh() SQLAlchemyError returns 503 Service Unavailable
 - [x] logout() DB failure returns 501 Not Implemented with migration hint
+- [x] logout() SQLAlchemyError returns 503 Service Unavailable
 - [x] me() DB failure returns 501 Not Implemented with migration hint
+- [x] me() SQLAlchemyError returns 503 Service Unavailable
 
 ## Edge Cases
 - [x] System admin without memberships can still log in (`requires_bootstrap=true`)
@@ -145,3 +150,12 @@ WebSocket auth tokens, algorithm pinning, and SECRET_KEY entropy enforcement (PR
 - Added 2 new edge cases (blacklisted family idempotent, login DB failure 501)
 - Added unit-tests frontmatter ref to new test file
 - Status: partial (9 known gaps remain)
+
+### 2026-07-08 — Cross-cutting QA (improve-architecture index 256)
+- Fixed CRITICAL: added SQLAlchemyError→503 catches to all 4 auth routes (login, refresh, logout, me) — connection/deadlock failures previously propagated as raw 500
+- Fixed CRITICAL: added IntegrityError→409 catch on login route (token family creation race)
+- Fixed MAJOR: corrected BDD feature file API paths from `/api/auth/` to `/api/v1/auth/` to match actual router prefix
+- Fixed MAJOR: `test_none_algorithm_rejected` now properly verifies decode-time rejection of `alg: none` tokens (manually crafted JWT bypasses python-jose encode-time validation)
+- Added 5 new tests in test_auth_programming_error.py (integrity error→409 on login, SQLAlchemyError→503 on login, refresh, logout, me)
+- Updated Error Handling section with 5 new [x] checkboxes
+- 9 existing tests + 5 new tests all pass

@@ -12,7 +12,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from fastapi.testclient import TestClient
 
-from modulo.api.dependencies import _get_engine, get_db_session
+from modulo.api.dependencies import _get_engine, get_db_session, get_plan_context
 from modulo.api.main import app
 from modulo.auth.dependencies import get_current_user
 from modulo.auth.jwt import AuthenticatedPrincipal
@@ -46,6 +46,9 @@ def client() -> Generator[TestClient, None, None]:
         account_id=MagicMock(),
         org_role="admin",
     )
+    mock_plan = MagicMock()
+    mock_plan.feature_enabled.return_value = True
+    app.dependency_overrides[get_plan_context] = lambda: mock_plan
     yield TestClient(app)
     app.dependency_overrides.clear()
 
@@ -141,6 +144,7 @@ class TestCorsNormalRequests:
         mock_pipeline.id = _pipe_id
         mock_pipeline.organisation_id = _org
         mock_pipeline.created_by = _user
+        mock_pipeline.account_id = _user
         mock_pipeline.name = "test"
         mock_pipeline.description = None
         mock_pipeline.visibility = "org"

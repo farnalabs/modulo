@@ -30,6 +30,33 @@ from modulo.model_backends.base import ModelBackendBase
 
 logger = logging.getLogger(__name__)
 
+__all__ = [
+    "PluginHealth",
+    "PluginManifest",
+    "PluginNotFoundError",
+    "PluginRegistry",
+    "get_plugin_registry",
+    "reset_plugin_registry",
+]
+
+_ENTRY_POINT_CONNECTORS = "modulo.connectors"
+_ENTRY_POINT_MODEL_BACKENDS = "modulo.model_backends"
+_ENTRY_POINT_GROUPS: tuple[str, ...] = (
+    _ENTRY_POINT_CONNECTORS,
+    _ENTRY_POINT_MODEL_BACKENDS,
+)
+
+_HLTH_LOADED = "Loaded"
+_HLTH_REGISTERED_IN_TREE = "Registered in-tree"
+_HLTH_METADATA_FOUND = "Package metadata found"
+_HLTH_PACKAGE_NOT_FOUND = "Package not found in installed packages"
+_HLTH_UNKNOWN_PLUGIN = "Unknown plugin"
+_HLTH_FAILED_LOAD = "Failed to load entry point"
+_HLTH_BUILD_FAILED = "Plugin builder raised an error"
+
+_CAP_CONNECTOR = "connector_type"
+_CAP_MODEL_BACKEND = "model_backend"
+
 
 class PluginNotFoundError(KeyError):
     """Raised when a plugin or builder is not found in the registry."""
@@ -50,7 +77,8 @@ def get_plugin_registry() -> PluginRegistry:
 def reset_plugin_registry() -> None:
     """Reset the cached singleton — useful for test teardown."""
     global _DISCOVERED
-    _DISCOVERED = None
+    with _DISCOVERED_LOCK:
+        _DISCOVERED = None
 
 
 @dataclass
@@ -90,18 +118,26 @@ class PluginRegistry:
     # ------------------------------------------------------------------
 
     def discover_plugins(self) -> list[PluginManifest]:
-        """Scan installed packages for ``modulo.connectors`` and ``modulo.model_backends``
-        entry points.
+        """Scan installed packages for entry points.
 
         Returns the list of newly discovered manifests.
         """
         discovered: list[PluginManifest] = []
-        with self._lock:
-            for group in ("modulo.connectors", "modulo.model_backends"):
-                for ep in importlib.metadata.entry_points(group=group):
-                    manifest = self._load_entry_point(ep, group)
-                    if manifest is not None:
-                        discovered.append(manifest)
+        try:
+            entries: list[tuple[str, importlib.metadata.EntryPoint]] = [
+                (group, ep)
+                for group in _ENTRY_POINT_GROUPS
+                for ep in importlib.metadata.entry_points(group=group)
+            ]
+        except Exception:
+            logger.exception("Failed to query entry points during plugin discovery")
+            return discovered
+
+        for group, ep in entries:
+            manifest = self._load_entry_point(ep, group)
+            if manifest is not None:
+                discovered.append(manifest)
+
         if discovered:
             ids = [p.PLUGIN_ID for p in discovered]
             logger.info("Discovered %d plugin(s): %s", len(discovered), ids)
@@ -109,6 +145,9 @@ class PluginRegistry:
 
     def _load_entry_point(self, ep: importlib.metadata.EntryPoint, group: str) -> PluginManifest | None:
         """Load an entry point and register its builder.
+
+        ``ep.load()`` runs outside the registry lock so that a slow or
+        hanging plugin import does not block concurrent readers.
 
         Returns a ``PluginManifest`` or ``None`` if the module could not be imported.
         """
@@ -120,38 +159,49 @@ class PluginRegistry:
         description = dist.metadata.get("Summary", "")
         version = dist.metadata.get("Version", "0.0.0")
 
-        existing = self._plugins.get(plugin_id)
-        if existing is not None:
-            manifest = existing
-        else:
-            manifest = PluginManifest(
-                PLUGIN_ID=plugin_id,
-                display_name=display_name,
-                description=description,
-                version=version,
-            )
-
         try:
             builder = ep.load()
-        except (ImportError, TypeError, AttributeError):
+        except (ImportError, TypeError, AttributeError, SyntaxError):
             logger.exception("Failed to load entry point %s from package %s", ep.name, plugin_id)
             detail = f"Failed to load entry point {ep.name}"
-            self._entry_point_errors[plugin_id] = detail
-            self._plugins[plugin_id] = manifest
-            self._health[plugin_id] = PluginHealth(ok=False, detail=detail)
+            with self._lock:
+                self._entry_point_errors[plugin_id] = detail
+                existing = self._plugins.get(plugin_id)
+                if existing is None:
+                    existing = PluginManifest(
+                        PLUGIN_ID=plugin_id,
+                        display_name=display_name,
+                        description=description,
+                        version=version,
+                    )
+                self._plugins[plugin_id] = existing
+                self._health[plugin_id] = PluginHealth(ok=False, detail=detail)
             return None
 
-        if group == "modulo.connectors":
-            self._connector_builders[ep.name] = builder
-            manifest.capabilities.add("connector_type")
-            logger.debug("Registered connector type '%s' from plugin %s", ep.name, plugin_id)
-        elif group == "modulo.model_backends":
-            self._backend_builders[ep.name] = builder
-            manifest.capabilities.add("model_backend")
-            logger.debug("Registered model backend '%s' from plugin %s", ep.name, plugin_id)
+        with self._lock:
+            self._entry_point_errors.pop(plugin_id, None)
+            existing = self._plugins.get(plugin_id)
+            if existing is not None:
+                manifest = existing
+            else:
+                manifest = PluginManifest(
+                    PLUGIN_ID=plugin_id,
+                    display_name=display_name,
+                    description=description,
+                    version=version,
+                )
 
-        self._plugins[plugin_id] = manifest
-        self._health[plugin_id] = PluginHealth(ok=True, detail="Loaded")
+            if group == _ENTRY_POINT_CONNECTORS:
+                self._connector_builders[ep.name] = builder
+                manifest.capabilities.add(_CAP_CONNECTOR)
+                logger.debug("Registered connector type '%s' from plugin %s", ep.name, plugin_id)
+            elif group == _ENTRY_POINT_MODEL_BACKENDS:
+                self._backend_builders[ep.name] = builder
+                manifest.capabilities.add(_CAP_MODEL_BACKEND)
+                logger.debug("Registered model backend '%s' from plugin %s", ep.name, plugin_id)
+
+            self._plugins[plugin_id] = manifest
+            self._health[plugin_id] = PluginHealth(ok=True, detail=_HLTH_LOADED)
         return manifest
 
     # ------------------------------------------------------------------
@@ -163,6 +213,8 @@ class PluginRegistry:
 
         Raises ``PluginNotFoundError`` if no plugin provides this connector type.
         """
+        if not isinstance(type_id, str):
+            raise TypeError("type_id must be a string")
         if not isinstance(config, dict):
             raise TypeError("config must be a dict")
         if not isinstance(creds, dict):
@@ -170,7 +222,11 @@ class PluginRegistry:
         builder = self._connector_builders.get(type_id)
         if builder is None:
             raise PluginNotFoundError(f"No plugin registered connector type {type_id!r}")
-        return builder(config, creds)
+        try:
+            return builder(config, creds)
+        except Exception:
+            logger.exception("Connector builder %s for type %s raised an error", builder.__name__, type_id)
+            raise PluginNotFoundError(f"Connector builder for type {type_id!r} failed") from None
 
     def build_model_backend(
         self, provider: str, model_id: str, api_key: str, **default_params: Any
@@ -179,6 +235,8 @@ class PluginRegistry:
 
         Raises ``PluginNotFoundError`` if no plugin provides this provider.
         """
+        if not isinstance(provider, str):
+            raise TypeError("provider must be a string")
         if not isinstance(model_id, str):
             raise TypeError("model_id must be a string")
         if not isinstance(api_key, str):
@@ -186,31 +244,50 @@ class PluginRegistry:
         builder = self._backend_builders.get(provider)
         if builder is None:
             raise PluginNotFoundError(f"No plugin registered model backend provider {provider!r}")
-        return builder(api_key=api_key, model_id=model_id, **default_params)
+        try:
+            return builder(api_key=api_key, model_id=model_id, **default_params)
+        except Exception:
+            logger.exception("Model backend builder %s for provider %s raised an error", builder.__name__, provider)
+            raise PluginNotFoundError(f"Model backend builder for provider {provider!r} failed") from None
 
     def register_connector_type(
         self, type_id: str, builder: Callable[..., ConnectorBase], manifest: PluginManifest
     ) -> None:
         """Explicitly register a connector type builder (e.g. from an in-tree module)."""
+        if not isinstance(type_id, str):
+            raise TypeError("type_id must be a string")
+        if not callable(builder):
+            raise TypeError("builder must be callable")
+        if not isinstance(manifest, PluginManifest):
+            raise TypeError("manifest must be a PluginManifest")
         with self._lock:
+            if type_id in self._connector_builders:
+                logger.warning("Overwriting existing connector type '%s' from plugin %s", type_id, manifest.PLUGIN_ID)
             self._connector_builders[type_id] = builder
-            self._finalize_registration(manifest, "connector_type")
-        logger.info("Manually registered connector type '%s' from plugin %s", type_id, manifest.PLUGIN_ID)
+            self._finalize_registration(manifest, _CAP_CONNECTOR)
 
     def register_model_backend(
         self, provider: str, builder: Callable[..., ModelBackendBase], manifest: PluginManifest
     ) -> None:
         """Explicitly register a model backend builder (e.g. from an in-tree module)."""
+        if not isinstance(provider, str):
+            raise TypeError("provider must be a string")
+        if not callable(builder):
+            raise TypeError("builder must be callable")
+        if not isinstance(manifest, PluginManifest):
+            raise TypeError("manifest must be a PluginManifest")
         with self._lock:
+            if provider in self._backend_builders:
+                logger.warning("Overwriting existing model backend '%s' from plugin %s", provider, manifest.PLUGIN_ID)
             self._backend_builders[provider] = builder
-            self._finalize_registration(manifest, "model_backend")
-        logger.info("Manually registered model backend '%s' from plugin %s", provider, manifest.PLUGIN_ID)
+            self._finalize_registration(manifest, _CAP_MODEL_BACKEND)
 
     def _finalize_registration(self, manifest: PluginManifest, capability: str) -> None:
         """Shared bookkeeping for registering a plugin's manifest and health."""
         manifest.capabilities.add(capability)
         self._plugins[manifest.PLUGIN_ID] = manifest
-        self._health[manifest.PLUGIN_ID] = PluginHealth(ok=True, detail="Registered in-tree")
+        self._entry_point_errors.pop(manifest.PLUGIN_ID, None)
+        self._health[manifest.PLUGIN_ID] = PluginHealth(ok=True, detail=_HLTH_REGISTERED_IN_TREE)
 
     # ------------------------------------------------------------------
     # Queries
@@ -218,29 +295,36 @@ class PluginRegistry:
 
     def list_plugins(self) -> dict[str, PluginManifest]:
         """Return all discovered plugin manifests keyed by PLUGIN_ID."""
-        return dict(self._plugins)
+        with self._lock:
+            return dict(self._plugins)
 
     def get_plugin(self, plugin_id: str) -> PluginManifest | None:
-        return self._plugins.get(plugin_id)
+        with self._lock:
+            return self._plugins.get(plugin_id)
 
     def has_connector_type(self, type_id: str) -> bool:
-        return type_id in self._connector_builders
+        with self._lock:
+            return type_id in self._connector_builders
 
     def has_model_backend(self, provider: str) -> bool:
-        return provider in self._backend_builders
+        with self._lock:
+            return provider in self._backend_builders
 
     @property
     def connector_types(self) -> frozenset[str]:
-        return frozenset(self._connector_builders)
+        with self._lock:
+            return frozenset(self._connector_builders)
 
     @property
     def backend_providers(self) -> frozenset[str]:
-        return frozenset(self._backend_builders)
+        with self._lock:
+            return frozenset(self._backend_builders)
 
     @property
     def entry_point_errors(self) -> dict[str, str]:
         """Return a copy of entry-point load errors keyed by plugin_id."""
-        return dict(self._entry_point_errors)
+        with self._lock:
+            return dict(self._entry_point_errors)
 
     # ------------------------------------------------------------------
     # Health
@@ -252,30 +336,42 @@ class PluginRegistry:
         Returns a dict of ``{plugin_id: PluginHealth}``.
         """
         if plugin_id is not None:
-            manifest = self._plugins.get(plugin_id)
-            if manifest is None:
-                return {plugin_id: PluginHealth(ok=False, detail="Unknown plugin")}
-            return {plugin_id: self._check_single(manifest)}
+            with self._lock:
+                manifest = self._plugins.get(plugin_id)
+                if manifest is None:
+                    return {plugin_id: PluginHealth(ok=False, detail=_HLTH_UNKNOWN_PLUGIN)}
+                cached_error = self._entry_point_errors.get(manifest.PLUGIN_ID)
+            health = self._check_single(manifest, cached_error)
+            with self._lock:
+                self._health[plugin_id] = health
+            return {plugin_id: health}
 
-        results: dict[str, PluginHealth] = {}
+        manifests: list[PluginManifest] = []
         with self._lock:
-            for pid, manifest in self._plugins.items():
-                results[pid] = self._check_single(manifest)
+            manifests = list(self._plugins.values())
+        results: dict[str, PluginHealth] = {}
+        for manifest in manifests:
+            with self._lock:
+                cached_error = self._entry_point_errors.get(manifest.PLUGIN_ID)
+            results[manifest.PLUGIN_ID] = self._check_single(manifest, cached_error)
+        with self._lock:
             self._health.update(results)
         return results
 
-    def _check_single(self, manifest: PluginManifest) -> PluginHealth:
+    def _check_single(self, manifest: PluginManifest, cached_error: str | None = None) -> PluginHealth:
         """Verify that the manifest's source package is still importable.
 
-        If the entry point failed to load at discovery time, that error
-        is preserved as the definitive health status.  Otherwise the
-        package's metadata is re-checked to detect uninstallation.
+        If the entry point failed to load at discovery time, ``cached_error``
+        is used as the definitive health status.  Otherwise the package's
+        metadata is re-checked to detect uninstallation.
         """
-        error_detail = self._entry_point_errors.get(manifest.PLUGIN_ID)
-        if error_detail:
-            return PluginHealth(ok=False, detail=error_detail)
+        if cached_error:
+            return PluginHealth(ok=False, detail=cached_error)
         try:
             importlib.metadata.metadata(manifest.PLUGIN_ID)
-            return PluginHealth(ok=True, detail="Package metadata found")
+            return PluginHealth(ok=True, detail=_HLTH_METADATA_FOUND)
         except importlib.metadata.PackageNotFoundError:
-            return PluginHealth(ok=False, detail="Package not found in installed packages")
+            return PluginHealth(ok=False, detail=_HLTH_PACKAGE_NOT_FOUND)
+        except Exception:
+            logger.exception("Unexpected error checking metadata for plugin %s", manifest.PLUGIN_ID)
+            return PluginHealth(ok=False, detail="Error checking plugin metadata")
