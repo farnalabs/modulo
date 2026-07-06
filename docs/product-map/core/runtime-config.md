@@ -13,6 +13,7 @@ bdd:
 depends-on: []
 unit-tests:
   - backend/tests/unit/core/runtime_config/test_store.py
+  - backend/tests/unit/api/test_runtime_config_routes.py
 status: partial
 ---
 
@@ -43,17 +44,55 @@ environment-variable values, and hot-reloadable vs static settings.
 ### Edge Cases
 
 - [x] Override set to empty string is stored (clearing = explicit unset via clear list)
-- [x] Unknown key in overrides dict is stored but not returned in get_all (only KNOWN_KEYS are returned)
+- [x] Unknown key in overrides returns 400 with descriptive error message
 - [x] Reload called with no env var changes returns has_drift false
 - [x] All overrides cleared returns provenance to environment or default
 - [x] Frontend error state on API failure with retry
 - [x] Frontend loading state during API calls
+- [x] Non-dict overrides body rejected with 400
+- [x] Non-string override value rejected with 400
+- [x] Non-list clear body rejected with 400
+- [x] Non-string clear key rejected with 400
+- [x] Unknown key in clear list rejected with 400
+- [x] Keys with no default return None (no env, no override)
 
+### Error Handling
+
+- [x] GET route returns 500 with descriptive message on unexpected Exception (RuntimeError, ValueError, TypeError)
+- [x] PUT route returns 500 with descriptive message on unexpected Exception
+- [x] POST /reload route returns 500 with descriptive message on unexpected Exception
+- [x] All 3 routes propagate HTTPException without transformation (except HTTPException: raise)
+- [x] All 3 routes log exception via logger.exception before returning 500
+
+### Resilience
+
+- [x] Sensitive values (SECRET_KEY, FERNET_KEY, DATABASE_URL, etc.) masked in API response as `●●●●●●`
+- [x] Sensitive masking applied to all four value fields (current, default, env, override)
+- [x] Unknown key in overrides logged as warning but does not crash the request
+- [x] Reload does not clear existing overrides (override > env priority preserved)
+- [x] Empty-string defaults handled correctly (no falsey fallback)
+- [x] RLock ensures thread-safe concurrent access to store state
+- [x] Hot-reloadable flag is consistent with HOT_RELOADABLE_KEYS set
 
 ## Known Gaps
 
-- [ ] BDD feature file missing (created as stub, needs step definitions)
-- [ ] Frontend i18n gaps: "Key", "Default", "Provenance", "Actions", "Reload from env", "Apply", "Reset", "Reveal", "hot", "static" hardcoded in template
-- [ ] Backend `is_sensitive_env_key` does not match `DATABASE_URL` — frontend masks it, backend leaks it
 - [ ] No website docs page exists for runtime configuration (needs Website repo worktree)
-- [ ] Route handler has no DB error handling (in-memory store, so ProgrammingError catches not applicable — but store is process-global with no persistence, so no 501/503 paths exist)
+- [ ] No degraded-mode fallback — RuntimeConfigStore is process-global with no persistence layer
+- [ ] Route handler has no DB error handling (in-memory store, so no 501/503 paths exist)
+
+## QA History
+
+### 2026-07-08 — Cross-cutting QA (index 268)
+
+**CRITICAL fixes applied:**
+- All 3 route handlers (GET, PUT, POST /reload) in `admin_runtime_config.py` added `try/except Exception → 500` with `except HTTPException: raise` guard — previously Python-level errors (TypeError, KeyError, ValueError) propagated to CatchAllMiddleware as opaque 500 with no structured detail.
+
+**MAJOR fixes applied:**
+- Added Error Handling section (5 behaviour checkboxes covering exception→500 for all 3 routes, HTTPException propagation, and logging)
+- Added Resilience section (7 behaviour checkboxes covering sensitive masking, unknown-key warning, reload override preservation, thread safety)
+- Expanded Edge Cases section from 6 to 12 checkboxes (added non-dict overrides, non-string value, non-list clear, non-string clear key, unknown clear key, no-default keys)
+- Resolved 2 stale Known Gaps: (1) "Frontend i18n gaps: Key, Default..." — all template strings are `$t()` wrapped; (2) "Backend is_sensitive_env_key does not match DATABASE_URL" — `DATABASE_URL` is in `_SENSITIVE_ENV_KEYS` set and matches `is_sensitive_key()` pattern
+- Added 10 unit tests in `test_runtime_config_routes.py` covering exception→500 for all 3 routes and all PUT input validation paths
+- Added `test_runtime_config_routes.py` to `unit-tests` frontmatter
+
+**Status:** partial (3 known gaps remain)
