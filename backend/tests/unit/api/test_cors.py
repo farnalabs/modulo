@@ -144,6 +144,7 @@ class TestCorsNormalRequests:
         mock_pipeline.id = _pipe_id
         mock_pipeline.organisation_id = _org
         mock_pipeline.created_by = _user
+        mock_pipeline.account_id = _user
         mock_pipeline.name = "test"
         mock_pipeline.description = None
         mock_pipeline.visibility = "org"
