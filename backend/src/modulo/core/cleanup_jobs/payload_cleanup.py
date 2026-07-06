@@ -13,7 +13,7 @@ _log = logging.getLogger(__name__)
 DEFAULT_RETENTION_DAYS = 30
 BATCH_SIZE = 500
 
-_TERMINAL_STATES = ("complete", "failed", "eval_failed", "cancelled")
+_TERMINAL_STATES: tuple[str, ...] = ("complete", "failed", "eval_failed", "cancelled")
 
 
 async def cleanup_retained_payloads(

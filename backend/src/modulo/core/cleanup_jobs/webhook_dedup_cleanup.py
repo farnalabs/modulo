@@ -12,17 +12,21 @@ from modulo.db.models.trigger_event import TriggerEvent
 from modulo.settings import get_settings
 
 try:
-    from celery import Task
+    from celery import Task  # type: ignore[import-untyped]
 except ImportError:
     import typing
 
     if typing.TYPE_CHECKING:
         from celery import Task
-    Task = object
+    else:
+        raise ImportError(
+            "Celery is required for modulo.cleanup.webhook_dedup. "
+            "Install it with: pip install celery"
+        ) from None
 
 _log = logging.getLogger(__name__)
 
-RETENTION_DAYS = 30
+DEFAULT_RETENTION_DAYS = 30
 BATCH_SIZE = 1000
 
 # ---------------------------------------------------------------------------
@@ -30,14 +34,19 @@ BATCH_SIZE = 1000
 # ---------------------------------------------------------------------------
 
 
-async def cleanup_old_webhook_events(db_session: AsyncSession) -> int:
-    """Delete webhook trigger events older than RETENTION_DAYS.
+async def cleanup_old_webhook_events(
+    db_session: AsyncSession,
+    retention_days: int = DEFAULT_RETENTION_DAYS,
+) -> int:
+    """Delete webhook trigger events older than *retention_days*.
 
     Uses a two-step select-then-delete pattern (matching the existing
     cleanup in ``TriggerEngine``) to safely batch-delete without
     holding long-lived row locks. Returns the number of deleted rows.
     """
-    cutoff = datetime.now(UTC) - timedelta(days=RETENTION_DAYS)
+    if retention_days < 1:
+        raise ValueError(f"retention_days must be >= 1, got {retention_days}")
+    cutoff = datetime.now(UTC) - timedelta(days=retention_days)
 
     result = await db_session.execute(
         select(TriggerEvent.id).where(TriggerEvent.created_at < cutoff).limit(BATCH_SIZE)
