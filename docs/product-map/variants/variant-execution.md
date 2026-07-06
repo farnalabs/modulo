@@ -37,7 +37,9 @@ Weighted random variant selection, run_context_overrides merging, quota enforcem
 - [x] `snapshot_id` accepted as both `str` and `uuid.UUID`
 - [x] `degraded_evals=true` injects `_degraded_evals: True` into the merged payload
 - [x] `trigger_type` defaults to `"manual"` for variant-triggered runs
-- [x] Run count incremented on the variant group after each successful run
+- [x] Run count incremented on the variant group after each successful run via `increment_run_count`
+- [x] `increment_run_count` uses `with_for_update()` on the variant group row for safe concurrent increment
+- [x] `run_variant_weighted` re-locks the variant group row with `with_for_update()` before quota check and run creation (prevents TOCTOU races)
 - [x] Response includes `run_id`, `variant_name`, and `merged_payload`
 - [x] RLS org context set on the endpoint via `set_rls_org`
 
@@ -73,6 +75,8 @@ Weighted random variant selection, run_context_overrides merging, quota enforcem
 - [x] 204 No Content on successful DELETE
 - [x] 429 on run_variant when pipeline concurrent run quota exceeded
 - [x] 429 when no variant selected or quota exceeded in run_variant_weighted
+- [x] 429 with "no variants configured" when variant group has empty variants list
+- [x] `with_for_update()` row lock prevents concurrent quota races in `run_variant_weighted` and `increment_run_count`
 
 ## Known Gaps
 
@@ -81,5 +85,5 @@ Weighted random variant selection, run_context_overrides merging, quota enforcem
 - PRD 8.19 specifies cancel/abandon variant endpoint — not implemented
 - No frontend exists for variant group creation or coverage signal UI (comparison view exists as VariantCompareView.vue)
 - No all-or-nothing N-variant quota pre-flight
-- No website docs page — stub exists at Website/src/docs/variant-execution.md
+- No website docs page for variant execution (variant-groups.md exists but no execution-specific page)
 - Integration tests skipped (all `@pytest.mark.skip`)
