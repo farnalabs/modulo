@@ -87,10 +87,10 @@ backend:
     failureThreshold: 2
 
   startupProbe:
-    enabled: false
+    enabled: true
     path: /healthz
     initialDelaySeconds: 10
-    periodSeconds: 5
+    periodSeconds: 10
     failureThreshold: 30
 
   # -- Additional environment variables (plain text)
@@ -248,6 +248,16 @@ secrets:
   DATABASE_URL: ""
   # -- External Redis URL (overrides embedded Redis)
   REDIS_URL: ""
+  # -- Admin password for basic auth
+  MODULO_ADMIN_PASSWORD: ""
+  # -- SCIM provisioning bearer token
+  MODULO_SCIM_TOKEN: ""
+  # -- Token that bypasses rate limiting (for internal services)
+  MODULO_RATELIMIT_BYPASS_TOKEN: ""
+  # -- Multi-user format: "user1:$2b$12$hash,user2:$2b$12$hash"
+  MODULO_USERS: ""
+  # -- Enterprise license key. Set to "" for community tier.
+  MODULO_LICENSE_KEY: ""
 
 # =============================================================================
 # ConfigMap (non-sensitive configuration)
@@ -256,8 +266,23 @@ configmap:
   data:
     CORS_ORIGINS: "*"
     MODULO_PUBLIC_URL: "http://modulo.local"
-    LOG_LEVEL: "INFO"
+    MODULO_LOG_LEVEL: "INFO"
     MODULO_ENV: "production"
+    MODULO_DB: "postgres"
+    MODULO_DEBUG: "false"
+    MODULO_TELEMETRY_ENABLED: "false"
+    MODULO_OTEL_SERVICE_NAME: "modulo"
+    MODULO_AUTH_RATE_LIMIT_ENABLED: "true"
+    MODULO_AUTH_MAX_ATTEMPTS: "10"
+    MODULO_AUTH_WINDOW_SECONDS: "60"
+    INACTIVITY_TIMEOUT_MINUTES: "480"
+    MODULO_SSE_MAX_CONNECTIONS_PER_ORG: "100"
+    MODULO_SSE_MAX_CONNECTIONS_PER_USER: "10"
+    MODULO_CSRF_ENABLED: "true"
+    MODULO_CSRF_EXEMPT_PATHS: "/api/v1/health,/api/v1/triggers,/api/v1/auth"
+    MODULO_PLUGIN_DISCOVERY: "true"
+    MODULO_MAX_LOCAL_CONCURRENCY: "2"
+    MODULO_SECRETS_BACKEND: "fernet"
 
 # =============================================================================
 # Network Policy
