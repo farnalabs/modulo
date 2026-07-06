@@ -1,6 +1,8 @@
 """GitLabConnector — async GitLab API connector via REST API v4."""
 
+import asyncio
 import base64
+import json
 from typing import Any
 from urllib.parse import quote
 
@@ -18,6 +20,23 @@ from modulo.connectors.base import (
 _GITLAB_API = "https://gitlab.com/api/v4"
 
 REQUIRED_SCOPES = frozenset({"read_api", "write_repository", "api"})
+
+# Retry/backoff configuration
+_RETRYABLE_STATUSES = frozenset({429, 502, 503, 504})
+_MAX_RETRIES = 3
+_BASE_DELAY = 1.0
+_MAX_DELAY = 30.0
+
+
+def _parse_retry_after(response: httpx.Response) -> float | None:
+    """Parse Retry-After header from GitLab API response."""
+    value = response.headers.get("Retry-After") or response.headers.get("retry-after")
+    if value:
+        try:
+            return float(value)
+        except (ValueError, TypeError):
+            pass
+    return None
 
 
 def _project_path(project_id: str) -> str:
@@ -70,24 +89,54 @@ class GitLabConnector(ConnectorBase):
             raise ValueError(f"Missing required filter {key!r} for GitLab resource {resource!r}")
 
     async def _call_api(self, method: str, path: str, **kwargs: Any) -> httpx.Response:
-        """Make an HTTP request with wrapped exception handling."""
-        async with self._client() as client:
+        """Call GitLab API with retry/backoff for retryable statuses.
+
+        Retries on 429, 502, 503, 504 with exponential backoff + jitter.
+        Wraps HTTP/network/parse errors as ValueError.
+        """
+        last_exc: Exception | None = None
+        for attempt in range(_MAX_RETRIES + 1):
             try:
-                r = await client.request(method, path, **kwargs)
-                r.raise_for_status()
-                return r
+                async with self._client() as client:
+                    r = await client.request(method, path, **kwargs)
+                    if r.status_code == 304:
+                        raise ValueError("GitLab API returned 304 Not Modified — resource unchanged")
+                    if r.status_code in _RETRYABLE_STATUSES and attempt < _MAX_RETRIES:
+                        retry_after = _parse_retry_after(r)
+                        delay = min(retry_after, _MAX_DELAY) if retry_after else min(_BASE_DELAY * (2 ** attempt), _MAX_DELAY)
+                        await asyncio.sleep(delay)
+                        continue
+                    r.raise_for_status()
+                    return r
             except httpx.HTTPStatusError as exc:
-                raise ValueError(
-                    f"GitLab API HTTP {exc.response.status_code}: {exc.response.text[:200]}"
-                ) from exc
-            except (httpx.TimeoutException, httpx.ConnectError) as exc:
-                raise ValueError(f"GitLab API connection error: {exc}") from exc
+                last_exc = exc
+                if exc.response.status_code in _RETRYABLE_STATUSES and attempt < _MAX_RETRIES:
+                    retry_after = _parse_retry_after(exc.response)
+                    delay = min(retry_after, _MAX_DELAY) if retry_after else min(_BASE_DELAY * (2 ** attempt), _MAX_DELAY)
+                    await asyncio.sleep(delay)
+                    continue
+                raise ValueError(f"GitLab API HTTP {exc.response.status_code}: {exc.response.text[:200]}") from exc
+            except httpx.TimeoutException as exc:
+                last_exc = exc
+                if attempt < _MAX_RETRIES:
+                    delay = min(_BASE_DELAY * (2 ** attempt), _MAX_DELAY)
+                    await asyncio.sleep(delay)
+                    continue
+                raise ValueError("GitLab API timeout") from exc
+            except httpx.ConnectError as exc:
+                last_exc = exc
+                if attempt < _MAX_RETRIES:
+                    delay = min(_BASE_DELAY * (2 ** attempt), _MAX_DELAY)
+                    await asyncio.sleep(delay)
+                    continue
+                raise ValueError("GitLab API connection error") from exc
+        raise ValueError("GitLab API request failed after retries") from last_exc
 
     async def _parse_json(self, response: httpx.Response) -> dict[str, Any]:
         """Safely parse JSON response, wrapping decode errors."""
         try:
             return response.json()
-        except Exception as exc:
+        except json.JSONDecodeError as exc:
             raise ValueError(f"GitLab API invalid response: {exc}") from exc
 
     @property
@@ -107,17 +156,15 @@ class GitLabConnector(ConnectorBase):
         try:
             async with self._client() as client:
                 r = await client.get("/user")
+                if r.status_code != 200:
+                    return HealthResult(ok=False, detail=f"HTTP {r.status_code}: {r.text[:200]}")
 
-            if r.status_code != 200:
-                return HealthResult(ok=False, detail=f"HTTP {r.status_code}: {r.text[:200]}")
+                try:
+                    user_info = r.json()
+                except json.JSONDecodeError:
+                    return HealthResult(ok=False, detail=f"Invalid JSON in /user response: {r.text[:200]}")
+                username = user_info.get("username", "")
 
-            try:
-                user_info = r.json()
-            except Exception:
-                return HealthResult(ok=False, detail=f"Invalid JSON in /user response: {r.text[:200]}")
-            username = user_info.get("username", "")
-
-            async with self._client() as client:
                 projects_r = await client.get("/projects", params={"per_page": 1})
                 if projects_r.status_code in (401, 403):
                     return HealthResult(ok=False, detail="Missing scopes: API access not granted")

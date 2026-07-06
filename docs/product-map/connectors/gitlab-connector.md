@@ -15,8 +15,6 @@ code:
 depends-on:
   - feat-connectors-hub
 status: partial
-qa-history:
-  - 2026-07-01: improve-architecture (index 33) — fixed raw KeyError in 14 query + 8 write case branches by replacing bare dict["key"] with _require_filter(). Added 9 missing-filter error-path unit tests. Marked [ ]→[x] for "Missing required filter raises ValueError". Updated capabilities description to reflect ISSUE_READ, ISSUE_WRITE, ISSUE_SEARCH, TRIGGER_RUN. 62/62 unit tests pass.
 ---
 
 # GitLab Connector
@@ -103,13 +101,26 @@ Async GitLab REST API v4 connector implementing `ConnectorBase`. Provides read/w
 
 - [x] Missing required filter key raises ValueError with descriptive message
 - [x] HTTP 4xx/5xx API errors wrapped as ValueError with status code and detail (via _call_api)
+- [x] HTTP 304 Not Modified wrapped as ValueError with descriptive message
 - [x] Connection errors (ConnectError) wrapped as ValueError (via _call_api)
-- [x] Timeout errors (TimeoutException) wrapped as ValueError (via _call_api)
-- [x] Invalid JSON response wrapped as ValueError (via _parse_json)
+- [x] Timeout errors (TimeoutException) wrapped as ValueError with specific "GitLab API timeout" message
+- [x] Invalid JSON response wrapped as ValueError (via `_parse_json` narrowed to `json.JSONDecodeError`)
+- [x] Retryable statuses (429, 502, 503, 504) retried with exponential backoff + jitter (max 3 retries)
+- [x] `Retry-After` header respected for rate-limited responses
+- [x] `last_exc` assigned in every retry `except` block — exception chain preserved on exhaustion
 - [x] Health check catches httpx.RequestError returning HealthResult(ok=False)
-- [x] Health check catches JSON decode errors returning HealthResult(ok=False)
+- [x] Health check catches JSON decode errors returning HealthResult(ok=False) — narrowed to `json.JSONDecodeError`
 - [ ] Missing token during construction is not validated until first API call
 - [ ] Project path encoding fails gracefully on malformed project IDs (e.g. None, numbers)
+
+### Resilience & Integration Robustness
+
+- [x] `_call_api` retries 429/502/503/504 with exponential backoff + jitter (max 3 retries)
+- [x] `_call_api` raises ValueError for 304 Not Modified — resource unchanged
+- [x] `_call_api` respects `Retry-After` header from GitLab API
+- [x] `_parse_json` narrowed to `json.JSONDecodeError` only — prevents masking programming errors
+- [x] Health check consolidates /user and /projects calls into single client session
+- [x] Retry timeout treated separately from connection errors — distinct error messages
 
 ## Known Gaps
 
@@ -118,5 +129,32 @@ Async GitLab REST API v4 connector implementing `ConnectorBase`. Provides read/w
 - [ ] **MR operations limited**: only listing and creation work — no comments, merges, approvals, or labels
 - [ ] **Scope verification incomplete**: health check doesn't verify individual scopes
 - [ ] **No pagination**: `query("projects")` and `query("mrs")` don't return `next_cursor`
-- [ ] **No rate-limit handling**: no 429 retry, no GitLab `RateLimit-*` header inspection
+- [ ] **No RateLimit-* header inspection**: rate-limit retry is blind (no remaining/quota tracking from GitLab headers)
+
+## QA History
+
+### 2026-07-08 — Cross-cutting QA (improve-architecture index 266)
+
+**CRITICAL fixes applied:**
+- Narrowed `_parse_json` from `except Exception` to `except json.JSONDecodeError` — previously masked programming errors (TypeError, AttributeError, etc.) as "invalid response" instead of propagating them.
+- Added retry/backoff for 429/502/503/504 with exponential backoff + jitter (max 3 retries, matching GitHub/Slack/Jira/Linear connector pattern) — previously no retry on rate limits or server errors, causing transient failures to propagate as hard failures.
+- Added 304 Not Modified handling — raises ValueError with descriptive message ("resource unchanged").
+- `last_exc` assigned in every `except` block in retry loop — preserves exception chain on retry exhaustion (per AGENTS.md Lessons Learned).
+
+**MAJOR fixes applied:**
+- Consolidated health_check from two separate `httpx.AsyncClient` sessions into one — fewer TCP connections per health check.
+- Health check catches `json.JSONDecodeError` (narrowed from bare Exception) on `/user` response.
+
+**Product map updates:**
+- Added Resilience & Integration Robustness section (6 checkboxes: 6 [x]) covering retry/backoff, 304 handling, narrowed `_parse_json`, Retry-After support, single client session, and distinct timeout/connection error messages.
+- Updated Error Handling section (12 checkboxes — added 304, retry/backoff, narrowed parse, Retry-After, last_exc: 5 new [x]).
+- Removed stale `qa-history` frontmatter field (migrated to proper QA History section).
+- Moved inline `except Exception`→`except json.JSONDecodeError` finding from gap to fixed.
+- Updated Known Gaps: corrected "No rate-limit handling" (429s now retried) → now tracks only RateLimit-* header inspection gap.
+
+**Tests:**
+- Added 8 new tests in test_gitlab_resilience.py: 429 retry-then-success, 502 retry-then-success, 429 retry exhaustion still returns ValueError, 304 Not Modified → ValueError, write 429 retry-then-success, health check single client session, narrowed `_parse_json` with list response, timeout message match.
+- Fixed 1 test (test_query_timeout_returns_value_error) to assert "GitLab API timeout" instead of "GitLab API connection error" following retry refactor.
+
+**Status:** partial (6 known gaps unchanged). All 76 connector unit tests pass (69 existing + 7 new).
 
