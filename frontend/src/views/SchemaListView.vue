@@ -26,10 +26,10 @@
         <table class="w-full text-left text-sm">
           <thead class="bg-muted/50">
             <tr>
-              <th class="px-4 py-3 font-medium">Name</th>
-              <th class="px-4 py-3 font-medium">Description</th>
-              <th class="px-4 py-3 font-medium">Status</th>
-              <th class="px-4 py-3 font-medium text-right">Actions</th>
+              <th class="px-4 py-3 font-medium">{{ $t('views.SchemaListView.name') }}</th>
+              <th class="px-4 py-3 font-medium">{{ $t('views.SchemaListView.description') }}</th>
+              <th class="px-4 py-3 font-medium">{{ $t('views.SchemaListView.status') }}</th>
+              <th class="px-4 py-3 font-medium text-right">{{ $t('views.SchemaListView.actions') }}</th>
             </tr>
           </thead>
           <tbody class="divide-y">
@@ -46,14 +46,14 @@
                   class="inline-flex items-center gap-1 rounded-full bg-destructive/10 px-2.5 py-0.5 text-xs font-medium text-destructive"
                 >
                   <span class="h-1.5 w-1.5 rounded-full bg-destructive" />
-                  Deprecated
+                  {{ $t('views.SchemaListView.deprecated') }}
                 </span>
                 <span
                   v-else
                   class="inline-flex items-center gap-1 rounded-full bg-success/10 px-2.5 py-0.5 text-xs font-medium text-success"
                 >
                   <span class="h-1.5 w-1.5 rounded-full bg-success" />
-                  Active
+                  {{ $t('views.SchemaListView.active') }}
                 </span>
               </td>
               <td class="px-4 py-3 text-right">
@@ -79,9 +79,9 @@
       </div>
 
       <div v-if="deprecateConfirmId" class="rounded-lg border border-destructive/50 bg-destructive/10 p-4">
-        <p class="text-sm font-medium text-destructive">Deprecate "{{ deprecateConfirmName }}"?</p>
+        <p class="text-sm font-medium text-destructive">{{ $t('views.SchemaListView.deprecate_confirm_title', { name: deprecateConfirmName }) }}</p>
         <p class="mt-1 text-sm text-destructive/80">
-          This schema will be marked as deprecated. Agents using it will still function, but it will no longer appear as active.
+          {{ $t('views.SchemaListView.deprecate_confirm_description') }}
         </p>
         <div class="mt-3 flex items-center gap-2">
           <button
@@ -90,14 +90,14 @@
             data-testid="schema-deprecate-confirm"
             @click="deprecateSchema"
           >
-            {{ deprecating ? 'Deprecating...' : 'Deprecate' }}
+            {{ deprecating ? $t('views.SchemaListView.deprecating') : $t('views.SchemaListView.deprecate') }}
           </button>
           <button
             class="rounded-lg border border-input bg-background px-4 py-2 text-sm font-medium hover:bg-accent"
             data-testid="schema-deprecate-cancel"
             @click="deprecateConfirmId = null"
           >
-            Cancel
+            {{ $t('views.SchemaListView.cancel') }}
           </button>
         </div>
         <div v-if="deprecateError" class="mt-2 text-sm text-destructive">{{ deprecateError }}</div>
@@ -108,12 +108,15 @@
 
 <script setup lang="ts">
 import { ref, onMounted } from 'vue'
+import { useI18n } from 'vue-i18n'
 import { api } from '../lib/api/client'
 import { formatApiError, type ProblemDetail } from '../lib/api/formatError'
 import type { components } from '../lib/api/client'
 import LoadingSpinner from '../components/shared/LoadingSpinner.vue'
 import ErrorAlert from '../components/shared/ErrorAlert.vue'
 import PageTabs from "../components/PageTabs.vue"
+
+const { t } = useI18n()
 
 type SchemaItem = components['schemas']['SchemaItem']
 
@@ -135,13 +138,13 @@ async function loadSchemas() {
     })
     if (err) {
       error.value = err && typeof err === 'object' && 'detail' in err
-        ? `Failed to load schemas: ${(err as ProblemDetail).detail}`
-        : `Failed to load schemas: ${formatApiError(err)}`
+        ? `${t('views.SchemaListView.failed_to_load_schemas')} ${(err as ProblemDetail).detail}`
+        : `${t('views.SchemaListView.failed_to_load_schemas')} ${formatApiError(err)}`
     } else if (data) {
       schemas.value = data.items
     }
   } catch (e: unknown) {
-    error.value = `Failed to load schemas: ${e instanceof Error ? e.message : String(e)}`
+    error.value = `${t('views.SchemaListView.failed_to_load_schemas')} ${e instanceof Error ? e.message : String(e)}`
   } finally {
     loading.value = false
   }

@@ -7,7 +7,7 @@
   <div class="flex h-[calc(100vh-3.5rem)]">
     <aside class="flex w-80 flex-col border-r bg-background">
       <div class="border-b p-4">
-        <h2 class="text-lg font-semibold">Schemas</h2>
+        <h2 class="text-lg font-semibold">{{ $t('views.SchemaEditorView.schemas') }}</h2>
         <div class="relative mt-2">
           <input
             v-model="searchQuery"
@@ -23,7 +23,7 @@
       <div class="flex-1 overflow-y-auto">
         <LoadingSpinner v-if="loadingSchemas" />
         <div v-else-if="schemas.length === 0" class="p-4 text-center text-sm text-muted-foreground">
-          No schemas yet.
+          {{ $t('views.SchemaEditorView.no_schemas_yet') }}
         </div>
         <template v-else>
           <div
@@ -52,22 +52,22 @@
           class="w-full rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90"
           @click="createNewSchema"
         >
-          + New Schema
+          {{ $t('views.SchemaEditorView.new_schema') }}
         </button>
       </div>
     </aside>
 
     <main class="flex-1 overflow-y-auto">
       <div v-if="!editingSchema" class="flex h-full items-center justify-center text-sm text-muted-foreground">
-        Select a schema or create a new one
+        {{ $t('views.SchemaEditorView.select_or_create') }}
       </div>
 
       <template v-else>
         <div class="space-y-6 p-6">
           <header class="flex items-center justify-between">
             <div>
-              <h1 class="text-2xl font-bold tracking-tight">{{ isNew ? 'New Schema' : 'Edit Schema' }}</h1>
-              <p class="mt-0.5 text-sm text-muted-foreground">{{ isNew ? 'Define a new schema' : schemaName }}</p>
+              <h1 class="text-2xl font-bold tracking-tight">{{ isNew ? $t('views.SchemaEditorView.new_schema_title') : $t('views.SchemaEditorView.edit_schema_title') }}</h1>
+              <p class="mt-0.5 text-sm text-muted-foreground">{{ isNew ? $t('views.SchemaEditorView.define_new_schema') : schemaName }}</p>
             </div>
             <div class="flex items-center gap-2">
               <button
@@ -76,20 +76,20 @@
                 class="rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
                 @click="saveSchema"
               >
-                {{ saving ? 'Saving...' : 'Save' }}
+                {{ saving ? $t('views.SchemaEditorView.saving') : $t('views.SchemaEditorView.save') }}
               </button>
               <button
                 data-testid="schema-editor-cancel"
                 class="rounded-lg border border-input bg-background px-4 py-2 text-sm font-medium hover:bg-accent"
                 @click="cancelEditing"
               >
-                Cancel
+                {{ $t('views.SchemaEditorView.cancel') }}
               </button>
             </div>
           </header>
 
           <div v-if="validationErrors.length > 0" class="rounded-lg border border-destructive/50 bg-destructive/10 p-4">
-            <p class="mb-2 text-sm font-medium text-destructive">Validation errors</p>
+            <p class="mb-2 text-sm font-medium text-destructive">{{ $t('views.SchemaEditorView.validation_errors') }}</p>
             <ul class="list-inside list-disc space-y-1 text-sm text-destructive/90">
               <li v-for="err in validationErrors" :key="err">{{ err }}</li>
             </ul>
@@ -106,10 +106,10 @@
           <div class="grid grid-cols-1 gap-6 xl:grid-cols-2">
             <div class="space-y-6">
               <section class="rounded-lg border bg-card p-6 shadow-sm">
-                <h2 class="mb-4 text-lg font-semibold">Schema Details</h2>
+                <h2 class="mb-4 text-lg font-semibold">{{ $t('views.SchemaEditorView.schema_details') }}</h2>
                 <div class="space-y-4">
                   <div>
-                    <label class="mb-1 block text-sm font-medium">Name</label>
+                    <label class="mb-1 block text-sm font-medium">{{ $t('views.SchemaEditorView.name') }}</label>
                     <input
                       v-model="schemaName"
                       type="text"
@@ -119,7 +119,7 @@
                     />
                   </div>
                   <div>
-                    <label class="mb-1 block text-sm font-medium">Description</label>
+                    <label class="mb-1 block text-sm font-medium">{{ $t('views.SchemaEditorView.description') }}</label>
                     <input
                       v-model="schemaDescription"
                       type="text"
@@ -129,7 +129,7 @@
                     />
                   </div>
                   <div>
-                    <label class="mb-1 block text-sm font-medium">Version</label>
+                    <label class="mb-1 block text-sm font-medium">{{ $t('views.SchemaEditorView.version') }}</label>
                     <input
                       v-model="schemaVersion"
                       type="text"
@@ -143,18 +143,18 @@
 
               <section class="rounded-lg border bg-card p-6 shadow-sm">
                 <div class="mb-4 flex items-center justify-between">
-                  <h2 class="text-lg font-semibold">Fields</h2>
+                  <h2 class="text-lg font-semibold">{{ $t('views.SchemaEditorView.fields') }}</h2>
                   <button
                     data-testid="schema-editor-add-field"
                     class="rounded-lg bg-primary px-3 py-1.5 text-xs font-medium text-primary-foreground hover:bg-primary/90"
                     @click="addField"
                   >
-                    + Add Field
+                    {{ $t('views.SchemaEditorView.add_field') }}
                   </button>
                 </div>
 
                 <div v-if="fields.length === 0" class="py-4 text-center text-sm text-muted-foreground">
-                  No fields defined. Add a field to build your schema.
+                  {{ $t('views.SchemaEditorView.no_fields') }}
                 </div>
 
                 <div class="space-y-3">
@@ -170,7 +170,7 @@
                           <button
                             class="rounded p-1 text-muted-foreground hover:bg-accent disabled:opacity-30"
                             :disabled="index === 0"
-                            :title="'Move up'"
+                            :title="$t('views.SchemaEditorView.move_up')"
                             data-testid="schema-editor-field-move-up"
                             @click="moveField(index, -1)"
                           >
@@ -179,7 +179,7 @@
                           <button
                             class="rounded p-1 text-muted-foreground hover:bg-accent disabled:opacity-30"
                             :disabled="index === fields.length - 1"
-                            :title="'Move down'"
+                            :title="$t('views.SchemaEditorView.move_down')"
                             data-testid="schema-editor-field-move-down"
                             @click="moveField(index, 1)"
                           >
@@ -190,7 +190,7 @@
 
                         <div class="grid grid-cols-2 gap-3">
                           <div>
-                            <label class="mb-1 block text-xs text-muted-foreground">Name</label>
+                            <label class="mb-1 block text-xs text-muted-foreground">{{ $t('views.SchemaEditorView.field_name') }}</label>
                             <input
                               v-model="field.name"
                               type="text"
@@ -200,7 +200,7 @@
                             />
                           </div>
                           <div>
-                            <label class="mb-1 block text-xs text-muted-foreground">Type</label>
+                            <label class="mb-1 block text-xs text-muted-foreground">{{ $t('views.SchemaEditorView.field_type') }}</label>
                             <select
                               v-model="field.type"
                               data-testid="schema-editor-field-type"
@@ -217,7 +217,7 @@
 
                         <div class="grid grid-cols-2 gap-3">
                           <div>
-                            <label class="mb-1 block text-xs text-muted-foreground">Description</label>
+                            <label class="mb-1 block text-xs text-muted-foreground">{{ $t('views.SchemaEditorView.field_description') }}</label>
                             <input
                               v-model="field.description"
                               type="text"
@@ -227,7 +227,7 @@
                             />
                           </div>
                           <div>
-                            <label class="mb-1 block text-xs text-muted-foreground">Default value</label>
+                            <label class="mb-1 block text-xs text-muted-foreground">{{ $t('views.SchemaEditorView.default_value') }}</label>
                             <input
                               v-model="field.defaultValue"
                               type="text"
@@ -246,7 +246,7 @@
                               data-testid="schema-editor-field-required"
                               class="rounded border-input text-primary focus:ring-primary"
                             />
-                            Required
+                            {{ $t('views.SchemaEditorView.required') }}
                           </label>
                         </div>
                       </div>
@@ -254,7 +254,7 @@
                       <button
                         class="shrink-0 rounded p-1 text-destructive hover:bg-destructive/10"
                         data-testid="schema-editor-field-remove"
-                        :title="'Remove field'"
+                        :title="$t('views.SchemaEditorView.remove_field')"
                         @click="removeField(index)"
                       >
                         <svg class="h-4 w-4" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 6h18"/><path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6"/><path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2"/></svg>
@@ -268,9 +268,9 @@
             <div class="space-y-6">
               <FeatureGate feature-name="schema_version_history" required-tier="team" show-disabled>
                 <section class="rounded-lg border bg-card p-6 shadow-sm">
-                  <h2 class="mb-4 text-lg font-semibold">Version History</h2>
+                  <h2 class="mb-4 text-lg font-semibold">{{ $t('views.SchemaEditorView.version_history') }}</h2>
                   <LoadingSpinner v-if="loadingVersions" />
-                  <p v-else-if="versions.length === 0" class="text-sm text-muted-foreground">No version history.</p>
+                  <p v-else-if="versions.length === 0" class="text-sm text-muted-foreground">{{ $t('views.SchemaEditorView.no_version_history') }}</p>
                   <div v-else class="space-y-2">
                     <div
                       v-for="version in versions"
@@ -282,7 +282,7 @@
                         <span
                           v-if="version.published"
                           class="rounded bg-success/10 px-1.5 py-0.5 text-[10px] font-medium text-success"
-                        >Published</span>
+                        >{{ $t('views.SchemaEditorView.published') }}</span>
                         <span class="text-xs text-muted-foreground">{{ formatDate(version.created_at) }}</span>
                       </div>
                       <button
@@ -290,7 +290,7 @@
                         class="rounded px-2 py-1 text-xs font-medium text-primary hover:bg-primary/10"
                         @click="restoreVersion(version)"
                       >
-                        Restore
+                        {{ $t('views.SchemaEditorView.restore') }}
                       </button>
                     </div>
                   </div>
@@ -298,11 +298,11 @@
               </FeatureGate>
 
               <section class="rounded-lg border bg-card p-6 shadow-sm">
-                <h2 class="mb-4 text-lg font-semibold">JSON Schema Preview</h2>
+                <h2 class="mb-4 text-lg font-semibold">{{ $t('views.SchemaEditorView.json_preview') }}</h2>
                 <div class="relative">
                   <button
                     class="absolute right-2 top-2 rounded p-1 text-muted-foreground hover:bg-accent"
-                    title="Copy to clipboard"
+                    :title="$t('views.SchemaEditorView.copy_to_clipboard')"
                     data-testid="schema-editor-copy-json"
                     @click="copyJsonPreview"
                   >
@@ -325,11 +325,15 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
+import { useI18n } from 'vue-i18n'
 import { api, getAccessToken } from '../lib/api/client'
+import { formatApiError, type ProblemDetail } from '../lib/api/formatError'
 import type { components } from '../lib/api/client'
 import LoadingSpinner from '../components/shared/LoadingSpinner.vue'
 import FeatureGate from '../components/FeatureGate.vue'
 import PageTabs from "../components/PageTabs.vue"
+
+const { t } = useI18n()
 
 type SchemaItem = components['schemas']['SchemaItem']
 
@@ -455,12 +459,12 @@ async function loadSchemas() {
       params: { query: { page: 1, page_size: 100 } },
     })
     if (error) {
-      saveError.value = `Failed to load schemas: ${error}`
+      saveError.value = `${t('views.SchemaEditorView.failed_to_load_schemas')} ${formatApiError(error)}`
     } else if (data) {
       schemas.value = data.items
     }
   } catch (e: unknown) {
-    saveError.value = `Failed to load schemas: ${e instanceof Error ? e.message : String(e)}`
+    saveError.value = `${t('views.SchemaEditorView.failed_to_load_schemas')} ${e instanceof Error ? e.message : String(e)}`
   } finally {
     loadingSchemas.value = false
   }
@@ -576,18 +580,18 @@ async function validateSchema(): Promise<boolean> {
   validationErrors.value = []
   const errors: string[] = []
 
-  if (!schemaName.value.trim()) errors.push('Schema name is required')
-  if (!schemaVersion.value.trim()) errors.push('Schema version is required')
-  if (fields.value.length === 0) errors.push('At least one field is required')
+  if (!schemaName.value.trim()) errors.push(t('views.SchemaEditorView.schema_name_required'))
+  if (!schemaVersion.value.trim()) errors.push(t('views.SchemaEditorView.schema_version_required'))
+  if (fields.value.length === 0) errors.push(t('views.SchemaEditorView.at_least_one_field'))
 
   const seen = new Set<string>()
   for (const field of fields.value) {
     if (!field.name.trim()) {
-      errors.push('All fields must have a name')
+      errors.push(t('views.SchemaEditorView.all_fields_must_have_name'))
       break
     }
     if (seen.has(field.name.trim())) {
-      errors.push(`Duplicate field name: "${field.name.trim()}"`)
+      errors.push(`${t('views.SchemaEditorView.duplicate_field_name')} "${field.name.trim()}"`)
     }
     seen.add(field.name.trim())
   }
@@ -643,7 +647,7 @@ async function saveSchema() {
         },
       })
       if (createErr) {
-        saveError.value = `Create failed: ${createErr}`
+        saveError.value = `${t('views.SchemaEditorView.create_failed')} ${formatApiError(createErr)}`
         return
       }
       if (!schemaData) return
@@ -663,11 +667,11 @@ async function saveSchema() {
         }),
       })
       if (!versionRes.ok) {
-        saveError.value = 'Schema created but version save failed'
+        saveError.value = t('views.SchemaEditorView.schema_created_version_failed')
         return
       }
 
-      saveSuccess.value = `Schema "${schemaData.name}" created.`
+      saveSuccess.value = `${t('views.SchemaEditorView.schema_created')} "${schemaData.name}"`
       await loadSchemas()
       selectedSchemaId.value = schemaData.id
       isNew.value = false
@@ -680,7 +684,7 @@ async function saveSchema() {
         },
       })
       if (updateErr) {
-        saveError.value = `Update failed: ${updateErr}`
+        saveError.value = `${t('views.SchemaEditorView.update_failed')} ${formatApiError(updateErr)}`
         return
       }
 
@@ -702,16 +706,16 @@ async function saveSchema() {
         }),
       })
       if (!versionRes.ok) {
-        saveError.value = 'Schema updated but version save failed'
+        saveError.value = t('views.SchemaEditorView.schema_updated_version_failed')
         return
       }
 
-      saveSuccess.value = `Schema "${schemaData?.name}" updated.`
+      saveSuccess.value = `${t('views.SchemaEditorView.schema_updated')} "${schemaData?.name}"`
       await loadSchemas()
       await loadVersions(selectedSchemaId.value)
     }
   } catch (e: unknown) {
-    saveError.value = `Save failed: ${e instanceof Error ? e.message : String(e)}`
+    saveError.value = `${t('views.SchemaEditorView.save_failed')} ${e instanceof Error ? e.message : String(e)}`
   } finally {
     saving.value = false
   }
