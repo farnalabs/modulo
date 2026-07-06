@@ -5,7 +5,7 @@
     <header class="flex items-center justify-between">
       <div>
         <h1 class="text-3xl font-bold tracking-tight">Triggers</h1>
-        <p class="mt-1 text-muted-foreground">Configure triggers that automatically kick off pipeline runs</p>
+        <p class="mt-1 text-muted-foreground">Automate pipeline execution with schedules (cron), webhooks, polling, or inter-pipeline signals. Each trigger launches a pipeline run when its conditions are met.</p>
       </div>
       <button
         data-testid="settings-triggers-create"
