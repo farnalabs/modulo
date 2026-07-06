@@ -14,7 +14,11 @@ export const usePlanStore = defineStore("plan", () => {
   const expiresAt = ref<string | null>(null);
   const orgId = ref<string | null>(null);
   const tierLabels = ref<Record<string, string>>({});
-  const tierRanks = ref<Record<string, number>>({});
+  const tierRanks = ref<Record<string, number>>({
+    community: 0,
+    team: 1,
+    enterprise: 2,
+  });
   const syncingIds = ref(new Set<string>());
   const unsubHandlers: (() => void)[] = [];
   let hasLoadedOnce = false;
