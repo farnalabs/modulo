@@ -255,6 +255,20 @@ class TestEvalCoverageProgrammingError:
         assert resp.status_code == 503
         assert "database" in resp.json()["detail"].lower()
 
+    def test_coverage_returns_500_on_unexpected_error(self, admin_client: TestClient) -> None:
+        session = AsyncMock()
+        begin_cm = AsyncMock()
+        begin_cm.__aenter__ = AsyncMock(side_effect=ValueError("unexpected"))
+        begin_cm.__aexit__ = AsyncMock(return_value=False)
+        session.begin = MagicMock(return_value=begin_cm)
+        bind_mock = MagicMock()
+        bind_mock.dialect.name = "postgresql"
+        session.get_bind = AsyncMock(return_value=bind_mock)
+        _override_session(session)
+        resp = admin_client.get(f"{self.URL}?pipeline_id={_PIPELINE_ID}")
+        assert resp.status_code == 500
+        assert "unexpected error" in resp.json()["detail"].lower()
+
 
 class TestListRunEvalsProgrammingError:
     URL = "/api/v1/runs"

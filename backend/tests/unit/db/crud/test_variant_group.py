@@ -6,6 +6,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from modulo.db.crud.variant_group import (
+    get_coverage_gaps,
     get_prompt_diffs,
     increment_run_count,
     pick_variant_weighted,
@@ -283,6 +284,105 @@ class TestRunVariantWeighted:
 
 
 @pytest.mark.asyncio
+@pytest.mark.asyncio
+class TestGetCoverageGaps:
+    async def test_returns_empty_when_no_gaps(self) -> None:
+        session = AsyncMock()
+        group = MagicMock()
+        group.pipeline_id = uuid.uuid4()
+        group.variants = [
+            {
+                "name": "covered",
+                "snapshot_id": str(uuid.uuid4()),
+                "eval_definition_ids": [str(uuid.uuid4())],
+            }
+        ]
+
+        exec_result = MagicMock()
+        exec_result.scalars.return_value = []
+        session.execute.return_value = exec_result
+
+        result = await get_coverage_gaps(session, group)
+        assert result == []
+
+    async def test_detects_missing_evals(self) -> None:
+        session = AsyncMock()
+        eval_id = uuid.uuid4()
+        group = MagicMock()
+        group.pipeline_id = uuid.uuid4()
+        group.variants = [
+            {
+                "name": "no-evals",
+                "snapshot_id": str(uuid.uuid4()),
+                "eval_definition_ids": [],
+            }
+        ]
+
+        mock_eval = MagicMock()
+        mock_eval.id = eval_id
+        exec_result = MagicMock()
+        exec_result.scalars.return_value = [mock_eval]
+        session.execute.return_value = exec_result
+
+        result = await get_coverage_gaps(session, group)
+        assert len(result) == 1
+        assert result[0]["variant"]["name"] == "no-evals"
+        assert str(eval_id) in result[0]["missing_evals"]
+
+    async def test_uses_provided_eval_def_ids(self) -> None:
+        session = AsyncMock()
+        group = MagicMock()
+        group.pipeline_id = uuid.uuid4()
+        eval_id = uuid.uuid4()
+        group.variants = [
+            {
+                "name": "partial",
+                "snapshot_id": str(uuid.uuid4()),
+                "eval_definition_ids": [str(eval_id)],
+            }
+        ]
+
+        result = await get_coverage_gaps(session, group, eval_def_ids=[eval_id])
+        assert result == []
+
+    async def test_reports_variant_with_partial_coverage(self) -> None:
+        session = AsyncMock()
+        group = MagicMock()
+        group.pipeline_id = uuid.uuid4()
+        eval_a = uuid.uuid4()
+        eval_b = uuid.uuid4()
+        group.variants = [
+            {
+                "name": "partial",
+                "snapshot_id": str(uuid.uuid4()),
+                "eval_definition_ids": [str(eval_a)],
+            }
+        ]
+
+        result = await get_coverage_gaps(session, group, eval_def_ids=[eval_a, eval_b])
+        assert len(result) == 1
+        assert result[0]["variant"]["name"] == "partial"
+        assert str(eval_b) in result[0]["missing_evals"]
+        assert str(eval_a) not in result[0]["missing_evals"]
+
+    async def test_handles_variant_without_eval_definition_ids_key(self) -> None:
+        session = AsyncMock()
+        group = MagicMock()
+        group.pipeline_id = uuid.uuid4()
+        eval_id = uuid.uuid4()
+        group.variants = [
+            {
+                "name": "no-ids-key",
+                "snapshot_id": str(uuid.uuid4()),
+            }
+        ]
+
+        result = await get_coverage_gaps(session, group, eval_def_ids=[eval_id])
+        assert len(result) == 1
+        assert result[0]["variant"]["name"] == "no-ids-key"
+        assert str(eval_id) in result[0]["missing_evals"]
+
+
 class TestGetPromptDiffsMissingSnapshotId:
     async def test_skips_variants_without_snapshot_id(self) -> None:
         session = AsyncMock()
