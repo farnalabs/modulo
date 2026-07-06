@@ -29,6 +29,7 @@ unit-tests:
   - backend/tests/unit/connector_hub/test_connector_hub.py
   - backend/tests/unit/connector_hub/test_traced_connector.py
   - backend/tests/unit/api/test_connectors_endpoint.py
+  - backend/tests/unit/api/test_connectors_programming_error.py
   - backend/tests/unit/connector_hub/test_advisory_lock.py
 code:
   - backend/src/modulo/core/connector_hub/
@@ -316,6 +317,28 @@ All connectors receive `_TracedConnector` wrapping at construction time. All use
 - [x] Used by schema inference to sample connector data for LLM-assisted schema generation
 - [x] Raises `ConnectorNotFoundError` for unknown connector IDs
 
+### Error Handling (CRUD API routes)
+
+All 5 CRUD routes in `connectors.py` have complete error handling chains:
+- [x] `list_connectors_endpoint` — ProgrammingError→501, SQLAlchemyError→503
+- [x] `create_connector_endpoint` — IntegrityError→409, ProgrammingError→501, SQLAlchemyError→503
+- [x] `get_connector_endpoint` — ProgrammingError→501, SQLAlchemyError→503, 404 on missing
+- [x] `update_connector_endpoint` — IntegrityError→409, ProgrammingError→501, SQLAlchemyError→503, 404 on missing
+- [x] `delete_connector_endpoint` — ProgrammingError→501, SQLAlchemyError→503, 404 on missing
+
+### Test Coverage (programming error paths)
+- [x] `test_create_connector_programming_error_returns_501`
+- [x] `test_create_connector_sqlalchemy_error_returns_503`
+- [x] `test_create_connector_integrity_error_returns_409`
+- [x] `test_list_connectors_programming_error_returns_501`
+- [x] `test_list_connectors_sqlalchemy_error_returns_503`
+- [x] `test_get_connector_programming_error_returns_501`
+- [x] `test_get_connector_sqlalchemy_error_returns_503`
+- [x] `test_update_connector_programming_error_returns_501`
+- [x] `test_update_connector_sqlalchemy_error_returns_503`
+- [x] `test_delete_connector_programming_error_returns_501`
+- [x] `test_delete_connector_sqlalchemy_error_returns_503`
+
 ## Known Gaps
 
 ### Resolved (this iteration)
@@ -323,6 +346,8 @@ All connectors receive `_TracedConnector` wrapping at construction time. All use
 - [x] ~~**`ConnectorACL` is constructed but never called**~~ — **This was incorrect.** ACL IS enforced via three mechanisms: (1) `_TracedConnector._enforce_acl()` called from `health_check()` (read), `query()` (read), and `write()` (write) at `__init__.py:288-289,304,318`; (2) `hub.get(cid, operation=...)` checks ACL before returning the connector at `__init__.py:178-179`; (3) `hub.sample()` checks "read" ACL at `__init__.py:202`.
 - [x] ~~**`GitLabConnector` has no BDD coverage**~~ — `gitlab_issues.feature` exists with real scenarios and step definitions.
 - [x] ~~**Status was `covered`**~~ — Changed to `partial`. Only 9 connector types were documented; 33+ undocumented types now added.
+- [x] ~~**Missing IntegrityError→409 catches on connector CRUD routes**~~ — Added to create and update endpoints. Both now return 409 on constraint violations instead of misleading 503.
+- [x] ~~**Missing test coverage for ProgrammingError→501 and SQLAlchemyError→503 on connector CRUD routes**~~ — Created `test_connectors_programming_error.py` with 11 tests covering all 5 routes.
 
 ### Remaining Gaps
 
@@ -336,3 +361,6 @@ All connectors receive `_TracedConnector` wrapping at construction time. All use
 - **Shell connector** in hub context passes `runtime_provider=None` — the connector cannot actually execute commands without a real provider; this is a partial initialisation.
 - **No BDD scenarios** for error-specific paths: `ConnectorNotFoundError`, path traversal, missing config fields, unsupported resources (ConnectorDecryptError has BDD coverage).
 - **CI Runner connectors** have no BDD coverage — no dedicated feature files for GitHub Actions CI or GitLab CI.
+
+### QA History
+- 2026-07-08: Cross-cutting QA (index 249). Fixed CRITICAL — added IntegrityError→409 catch to create_connector_endpoint and update_connector_endpoint (FK/constraint violations previously returned misleading 503). Fixed MAJOR — created `test_connectors_programming_error.py` with 11 tests covering ProgrammingError→501, SQLAlchemyError→503, and IntegrityError→409 for all 5 CRUD routes. Added Error Handling and Test Coverage sections to product map.
