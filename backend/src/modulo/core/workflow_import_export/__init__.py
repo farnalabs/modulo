@@ -202,6 +202,7 @@ async def export_pipeline_bundle(
                 "source_node_id": str(e.source_node_id),
                 "target_node_id": str(e.target_node_id),
                 "edge_type": e.edge_type,
+                "hitl_gate_config": e.hitl_gate_config,
             }
             for e in edges
         ]

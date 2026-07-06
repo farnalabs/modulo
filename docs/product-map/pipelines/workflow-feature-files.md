@@ -40,6 +40,7 @@ import it into another organisation with schema/connector/model backend binding.
 - [x] Bundle schema uses JSON format with `format_version`, `pipeline`, `agents`, `schemas`, `edges` keys (not YAML as in PRD)
 - [ ] Bundle declares `requires.connector_types` and `requires.abstract_schemas`
 - [x] Bundle embeds full schema definitions for self-containment
+- [x] Export preserves `hitl_gate_config` on edges (fixed in cross-cutting QA — was silently dropping all gate config)
 
 ### Import — Analysis
 
@@ -78,7 +79,7 @@ import it into another organisation with schema/connector/model backend binding.
 
 - [x] Pipeline name collision: imported with "(imported)" suffix, no silent overwrite
 - [x] Agent name collision: imported with "(imported)" suffix
-- [x] Two agents in same bundle sharing identical name — rejected pre-import with validation error listing duplicates
+- [x] Two agents in same bundle sharing identical name — warning emitted during analysis (added in cross-cutting QA)
 - [x] `suggest_import_name` appends suffix on collision, increments counter
   (`(imported) 2`, `(imported) 3`) on repeated collisions
 - [x] Name conflict resolution is case-sensitive — same string with different case is a distinct name
@@ -125,7 +126,7 @@ import it into another organisation with schema/connector/model backend binding.
 - [x] Abstract schema namespacing: unnamespaced in local use (collision is user's
   responsibility); `author/name` in v2 registry
 - [x] `owner_team_id` stripped on export (org-internal reference, meaningless outside source org)
-- [ ] `visibility` defaults to `org` on import regardless of source value
+- [x] `visibility` defaults to `org` on import regardless of source value (hardcoded in materialize_import, line 671)
 
 ### Error Handling (added in cross-cutting QA)
 
@@ -147,10 +148,21 @@ import it into another organisation with schema/connector/model backend binding.
 - [x] Export pipeline race condition fixed (single transaction)
 - [x] Concurrency: non-existent owner_team_id produces validation error, not cryptic FK violation
 - [ ] Import with already-deleted team produces clear validation error
+- [x] `hitl_gate_config` now preserved in edge export (fixed in cross-cutting QA)
+- [x] Duplicate agent name within bundle detected as warning during analysis (added in cross-cutting QA)
 
 ## QA History
 
 - 2026-07-05: Prodmap pipelines QA: Added depends-on (feat-pipelines-core, feat-pipelines-library). Added QA History section. Moved `confirm_import` account_id bug fix description from Known Gaps to QA History.
+- 2026-07-06: Cross-cutting QA on feat-pipelines-workflow-feature-files:
+  - Verified all export behaviours match code
+  - Verified all import analysis/resolution/binding behaviours match code
+  - Verified all ProgrammingError catches on library.py routes
+  - Fixed: `hitl_gate_config` was silently dropped during edge export — now exported
+  - Added: duplicate agent name within bundle warning in `_analyse_bundle`
+  - Verified: `visibility` hardcoded to `org` in `materialize_import`
+  - Known gaps confirmed: `requires.connector_types`/`requires.abstract_schemas` not implemented,
+    capability check not implemented, no prompt template review UI
 
 ## Known Gaps
 
@@ -169,5 +181,7 @@ import it into another organisation with schema/connector/model backend binding.
 - No BDD scenarios covering the edge/export-strip interaction for bundles with gates
 - No BDD scenarios for the ownership picker UI presentation before confirm
 - No BDD scenarios for workflow update / re-import flow
-- `visibility` defaults to `org` on import regardless of source value not verified in code
+- `visibility` defaults to `org` on import regardless of source value (verified — hardcoded in materialize_import)
 - No BDD scenarios for the import confirm endpoint covering error paths
+- No capability/connector_capability check on connector binding during import analysis — binding warns on unmatched type but does not check that the matched instance supports required operations
+- No BDD scenarios for the duplicate agent name warning within bundle
