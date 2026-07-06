@@ -1,7 +1,7 @@
 """Integration-level tests for registry protocol v2 endpoints — verify, publish, download.
 
 Covers the public_key_pem verify path, duplicate slug publish (last-write-wins),
-signature failure handling, and bundle integrity mismatch at the endpoint level.
+signature failure handling, bundle integrity mismatch, and SQLAlchemy error handling.
 """
 
 from __future__ import annotations
@@ -13,6 +13,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from fastapi.testclient import TestClient
+from sqlalchemy.exc import ProgrammingError, SQLAlchemyError
 
 from modulo.api.dependencies import _get_engine, get_db_session
 from modulo.api.main import app
@@ -185,3 +186,71 @@ class TestDownload:
         data = resp.json()
         assert data["integrity_ok"] is False
         assert data["verified"] is True
+
+
+class TestDownloadErrors:
+    def test_download_programming_error_returns_501(self, client: TestClient) -> None:
+        entry = _make_entry()
+        with (
+            patch("modulo.api.routes.registry.get_registry_primitive", return_value=entry),
+            patch("modulo.api.routes.registry.verify_primitive_signature", return_value=True),
+            patch("modulo.api.routes.registry.verify_bundle_integrity", return_value=True),
+            patch("modulo.api.routes.registry.set_rls_org"),
+            patch(
+                "modulo.api.routes.registry.create_library_primitive",
+                side_effect=ProgrammingError("stmt", {}, "table not found"),
+            ),
+        ):
+            resp = client.post(DOWNLOAD_URL)
+
+        assert resp.status_code == 501
+        assert "migrations" in resp.json()["detail"].lower()
+
+    def test_download_sqlalchemy_error_returns_503(self, client: TestClient) -> None:
+        entry = _make_entry()
+        with (
+            patch("modulo.api.routes.registry.get_registry_primitive", return_value=entry),
+            patch("modulo.api.routes.registry.verify_primitive_signature", return_value=True),
+            patch("modulo.api.routes.registry.verify_bundle_integrity", return_value=True),
+            patch("modulo.api.routes.registry.set_rls_org"),
+            patch(
+                "modulo.api.routes.registry.create_library_primitive",
+                side_effect=SQLAlchemyError("connection lost"),
+            ),
+        ):
+            resp = client.post(DOWNLOAD_URL)
+
+        assert resp.status_code == 503
+
+
+class TestVerifyErrors:
+    def test_verify_hex_programming_error_returns_501(self, client: TestClient) -> None:
+        with (
+            patch("modulo.api.routes.registry.get_registry_primitive", return_value=_make_entry()),
+            patch("modulo.api.routes.registry.get_publisher_status", return_value="verified"),
+            patch("modulo.api.routes.registry.crypto_verify_signature", return_value=True),
+            patch(
+                "modulo.api.routes.registry.db_get_publisher_by_key",
+                side_effect=ProgrammingError("stmt", {}, "table not found"),
+            ),
+            patch("modulo.api.routes.registry.set_rls_org"),
+        ):
+            resp = client.get(f"{VERIFY_URL}?public_key_hex={'ab' * 32}")
+
+        assert resp.status_code == 501
+        assert "migrations" in resp.json()["detail"].lower()
+
+    def test_verify_hex_sqlalchemy_error_returns_503(self, client: TestClient) -> None:
+        with (
+            patch("modulo.api.routes.registry.get_registry_primitive", return_value=_make_entry()),
+            patch("modulo.api.routes.registry.get_publisher_status", return_value="verified"),
+            patch("modulo.api.routes.registry.crypto_verify_signature", return_value=True),
+            patch(
+                "modulo.api.routes.registry.db_get_publisher_by_key",
+                side_effect=SQLAlchemyError("connection lost"),
+            ),
+            patch("modulo.api.routes.registry.set_rls_org"),
+        ):
+            resp = client.get(f"{VERIFY_URL}?public_key_hex={'ab' * 32}")
+
+        assert resp.status_code == 503

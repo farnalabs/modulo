@@ -454,8 +454,10 @@ async def publish_primitive(
         raise ValueError("invalid signing key hex") from None
 
     slug = f"{author}/{name}"
+    # Overwrite (last-write-wins) for the in-memory registry.
+    # A hosted production registry would use version pinning instead.
     if slug in _BUILTIN_REGISTRY:
-        raise ValueError(f"primitive already exists: {slug}")
+        logger.info("publish_primitive: overwriting existing entry %r", slug)
 
     entry = _build_entry(
         author=author,
