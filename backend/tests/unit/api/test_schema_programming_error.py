@@ -491,6 +491,42 @@ class TestSchemaFieldsEndpoint:
         assert resp.status_code == 503
 
 
+class TestSchemaInferExceptionGuard:
+    CONNECTOR_ID = str(uuid.UUID("00000000-0000-0000-0000-000000000099"))
+
+    def test_infer_unexpected_error_returns_500(self, client: TestClient) -> None:
+        mock_get = AsyncMock(side_effect=ValueError("unexpected processing error"))
+        with (
+            patch("modulo.api.routes.schemas.get_connector_instance", mock_get),
+            patch("modulo.api.routes.schemas.set_rls_org"),
+            patch("modulo.api.routes.schemas.create_secrets_backend"),
+        ):
+            resp = client.post(
+                "/api/v1/schemas/infer",
+                json={
+                    "connector_instance_id": self.CONNECTOR_ID,
+                    "sample_query": {"resource": "issues"},
+                },
+            )
+        assert resp.status_code == 500
+        assert "unexpected error" in resp.json()["detail"].lower()
+
+
+class TestSchemaGenerateExceptionGuard:
+    def test_generate_unexpected_error_returns_500(self, client: TestClient) -> None:
+        mock_list = AsyncMock(side_effect=TypeError("unexpected type error"))
+        with (
+            patch("modulo.api.routes.schemas.list_model_backends", mock_list),
+            patch("modulo.api.routes.schemas.set_rls_org"),
+        ):
+            resp = client.post(
+                "/api/v1/schemas/generate",
+                json={"description": "generate a product schema"},
+            )
+        assert resp.status_code == 500
+        assert "unexpected error" in resp.json()["detail"].lower()
+
+
 class TestSchemaMigrateDataErrors:
     SCHEMA_ID = str(uuid.UUID("00000000-0000-0000-0000-000000000099"))
     SCHEMA_TARGET_ID = str(uuid.UUID("00000000-0000-0000-0000-000000000100"))
