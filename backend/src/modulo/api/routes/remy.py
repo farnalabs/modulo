@@ -951,14 +951,20 @@ async def stream_chat(
                             if chunk.tool_call_chunks:
                                 for tc in chunk.tool_call_chunks:
                                     idx = tc.get("index", 0)
-                                    if idx not in tool_call_buffers:
+                                    buf = tool_call_buffers.get(idx)
+                                    if buf is None:
                                         tool_call_buffers[idx] = {
-                                            "id": tc.get("id", ""),
-                                            "name": tc.get("name", ""),
-                                            "args": tc.get("args", ""),
+                                            "id": tc.get("id", "") or "",
+                                            "name": tc.get("name", "") or "",
+                                            "args": tc.get("args", "") or "",
                                         }
                                     else:
-                                        tool_call_buffers[idx]["args"] += tc.get("args", "")
+                                        if tc.get("id"):
+                                            buf["id"] = tc["id"]
+                                        if tc.get("name"):
+                                            buf["name"] = tc["name"]
+                                        if tc.get("args"):
+                                            buf["args"] += tc["args"]
 
                     if await request.is_disconnected():
                         return
@@ -1126,12 +1132,11 @@ async def stream_chat(
                                 yield f"event: tool_call\ndata: {json.dumps(tool_results[-1])}\n\n"
 
                             if all(r.get("error") == "cancelled_by_user" for r in results):
-                                completed_count = sum(
-                                    1 for r in results if r.get("error") != "cancelled_by_user"
-                                )
-                                skipped_count = len(results) - completed_count
+                                skipped = len(results)
+                                s = "s" if skipped != 1 else ""
+                                summary = f"Action cancelled by user. {skipped} action{s} skipped."
                                 yield f"event: abort_summary\ndata: {json.dumps({
-                                    'completed': completed_count, 'skipped': skipped_count,
+                                    'completed': 0, 'skipped': skipped, 'summary': summary,
                                 })}\n\n"
                                 break
 
