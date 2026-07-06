@@ -236,6 +236,7 @@ import { ref, computed, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { useApi } from '../composables/useApi'
 import ErrorAlert from '../components/shared/ErrorAlert.vue'
+import { formatApiError } from '../lib/api/formatError'
 
 interface PipelineItem {
   id: string
@@ -294,7 +295,7 @@ async function loadPipelines() {
     const data = await get<PipelineListResponse>('/api/v1/pipelines?page_size=100')
     allPipelines.value = data.items || []
   } catch (e) {
-    error.value = e instanceof Error ? e.message : 'Failed to load pipelines'
+    error.value = formatApiError(e)
   } finally {
     loading.value = false
   }
@@ -358,7 +359,7 @@ async function triggerRun() {
     showRunDialog.value = false
     router.push({ name: 'run-detail', params: { id: result.id } })
   } catch (e) {
-    runError.value = e instanceof Error ? e.message : 'Failed to start run'
+    runError.value = formatApiError(e)
   } finally {
     running.value = false
   }
