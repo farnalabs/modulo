@@ -321,8 +321,8 @@ async function loadUsers() {
     if (data) {
       users.value = data.items
     }
-  } catch {
-    // Users list is non-critical
+  } catch (err) {
+    console.warn('Failed to load users:', err)
   }
 }
 

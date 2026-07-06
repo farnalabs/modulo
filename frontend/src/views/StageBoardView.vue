@@ -461,8 +461,8 @@ async function loadStages() {
   try {
     const result = await get<any>('/api/v1/stages')
     stages.value = (result.items || []).sort((a: any, b: any) => a.position - b.position)
-  } catch {
-    // Will show empty state
+  } catch (err) {
+    console.warn('Failed to load stages:', err)
   }
 }
 
@@ -470,8 +470,8 @@ async function loadPipelines() {
   try {
     const result = await get<any>('/api/v1/pipelines')
     allPipelines.value = result.items || []
-  } catch {
-    // Will show empty state
+  } catch (err) {
+    console.warn('Failed to load pipelines:', err)
   }
 }
 
@@ -479,8 +479,8 @@ async function loadTeams() {
   try {
     const result = await get<any>('/api/v1/teams')
     teams.value = result.items || []
-  } catch {
-    // Will show empty state
+  } catch (err) {
+    console.warn('Failed to load teams:', err)
   }
 }
 

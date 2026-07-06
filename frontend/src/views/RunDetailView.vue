@@ -296,8 +296,8 @@ async function copyShareSummary() {
     await navigator.clipboard.writeText(text)
     shareCopied.value = true
     setTimeout(() => { shareCopied.value = false }, 2000)
-  } catch {
-    // clipboard not available
+  } catch (err) {
+    console.warn('Clipboard write failed:', err)
   }
 }
 
@@ -322,8 +322,8 @@ async function copyText(text: string) {
     await navigator.clipboard.writeText(text)
     copied.value = true
     setTimeout(() => { copied.value = false }, 2000)
-  } catch {
-    // clipboard not available
+  } catch (err) {
+    console.warn('Clipboard write failed:', err)
   }
 }
 
@@ -382,8 +382,8 @@ async function copyPromptText() {
     await navigator.clipboard.writeText(selectedPrompt.value.prompt)
     promptCopied.value = true
     setTimeout(() => { promptCopied.value = false }, 2000)
-  } catch {
-    // clipboard not available
+  } catch (err) {
+    console.warn('Clipboard write failed:', err)
   }
 }
 
@@ -469,8 +469,8 @@ async function copyOutput() {
     await navigator.clipboard.writeText(text)
     outputCopied.value = true
     setTimeout(() => { outputCopied.value = false }, 2000)
-  } catch {
-    // clipboard not available
+  } catch (err) {
+    console.warn('Clipboard write failed:', err)
   }
 }
 

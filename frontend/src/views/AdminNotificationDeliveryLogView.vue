@@ -249,6 +249,7 @@
 <script setup lang="ts">
 import { ref, computed, onMounted } from 'vue'
 import { api } from '../lib/api/client'
+import { formatApiError } from '../lib/api/formatError'
 import type { components } from '../lib/api/client'
 import LoadingSpinner from '../components/shared/LoadingSpinner.vue'
 import ErrorAlert from '../components/shared/ErrorAlert.vue'
@@ -321,7 +322,7 @@ async function loadDeliveries(cursor?: string | null) {
       params: { query: params as any },
     })
     if (err) {
-      error.value = `Failed to load delivery logs: ${err}`
+      error.value = `Failed to load delivery logs: ${formatApiError(err)}`
     } else if (data) {
       items.value = data.items
       total.value = data.total
@@ -383,7 +384,7 @@ async function retryDelivery(entry: DeliveryLogEntry) {
       },
     )
     if (err) {
-      retryMessages.value[entry.id] = { type: 'error', text: `Retry failed: ${err}` }
+      retryMessages.value[entry.id] = { type: 'error', text: `Retry failed: ${formatApiError(err)}` }
     } else if (data) {
       if (data.success) {
         await loadDeliveries(currentCursor.value)
@@ -408,7 +409,7 @@ async function retryAllFailed() {
   try {
     const { data, error: err } = await api.POST('/api/v1/admin/notifications/deliveries/retry-all-failed', {})
     if (err) {
-      error.value = `Retry all failed: ${err}`
+      error.value = `Retry all failed: ${formatApiError(err)}`
     } else if (data) {
       await loadDeliveries(currentCursor.value)
       const msg = `Retried ${data.retried} deliver${data.retried === 1 ? 'y' : 'ies'}`

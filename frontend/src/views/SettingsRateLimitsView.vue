@@ -52,6 +52,7 @@
 <script setup lang="ts">
 import { ref, onMounted } from 'vue'
 import { api } from '../lib/api/client'
+import { formatApiError } from '../lib/api/formatError'
 import type { components } from '../lib/api/client'
 import LoadingSpinner from '../components/shared/LoadingSpinner.vue'
 import ErrorAlert from '../components/shared/ErrorAlert.vue'
@@ -69,7 +70,7 @@ async function loadRules() {
   try {
     const { data, error: err } = await api.GET('/api/v1/admin/rate-limits')
     if (err) {
-      loadError.value = `Failed to load rate limits: ${err}`
+      loadError.value = `Failed to load rate limits: ${formatApiError(err)}`
     } else if (data) {
       mode.value = data.mode
       rules.value = data.rules ?? []

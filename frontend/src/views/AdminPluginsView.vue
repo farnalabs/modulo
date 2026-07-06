@@ -169,6 +169,7 @@
 <script setup lang="ts">
 import { ref, reactive, onMounted } from 'vue'
 import { api } from '../lib/api/client'
+import { formatApiError } from '../lib/api/formatError'
 import LoadingSpinner from '../components/shared/LoadingSpinner.vue'
 import ErrorAlert from '../components/shared/ErrorAlert.vue'
 import FeatureGate from '../components/FeatureGate.vue'
@@ -201,8 +202,21 @@ function toggleExpand(id: string) {
   expanded[id] = !expanded[id]
 }
 
-function togglePlugin(id: string) {
-  activeStates[id] = activeStates[id] !== false ? false : true
+async function togglePlugin(id: string) {
+  const newState = activeStates[id] !== false ? false : true
+  activeStates[id] = newState
+  try {
+    const { error: err } = await (api as any).PUT(`/api/v1/plugins/${id}/toggle`, {
+      body: { active: newState }
+    })
+    if (err) {
+      activeStates[id] = !newState
+      error.value = `Failed to toggle plugin: ${formatApiError(err)}`
+    }
+  } catch (e: unknown) {
+    activeStates[id] = !newState
+    error.value = `Failed to toggle plugin: ${formatApiError(e)}`
+  }
 }
 
 async function loadPlugins() {
@@ -211,7 +225,7 @@ async function loadPlugins() {
   try {
     const { data, error: err } = await (api as any).GET('/api/v1/plugins')
     if (err) {
-      error.value = `Failed to load plugins: ${err}`
+      error.value = `Failed to load plugins: ${formatApiError(err)}`
     } else if (data) {
       plugins.value = data as PluginItem[]
       for (const p of data as PluginItem[]) {

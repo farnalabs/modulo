@@ -112,6 +112,7 @@
 <script setup lang="ts">
 import { ref, onMounted } from 'vue'
 import { api } from '../lib/api/client'
+import { formatApiError } from '../lib/api/formatError'
 import { usePlanStore } from '../stores/planStore'
 import FeatureGate from '../components/FeatureGate.vue'
 import LoadingSpinner from '../components/shared/LoadingSpinner.vue'
@@ -167,7 +168,7 @@ async function loadData() {
   try {
     const { data, error: err } = await (api as any).GET('/api/v1/admin/runs/retention')
     if (err) {
-      loadError.value = `Failed to load retention config: ${err}`
+      loadError.value = `Failed to load retention config: ${formatApiError(err)}`
     } else if (data) {
       const resp = data as RetentionConfig
       retentionDays.value = resp.retention_days
@@ -185,7 +186,7 @@ async function loadStorageInfo() {
   try {
     const { data, error: err } = await (api as any).GET('/api/v1/admin/runs/storage')
     if (err) {
-      storageError.value = `Failed to load storage info: ${err}`
+      storageError.value = `Failed to load storage info: ${formatApiError(err)}`
     } else if (data) {
       storageInfo.value = data as StorageInfo
     }
@@ -205,7 +206,7 @@ async function saveRetention() {
       body: { retention_days: retentionDays.value },
     })
     if (err) {
-      retentionSaveError.value = `Failed to save: ${err}`
+      retentionSaveError.value = `Failed to save: ${formatApiError(err)}`
     } else {
       retentionSaveSuccess.value = true
     }
@@ -232,7 +233,7 @@ async function executePurge() {
       body: { older_than_days: purgeAge.value },
     })
     if (err) {
-      purgeError.value = `Purge failed: ${err}`
+      purgeError.value = `Purge failed: ${formatApiError(err)}`
     } else if (data) {
       const resp = data as PurgeResult
       purgeResult.value = `Purge completed. ${resp.deleted_count} run(s) deleted.`

@@ -60,6 +60,7 @@
                 :data-testid="`admin-users-role-${u.id}`"
                 class="text-xs border border-input bg-background rounded-md px-2 py-1"
                 @change="updateRole(u)"
+                @focus="captureRole(u.org_role)"
               >
                 <option value="admin">Admin</option>
                 <option value="operator">Operator</option>
@@ -284,8 +285,13 @@ async function loadUsers() {
   }
 }
 
+const selectedRole = ref<string>('')
+function captureRole(role: string) {
+  selectedRole.value = role
+}
+
 async function updateRole(u: UserItem) {
-  const prevRole = u.org_role
+  const prevRole = selectedRole.value
   actionLoading.value[u.id] = true
   try {
     const data = await httpPut<UserItem>(`/api/v1/admin/users/${u.id}`, { org_role: u.org_role })
