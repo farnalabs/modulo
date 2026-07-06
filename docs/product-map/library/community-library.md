@@ -1,6 +1,6 @@
 ---
 id: feat-community-library
-prd: 15
+prd: 8.14
 delivery-tasks: []
 bdd:
   - backend/tests/bdd/features/library/browse.feature
@@ -93,8 +93,6 @@ See ADR 010 §2.
 - [x] **No auto-update toggle for community primitives** — the auto-update toggle only renders for items with `prim.forked_from`, which community primitives never have (they are in-memory constants, not DB rows).
 - [x] **Community contribution publish adds to both DB and in-memory cache** — `publish_contribution` calls `_update_community_cache` to add the published item to `_COMMUNITY_PRIMITIVES`, `_COMMUNITY_BY_ID`, and `_COMMUNITY_BY_SLUG`, so the in-memory cache stays consistent even across server restart warm-start.
 - [x] **Slug collision protection** — community `get_primitive_by_slug` returns the in-memory community match only after exhausting org DB and modulo in-memory lookups (`_MODULO_BY_SLUG.get(...) or _COMMUNITY_BY_SLUG.get(...)`), so an org-local primitive with the same slug takes priority.
-- [ ] **No pagination/count semantics documented for merged native+community lists** beyond the unit tests already listed — large community seed growth is untested.
-- [ ] **Community DB publish after server restart** — the in-memory cache is the primary mechanism. `_fetch_published_community_from_db` supplements it for warm-start scenarios but has no backfill into the in-memory cache: published items are only added to the in-memory cache at publish time, not on server restart. Items published between restarts won't appear in the in-memory list until another publish triggers cache refresh.
 
 ## Known Gaps
 
@@ -116,5 +114,21 @@ Tab labels ("Native Library", "Community"), community disclaimer paragraph, "Loa
 **Product map updated:**
 - Added Resilience & Integration Robustness section (5 checkboxes)
 - Updated Error Handling section to note SQLAlchemyError→503 coverage
+
+**Status:** partial (same 4 known gaps remain).
+
+### 2026-07-06 — Library product map QA
+
+**CRITICAL — Fixed `prd: 15` → `prd: 8.14`:**
+The `prd:` frontmatter field was pointing to `15` (Resolved Design Decisions) instead of `8.14` (Community Library PRD section
+§8.14). §15 only contains a single table row about community library scope — not the feature specification.
+
+**MAJOR — Removed duplicate unchecked Edge Cases:**
+Two `[ ]` items in the Edge Cases section (`No pagination/count semantics documented` and `Community DB publish after server
+restart`) were duplicates of the same items in Known Gaps. Removed from Edge Cases — gaps belong only in Known Gaps.
+
+**Product map updated:**
+- Corrected `prd:` reference from §15 to §8.14
+- Removed duplicate edge case entries that overlapped with Known Gaps
 
 **Status:** partial (same 4 known gaps remain).
