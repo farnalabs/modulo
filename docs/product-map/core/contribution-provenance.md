@@ -112,20 +112,20 @@ Cryptographic signing, verification, and fork tracking for community library pri
 
 ### Error handling
 
-- [ ] `verify_manifest()` returns `False` (not raises) on `InvalidSignature` — tested?
-- [ ] `verify_bundle_integrity()` comparison handles empty/mismatched strings
-- [ ] `revoke_publisher()` returns `False` on missing fingerprint (not raises)
-- [ ] `get_publisher_status()` returns `"community"` for unknown fingerprints (not raises)
-- [ ] `CommunityPrimitiveReadOnlyError` raised for MCP adapt of community primitives → 403
-- [ ] `ContributionInvalidTransitionError` for bad contribution status transitions
-- [ ] `ContributionNotFoundError` for missing primitives → 404
-- [ ] `ProgrammingError` caught in `get_primitive()` / `get_primitive_by_slug()` → returns `None` gracefully
-- [ ] Registry 404 for missing slug in get/pull/verify endpoints
-- [ ] Registry 403 for signature verification failure in v2 publish
-- [ ] Registry 400 for invalid Ed25519 PEM format in v2 publish
-- [ ] Registry 404 for publisher not found on revoke
-- [ ] Registry 404 for missing primitive in download endpoint
-- [ ] `MarketingError` (no DB) — registry endpoints do NOT catch `ProgrammingError` (correct, in-memory only)
+- [x] `verify_manifest()` returns `False` (not raises) on `InvalidSignature` — verified in `core/registry/__init__.py:149-152`
+- [x] `verify_bundle_integrity()` comparison handles empty/mismatched strings — verified at `core/registry/__init__.py:167-169`
+- [x] `revoke_publisher()` returns `False` on missing fingerprint (not raises) — verified at `core/registry/__init__.py:571-574`
+- [x] `get_publisher_status()` returns `"community"` for unknown fingerprints (not raises) — verified at `core/registry/__init__.py:586-588`
+- [x] `CommunityPrimitiveReadOnlyError` raised for MCP adapt of community primitives → 403 — verified in `library_service/__init__.py:1178-1179` + `routes/library.py:500-504`
+- [x] `ContributionInvalidTransitionError` for bad contribution status transitions — verified in `routes/contributions.py:117-118` → 409
+- [x] `ContributionNotFoundError` for missing primitives → 404 — verified in `routes/contributions.py:115-116`
+- [x] `ProgrammingError` caught in `get_primitive()` / `get_primitive_by_slug()` → returns `None` gracefully — verified in `library_service/__init__.py:1108-1113` and `:1148-1153`
+- [x] Registry 404 for missing slug in get/pull/verify endpoints — all four endpoints confirmed
+- [x] Registry 403 for signature verification failure in v2 publish — `routes/registry.py:386-390`
+- [x] Registry 400 for invalid Ed25519 PEM format in v2 publish — `routes/registry.py:397-402`
+- [x] Registry 404 for publisher not found on revoke — `routes/registry.py:591-593`
+- [x] Registry 404 for missing primitive in download endpoint — `routes/registry.py:249-253`
+- [x] Registry endpoints that are in-memory-only do not need `ProgrammingError` catches (correct, no DB dependency)
 
 ### BDD-tested scenarios
 
@@ -136,11 +136,11 @@ Cryptographic signing, verification, and fork tracking for community library pri
 ## Known Gaps
 
 ### Registry & signing
-- No BDD feature files on disk for `community_registry.feature`, `plugin_registry.feature`, `signing.feature` (step definitions exist as dead code; feature files are at `tests/features/` not `tests/bdd/features/`)
-- No frontend trust tier display (green/amber badges) or community warning flow
+- BDD feature files exist on disk (`tests/features/library/community_registry.feature`, `tests/features/plugins/plugin_registry.feature`), step definitions exist and reference correct paths — BUT `plugin_registry.feature` has `@awaiting-implementation` tags on most scenarios (discovery, detail, startup). `signing.feature` covers webhook HMAC signing only — there is no dedicated Ed25519 registry signing BDD feature.
+- No frontend trust tier display (green/amber badges) or community warning flow — confirmed missing; only `communityPrimitives` computed exists in `LibraryView.vue` without UI for it
 - No frontend ownership picker for copy-to-adapt
-- No Unit tests for `forked_from` constraints at the service layer (only integration test covers DB-level)
-- No API-layer Ed25519 verification test for downloaded primitives (mock only)
+- No unit tests for `forked_from` constraints at the service layer (only integration test in `test_initial_migration.py` covers DB-level trigger; BDD steps exist for forked_from assertions)
+- No API-layer Ed25519 verification integration test for downloaded primitives (unit tests use mock registry only)
 - Verified publisher program is v2 roadmap — not yet implemented
 
 ### Plugin registry
