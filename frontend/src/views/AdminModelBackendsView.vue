@@ -11,7 +11,7 @@
           data-testid="admin-model-backends-add"
           @click="openAddForm"
         >
-          Add Model Backend
+          {{ $t('views.AdminModelBackendsView.add_model_backend') }}
         </button>
       </header>
 
@@ -25,12 +25,12 @@
           <form @submit.prevent="createBackend">
             <div class="space-y-4">
               <div>
-                <label class="mb-1 block text-sm font-medium">Name</label>
+                <label class="mb-1 block text-sm font-medium">{{ $t('views.AdminModelBackendsView.name') }}</label>
                 <input
                   v-model="formData.name"
                   type="text"
                   class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm"
-                  placeholder="my-llm-backend"
+                  :placeholder="$t('views.AdminModelBackendsView.name_placeholder')"
                   data-testid="admin-model-backends-name-input"
                 />
               </div>
@@ -45,27 +45,25 @@
                 />
               </div>
               <div>
-                <label class="mb-1 block text-sm font-medium">Provider</label>
+                <label class="mb-1 block text-sm font-medium">{{ $t('views.AdminModelBackendsView.provider') }}</label>
                 <select
                   v-model="formData.provider"
                   class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm"
                   data-testid="admin-model-backends-provider-select"
                 >
-                  <option value="anthropic">Anthropic</option>
-                  <option value="openai">OpenAI</option>
-                  <option value="opencode">OpenCode</option>
+                  <option value="anthropic">{{ $t('views.AdminModelBackendsView.provider_anthropic') }}</option>
+                  <option value="openai">{{ $t('views.AdminModelBackendsView.provider_openai') }}</option>
+                  <option value="opencode">{{ $t('views.AdminModelBackendsView.provider_opencode') }}</option>
                   <option value="azure_openai">{{ $t('views.AdminModelBackendsView.azure_openai') }}</option>
-                  <option value="ollama">Ollama</option>
-                  <option value="groq">Groq</option>
-                  <option value="deepseek">DeepSeek</option>
-                  <option value="google">Google</option>
-                  <option value="mistral">Mistral</option>
-                  <option value="cohere">Cohere</option>
-                  <option value="together">Together</option>
-                  <option value="fireworks">Fireworks</option>
-                  <option value="replicate">Replicate</option>
-                  <option value="openrouter">OpenRouter</option>
-                  <option value="custom">Custom</option>
+                  <option value="ollama">{{ $t('views.AdminModelBackendsView.provider_ollama') }}</option>
+                  <option value="groq">{{ $t('views.AdminModelBackendsView.provider_groq') }}</option>
+                  <option value="deepseek">{{ $t('views.AdminModelBackendsView.provider_deepseek') }}</option>
+                  <option value="gemini">{{ $t('views.AdminModelBackendsView.provider_gemini') }}</option>
+                  <option value="mistral">{{ $t('views.AdminModelBackendsView.provider_mistral') }}</option>
+                  <option value="cohere">{{ $t('views.AdminModelBackendsView.provider_cohere') }}</option>
+                  <option value="togetherai">{{ $t('views.AdminModelBackendsView.provider_togetherai') }}</option>
+                  <option value="fireworks">{{ $t('views.AdminModelBackendsView.provider_fireworks') }}</option>
+                  <option value="openrouter">{{ $t('views.AdminModelBackendsView.provider_openrouter') }}</option>
                 </select>
               </div>
               <div v-if="showBaseUrl">
@@ -109,14 +107,14 @@
                 ></textarea>
               </div>
               <div>
-                <label class="mb-1 block text-sm font-medium">Visibility</label>
+                <label class="mb-1 block text-sm font-medium">{{ $t('views.AdminModelBackendsView.visibility') }}</label>
                 <select
                   v-model="formData.visibility"
                   class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm"
                   data-testid="admin-model-backends-visibility-select"
                 >
-                  <option value="org">Organisation</option>
-                  <option value="private">Private</option>
+                  <option value="org">{{ $t('views.AdminModelBackendsView.visibility_org') }}</option>
+                  <option value="private">{{ $t('views.AdminModelBackendsView.visibility_private') }}</option>
                 </select>
               </div>
               <div v-if="formError" class="text-sm text-destructive">{{ formError }}</div>
@@ -127,7 +125,7 @@
                   class="rounded-lg bg-primary px-4 py-2 text-sm font-semibold text-primary-foreground hover:brightness-110 disabled:opacity-50 transition-all"
                   data-testid="admin-model-backends-submit"
                 >
-                  {{ saving ? 'Creating...' : 'Create' }}
+                  {{ saving ? $t('views.AdminModelBackendsView.creating') : $t('views.AdminModelBackendsView.create') }}
                 </button>
                 <button
                   type="button"
@@ -135,7 +133,7 @@
                   data-testid="admin-model-backends-cancel"
                   @click="closeForm"
                 >
-                  Cancel
+                  {{ $t('views.AdminModelBackendsView.cancel') }}
                 </button>
               </div>
             </div>
@@ -145,7 +143,7 @@
         <div v-if="nativeBackends.length === 0" class="card p-8 text-center">
           <p class="text-lg font-medium">{{ $t('views.AdminModelBackendsView.no_model_backends_configured') }}</p>
           <p class="mt-1 text-sm text-muted-foreground">
-            Add a model backend to connect to an LLM provider.
+            {{ $t('views.AdminModelBackendsView.no_backends_description') }}
           </p>
         </div>
 
@@ -153,13 +151,13 @@
           <table class="w-full text-left text-sm">
             <thead class="bg-muted/50">
               <tr>
-                <th class="px-4 py-3 font-medium">Name</th>
-                <th class="px-4 py-3 font-medium">Provider</th>
+                <th class="px-4 py-3 font-medium">{{ $t('views.AdminModelBackendsView.name') }}</th>
+                <th class="px-4 py-3 font-medium">{{ $t('views.AdminModelBackendsView.provider') }}</th>
                 <th class="px-4 py-3 font-medium">{{ $t('views.AdminModelBackendsView.model_id') }}</th>
                 <th class="px-4 py-3 font-medium">{{ $t('views.AdminModelBackendsView.display_name') }}</th>
-                <th class="px-4 py-3 font-medium">Credentials</th>
-                <th class="px-4 py-3 font-medium">Visibility</th>
-                <th class="px-4 py-3 font-medium text-right">Actions</th>
+                <th class="px-4 py-3 font-medium">{{ $t('views.AdminModelBackendsView.credentials') }}</th>
+                <th class="px-4 py-3 font-medium">{{ $t('views.AdminModelBackendsView.visibility') }}</th>
+                <th class="px-4 py-3 font-medium text-right">{{ $t('views.AdminModelBackendsView.actions') }}</th>
               </tr>
             </thead>
             <tbody class="divide-y">
@@ -186,7 +184,7 @@
                       class="h-1.5 w-1.5 rounded-full"
                       :class="backend.has_credentials ? 'bg-success' : 'bg-muted-foreground'"
                     />
-                    {{ backend.has_credentials ? 'Configured' : 'Missing' }}
+                    {{ backend.has_credentials ? $t('views.AdminModelBackendsView.configured') : $t('views.AdminModelBackendsView.missing') }}
                   </span>
                 </td>
                 <td class="px-4 py-3 text-xs text-muted-foreground">
@@ -231,11 +229,11 @@
             <table class="w-full text-left text-sm">
               <thead class="bg-muted/50">
                 <tr>
-                  <th class="px-4 py-3 font-medium">Name</th>
-                  <th class="px-4 py-3 font-medium">Provider</th>
+                  <th class="px-4 py-3 font-medium">{{ $t('views.AdminModelBackendsView.name') }}</th>
+                  <th class="px-4 py-3 font-medium">{{ $t('views.AdminModelBackendsView.provider') }}</th>
                   <th class="px-4 py-3 font-medium">{{ $t('views.AdminModelBackendsView.model_id') }}</th>
-                  <th class="px-4 py-3 font-medium">Tier</th>
-                  <th class="px-4 py-3 font-medium text-right">Actions</th>
+                  <th class="px-4 py-3 font-medium">{{ $t('views.AdminModelBackendsView.tier') }}</th>
+                  <th class="px-4 py-3 font-medium text-right">{{ $t('views.AdminModelBackendsView.actions') }}</th>
                 </tr>
               </thead>
               <tbody class="divide-y">
@@ -288,7 +286,7 @@
           <form @submit.prevent="updateBackend">
             <div class="space-y-4">
               <div>
-                <label class="mb-1 block text-sm font-medium">Name</label>
+                <label class="mb-1 block text-sm font-medium">{{ $t('views.AdminModelBackendsView.name') }}</label>
                 <input
                   v-model="formData.name"
                   type="text"
@@ -334,14 +332,14 @@
                 ></textarea>
               </div>
               <div>
-                <label class="mb-1 block text-sm font-medium">Visibility</label>
+                <label class="mb-1 block text-sm font-medium">{{ $t('views.AdminModelBackendsView.visibility') }}</label>
                 <select
                   v-model="formData.visibility"
                   class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm"
                   data-testid="admin-model-backends-edit-visibility"
                 >
-                  <option value="org">Organisation</option>
-                  <option value="private">Private</option>
+                  <option value="org">{{ $t('views.AdminModelBackendsView.visibility_org') }}</option>
+                  <option value="private">{{ $t('views.AdminModelBackendsView.visibility_private') }}</option>
                 </select>
               </div>
               <div v-if="formError" class="text-sm text-destructive">{{ formError }}</div>
@@ -352,7 +350,7 @@
                   class="rounded-lg bg-primary px-4 py-2 text-sm font-semibold text-primary-foreground hover:brightness-110 disabled:opacity-50 transition-all"
                   data-testid="admin-model-backends-save"
                 >
-                  {{ saving ? 'Saving...' : 'Save' }}
+                  {{ saving ? $t('views.AdminModelBackendsView.saving') : $t('views.AdminModelBackendsView.save') }}
                 </button>
                 <button
                   type="button"
@@ -360,7 +358,7 @@
                   data-testid="admin-model-backends-edit-cancel"
                   @click="closeEditForm"
                 >
-                  Cancel
+                  {{ $t('views.AdminModelBackendsView.cancel') }}
                 </button>
               </div>
             </div>
@@ -368,7 +366,7 @@
         </div>
 
         <div v-if="deleteConfirmBackendId" class="rounded-lg border border-destructive/50 bg-destructive/10 p-4">
-          <p class="text-sm font-medium text-destructive">Delete "{{ deleteConfirmName }}"?</p>
+          <p class="text-sm font-medium text-destructive">{{ $t('views.AdminModelBackendsView.delete_confirm', { name: deleteConfirmName }) }}</p>
           <p class="mt-1 text-sm text-destructive/80">{{ $t('views.AdminModelBackendsView.this_action_cannot_be_undone') }}</p>
           <div class="mt-3 flex items-center gap-2">
             <button
@@ -377,14 +375,15 @@
               data-testid="admin-model-backends-delete-confirm"
               @click="deleteBackend"
             >
-              {{ deleting ? 'Deleting...' : 'Delete' }}
+              {{ deleting ? $t('views.AdminModelBackendsView.deleting') : $t('views.AdminModelBackendsView.delete') }}
             </button>
             <button
+              type="button"
               class="rounded-lg border border-input bg-background px-4 py-2 text-sm font-medium hover:bg-accent"
-              data-testid="admin-model-backends-delete-cancel"
-              @click="deleteConfirmBackendId = null"
+              data-testid="admin-model-backends-cancel"
+              @click="closeForm"
             >
-              Cancel
+              {{ $t('views.AdminModelBackendsView.cancel') }}
             </button>
           </div>
           <div v-if="deleteError" class="mt-2 text-sm text-destructive">{{ deleteError }}</div>
@@ -563,13 +562,13 @@ async function createBackend() {
       body: buildCreateBody() as any,
     })
     if (err) {
-      formError.value = String(err)
+      formError.value = formatApiError(err)
     } else if (data) {
       backends.value.push(data)
       closeForm()
     }
   } catch (e: unknown) {
-    formError.value = e instanceof Error ? e.message : String(e)
+    formError.value = formatApiError(e)
   } finally {
     saving.value = false
   }
@@ -585,7 +584,7 @@ async function updateBackend() {
       body: buildUpdateBody() as any,
     })
     if (err) {
-      formError.value = String(err)
+      formError.value = formatApiError(err)
     } else if (data) {
       const idx = backends.value.findIndex(b => b.id === editBackendId.value)
       if (idx >= 0) {
@@ -594,7 +593,7 @@ async function updateBackend() {
       closeEditForm()
     }
   } catch (e: unknown) {
-    formError.value = e instanceof Error ? e.message : String(e)
+    formError.value = formatApiError(e)
   } finally {
     saving.value = false
   }
@@ -616,13 +615,13 @@ async function deleteBackend() {
       params: { path: { backend_id: deleteConfirmBackendId.value } },
     })
     if (err) {
-      deleteError.value = String(err)
+      deleteError.value = formatApiError(err)
     } else if (response.status === 204 || response.ok) {
       backends.value = backends.value.filter(b => b.id !== deleteConfirmBackendId.value)
       deleteConfirmBackendId.value = null
     }
   } catch (e: unknown) {
-    deleteError.value = e instanceof Error ? e.message : String(e)
+    deleteError.value = formatApiError(e)
   } finally {
     deleting.value = false
   }
