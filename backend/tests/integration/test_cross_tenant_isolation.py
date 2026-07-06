@@ -47,22 +47,32 @@ async def _seed_org(db_engine: AsyncEngine, name: str) -> uuid.UUID:
 
 
 async def _seed_user(db_engine: AsyncEngine, org_id: uuid.UUID, email: str) -> uuid.UUID:
-    user_id = uuid.uuid4()
+    account_id = uuid.uuid4()
     async with db_engine.connect() as conn, conn.begin():
         await conn.execute(
             text(
-                "INSERT INTO users (id, organisation_id, email, display_name, "
-                "org_role, auth_provider, active, password_hash) "
-                "VALUES (:id, :oid, :email, :name, 'admin', 'local', true, 'hash')",
+                "INSERT INTO accounts (id, email, display_name, "
+                "auth_provider, active, password_hash) "
+                "VALUES (:id, :email, :name, 'local', true, 'hash')",
             ),
             {
-                "id": str(user_id),
-                "oid": str(org_id),
+                "id": str(account_id),
                 "email": email,
                 "name": f"Admin {email}",
             },
         )
-    return user_id
+        await conn.execute(
+            text(
+                "INSERT INTO org_memberships (id, account_id, organisation_id, role) "
+                "VALUES (:mid, :aid, :oid, 'admin')",
+            ),
+            {
+                "mid": str(uuid.uuid4()),
+                "aid": str(account_id),
+                "oid": str(org_id),
+            },
+        )
+    return account_id
 
 
 async def _seed_pipeline(
@@ -309,6 +319,54 @@ class TestOrgAdminCrossOrgForbidden:
 
 # ===================================================================
 # Test 4: System admin uses explicit org_id parameter
+# ===================================================================
+
+
+# ===================================================================
+# Test 5: Cross-org single-resource fetch returns 404
+# ===================================================================
+
+
+class TestCrossOrgSingleResourceFetch:
+    """Getting a resource by ID from another org must return 404 (not 403)."""
+
+    async def test_get_other_org_pipeline_by_id_returns_404(
+        self,
+        integration_client: AsyncClient,
+        org_a: uuid.UUID,
+        user_a: uuid.UUID,
+        pipeline_b: uuid.UUID,
+    ) -> None:
+        token = _token(org_a, user_a, "admin")
+        resp = await integration_client.get(
+            f"/api/v1/pipelines/{pipeline_b}",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert resp.status_code == 404, (
+            f"Expected 404 for cross-org pipeline fetch, got {resp.status_code}: {resp.text}"
+        )
+
+    async def test_get_own_org_pipeline_by_id_succeeds(
+        self,
+        integration_client: AsyncClient,
+        org_a: uuid.UUID,
+        user_a: uuid.UUID,
+        pipeline_a: uuid.UUID,
+    ) -> None:
+        token = _token(org_a, user_a, "admin")
+        resp = await integration_client.get(
+            f"/api/v1/pipelines/{pipeline_a}",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert resp.status_code == 200, (
+            f"Expected 200 for own org pipeline fetch, got {resp.status_code}: {resp.text}"
+        )
+        data = resp.json()
+        assert data["id"] == str(pipeline_a)
+
+
+# ===================================================================
+# Test 6: System admin uses explicit org_id parameter
 # ===================================================================
 
 
