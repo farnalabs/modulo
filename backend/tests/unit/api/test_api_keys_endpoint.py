@@ -277,10 +277,13 @@ def test_update_api_key_not_found_returns_404(client: TestClient) -> None:
 def test_create_api_key_with_team_id_returns_team_id(client: TestClient) -> None:
     key = _make_key()
     key.team_id = _TEAM_ID
+    mock_plan = MagicMock()
+    mock_plan.feature_enabled.return_value = True
     with (
         patch("modulo.api.routes.api_keys.create_api_key", return_value=(key, "mk_team_key")),
         patch("modulo.api.routes.api_keys.set_rls_org"),
         patch("modulo.api.routes.api_keys.set_rls_user_context"),
+        patch("modulo.api.routes.api_keys.resolve_plan_context", return_value=mock_plan),
     ):
         resp = client.post(
             "/api/v1/api-keys",
@@ -327,10 +330,13 @@ def test_update_api_key_with_team_id_returns_team_id(client: TestClient) -> None
     key = _make_key()
     key.name = "Team Key Updated"
     key.team_id = _TEAM_ID
+    mock_plan = MagicMock()
+    mock_plan.feature_enabled.return_value = True
     with (
         patch("modulo.api.routes.api_keys.update_api_key", return_value=key),
         patch("modulo.api.routes.api_keys.set_rls_org"),
         patch("modulo.api.routes.api_keys.set_rls_user_context"),
+        patch("modulo.api.routes.api_keys.resolve_plan_context", return_value=mock_plan),
     ):
         resp = client.put(
             f"/api/v1/api-keys/{_KEY_ID}",
