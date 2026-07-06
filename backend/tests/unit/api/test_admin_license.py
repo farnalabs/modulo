@@ -4,7 +4,7 @@ import base64
 import json
 from collections.abc import Generator
 from datetime import UTC, datetime, timedelta
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from fastapi.testclient import TestClient
@@ -73,10 +73,19 @@ def _reset_license_state() -> Generator[None, None, None]:
     clear_license()
 
 
+def _make_mock_session() -> AsyncMock:
+    session = AsyncMock()
+    begin_cm = AsyncMock()
+    begin_cm.__aenter__ = AsyncMock(return_value=None)
+    begin_cm.__aexit__ = AsyncMock(return_value=False)
+    session.begin = MagicMock(return_value=begin_cm)
+    return session
+
+
 @pytest.fixture()
 def client() -> Generator[TestClient, None, None]:
     app.dependency_overrides[get_settings] = _make_settings
-    app.dependency_overrides[get_db_session] = lambda: MagicMock()
+    app.dependency_overrides[get_db_session] = _make_mock_session
     app.dependency_overrides[_get_engine] = lambda: MagicMock()
     app.dependency_overrides[get_current_user] = lambda: AuthenticatedPrincipal(
         username="admin",
@@ -98,7 +107,7 @@ def unauth_client() -> Generator[TestClient, None, None]:
 @pytest.fixture()
 def operator_client() -> Generator[TestClient, None, None]:
     app.dependency_overrides[get_settings] = _make_settings
-    app.dependency_overrides[get_db_session] = lambda: MagicMock()
+    app.dependency_overrides[get_db_session] = _make_mock_session
     app.dependency_overrides[_get_engine] = lambda: MagicMock()
     app.dependency_overrides[get_current_user] = lambda: AuthenticatedPrincipal(
         username="operator",
