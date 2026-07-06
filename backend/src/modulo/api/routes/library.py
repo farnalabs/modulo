@@ -302,6 +302,12 @@ async def list_library_primitives_endpoint(
                 status_code=status.HTTP_501_NOT_IMPLEMENTED,
                 detail="Feature is not available. Run database migrations to enable it.",
             ) from None
+        except SQLAlchemyError:
+            _log.exception("list_library_primitives_endpoint: SQLAlchemyError — transient DB failure")
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="The library feature is temporarily unavailable due to a database issue. Please retry.",
+            ) from None
         try:
             items = [LibraryPrimitiveResponse.model_validate(p) for p in result.items]
         except Exception:
@@ -361,6 +367,12 @@ async def get_library_primitive_endpoint(
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
+        ) from None
+    except SQLAlchemyError:
+        _log.exception("get_library_primitive_endpoint: SQLAlchemyError")
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="The library feature is temporarily unavailable due to a database issue. Please retry.",
         ) from None
     if primitive is None:
         raise HTTPException(
@@ -423,6 +435,12 @@ async def create_library_primitive_endpoint(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
         ) from None
+    except SQLAlchemyError:
+        _log.exception("create_library_primitive_endpoint: SQLAlchemyError")
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="The library feature is temporarily unavailable due to a database issue. Please retry.",
+        ) from None
     return LibraryPrimitiveResponse.model_validate(prim)
 
 
@@ -443,6 +461,12 @@ async def update_library_primitive_endpoint(
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
+        ) from None
+    except SQLAlchemyError:
+        _log.exception("update_library_primitive_endpoint: SQLAlchemyError")
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="The library feature is temporarily unavailable due to a database issue. Please retry.",
         ) from None
     if prim is None:
         raise HTTPException(
@@ -467,6 +491,12 @@ async def delete_library_primitive_endpoint(
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
+        ) from None
+    except SQLAlchemyError:
+        _log.exception("delete_library_primitive_endpoint: SQLAlchemyError")
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="The library feature is temporarily unavailable due to a database issue. Please retry.",
         ) from None
     if not deleted:
         raise HTTPException(
@@ -512,6 +542,12 @@ async def copy_to_adapt_endpoint(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
         ) from None
+    except SQLAlchemyError:
+        _log.exception("copy_to_adapt_endpoint: SQLAlchemyError")
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="The library feature is temporarily unavailable due to a database issue. Please retry.",
+        ) from None
     return LibraryPrimitiveResponse.model_validate(result)
 
 
@@ -541,6 +577,12 @@ async def export_pipeline_endpoint(
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
+        ) from None
+    except SQLAlchemyError:
+        _log.exception("export_pipeline_endpoint: SQLAlchemyError")
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="The library feature is temporarily unavailable due to a database issue. Please retry.",
         ) from None
     safe_name = "".join(c if c.isalnum() or c in "-_." else "_" for c in pipeline.name)
     return Response(
