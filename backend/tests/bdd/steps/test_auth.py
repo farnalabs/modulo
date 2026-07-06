@@ -514,7 +514,7 @@ def authenticate_org(request: Any, org: str) -> None:
     request.node.current_org = org
 
 
-@when("I GET /api/pipelines", target_fixture="pipelines_response")
+@when("I GET /api/v1/pipelines", target_fixture="pipelines_response")
 def get_pipelines(request: Any, client: Any, alt_org_client: Any, ctx: dict[str, Any]) -> Any:
     """GET /api/v1/pipelines with the correct client for ``current_org``.
 

@@ -225,7 +225,7 @@ class TestCrossOrgIsolationGeneric:
         assert session_a.info[_TENANT_KEY] == _ORG_ID
         assert session_b.info[_TENANT_KEY] == _ALT_ORG_ID
 
-    async def test_without_org_context_no_filter_injected(
+    async def test_apply_tenant_filter_still_injects_when_session_lacks_org_context(
         self,
         repo: GenericRepository,
     ) -> None:
@@ -451,7 +451,6 @@ class TestTimeFunctionsMultiBackend:
         import datetime
 
         now = datetime.datetime.now(datetime.UTC)
-        assert now is not None
         assert now.tzinfo is not None
 
     def test_created_at_column_uses_default_factory(self) -> None:

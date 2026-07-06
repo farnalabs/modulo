@@ -1,6 +1,7 @@
 ---
 id: feat-core-db-abstraction-remaining
-prd: 8.17
+prd: 6.1, 6.2
+adr: [docs/adr/002-database-abstraction-strategy.md]
 delivery-tasks: [task-nv12-db-abstraction-remaining]
 bdd:
   - backend/tests/bdd/features/security/rls_enforcement.feature
@@ -14,9 +15,8 @@ unit-tests:
   - backend/tests/unit/db/test_rls_multibackend.py
   - backend/tests/unit/db/test_repositories_generic.py
   - backend/tests/unit/db/test_repositories_locks.py
-  - backend/tests/unit/db/test_multi_backend_bdd.py
-  - backend/tests/unit/test_multi_backend_sqlite.py
   - backend/tests/integration/test_rls_isolation.py
+  - backend/tests/unit/db/test_multi_backend_bdd.py
 status: partial
 ---
 
@@ -136,7 +136,13 @@ Multi-backend database abstraction. Phase 1 (UUID swap, Repository ABC + Hub) is
 - `MODULO_DB` setting does not validate accepted values — any string accepted
 - MariaDB async driver has no Docker Compose profile or integration test
 - Migration coordination advisory locks do not use the repository lock abstraction
+- **No RLS DML enforcement integration test for Postgres**: `test_rls_filters_rows_for_non_superuser` only verifies SELECT filtering. INSERT, UPDATE, and DELETE under `SET ROLE` + `SET LOCAL` are untested — a bug where RLS policies only apply to SELECT would go undetected
+- **Race-prone `asyncio.sleep(0.1)` in lock contention tests**: `test_acquire_twice_same_key_blocks` and `test_generic_lock_waits_when_contended` use fixed sleep to wait for task creation instead of `asyncio.Event` — may flake on loaded CI runners
+- **Mock-chain assertions instead of SQL predicate verification**: All `apply_tenant_filter` unit tests verify `.where.assert_called_once()` but never assert the actual SQL expression (e.g., `EntityWithOrg.organisation_id == _ORG_ID`) — a bug that injects the wrong predicate would pass all tests
+- **`test_multi_backend_bdd.py` naming is misleading**: Not a BDD file — no pytest-bdd usage, no Gherkin parsing. Should be renamed to `test_multi_backend_scenarios.py`
 
 ## QA History
 
 - 2026-07-04: Cross-cutting QA (index 123). Marked ~45`[ ]`→`[x]` behaviours across all sections (Repository Layer, RLS/Tenant Isolation, Session/Engine, LangGraph Checkpointer, Migrations, Rate Limiter, BDD/Tests). Added unit-tests frontmatter (6 test file refs — was empty `[]`). Added Error Handling section (14 behaviour checkboxes covering all guard/error paths). Resolved 4 stale known gaps: (1) `rls_enforcement.feature` is NOT a placeholder — 7 real scenarios with step definitions; (2) unit tests exist for GenericRepository, GenericLock, _inject_tenant_filter, set_rls_org on SQLite; (3) rate limiter has in-memory TokenBucket fallback — confirmed working; (4) corrected "conditional migration" claim — both 0002 and 0025 are NOT conditional. Added 4 new known gaps (no RepositoryHub tests, no set_rls_user_context generic path test, MODULO_DB validation missing, MariaDB profile absent). Website docs stub already exists at `Website/src/docs/database-abstraction.md`.
+
+- 2026-07-08: Cross-cutting QA (index 274). Fixed CRITICAL — `prd: 8.17` was stale (8.17 = Eval System, not DB abstraction). Changed to `prd: 6.1, 6.2` + added `adr: [docs/adr/002-database-abstraction-strategy.md]`. Fixed MAJOR — `tenant_isolation.feature` BDD API paths used `/api/pipelines` instead of `/api/v1/pipelines` (step text mismatch); updated step definition in `test_auth.py` to match. Fixed MAJOR — misnamed test `test_without_org_context_no_filter_injected` renamed to `test_apply_tenant_filter_still_injects_when_session_lacks_org_context` (the test verified filter IS injected, not the opposite). Fixed MINOR — removed dead assertion `assert now is not None` (datetime.datetime.now never returns None) from `test_default_factory_is_not_backend_specific`. Added 4 new Known Gaps: (1) no RLS DML enforcement integration test for Postgres (INSERT/UPDATE/DELETE untested), (2) race-prone `asyncio.sleep(0.1)` in lock tests should use `asyncio.Event`, (3) unit tests use mock-chain assertions that verify `.where()` was called but not the actual SQL predicate, (4) `test_multi_backend_bdd.py` naming is misleading (not a real BDD file). Status: partial.
