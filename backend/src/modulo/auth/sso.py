@@ -153,13 +153,23 @@ async def apply_group_mappings(
             )
 
 
-async def _lookup_provider_by_client_id(session: AsyncSession, client_id: str) -> SsoProvider | None:
-    result = await session.execute(select(SsoProvider).where(SsoProvider.client_id == client_id).limit(1))
+async def _lookup_provider_by_client_id(session: AsyncSession, client_id: str, org_id: uuid.UUID) -> SsoProvider | None:
+    result = await session.execute(
+        select(SsoProvider).where(
+            SsoProvider.client_id == client_id,
+            SsoProvider.organisation_id == org_id,
+        ).limit(1)
+    )
     return result.scalar_one_or_none()
 
 
-async def _lookup_provider_by_entity_id(session: AsyncSession, entity_id: str) -> SsoProvider | None:
-    result = await session.execute(select(SsoProvider).where(SsoProvider.entity_id == entity_id).limit(1))
+async def _lookup_provider_by_entity_id(session: AsyncSession, entity_id: str, org_id: uuid.UUID) -> SsoProvider | None:
+    result = await session.execute(
+        select(SsoProvider).where(
+            SsoProvider.entity_id == entity_id,
+            SsoProvider.organisation_id == org_id,
+        ).limit(1)
+    )
     return result.scalar_one_or_none()
 
 
@@ -297,7 +307,7 @@ async def oidc_process_callback(
         raw_groups = []
     idp_groups: list[str] = raw_groups
     if idp_groups:
-        db_provider = await _lookup_provider_by_client_id(session, provider["client_id"])
+        db_provider = await _lookup_provider_by_client_id(session, provider["client_id"], org_id)
         if db_provider is not None and db_provider.group_mappings:
             await apply_group_mappings(session, account, org_id, idp_groups, db_provider.group_mappings)
 
@@ -537,7 +547,7 @@ async def saml_process_response(
                 saml_groups = [g.strip() for g in raw.split(",") if g.strip()]
                 break
         if saml_groups:
-            db_provider = await _lookup_provider_by_entity_id(session, idp_entity_id)
+            db_provider = await _lookup_provider_by_entity_id(session, idp_entity_id, org_id)
             if db_provider is not None and db_provider.group_mappings:
                 await apply_group_mappings(session, account, org_id, saml_groups, db_provider.group_mappings)
 

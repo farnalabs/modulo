@@ -66,7 +66,7 @@ def _make_key_row(full_key: str) -> MagicMock:
 def _make_session(key_row: MagicMock | None) -> AsyncMock:
     session = AsyncMock()
     scalar_result = MagicMock()
-    scalar_result.scalar_one_or_none.return_value = key_row
+    scalar_result.scalars.return_value = [key_row] if key_row else []
     session.execute = AsyncMock(return_value=scalar_result)
     return session
 
