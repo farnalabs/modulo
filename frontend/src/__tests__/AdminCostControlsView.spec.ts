@@ -1,10 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { mount } from '@vue/test-utils'
+import { mount, flushPromises } from '@vue/test-utils'
 import { createPinia, setActivePinia } from 'pinia'
-
-function flushPromises() {
-  return new Promise((resolve) => setTimeout(resolve, 0))
-}
 
 const mockGet = vi.hoisted(() => vi.fn().mockImplementation((path: string) => {
   if (path === '/api/v1/admin/costs') {

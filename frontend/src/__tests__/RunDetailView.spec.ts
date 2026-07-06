@@ -1,11 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { mount } from '@vue/test-utils'
+import { mount, flushPromises } from '@vue/test-utils'
 import { createRouter, createWebHistory } from 'vue-router'
 import { nextTick } from 'vue'
-
-function flushPromises() {
-  return new Promise((resolve) => setTimeout(resolve, 0))
-}
 
 vi.mock('../lib/api/client', () => {
   const mockPost = vi.fn().mockImplementation((url: string) => {

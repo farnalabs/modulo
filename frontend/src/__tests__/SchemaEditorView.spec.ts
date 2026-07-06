@@ -1,15 +1,11 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { mount } from '@vue/test-utils'
+import { mount, flushPromises } from '@vue/test-utils'
 import { nextTick } from 'vue'
 
 vi.mock('vue-router', () => ({
   useRoute: vi.fn(() => ({ params: {}, path: '/schemas/editor' })),
   useRouter: vi.fn(() => ({ push: vi.fn() })),
 }))
-
-function flushPromises(): Promise<void> {
-  return new Promise(resolve => setTimeout(resolve, 0))
-}
 
 const mockSchemas = [
   {
