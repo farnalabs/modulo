@@ -266,7 +266,7 @@ async def logout(
                     detail="Feature is not available. Run database migrations to enable it.",
                 )
         except ValueError:
-            pass
+            _log.warning("logout.invalid_token_family", extra={"token_family": family_id_val})
 
     clear_all_session_approvals()
 
