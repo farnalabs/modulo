@@ -433,7 +433,11 @@ export default {
       "save_failed": "Save failed:",
       "resolve_failed": "Resolve failed:",
       "trigger_failed": "Trigger failed:",
-      "failed_to_load_detail": "Failed to load detail:"
+      "failed_to_load_detail": "Failed to load detail:",
+      "dismiss_failed": "Dismiss failed:",
+      "dismissed": "Dismissed.",
+      "dismissing": "Dismissing...",
+      "failed_to_load_pipelines": "Failed to load pipelines"
     },
     "AdminSystemOrgsView": {
       "create_organisation": "Create Organisation",

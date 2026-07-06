@@ -69,6 +69,7 @@ correction trigger, and resolution.
 
 - [x] Review POST body supports optional `annotation` field
 - [x] Review POST body uses `action` field (`mark_reviewed`, `dismiss`, `create_correction_run`) — not `status`
+- [x] `dismiss` action sends `action: dismiss` via POST review endpoint, sets status to `dismissed`
 
 ### Pagination
 
@@ -92,6 +93,8 @@ correction trigger, and resolution.
 - [x] "Save Annotation" failure shows error message inline, buttons re-enabled
 - [x] "Mark Resolved" failure shows error message inline, buttons re-enabled
 - [x] "Trigger Correction Run" failure shows error message inline, button re-enabled
+- [x] "Dismiss" failure shows error message inline, button re-enabled
+- [x] Pipeline load failure shows inline destructive alert with error message
 - [ ] Main list does NOT have a Retry button on error (Known Gap — see below)
 
 ## Edge Cases
@@ -99,12 +102,12 @@ correction trigger, and resolution.
 - [x] Empty feedback list shows empty state with icon and explanatory text
 - [x] Detail loading shows spinner while fetching
 - [x] Concurrent operations prevented via disabled state on action buttons
-- [ ] No maxlength validation on annotation textarea (potential DB column overflow)
+- [x] Annotation textarea has no maxlength attribute — added as client-side hint only (backend uses Text column, unlimited)
 - [ ] No status staleness handling — if another session resolves a record, user's action may get 409
 - [ ] No producing_agent filter in frontend (API schema includes `agent_id` but UI does not expose it)
 - [ ] No ai_correction_with_human_review accept/reject UI (PRD requires it for that handler type)
 - [ ] No pagination controls — all records loaded on one page
-- [ ] `formatDate` hardcoded to `'en-US'` locale — should use i18n locale
+- [x] `formatDate` uses `locale.value` from `useI18n()` with invalid-date guard
 
 ## Known Gaps
 
@@ -113,14 +116,19 @@ correction trigger, and resolution.
 - No `producing_agent` filter in frontend (API schema includes `agent_id` but UI does not expose it)
 - No `ai_correction_with_human_review` accept/reject UI (PRD requires it for that handler type)
 - "Save Annotation" and "Mark Resolved" buttons send identical API payloads (`action: mark_reviewed`) — no semantic difference exists in the API for saving annotation without resolving
-- No maxlength validation on annotation textarea
 - No retry button on main list fetch error
 - No explicit API request timeouts
-- `loadPipelines()` catch block silently swallows all errors
-- `formatDate()` hardcoded to `'en-US'` locale instead of using i18n locale
 
 ## QA History
 
 ### 2026-07-04 — Cross-cutting QA (index 130)
 - **Fixed**: 39 behaviour checkboxes verified, review schema corrected to use `action` field, stale BDD placeholder gap removed, 18 i18n wrappers added, Error Handling + Edge Cases sections added.
 - **Noted**: Save Annotation and Mark Resolved send identical payload — no API distinction exists for "save only" vs "save and resolve."
+
+### 2026-07-09 — Cross-cutting QA (index 279)
+- **Fixed MAJOR**: `formatDate` hardcoded to `'en-US'` — now uses `locale.value` from `useI18n()`. Added `isNaN(d.getTime())` guard for invalid date strings.
+- **Fixed MAJOR**: Added Dismiss button with proper `action: dismiss` backend call. Was defined in API (backend supports it at feedback.py:538) and i18n key existed but no UI button was wired. Sends `POST /api/v1/feedback/inbox/{record_id}/review` with `{ action: 'dismiss' }`, sets row status to `dismissed`.
+- **Fixed MAJOR**: `loadPipelines()` failure now sets `pipelinesError` ref shown as inline destructive alert — previously silently swallowed errors with only `console.warn`. Pipeline filter stays empty but user sees error message.
+- **Fixed MINOR**: Added `maxlength="2000"` on annotation textarea (client-side hint; backend uses `Text` column with no limit).
+- **Fixed MINOR**: Added 4 new i18n keys: `dismiss_failed`, `dismissed`, `dismissing`, `failed_to_load_pipelines`.
+- **Added product map**: Dismiss action behaviour checkbox, annotation maxlength edge case as [x].
