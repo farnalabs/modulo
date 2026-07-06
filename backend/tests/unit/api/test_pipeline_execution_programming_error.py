@@ -1,8 +1,9 @@
-"""Unit tests: pipeline execution routes return 501 on ProgrammingError.
+"""Unit tests: pipeline execution routes return 501/503/500 on DB errors.
 
 Tests that route handlers in runs.py and pipelines.py gracefully return
-501 Not Implemented when the database raises ProgrammingError
-(e.g. missing table because migrations haven't run yet).
+501 Not Implemented on ProgrammingError, 503 on SQLAlchemyError, and
+500 on generic Exception (e.g. missing table because migrations haven't
+run yet, connection failures, unexpected Python-level errors).
 """
 
 import uuid
@@ -11,7 +12,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from fastapi.testclient import TestClient
-from sqlalchemy.exc import ProgrammingError
+from sqlalchemy.exc import ProgrammingError, SQLAlchemyError
 
 from modulo.api.dependencies import _get_engine, get_db_session
 from modulo.api.main import app
@@ -261,4 +262,126 @@ class TestRunHeatmapProgrammingError:
         _override_session(session)
         resp = admin_client.get("/api/v1/runs/stats/heatmap?year=2026")
         assert resp.status_code == 501
+
+
+# ---------------------------------------------------------------------------
+# SQLAlchemyError→503 for pipeline & run routes
+# ---------------------------------------------------------------------------
+
+
+def _make_session_raising_sqlalchemy_error() -> AsyncMock:
+    session = AsyncMock()
+    begin_cm = AsyncMock()
+    begin_cm.__aenter__ = AsyncMock(side_effect=SQLAlchemyError("connection timeout"))
+    begin_cm.__aexit__ = AsyncMock(return_value=False)
+    session.begin = MagicMock(return_value=begin_cm)
+    bind_mock = MagicMock()
+    bind_mock.dialect.name = "postgresql"
+    session.get_bind = AsyncMock(return_value=bind_mock)
+    return session
+
+
+class TestGetRunStatusSQLAlchemyError:
+    def test_get_run_returns_503_on_sqlalchemy_error(self, admin_client: TestClient) -> None:
+        session = _make_session_raising_sqlalchemy_error()
+        _override_session(session)
+        resp = admin_client.get(f"/api/v1/runs/{_RUN_ID}")
+        assert resp.status_code == 503
+
+
+class TestCancelRunSQLAlchemyError:
+    def test_cancel_run_returns_503_on_sqlalchemy_error(self, admin_client: TestClient) -> None:
+        session = _make_session_raising_sqlalchemy_error()
+        _override_session(session)
+        resp = admin_client.post(f"/api/v1/runs/{_RUN_ID}/cancel")
+        assert resp.status_code == 503
+
+
+class TestGetRunIoSQLAlchemyError:
+    def test_get_run_io_returns_503_on_sqlalchemy_error(self, admin_client: TestClient) -> None:
+        session = _make_session_raising_sqlalchemy_error()
+        _override_session(session)
+        resp = admin_client.get(f"/api/v1/runs/{_RUN_ID}/io")
+        assert resp.status_code == 503
+
+
+class TestListPipelinesSQLAlchemyError:
+    def test_list_returns_503_on_sqlalchemy_error(self, admin_client: TestClient) -> None:
+        session = _make_session_raising_sqlalchemy_error()
+        _override_session(session)
+        resp = admin_client.get("/api/v1/pipelines")
+        assert resp.status_code == 503
+
+
+class TestListStagesSQLAlchemyError:
+    def test_list_returns_503_on_sqlalchemy_error(self, admin_client: TestClient) -> None:
+        session = _make_session_raising_sqlalchemy_error()
+        _override_session(session)
+        resp = admin_client.get("/api/v1/stages")
+        assert resp.status_code == 503
+
+
+# ---------------------------------------------------------------------------
+# Exception→500 for pipeline, run & stage routes
+# ---------------------------------------------------------------------------
+
+
+def _make_session_raising_exception() -> AsyncMock:
+    session = AsyncMock()
+    begin_cm = AsyncMock()
+    begin_cm.__aenter__ = AsyncMock(side_effect=ValueError("unexpected Python error"))
+    begin_cm.__aexit__ = AsyncMock(return_value=False)
+    session.begin = MagicMock(return_value=begin_cm)
+    bind_mock = MagicMock()
+    bind_mock.dialect.name = "postgresql"
+    session.get_bind = AsyncMock(return_value=bind_mock)
+    return session
+
+
+class TestGetRunStatusException:
+    def test_get_run_returns_500_on_exception(self, admin_client: TestClient) -> None:
+        session = _make_session_raising_exception()
+        _override_session(session)
+        resp = admin_client.get(f"/api/v1/runs/{_RUN_ID}")
+        assert resp.status_code == 500
+
+
+class TestCancelRunException:
+    def test_cancel_run_returns_500_on_exception(self, admin_client: TestClient) -> None:
+        session = _make_session_raising_exception()
+        _override_session(session)
+        resp = admin_client.post(f"/api/v1/runs/{_RUN_ID}/cancel")
+        assert resp.status_code == 500
+
+
+class TestListPipelinesException:
+    def test_list_returns_500_on_exception(self, admin_client: TestClient) -> None:
+        session = _make_session_raising_exception()
+        _override_session(session)
+        resp = admin_client.get("/api/v1/pipelines")
+        assert resp.status_code == 500
+
+
+class TestCreatePipelineException:
+    def test_create_returns_500_on_exception(self, admin_client: TestClient) -> None:
+        session = _make_session_raising_exception()
+        _override_session(session)
+        resp = admin_client.post("/api/v1/pipelines", json={"name": "Test"})
+        assert resp.status_code == 500
+
+
+class TestListStagesException:
+    def test_list_returns_500_on_exception(self, admin_client: TestClient) -> None:
+        session = _make_session_raising_exception()
+        _override_session(session)
+        resp = admin_client.get("/api/v1/stages")
+        assert resp.status_code == 500
+
+
+class TestCreateStageException:
+    def test_create_returns_500_on_exception(self, admin_client: TestClient) -> None:
+        session = _make_session_raising_exception()
+        _override_session(session)
+        resp = admin_client.post("/api/v1/stages", json={"name": "Test Stage"})
+        assert resp.status_code == 500
         assert "migrations" in resp.json()["detail"].lower()
