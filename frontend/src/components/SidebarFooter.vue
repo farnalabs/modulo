@@ -1,5 +1,5 @@
 <template>
-  <div class="border-t pt-4 mt-auto space-y-3">
+  <div :class="['space-y-3', compact ? 'mb-2' : 'border-t pt-4 mt-auto']">
     <div class="flex items-center gap-2">
       <div class="avatar-ring">
         <div
@@ -105,6 +105,7 @@ defineProps<{
   userEmail: string;
   userInitial: string;
   isLight: boolean;
+  compact?: boolean;
 }>();
 
 defineEmits<{
