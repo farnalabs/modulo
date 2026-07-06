@@ -3,6 +3,7 @@
 Covers the public_key_pem verify path, duplicate slug publish (last-write-wins),
 signature failure handling, and bundle integrity mismatch at the endpoint level.
 """
+
 from __future__ import annotations
 
 import uuid

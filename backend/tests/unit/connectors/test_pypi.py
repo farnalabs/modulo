@@ -97,9 +97,7 @@ async def test_query_package(connector):
             json={"info": {"name": "requests", "version": "2.31.0"}, "releases": {}},
         ),
     )
-    result = await connector.query(
-        ConnectorQuery(resource="package", filters={"package": "requests"})
-    )
+    result = await connector.query(ConnectorQuery(resource="package", filters={"package": "requests"}))
     assert len(result.records) == 1
     assert result.records[0]["info"]["name"] == "requests"
     assert result.total == 1
@@ -139,17 +137,13 @@ async def test_query_package_version(connector):
 @respx.mock
 async def test_query_package_version_missing_package(connector):
     with pytest.raises(ValueError, match="requires 'package' in filters"):
-        await connector.query(
-            ConnectorQuery(resource="package_version", filters={"version": "2.31.0"})
-        )
+        await connector.query(ConnectorQuery(resource="package_version", filters={"version": "2.31.0"}))
 
 
 @respx.mock
 async def test_query_package_version_missing_version(connector):
     with pytest.raises(ValueError, match="requires 'version' in filters"):
-        await connector.query(
-            ConnectorQuery(resource="package_version", filters={"package": "requests"})
-        )
+        await connector.query(ConnectorQuery(resource="package_version", filters={"package": "requests"}))
 
 
 @respx.mock
@@ -186,9 +180,7 @@ async def test_query_search(connector):
     respx.post(f"{API_BASE}/").mock(
         return_value=httpx.Response(200, text=xml_resp),
     )
-    result = await connector.query(
-        ConnectorQuery(resource="search", filters={"text": "asyncio"})
-    )
+    result = await connector.query(ConnectorQuery(resource="search", filters={"text": "asyncio"}))
     assert len(result.records) == 2
     assert result.records[0]["name"] == "aiohttp"
 
@@ -206,9 +198,7 @@ async def test_query_search_empty(connector):
     respx.post(f"{API_BASE}/").mock(
         return_value=httpx.Response(200, text=xml_resp),
     )
-    result = await connector.query(
-        ConnectorQuery(resource="search", filters={"text": "nonexistent-package-xyz"})
-    )
+    result = await connector.query(ConnectorQuery(resource="search", filters={"text": "nonexistent-package-xyz"}))
     assert len(result.records) == 0
     assert result.total == 0
 
@@ -228,8 +218,16 @@ async def test_query_package_files(connector):
                 "info": {"name": "requests", "version": "2.31.0"},
                 "releases": {
                     "2.31.0": [
-                        {"filename": "requests-2.31.0.tar.gz", "size": 102400, "url": "https://files.pythonhosted.org/packages/requests-2.31.0.tar.gz"},
-                        {"filename": "requests-2.31.0-py3-none-any.whl", "size": 51200, "url": "https://files.pythonhosted.org/packages/requests-2.31.0-py3-none-any.whl"},
+                        {
+                            "filename": "requests-2.31.0.tar.gz",
+                            "size": 102400,
+                            "url": "https://files.pythonhosted.org/packages/requests-2.31.0.tar.gz",
+                        },
+                        {
+                            "filename": "requests-2.31.0-py3-none-any.whl",
+                            "size": 51200,
+                            "url": "https://files.pythonhosted.org/packages/requests-2.31.0-py3-none-any.whl",
+                        },
                     ]
                 },
             },
@@ -246,17 +244,13 @@ async def test_query_package_files(connector):
 @respx.mock
 async def test_query_package_files_missing_package(connector):
     with pytest.raises(ValueError, match="requires 'package' in filters"):
-        await connector.query(
-            ConnectorQuery(resource="package_files", filters={"version": "2.31.0"})
-        )
+        await connector.query(ConnectorQuery(resource="package_files", filters={"version": "2.31.0"}))
 
 
 @respx.mock
 async def test_query_package_files_missing_version(connector):
     with pytest.raises(ValueError, match="requires 'version' in filters"):
-        await connector.query(
-            ConnectorQuery(resource="package_files", filters={"package": "requests"})
-        )
+        await connector.query(ConnectorQuery(resource="package_files", filters={"package": "requests"}))
 
 
 @respx.mock
@@ -274,9 +268,7 @@ async def test_query_simple_list(connector):
             },
         ),
     )
-    result = await connector.query(
-        ConnectorQuery(resource="simple_list", filters={"package": "requests"})
-    )
+    result = await connector.query(ConnectorQuery(resource="simple_list", filters={"package": "requests"}))
     assert len(result.records) == 1
     assert result.total == 3
     versions = result.records[0]["versions"]

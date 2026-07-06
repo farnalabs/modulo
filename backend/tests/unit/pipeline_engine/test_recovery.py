@@ -106,11 +106,13 @@ async def test_recover_node_with_valid_input():
             locked_result = MagicMock()
             locked_result.scalar_one_or_none.return_value = _RUN_ID
 
-            session.execute = AsyncMock(side_effect=[
-                pipeline_result,  # Pipeline lock
-                snapshot_result,  # Snapshot query
-                locked_result,    # Update RUN ... RETURNING
-            ])
+            session.execute = AsyncMock(
+                side_effect=[
+                    pipeline_result,  # Pipeline lock
+                    snapshot_result,  # Snapshot query
+                    locked_result,  # Update RUN ... RETURNING
+                ]
+            )
 
             result = await recover_node(
                 session,
@@ -150,11 +152,13 @@ async def test_skip_node_on_awaiting_human():
             locked_result = MagicMock()
             locked_result.scalar_one_or_none.return_value = _RUN_ID
 
-            session.execute = AsyncMock(side_effect=[
-                pipeline_result,
-                snapshot_result,
-                locked_result,
-            ])
+            session.execute = AsyncMock(
+                side_effect=[
+                    pipeline_result,
+                    snapshot_result,
+                    locked_result,
+                ]
+            )
 
             result = await recover_node(
                 session,
@@ -227,10 +231,12 @@ async def test_recover_nonexistent_node():
         snapshot_result = MagicMock()
         snapshot_result.scalar_one_or_none.return_value = snap
 
-        session.execute = AsyncMock(side_effect=[
-            pipeline_result,
-            snapshot_result,
-        ])
+        session.execute = AsyncMock(
+            side_effect=[
+                pipeline_result,
+                snapshot_result,
+            ]
+        )
 
         with pytest.raises(NodeNotFoundInGraphError) as exc_info:
             await recover_node(
@@ -257,10 +263,12 @@ async def test_recover_already_completed_node():
         snapshot_result = MagicMock()
         snapshot_result.scalar_one_or_none.return_value = snap
 
-        session.execute = AsyncMock(side_effect=[
-            pipeline_result,
-            snapshot_result,
-        ])
+        session.execute = AsyncMock(
+            side_effect=[
+                pipeline_result,
+                snapshot_result,
+            ]
+        )
 
         with pytest.raises(NodeAlreadyCompletedError) as exc_info:
             await recover_node(
@@ -289,11 +297,13 @@ async def test_concurrent_recovery_race():
         locked_result = MagicMock()
         locked_result.scalar_one_or_none.return_value = None  # No row updated — race lost
 
-        session.execute = AsyncMock(side_effect=[
-            pipeline_result,
-            snapshot_result,
-            locked_result,
-        ])
+        session.execute = AsyncMock(
+            side_effect=[
+                pipeline_result,
+                snapshot_result,
+                locked_result,
+            ]
+        )
 
         with pytest.raises(ConcurrentRecoveryError) as exc_info:
             await recover_node(

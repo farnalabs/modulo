@@ -215,5 +215,3 @@ class TestChangePassword:
         assert resp.status_code == 200
         mock_list.assert_called_once()
         assert mock_blacklist.call_count == 2
-
-

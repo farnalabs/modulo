@@ -194,6 +194,7 @@ class TestGetSecretOrgScoping:
         row.encrypted_value = backend._fernet.encrypt(_SECRET_VALUE.encode())
 
         execute_calls = []
+
         async def mock_execute(stmt, *args, **kwargs):
             execute_calls.append((str(stmt), args, kwargs))
             result = MagicMock()
@@ -239,7 +240,9 @@ class TestDeleteSecretOrgScoping:
         await backend.delete_secret("my-key")
 
         # Verify the delete statement included organisation_id filter
-        delete_calls = [str(c[0]) for c in mock_session.execute.call_args_list if "DELETE" in str(c[0]) or "delete" in str(c[0])]
+        delete_calls = [
+            str(c[0]) for c in mock_session.execute.call_args_list if "DELETE" in str(c[0]) or "delete" in str(c[0])
+        ]
         if delete_calls:
             assert "organisation_id" in delete_calls[0]
 

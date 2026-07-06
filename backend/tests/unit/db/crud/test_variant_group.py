@@ -147,9 +147,7 @@ class TestRunVariantWeighted:
             patch("modulo.db.crud.variant_group.create_run", new_callable=AsyncMock, return_value=mock_run),
             patch("modulo.db.crud.variant_group.increment_run_count", new_callable=AsyncMock),
         ):
-            result = await run_variant_weighted(
-                session, org_id=org_id, group=group, input_payload={"existing": "data"}
-            )
+            result = await run_variant_weighted(session, org_id=org_id, group=group, input_payload={"existing": "data"})
 
         assert result is not None
         assert result["run_id"] == mock_run.id

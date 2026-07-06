@@ -60,7 +60,10 @@ class TestRemyConfigServiceGetConfig:
         return RemyConfigService(mock_session)
 
     async def test_returns_defaults_when_no_config_stored(
-        self, service: RemyConfigService, mock_session: AsyncMock, org_id: uuid.UUID,
+        self,
+        service: RemyConfigService,
+        mock_session: AsyncMock,
+        org_id: uuid.UUID,
     ) -> None:
         mock_result = MagicMock()
         mock_result.scalar_one_or_none = MagicMock(return_value=None)
@@ -72,7 +75,10 @@ class TestRemyConfigServiceGetConfig:
         assert config.default_provider == "anthropic"
 
     async def test_returns_stored_config(
-        self, service: RemyConfigService, mock_session: AsyncMock, org_id: uuid.UUID,
+        self,
+        service: RemyConfigService,
+        mock_session: AsyncMock,
+        org_id: uuid.UUID,
     ) -> None:
         stored_value = {
             "system_prompt": "You are helpful.",
@@ -93,7 +99,10 @@ class TestRemyConfigServiceGetConfig:
         assert config.default_context_window == 100000
 
     async def test_returns_defaults_when_stored_value_is_not_dict(
-        self, service: RemyConfigService, mock_session: AsyncMock, org_id: uuid.UUID,
+        self,
+        service: RemyConfigService,
+        mock_session: AsyncMock,
+        org_id: uuid.UUID,
     ) -> None:
         entry = MagicMock()
         entry.value = "not a dict"
@@ -106,7 +115,10 @@ class TestRemyConfigServiceGetConfig:
         assert config.system_prompt == ""
 
     async def test_returns_partial_config_with_defaults(
-        self, service: RemyConfigService, mock_session: AsyncMock, org_id: uuid.UUID,
+        self,
+        service: RemyConfigService,
+        mock_session: AsyncMock,
+        org_id: uuid.UUID,
     ) -> None:
         stored_value = {
             "system_prompt": "Be concise.",
@@ -131,7 +143,10 @@ class TestRemyConfigServiceUpdateConfig:
         return RemyConfigService(mock_session)
 
     async def test_update_config_persists(
-        self, service: RemyConfigService, mock_session: AsyncMock, org_id: uuid.UUID,
+        self,
+        service: RemyConfigService,
+        mock_session: AsyncMock,
+        org_id: uuid.UUID,
     ) -> None:
         with patch("modulo.core.remy.config_service.set_config", new_callable=AsyncMock) as mock_set:
             config = RemyConfig(
@@ -154,7 +169,10 @@ class TestRemyConfigServiceCheckAccess:
         return RemyConfigService(mock_session)
 
     async def test_check_access_matches_user_id(
-        self, service: RemyConfigService, mock_session: AsyncMock, org_id: uuid.UUID,
+        self,
+        service: RemyConfigService,
+        mock_session: AsyncMock,
+        org_id: uuid.UUID,
     ) -> None:
         user_id = uuid.uuid4()
         stored_value = {
@@ -174,7 +192,10 @@ class TestRemyConfigServiceCheckAccess:
         assert granted is True
 
     async def test_check_access_matches_org_role(
-        self, service: RemyConfigService, mock_session: AsyncMock, org_id: uuid.UUID,
+        self,
+        service: RemyConfigService,
+        mock_session: AsyncMock,
+        org_id: uuid.UUID,
     ) -> None:
         user_id = uuid.uuid4()
         stored_value = {
@@ -194,7 +215,10 @@ class TestRemyConfigServiceCheckAccess:
         assert granted is True
 
     async def test_check_access_matches_team_id(
-        self, service: RemyConfigService, mock_session: AsyncMock, org_id: uuid.UUID,
+        self,
+        service: RemyConfigService,
+        mock_session: AsyncMock,
+        org_id: uuid.UUID,
     ) -> None:
         user_id = uuid.uuid4()
         team_id = uuid.uuid4()
@@ -215,7 +239,10 @@ class TestRemyConfigServiceCheckAccess:
         assert granted is True
 
     async def test_check_access_returns_false_when_no_match(
-        self, service: RemyConfigService, mock_session: AsyncMock, org_id: uuid.UUID,
+        self,
+        service: RemyConfigService,
+        mock_session: AsyncMock,
+        org_id: uuid.UUID,
     ) -> None:
         user_id = uuid.uuid4()
         stored_value: dict = {
@@ -235,7 +262,10 @@ class TestRemyConfigServiceCheckAccess:
         assert granted is False
 
     async def test_check_access_with_team_ids_as_uuid_objects(
-        self, service: RemyConfigService, mock_session: AsyncMock, org_id: uuid.UUID,
+        self,
+        service: RemyConfigService,
+        mock_session: AsyncMock,
+        org_id: uuid.UUID,
     ) -> None:
         user_id = uuid.uuid4()
         team_id = uuid.uuid4()
@@ -256,7 +286,10 @@ class TestRemyConfigServiceCheckAccess:
         assert granted is True
 
     async def test_check_access_with_user_id_as_uuid_object(
-        self, service: RemyConfigService, mock_session: AsyncMock, org_id: uuid.UUID,
+        self,
+        service: RemyConfigService,
+        mock_session: AsyncMock,
+        org_id: uuid.UUID,
     ) -> None:
         user_id = uuid.uuid4()
         stored_value = {

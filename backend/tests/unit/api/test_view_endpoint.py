@@ -183,9 +183,7 @@ class TestCreateView:
         assert resp.status_code == 422
 
     def test_invalid_sort_order_returns_422(self, client: TestClient) -> None:
-        resp = client.post(
-            "/api/v1/views", json={"name": "Test", "view_type": "run_list", "sort_order": "invalid"}
-        )
+        resp = client.post("/api/v1/views", json={"name": "Test", "view_type": "run_list", "sort_order": "invalid"})
         assert resp.status_code == 422
 
     def test_unauthorized_returns_4xx(self, unauth_client: TestClient) -> None:

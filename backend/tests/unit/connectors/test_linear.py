@@ -215,9 +215,7 @@ async def test_query_missing_id_raises(connector):
 @respx.mock
 async def test_write_update_missing_id_raises(connector):
     with pytest.raises(ValueError, match="Missing 'id' in update payload"):
-        await connector.write(
-            ConnectorPayload(resource="issue_update", data={"title": "No id"})
-        )
+        await connector.write(ConnectorPayload(resource="issue_update", data={"title": "No id"}))
 
 
 @respx.mock
@@ -226,20 +224,14 @@ async def test_write_update_failure(connector):
         return_value=httpx.Response(200, json={"data": {"issueUpdate": {"success": False, "issue": None}}})
     )
     with pytest.raises(ValueError, match="Failed to update Linear issue"):
-        await connector.write(
-            ConnectorPayload(resource="issue_update", data={"id": "issue-1", "title": "Fail"})
-        )
+        await connector.write(ConnectorPayload(resource="issue_update", data={"id": "issue-1", "title": "Fail"}))
 
 
 @respx.mock
 async def test_write_graphql_error(connector):
-    respx.post(_GRAPHQL).mock(
-        return_value=httpx.Response(200, json={"errors": [{"message": "Not authorized"}]})
-    )
+    respx.post(_GRAPHQL).mock(return_value=httpx.Response(200, json={"errors": [{"message": "Not authorized"}]}))
     with pytest.raises(ValueError, match="Linear API error"):
-        await connector.write(
-            ConnectorPayload(resource="issue", data={"title": "X", "teamId": "t1"})
-        )
+        await connector.write(ConnectorPayload(resource="issue", data={"title": "X", "teamId": "t1"}))
 
 
 @respx.mock
@@ -306,7 +298,21 @@ async def test_query_search_with_pagination(connector):
     page1 = {
         "data": {
             "searchIssues": {
-                "nodes": [{"id": "i1", "identifier": "PROJ-1", "title": "First", "description": None, "priority": 0, "state": {"id": "s1", "name": "Todo"}, "assignee": None, "team": {"id": "t1", "name": "Eng", "key": "PROJ"}, "createdAt": "2024-01-01T00:00:00Z", "updatedAt": "2024-01-01T00:00:00Z", "url": "https://linear.app/team/issue/PROJ-1"}],
+                "nodes": [
+                    {
+                        "id": "i1",
+                        "identifier": "PROJ-1",
+                        "title": "First",
+                        "description": None,
+                        "priority": 0,
+                        "state": {"id": "s1", "name": "Todo"},
+                        "assignee": None,
+                        "team": {"id": "t1", "name": "Eng", "key": "PROJ"},
+                        "createdAt": "2024-01-01T00:00:00Z",
+                        "updatedAt": "2024-01-01T00:00:00Z",
+                        "url": "https://linear.app/team/issue/PROJ-1",
+                    }
+                ],
                 "pageInfo": {"hasNextPage": True, "endCursor": "cursor-abc"},
             }
         }
@@ -314,14 +320,26 @@ async def test_query_search_with_pagination(connector):
     page2 = {
         "data": {
             "searchIssues": {
-                "nodes": [{"id": "i2", "identifier": "PROJ-2", "title": "Second", "description": None, "priority": 1, "state": {"id": "s2", "name": "In Progress"}, "assignee": None, "team": {"id": "t1", "name": "Eng", "key": "PROJ"}, "createdAt": "2024-01-02T00:00:00Z", "updatedAt": "2024-01-02T00:00:00Z", "url": "https://linear.app/team/issue/PROJ-2"}],
+                "nodes": [
+                    {
+                        "id": "i2",
+                        "identifier": "PROJ-2",
+                        "title": "Second",
+                        "description": None,
+                        "priority": 1,
+                        "state": {"id": "s2", "name": "In Progress"},
+                        "assignee": None,
+                        "team": {"id": "t1", "name": "Eng", "key": "PROJ"},
+                        "createdAt": "2024-01-02T00:00:00Z",
+                        "updatedAt": "2024-01-02T00:00:00Z",
+                        "url": "https://linear.app/team/issue/PROJ-2",
+                    }
+                ],
                 "pageInfo": {"hasNextPage": False, "endCursor": "cursor-def"},
             }
         }
     }
-    respx.post(_GRAPHQL).mock(
-        side_effect=[_mock_response(page1), _mock_response(page2)]
-    )
+    respx.post(_GRAPHQL).mock(side_effect=[_mock_response(page1), _mock_response(page2)])
 
     q1 = ConnectorQuery(resource="search", filters={"query": "bug"}, limit=1)
     r1 = await connector.query(q1)
@@ -341,7 +359,13 @@ async def test_query_issue_comments(connector):
             "issue": {
                 "comments": {
                     "nodes": [
-                        {"id": "c1", "body": "Looks good", "user": {"id": "u1", "name": "Alice", "email": "a@a.com"}, "createdAt": "2024-01-01T00:00:00Z", "updatedAt": "2024-01-01T00:00:00Z"},
+                        {
+                            "id": "c1",
+                            "body": "Looks good",
+                            "user": {"id": "u1", "name": "Alice", "email": "a@a.com"},
+                            "createdAt": "2024-01-01T00:00:00Z",
+                            "updatedAt": "2024-01-01T00:00:00Z",
+                        },
                     ]
                 }
             }
@@ -365,19 +389,29 @@ async def test_write_issue_comment(connector):
         "data": {
             "commentCreate": {
                 "success": True,
-                "comment": {"id": "c1", "body": "Nice work", "user": {"id": "u1", "name": "Alice", "email": "a@a.com"}, "createdAt": "2024-01-01T00:00:00Z", "updatedAt": "2024-01-01T00:00:00Z"},
+                "comment": {
+                    "id": "c1",
+                    "body": "Nice work",
+                    "user": {"id": "u1", "name": "Alice", "email": "a@a.com"},
+                    "createdAt": "2024-01-01T00:00:00Z",
+                    "updatedAt": "2024-01-01T00:00:00Z",
+                },
             }
         }
     }
     respx.post(_GRAPHQL).mock(return_value=_mock_response(comment_data))
-    result = await connector.write(ConnectorPayload(resource="issue_comment", data={"issueId": "issue-1", "body": "Nice work"}))
+    result = await connector.write(
+        ConnectorPayload(resource="issue_comment", data={"issueId": "issue-1", "body": "Nice work"})
+    )
     assert result["id"] == "c1"
     assert result["body"] == "Nice work"
 
 
 @respx.mock
 async def test_write_issue_comment_failure(connector):
-    respx.post(_GRAPHQL).mock(return_value=_mock_response({"data": {"commentCreate": {"success": False, "comment": None}}}))
+    respx.post(_GRAPHQL).mock(
+        return_value=_mock_response({"data": {"commentCreate": {"success": False, "comment": None}}})
+    )
     with pytest.raises(ValueError, match="Failed to create Linear issue comment"):
         await connector.write(ConnectorPayload(resource="issue_comment", data={"issueId": "i1", "body": "Fail"}))
 
@@ -408,7 +442,14 @@ async def test_query_team_projects(connector):
             "team": {
                 "projects": {
                     "nodes": [
-                        {"id": "p1", "name": "Q4 Launch", "description": "Big release", "state": "planned", "startDate": None, "targetDate": None},
+                        {
+                            "id": "p1",
+                            "name": "Q4 Launch",
+                            "description": "Big release",
+                            "state": "planned",
+                            "startDate": None,
+                            "targetDate": None,
+                        },
                     ]
                 }
             }
@@ -467,7 +508,13 @@ async def test_query_team_cycles(connector):
             "team": {
                 "cycles": {
                     "nodes": [
-                        {"id": "cy1", "name": "Sprint 24", "startsAt": "2024-06-01T00:00:00Z", "endsAt": "2024-06-14T00:00:00Z", "completedAt": None},
+                        {
+                            "id": "cy1",
+                            "name": "Sprint 24",
+                            "startsAt": "2024-06-01T00:00:00Z",
+                            "endsAt": "2024-06-14T00:00:00Z",
+                            "completedAt": None,
+                        },
                     ]
                 }
             }

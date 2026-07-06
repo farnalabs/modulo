@@ -32,9 +32,7 @@ async def test_health_check_ok(connector):
 
 @respx.mock
 async def test_health_check_fail(connector):
-    respx.get(_PROFILE_URL, params={"api-version": "7.0"}).mock(
-        return_value=httpx.Response(401, text="Unauthorized")
-    )
+    respx.get(_PROFILE_URL, params={"api-version": "7.0"}).mock(return_value=httpx.Response(401, text="Unauthorized"))
     result = await connector.health_check()
     assert result.ok is False
     assert "401" in result.detail
@@ -77,9 +75,7 @@ async def test_query_pulls(connector):
         f"{_BASE}/myproject/_apis/git/repositories/myrepo/pullrequests",
         params={"searchCriteria.status": "active", "api-version": "7.0"},
     ).mock(return_value=httpx.Response(200, json={"value": prs, "count": 1}))
-    result = await connector.query(
-        ConnectorQuery(resource="pulls", filters={"project": "myproject", "repo": "myrepo"})
-    )
+    result = await connector.query(ConnectorQuery(resource="pulls", filters={"project": "myproject", "repo": "myrepo"}))
     assert len(result.records) == 1
     assert result.records[0]["pullRequestId"] == 42
 
@@ -134,9 +130,7 @@ async def test_write_file(connector):
     respx.get(
         f"{_BASE}/myproject/_apis/git/repositories/myrepo/refs",
         params={"filter": "heads/main", "api-version": "7.0"},
-    ).mock(
-        return_value=httpx.Response(200, json={"value": [{"objectId": "oldoid123"}]})
-    )
+    ).mock(return_value=httpx.Response(200, json={"value": [{"objectId": "oldoid123"}]}))
     push_response = {"pushId": 1, "commitIds": ["newcommit456"]}
     respx.post(
         f"{_BASE}/myproject/_apis/git/repositories/myrepo/pushes",
@@ -164,9 +158,7 @@ async def test_write_file_branch_not_found(connector):
     respx.get(
         f"{_BASE}/myproject/_apis/git/repositories/myrepo/refs",
         params={"filter": "heads/nonexistent", "api-version": "7.0"},
-    ).mock(
-        return_value=httpx.Response(200, json={"value": []})
-    )
+    ).mock(return_value=httpx.Response(200, json={"value": []}))
     with pytest.raises(ValueError, match="not found"):
         await connector.write(
             ConnectorPayload(

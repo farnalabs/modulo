@@ -76,9 +76,11 @@ class TestSignThenVerifyWithDefaultKey:
         sig_hex = sign_primitive(payload, kp["private_key"])
         sig_bytes = bytes.fromhex(sig_hex)
 
-        payload_b64 = base64.urlsafe_b64encode(
-            json.dumps(payload, separators=(",", ":"), sort_keys=True).encode()
-        ).decode().rstrip("=")
+        payload_b64 = (
+            base64.urlsafe_b64encode(json.dumps(payload, separators=(",", ":"), sort_keys=True).encode())
+            .decode()
+            .rstrip("=")
+        )
         sig_b64 = base64.urlsafe_b64encode(sig_bytes).decode().rstrip("=")
         key = f"{payload_b64}.{sig_b64}"
 

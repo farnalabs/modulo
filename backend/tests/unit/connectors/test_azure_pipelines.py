@@ -214,10 +214,7 @@ async def test_get_run_logs(ap_runner):
                     {
                         "id": 1,
                         "name": "Job 1",
-                        "url": (
-                            f"{_AZURE_DEVOPS_API}/myorg/myproject"
-                            "/_apis/pipelines/1/runs/101/logs/1"
-                        ),
+                        "url": (f"{_AZURE_DEVOPS_API}/myorg/myproject/_apis/pipelines/1/runs/101/logs/1"),
                     },
                 ]
             },
@@ -468,7 +465,5 @@ async def test_double_query(ap_double):
 
 
 async def test_double_write(ap_double):
-    result = await ap_double.write(
-        ConnectorPayload(resource="run", data={"pipeline_id": "1"})
-    )
+    result = await ap_double.write(ConnectorPayload(resource="run", data={"pipeline_id": "1"}))
     assert result == {}

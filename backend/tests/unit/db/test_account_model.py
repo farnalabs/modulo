@@ -29,16 +29,13 @@ def test_account_columns() -> None:
 def test_account_email_unique() -> None:
     table = Base.metadata.tables["accounts"]
     has_unique = any(
-        isinstance(c, UniqueConstraint) and [col.name for col in c.columns] == ["email"]
-        for c in table.constraints
+        isinstance(c, UniqueConstraint) and [col.name for col in c.columns] == ["email"] for c in table.constraints
     )
     assert has_unique
 
 
 def test_account_auth_provider_check() -> None:
-    checks = " ".join(
-        str(c.sqltext) for c in Base.metadata.tables["accounts"].constraints if hasattr(c, "sqltext")
-    )
+    checks = " ".join(str(c.sqltext) for c in Base.metadata.tables["accounts"].constraints if hasattr(c, "sqltext"))
     assert "local" in checks
     assert "oidc" in checks
     assert "saml" in checks
@@ -81,8 +78,7 @@ def test_org_membership_role_check() -> None:
 def test_org_membership_account_org_unique() -> None:
     table = Base.metadata.tables["org_memberships"]
     has_unique = any(
-        isinstance(c, UniqueConstraint)
-        and sorted(col.name for col in c.columns) == ["account_id", "organisation_id"]
+        isinstance(c, UniqueConstraint) and sorted(col.name for col in c.columns) == ["account_id", "organisation_id"]
         for c in table.constraints
     )
     assert has_unique

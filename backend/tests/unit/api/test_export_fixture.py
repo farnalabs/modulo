@@ -102,18 +102,14 @@ def unauth_client() -> Generator[TestClient, None, None]:
 class TestExportFixture:
     """GET /api/v1/runs/{run_id}/export-fixture"""
 
-    def test_export_fixture_returns_200_with_fixture_map(
-        self, client: TestClient, mock_session: AsyncMock
-    ) -> None:
+    def test_export_fixture_returns_200_with_fixture_map(self, client: TestClient, mock_session: AsyncMock) -> None:
         run = _make_run(
             input_payload={"prompt": "Hello"},
             outputs_json={"node-1": "World"},
         )
         snapshot = _make_snapshot(graph_json={"nodes": [{"id": "a"}], "edges": []})
 
-        mock_session.execute.return_value.scalar_one_or_none = MagicMock(
-            side_effect=[run, snapshot]
-        )
+        mock_session.execute.return_value.scalar_one_or_none = MagicMock(side_effect=[run, snapshot])
 
         resp = client.get(f"/api/v1/runs/{_RUN_ID}/export-fixture")
 
@@ -138,9 +134,7 @@ class TestExportFixture:
         )
         snapshot = _make_snapshot()
 
-        mock_session.execute.return_value.scalar_one_or_none = MagicMock(
-            side_effect=[run, snapshot]
-        )
+        mock_session.execute.return_value.scalar_one_or_none = MagicMock(side_effect=[run, snapshot])
 
         resp = client.get(f"/api/v1/runs/{_RUN_ID}/export-fixture")
         body = resp.json()
@@ -160,9 +154,7 @@ class TestExportFixture:
         )
         snapshot = _make_snapshot()
 
-        mock_session.execute.return_value.scalar_one_or_none = MagicMock(
-            side_effect=[run, snapshot]
-        )
+        mock_session.execute.return_value.scalar_one_or_none = MagicMock(side_effect=[run, snapshot])
 
         resp = client.get(f"/api/v1/runs/{_RUN_ID}/export-fixture")
         body = resp.json()
@@ -170,9 +162,7 @@ class TestExportFixture:
         assert body["fixture_map"]["design"] == "blueprint"
         assert body["fixture_map"]["blueprint"] == "code"
 
-    def test_export_fixture_run_not_found_returns_404(
-        self, client: TestClient, mock_session: AsyncMock
-    ) -> None:
+    def test_export_fixture_run_not_found_returns_404(self, client: TestClient, mock_session: AsyncMock) -> None:
         mock_session.execute.return_value.scalar_one_or_none = MagicMock(return_value=None)
 
         resp = client.get(f"/api/v1/runs/{_RUN_ID}/export-fixture")
@@ -180,15 +170,11 @@ class TestExportFixture:
         assert resp.status_code == 404
         assert "not found" in resp.json()["detail"].lower()
 
-    def test_export_fixture_unauthenticated_returns_4xx(
-        self, unauth_client: TestClient
-    ) -> None:
+    def test_export_fixture_unauthenticated_returns_4xx(self, unauth_client: TestClient) -> None:
         resp = unauth_client.get(f"/api/v1/runs/{_RUN_ID}/export-fixture")
         assert resp.status_code in (401, 403)
 
-    def test_export_fixture_returns_graph_json_from_snapshot(
-        self, client: TestClient, mock_session: AsyncMock
-    ) -> None:
+    def test_export_fixture_returns_graph_json_from_snapshot(self, client: TestClient, mock_session: AsyncMock) -> None:
         expected_graph = {
             "nodes": [{"id": "a", "agent_id": "agent-1"}],
             "edges": [{"source": "a", "target": "b"}],
@@ -196,9 +182,7 @@ class TestExportFixture:
         run = _make_run()
         snapshot = _make_snapshot(graph_json=expected_graph)
 
-        mock_session.execute.return_value.scalar_one_or_none = MagicMock(
-            side_effect=[run, snapshot]
-        )
+        mock_session.execute.return_value.scalar_one_or_none = MagicMock(side_effect=[run, snapshot])
 
         resp = client.get(f"/api/v1/runs/{_RUN_ID}/export-fixture")
         body = resp.json()

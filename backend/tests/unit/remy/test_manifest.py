@@ -27,12 +27,15 @@ SAMPLE_MANIFEST = {
     },
     "elements": {
         "/": [
-            {"testid": "dashboard-metrics-overview", "type": "section", "label": "Metrics Overview", "dynamic_testid": False}
+            {
+                "testid": "dashboard-metrics-overview",
+                "type": "section",
+                "label": "Metrics Overview",
+                "dynamic_testid": False,
+            }
         ]
     },
-    "sidebar_groups": {
-        "core": {"label": "Core", "order": 1, "default_expanded": True, "simple_mode": False}
-    },
+    "sidebar_groups": {"core": {"label": "Core", "order": 1, "default_expanded": True, "simple_mode": False}},
 }
 
 
@@ -76,7 +79,16 @@ class TestManifestLoad:
 
         manifest = load_manifest()
         groups = manifest.get("sidebar_groups", {})
-        expected_groups = {"core", "remy", "settings", "access-control", "cost-management", "system", "monitoring", "extensions"}
+        expected_groups = {
+            "core",
+            "remy",
+            "settings",
+            "access-control",
+            "cost-management",
+            "system",
+            "monitoring",
+            "extensions",
+        }
         assert set(groups.keys()) == expected_groups
 
     def test_returns_empty_dicts_when_file_missing(self):

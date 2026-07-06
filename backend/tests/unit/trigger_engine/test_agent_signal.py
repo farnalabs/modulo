@@ -306,4 +306,3 @@ class TestFireAgentSignal:
         assert len(results) == 2
         assert all(r["status"] == "fired" for r in results)
         assert mock_create_run.await_count == 2
-

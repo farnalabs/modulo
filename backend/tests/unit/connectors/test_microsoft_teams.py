@@ -66,9 +66,7 @@ async def test_query_teams(connector: MicrosoftTeamsConnector) -> None:
         {"id": "T1", "displayName": "Engineering", "description": "Engineering team"},
         {"id": "T2", "displayName": "Marketing", "description": "Marketing team"},
     ]
-    respx.get(f"{_BASE}/teams").mock(
-        return_value=httpx.Response(200, json={"value": teams})
-    )
+    respx.get(f"{_BASE}/teams").mock(return_value=httpx.Response(200, json={"value": teams}))
     result = await connector.query(ConnectorQuery(resource="teams"))
     assert len(result.records) == 2
     assert result.records[0]["displayName"] == "Engineering"
@@ -104,16 +102,10 @@ async def test_query_teams_with_limit(connector: MicrosoftTeamsConnector) -> Non
     ).mock(
         return_value=httpx.Response(
             200,
-            json={
-                "value": [
-                    {"id": f"T{i}", "displayName": f"Team {i}"} for i in range(10)
-                ]
-            },
+            json={"value": [{"id": f"T{i}", "displayName": f"Team {i}"} for i in range(10)]},
         )
     )
-    result = await connector.query(
-        ConnectorQuery(resource="teams", limit=3)
-    )
+    result = await connector.query(ConnectorQuery(resource="teams", limit=3))
     assert len(result.records) == 3
 
 
@@ -131,9 +123,7 @@ async def test_query_teams_with_cursor(connector: MicrosoftTeamsConnector) -> No
             },
         )
     )
-    result = await connector.query(
-        ConnectorQuery(resource="teams", cursor="token123", limit=5)
-    )
+    result = await connector.query(ConnectorQuery(resource="teams", cursor="token123", limit=5))
     assert len(result.records) == 1
     assert result.next_cursor == "nexttoken"
 
@@ -141,12 +131,8 @@ async def test_query_teams_with_cursor(connector: MicrosoftTeamsConnector) -> No
 @respx.mock
 async def test_query_team_by_id(connector: MicrosoftTeamsConnector) -> None:
     team_data = {"id": "T1", "displayName": "Engineering", "description": "Build stuff"}
-    respx.get(f"{_BASE}/teams/T1").mock(
-        return_value=httpx.Response(200, json=team_data)
-    )
-    result = await connector.query(
-        ConnectorQuery(resource="team", filters={"team_id": "T1"})
-    )
+    respx.get(f"{_BASE}/teams/T1").mock(return_value=httpx.Response(200, json=team_data))
+    result = await connector.query(ConnectorQuery(resource="team", filters={"team_id": "T1"}))
     assert len(result.records) == 1
     assert result.records[0]["displayName"] == "Engineering"
 
@@ -163,12 +149,8 @@ async def test_query_channels(connector: MicrosoftTeamsConnector) -> None:
         {"id": "C1", "displayName": "General"},
         {"id": "C2", "displayName": "Random"},
     ]
-    respx.get(f"{_BASE}/teams/T1/channels").mock(
-        return_value=httpx.Response(200, json={"value": channels})
-    )
-    result = await connector.query(
-        ConnectorQuery(resource="channels", filters={"team_id": "T1"})
-    )
+    respx.get(f"{_BASE}/teams/T1/channels").mock(return_value=httpx.Response(200, json={"value": channels}))
+    result = await connector.query(ConnectorQuery(resource="channels", filters={"team_id": "T1"}))
     assert len(result.records) == 2
     assert result.records[0]["displayName"] == "General"
 
@@ -182,9 +164,7 @@ async def test_query_channels_missing_team_id(connector: MicrosoftTeamsConnector
 @respx.mock
 async def test_query_channel_by_id(connector: MicrosoftTeamsConnector) -> None:
     channel_data = {"id": "C1", "displayName": "General", "description": "General discussions"}
-    respx.get(f"{_BASE}/teams/T1/channels/C1").mock(
-        return_value=httpx.Response(200, json=channel_data)
-    )
+    respx.get(f"{_BASE}/teams/T1/channels/C1").mock(return_value=httpx.Response(200, json=channel_data))
     result = await connector.query(
         ConnectorQuery(
             resource="channel",
@@ -215,9 +195,7 @@ async def test_query_messages(connector: MicrosoftTeamsConnector) -> None:
         {"id": "M1", "body": {"content": "Hello"}},
         {"id": "M2", "body": {"content": "World"}},
     ]
-    respx.get(f"{_BASE}/teams/T1/channels/C1/messages").mock(
-        return_value=httpx.Response(200, json={"value": messages})
-    )
+    respx.get(f"{_BASE}/teams/T1/channels/C1/messages").mock(return_value=httpx.Response(200, json={"value": messages}))
     result = await connector.query(
         ConnectorQuery(
             resource="messages",
@@ -282,9 +260,7 @@ async def test_query_channel_messages(connector: MicrosoftTeamsConnector) -> Non
     messages = [
         {"id": "CM1", "body": {"content": "Channel msg 1"}},
     ]
-    respx.get(f"{_BASE}/teams/T1/channels/C1/messages").mock(
-        return_value=httpx.Response(200, json={"value": messages})
-    )
+    respx.get(f"{_BASE}/teams/T1/channels/C1/messages").mock(return_value=httpx.Response(200, json={"value": messages}))
     result = await connector.query(
         ConnectorQuery(
             resource="channel_messages",
@@ -301,12 +277,8 @@ async def test_query_members(connector: MicrosoftTeamsConnector) -> None:
         {"id": "M1", "displayName": "Alice"},
         {"id": "M2", "displayName": "Bob"},
     ]
-    respx.get(f"{_BASE}/teams/T1/members").mock(
-        return_value=httpx.Response(200, json={"value": members})
-    )
-    result = await connector.query(
-        ConnectorQuery(resource="members", filters={"team_id": "T1"})
-    )
+    respx.get(f"{_BASE}/teams/T1/members").mock(return_value=httpx.Response(200, json={"value": members}))
+    result = await connector.query(ConnectorQuery(resource="members", filters={"team_id": "T1"}))
     assert len(result.records) == 2
     assert result.records[0]["displayName"] == "Alice"
 
@@ -323,9 +295,7 @@ async def test_query_users(connector: MicrosoftTeamsConnector) -> None:
         {"id": "U1", "displayName": "Alice", "mail": "alice@example.com"},
         {"id": "U2", "displayName": "Bob", "mail": "bob@example.com"},
     ]
-    respx.get(f"{_BASE}/users").mock(
-        return_value=httpx.Response(200, json={"value": users})
-    )
+    respx.get(f"{_BASE}/users").mock(return_value=httpx.Response(200, json={"value": users}))
     result = await connector.query(ConnectorQuery(resource="users"))
     assert len(result.records) == 2
     assert result.records[0]["displayName"] == "Alice"
@@ -359,9 +329,7 @@ async def test_query_groups(connector: MicrosoftTeamsConnector) -> None:
         {"id": "G1", "displayName": "Sales Team"},
         {"id": "G2", "displayName": "Dev Team"},
     ]
-    respx.get(f"{_BASE}/groups").mock(
-        return_value=httpx.Response(200, json={"value": groups})
-    )
+    respx.get(f"{_BASE}/groups").mock(return_value=httpx.Response(200, json={"value": groups}))
     result = await connector.query(ConnectorQuery(resource="groups"))
     assert len(result.records) == 2
     assert result.records[0]["displayName"] == "Sales Team"
@@ -378,9 +346,7 @@ async def test_query_groups_with_limit(connector: MicrosoftTeamsConnector) -> No
             json={"value": [{"id": "G1", "displayName": "Sales Team"}]},
         )
     )
-    result = await connector.query(
-        ConnectorQuery(resource="groups", limit=1)
-    )
+    result = await connector.query(ConnectorQuery(resource="groups", limit=1))
     assert len(result.records) == 1
 
 
@@ -452,9 +418,7 @@ async def test_write_message_missing_fields(connector: MicrosoftTeamsConnector) 
 async def test_write_message_missing_all(connector: MicrosoftTeamsConnector) -> None:
     msg = "Microsoft Teams message write requires 'team_id', 'channel_id', and 'body' in data"
     with pytest.raises(ValueError, match=msg):
-        await connector.write(
-            ConnectorPayload(resource="message", data={})
-        )
+        await connector.write(ConnectorPayload(resource="message", data={}))
 
 
 @respx.mock
@@ -540,27 +504,21 @@ async def test_write_invalid_resource(connector: MicrosoftTeamsConnector) -> Non
 
 @respx.mock
 async def test_query_http_500(connector: MicrosoftTeamsConnector) -> None:
-    respx.get(f"{_BASE}/teams").mock(
-        return_value=httpx.Response(500, text="Internal Server Error")
-    )
+    respx.get(f"{_BASE}/teams").mock(return_value=httpx.Response(500, text="Internal Server Error"))
     with pytest.raises(httpx.HTTPStatusError):
         await connector.query(ConnectorQuery(resource="teams"))
 
 
 @respx.mock
 async def test_query_http_403(connector: MicrosoftTeamsConnector) -> None:
-    respx.get(f"{_BASE}/users").mock(
-        return_value=httpx.Response(403, text="Forbidden")
-    )
+    respx.get(f"{_BASE}/users").mock(return_value=httpx.Response(403, text="Forbidden"))
     with pytest.raises(httpx.HTTPStatusError):
         await connector.query(ConnectorQuery(resource="users"))
 
 
 @respx.mock
 async def test_write_http_401(connector: MicrosoftTeamsConnector) -> None:
-    respx.post(f"{_BASE}/teams/T1/channels/C1/messages").mock(
-        return_value=httpx.Response(401, text="Unauthorized")
-    )
+    respx.post(f"{_BASE}/teams/T1/channels/C1/messages").mock(return_value=httpx.Response(401, text="Unauthorized"))
     with pytest.raises(httpx.HTTPStatusError):
         await connector.write(
             ConnectorPayload(
@@ -572,9 +530,7 @@ async def test_write_http_401(connector: MicrosoftTeamsConnector) -> None:
 
 @respx.mock
 async def test_write_channel_http_500(connector: MicrosoftTeamsConnector) -> None:
-    respx.post(f"{_BASE}/teams/T1/channels").mock(
-        return_value=httpx.Response(500, text="Internal Server Error")
-    )
+    respx.post(f"{_BASE}/teams/T1/channels").mock(return_value=httpx.Response(500, text="Internal Server Error"))
     with pytest.raises(httpx.HTTPStatusError):
         await connector.write(
             ConnectorPayload(

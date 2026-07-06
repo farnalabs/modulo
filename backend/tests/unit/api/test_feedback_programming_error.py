@@ -1,4 +1,5 @@
 """Unit tests for ProgrammingError handling on feedback API routes."""
+
 import uuid
 from collections.abc import AsyncGenerator, Generator
 from unittest.mock import AsyncMock, MagicMock
@@ -17,6 +18,7 @@ _VALID_32 = "a" * 32
 _ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
 _USER_ID = uuid.UUID("00000000-0000-0000-0000-000000000002")
 
+
 def _make_settings() -> Settings:
     return Settings(
         database_url="postgresql+asyncpg://localhost/test",
@@ -24,6 +26,7 @@ def _make_settings() -> Settings:
         fernet_key=_VALID_32,
         modulo_admin_password="testpass",
     )
+
 
 @pytest.fixture()
 def client() -> Generator[TestClient, None, None]:
@@ -48,8 +51,10 @@ def client() -> Generator[TestClient, None, None]:
     yield TestClient(app)
     app.dependency_overrides.clear()
 
+
 _RUN_ID = uuid.uuid4()
 _RECORD_ID = uuid.uuid4()
+
 
 class TestFeedbackProgrammingError:
     def test_create_feedback_returns_501(self, client: TestClient) -> None:

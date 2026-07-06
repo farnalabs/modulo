@@ -22,9 +22,7 @@ def test_connector_type(connector: CodeClimateConnector) -> None:
 
 @respx.mock
 async def test_health_check_ok(connector: CodeClimateConnector) -> None:
-    respx.get(f"{_BASE}/repos", params={"limit": 1}).mock(
-        return_value=httpx.Response(200, json={"data": []})
-    )
+    respx.get(f"{_BASE}/repos", params={"limit": 1}).mock(return_value=httpx.Response(200, json={"data": []}))
     result = await connector.health_check()
     assert result.ok is True
     assert result.detail == "Code Climate API token validated"
@@ -32,9 +30,7 @@ async def test_health_check_ok(connector: CodeClimateConnector) -> None:
 
 @respx.mock
 async def test_health_check_invalid_token(connector: CodeClimateConnector) -> None:
-    respx.get(f"{_BASE}/repos", params={"limit": 1}).mock(
-        return_value=httpx.Response(401, text="Unauthorized")
-    )
+    respx.get(f"{_BASE}/repos", params={"limit": 1}).mock(return_value=httpx.Response(401, text="Unauthorized"))
     result = await connector.health_check()
     assert result.ok is False
     assert "Invalid" in result.detail
@@ -42,9 +38,7 @@ async def test_health_check_invalid_token(connector: CodeClimateConnector) -> No
 
 @respx.mock
 async def test_health_check_network_error(connector: CodeClimateConnector) -> None:
-    respx.get(f"{_BASE}/repos", params={"limit": 1}).mock(
-        side_effect=httpx.ConnectError("connection refused")
-    )
+    respx.get(f"{_BASE}/repos", params={"limit": 1}).mock(side_effect=httpx.ConnectError("connection refused"))
     result = await connector.health_check()
     assert result.ok is False
     assert "connection refused" in result.detail
@@ -85,9 +79,7 @@ async def test_query_repos_with_github_slug(connector: CodeClimateConnector) -> 
         f"{_BASE}/repos",
         params={"github_slug": "my-org/my-repo"},
     ).mock(return_value=httpx.Response(200, json=repos))
-    result = await connector.query(
-        ConnectorQuery(resource="repos", filters={"github_slug": "my-org/my-repo"})
-    )
+    result = await connector.query(ConnectorQuery(resource="repos", filters={"github_slug": "my-org/my-repo"}))
     assert len(result.records) == 1
     assert result.records[0]["attributes"]["github_slug"] == "my-org/my-repo"
 
@@ -95,9 +87,7 @@ async def test_query_repos_with_github_slug(connector: CodeClimateConnector) -> 
 @respx.mock
 async def test_query_repos_with_limit(connector: CodeClimateConnector) -> None:
     repos = {"data": [{"id": "1", "attributes": {"github_slug": "a"}}]}
-    respx.get(f"{_BASE}/repos", params={"limit": 5}).mock(
-        return_value=httpx.Response(200, json=repos)
-    )
+    respx.get(f"{_BASE}/repos", params={"limit": 5}).mock(return_value=httpx.Response(200, json=repos))
     result = await connector.query(ConnectorQuery(resource="repos", limit=5))
     assert len(result.records) == 1
     assert result.total == 1
@@ -107,9 +97,7 @@ async def test_query_repos_with_limit(connector: CodeClimateConnector) -> None:
 async def test_query_repo(connector: CodeClimateConnector) -> None:
     repo = {"data": {"id": "r1", "attributes": {"github_slug": "my-org/my-repo"}}}
     respx.get(f"{_BASE}/repos/r1").mock(return_value=httpx.Response(200, json=repo))
-    result = await connector.query(
-        ConnectorQuery(resource="repo", filters={"id": "r1"})
-    )
+    result = await connector.query(ConnectorQuery(resource="repo", filters={"id": "r1"}))
     assert len(result.records) == 1
     assert result.records[0]["id"] == "r1"
 
@@ -127,12 +115,8 @@ async def test_query_snapshots(connector: CodeClimateConnector) -> None:
             {"id": "ss1", "attributes": {"branch": "main"}},
         ]
     }
-    respx.get(f"{_BASE}/repos/r1/snapshots").mock(
-        return_value=httpx.Response(200, json=snapshots)
-    )
-    result = await connector.query(
-        ConnectorQuery(resource="snapshots", filters={"repo_id": "r1"})
-    )
+    respx.get(f"{_BASE}/repos/r1/snapshots").mock(return_value=httpx.Response(200, json=snapshots))
+    result = await connector.query(ConnectorQuery(resource="snapshots", filters={"repo_id": "r1"}))
     assert len(result.records) == 1
     assert result.records[0]["id"] == "ss1"
 
@@ -146,12 +130,8 @@ async def test_query_snapshots_missing_repo_id(connector: CodeClimateConnector) 
 @respx.mock
 async def test_query_snapshot(connector: CodeClimateConnector) -> None:
     snapshot = {"data": {"id": "ss1", "attributes": {"branch": "main"}}}
-    respx.get(f"{_BASE}/repos/r1/snapshots/ss1").mock(
-        return_value=httpx.Response(200, json=snapshot)
-    )
-    result = await connector.query(
-        ConnectorQuery(resource="snapshot", filters={"repo_id": "r1", "id": "ss1"})
-    )
+    respx.get(f"{_BASE}/repos/r1/snapshots/ss1").mock(return_value=httpx.Response(200, json=snapshot))
+    result = await connector.query(ConnectorQuery(resource="snapshot", filters={"repo_id": "r1", "id": "ss1"}))
     assert len(result.records) == 1
     assert result.records[0]["id"] == "ss1"
 
@@ -159,17 +139,13 @@ async def test_query_snapshot(connector: CodeClimateConnector) -> None:
 @respx.mock
 async def test_query_snapshot_missing_repo_id(connector: CodeClimateConnector) -> None:
     with pytest.raises(ValueError, match="Code Climate snapshot query requires 'repo_id'"):
-        await connector.query(
-            ConnectorQuery(resource="snapshot", filters={"id": "ss1"})
-        )
+        await connector.query(ConnectorQuery(resource="snapshot", filters={"id": "ss1"}))
 
 
 @respx.mock
 async def test_query_snapshot_missing_id(connector: CodeClimateConnector) -> None:
     with pytest.raises(ValueError, match="Code Climate snapshot query requires 'id'"):
-        await connector.query(
-            ConnectorQuery(resource="snapshot", filters={"repo_id": "r1"})
-        )
+        await connector.query(ConnectorQuery(resource="snapshot", filters={"repo_id": "r1"}))
 
 
 @respx.mock
@@ -179,12 +155,8 @@ async def test_query_test_reports(connector: CodeClimateConnector) -> None:
             {"id": "tr1", "attributes": {"branch": "main", "exit_code": 0}},
         ]
     }
-    respx.get(f"{_BASE}/repos/r1/test_reports").mock(
-        return_value=httpx.Response(200, json=reports)
-    )
-    result = await connector.query(
-        ConnectorQuery(resource="test_reports", filters={"repo_id": "r1"})
-    )
+    respx.get(f"{_BASE}/repos/r1/test_reports").mock(return_value=httpx.Response(200, json=reports))
+    result = await connector.query(ConnectorQuery(resource="test_reports", filters={"repo_id": "r1"}))
     assert len(result.records) == 1
     assert result.records[0]["id"] == "tr1"
 
@@ -198,12 +170,8 @@ async def test_query_test_reports_missing_repo_id(connector: CodeClimateConnecto
 @respx.mock
 async def test_query_test_report(connector: CodeClimateConnector) -> None:
     report = {"data": {"id": "tr1", "attributes": {"branch": "main", "exit_code": 0}}}
-    respx.get(f"{_BASE}/repos/r1/test_reports/tr1").mock(
-        return_value=httpx.Response(200, json=report)
-    )
-    result = await connector.query(
-        ConnectorQuery(resource="test_report", filters={"repo_id": "r1", "id": "tr1"})
-    )
+    respx.get(f"{_BASE}/repos/r1/test_reports/tr1").mock(return_value=httpx.Response(200, json=report))
+    result = await connector.query(ConnectorQuery(resource="test_report", filters={"repo_id": "r1", "id": "tr1"}))
     assert len(result.records) == 1
     assert result.records[0]["id"] == "tr1"
 
@@ -211,17 +179,13 @@ async def test_query_test_report(connector: CodeClimateConnector) -> None:
 @respx.mock
 async def test_query_test_report_missing_repo_id(connector: CodeClimateConnector) -> None:
     with pytest.raises(ValueError, match="Code Climate test_report query requires 'repo_id'"):
-        await connector.query(
-            ConnectorQuery(resource="test_report", filters={"id": "tr1"})
-        )
+        await connector.query(ConnectorQuery(resource="test_report", filters={"id": "tr1"}))
 
 
 @respx.mock
 async def test_query_test_report_missing_id(connector: CodeClimateConnector) -> None:
     with pytest.raises(ValueError, match="Code Climate test_report query requires 'id'"):
-        await connector.query(
-            ConnectorQuery(resource="test_report", filters={"repo_id": "r1"})
-        )
+        await connector.query(ConnectorQuery(resource="test_report", filters={"repo_id": "r1"}))
 
 
 @respx.mock
@@ -344,18 +308,14 @@ async def test_write_invalid_resource(connector: CodeClimateConnector) -> None:
 
 @respx.mock
 async def test_query_repos_with_http_401(connector: CodeClimateConnector) -> None:
-    respx.get(f"{_BASE}/repos").mock(
-        return_value=httpx.Response(401, text="Unauthorized")
-    )
+    respx.get(f"{_BASE}/repos").mock(return_value=httpx.Response(401, text="Unauthorized"))
     with pytest.raises(httpx.HTTPStatusError):
         await connector.query(ConnectorQuery(resource="repos"))
 
 
 @respx.mock
 async def test_query_repos_with_http_500(connector: CodeClimateConnector) -> None:
-    respx.get(f"{_BASE}/repos").mock(
-        return_value=httpx.Response(500, text="Internal Server Error")
-    )
+    respx.get(f"{_BASE}/repos").mock(return_value=httpx.Response(500, text="Internal Server Error"))
     with pytest.raises(httpx.HTTPStatusError):
         await connector.query(ConnectorQuery(resource="repos"))
 
@@ -376,24 +336,16 @@ async def test_query_repos_with_cursor(connector: CodeClimateConnector) -> None:
 
 @respx.mock
 async def test_query_repo_empty_result(connector: CodeClimateConnector) -> None:
-    respx.get(f"{_BASE}/repos/nonexistent").mock(
-        return_value=httpx.Response(200, json={"data": {}})
-    )
-    result = await connector.query(
-        ConnectorQuery(resource="repo", filters={"id": "nonexistent"})
-    )
+    respx.get(f"{_BASE}/repos/nonexistent").mock(return_value=httpx.Response(200, json={"data": {}}))
+    result = await connector.query(ConnectorQuery(resource="repo", filters={"id": "nonexistent"}))
     assert len(result.records) == 0
 
 
 @respx.mock
 async def test_snapshots_with_limit(connector: CodeClimateConnector) -> None:
     snapshots = {"data": [{"id": "ss1"}, {"id": "ss2"}]}
-    respx.get(f"{_BASE}/repos/r1/snapshots", params={"limit": 2}).mock(
-        return_value=httpx.Response(200, json=snapshots)
-    )
-    result = await connector.query(
-        ConnectorQuery(resource="snapshots", filters={"repo_id": "r1"}, limit=2)
-    )
+    respx.get(f"{_BASE}/repos/r1/snapshots", params={"limit": 2}).mock(return_value=httpx.Response(200, json=snapshots))
+    result = await connector.query(ConnectorQuery(resource="snapshots", filters={"repo_id": "r1"}, limit=2))
     assert len(result.records) == 2
 
 
@@ -403,9 +355,7 @@ async def test_test_reports_with_limit(connector: CodeClimateConnector) -> None:
     respx.get(f"{_BASE}/repos/r1/test_reports", params={"limit": 1}).mock(
         return_value=httpx.Response(200, json=reports)
     )
-    result = await connector.query(
-        ConnectorQuery(resource="test_reports", filters={"repo_id": "r1"}, limit=1)
-    )
+    result = await connector.query(ConnectorQuery(resource="test_reports", filters={"repo_id": "r1"}, limit=1))
     assert len(result.records) == 1
 
 

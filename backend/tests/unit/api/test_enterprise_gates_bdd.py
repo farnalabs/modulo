@@ -14,10 +14,11 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from fastapi.testclient import TestClient
 
-from modulo.api.dependencies import _get_engine, get_db_session
+from modulo.api.dependencies import _get_engine, get_db_session, get_plan_context
 from modulo.api.main import app
 from modulo.auth.dependencies import get_current_user
 from modulo.auth.jwt import AuthenticatedPrincipal
+from modulo.core.feature_flags import DbPlanContext, FeatureFlagRegistry
 from modulo.settings import Settings, get_settings
 
 _VALID_32 = "a" * 32
@@ -28,6 +29,11 @@ _PROVIDER_ID = uuid.UUID("00000000-0000-0000-0000-000000000010")
 
 
 # ── Settings helpers ──────────────────────────────────────────────────────
+
+
+def _team_plan_context() -> DbPlanContext:
+    registry = FeatureFlagRegistry(current_tier="team", has_license_key=True)
+    return DbPlanContext(registry)
 
 
 def _make_settings(*, license_key: str = "") -> Settings:
@@ -46,6 +52,13 @@ def _make_mock_session() -> AsyncMock:
     begin_cm.__aenter__ = AsyncMock(return_value=None)
     begin_cm.__aexit__ = AsyncMock(return_value=False)
     session.begin = MagicMock(return_value=begin_cm)
+    session.execute = AsyncMock(
+        return_value=MagicMock(
+            scalar=MagicMock(return_value=0),
+            scalar_one_or_none=MagicMock(return_value=None),
+            scalars=MagicMock(return_value=MagicMock(all=MagicMock(return_value=[]))),
+        )
+    )
     return session
 
 
@@ -77,11 +90,13 @@ def free_client() -> Generator[TestClient, None, None]:
 def licensed_client() -> Generator[TestClient, None, None]:
     """Client with a valid license key — all team features enabled."""
     mock_session = _make_mock_session()
+    plan_ctx = _team_plan_context()
 
     async def override_session() -> AsyncGenerator[AsyncMock, None]:
         yield mock_session
 
     app.dependency_overrides[get_settings] = lambda: _make_settings(license_key="valid-license-key")
+    app.dependency_overrides[get_plan_context] = lambda: plan_ctx
     app.dependency_overrides[get_db_session] = override_session
     app.dependency_overrides[_get_engine] = lambda: MagicMock()
     app.dependency_overrides[get_current_user] = lambda: AuthenticatedPrincipal(
@@ -228,11 +243,11 @@ class TestMixedGating:
         resp = free_client.get("/api/v1/admin/costs/limits")
         assert resp.status_code == 402
 
-    def test_costs_report_not_gated_on_free(self, free_client: TestClient) -> None:
+    def test_costs_report_not_gated_on_free(self, licensed_client: TestClient) -> None:
         rows = [{"entity_id": str(_TEAM_ID), "entity_name": "Team A", "total_spend_usd": 100.0, "total_runs": 5}]
         with (
             patch("modulo.api.routes.costs.get_cost_report", return_value=rows),
             patch("modulo.api.routes.costs.set_rls_org"),
         ):
-            resp = free_client.get("/api/v1/admin/costs")
+            resp = licensed_client.get("/api/v1/admin/costs")
         assert resp.status_code == 200

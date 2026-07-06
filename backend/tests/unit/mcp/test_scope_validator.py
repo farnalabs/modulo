@@ -201,6 +201,7 @@ class TestConstants:
         assert "trigger_pipeline" in TOOL_SCOPE_REQUIREMENTS
         assert "create_model_backend" in TOOL_SCOPE_REQUIREMENTS
 
+
 _FAKE_ID = "00000000-0000-0000-0000-000000000001"
 
 
@@ -226,9 +227,12 @@ class TestToolHandlerScopeErrorFormat:
         ],
     )
     async def test_insufficient_scope_when_role_none(
-        self, handler_name: str, kwargs: dict[str, str],
+        self,
+        handler_name: str,
+        kwargs: dict[str, str],
     ) -> None:
         import importlib
+
         mcp = importlib.import_module("modulo.api.mcp_server")
         handler = getattr(mcp, handler_name)
         mcp._ctx_role.set(None)
@@ -244,7 +248,10 @@ class TestToolHandlerScopeErrorFormat:
 
         _role.set("viewer")
         result = await _rh(
-            run_id=_FAKE_ID, gate_id="gate-1", action="approve", claim_token="tok",
+            run_id=_FAKE_ID,
+            gate_id="gate-1",
+            action="approve",
+            claim_token="tok",
         )
         assert result["error"] == "insufficient_scope"
         assert "requires 'operator' role, got 'viewer'" in result["detail"]
@@ -255,7 +262,10 @@ class TestToolHandlerScopeErrorFormat:
 
         _role.set("runner")
         result = await _rh(
-            run_id=_FAKE_ID, gate_id="gate-1", action="approve", claim_token="tok",
+            run_id=_FAKE_ID,
+            gate_id="gate-1",
+            action="approve",
+            claim_token="tok",
         )
         assert result["error"] == "insufficient_scope"
         assert "requires 'operator' role, got 'runner'" in result["detail"]
@@ -268,7 +278,9 @@ class TestToolHandlerScopeErrorFormat:
         with patch("modulo.api.mcp_server._session") as mock_session:
             mock_session.return_value.__aenter__.return_value = AsyncMock()
             result = await _rh(
-                run_id=_FAKE_ID, gate_id="gate-1", action="claim",
+                run_id=_FAKE_ID,
+                gate_id="gate-1",
+                action="claim",
             )
             assert result["error"] != "insufficient_scope"
 

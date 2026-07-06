@@ -73,7 +73,9 @@ class TestLocalRuntimeProvider:
         async def slow_command() -> None:
             started_event.set()
             proc = await asyncio.create_subprocess_exec(
-                sys.executable, "-c", "import time; time.sleep(20)",
+                sys.executable,
+                "-c",
+                "import time; time.sleep(20)",
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
             )
@@ -85,9 +87,7 @@ class TestLocalRuntimeProvider:
         await started_event.wait()
 
         asyncio.get_running_loop().time()
-        second_task = asyncio.create_task(
-            tight_provider.exec_command(ref, [sys.executable, "-c", "print('second')"])
-        )
+        second_task = asyncio.create_task(tight_provider.exec_command(ref, [sys.executable, "-c", "print('second')"]))
 
         await asyncio.sleep(0.05)
         assert not second_task.done(), "Second command should be blocked by semaphore"

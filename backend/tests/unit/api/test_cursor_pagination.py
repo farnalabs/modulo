@@ -92,6 +92,7 @@ class TestCursorEncoding:
         with pytest.raises(ValueError):
             CursorPaginator.decode_cursor("not-base64!!!")
 
+
 # ---------------------------------------------------------------------------
 # API endpoint integration tests
 # ---------------------------------------------------------------------------
@@ -124,8 +125,12 @@ class TestPipelinesEndpointCursor:
     def test_list_with_cursor_param(client: TestClient) -> None:
         """cursor query param is accepted and passed to CRUD."""
         page_result = PageResult(
-            items=[], total=0, page=1, page_size=20,
-            next_cursor=None, has_more=False,
+            items=[],
+            total=0,
+            page=1,
+            page_size=20,
+            next_cursor=None,
+            has_more=False,
         )
 
         with (
@@ -157,7 +162,10 @@ class TestPipelinesEndpointCursor:
         pipeline.updated_at = _NOW
 
         page_result = PageResult(
-            items=[pipeline], total=1, page=1, page_size=20,
+            items=[pipeline],
+            total=1,
+            page=1,
+            page_size=20,
         )
 
         with (
@@ -197,8 +205,12 @@ class TestPipelinesEndpointCursor:
         pipeline.updated_at = _NOW
 
         page_result = PageResult(
-            items=[pipeline], total=5, page=1, page_size=1,
-            next_cursor="some-cursor-value", has_more=True,
+            items=[pipeline],
+            total=5,
+            page=1,
+            page_size=1,
+            next_cursor="some-cursor-value",
+            has_more=True,
         )
 
         with (
@@ -220,8 +232,12 @@ class TestConnectorsEndpointCursor:
     @staticmethod
     def test_list_with_cursor(client: TestClient) -> None:
         page_result = PageResult(
-            items=[], total=0, page=1, page_size=20,
-            next_cursor="next-page", has_more=False,
+            items=[],
+            total=0,
+            page=1,
+            page_size=20,
+            next_cursor="next-page",
+            has_more=False,
         )
 
         with (
@@ -243,8 +259,12 @@ class TestLibraryEndpointCursor:
     @staticmethod
     def test_list_with_cursor(client: TestClient) -> None:
         page_result = PageResult(
-            items=[], total=0, page=1, page_size=20,
-            next_cursor=None, has_more=False,
+            items=[],
+            total=0,
+            page=1,
+            page_size=20,
+            next_cursor=None,
+            has_more=False,
         )
 
         with (
@@ -272,8 +292,12 @@ class TestPageResultBackwardCompat:
     @staticmethod
     def test_page_result_with_cursor_fields() -> None:
         result = PageResult(
-            items=["a"], total=10, page=1, page_size=1,
-            next_cursor="cursor123", has_more=True,
+            items=["a"],
+            total=10,
+            page=1,
+            page_size=1,
+            next_cursor="cursor123",
+            has_more=True,
         )
         assert result.next_cursor == "cursor123"
         assert result.has_more is True

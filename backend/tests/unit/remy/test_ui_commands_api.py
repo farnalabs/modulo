@@ -160,10 +160,8 @@ class TestUiCommandResultsEndpoint:
             f"/api/v1/remy/sessions/{SESSION_ID}/ui-command-results",
             json={
                 "results": [
-                    {"id": "nav-1", "name": "navigate", "success": True,
-                     "result": {"url": "/admin/pipelines"}},
-                    {"id": "click-1", "name": "click", "success": True,
-                     "result": None},
+                    {"id": "nav-1", "name": "navigate", "success": True, "result": {"url": "/admin/pipelines"}},
+                    {"id": "click-1", "name": "click", "success": True, "result": None},
                 ],
             },
         )
@@ -182,8 +180,7 @@ class TestUiCommandResultsEndpoint:
             f"/api/v1/remy/sessions/{SESSION_ID}/ui-command-results",
             json={
                 "results": [
-                    {"id": "click-1", "name": "click", "success": False,
-                     "error": "Element not found: .missing-btn"},
+                    {"id": "click-1", "name": "click", "success": False, "error": "Element not found: .missing-btn"},
                 ],
             },
         )
@@ -199,8 +196,7 @@ class TestUiCommandResultsEndpoint:
             f"/api/v1/remy/sessions/{SESSION_ID}/ui-command-results",
             json={
                 "results": [
-                    {"id": "nav-1", "name": "navigate", "success": False,
-                     "error": "cancelled_by_user"},
+                    {"id": "nav-1", "name": "navigate", "success": False, "error": "cancelled_by_user"},
                 ],
             },
         )
@@ -215,8 +211,7 @@ class TestUiCommandResultsEndpoint:
             f"/api/v1/remy/sessions/{SESSION_ID}/ui-command-results",
             json={
                 "results": [
-                    {"id": "nav-1", "name": "navigate", "success": True,
-                     "result": {"url": "/admin/config"}},
+                    {"id": "nav-1", "name": "navigate", "success": True, "result": {"url": "/admin/config"}},
                 ],
                 "api_key": "sk-test-key",
                 "system_prompt": "You are a helpful assistant.",

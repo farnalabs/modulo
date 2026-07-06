@@ -1,4 +1,5 @@
 """Unit tests: trigger route handlers return 503 on SQLAlchemyError."""
+
 import uuid
 from collections.abc import AsyncGenerator, Generator
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -78,11 +79,14 @@ def engine_client() -> Generator[TestClient, None, None]:
 
 # === triggers.py handler tests (each route returns 503 on SQLAlchemyError) ===
 
+
 def test_list_triggers_sqlalchemy_error(client: TestClient) -> None:
     session = _make_mock_session(SQLAlchemyError("mock", "mock", "mock"))
     with patch("modulo.api.routes.triggers.set_rls_org"):
+
         async def override_session() -> AsyncGenerator[AsyncMock, None]:
             yield session
+
         client.app.dependency_overrides[get_db_session] = override_session
         resp = client.get("/api/v1/triggers")
     assert resp.status_code == 503
@@ -91,8 +95,10 @@ def test_list_triggers_sqlalchemy_error(client: TestClient) -> None:
 def test_update_cron_config_sqlalchemy_error(client: TestClient) -> None:
     session = _make_mock_session(SQLAlchemyError("mock", "mock", "mock"))
     with patch("modulo.api.routes.triggers.set_rls_org"):
+
         async def override_session() -> AsyncGenerator[AsyncMock, None]:
             yield session
+
         client.app.dependency_overrides[get_db_session] = override_session
         resp = client.patch(f"/api/v1/triggers/{_TRIGGER_ID}/cron", json={"cron_expression": "0 * * * *"})
     assert resp.status_code == 503
@@ -101,8 +107,10 @@ def test_update_cron_config_sqlalchemy_error(client: TestClient) -> None:
 def test_preview_cron_schedule_sqlalchemy_error(client: TestClient) -> None:
     session = _make_mock_session(SQLAlchemyError("mock", "mock", "mock"))
     with patch("modulo.api.routes.triggers.set_rls_org"):
+
         async def override_session() -> AsyncGenerator[AsyncMock, None]:
             yield session
+
         client.app.dependency_overrides[get_db_session] = override_session
         resp = client.get(f"/api/v1/triggers/{_TRIGGER_ID}/cron/preview")
     assert resp.status_code == 503
@@ -114,8 +122,10 @@ def test_update_polling_config_sqlalchemy_error(client: TestClient) -> None:
         patch("modulo.api.routes.triggers.set_rls_org"),
         patch("modulo.api.routes.triggers.TriggerEngine.schedule_polling_trigger"),
     ):
+
         async def override_session() -> AsyncGenerator[AsyncMock, None]:
             yield session
+
         client.app.dependency_overrides[get_db_session] = override_session
         resp = client.patch(f"/api/v1/triggers/{_TRIGGER_ID}/polling", json={"poll_interval_seconds": 60})
     assert resp.status_code == 503
@@ -127,8 +137,10 @@ def test_test_polling_condition_sqlalchemy_error(client: TestClient) -> None:
         patch("modulo.api.routes.triggers.set_rls_org"),
         patch("modulo.api.routes.triggers.TriggerEngine.evaluate_condition", new_callable=AsyncMock),
     ):
+
         async def override_session() -> AsyncGenerator[AsyncMock, None]:
             yield session
+
         client.app.dependency_overrides[get_db_session] = override_session
         resp = client.post(
             f"/api/v1/triggers/{_TRIGGER_ID}/polling/test",
@@ -141,8 +153,10 @@ def test_create_trigger_sqlalchemy_error(client: TestClient) -> None:
     session = _make_mock_session(None)
     session.flush = AsyncMock(side_effect=SQLAlchemyError("mock", "mock", "mock"))
     with patch("modulo.api.routes.triggers.set_rls_org"):
+
         async def override_session() -> AsyncGenerator[AsyncMock, None]:
             yield session
+
         client.app.dependency_overrides[get_db_session] = override_session
         resp = client.post(f"/api/v1/pipelines/{_PIPELINE_ID}/triggers", json={"trigger_type": "manual"})
     assert resp.status_code == 503
@@ -151,8 +165,10 @@ def test_create_trigger_sqlalchemy_error(client: TestClient) -> None:
 def test_update_trigger_sqlalchemy_error(client: TestClient) -> None:
     session = _make_mock_session(SQLAlchemyError("mock", "mock", "mock"))
     with patch("modulo.api.routes.triggers.set_rls_org"):
+
         async def override_session() -> AsyncGenerator[AsyncMock, None]:
             yield session
+
         client.app.dependency_overrides[get_db_session] = override_session
         resp = client.put(f"/api/v1/triggers/{_TRIGGER_ID}", json={"active": False})
     assert resp.status_code == 503
@@ -161,8 +177,10 @@ def test_update_trigger_sqlalchemy_error(client: TestClient) -> None:
 def test_delete_trigger_sqlalchemy_error(client: TestClient) -> None:
     session = _make_mock_session(SQLAlchemyError("mock", "mock", "mock"))
     with patch("modulo.api.routes.triggers.set_rls_org"):
+
         async def override_session() -> AsyncGenerator[AsyncMock, None]:
             yield session
+
         client.app.dependency_overrides[get_db_session] = override_session
         resp = client.delete(f"/api/v1/triggers/{_TRIGGER_ID}")
     assert resp.status_code == 503
@@ -171,8 +189,10 @@ def test_delete_trigger_sqlalchemy_error(client: TestClient) -> None:
 def test_toggle_trigger_sqlalchemy_error(client: TestClient) -> None:
     session = _make_mock_session(SQLAlchemyError("mock", "mock", "mock"))
     with patch("modulo.api.routes.triggers.set_rls_org"):
+
         async def override_session() -> AsyncGenerator[AsyncMock, None]:
             yield session
+
         client.app.dependency_overrides[get_db_session] = override_session
         resp = client.post(f"/api/v1/triggers/{_TRIGGER_ID}/toggle")
     assert resp.status_code == 503
@@ -181,8 +201,10 @@ def test_toggle_trigger_sqlalchemy_error(client: TestClient) -> None:
 def test_test_trigger_sqlalchemy_error(client: TestClient) -> None:
     session = _make_mock_session(SQLAlchemyError("mock", "mock", "mock"))
     with patch("modulo.api.routes.triggers.set_rls_org"):
+
         async def override_session() -> AsyncGenerator[AsyncMock, None]:
             yield session
+
         client.app.dependency_overrides[get_db_session] = override_session
         resp = client.post(f"/api/v1/triggers/{_TRIGGER_ID}/test", json={"payload": {}})
     assert resp.status_code == 503
@@ -191,8 +213,10 @@ def test_test_trigger_sqlalchemy_error(client: TestClient) -> None:
 def test_list_trigger_events_sqlalchemy_error(client: TestClient) -> None:
     session = _make_mock_session(SQLAlchemyError("mock", "mock", "mock"))
     with patch("modulo.api.routes.triggers.set_rls_org"):
+
         async def override_session() -> AsyncGenerator[AsyncMock, None]:
             yield session
+
         client.app.dependency_overrides[get_db_session] = override_session
         resp = client.get(f"/api/v1/triggers/{_TRIGGER_ID}/events")
     assert resp.status_code == 503
@@ -201,8 +225,10 @@ def test_list_trigger_events_sqlalchemy_error(client: TestClient) -> None:
 def test_list_pipeline_triggers_sqlalchemy_error(client: TestClient) -> None:
     session = _make_mock_session(SQLAlchemyError("mock", "mock", "mock"))
     with patch("modulo.api.routes.triggers.set_rls_org"):
+
         async def override_session() -> AsyncGenerator[AsyncMock, None]:
             yield session
+
         client.app.dependency_overrides[get_db_session] = override_session
         resp = client.get(f"/api/v1/pipelines/{_PIPELINE_ID}/triggers")
     assert resp.status_code == 503
@@ -210,11 +236,14 @@ def test_list_pipeline_triggers_sqlalchemy_error(client: TestClient) -> None:
 
 # === admin_triggers.py tests ===
 
+
 def test_admin_list_trigger_events_sqlalchemy_error(client: TestClient) -> None:
     session = _make_mock_session(SQLAlchemyError("mock", "mock", "mock"))
     with patch("modulo.api.routes.admin_triggers.set_rls_org"):
+
         async def override_session() -> AsyncGenerator[AsyncMock, None]:
             yield session
+
         client.app.dependency_overrides[get_db_session] = override_session
         resp = client.get("/api/v1/admin/trigger-events")
     assert resp.status_code == 503
@@ -228,8 +257,10 @@ def test_admin_list_trigger_events_count_sqlalchemy_error(client: TestClient) ->
     session.execute = AsyncMock(return_value=execute_result)
     session.execute.side_effect = [execute_result, SQLAlchemyError("mock", "mock", "mock")]
     with patch("modulo.api.routes.admin_triggers.set_rls_org"):
+
         async def override_session() -> AsyncGenerator[AsyncMock, None]:
             yield session
+
         client.app.dependency_overrides[get_db_session] = override_session
         resp = client.get("/api/v1/admin/trigger-events")
     assert resp.status_code == 503
@@ -237,14 +268,17 @@ def test_admin_list_trigger_events_count_sqlalchemy_error(client: TestClient) ->
 
 # === webhooks.py tests ===
 
+
 def test_receive_webhook_sqlalchemy_error(engine_client: TestClient) -> None:
     session = _make_mock_session(SQLAlchemyError("mock", "mock", "mock"))
     with (
         patch("modulo.api.routes.webhooks.set_rls_org"),
         patch("modulo.api.routes.webhooks._trigger_engine.handle_webhook"),
     ):
+
         async def override_session() -> AsyncGenerator[AsyncMock, None]:
             yield session
+
         engine_client.app.dependency_overrides[get_db_session] = override_session
         resp = engine_client.post(
             f"/api/v1/triggers/{_TRIGGER_ID}/webhook",
@@ -260,8 +294,10 @@ def test_replay_webhook_sqlalchemy_error(engine_client: TestClient) -> None:
         patch("modulo.api.routes.webhooks.set_rls_org"),
         patch("modulo.api.routes.webhooks._trigger_engine.replay_event"),
     ):
+
         async def override_session() -> AsyncGenerator[AsyncMock, None]:
             yield session
+
         engine_client.app.dependency_overrides[get_db_session] = override_session
         resp = engine_client.post(f"/api/v1/triggers/{_TRIGGER_ID}/webhook/replay/{uuid.uuid4()}")
     assert resp.status_code == 503
@@ -270,8 +306,10 @@ def test_replay_webhook_sqlalchemy_error(engine_client: TestClient) -> None:
 def test_cleanup_expired_sqlalchemy_error(engine_client: TestClient) -> None:
     session = _make_mock_session(SQLAlchemyError("mock", "mock", "mock"))
     with patch("modulo.api.routes.webhooks.set_rls_org"):
+
         async def override_session() -> AsyncGenerator[AsyncMock, None]:
             yield session
+
         engine_client.app.dependency_overrides[get_db_session] = override_session
         resp = engine_client.post("/api/v1/triggers/cleanup-expired")
     assert resp.status_code == 503

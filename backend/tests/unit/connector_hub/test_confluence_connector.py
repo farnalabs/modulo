@@ -277,9 +277,7 @@ async def test_write_update_page(connector):
 
 async def test_write_update_page_missing_id(connector):
     with pytest.raises(ValueError, match="'id' in data"):
-        await connector.write(
-            ConnectorPayload(resource="page_update", data={"title": "Orphan"})
-        )
+        await connector.write(ConnectorPayload(resource="page_update", data={"title": "Orphan"}))
 
 
 # ---------------------------------------------------------------------------
@@ -289,9 +287,7 @@ async def test_write_update_page_missing_id(connector):
 
 @respx.mock
 async def test_write_add_label(connector):
-    respx.post(f"{_BASE}/wiki/api/v2/pages/p1/labels").mock(
-        return_value=httpx.Response(200, json={"name": "how-to"})
-    )
+    respx.post(f"{_BASE}/wiki/api/v2/pages/p1/labels").mock(return_value=httpx.Response(200, json={"name": "how-to"}))
     result = await connector.write(
         ConnectorPayload(
             resource="label",

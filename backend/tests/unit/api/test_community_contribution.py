@@ -187,7 +187,9 @@ class TestCommunityContribute:
 
         with (
             patch(
-                "modulo.api.routes.library.contribute_primitive", new_callable=AsyncMock, return_value=prim,
+                "modulo.api.routes.library.contribute_primitive",
+                new_callable=AsyncMock,
+                return_value=prim,
             ) as mock_fn,
         ):
             resp = client.post(

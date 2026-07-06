@@ -16,6 +16,7 @@ def _make_app():
     app = FastAPI()
 
     from modulo.api.routes.error_forwarder_config import router as forwarder_config_router
+
     app.include_router(forwarder_config_router)
 
     async def _override_user():
@@ -43,6 +44,7 @@ def _make_app():
 
     from modulo.api.dependencies import get_db_session
     from modulo.auth.dependencies import get_current_user
+
     app.dependency_overrides[get_current_user] = _override_user
     app.dependency_overrides[get_db_session] = _override_db
     return app
@@ -51,6 +53,7 @@ def _make_app():
 class TestListForwarders:
     def test_returns_all_types_no_configs(self):
         from fastapi.testclient import TestClient
+
         app = _make_app()
         client = TestClient(app)
 
@@ -69,6 +72,7 @@ class TestListForwarders:
 class TestConfigureForwarder:
     def test_creates_new_config(self):
         from fastapi.testclient import TestClient
+
         app = _make_app()
         client = TestClient(app)
 
@@ -85,6 +89,7 @@ class TestConfigureForwarder:
 
     def test_unknown_type_returns_404(self):
         from fastapi.testclient import TestClient
+
         app = _make_app()
         client = TestClient(app)
         resp = client.put("/api/v1/errors/forwarders/unknown", json={"enabled": True})
@@ -93,6 +98,7 @@ class TestConfigureForwarder:
     def test_non_admin_returns_403(self):
         app = FastAPI()
         from modulo.api.routes.error_forwarder_config import router as forwarder_config_router
+
         app.include_router(forwarder_config_router)
 
         async def _override_viewer():
@@ -118,10 +124,12 @@ class TestConfigureForwarder:
 
         from modulo.api.dependencies import get_db_session
         from modulo.auth.dependencies import get_current_user
+
         app.dependency_overrides[get_current_user] = _override_viewer
         app.dependency_overrides[get_db_session] = _override_db
 
         from fastapi.testclient import TestClient
+
         client = TestClient(app)
         resp = client.put("/api/v1/errors/forwarders/sentry", json={"enabled": True})
         assert resp.status_code == 403
@@ -130,6 +138,7 @@ class TestConfigureForwarder:
 class TestTestConnection:
     def test_test_connection_success(self):
         from fastapi.testclient import TestClient
+
         app = _make_app()
         client = TestClient(app)
 
@@ -151,6 +160,7 @@ class TestTestConnection:
 
     def test_test_connection_failure(self):
         from fastapi.testclient import TestClient
+
         app = _make_app()
         client = TestClient(app)
 
@@ -172,6 +182,7 @@ class TestTestConnection:
 
     def test_unknown_type_returns_404(self):
         from fastapi.testclient import TestClient
+
         app = _make_app()
         client = TestClient(app)
         resp = client.post("/api/v1/errors/forwarders/unknown/test", json={})
@@ -181,6 +192,7 @@ class TestTestConnection:
 class TestConfigSummaryMasking:
     def test_sensitive_keys_are_masked(self):
         from fastapi.testclient import TestClient
+
         app = _make_app()
         client = TestClient(app)
 

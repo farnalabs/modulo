@@ -32,9 +32,7 @@ def test_connector_type(cc_runner):
 
 @respx.mock
 async def test_health_check_ok(cc_runner):
-    respx.get(f"{_CIRCLECI_API}/me").mock(
-        return_value=httpx.Response(200, json={"login": "testuser"})
-    )
+    respx.get(f"{_CIRCLECI_API}/me").mock(return_value=httpx.Response(200, json={"login": "testuser"}))
     result = await cc_runner.health_check()
     assert result.ok is True
 

@@ -64,9 +64,7 @@ async def test_health_check_network_error(connector: AzureKeyVaultConnector) -> 
 @respx.mock
 async def test_query_secrets(connector: AzureKeyVaultConnector) -> None:
     secrets = {"value": [{"id": "https://myvault.vault.azure.net/secrets/secret1", "attributes": {"enabled": True}}]}
-    respx.get(f"{_BASE}/secrets", params={"api-version": "7.4"}).mock(
-        return_value=httpx.Response(200, json=secrets)
-    )
+    respx.get(f"{_BASE}/secrets", params={"api-version": "7.4"}).mock(return_value=httpx.Response(200, json=secrets))
     result = await connector.query(ConnectorQuery(resource="secrets"))
     assert len(result.records) == 1
     assert "secret1" in result.records[0]["id"]
@@ -154,9 +152,7 @@ async def test_query_secret_by_version_missing_version(connector: AzureKeyVaultC
 @respx.mock
 async def test_query_keys(connector: AzureKeyVaultConnector) -> None:
     keys = {"value": [{"kid": "https://myvault.vault.azure.net/keys/key1", "attributes": {"enabled": True}}]}
-    respx.get(f"{_BASE}/keys", params={"api-version": "7.4"}).mock(
-        return_value=httpx.Response(200, json=keys)
-    )
+    respx.get(f"{_BASE}/keys", params={"api-version": "7.4"}).mock(return_value=httpx.Response(200, json=keys))
     result = await connector.query(ConnectorQuery(resource="keys"))
     assert len(result.records) == 1
 
@@ -174,9 +170,7 @@ async def test_query_keys_with_limit(connector: AzureKeyVaultConnector) -> None:
 @respx.mock
 async def test_query_key(connector: AzureKeyVaultConnector) -> None:
     key_data = {"key": {"kid": "https://myvault.vault.azure.net/keys/key1", "kty": "RSA"}}
-    respx.get(f"{_BASE}/keys/key1", params={"api-version": "7.4"}).mock(
-        return_value=httpx.Response(200, json=key_data)
-    )
+    respx.get(f"{_BASE}/keys/key1", params={"api-version": "7.4"}).mock(return_value=httpx.Response(200, json=key_data))
     result = await connector.query(ConnectorQuery(resource="key", filters={"name": "key1"}))
     assert len(result.records) == 1
     assert result.records[0]["key"]["kty"] == "RSA"
@@ -191,9 +185,7 @@ async def test_query_key_missing_name(connector: AzureKeyVaultConnector) -> None
 @respx.mock
 async def test_query_certificates(connector: AzureKeyVaultConnector) -> None:
     certs = {"value": [{"id": "https://myvault.vault.azure.net/certificates/cert1"}]}
-    respx.get(f"{_BASE}/certificates", params={"api-version": "7.4"}).mock(
-        return_value=httpx.Response(200, json=certs)
-    )
+    respx.get(f"{_BASE}/certificates", params={"api-version": "7.4"}).mock(return_value=httpx.Response(200, json=certs))
     result = await connector.query(ConnectorQuery(resource="certificates"))
     assert len(result.records) == 1
 
@@ -239,9 +231,7 @@ async def test_write_secret(connector: AzureKeyVaultConnector) -> None:
     respx.put(f"{_BASE}/secrets/new-secret", params={"api-version": "7.4"}).mock(
         return_value=httpx.Response(200, json=created)
     )
-    result = await connector.write(
-        ConnectorPayload(resource="secret", data={"name": "new-secret", "value": "s3cret"})
-    )
+    result = await connector.write(ConnectorPayload(resource="secret", data={"name": "new-secret", "value": "s3cret"}))
     assert result["value"] == "s3cret"
     assert "new-secret" in result["id"]
 
@@ -250,7 +240,9 @@ async def test_write_secret(connector: AzureKeyVaultConnector) -> None:
 async def test_write_secret_with_content_type_and_tags(connector: AzureKeyVaultConnector) -> None:
     created = {
         "id": "https://myvault.vault.azure.net/secrets/tagged",
-        "value": "val", "contentType": "text/plain", "tags": {"env": "prod"},
+        "value": "val",
+        "contentType": "text/plain",
+        "tags": {"env": "prod"},
     }
     respx.put(f"{_BASE}/secrets/tagged", params={"api-version": "7.4"}).mock(
         return_value=httpx.Response(200, json=created)
@@ -268,17 +260,13 @@ async def test_write_secret_with_content_type_and_tags(connector: AzureKeyVaultC
 @respx.mock
 async def test_write_secret_missing_name(connector: AzureKeyVaultConnector) -> None:
     with pytest.raises(ValueError, match="Azure Key Vault secret write requires 'name'"):
-        await connector.write(
-            ConnectorPayload(resource="secret", data={"value": "val"})
-        )
+        await connector.write(ConnectorPayload(resource="secret", data={"value": "val"}))
 
 
 @respx.mock
 async def test_write_secret_missing_value(connector: AzureKeyVaultConnector) -> None:
     with pytest.raises(ValueError, match="Azure Key Vault secret write requires 'value'"):
-        await connector.write(
-            ConnectorPayload(resource="secret", data={"name": "my-secret"})
-        )
+        await connector.write(ConnectorPayload(resource="secret", data={"name": "my-secret"}))
 
 
 @respx.mock
@@ -311,9 +299,7 @@ async def test_write_secret_update_with_tags(connector: AzureKeyVaultConnector) 
 @respx.mock
 async def test_write_secret_update_missing_name(connector: AzureKeyVaultConnector) -> None:
     with pytest.raises(ValueError, match="Azure Key Vault secret_update write requires 'name'"):
-        await connector.write(
-            ConnectorPayload(resource="secret_update", data={"enabled": False})
-        )
+        await connector.write(ConnectorPayload(resource="secret_update", data={"enabled": False}))
 
 
 @respx.mock
@@ -325,18 +311,14 @@ async def test_write_secret_delete(connector: AzureKeyVaultConnector) -> None:
     respx.delete(f"{_BASE}/secrets/to-delete", params={"api-version": "7.4"}).mock(
         return_value=httpx.Response(200, json=deleted)
     )
-    result = await connector.write(
-        ConnectorPayload(resource="secret_delete", data={"name": "to-delete"})
-    )
+    result = await connector.write(ConnectorPayload(resource="secret_delete", data={"name": "to-delete"}))
     assert "recoveryId" in result
 
 
 @respx.mock
 async def test_write_secret_delete_missing_name(connector: AzureKeyVaultConnector) -> None:
     with pytest.raises(ValueError, match="Azure Key Vault secret_delete write requires 'name'"):
-        await connector.write(
-            ConnectorPayload(resource="secret_delete", data={})
-        )
+        await connector.write(ConnectorPayload(resource="secret_delete", data={}))
 
 
 @respx.mock
@@ -345,18 +327,14 @@ async def test_write_secret_backup(connector: AzureKeyVaultConnector) -> None:
     respx.post(f"{_BASE}/secrets/my-secret/backup", params={"api-version": "7.4"}).mock(
         return_value=httpx.Response(200, json=backup_response)
     )
-    result = await connector.write(
-        ConnectorPayload(resource="secret_backup", data={"name": "my-secret"})
-    )
+    result = await connector.write(ConnectorPayload(resource="secret_backup", data={"name": "my-secret"}))
     assert "value" in result
 
 
 @respx.mock
 async def test_write_secret_backup_missing_name(connector: AzureKeyVaultConnector) -> None:
     with pytest.raises(ValueError, match="Azure Key Vault secret_backup write requires 'name'"):
-        await connector.write(
-            ConnectorPayload(resource="secret_backup", data={})
-        )
+        await connector.write(ConnectorPayload(resource="secret_backup", data={}))
 
 
 @respx.mock
@@ -365,18 +343,14 @@ async def test_write_secret_restore(connector: AzureKeyVaultConnector) -> None:
     respx.post(f"{_BASE}/secrets/restore", params={"api-version": "7.4"}).mock(
         return_value=httpx.Response(200, json=restored)
     )
-    result = await connector.write(
-        ConnectorPayload(resource="secret_restore", data={"value": "base64-backup-blob"})
-    )
+    result = await connector.write(ConnectorPayload(resource="secret_restore", data={"value": "base64-backup-blob"}))
     assert result["value"] == "restored-val"
 
 
 @respx.mock
 async def test_write_secret_restore_missing_value(connector: AzureKeyVaultConnector) -> None:
     with pytest.raises(ValueError, match="Azure Key Vault secret_restore write requires 'value'"):
-        await connector.write(
-            ConnectorPayload(resource="secret_restore", data={})
-        )
+        await connector.write(ConnectorPayload(resource="secret_restore", data={}))
 
 
 @respx.mock
@@ -415,6 +389,4 @@ async def test_write_http_403(connector: AzureKeyVaultConnector) -> None:
         return_value=httpx.Response(403, text="Forbidden")
     )
     with pytest.raises(httpx.HTTPStatusError):
-        await connector.write(
-            ConnectorPayload(resource="secret", data={"name": "blocked", "value": "val"})
-        )
+        await connector.write(ConnectorPayload(resource="secret", data={"name": "blocked", "value": "val"}))

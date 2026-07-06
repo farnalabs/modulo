@@ -114,9 +114,7 @@ def make_snapshot(nodes=None):
     snapshot = MagicMock()
     snapshot.id = SNAPSHOT_ID
     snapshot.graph_json = {
-        "nodes": nodes or [
-            {"id": str(NODE_ID), "node_type": "manual", "output_schema_id": str(uuid.uuid4())}
-        ],
+        "nodes": nodes or [{"id": str(NODE_ID), "node_type": "manual", "output_schema_id": str(uuid.uuid4())}],
         "edges": [],
     }
     return snapshot
@@ -153,12 +151,15 @@ class TestConvertToAgent:
 
     async def test_happy_path(self):
         session = make_session()
-        setup_execute_side_effect(session, [
-            make_pipeline_row(nodes=[make_manual_node()]),
-            make_agent_mock(),
-            make_connector_mock(),
-            make_model_backend_mock(),
-        ])
+        setup_execute_side_effect(
+            session,
+            [
+                make_pipeline_row(nodes=[make_manual_node()]),
+                make_agent_mock(),
+                make_connector_mock(),
+                make_model_backend_mock(),
+            ],
+        )
         principal = make_principal()
         body = make_convert_body()
 
@@ -166,8 +167,7 @@ class TestConvertToAgent:
         saved_nodes[0]["node_type"] = "agent"
         saved_nodes[0]["agent_id"] = str(AGENT_ID)
 
-        with patch("modulo.api.routes.pipelines.replace_pipeline_graph",
-                    return_value=(saved_nodes, [])):
+        with patch("modulo.api.routes.pipelines.replace_pipeline_graph", return_value=(saved_nodes, [])):
             resp = await convert_node_to_agent_endpoint(
                 pipeline_id=PIPELINE_ID,
                 node_id=NODE_ID,
@@ -234,10 +234,13 @@ class TestConvertToAgent:
 
     async def test_agent_not_found(self):
         session = make_session()
-        setup_execute_side_effect(session, [
-            make_pipeline_row(nodes=[make_manual_node()]),
-            None,
-        ])
+        setup_execute_side_effect(
+            session,
+            [
+                make_pipeline_row(nodes=[make_manual_node()]),
+                None,
+            ],
+        )
         principal = make_principal()
         body = make_convert_body()
 
@@ -255,11 +258,14 @@ class TestConvertToAgent:
 
     async def test_connector_not_found(self):
         session = make_session()
-        setup_execute_side_effect(session, [
-            make_pipeline_row(nodes=[make_manual_node()]),
-            make_agent_mock(),
-            None,
-        ])
+        setup_execute_side_effect(
+            session,
+            [
+                make_pipeline_row(nodes=[make_manual_node()]),
+                make_agent_mock(),
+                None,
+            ],
+        )
         principal = make_principal()
         body = make_convert_body()
 
@@ -277,11 +283,14 @@ class TestConvertToAgent:
 
     async def test_connector_type_mismatch(self):
         session = make_session()
-        setup_execute_side_effect(session, [
-            make_pipeline_row(nodes=[make_manual_node()]),
-            make_agent_mock(),
-            make_connector_mock(connector_type="gitlab"),
-        ])
+        setup_execute_side_effect(
+            session,
+            [
+                make_pipeline_row(nodes=[make_manual_node()]),
+                make_agent_mock(),
+                make_connector_mock(connector_type="gitlab"),
+            ],
+        )
         principal = make_principal()
         body = make_convert_body()
 
@@ -298,12 +307,15 @@ class TestConvertToAgent:
 
     async def test_model_backend_not_found(self):
         session = make_session()
-        setup_execute_side_effect(session, [
-            make_pipeline_row(nodes=[make_manual_node()]),
-            make_agent_mock(),
-            make_connector_mock(),
-            None,
-        ])
+        setup_execute_side_effect(
+            session,
+            [
+                make_pipeline_row(nodes=[make_manual_node()]),
+                make_agent_mock(),
+                make_connector_mock(),
+                None,
+            ],
+        )
         principal = make_principal()
         body = make_convert_body()
 
@@ -321,19 +333,25 @@ class TestConvertToAgent:
 
     async def test_programming_error_caught(self):
         session = make_session()
-        setup_execute_side_effect(session, [
-            make_pipeline_row(nodes=[make_manual_node()]),
-            make_agent_mock(),
-            make_connector_mock(),
-            make_model_backend_mock(),
-        ])
+        setup_execute_side_effect(
+            session,
+            [
+                make_pipeline_row(nodes=[make_manual_node()]),
+                make_agent_mock(),
+                make_connector_mock(),
+                make_model_backend_mock(),
+            ],
+        )
         principal = make_principal()
         body = make_convert_body()
 
-        with patch(
-            "modulo.api.routes.pipelines.replace_pipeline_graph",
-            side_effect=ProgrammingError("stmt", {}, "table not found"),
-        ), pytest.raises(HTTPException) as excinfo:
+        with (
+            patch(
+                "modulo.api.routes.pipelines.replace_pipeline_graph",
+                side_effect=ProgrammingError("stmt", {}, "table not found"),
+            ),
+            pytest.raises(HTTPException) as excinfo,
+        ):
             await convert_node_to_agent_endpoint(
                 pipeline_id=PIPELINE_ID,
                 node_id=NODE_ID,
@@ -366,10 +384,8 @@ class TestRevertToManual:
         saved_nodes[0]["label"] = "qa-review"
 
         with (
-            patch("modulo.api.routes.pipelines.get_snapshot_detail",
-                  return_value=snapshot),
-            patch("modulo.api.routes.pipelines.replace_pipeline_graph",
-                  return_value=(saved_nodes, [])),
+            patch("modulo.api.routes.pipelines.get_snapshot_detail", return_value=snapshot),
+            patch("modulo.api.routes.pipelines.replace_pipeline_graph", return_value=(saved_nodes, [])),
         ):
             resp = await revert_node_to_manual_endpoint(
                 pipeline_id=PIPELINE_ID,
@@ -454,9 +470,11 @@ class TestRevertToManual:
         session = make_session()
         setup_execute_side_effect(session, [make_pipeline_row(nodes=[make_agent_node()])])
         principal = make_principal()
-        snapshot = make_snapshot(nodes=[
-            {"id": str(uuid.uuid4()), "node_type": "manual", "output_schema_id": str(uuid.uuid4())},
-        ])
+        snapshot = make_snapshot(
+            nodes=[
+                {"id": str(uuid.uuid4()), "node_type": "manual", "output_schema_id": str(uuid.uuid4())},
+            ]
+        )
 
         with patch("modulo.api.routes.pipelines.get_snapshot_detail", return_value=snapshot):
             with pytest.raises(HTTPException) as excinfo:
@@ -474,9 +492,11 @@ class TestRevertToManual:
         session = make_session()
         setup_execute_side_effect(session, [make_pipeline_row(nodes=[make_agent_node()])])
         principal = make_principal()
-        snapshot = make_snapshot(nodes=[
-            {"id": str(NODE_ID), "node_type": "agent", "output_schema_id": str(uuid.uuid4())},
-        ])
+        snapshot = make_snapshot(
+            nodes=[
+                {"id": str(NODE_ID), "node_type": "agent", "output_schema_id": str(uuid.uuid4())},
+            ]
+        )
 
         with patch("modulo.api.routes.pipelines.get_snapshot_detail", return_value=snapshot):
             with pytest.raises(HTTPException) as excinfo:
@@ -494,9 +514,11 @@ class TestRevertToManual:
         session = make_session()
         setup_execute_side_effect(session, [make_pipeline_row(nodes=[make_agent_node()])])
         principal = make_principal()
-        snapshot = make_snapshot(nodes=[
-            {"id": str(NODE_ID), "node_type": "manual"},
-        ])
+        snapshot = make_snapshot(
+            nodes=[
+                {"id": str(NODE_ID), "node_type": "manual"},
+            ]
+        )
 
         with patch("modulo.api.routes.pipelines.get_snapshot_detail", return_value=snapshot):
             with pytest.raises(HTTPException) as excinfo:

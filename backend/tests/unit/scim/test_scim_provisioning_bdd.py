@@ -138,6 +138,7 @@ def _clear_overrides() -> object:
 # Scenario: Create a SCIM user provisions a new Modulo user
 # ===========================================================================
 
+
 class TestCreateScimUser:
     """POST /scim/v2/Users — happy path."""
 
@@ -164,6 +165,7 @@ class TestCreateScimUser:
 # ===========================================================================
 # Scenario: Get a SCIM user by id returns the full resource
 # ===========================================================================
+
 
 class TestGetScimUser:
     """GET /scim/v2/Users/{user_id} — happy path."""
@@ -198,6 +200,7 @@ class TestGetScimUser:
 # Scenario: Replace a SCIM user updates all attributes
 # ===========================================================================
 
+
 class TestReplaceScimUser:
     """PUT /scim/v2/Users/{user_id} — happy path."""
 
@@ -220,6 +223,7 @@ class TestReplaceScimUser:
 # ===========================================================================
 # Scenario: Delete a SCIM user deactivates the Modulo user
 # ===========================================================================
+
 
 class TestDeleteScimUser:
     """DELETE /scim/v2/Users/{user_id} — happy path."""
@@ -248,6 +252,7 @@ class TestDeleteScimUser:
 # ===========================================================================
 # Scenario: JIT provisioning links an unknown SCIM user to a new Modulo user
 # ===========================================================================
+
 
 class TestJitProvisioning:
     """JIT — user created with auth_provider=scim, no password."""
@@ -283,6 +288,7 @@ class TestJitProvisioning:
             resp = client.post("/scim/v2/Users", json=body, headers=headers)
             assert resp.status_code == 201
             from modulo.api.routes import scim as scim_routes
+
             scim_routes.scim_create_user.assert_called_once()
 
     def test_duplicate_username_returns_409(self, client: TestClient) -> None:
@@ -299,6 +305,7 @@ class TestJitProvisioning:
 # ===========================================================================
 # Scenario: Deprovisioning a SCIM user deactivates but preserves the record
 # ===========================================================================
+
 
 class TestDeprovisionScimUser:
     """PATCH /scim/v2/Users/{user_id} — deactivate user."""
@@ -339,6 +346,7 @@ class TestDeprovisionScimUser:
 # ===========================================================================
 # Scenario: Create a SCIM group with members
 # ===========================================================================
+
 
 class TestCreateScimGroup:
     """POST /scim/v2/Groups — happy path."""
@@ -396,6 +404,7 @@ class TestCreateScimGroup:
 # Scenario: Team sync maps IdP group membership to Modulo teams
 # ===========================================================================
 
+
 class TestTeamSync:
     """PATCH /scim/v2/Groups — add/remove members."""
 
@@ -425,7 +434,9 @@ class TestTeamSync:
         ):
             headers = {"Authorization": f"Bearer {_SCIM_TOKEN}"}
             resp = client.patch(
-                f"/scim/v2/Groups/{_TEAM_ID}", json=_PATCH_GROUP_ADD_MEMBER, headers=headers,
+                f"/scim/v2/Groups/{_TEAM_ID}",
+                json=_PATCH_GROUP_ADD_MEMBER,
+                headers=headers,
             )
 
         assert resp.status_code == 200
@@ -440,7 +451,9 @@ class TestTeamSync:
         ):
             headers = {"Authorization": f"Bearer {_SCIM_TOKEN}"}
             resp = client.patch(
-                f"/scim/v2/Groups/{_TEAM_ID}", json=_PATCH_GROUP_REMOVE_MEMBER, headers=headers,
+                f"/scim/v2/Groups/{_TEAM_ID}",
+                json=_PATCH_GROUP_REMOVE_MEMBER,
+                headers=headers,
             )
 
         assert resp.status_code == 200
@@ -448,6 +461,7 @@ class TestTeamSync:
     def test_add_nonexistent_user_returns_error(self, client: TestClient) -> None:
         mock_team = self._get_mock_team()
         from fastapi import HTTPException as FastAPIHTTPException
+
         with (
             patch("modulo.api.routes.scim.scim_get_group", return_value=mock_team),
             patch("modulo.api.routes.scim.scim_list_group_members", return_value=[]),
@@ -459,7 +473,9 @@ class TestTeamSync:
         ):
             headers = {"Authorization": f"Bearer {_SCIM_TOKEN}"}
             resp = client.patch(
-                f"/scim/v2/Groups/{_TEAM_ID}", json=_PATCH_GROUP_ADD_MEMBER, headers=headers,
+                f"/scim/v2/Groups/{_TEAM_ID}",
+                json=_PATCH_GROUP_ADD_MEMBER,
+                headers=headers,
             )
 
         assert resp.status_code == 404
@@ -468,6 +484,7 @@ class TestTeamSync:
 # ===========================================================================
 # Scenario: SCIM bearer token auth rejects invalid credentials
 # ===========================================================================
+
 
 class TestScimAuth:
     """Authentication edge cases."""
@@ -478,8 +495,10 @@ class TestScimAuth:
         app.dependency_overrides[_get_engine] = lambda: MagicMock()
         headers = {"X-CSRF-Token": "test-csrf-token"}
         resp = TestClient(app).post(
-            "/scim/v2/Users", json=_USER_CREATE_BODY,
-            headers=headers, cookies={"XSRF-TOKEN": "test-csrf-token"},
+            "/scim/v2/Users",
+            json=_USER_CREATE_BODY,
+            headers=headers,
+            cookies={"XSRF-TOKEN": "test-csrf-token"},
         )
         app.dependency_overrides.clear()
         assert resp.status_code == 401
@@ -514,6 +533,7 @@ class TestScimAuth:
 # ===========================================================================
 # Scenario: Team license gate blocks SCIM without valid license
 # ===========================================================================
+
 
 class TestLicenseGate:
     """Team license gating for SCIM endpoints."""

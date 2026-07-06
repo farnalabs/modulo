@@ -125,9 +125,7 @@ def test_conditional_router_with_persisted_names():
         [],
         None,
     )
-    result = router(
-        {"artifacts": [{"node_id": "prev", "status": "ok"}]}
-    )
+    result = router({"artifacts": [{"node_id": "prev", "status": "ok"}]})
     assert result == "target-a"
 
 

@@ -44,9 +44,11 @@ def _make_settings() -> Settings:
 def _sign_license_payload(payload: dict, private_key: str = _TEST_PRIV) -> str:
     sig_hex = sign_primitive(payload, private_key)
     sig_bytes = bytes.fromhex(sig_hex)
-    payload_b64 = base64.urlsafe_b64encode(
-        json.dumps(payload, separators=(",", ":"), sort_keys=True).encode()
-    ).decode().rstrip("=")
+    payload_b64 = (
+        base64.urlsafe_b64encode(json.dumps(payload, separators=(",", ":"), sort_keys=True).encode())
+        .decode()
+        .rstrip("=")
+    )
     sig_b64 = base64.urlsafe_b64encode(sig_bytes).decode().rstrip("=")
     return f"{payload_b64}.{sig_b64}"
 
@@ -143,18 +145,18 @@ class TestParseAndVerify:
         payload = _make_valid_payload()
         key = _sign_license_payload(payload)
         parts = key.split(".")
-        tampered_payload_b64 = base64.urlsafe_b64encode(
-            json.dumps({"tier": "community"}, separators=(",", ":"), sort_keys=True).encode()
-        ).decode().rstrip("=")
+        tampered_payload_b64 = (
+            base64.urlsafe_b64encode(json.dumps({"tier": "community"}, separators=(",", ":"), sort_keys=True).encode())
+            .decode()
+            .rstrip("=")
+        )
         tampered_key = f"{tampered_payload_b64}.{parts[1]}"
         result = parse_and_verify(tampered_key)
         assert result.valid is False
         assert "Signature" in (result.error or "")
 
     def test_rejects_expired_license(self) -> None:
-        payload = _make_valid_payload(
-            expires_at=(datetime.now(UTC) - timedelta(days=1)).isoformat()
-        )
+        payload = _make_valid_payload(expires_at=(datetime.now(UTC) - timedelta(days=1)).isoformat())
         key = _sign_license_payload(payload)
         result = parse_and_verify(key)
         assert result.valid is False
@@ -295,9 +297,7 @@ class TestUploadLicense:
         assert "Signature" in resp.json()["detail"]
 
     def test_rejects_expired_license(self, client: TestClient) -> None:
-        payload = _make_valid_payload(
-            expires_at=(datetime.now(UTC) - timedelta(days=1)).isoformat()
-        )
+        payload = _make_valid_payload(expires_at=(datetime.now(UTC) - timedelta(days=1)).isoformat())
         key = _sign_license_payload(payload)
         resp = client.post(self.URL, json={"license_key": key})
         assert resp.status_code == 422

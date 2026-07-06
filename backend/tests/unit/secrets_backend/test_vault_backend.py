@@ -90,6 +90,7 @@ class TestVaultSecretsBackend:
 
     async def test_get_secret_timeout_wraps_as_runtime_error(self, mock_hvac):
         import asyncio
+
         backend = _make_backend(mock_hvac)
 
         with patch.object(asyncio, "wait_for", side_effect=TimeoutError()):

@@ -145,7 +145,8 @@ class TestIngest:
             upsert_mock.return_value = upsert_group
 
             result = await svc.ingest(
-                session, _ORG_ID,
+                session,
+                _ORG_ID,
                 {"level": "error", "message": "test", "source": "backend"},
             )
             assert "group_id" in result
@@ -171,7 +172,8 @@ class TestIngest:
             upsert_mock.return_value = upsert_group
 
             result = await svc.ingest(
-                session, _ORG_ID,
+                session,
+                _ORG_ID,
                 {"level": "error", "message": "test", "source": "backend"},
             )
             assert result["is_new"] is False

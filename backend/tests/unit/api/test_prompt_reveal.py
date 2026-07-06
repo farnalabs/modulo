@@ -223,9 +223,7 @@ class TestBuildMessagesFromAgentAndState:
         from modulo.api.routes.runs import _build_messages_from_agent_and_state
 
         agent = _make_agent()
-        messages = _build_messages_from_agent_and_state(
-            agent, {"query": "hello"}, None, None, "node-a"
-        )
+        messages = _build_messages_from_agent_and_state(agent, {"query": "hello"}, None, None, "node-a")
         user_msgs = [m for m in messages if m["role"] == "user"]
         assert len(user_msgs) == 1
         assert "hello" in user_msgs[0]["content"]
@@ -332,9 +330,7 @@ class TestRevealNodePrompt:
         session = _session_holder[0]
         run = _make_run()
 
-        session.execute = AsyncMock(
-            side_effect=self._make_mock_execute(run, None)
-        )
+        session.execute = AsyncMock(side_effect=self._make_mock_execute(run, None))
 
         with patch("modulo.api.routes.runs.get_run", return_value=run):
             with patch("modulo.api.routes.runs.set_rls_org"):
@@ -356,9 +352,7 @@ class TestRevealNodePrompt:
             "edges": [],
         }
 
-        session.execute = AsyncMock(
-            side_effect=self._make_mock_execute(run, snapshot, agent=None)
-        )
+        session.execute = AsyncMock(side_effect=self._make_mock_execute(run, snapshot, agent=None))
 
         with patch("modulo.api.routes.runs.get_run", return_value=run):
             with patch("modulo.api.routes.runs.set_rls_org"):
@@ -371,6 +365,7 @@ class TestRevealNodePrompt:
 
     def _make_mock_execute(self, run, snapshot, agent=None, checkpoint_row=None):
         """Helper to build the common mock_execute pattern."""
+
         def _mock_execute(stmt, *args, **kwargs):
             stmt_str = str(stmt)
             if "pipeline_snapshots" in stmt_str:
@@ -392,6 +387,7 @@ class TestRevealNodePrompt:
             result = AsyncMock()
             result.scalar_one_or_none = MagicMock(return_value=None)
             return result
+
         return _mock_execute
 
     def test_reveal_returns_prompt_with_system_message(self, client: TestClient) -> None:
@@ -400,9 +396,7 @@ class TestRevealNodePrompt:
         snapshot = _make_snapshot()
         agent = _make_agent(prompt_template="You are a helpful coding assistant.")
 
-        session.execute = AsyncMock(
-            side_effect=self._make_mock_execute(run, snapshot, agent=agent)
-        )
+        session.execute = AsyncMock(side_effect=self._make_mock_execute(run, snapshot, agent=agent))
 
         with patch("modulo.api.routes.runs.get_run", return_value=run):
             with patch("modulo.api.routes.runs.set_rls_org"):
@@ -431,9 +425,7 @@ class TestRevealNodePrompt:
         snapshot = _make_snapshot()
         agent = _make_agent(prompt_template="Process the input.")
 
-        session.execute = AsyncMock(
-            side_effect=self._make_mock_execute(run, snapshot, agent=agent)
-        )
+        session.execute = AsyncMock(side_effect=self._make_mock_execute(run, snapshot, agent=agent))
 
         with patch("modulo.api.routes.runs.get_run", return_value=run):
             with patch("modulo.api.routes.runs.set_rls_org"):
@@ -454,17 +446,17 @@ class TestRevealNodePrompt:
         snapshot = _make_snapshot()
         agent = _make_agent()
 
-        checkpoint_data = json.dumps({
-            "channel_values": {
-                "run_context": {"input": {"query": "from checkpoint state"}},
+        checkpoint_data = json.dumps(
+            {
+                "channel_values": {
+                    "run_context": {"input": {"query": "from checkpoint state"}},
+                }
             }
-        })
+        )
         checkpoint_row = (checkpoint_data, "ckp-001")
 
         session.execute = AsyncMock(
-            side_effect=self._make_mock_execute(
-                run, snapshot, agent=agent, checkpoint_row=checkpoint_row
-            )
+            side_effect=self._make_mock_execute(run, snapshot, agent=agent, checkpoint_row=checkpoint_row)
         )
 
         with patch("modulo.api.routes.runs.get_run", return_value=run):
@@ -484,9 +476,7 @@ class TestRevealNodePrompt:
         run = _make_run()
         snapshot = _make_snapshot(agent_id=None)
 
-        session.execute = AsyncMock(
-            side_effect=self._make_mock_execute(run, snapshot)
-        )
+        session.execute = AsyncMock(side_effect=self._make_mock_execute(run, snapshot))
 
         with patch("modulo.api.routes.runs.get_run", return_value=run):
             with patch("modulo.api.routes.runs.set_rls_org"):
@@ -507,9 +497,7 @@ class TestRevealNodePrompt:
         snapshot = _make_snapshot()
         agent = _make_agent(prompt_template="Short.")
 
-        session.execute = AsyncMock(
-            side_effect=self._make_mock_execute(run, snapshot, agent=agent)
-        )
+        session.execute = AsyncMock(side_effect=self._make_mock_execute(run, snapshot, agent=agent))
 
         with patch("modulo.api.routes.runs.get_run", return_value=run):
             with patch("modulo.api.routes.runs.set_rls_org"):
@@ -534,18 +522,18 @@ class TestRevealNodePrompt:
         agent = _make_agent()
 
         f = Fernet(_FERNET_KEY.encode())
-        checkpoint_body = json.dumps({
-            "channel_values": {
-                "run_context": {"input": {"query": "from encrypted checkpoint"}},
+        checkpoint_body = json.dumps(
+            {
+                "channel_values": {
+                    "run_context": {"input": {"query": "from encrypted checkpoint"}},
+                }
             }
-        })
+        )
         encrypted = f.encrypt(checkpoint_body.encode())
         checkpoint_row = (json.dumps({"__encrypted__": True, "data": encrypted.decode()}), "ckp-002")
 
         session.execute = AsyncMock(
-            side_effect=self._make_mock_execute(
-                run, snapshot, agent=agent, checkpoint_row=checkpoint_row
-            )
+            side_effect=self._make_mock_execute(run, snapshot, agent=agent, checkpoint_row=checkpoint_row)
         )
 
         with patch("modulo.api.routes.runs.get_run", return_value=run):

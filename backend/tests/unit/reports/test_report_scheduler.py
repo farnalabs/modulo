@@ -345,17 +345,13 @@ class TestFireScheduledReport:
         assert "no_generator" in result["reason"]
 
     async def test_generates_and_delivers_with_registered_components(self) -> None:
-        async def dummy_generator(
-            session: object, org_id: uuid.UUID, config: dict[str, object]
-        ) -> dict[str, object]:
+        async def dummy_generator(session: object, org_id: uuid.UUID, config: dict[str, object]) -> dict[str, object]:
             return {"runs": 42, "pass_rate": 95.0}
 
         def dummy_formatter(data: dict[str, object]) -> str:
             return f"Report: {data['runs']} runs, {data['pass_rate']}% pass"
 
-        async def dummy_deliverer(
-            payload: str, config: dict[str, object]
-        ) -> list[dict[str, object]]:
+        async def dummy_deliverer(payload: str, config: dict[str, object]) -> list[dict[str, object]]:
             return [{"url": "https://hooks.example.com", "status": "delivered"}]
 
         register_report_type("test_report", dummy_generator, formatter=dummy_formatter, deliverer=dummy_deliverer)
@@ -393,9 +389,7 @@ class TestFireScheduledReport:
         assert result["delivery_results"][0]["status"] == "delivered"
 
     async def test_updates_last_sent_and_next_send(self) -> None:
-        async def dummy_generator(
-            session: object, org_id: uuid.UUID, config: dict[str, object]
-        ) -> dict[str, object]:
+        async def dummy_generator(session: object, org_id: uuid.UUID, config: dict[str, object]) -> dict[str, object]:
             return {"runs": 10}
 
         register_report_type("minimal", dummy_generator)

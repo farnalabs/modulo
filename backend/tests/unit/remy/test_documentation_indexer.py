@@ -99,9 +99,21 @@ class TestDocumentationIndexSearch:
     @pytest.fixture
     def index(self) -> DocumentationIndex:
         entries = [
-            DocEntry(heading_path="Pipelines > Overview", heading="Pipeline Overview", first_paragraph="Pipelines are the core execution unit."),
-            DocEntry(heading_path="Pipelines > Config", heading="Pipeline Config", first_paragraph="Configure pipeline nodes and edges."),
-            DocEntry(heading_path="Schemas > Types", heading="Schema Types", first_paragraph="Define schemas with types and validation rules."),
+            DocEntry(
+                heading_path="Pipelines > Overview",
+                heading="Pipeline Overview",
+                first_paragraph="Pipelines are the core execution unit.",
+            ),
+            DocEntry(
+                heading_path="Pipelines > Config",
+                heading="Pipeline Config",
+                first_paragraph="Configure pipeline nodes and edges.",
+            ),
+            DocEntry(
+                heading_path="Schemas > Types",
+                heading="Schema Types",
+                first_paragraph="Define schemas with types and validation rules.",
+            ),
         ]
         return DocumentationIndex(entries=entries)
 
@@ -145,8 +157,14 @@ class TestDocumentationIndexFormatResults:
     @pytest.fixture
     def index(self) -> DocumentationIndex:
         entries = [
-            DocEntry(heading_path="Pipelines > Overview", heading="Pipeline Overview", first_paragraph="Core execution unit."),
-            DocEntry(heading_path="Schemas > Types", heading="Schema Types", first_paragraph="Define schemas with validation."),
+            DocEntry(
+                heading_path="Pipelines > Overview", heading="Pipeline Overview", first_paragraph="Core execution unit."
+            ),
+            DocEntry(
+                heading_path="Schemas > Types",
+                heading="Schema Types",
+                first_paragraph="Define schemas with validation.",
+            ),
         ]
         return DocumentationIndex(entries=entries)
 

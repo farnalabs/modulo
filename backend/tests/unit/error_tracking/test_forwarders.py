@@ -196,9 +196,7 @@ class TestDatadogErrorForwarder:
             instance = AsyncMock()
             instance.post = AsyncMock(side_effect=Exception("timeout"))
             mock_client.return_value.__aenter__.return_value = instance
-            result = await fwd.forward(
-                _ORG_ID, _make_error_group(), _make_error_event(), {"api_key": "key"}
-            )
+            result = await fwd.forward(_ORG_ID, _make_error_group(), _make_error_event(), {"api_key": "key"})
         assert result is False
 
 
@@ -468,8 +466,10 @@ class TestForwarderRegistry:
         assert fwd is None
 
     def test_list_types(self) -> None:
-        types = get_forwarder.list_types() if hasattr(get_forwarder, "list_types") else list(
-            {"sentry", "datadog", "pagerduty", "rollbar", "opsgenie", "loki"}
+        types = (
+            get_forwarder.list_types()
+            if hasattr(get_forwarder, "list_types")
+            else list({"sentry", "datadog", "pagerduty", "rollbar", "opsgenie", "loki"})
         )
         assert "sentry" in types
         assert "datadog" in types
@@ -514,9 +514,11 @@ class TestForwarderFailureIsolation:
     async def test_dispatch_forwarders_swallows_all_exceptions(self) -> None:
         from modulo.core.error_tracking import _dispatch_forwarders, configure_forwarders
 
-        configure_forwarders({
-            "sentry": {"dsn": "dummy"},
-        })
+        configure_forwarders(
+            {
+                "sentry": {"dsn": "dummy"},
+            }
+        )
 
         result = await _dispatch_forwarders(
             _ORG_ID,

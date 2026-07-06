@@ -77,21 +77,26 @@ class TestGenericRepositoryTenantFilter:
         return GenericRepository(session_factory=MagicMock())
 
     async def test_set_org_context_stores_in_session_info(
-        self, repo: GenericRepository, dialect: str,
+        self,
+        repo: GenericRepository,
+        dialect: str,
     ) -> None:
         session = _make_session(dialect=dialect)
         await repo.set_org_context(session, _ORG_ID)
         assert session.info.get(_TENANT_KEY) == _ORG_ID
 
     async def test_set_org_context_does_not_call_set_config(
-        self, repo: GenericRepository, dialect: str,
+        self,
+        repo: GenericRepository,
+        dialect: str,
     ) -> None:
         session = _make_session(dialect=dialect)
         await repo.set_org_context(session, _ORG_ID)
         session.execute.assert_not_called()
 
     def test_apply_tenant_filter_injects_where_for_org_entity(
-        self, repo: GenericRepository,
+        self,
+        repo: GenericRepository,
     ) -> None:
         stmt = _make_stmt(entities=[{"entity": EntityWithOrg}])
         result = repo.apply_tenant_filter(stmt, _ORG_ID)
@@ -99,7 +104,8 @@ class TestGenericRepositoryTenantFilter:
         assert result is not stmt
 
     def test_apply_tenant_filter_skips_entity_without_org_column(
-        self, repo: GenericRepository,
+        self,
+        repo: GenericRepository,
     ) -> None:
         stmt = _make_stmt(entities=[{"entity": EntityWithoutOrg}])
         result = repo.apply_tenant_filter(stmt, _ORG_ID)
@@ -107,18 +113,23 @@ class TestGenericRepositoryTenantFilter:
         assert result is stmt
 
     def test_apply_tenant_filter_handles_join_multiple_org_entities(
-        self, repo: GenericRepository,
+        self,
+        repo: GenericRepository,
     ) -> None:
-        stmt = _make_stmt(entities=[
-            {"entity": EntityWithOrg},
-            {"entity": EntityWithOrg},
-        ])
+        stmt = _make_stmt(
+            entities=[
+                {"entity": EntityWithOrg},
+                {"entity": EntityWithOrg},
+            ]
+        )
         result = repo.apply_tenant_filter(stmt, _ORG_ID)
         stmt.where.assert_called_once()
         assert result is not stmt
 
     async def test_set_org_context_raises_without_transaction(
-        self, repo: GenericRepository, dialect: str,
+        self,
+        repo: GenericRepository,
+        dialect: str,
     ) -> None:
         session = _make_session(dialect=dialect, in_tx=False)
         with pytest.raises(RuntimeError, match="requires an active transaction"):
@@ -146,14 +157,16 @@ class TestPostgresRepositoryRLS:
         assert "app.organisation_id" in call_text
 
     async def test_set_org_context_does_not_set_session_info(
-        self, repo: PostgresRepository,
+        self,
+        repo: PostgresRepository,
     ) -> None:
         session = _make_session(dialect="postgresql")
         await repo.set_org_context(session, _ORG_ID)
         assert session.info.get(_TENANT_KEY) is None
 
     def test_apply_tenant_filter_returns_stmt_unchanged(
-        self, repo: PostgresRepository,
+        self,
+        repo: PostgresRepository,
     ) -> None:
         stmt = _make_stmt(entities=[{"entity": EntityWithOrg}])
         result = repo.apply_tenant_filter(stmt, _ORG_ID)
@@ -161,14 +174,16 @@ class TestPostgresRepositoryRLS:
         assert result is stmt
 
     def test_apply_tenant_filter_unchanged_even_without_org_entity(
-        self, repo: PostgresRepository,
+        self,
+        repo: PostgresRepository,
     ) -> None:
         stmt = _make_stmt(entities=[{"entity": EntityWithoutOrg}])
         result = repo.apply_tenant_filter(stmt, _ORG_ID)
         assert result is stmt
 
     async def test_set_org_context_raises_without_transaction(
-        self, repo: PostgresRepository,
+        self,
+        repo: PostgresRepository,
     ) -> None:
         session = _make_session(dialect="postgresql", in_tx=False)
         with pytest.raises(RuntimeError, match="requires an active transaction"):
@@ -198,7 +213,8 @@ class TestCrossOrgIsolationGeneric:
         assert filtered is not stmt
 
     async def test_different_session_isolates_org_context(
-        self, repo: GenericRepository,
+        self,
+        repo: GenericRepository,
     ) -> None:
         session_a = _make_session(dialect="sqlite")
         session_b = _make_session(dialect="sqlite")
@@ -209,7 +225,8 @@ class TestCrossOrgIsolationGeneric:
         assert session_b.info[_TENANT_KEY] == _ALT_ORG_ID
 
     async def test_without_org_context_no_filter_injected(
-        self, repo: GenericRepository,
+        self,
+        repo: GenericRepository,
     ) -> None:
         session = _make_session(dialect="sqlite")
         session.info.pop(_TENANT_KEY, None)
@@ -230,18 +247,22 @@ class TestMigrationBackendConfig:
 
     def test_detect_postgres(self) -> None:
         from modulo.db.migrations.env import _detect_backend
+
         assert _detect_backend("postgresql+asyncpg://user:pass@localhost/db") == "postgresql"
 
     def test_detect_mysql(self) -> None:
         from modulo.db.migrations.env import _detect_backend
+
         assert _detect_backend("mysql+asyncmy://user:pass@localhost/db") == "mysql"
 
     def test_detect_sqlite(self) -> None:
         from modulo.db.migrations.env import _detect_backend
+
         assert _detect_backend("sqlite:///test.db") == "sqlite"
 
     def test_detect_unknown(self) -> None:
         from modulo.db.migrations.env import _detect_backend
+
         assert _detect_backend("oracle://user:pass@localhost/db") == "unknown"
 
     def test_asyncpg_converts_to_psycopg2(self) -> None:
@@ -262,15 +283,18 @@ class TestMigrationBackendConfig:
 
     def test_render_as_batch_enabled_for_sqlite(self) -> None:
         from modulo.db.migrations.env import _detect_backend
+
         assert _detect_backend("sqlite:///test.db") == "sqlite"
 
     def test_render_as_batch_disabled_for_postgres(self) -> None:
         from modulo.db.migrations.env import _detect_backend
+
         backend = _detect_backend("postgresql+asyncpg://user:pass@localhost/db")
         assert backend == "postgresql"
 
     def test_render_as_batch_disabled_for_mysql(self) -> None:
         from modulo.db.migrations.env import _detect_backend
+
         backend = _detect_backend("mysql+asyncmy://user:pass@localhost/db")
         assert backend == "mysql"
 
@@ -410,18 +434,21 @@ class TestTimeFunctionsMultiBackend:
 
     def test_model_uses_sa_func_now_not_backend_specific(self) -> None:
         from sqlalchemy import func
+
         now = func.now()
         compiled = str(now.compile(compile_kwargs={"literal_binds": True}))
         assert "now" in compiled.lower()
 
     def test_model_uses_sa_func_current_timestamp_not_backend_specific(self) -> None:
         from sqlalchemy import func
+
         ts = func.current_timestamp()
         compiled = str(ts.compile(compile_kwargs={"literal_binds": True}))
         assert "current_timestamp" in compiled.lower()
 
     def test_default_factory_is_not_backend_specific(self) -> None:
         import datetime
+
         now = datetime.datetime.now(datetime.UTC)
         assert now is not None
         assert now.tzinfo is not None
@@ -433,4 +460,5 @@ class TestTimeFunctionsMultiBackend:
 
     def test_created_at_column_uses_default_factory(self) -> None:
         from modulo.db.models.base import Base
+
         assert hasattr(Base, "metadata")

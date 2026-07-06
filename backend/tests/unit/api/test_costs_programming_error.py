@@ -93,10 +93,13 @@ class TestGetSpendLimitsProgrammingError:
     ENDPOINT = "/api/v1/admin/costs/limits"
 
     def test_returns_501(self, client: TestClient) -> None:
-        with patch(
-            "modulo.api.routes.costs.get_organisation",
-            side_effect=_PROG_ERROR,
-        ), patch("modulo.api.routes.costs.set_rls_org"):
+        with (
+            patch(
+                "modulo.api.routes.costs.get_organisation",
+                side_effect=_PROG_ERROR,
+            ),
+            patch("modulo.api.routes.costs.set_rls_org"),
+        ):
             resp = client.get(self.ENDPOINT)
 
         assert resp.status_code == 501

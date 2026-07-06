@@ -29,6 +29,7 @@ class _MockPlanContext:
     def has_license_key(self) -> bool:
         return True
 
+
 _VALID_32 = "a" * 32
 _ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
 _USER_ID = uuid.UUID("00000000-0000-0000-0000-000000000002")
@@ -357,7 +358,9 @@ class TestExportChain:
                 "page": 1,
                 "page_size": 100,
             }
-            resp = client.get(f"{self.URL}?event_type=pipeline.run&user_id={_USER_ID}&entity_type=pipeline&from_date=2025-01-01&to_date=2025-12-31")
+            resp = client.get(
+                f"{self.URL}?event_type=pipeline.run&user_id={_USER_ID}&entity_type=pipeline&from_date=2025-01-01&to_date=2025-12-31"
+            )
         assert resp.status_code == 200
         _, kwargs = mock_export.call_args
         assert kwargs.get("event_type") == "pipeline.run"

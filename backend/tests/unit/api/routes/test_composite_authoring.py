@@ -79,11 +79,14 @@ def _make_pipeline_mock(**overrides: object) -> MagicMock:
         [
             {
                 "id": str(uuid.UUID("00000000-0000-0000-0000-000000000010")),
-                "node_type": "agent", "agent_id": str(_AGENT_ID), "label": "Agent 1",
+                "node_type": "agent",
+                "agent_id": str(_AGENT_ID),
+                "label": "Agent 1",
             },
             {
                 "id": str(uuid.UUID("00000000-0000-0000-0000-000000000011")),
-                "node_type": "manual", "label": "Manual 1",
+                "node_type": "manual",
+                "label": "Manual 1",
             },
         ],
     )
@@ -97,8 +100,7 @@ def _make_agent_mock() -> MagicMock:
     a.organisation_id = _ORG_ID
     a.name = "Test Agent"
     a.prompt_template = (
-        "Analyze this input and provide {{parameter.tone}} feedback "
-        "with {{parameter.max_length}} words."
+        "Analyze this input and provide {{parameter.tone}} feedback with {{parameter.max_length}} words."
     )
     return a
 
@@ -109,6 +111,7 @@ def client() -> Generator[TestClient, None, None]:
     _mock_session = _make_mock_session()
 
     session = _mock_session
+
     async def override_session() -> AsyncGenerator[AsyncMock, None]:
         yield session
 
@@ -171,7 +174,9 @@ class TestCompositeEditor:
         )
         with (
             patch("modulo.api.routes.composite_templates.get_composite_template", return_value=template),
-            patch("modulo.api.routes.composite_templates.update_composite_template", new=AsyncMock(return_value=template)),
+            patch(
+                "modulo.api.routes.composite_templates.update_composite_template", new=AsyncMock(return_value=template)
+            ),
             patch("modulo.api.routes.composite_templates.set_rls_org"),
         ):
             resp = client.put(

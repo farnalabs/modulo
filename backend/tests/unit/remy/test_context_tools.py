@@ -36,8 +36,16 @@ class TestGetDocumentation:
 
     def test_search_returns_formatted_results(self) -> None:
         entries = [
-            DocEntry(heading_path="Pipelines > Overview", heading="Pipeline Overview", first_paragraph="Pipelines are the core execution unit."),
-            DocEntry(heading_path="Pipelines > Config", heading="Pipeline Config", first_paragraph="Configure pipeline nodes."),
+            DocEntry(
+                heading_path="Pipelines > Overview",
+                heading="Pipeline Overview",
+                first_paragraph="Pipelines are the core execution unit.",
+            ),
+            DocEntry(
+                heading_path="Pipelines > Config",
+                heading="Pipeline Config",
+                first_paragraph="Configure pipeline nodes.",
+            ),
         ]
         index = DocumentationIndex(entries=entries)
         results = index.search("pipeline")
