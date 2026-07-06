@@ -8,7 +8,7 @@ from datetime import UTC, datetime, timedelta
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, Field
 from sqlalchemy import Date, case, cast, delete, func, select, text
-from sqlalchemy.exc import ProgrammingError, SQLAlchemyError
+from sqlalchemy.exc import IntegrityError, ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.api.dependencies import get_db_session, require_feature
@@ -426,29 +426,65 @@ async def admin_create_team(
             detail="Only admin users can create teams",
         )
 
-    async with session.begin():
-        await set_rls_org(session, current_user.organisation_id)
-        team = await create_team(
-            session,
-            org_id=current_user.organisation_id,
-            name=req.name,
-            account_id=current_user.account_id,
-            description=req.description,
-        )
+    try:
+        async with session.begin():
+            await set_rls_org(session, current_user.organisation_id)
+            existing = await get_team_by_name(session, current_user.organisation_id, req.name)
+            if existing is not None:
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail="A team with this name already exists in your organisation",
+                )
+            team = await create_team(
+                session,
+                org_id=current_user.organisation_id,
+                name=req.name,
+                account_id=current_user.account_id,
+                description=req.description,
+            )
+    except HTTPException:
+        raise
+    except IntegrityError:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="A team with this name already exists in your organisation",
+        ) from None
+    except ProgrammingError:
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="Feature is not available. Run database migrations to enable it.",
+        ) from None
+    except SQLAlchemyError:
+        logger.warning("admin_create_team SQLAlchemyError", extra={"org_id": str(current_user.organisation_id)})
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Database temporarily unavailable. Please try again.",
+        ) from None
+    except Exception:
+        logger.exception("admin_create_team unexpected error", extra={"org_id": str(current_user.organisation_id)})
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="An unexpected error occurred while creating the team.",
+        ) from None
 
     from modulo.core.audit_logger import append_audit_event
 
-    async with session.begin():
-        await set_rls_org(session, current_user.organisation_id)
-        await append_audit_event(
-            session,
-            org_id=current_user.organisation_id,
-            event_type="team_created",
-            actor_user_id=current_user.account_id,
-            resource_type="team",
-            resource_id=team.id,
-            payload_json={"team_id": str(team.id), "name": team.name},
-        )
+    try:
+        async with session.begin():
+            await set_rls_org(session, current_user.organisation_id)
+            await append_audit_event(
+                session,
+                org_id=current_user.organisation_id,
+                event_type="team_created",
+                actor_user_id=current_user.account_id,
+                resource_type="team",
+                resource_id=team.id,
+                payload_json={"team_id": str(team.id), "name": team.name},
+            )
+    except ProgrammingError:
+        logger.warning("admin_create_team audit event ProgrammingError — team was created", extra={"org_id": str(current_user.organisation_id), "team_id": str(team.id)})
+    except SQLAlchemyError:
+        logger.warning("admin_create_team audit event SQLAlchemyError — team was created", extra={"org_id": str(current_user.organisation_id), "team_id": str(team.id)})
 
     return AdminCreateTeamResponse(
         id=str(team.id),
@@ -1005,7 +1041,7 @@ async def admin_list_teams(
 ) -> AdminTeamListResponse:
     if current_user.org_role != "admin":
         raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
+            status_code=status.HTTP_403_FORBIDDEN,
             detail="Only admin users can list teams",
         )
 
@@ -1033,7 +1069,14 @@ async def admin_list_teams(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
         ) from None
+    except SQLAlchemyError:
+        logger.warning("admin_list_teams SQLAlchemyError", extra={"org_id": str(current_user.organisation_id)})
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Database temporarily unavailable. Please try again.",
+        ) from None
     except Exception:
+        logger.exception("admin_list_teams unexpected error", extra={"org_id": str(current_user.organisation_id)})
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="An unexpected error occurred while fetching teams.",
@@ -1072,35 +1115,60 @@ async def admin_update_team(
 
     updates = req.model_dump(exclude_unset=True)
 
-    async with session.begin():
-        await set_rls_org(session, current_user.organisation_id)
+    try:
+        async with session.begin():
+            await set_rls_org(session, current_user.organisation_id)
 
-        if "name" in updates:
-            existing = await get_team_by_name(session, current_user.organisation_id, updates["name"])
-            if existing is not None and existing.id != team_id:
-                raise HTTPException(
-                    status_code=status.HTTP_409_CONFLICT,
-                    detail="A team with this name already exists in your organisation",
-                )
+            if "name" in updates:
+                existing = await get_team_by_name(session, current_user.organisation_id, updates["name"])
+                if existing is not None and existing.id != team_id:
+                    raise HTTPException(
+                        status_code=status.HTTP_409_CONFLICT,
+                        detail="A team with this name already exists in your organisation",
+                    )
 
-        team = await crud_update_team(session, team_id, updates)
+            team = await crud_update_team(session, team_id, updates)
+    except ProgrammingError:
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="Feature is not available. Run database migrations to enable it.",
+        ) from None
+    except SQLAlchemyError:
+        logger.warning("admin_update_team SQLAlchemyError", extra={"org_id": str(current_user.organisation_id), "team_id": str(team_id)})
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Database temporarily unavailable. Please try again.",
+        ) from None
+    except HTTPException:
+        raise
+    except Exception:
+        logger.exception("admin_update_team unexpected error", extra={"org_id": str(current_user.organisation_id), "team_id": str(team_id)})
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="An unexpected error occurred while updating the team.",
+        ) from None
 
     if team is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Team not found")
 
     from modulo.core.audit_logger import append_audit_event
 
-    async with session.begin():
-        await set_rls_org(session, current_user.organisation_id)
-        await append_audit_event(
-            session,
-            org_id=current_user.organisation_id,
-            event_type="team_updated",
-            actor_user_id=current_user.account_id,
-            resource_type="team",
-            resource_id=team_id,
-            payload_json={"team_id": str(team_id), "updates": updates},
-        )
+    try:
+        async with session.begin():
+            await set_rls_org(session, current_user.organisation_id)
+            await append_audit_event(
+                session,
+                org_id=current_user.organisation_id,
+                event_type="team_updated",
+                actor_user_id=current_user.account_id,
+                resource_type="team",
+                resource_id=team_id,
+                payload_json={"team_id": str(team_id), "updates": updates},
+            )
+    except ProgrammingError:
+        logger.warning("admin_update_team audit event ProgrammingError — team was updated", extra={"org_id": str(current_user.organisation_id), "team_id": str(team_id)})
+    except SQLAlchemyError:
+        logger.warning("admin_update_team audit event SQLAlchemyError — team was updated", extra={"org_id": str(current_user.organisation_id), "team_id": str(team_id)})
 
     return AdminTeamItem(
         id=str(team.id),
@@ -1123,33 +1191,53 @@ async def admin_delete_team(
             detail="Only admin users can delete teams",
         )
 
-    async with session.begin():
-        await set_rls_org(session, current_user.organisation_id)
+    try:
+        async with session.begin():
+            await set_rls_org(session, current_user.organisation_id)
 
-        resource_checks: list[tuple[str, int]] = []
-        for model_cls, label in [
-            (Pipeline, "pipeline"),
-            (Stage, "stage"),
-            (ConnectorInstance, "connector"),
-            (ModelBackend, "model backend"),
-            (LibraryPrimitive, "library primitive"),
-        ]:
-            count = (
-                await session.execute(
-                    select(func.count()).select_from(model_cls).where(model_cls.owner_team_id == team_id)
+            resource_checks: list[tuple[str, int]] = []
+            for model_cls, label in [
+                (Pipeline, "pipeline"),
+                (Stage, "stage"),
+                (ConnectorInstance, "connector"),
+                (ModelBackend, "model backend"),
+                (LibraryPrimitive, "library primitive"),
+            ]:
+                count = (
+                    await session.execute(
+                        select(func.count()).select_from(model_cls).where(model_cls.owner_team_id == team_id)
+                    )
+                ).scalar() or 0
+                if count > 0:
+                    resource_checks.append((label, count))
+
+            if resource_checks:
+                details = "; ".join(f"{count} {label}(s)" for label, count in resource_checks)
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail=f"Cannot delete team: still has resources — {details}",
                 )
-            ).scalar() or 0
-            if count > 0:
-                resource_checks.append((label, count))
 
-        if resource_checks:
-            details = "; ".join(f"{count} {label}(s)" for label, count in resource_checks)
-            raise HTTPException(
-                status_code=status.HTTP_409_CONFLICT,
-                detail=f"Cannot delete team: still has resources — {details}",
-            )
-
-        deleted = await delete_team(session, team_id)
+            deleted = await delete_team(session, team_id)
+    except ProgrammingError:
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="Feature is not available. Run database migrations to enable it.",
+        ) from None
+    except SQLAlchemyError:
+        logger.warning("admin_delete_team SQLAlchemyError", extra={"org_id": str(current_user.organisation_id), "team_id": str(team_id)})
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Database temporarily unavailable. Please try again.",
+        ) from None
+    except HTTPException:
+        raise
+    except Exception:
+        logger.exception("admin_delete_team unexpected error", extra={"org_id": str(current_user.organisation_id), "team_id": str(team_id)})
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="An unexpected error occurred while deleting the team.",
+        ) from None
 
     if not deleted:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Team not found")
