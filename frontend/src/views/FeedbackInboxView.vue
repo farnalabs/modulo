@@ -65,6 +65,10 @@
       </div>
     </div>
 
+    <div v-if="pipelinesError" class="rounded-lg border border-destructive/50 bg-destructive/10 p-3 text-sm text-destructive">
+      {{ pipelinesError }}
+    </div>
+
     <LoadingSpinner v-if="loading" />
 
     <ErrorAlert v-else-if="error" :message="error" />
@@ -196,6 +200,7 @@
                   <textarea
                     v-model="annotations[record.id]"
                     rows="3"
+                    maxlength="2000"
                     data-testid="feedback-inbox-annotation"
                     class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                     :placeholder="$t('views.FeedbackInboxView.add_your_review_annotation')"
@@ -216,6 +221,14 @@
                       @click="resolveRecord(record.id)"
                     >
                       {{ $t('views.FeedbackInboxView.mark_resolved') }}
+                    </button>
+                    <button
+                      :disabled="dismissLoading[record.id]"
+                      data-testid="feedback-inbox-dismiss"
+                      class="rounded-lg border border-destructive/50 bg-background px-4 py-2 text-sm font-medium text-destructive hover:bg-destructive/10 disabled:opacity-50"
+                      @click="dismissRecord(record.id)"
+                    >
+                      {{ dismissLoading[record.id] ? $t('views.FeedbackInboxView.dismissing') : $t('views.FeedbackInboxView.dismiss') }}
                     </button>
                     <div v-if="annotationMessage[record.id]" class="text-sm" :class="annotationMessage[record.id]?.type === 'error' ? 'text-destructive' : 'text-success'">
                       {{ annotationMessage[record.id]?.text }}
@@ -249,12 +262,13 @@ type FeedbackRecordItem = components['schemas']['FeedbackRecordItem']
 type FeedbackRecordDetail = components['schemas']['FeedbackRecordDetail']
 type PipelineItem = components['schemas']['PipelineItem']
 
-const { t } = useI18n()
+const { t, locale } = useI18n()
 
 const records = ref<FeedbackRecordItem[]>([])
 const pipelines = ref<PipelineItem[]>([])
 const loading = ref(true)
 const error = ref<string | null>(null)
+const pipelinesError = ref<string | null>(null)
 
 const statusFilter = ref('')
 const pipelineFilter = ref('')
@@ -270,6 +284,7 @@ const annotations = ref<Record<string, string>>({})
 const savingAnnotation = ref<Record<string, boolean>>({})
 const annotationMessage = ref<Record<string, { type: string; text: string } | null>>({})
 const triggering = ref<Record<string, boolean>>({})
+const dismissLoading = ref<Record<string, boolean>>({})
 const feedbackTimeouts = ref<Record<string, ReturnType<typeof setTimeout>>>({})
 
 function statusBadgeClass(status: string): string {
@@ -285,7 +300,8 @@ function statusBadgeClass(status: string): string {
 
 function formatDate(dateStr: string): string {
   const d = new Date(dateStr)
-  return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })
+  if (isNaN(d.getTime())) return '-'
+  return d.toLocaleDateString(locale.value, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })
 }
 
 function formatJson(value: unknown): string {
@@ -297,13 +313,16 @@ function formatJson(value: unknown): string {
 }
 
 async function loadPipelines() {
+  pipelinesError.value = null
   try {
     const { data, error: err } = await api.GET('/api/v1/pipelines')
-    if (!err && data) {
+    if (err) {
+      pipelinesError.value = `${t('views.FeedbackInboxView.failed_to_load_pipelines')} ${formatApiError(err)}`
+    } else if (data) {
       pipelines.value = data.items
     }
-  } catch (err) {
-    console.warn('Failed to load pipelines:', err)
+  } catch (e: unknown) {
+    pipelinesError.value = `${t('views.FeedbackInboxView.failed_to_load_pipelines')} ${formatApiError(e)}`
   }
 }
 
@@ -433,6 +452,31 @@ async function triggerCorrection(recordId: string) {
     annotationMessage.value[recordId] = { type: 'error', text: `${t('views.FeedbackInboxView.trigger_failed')} ${formatApiError(e)}` }
   } finally {
     triggering.value[recordId] = false
+  }
+}
+
+async function dismissRecord(recordId: string) {
+  dismissLoading.value[recordId] = true
+  annotationMessage.value[recordId] = null
+  try {
+    const { data, error: err } = await api.POST('/api/v1/feedback/inbox/{record_id}/review', {
+      params: { path: { record_id: recordId } },
+      body: { action: 'dismiss', annotation: annotations.value[recordId] || null },
+    })
+    if (err) {
+      annotationMessage.value[recordId] = { type: 'error', text: `${t('views.FeedbackInboxView.dismiss_failed')} ${formatApiError(err)}` }
+    } else if (data) {
+      detailMap.value[recordId] = data
+      annotationMessage.value[recordId] = { type: 'success', text: t('views.FeedbackInboxView.dismissed') }
+      const rec = records.value.find(r => r.id === recordId)
+      if (rec) rec.feedback_status = 'dismissed'
+      if (feedbackTimeouts.value[recordId]) clearTimeout(feedbackTimeouts.value[recordId])
+      feedbackTimeouts.value[recordId] = setTimeout(() => { annotationMessage.value[recordId] = null }, 3000)
+    }
+  } catch (e: unknown) {
+    annotationMessage.value[recordId] = { type: 'error', text: `${t('views.FeedbackInboxView.dismiss_failed')} ${formatApiError(e)}` }
+  } finally {
+    dismissLoading.value[recordId] = false
   }
 }
 
