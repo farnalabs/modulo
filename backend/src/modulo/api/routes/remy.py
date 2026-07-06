@@ -856,7 +856,7 @@ async def stream_chat(
         last_ping_at = _time.monotonic()
         parent_msg_id: uuid.UUID | None = None
         try:
-            async with AsyncSession(session.bind) as db_session:
+            async with AsyncSession(session.bind, autobegin=False) as db_session:
                 # 1. Resolve API key
                 api_key = req.api_key
                 if not api_key:
@@ -1061,8 +1061,10 @@ async def stream_chat(
 
                     # Handle UI tools
                     if ui_tool_calls:
-                        config_service = RemyConfigService(db_session)
-                        config = await config_service.get_config(principal.organisation_id)
+                        async with db_session.begin():
+                            await set_rls_org(db_session, principal.organisation_id)
+                            config_service = RemyConfigService(db_session)
+                            config = await config_service.get_config(principal.organisation_id)
 
                         approved_calls: list[dict[str, Any]] = []
                         pending_permission_calls: list[dict[str, Any]] = []
@@ -1121,9 +1123,9 @@ async def stream_chat(
                             finally:
                                 _pending_ui_results.pop(session_id_str, None)
 
-                            for r in results:
+                            for ac, r in zip(approved_calls, results):
                                 tool_results.append({
-                                    "tool_call_id": r.get("id", ""),
+                                    "tool_call_id": ac["id"],
                                     "tool_name": r.get("name", ""),
                                     "success": r.get("success", False),
                                     "result": r.get("result"),
