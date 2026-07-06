@@ -12,6 +12,8 @@ import pytest_asyncio
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
+from modulo.db.rls import set_rls_org
+
 
 @pytest_asyncio.fixture(scope="session")
 async def test_org(db_engine: AsyncEngine) -> uuid.UUID:
@@ -55,10 +57,7 @@ async def rls_session(db_engine: AsyncEngine, test_org: uuid.UUID) -> AsyncGener
     """AsyncSession with RLS set to test_org; all ORM changes are rolled back."""
     factory = async_sessionmaker(db_engine, expire_on_commit=False)
     async with factory() as session:
-        # Execute a query to trigger autobegin, then set RLS directly.
-        await session.execute(
-            text("SELECT set_config('app.organisation_id', :oid, true)"),
-            {"oid": str(test_org)},
-        )
+        await session.execute(text("SELECT 1"))
+        await set_rls_org(session, test_org)
         yield session
         await session.rollback()

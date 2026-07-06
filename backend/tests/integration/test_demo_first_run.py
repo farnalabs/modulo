@@ -350,16 +350,21 @@ async def test_seed_demo_data_idempotent(db_engine: AsyncEngine, db_url: str) ->
 # ---------------------------------------------------------------------------
 
 
+async def _demo_login(client: AsyncClient) -> str:
+    resp = await client.post("/api/v1/auth/login", json={"email": "demo", "password": "demo"})
+    assert resp.status_code == 200, f"Login failed: {resp.text}"
+    return resp.json()["access_token"]
+
+
 class TestDemoAuth:
     """Test that the demo user can authenticate via the auth API."""
 
-    async def _login(self, client: AsyncClient) -> str:
-        resp = await client.post("/api/v1/auth/login", json={"email": "demo", "password": "demo"})
-        assert resp.status_code == 200, f"Login failed: {resp.text}"
-        return resp.json()["access_token"]
+    @pytest_asyncio.fixture(autouse=True)
+    async def _ensure_demo_user(self, test_demo_user: uuid.UUID) -> None:
+        pass
 
     async def test_demo_user_can_login(self, demo_client: AsyncClient) -> None:
-        token = await self._login(demo_client)
+        token = await _demo_login(demo_client)
         assert isinstance(token, str) and len(token) > 20
 
     async def test_demo_user_invalid_password(self, demo_client: AsyncClient) -> None:
@@ -375,7 +380,7 @@ class TestDemoAuth:
         assert resp.status_code == 401
 
     async def test_demo_user_me(self, demo_client: AsyncClient) -> None:
-        token = await self._login(demo_client)
+        token = await _demo_login(demo_client)
         resp = await demo_client.get(
             "/api/v1/auth/me",
             headers={"Authorization": f"Bearer {token}"},
@@ -408,14 +413,13 @@ class TestDemoAuth:
 class TestDemoOnboarding:
     """Test the onboarding/first-run flow with a demo user."""
 
-    async def _login(self, client: AsyncClient) -> str:
-        resp = await client.post("/api/v1/auth/login", json={"email": "demo", "password": "demo"})
-        assert resp.status_code == 200
-        return resp.json()["access_token"]
+    @pytest_asyncio.fixture(autouse=True)
+    async def _ensure_demo_user(self, test_demo_user: uuid.UUID) -> None:
+        pass
 
     async def test_onboarding_status_first_run(self, demo_client: AsyncClient) -> None:
         """Onboarding should report is_first_run=True when no pipelines exist."""
-        token = await self._login(demo_client)
+        token = await _demo_login(demo_client)
         resp = await demo_client.get(
             "/api/v1/onboarding/status",
             headers={"Authorization": f"Bearer {token}"},
@@ -428,7 +432,7 @@ class TestDemoOnboarding:
         assert data["total_steps"] == 4
 
     async def test_onboarding_mark_step(self, demo_client: AsyncClient) -> None:
-        token = await self._login(demo_client)
+        token = await _demo_login(demo_client)
         resp = await demo_client.post(
             "/api/v1/onboarding/step",
             json={"step_id": "connect_tools"},
@@ -441,7 +445,7 @@ class TestDemoOnboarding:
         assert "connect_tools" in data["completed_steps"]
 
     async def test_onboarding_mark_invalid_step(self, demo_client: AsyncClient) -> None:
-        token = await self._login(demo_client)
+        token = await _demo_login(demo_client)
         resp = await demo_client.post(
             "/api/v1/onboarding/step",
             json={"step_id": "invalid_step"},
@@ -450,7 +454,7 @@ class TestDemoOnboarding:
         assert resp.status_code == 422
 
     async def test_onboarding_get_step_data(self, demo_client: AsyncClient) -> None:
-        token = await self._login(demo_client)
+        token = await _demo_login(demo_client)
         resp = await demo_client.get(
             "/api/v1/onboarding/step/connect_tools",
             headers={"Authorization": f"Bearer {token}"},
@@ -462,7 +466,7 @@ class TestDemoOnboarding:
         assert "connectors" in data["data"]
 
     async def test_onboarding_get_invalid_step_data(self, demo_client: AsyncClient) -> None:
-        token = await self._login(demo_client)
+        token = await _demo_login(demo_client)
         resp = await demo_client.get(
             "/api/v1/onboarding/step/invalid_step",
             headers={"Authorization": f"Bearer {token}"},
@@ -470,7 +474,7 @@ class TestDemoOnboarding:
         assert resp.status_code == 404
 
     async def test_onboarding_complete_all_steps(self, demo_client: AsyncClient) -> None:
-        token = await self._login(demo_client)
+        token = await _demo_login(demo_client)
         for step_id in ["connect_tools", "select_template", "configure_agent", "run_demo"]:
             resp = await demo_client.post(
                 "/api/v1/onboarding/step",
@@ -487,7 +491,7 @@ class TestDemoOnboarding:
         assert data["is_first_run"] is False
 
     async def test_onboarding_current_step_updates(self, demo_client: AsyncClient) -> None:
-        token = await self._login(demo_client)
+        token = await _demo_login(demo_client)
 
         resp = await demo_client.get(
             "/api/v1/onboarding/status",
@@ -522,17 +526,16 @@ class TestDemoOnboarding:
 class TestDemoPipeline:
     """Test that demo pipelines can be loaded and viewed."""
 
-    async def _login(self, client: AsyncClient) -> str:
-        resp = await client.post("/api/v1/auth/login", json={"email": "demo", "password": "demo"})
-        assert resp.status_code == 200
-        return resp.json()["access_token"]
+    @pytest_asyncio.fixture(autouse=True)
+    async def _ensure_demo_user(self, test_demo_user: uuid.UUID) -> None:
+        pass
 
     async def test_list_pipelines_shows_demo_pipeline(
         self,
         demo_client: AsyncClient,
         demo_pipeline: uuid.UUID,
     ) -> None:
-        token = await self._login(demo_client)
+        token = await _demo_login(demo_client)
         resp = await demo_client.get(
             "/api/v1/pipelines",
             headers={"Authorization": f"Bearer {token}"},
@@ -548,7 +551,7 @@ class TestDemoPipeline:
         demo_client: AsyncClient,
         demo_pipeline: uuid.UUID,
     ) -> None:
-        token = await self._login(demo_client)
+        token = await _demo_login(demo_client)
         resp = await demo_client.get(
             f"/api/v1/pipelines/{demo_pipeline}",
             headers={"Authorization": f"Bearer {token}"},
@@ -560,7 +563,7 @@ class TestDemoPipeline:
         assert "Demo pipeline" in data["description"]
 
     async def test_get_nonexistent_pipeline_returns_404(self, demo_client: AsyncClient) -> None:
-        token = await self._login(demo_client)
+        token = await _demo_login(demo_client)
         fake_id = uuid.uuid4()
         resp = await demo_client.get(
             f"/api/v1/pipelines/{fake_id}",
@@ -573,7 +576,7 @@ class TestDemoPipeline:
         demo_client: AsyncClient,
         demo_pipeline: uuid.UUID,
     ) -> None:
-        token = await self._login(demo_client)
+        token = await _demo_login(demo_client)
         resp = await demo_client.get(
             "/api/v1/onboarding/status",
             headers={"Authorization": f"Bearer {token}"},
