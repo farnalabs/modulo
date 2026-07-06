@@ -10,6 +10,7 @@ from datetime import UTC, datetime
 from typing import Any
 
 from sqlalchemy import func, select
+from sqlalchemy.exc import ProgrammingError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.db.models.error_event import ErrorEvent
@@ -130,8 +131,11 @@ async def get_error_groups(
         q = q.where(ErrorGroup.fingerprint.in_(event_sub))
 
     q = q.order_by(ErrorGroup.last_seen.desc()).offset(offset).limit(limit)
-    result = await session.execute(q)
-    return list(result.scalars().all())
+    try:
+        result = await session.execute(q)
+        return list(result.scalars().all())
+    except ProgrammingError:
+        return []
 
 
 async def count_error_groups(
@@ -164,8 +168,11 @@ async def count_error_groups(
             event_sub = event_sub.where(ErrorEvent.message.ilike(f"%{search}%"))
         q = q.where(ErrorGroup.fingerprint.in_(event_sub))
 
-    result = await session.execute(q)
-    return result.scalar_one() or 0
+    try:
+        result = await session.execute(q)
+        return result.scalar_one() or 0
+    except ProgrammingError:
+        return 0
 
 
 async def get_error_group(

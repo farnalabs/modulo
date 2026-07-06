@@ -7,6 +7,7 @@ import uuid
 from typing import Any
 
 from sqlalchemy import func, select
+from sqlalchemy.exc import ProgrammingError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.db.crud.base import PageResult, apply_updates
@@ -87,7 +88,10 @@ async def list_connector_instances(
     total_query = select(func.count()).select_from(ConnectorInstance)
     if excluded_tiers:
         total_query = total_query.where(~ConnectorInstance.tier.in_(excluded_tiers))
-    total = (await session.execute(total_query)).scalar_one()
+    try:
+        total = (await session.execute(total_query)).scalar_one()
+    except ProgrammingError:
+        return PageResult(items=[], total=0, page=page, page_size=page_size)
     items_stmt = select(ConnectorInstance).order_by(ConnectorInstance.created_at.desc()).offset(offset).limit(page_size)
     if excluded_tiers:
         items_stmt = items_stmt.where(~ConnectorInstance.tier.in_(excluded_tiers))

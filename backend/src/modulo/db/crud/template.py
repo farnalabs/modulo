@@ -4,6 +4,7 @@ import uuid
 from typing import Any
 
 from sqlalchemy import func, select
+from sqlalchemy.exc import ProgrammingError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.db.crud.base import PageResult
@@ -30,7 +31,10 @@ async def list_templates(
     count_stmt = select(func.count()).select_from(LibraryPrimitive)
     if conditions:
         count_stmt = count_stmt.where(*conditions)
-    total = (await session.execute(count_stmt)).scalar_one()
+    try:
+        total = (await session.execute(count_stmt)).scalar_one()
+    except ProgrammingError:
+        return PageResult(items=[], total=0, page=page, page_size=page_size)
 
     items_stmt = (
         select(LibraryPrimitive)

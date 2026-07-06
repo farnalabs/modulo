@@ -12,6 +12,7 @@ from decimal import Decimal
 from typing import Any
 
 from sqlalchemy import delete, func, select
+from sqlalchemy.exc import ProgrammingError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.db.crud.base import PageResult
@@ -141,7 +142,10 @@ async def list_runs(
         )
 
     offset = (page - 1) * page_size
-    total = (await session.execute(count_q)).scalar_one_or_none() or 0
+    try:
+        total = (await session.execute(count_q)).scalar_one_or_none() or 0
+    except ProgrammingError:
+        return PageResult(items=[], total=0, page=page, page_size=page_size)
     items = list((await session.execute(q.order_by(Run.created_at.desc()).offset(offset).limit(page_size))).scalars())
     return PageResult(items=items, total=total, page=page, page_size=page_size)
 

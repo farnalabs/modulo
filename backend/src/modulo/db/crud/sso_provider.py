@@ -8,6 +8,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.core.audit_logger import append_audit_event
+from modulo.db.crud.base import apply_updates
 from modulo.db.models.sso_provider import SsoProvider
 
 logger = logging.getLogger(__name__)
@@ -110,13 +111,8 @@ async def update_provider(
     if "scopes" in updates and updates["scopes"] is not None and not isinstance(updates["scopes"], str):
         updates["scopes"] = json.dumps(updates["scopes"])
 
-    for key, value in updates.items():
-        if key not in _UPDATABLE_SSO_FIELDS:
-            continue
-        if value is not None:
-            setattr(provider, key, value)
-        else:
-            setattr(provider, key, None)
+    filtered = {k: v for k, v in updates.items() if k in _UPDATABLE_SSO_FIELDS}
+    apply_updates(provider, filtered)
 
     await session.flush()
 
