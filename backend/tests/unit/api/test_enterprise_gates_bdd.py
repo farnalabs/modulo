@@ -36,6 +36,11 @@ def _team_plan_context() -> DbPlanContext:
     return DbPlanContext(registry)
 
 
+def _community_plan_context() -> DbPlanContext:
+    registry = FeatureFlagRegistry(current_tier="community", has_license_key=False)
+    return DbPlanContext(registry)
+
+
 def _make_settings(*, license_key: str = "") -> Settings:
     return Settings(
         database_url="postgresql+asyncpg://localhost/test",
@@ -69,11 +74,13 @@ def _make_mock_session() -> AsyncMock:
 def free_client() -> Generator[TestClient, None, None]:
     """Client with no license key — all team features disabled."""
     mock_session = _make_mock_session()
+    plan_ctx = _community_plan_context()
 
     async def override_session() -> AsyncGenerator[AsyncMock, None]:
         yield mock_session
 
     app.dependency_overrides[get_settings] = lambda: _make_settings(license_key="")
+    app.dependency_overrides[get_plan_context] = lambda: plan_ctx
     app.dependency_overrides[get_db_session] = override_session
     app.dependency_overrides[_get_engine] = lambda: MagicMock()
     app.dependency_overrides[get_current_user] = lambda: AuthenticatedPrincipal(
@@ -172,12 +179,11 @@ class TestTeamRbacGating:
 
 
 class TestAuditGating:
-    """Audit viewer endpoints return 402 when no team license is present."""
+    """Audit viewer endpoints — list is community-tier, batch/export require team license."""
 
-    def test_list_audit_returns_402_on_free(self, free_client: TestClient) -> None:
+    def test_list_audit_succeeds_on_free(self, free_client: TestClient) -> None:
         resp = free_client.get("/api/v1/admin/audit")
-        assert resp.status_code == 402
-        assert "audit_viewer" in resp.text.lower()
+        assert resp.status_code == 200
 
     def test_list_audit_succeeds_on_licensed(self, licensed_client: TestClient) -> None:
         with (
@@ -186,6 +192,11 @@ class TestAuditGating:
         ):
             resp = licensed_client.get("/api/v1/admin/audit")
             assert resp.status_code == 200
+
+    def test_batch_detail_returns_402_on_free(self, free_client: TestClient) -> None:
+        resp = free_client.post("/api/v1/admin/audit/batch-detail", json={"event_ids": []})
+        assert resp.status_code == 402
+        assert "audit_viewer" in resp.text.lower()
 
 
 class TestSpendLimitsGating:
