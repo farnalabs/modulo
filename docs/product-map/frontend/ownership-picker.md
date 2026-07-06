@@ -68,6 +68,11 @@ from the admin API.
 - [x] Label rendered above trigger when `label` prop is provided
 - [x] Focus-visible visible on all interactive elements
 
+### Internationalisation
+
+- [x] `selectedLabel` computed uses `t()` for "Org-wide" and "Unknown team" — no hardcoded English strings
+- [x] `label` prop passed from parent views uses `$t('views.LibraryPipelineWizard.owner')` — all 3 callers (LibraryPipelineWizard, PipelineTemplateGallery, CopyPipelineWizard)
+
 ### Integration (LibraryPipelineWizard consumer)
 
 - [x] OwnershipPicker used in pipeline creation wizard with `v-model` bound to `ownership` ref
@@ -118,10 +123,16 @@ from the admin API.
 
 ### UX
 - Picker relies on `GET /api/v1/admin/teams` — non-admin users see an error rather than a read-only view
-- No i18n for `label="Owner"` prop passed from parent views (LibraryPipelineWizard, PipelineTemplateGallery, CopyPipelineWizard)
 
 ## QA History
 
 ### 2026-07-05 — Cross-cutting QA (prodmap-frontend)
 - **Fixed**: `unit-tests:` paths missing `backend/` prefix — all 3 paths corrected to match actual file locations on disk
 - **Added**: QA History section for consistency with other frontend product map entries
+
+### 2026-07-06 — Cross-cutting QA (feat-frontend-ownership-picker)
+- **Fixed**: `selectedLabel` computed in OwnershipPicker.vue used hardcoded `"Org-wide"` and `"Unknown team"` instead of `t()` — both now use existing translation keys
+- **Fixed**: `label="Owner"` prop hardcoded in English across 3 parent views (LibraryPipelineWizard, PipelineTemplateGallery, CopyPipelineWizard) — now uses `$t('views.LibraryPipelineWizard.owner')` via a new translation key
+- **Added**: `views.LibraryPipelineWizard.owner` translation key to en-US.js
+- **Added**: Internationalisation behaviour section with 2 checked behaviours
+- **Verified**: Backend stages.py routes all have `ProgrammingError` catch for 501 on missing DB tables (all 5 CRUD routes)
