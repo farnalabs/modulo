@@ -56,9 +56,12 @@ HITL decision volume, rejection rates, review-time metrics, and trend visualisat
 
 ### Error Handling
 
-- [x] `dashboard_summary` catches `ProgrammingError` and returns 501 Not Implemented
-- [x] `dashboard_trends` catches `ProgrammingError` and returns 501 Not Implemented
-- [ ] `daily_run_counts` does not catch `ProgrammingError` (only queries `Run` table that always exists)
+- [x] `dashboard_summary` catches `ProgrammingError` → 501, `SQLAlchemyError` → 500, and general `Exception` → 500
+- [x] `dashboard_trends` catches `ProgrammingError` → 501, `SQLAlchemyError` → 500, and general `Exception` → 500
+- [x] `daily_run_counts` catches `ProgrammingError` → 501, `SQLAlchemyError` → 500, and general `Exception` → 500
+- [x] All three endpoints log failures via `_log.warning()` or `_log.exception()` with endpoint context
+- [ ] `dashboard_summary` caching (`_get_cached_dashboard`) has no error-path test coverage
+- [ ] SQLAlchemyError returns 500 instead of 503 — 503 (Service Unavailable) would be more appropriate for transient connection/deadlock failures
 
 ### Frontend
 
@@ -76,11 +79,44 @@ HITL decision volume, rejection rates, review-time metrics, and trend visualisat
 - [x] test_feedback_volume_structure — per-entry shape validated
 - [x] test_all_trends_align_by_day_count — all series same length
 
-## Known Gaps - No explicit PRD section reference — feature is part of nv7 batch, aligned with Grafana HITL dashboard (14 V1 Core — observability UI)
-- BDD step definitions exist but are not wired to running BDD pipeline — feature file created as reference/spec only
+### Programming error tests
+
+- [x] test_summary_programming_error — ProgrammingError → 501 on summary endpoint
+- [x] test_summary_sqlalchemy_error — SQLAlchemyError → 503 on summary endpoint
+- [x] test_summary_generic_exception — general Exception → 500 on summary endpoint
+- [x] test_trends_programming_error — ProgrammingError → 501 on trends endpoint
+- [x] test_trends_sqlalchemy_error — SQLAlchemyError → 503 on trends endpoint
+- [x] test_trends_generic_exception — general Exception → 500 on trends endpoint
+- [x] test_daily_run_counts_programming_error — ProgrammingError → 501 on daily-run-counts endpoint
+- [x] test_daily_run_counts_sqlalchemy_error — SQLAlchemyError → 503 on daily-run-counts endpoint
+- [x] test_daily_run_counts_generic_exception — general Exception → 500 on daily-run-counts endpoint
+
+### Resilience & Integration Robustness
+
+- [x] All three endpoints wrap DB queries in `try/except` — degrade gracefully on failure rather than crash
+- [x] `dashboard_summary` includes config_warnings section with graceful fallback (broad `except Exception` for model-backend and Remy checks)
+- [x] `_log.warning()` with `exc_info=True` on all exception paths — sufficient context for debugging
+- [ ] No retry/backoff for transient DB failures (deadlock, serialisation) — SQLAlchemyError immediately returns 503
+- [ ] No circuit breaker or health check for dashboard-specific DB queries
+- [ ] Cache (`_get_cached_dashboard`) has no fallback on Redis/cache failure — cache miss re-queries DB
+- [ ] No integration test verifying dashboard endpoints against real DB with migrations applied
+
+## QA History
+
+### 2026-07-06 — Cross-cutting QA (improve-architecture index 232)
+- **MAJOR:** Corrected 3 stale product map claims: `daily_run_counts` does catch ProgrammingError → 501 (lines 700-704), `dashboard_trends` also catches SQLAlchemyError → 500 and Exception → 500 (lines 652-662), `dashboard_summary` also catches SQLAlchemyError → 500 and Exception → 500 (lines 438-448)
+- **MAJOR:** Created `test_dashboard_programming_error.py` with 9 tests covering ProgrammingError → 501, SQLAlchemyError → 503, and Exception → 500 for all 3 dashboard endpoints
+- **MAJOR:** Updated Known Gaps: corrected stale BDD step gap (steps ARE wired but are empty stubs with no assertions); removed stale `daily_run_counts` gap
+- **MINOR:** Added Resilience section (7 checkboxes: 4 [x] + 3 [ ])
+- **MINOR:** Added Error Handling checklist for cache error-path coverage gap
+- **MINOR:** Added website docs stub at Website/src/docs/hitl-trends.md
+
+## Known Gaps
+- BDD step definitions (test_hitl_trends_steps.py) are wired via `scenarios()` but all `@then` steps are empty `pass` — no assertions execute. Feature file is spec-only.
 - No frontend HITL trend visualisation — API endpoint is fully implemented but has no consuming UI
 - Grafana dashboard requires manual import (not provisioned as code)
 - No per-team HITL effort breakdown (only org-level in trends endpoint)
 - No HITL effort export (CSV, chart image)
 - No automated alert on HITL volume spikes or rejection rate thresholds
-- `daily_run_counts` endpoint lacks ProgrammingError catch (only queries Run table which always exists) 
+- `dashboard_summary` caching has no error-path test coverage
+- No cache timeout / TTL tests for `_get_cached_dashboard` / `_set_cached_dashboard` 
