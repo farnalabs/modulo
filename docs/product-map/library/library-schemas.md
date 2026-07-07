@@ -5,6 +5,7 @@ delivery-tasks: [task-lib-schemas-seed]
 bdd:
   - backend/tests/bdd/features/library/schemas.feature
 code:
+  - backend/src/modulo/core/seed_data/library_schemas.py
   - backend/scripts/seed_library_schemas.py
   - backend/src/modulo/db/models/schema.py
   - backend/src/modulo/db/crud/schema.py
