@@ -427,7 +427,14 @@ async function handleNewSession() {
   }
 }
 
+function onWindowResize() {
+  if (store.panelState === "floating") {
+    store.reclampPosition()
+  }
+}
+
 onMounted(async () => {
+  window.addEventListener("resize", onWindowResize)
   await store.fetchSessions();
   if (!store.activeSessionId) {
     await handleNewSession();
@@ -435,6 +442,7 @@ onMounted(async () => {
 });
 
 onUnmounted(() => {
+  window.removeEventListener("resize", onWindowResize)
   document.removeEventListener("mousemove", onDrag);
   document.removeEventListener("mouseup", stopDrag);
   document.removeEventListener("mousemove", onResize);

@@ -189,6 +189,13 @@ export const useRemyStore = defineStore('remy', () => {
     panelState.value = state
   }
 
+  function reclampPosition() {
+    panelPosition.value = {
+      x: Math.max(8, Math.min(panelPosition.value.x, window.innerWidth - 340)),
+      y: Math.max(8, Math.min(panelPosition.value.y, window.innerHeight - 100)),
+    }
+  }
+
   function updatePosition(pos: { x: number; y: number }) {
     panelPosition.value = {
       x: Math.max(8, Math.min(pos.x, window.innerWidth - 340)),
@@ -325,6 +332,7 @@ export const useRemyStore = defineStore('remy', () => {
     deleteSession,
     sendMessage,
     setPanelState,
+    reclampPosition,
     updatePosition,
     updateSize,
     setPageContext,
