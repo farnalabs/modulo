@@ -144,6 +144,7 @@ function removeMapping(sourceKey: string) {
               <label class="mb-1 block text-xs font-medium text-muted-foreground">Source field</label>
               <select
                 v-model="selectedSource"
+                aria-label="Source field"
                 class="w-full rounded-md border border-border bg-background px-2 py-1 text-xs"
               >
                 <option value="" disabled>Select source</option>
@@ -156,6 +157,7 @@ function removeMapping(sourceKey: string) {
               <label class="mb-1 block text-xs font-medium text-muted-foreground">Target field</label>
               <select
                 v-model="selectedTarget"
+                aria-label="Target field"
                 class="w-full rounded-md border border-border bg-background px-2 py-1 text-xs"
               >
                 <option value="" disabled>Select target</option>

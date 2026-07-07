@@ -23,6 +23,7 @@
             <select
               v-model="selectedConnectorId"
               data-testid="schema-inference-connector"
+              aria-label="Connector"
               class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
             >
               <option value="" disabled>{{ $t('views.SchemaInferenceView.select_a_connector') }}</option>

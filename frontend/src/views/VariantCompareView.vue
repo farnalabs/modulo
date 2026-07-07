@@ -21,6 +21,7 @@
         <select
           v-model="selectedGroupId"
           data-testid="variant-compare-group-select"
+          aria-label="Compare group"
           class="min-w-[280px] rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
         >
           <option value="" disabled>{{ $t('views.variantCompare.selectGroup') }}</option>
@@ -173,6 +174,7 @@
               <select
                 v-model="diffNode"
                 data-testid="variant-compare-diff-node"
+                aria-label="Diff node"
                 class="rounded-lg border border-input bg-background px-3 py-1.5 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
               >
                 <option v-for="n in nodeNames" :key="n" :value="n">{{ n }}</option>
@@ -183,6 +185,7 @@
               <select
                 v-model="diffVarA"
                 data-testid="variant-compare-diff-variant-a"
+                aria-label="Variant A"
                 class="rounded-lg border border-input bg-background px-3 py-1.5 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
               >
                 <option v-for="v in diffVariantsAvailable" :key="v" :value="v">{{ v }}</option>
@@ -193,6 +196,7 @@
               <select
                 v-model="diffVarB"
                 data-testid="variant-compare-diff-variant-b"
+                aria-label="Variant B"
                 class="rounded-lg border border-input bg-background px-3 py-1.5 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
               >
                 <option v-for="v in diffVariantsAvailable" :key="v" :value="v">{{ v }}</option>

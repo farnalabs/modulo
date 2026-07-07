@@ -11,6 +11,7 @@
         <select
           v-model="statusFilter"
           data-testid="feedback-inbox-status-select"
+          aria-label="Status"
           class="rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
           @change="loadFeedback"
         >
@@ -28,6 +29,7 @@
         <select
           v-model="pipelineFilter"
           data-testid="feedback-inbox-pipeline-select"
+          aria-label="Pipeline"
           class="rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
           @change="loadFeedback"
         >

@@ -12,6 +12,7 @@
           <select
             v-model="filterStatus"
             data-testid="admin-notification-log-status"
+            aria-label="Status"
             class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring"
           >
             <option value="">{{ $t('views.AdminErrorsView.all_statuses') }}</option>
@@ -26,6 +27,7 @@
           <select
             v-model="filterEventType"
             data-testid="admin-notification-log-event-type"
+            aria-label="Event Type"
             class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring"
           >
             <option value="">{{ $t('views.AdminNotificationDeliveryLogView.all_types') }}</option>

@@ -227,6 +227,7 @@
             <select
               v-model="libraryTypeFilter"
               data-testid="onboarding-wizard-library-type-filter"
+              aria-label="Filter by type"
               class="rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
             >
               <option value="">All types</option>

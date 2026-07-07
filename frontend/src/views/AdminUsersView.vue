@@ -58,6 +58,7 @@
               <select
                 v-model="u.org_role"
                 :data-testid="`admin-users-role-${u.id}`"
+                aria-label="User role"
                 class="text-xs border border-input bg-background rounded-md px-2 py-1"
                 @change="updateRole(u)"
                 @focus="captureRole(u.org_role)"
@@ -161,7 +162,7 @@
           </div>
           <div>
             <label class="block text-sm font-medium mb-1">Role</label>
-            <select v-model="newUser.org_role" data-testid="admin-users-create-role" class="w-full px-3 py-2 border border-input bg-background rounded-lg text-sm">
+            <select v-model="newUser.org_role" data-testid="admin-users-create-role" aria-label="Role" class="w-full px-3 py-2 border border-input bg-background rounded-lg text-sm">
               <option value="runner">Runner</option>
               <option value="operator">Operator</option>
               <option value="admin">Admin</option>

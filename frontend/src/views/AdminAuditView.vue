@@ -48,6 +48,7 @@
             v-model="filterEventType"
             class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring"
             data-testid="admin-audit-event-type"
+            aria-label="Event Type"
           >
             <option value="">{{ $t('views.AdminAuditView.all_types') }}</option>
             <optgroup :label="$t('views.AdminAuditView.optgroup_pipeline')">
@@ -139,6 +140,7 @@
             v-model="filterTargetType"
             class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring"
             data-testid="admin-audit-target-type"
+            aria-label="Target Type"
           >
             <option value="">{{ $t('views.AdminAuditView.all_targets') }}</option>
             <option value="pipeline">{{ $t('views.AdminAuditView.optgroup_pipeline') }}</option>

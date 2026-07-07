@@ -38,6 +38,7 @@
               v-model="form.view_type"
               class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary/50"
               data-testid="admin-views-type-select"
+              aria-label="View type"
             >
               <option value="table">Table</option>
               <option value="grid">Grid</option>
@@ -76,10 +77,11 @@
             </div>
             <div>
               <label class="mb-1 block text-sm font-medium">{{ $t('components.NodeCategoryEditor.sort_order') }}</label>
-              <select
-                v-model="form.sort_order"
-                class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary/50"
-                data-testid="admin-views-sort-order-select"
+            <select
+              v-model="form.sort_order"
+              class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary/50"
+              data-testid="admin-views-sort-order-select"
+              aria-label="Sort order"
               >
                 <option value="desc">Descending</option>
                 <option value="asc">Ascending</option>
