@@ -74,8 +74,10 @@ Mapping eval suites to organisational OKRs so teams can track quality targets ov
 - [x] Non-admin users receive 403 on OKR progress endpoint
 - [x] Suite not found in DB raises ValueError → returned as 404
 - [x] Database ProgrammingError caught → returned as 501 Not Implemented with migration hint
+- [x] SQLAlchemyError caught → returned as 503 Service Unavailable
+- [x] Exception→500 catch for unexpected Python-level errors (with HTTPException: raise guard)
 - [x] target_date parsing failure returns None days_to_target (graceful degradation)
-- [ ] SQLite dialect incompatibility — raw SQL text() queries use PostgreSQL-specific SQL
+- [x] SQLite dialect incompatibility — raw SQL text() queries use portable SUM(CASE WHEN ...) syntax (resolved 2026-07-09)
 
 ### Testing
 
@@ -105,7 +107,6 @@ Mapping eval suites to organisational OKRs so teams can track quality targets ov
 - No breach notification mechanism (webhook, in-app, or email) — breach is detected but alert not delivered
 - No scheduled quality report support — OKR breach summary not surfaced anywhere
 - No multi-suite aggregation endpoint (/evals/okr-progress?okr_id=...) — can only query by single suite_id
-- Raw SQL `text()` queries use PostgreSQL-specific SQL — will fail on SQLite (test/development) with ProgrammingError (already caught as 501)
 - BDD coverage is incomplete — no scenarios explicitly test the OKR progress endpoint, only eval_suite_crud.feature (eval definition CRUD, not progress tracking)
 - Elena persona scenario 8 ("Create eval suites aligned with team OKRs") not verified end-to-end
 
@@ -122,4 +123,14 @@ Mapping eval suites to organisational OKRs so teams can track quality targets ov
 - MINOR: Updated `unit-tests` frontmatter — added `test_evals_okr_progress_programming_error.py` ref (was missing even though file exists at backend/tests/unit/api/).
 
 ### Summary
-Status: partial (10 known gaps remain — all infrastructure/features, not code correctness issues). Existing 52+ unit tests confirmed on disk. No code changes needed — only product map documentation. 
+Status: partial (10 known gaps remain — all infrastructure/features, not code correctness issues). Existing 52+ unit tests confirmed on disk. No code changes needed — only product map documentation.
+
+### 2026-07-09 — Cross-cutting QA (improve-architecture index 285)
+
+**What was fixed:**
+- CRITICAL — Added `except Exception → 500` catch with `except HTTPException: raise` guard to `okr_progress` route handler in admin.py. Previously, any Python-level error (TypeError, KeyError, TimeoutError) during response construction or model_validate would propagate as an opaque 500 to CatchAllMiddleware with no structured detail.
+- MAJOR — Refactored `trend_q` query in `okr.py` from PostgreSQL-specific `COUNT(*) FILTER (WHERE ...)` syntax to portable `SUM(CASE WHEN ...)` syntax. The FILTER clause is PostgreSQL-only and crashes on SQLite/MariaDB with ProgrammingError. The new syntax works on all three supported backends.
+- MAJOR — Added `test_okr_progress_returns_500_on_unexpected_error()` to the programming error test file, verifying that unexpected RuntimeError returns 500 with descriptive detail.
+
+**Test results:** All 55+ OKR progress tests pass (52 existing + 3 new exception guard tests).
+**Status:** partial (9 known gaps remain — resolved SQLite dialect gap removed from Known Gaps). 

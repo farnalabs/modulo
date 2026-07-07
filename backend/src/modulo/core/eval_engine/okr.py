@@ -157,24 +157,20 @@ async def track_okr_progress(
                 WHERE suite_id = :suite_id AND organisation_id = :org_id
             )
             SELECT
-                COUNT(*) FILTER (WHERE er.evaluated_at >= :window_7)
+                SUM(CASE WHEN er.evaluated_at >= :window_7 THEN 1 ELSE 0 END)
                     AS total_7d,
-                COUNT(*) FILTER (WHERE er.evaluated_at >= :window_7 AND er.passed)
+                SUM(CASE WHEN er.evaluated_at >= :window_7 AND er.passed THEN 1 ELSE 0 END)
                     AS passed_7d,
-                COUNT(*) FILTER (
-                    WHERE er.evaluated_at >= :window_14 AND er.evaluated_at < :window_7
-                ) AS total_14d,
-                COUNT(*) FILTER (
-                    WHERE er.evaluated_at >= :window_14 AND er.evaluated_at < :window_7 AND er.passed
-                ) AS passed_14d,
-                COUNT(*) FILTER (
-                    WHERE er.evaluated_at >= :window_30 AND er.evaluated_at < :window_14
-                ) AS total_30d,
-                COUNT(*) FILTER (
-                    WHERE er.evaluated_at >= :window_30 AND er.evaluated_at < :window_14 AND er.passed
-                ) AS passed_30d,
+                SUM(CASE WHEN er.evaluated_at >= :window_14 AND er.evaluated_at < :window_7 THEN 1 ELSE 0 END)
+                    AS total_14d,
+                SUM(CASE WHEN er.evaluated_at >= :window_14 AND er.evaluated_at < :window_7 AND er.passed THEN 1 ELSE 0 END)
+                    AS passed_14d,
+                SUM(CASE WHEN er.evaluated_at >= :window_30 AND er.evaluated_at < :window_14 THEN 1 ELSE 0 END)
+                    AS total_30d,
+                SUM(CASE WHEN er.evaluated_at >= :window_30 AND er.evaluated_at < :window_14 AND er.passed THEN 1 ELSE 0 END)
+                    AS passed_30d,
                 COUNT(*) AS total_all,
-                COUNT(*) FILTER (WHERE er.passed) AS passed_all
+                SUM(CASE WHEN er.passed THEN 1 ELSE 0 END) AS passed_all
             FROM eval_results er
             WHERE er.eval_id IN (SELECT id FROM suite_eval_ids)
               AND er.organisation_id = :org_id
