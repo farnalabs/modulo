@@ -121,6 +121,7 @@ def _get_registry() -> Any | None:
 
             _redis_registry = RemyRedisRegistry(get_settings().redis_url)
         except Exception:
+            logger.warning("remy.redis_unavailable — falling back to in-memory registries")
             _redis_registry = _SENTINEL  # don't retry
     return _redis_registry if _redis_registry is not _SENTINEL else None
 
@@ -939,6 +940,12 @@ async def append_message(
             status_code=status.HTTP_502_BAD_GATEWAY,
             detail="Database error. Please try again later.",
         ) from None
+    except Exception:
+        logger.exception("remy.append_message.unexpected_error")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="An unexpected error occurred.",
+        ) from None
 
 
 # ── Streaming endpoint ───────────────────────────────────────────────────
@@ -1240,10 +1247,7 @@ async def stream_chat(
 
                         # Check if session is paused — wait for resume
                         registry = _get_registry()
-                        if registry is not None:
-                            paused = session_id_str in _resume_events
-                        else:
-                            paused = session_id_str in _resume_events
+                        paused = session_id_str in _resume_events
                         if paused:
                             yield (
                                 "event: paused\ndata: "
@@ -1441,7 +1445,7 @@ async def stream_chat(
             )
         except Exception as exc:
             logger.exception("Remy streaming error")
-            yield f"event: error\ndata: {json.dumps({'detail': str(exc)})}\n\n"
+            yield f"event: error\ndata: {json.dumps({'detail': 'An unexpected error occurred. Please try again.'})}\n\n"
 
     return StreamingResponse(
         event_generator(),

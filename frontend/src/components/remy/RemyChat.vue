@@ -30,7 +30,7 @@
         </div>
         <div class="remy-msg-content">
           <div class="remy-markdown">
-            <p class="remy-p">Hi! I'm Remy, your Modulo AI assistant. I can help you build pipelines, run evaluations, manage your workspace, and answer questions about your data. What would you like help with?</p>
+            <p class="remy-p">{{ $t('components.remy.RemyChat.intro_text') }}</p>
           </div>
         </div>
       </div>
