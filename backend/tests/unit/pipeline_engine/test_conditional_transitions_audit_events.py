@@ -119,8 +119,12 @@ def _make_compiled_raising(exc: Exception) -> MagicMock:
         raise exc
         yield  # pragma: no cover
 
+    async def _aupdate_state(config: Any, data: Any) -> None:
+        return None
+
     c = MagicMock()
     c.astream_events = _astream
+    c.aupdate_state = _aupdate_state
     return c
 
 
@@ -199,3 +203,43 @@ async def test_eval_suite_blocked_records_audit_event(mock_append: AsyncMock):
     assert call_kwargs["event_type"] == "eval.suite_blocked"
     assert call_kwargs["resource_type"] == "run"
     assert call_kwargs["payload_json"]["suite_id"] == "suite-1"
+
+
+@pytest.mark.asyncio
+@patch("modulo.core.pipeline_engine.executor.append_audit_event", new_callable=AsyncMock)
+async def test_resume_eval_blocked_records_audit_event(mock_append: AsyncMock):
+    """EvalBlockedError from _stream_graph during resume triggers an audit event."""
+    run = _make_run()
+    final_run = _make_run(run_id=run.id, status="eval_failed")
+    snapshot = _make_snapshot()
+    session = _make_session(snapshot)
+    factory = _make_session_factory(session)
+    compiled = _make_compiled_raising(EvalBlockedError("quality", "Low score"))
+    registry = _make_registry()
+
+    checkpointer_mock = MagicMock()
+    checkpointer_mock.__aenter__ = AsyncMock(return_value=checkpointer_mock)
+    checkpointer_mock.__aexit__ = AsyncMock(return_value=False)
+
+    settings_mock = MagicMock()
+    settings_mock.fernet_key = "test-fernet-key-not-for-production="
+
+    with (
+        patch("modulo.core.pipeline_engine.executor.async_sessionmaker", return_value=factory),
+        patch("modulo.core.pipeline_engine.executor.get_run", return_value=run),
+        patch("modulo.core.pipeline_engine.executor.update_run_status", return_value=final_run),
+        patch("modulo.core.pipeline_engine.executor.set_rls_org"),
+        patch("modulo.core.pipeline_engine.executor.get_or_compile", return_value=compiled),
+        patch("modulo.core.pipeline_engine.executor.get_registry", return_value=registry),
+        patch("modulo.core.pipeline_engine.executor.GraphValidator", new=_mock_graph_validator()),
+        patch("modulo.core.pipeline_engine.executor._checkpointer_scope", return_value=checkpointer_mock),
+        patch("modulo.settings.get_settings", return_value=settings_mock),
+    ):
+        executor = PipelineExecutor(MagicMock())
+        executor._checkpointer_conn_string = "sqlite:///test.db"
+        await executor.resume(run_id=run.id, org_id=uuid.uuid4(), resume_data={"action": "approved"})
+
+    mock_append.assert_called_once()
+    call_kwargs = mock_append.call_args[1]
+    assert call_kwargs["event_type"] == "eval.blocked"
+    assert call_kwargs["resource_type"] == "run"
