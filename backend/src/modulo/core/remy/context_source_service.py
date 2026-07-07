@@ -3,6 +3,7 @@ from __future__ import annotations
 import logging
 import uuid
 
+from pydantic import BaseModel
 from sqlalchemy import delete as sa_delete
 from sqlalchemy import select
 from sqlalchemy.exc import SQLAlchemyError
@@ -24,6 +25,45 @@ _BUILTIN_DEFAULTS: dict[str, str] = {
     "org_config": "tool",
     "feature_overview": "tool",
 }
+
+_BUILTIN_SOURCE_METADATA: dict[str, dict[str, str]] = {
+    "page_context": {
+        "name": "Page Context",
+        "description": "Content and state of the current page Remy is viewing",
+    },
+    "user_profile": {
+        "name": "User Profile",
+        "description": "Your account details, name, and preferences",
+    },
+    "product_primer": {
+        "name": "Product Primer",
+        "description": "Overview of Modulo's features, capabilities, and architecture",
+    },
+    "product_docs": {
+        "name": "Product Docs",
+        "description": "Product documentation, guides, and reference materials",
+    },
+    "integration_status": {
+        "name": "Integration Status",
+        "description": "Status of connected integrations, connectors, and model backends",
+    },
+    "org_config": {
+        "name": "Org Config",
+        "description": "Organisation-level configuration settings and preferences",
+    },
+    "feature_overview": {
+        "name": "Feature Overview",
+        "description": "Available features based on your current plan tier",
+    },
+}
+
+
+class ContextSourceResponseItem(BaseModel):
+    key: str
+    name: str
+    description: str
+    source_mode: str
+    is_overridden: bool
 
 
 class RemyContextSourceService:
@@ -54,6 +94,22 @@ class RemyContextSourceService:
         except SQLAlchemyError:
             logger.exception("Failed to query context sources for org %s, user %s", org_id, user_id)
             return {}
+
+    def build_effective_items(
+        self, effective: dict[str, str], user_overrides: dict[str, str]
+    ) -> list[ContextSourceResponseItem]:
+        return [
+            ContextSourceResponseItem(
+                key=key,
+                name=_BUILTIN_SOURCE_METADATA.get(key, {}).get(
+                    "name", key.replace("_", " ").title()
+                ),
+                description=_BUILTIN_SOURCE_METADATA.get(key, {}).get("description", ""),
+                source_mode=mode,
+                is_overridden=key in user_overrides,
+            )
+            for key, mode in effective.items()
+        ]
 
     async def get_effective_config(self, org_id: uuid.UUID, user_id: uuid.UUID) -> RemyConfig:
         config = RemyConfig()

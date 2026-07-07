@@ -7,15 +7,34 @@
   >
     <div class="remy-titlebar" @mousedown="startDrag">
       <div class="flex items-center gap-2 flex-1 min-w-0">
-        <span class="text-sm font-semibold truncate">
-          <template v-if="store.activeSession && store.activeSession.name">
-            {{ store.activeSession.name }}
-          </template>
-          <template v-else-if="store.activeSession">
-            Session {{ store.activeSession.session_number ? '#' + store.activeSession.session_number : shortId(store.activeSession.id) }}
-          </template>
-          <template v-else>Remy</template>
-        </span>
+        <template v-if="editingName && store.activeSession">
+          <input
+            ref="nameInputRef"
+            v-model="editNameValue"
+            class="remy-name-input text-sm font-semibold"
+            @keydown.enter="saveName"
+            @keydown.escape="cancelEditName"
+            @blur="saveName"
+            @mousedown.stop
+            @click.stop
+          />
+        </template>
+        <template v-else>
+          <span
+            class="text-sm font-semibold truncate cursor-pointer hover:opacity-80"
+            :title="$t('components.remy.RemyPanel.click_to_rename')"
+            @click.stop="startEditName"
+            @dblclick.stop="startEditName"
+          >
+            <template v-if="store.activeSession && store.activeSession.name">
+              {{ store.activeSession.name }}
+            </template>
+            <template v-else-if="store.activeSession">
+              {{ $t('components.remy.RemyPanel.session_label') }} {{ store.activeSession.session_number ? '#' + store.activeSession.session_number : shortId(store.activeSession.id) }}
+            </template>
+            <template v-else>Remy</template>
+          </span>
+        </template>
         <span v-if="store.isStreaming" class="remy-pulse-dot" />
       </div>
       <div class="flex items-center gap-1">
@@ -237,7 +256,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, watch, onMounted, onUnmounted } from "vue";
+import { ref, computed, watch, nextTick, onMounted, onUnmounted } from "vue";
 import { shortId } from "@/utils/format";
 import { useRemyStore } from "@/composables/useRemyStore";
 import { useRemyContext } from "@/composables/useRemyContext";
@@ -278,6 +297,33 @@ function cycleSpeed() {
   currentSpeed.value = next
   localStorage.setItem('remy-action-speed', next)
   setActionSpeed(next)
+}
+
+const editingName = ref(false)
+const editNameValue = ref('')
+const nameInputRef = ref<HTMLInputElement | null>(null)
+
+function startEditName() {
+  if (!store.activeSession) return
+  editNameValue.value = store.activeSession.name || ''
+  editingName.value = true
+  nextTick(() => {
+    nameInputRef.value?.focus()
+    nameInputRef.value?.select()
+  })
+}
+
+async function saveName() {
+  if (!store.activeSession || !editingName.value) return
+  editingName.value = false
+  const newName = editNameValue.value.trim()
+  if (!newName || newName === (store.activeSession.name || '')) return
+  await store.renameSession(store.activeSession.id, newName)
+}
+
+function cancelEditName() {
+  editingName.value = false
+  editNameValue.value = ''
 }
 
 const isRateLimitError = computed(() => {
@@ -433,6 +479,10 @@ function onWindowResize() {
   }
 }
 
+watch(() => store.requestRename, () => {
+  if (store.requestRename > 0) startEditName()
+})
+
 onMounted(async () => {
   window.addEventListener("resize", onWindowResize)
   await store.fetchSessions();
@@ -563,5 +613,12 @@ onUnmounted(() => {
   height: 12px;
   cursor: nwse-resize;
   background: linear-gradient(135deg, transparent 50%, hsl(var(--border)) 50%);
+}
+.remy-name-input {
+  @apply rounded px-1 py-0 text-sm font-semibold outline-none flex-1 min-w-0;
+  background-color: hsl(var(--background));
+  border: 1px solid hsl(var(--ring));
+  color: hsl(var(--foreground));
+  min-width: 60px;
 }
 </style>
