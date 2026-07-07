@@ -1,5 +1,102 @@
 import router from '@/router'
 
+const TAB_ID = typeof crypto !== 'undefined' && crypto.randomUUID ? crypto.randomUUID() : Date.now().toString(36)
+const lockChannel = typeof BroadcastChannel !== 'undefined' ? new BroadcastChannel('remy-element-locks') : null
+
+interface LockState {
+  selector: string
+  tabId: string
+  acquiredAt: number
+}
+
+const heldLocks = new Map<string, LockState>()
+
+async function acquireElementLock(selector: string, timeout = 5000): Promise<boolean> {
+  if (!lockChannel) return true
+
+  return new Promise<boolean>(resolve => {
+    const msgId = `${TAB_ID}:${Date.now()}:${Math.random().toString(36).slice(2)}`
+    let resolved = false
+    let timer: ReturnType<typeof setTimeout> | null = null
+
+    function cleanup() {
+      if (timer) clearTimeout(timer)
+      resolved = true
+    }
+
+    function handleMessage(e: MessageEvent) {
+      if (resolved) return
+      const data = e.data || {}
+      if (data.type === 'lock-response' && data.msgId === msgId) {
+        if (data.granted) {
+          heldLocks.set(selector, { selector, tabId: TAB_ID, acquiredAt: Date.now() })
+        }
+        cleanup()
+        resolve(data.granted === true)
+      }
+    }
+
+    lockChannel!.addEventListener('message', handleMessage)
+
+    lockChannel!.postMessage({
+      type: 'lock-request',
+      msgId,
+      selector,
+      tabId: TAB_ID,
+    })
+
+    timer = setTimeout(() => {
+      lockChannel!.removeEventListener('message', handleMessage)
+      if (!resolved) {
+        resolved = true
+        resolve(false)
+      }
+    }, timeout)
+  })
+}
+
+function releaseElementLock(selector: string) {
+  if (!lockChannel) return
+  heldLocks.delete(selector)
+  lockChannel.postMessage({
+    type: 'lock-release',
+    selector,
+    tabId: TAB_ID,
+  })
+}
+
+function releaseAllLocks() {
+  if (!lockChannel) return
+  for (const [selector] of heldLocks) {
+    lockChannel.postMessage({
+      type: 'lock-release',
+      selector,
+      tabId: TAB_ID,
+    })
+  }
+  heldLocks.clear()
+}
+
+if (lockChannel) {
+  lockChannel.addEventListener('message', (e: MessageEvent) => {
+    const data = e.data || {}
+    if (data.type === 'lock-request' && data.tabId !== TAB_ID) {
+      const existing = heldLocks.get(data.selector)
+      const granted = !existing || existing.tabId === data.tabId
+      lockChannel!.postMessage({
+        type: 'lock-response',
+        msgId: data.msgId,
+        granted,
+        holder: existing?.tabId || null,
+      })
+    }
+  })
+}
+
+if (typeof window !== 'undefined') {
+  window.addEventListener('beforeunload', releaseAllLocks)
+}
+
 export interface UiCommand {
   id: string
   name: string
@@ -190,105 +287,126 @@ async function navigate(path: string): Promise<UiCommandResult> {
 }
 
 async function click(selector: string): Promise<UiCommandResult> {
-  const el = resolveElement(selector)
-  if (!el) {
-    return { id: `click-${Date.now()}`, name: 'click', success: false, error: `Element not found: ${selector}` }
+  if (!(await acquireElementLock(selector))) {
+    return { id: `click-${Date.now()}`, name: 'click', success: false, error: `Could not acquire lock for element: ${selector}` }
   }
-  highlightElement(el)
-  const isCombobox = el.getAttribute('role') === 'combobox'
-  if (isCombobox) {
-    ;(el as HTMLElement).click()
-    await new Promise(r => setTimeout(r, 300))
-  } else {
-    ;(el as HTMLElement).click()
+  try {
+    const el = resolveElement(selector)
+    if (!el) {
+      return { id: `click-${Date.now()}`, name: 'click', success: false, error: `Element not found: ${selector}` }
+    }
+    highlightElement(el)
+    const isCombobox = el.getAttribute('role') === 'combobox'
+    if (isCombobox) {
+      ;(el as HTMLElement).click()
+      await new Promise(r => setTimeout(r, 300))
+    } else {
+      ;(el as HTMLElement).click()
+    }
+    return { id: `click-${Date.now()}`, name: 'click', success: true }
+  } finally {
+    releaseElementLock(selector)
   }
-  return { id: `click-${Date.now()}`, name: 'click', success: true }
 }
 
 async function fill(selector: string, value: string): Promise<UiCommandResult> {
-  const el = resolveElement(selector)
-  if (!el) {
-    return { id: `fill-${Date.now()}`, name: 'fill', success: false, error: `Element not found: ${selector}` }
+  if (!(await acquireElementLock(selector))) {
+    return { id: `fill-${Date.now()}`, name: 'fill', success: false, error: `Could not acquire lock for element: ${selector}` }
   }
-  highlightElement(el)
+  try {
+    const el = resolveElement(selector)
+    if (!el) {
+      return { id: `fill-${Date.now()}`, name: 'fill', success: false, error: `Element not found: ${selector}` }
+    }
+    highlightElement(el)
 
-  const role = el.getAttribute('role')
-  const tag = el.tagName.toLowerCase()
+    const role = el.getAttribute('role')
+    const tag = el.tagName.toLowerCase()
 
-  if (role === 'combobox' || el.closest('[data-shadcn-select]') || el.closest('[role="listbox"]')) {
-    ;(el as HTMLElement).click()
-    await new Promise(r => setTimeout(r, 300))
-    const commandInput = el.querySelector<HTMLInputElement>('[role="combobox"] input, [data-shadcn-command-input]')
-    if (commandInput) {
-      commandInput.value = value
-      commandInput.dispatchEvent(new Event('input', { bubbles: true }))
-      commandInput.dispatchEvent(new Event('change', { bubbles: true }))
-    } else {
-      const globalInput = document.querySelector<HTMLInputElement>('[role="combobox"] input, [data-shadcn-command-input]')
-      if (globalInput) {
-        globalInput.value = value
-        globalInput.dispatchEvent(new Event('input', { bubbles: true }))
-        globalInput.dispatchEvent(new Event('change', { bubbles: true }))
+    if (role === 'combobox' || el.closest('[data-shadcn-select]') || el.closest('[role="listbox"]')) {
+      ;(el as HTMLElement).click()
+      await new Promise(r => setTimeout(r, 300))
+      const commandInput = el.querySelector<HTMLInputElement>('[role="combobox"] input, [data-shadcn-command-input]')
+      if (commandInput) {
+        commandInput.value = value
+        commandInput.dispatchEvent(new Event('input', { bubbles: true }))
+        commandInput.dispatchEvent(new Event('change', { bubbles: true }))
+      } else {
+        const globalInput = document.querySelector<HTMLInputElement>('[role="combobox"] input, [data-shadcn-command-input]')
+        if (globalInput) {
+          globalInput.value = value
+          globalInput.dispatchEvent(new Event('input', { bubbles: true }))
+          globalInput.dispatchEvent(new Event('change', { bubbles: true }))
+        }
       }
+      return { id: `fill-${Date.now()}`, name: 'fill', success: true }
     }
-    return { id: `fill-${Date.now()}`, name: 'fill', success: true }
-  }
 
-  if (role === 'switch') {
-    ;(el as HTMLElement).click()
-    return { id: `fill-${Date.now()}`, name: 'fill', success: true }
-  }
-
-  if (el.getAttribute('contenteditable') === 'true') {
-    el.textContent = value
-    el.dispatchEvent(new Event('input', { bubbles: true }))
-    return { id: `fill-${Date.now()}`, name: 'fill', success: true }
-  }
-
-  if (tag === 'input' || tag === 'textarea') {
-    const input = el as HTMLInputElement
-    const nativeInputValueSetter = Object.getOwnPropertyDescriptor(
-      window.HTMLInputElement.prototype, 'value'
-    )?.set
-    if (nativeInputValueSetter) {
-      nativeInputValueSetter.call(input, value)
-    } else {
-      input.value = value
+    if (role === 'switch') {
+      ;(el as HTMLElement).click()
+      return { id: `fill-${Date.now()}`, name: 'fill', success: true }
     }
-    input.dispatchEvent(new Event('input', { bubbles: true }))
-    input.dispatchEvent(new Event('change', { bubbles: true }))
-    return { id: `fill-${Date.now()}`, name: 'fill', success: true }
-  }
 
-  return { id: `fill-${Date.now()}`, name: 'fill', success: false, error: `Unsupported element: ${tag}` }
+    if (el.getAttribute('contenteditable') === 'true') {
+      el.textContent = value
+      el.dispatchEvent(new Event('input', { bubbles: true }))
+      return { id: `fill-${Date.now()}`, name: 'fill', success: true }
+    }
+
+    if (tag === 'input' || tag === 'textarea') {
+      const input = el as HTMLInputElement
+      const nativeInputValueSetter = Object.getOwnPropertyDescriptor(
+        window.HTMLInputElement.prototype, 'value'
+      )?.set
+      if (nativeInputValueSetter) {
+        nativeInputValueSetter.call(input, value)
+      } else {
+        input.value = value
+      }
+      input.dispatchEvent(new Event('input', { bubbles: true }))
+      input.dispatchEvent(new Event('change', { bubbles: true }))
+      return { id: `fill-${Date.now()}`, name: 'fill', success: true }
+    }
+
+    return { id: `fill-${Date.now()}`, name: 'fill', success: false, error: `Unsupported element: ${tag}` }
+  } finally {
+    releaseElementLock(selector)
+  }
 }
 
 async function select(selector: string, value: string): Promise<UiCommandResult> {
-  const el = resolveElement(selector)
-  if (!el) {
-    return { id: `select-${Date.now()}`, name: 'select', success: false, error: `Element not found: ${selector}` }
+  if (!(await acquireElementLock(selector))) {
+    return { id: `select-${Date.now()}`, name: 'select', success: false, error: `Could not acquire lock for element: ${selector}` }
   }
-  highlightElement(el)
-
-  const option = el.querySelector(`[data-value="${CSS.escape(value)}"]`) as HTMLElement
-  if (option) {
-    option.click()
-    return { id: `select-${Date.now()}`, name: 'select', success: true }
-  }
-
-  const nativeSelect = el as HTMLSelectElement
-  if (nativeSelect.tagName === 'SELECT') {
-    for (let i = 0; i < nativeSelect.options.length; i++) {
-      if (nativeSelect.options[i].value === value || nativeSelect.options[i].text === value) {
-        nativeSelect.selectedIndex = i
-        nativeSelect.dispatchEvent(new Event('change', { bubbles: true }))
-        return { id: `select-${Date.now()}`, name: 'select', success: true }
-      }
+  try {
+    const el = resolveElement(selector)
+    if (!el) {
+      return { id: `select-${Date.now()}`, name: 'select', success: false, error: `Element not found: ${selector}` }
     }
-    return { id: `select-${Date.now()}`, name: 'select', success: false, error: `Option not found: ${value}` }
-  }
+    highlightElement(el)
 
-  return { id: `select-${Date.now()}`, name: 'select', success: false, error: `Unsupported element for select: ${el.tagName}` }
+    const option = el.querySelector(`[data-value="${CSS.escape(value)}"]`) as HTMLElement
+    if (option) {
+      option.click()
+      return { id: `select-${Date.now()}`, name: 'select', success: true }
+    }
+
+    const nativeSelect = el as HTMLSelectElement
+    if (nativeSelect.tagName === 'SELECT') {
+      for (let i = 0; i < nativeSelect.options.length; i++) {
+        if (nativeSelect.options[i].value === value || nativeSelect.options[i].text === value) {
+          nativeSelect.selectedIndex = i
+          nativeSelect.dispatchEvent(new Event('change', { bubbles: true }))
+          return { id: `select-${Date.now()}`, name: 'select', success: true }
+        }
+      }
+      return { id: `select-${Date.now()}`, name: 'select', success: false, error: `Option not found: ${value}` }
+    }
+
+    return { id: `select-${Date.now()}`, name: 'select', success: false, error: `Unsupported element for select: ${el.tagName}` }
+  } finally {
+    releaseElementLock(selector)
+  }
 }
 
 async function doExtract(selector: string): Promise<UiCommandResult> {
