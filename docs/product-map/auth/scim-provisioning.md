@@ -58,7 +58,7 @@ SCIM-provisioned groups map to Team entities; memberships map to TeamMembership.
 - [x] PATCH `replace` name → 200, display_name updated
 - [x] PATCH `remove` active → 200, active set to false
 - [x] PATCH nil (no matching ops) → 200, no changes
-- [x] Delete user → 204, user hard-deleted from DB (currently hard delete, not soft deactivate)
+- [x] Delete user → 204, OrgMembership removed (Account preserved — user disconnected from org)
 
 ### Users — Edge Cases
 - [x] Duplicate `userName` → 409 Conflict with SCIM Error schema
@@ -146,6 +146,10 @@ SCIM-provisioned groups map to Team entities; memberships map to TeamMembership.
 - [x] All User routes return 501 with migration message on ProgrammingError
 - [x] All Group routes return 501 with migration message on ProgrammingError
 - [x] ProgrammingError logged as warning before raising 501
+- [x] All 12 route handlers return 503 with database-error message on SQLAlchemyError
+- [x] All 12 route handlers return 500 with structured detail on unexpected Exception
+- [x] HTTPException (from _scim_error: 400, 404, 409) is re-raised before DB error catches
+- [x] Error Handling tested with 36 unit tests (12× ProgrammingError→501, 12× SQLAlchemyError→503, 12× Exception→500)
 
 ## Not implemented (known gaps)
 - `/Bulk` endpoint — SCIM 2.0 Bulk operations (Azure AD uses this)
@@ -156,14 +160,15 @@ SCIM-provisioned groups map to Team entities; memberships map to TeamMembership.
 - PATCH `path` attribute grammar validation (free-form `path` string, no schema validation)
 - SCIM filter syntax parser (raw string passed to CRUD ILIKE match; silently returns empty on complex filters)
 - Rate limiting / IdP backpressure
-- Soft-delete deactivation on user DELETE (currently hard delete, not `active=false` as SCIM 2.0 specifies)
+- Soft-delete deactivation on user DELETE (currently OrgMembership only removed, Account preserved — inaccurate map claim fixed)
 - User `org_role` mapping from SCIM attributes (all SCIM users default to `runner`)
 - SCIM User `emails[]` from request not mapped to User model (display_name derived from userName parts only)
 - Group `created_by` fallback to uuid zero when no org users exist
 - `members[value eq "..."]` remove path regex extraction fragile — malformed paths silently no-op
 - **Re-provisioning IDP user**: If user exists in another org (same email), `scim_create_user` adds a new membership but preserves the existing account — this re-membership path is undocumented in spec
-- **`_get_base_url` fallback**: URL hardcoded as `localhost:8000` when `modulo_public_url` is unset — should raise 500 for proper diagnosis
 - **SCIM bypasses Team CRUD REST validation**: Calls `create_team` directly rather than Team CRUD API — no duplicate name validation at CRUD level beyond DB constraint
+- **Pre-existing test bug**: `test_scim_provisioning.py` and `test_scim_provisioning_bdd.py` patch `modulo.db.crud.user.get_user_by_email` which doesn't exist in `user.py` — mocks silently no-op, tests run without isolation
+- **RLS leak (fixed)**: `scim_list_group_members` called outside transaction on `list_groups`, `get_group`, `patch_group` — response construction now inside the transaction block
 
 ## QA History
 
@@ -174,3 +179,11 @@ SCIM-provisioned groups map to Team entities; memberships map to TeamMembership.
 - Added Error Handling section to product map
 - Marked 13 stale behaviour checkboxes [ ]→[x]
 - Status: partial (known gaps unchanged — 16 items)
+
+### Index 290 (2026-07-09) — feat-auth-scim-provisioning cross-cutting QA
+- **CRITICAL**: Added `except Exception→500` catches (with `except HTTPException: raise` guard) to all 12 SCIM route handlers — Python-level errors (TypeError, KeyError, ValueError) from patch operation dict manipulation, `_user_to_scim`, `_group_to_scim`, and UUID parsing previously propagated as opaque 500 to CatchAllMiddleware
+- **CRITICAL**: Fixed RLS leak — `scim_list_group_members(session, ...)` called outside the `session.begin()` transaction on 3 Group routes (`list_groups`, `get_group`, `patch_group`). After the transaction commits, `SET LOCAL app.organisation_id` expires — cross-org data could leak. Moved member-fetch + response construction inside the transaction block for all 3 routes
+- **MAJOR**: Fixed `scim_list_groups` offset — bare `start_index - 1` without `max(0, ...)` guard that `scim_list_users` uses. Added `max(0, ...)` for consistency
+- **MAJOR**: Corrected product map "hard-deleted from DB" claim — `scim_delete_user_by_id` only removes OrgMembership, preserving Account (correct behavior for multi-org users)
+- **MAJOR**: Added 24 new unit tests (12× SQLAlchemyError→503 + 12× Exception→500) to `test_scim_provisioning_programming_error.py`
+- All 36 error-handling tests pass. Merged to main at vX.Y.Z.

@@ -11,7 +11,7 @@ from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, Field
-from sqlalchemy.exc import ProgrammingError, SQLAlchemyError
+from sqlalchemy.exc import IntegrityError, ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.api.dependencies import get_db_session
@@ -236,6 +236,9 @@ async def list_users(
                 start_index=startIndex,
                 count=count,
             )
+    except HTTPException:
+        _log.warning("SCIM list_users: re-raising HTTPException")
+        raise
     except ProgrammingError:
         _log.warning("SCIM endpoint failed: database migration required")
         raise HTTPException(
@@ -247,6 +250,12 @@ async def list_users(
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="SCIM provisioning is temporarily unavailable due to a database error",
+        ) from None
+    except Exception:
+        _log.exception("SCIM list_users failed: unexpected error")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="SCIM list_users failed due to an unexpected error",
         ) from None
 
     base_url = _get_base_url(settings)
@@ -297,6 +306,9 @@ async def create_user(
                 display_name=display_name,
                 active=req.active,
             )
+    except HTTPException:
+        _log.warning("SCIM create_user: re-raising HTTPException")
+        raise
     except ProgrammingError:
         _log.warning("SCIM endpoint failed: database migration required")
         raise HTTPException(
@@ -308,6 +320,12 @@ async def create_user(
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="SCIM provisioning is temporarily unavailable due to a database error",
+        ) from None
+    except Exception:
+        _log.exception("SCIM create_user failed: unexpected error")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="SCIM create_user failed due to an unexpected error",
         ) from None
 
     return _user_to_scim(account, _get_base_url(settings))
@@ -324,6 +342,9 @@ async def get_user(
         async with session.begin():
             await set_rls_org(session, principal.organisation_id)
             account = await scim_get_user(session, principal.organisation_id, user_id)
+    except HTTPException:
+        _log.warning("SCIM get_user: re-raising HTTPException")
+        raise
     except ProgrammingError:
         _log.warning("SCIM endpoint failed: database migration required")
         raise HTTPException(
@@ -335,6 +356,12 @@ async def get_user(
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="SCIM provisioning is temporarily unavailable due to a database error",
+        ) from None
+    except Exception:
+        _log.exception("SCIM get_user failed: unexpected error")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="SCIM get_user failed due to an unexpected error",
         ) from None
 
     if account is None:
@@ -377,6 +404,12 @@ async def replace_user(
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="SCIM provisioning is temporarily unavailable due to a database error",
+        ) from None
+    except Exception:
+        _log.exception("SCIM replace_user failed: unexpected error")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="SCIM replace_user failed due to an unexpected error",
         ) from None
 
     return _user_to_scim(account, _get_base_url(settings))
@@ -428,6 +461,9 @@ async def patch_user(
                             account.active = bool(op.value["active"])
 
             await session.flush()
+    except HTTPException:
+        _log.warning("SCIM patch_user: re-raising HTTPException")
+        raise
     except ProgrammingError:
         _log.warning("SCIM endpoint failed: database migration required")
         raise HTTPException(
@@ -439,6 +475,12 @@ async def patch_user(
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="SCIM provisioning is temporarily unavailable due to a database error",
+        ) from None
+    except Exception:
+        _log.exception("SCIM patch_user failed: unexpected error")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="SCIM patch_user failed due to an unexpected error",
         ) from None
 
     return _user_to_scim(account, _get_base_url(settings))
@@ -455,6 +497,9 @@ async def delete_user(
         async with session.begin():
             await set_rls_org(session, principal.organisation_id)
             deleted = await scim_delete_user_by_id(session, principal.organisation_id, user_id)
+    except HTTPException:
+        _log.warning("SCIM delete_user: re-raising HTTPException")
+        raise
     except ProgrammingError:
         _log.warning("SCIM endpoint failed: database migration required")
         raise HTTPException(
@@ -466,6 +511,12 @@ async def delete_user(
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="SCIM provisioning is temporarily unavailable due to a database error",
+        ) from None
+    except Exception:
+        _log.exception("SCIM delete_user failed: unexpected error")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="SCIM delete_user failed due to an unexpected error",
         ) from None
 
     if not deleted:
@@ -494,6 +545,22 @@ async def list_groups(
                 start_index=startIndex,
                 count=count,
             )
+            base_url = _get_base_url(settings)
+            resources: list[dict[str, object]] = []
+            for g in groups:
+                memberships = await scim_list_group_members(session, g.id)
+                members = [
+                    {
+                        "value": str(m.user_id),
+                        "$ref": f"{base_url}/scim/v2/Users/{m.user_id}",
+                        "type": "User",
+                    }
+                    for m in memberships
+                ]
+                resources.append(_group_to_scim(g, members, base_url))
+    except HTTPException:
+        _log.warning("SCIM list_groups: re-raising HTTPException")
+        raise
     except ProgrammingError:
         _log.warning("SCIM endpoint failed: database migration required")
         raise HTTPException(
@@ -506,20 +573,12 @@ async def list_groups(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="SCIM provisioning is temporarily unavailable due to a database error",
         ) from None
-
-    base_url = _get_base_url(settings)
-    resources: list[dict[str, object]] = []
-    for g in groups:
-        memberships = await scim_list_group_members(session, g.id)
-        members = [
-            {
-                "value": str(m.user_id),
-                "$ref": f"{base_url}/scim/v2/Users/{m.user_id}",
-                "type": "User",
-            }
-            for m in memberships
-        ]
-        resources.append(_group_to_scim(g, members, base_url))
+    except Exception:
+        _log.exception("SCIM list_groups failed: unexpected error")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="SCIM list_groups failed due to an unexpected error",
+        ) from None
 
     return ScimListResponse(
         schemas=[_SCIM_LIST_SCHEMA],
@@ -583,6 +642,9 @@ async def create_group(
                         team_id=team.id,
                         user_id=uid,
                     )
+    except HTTPException:
+        _log.warning("SCIM create_group: re-raising HTTPException")
+        raise
     except ProgrammingError:
         _log.warning("SCIM endpoint failed: database migration required")
         raise HTTPException(
@@ -594,6 +656,12 @@ async def create_group(
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="SCIM provisioning is temporarily unavailable due to a database error",
+        ) from None
+    except Exception:
+        _log.exception("SCIM create_group failed: unexpected error")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="SCIM create_group failed due to an unexpected error",
         ) from None
 
     base_url = _get_base_url(settings)
@@ -619,6 +687,21 @@ async def get_group(
         async with session.begin():
             await set_rls_org(session, principal.organisation_id)
             group = await scim_get_group(session, group_id)
+            if group is None:
+                raise _scim_error(status.HTTP_404_NOT_FOUND, f"Group {group_id} not found")
+            base_url = _get_base_url(settings)
+            memberships = await scim_list_group_members(session, group_id)
+            members = [
+                {
+                    "value": str(m.user_id),
+                    "$ref": f"{base_url}/scim/v2/Users/{m.user_id}",
+                    "type": "User",
+                }
+                for m in memberships
+            ]
+    except HTTPException:
+        _log.warning("SCIM get_group: re-raising HTTPException")
+        raise
     except ProgrammingError:
         _log.warning("SCIM endpoint failed: database migration required")
         raise HTTPException(
@@ -631,20 +714,13 @@ async def get_group(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="SCIM provisioning is temporarily unavailable due to a database error",
         ) from None
+    except Exception:
+        _log.exception("SCIM get_group failed: unexpected error")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="SCIM get_group failed due to an unexpected error",
+        ) from None
 
-    if group is None:
-        raise _scim_error(status.HTTP_404_NOT_FOUND, f"Group {group_id} not found")
-
-    base_url = _get_base_url(settings)
-    memberships = await scim_list_group_members(session, group_id)
-    members = [
-        {
-            "value": str(m.user_id),
-            "$ref": f"{base_url}/scim/v2/Users/{m.user_id}",
-            "type": "User",
-        }
-        for m in memberships
-    ]
     return _group_to_scim(group, members, base_url)
 
 
@@ -683,6 +759,9 @@ async def replace_group(
                         team_id=group.id,
                         user_id=uid,
                     )
+    except HTTPException:
+        _log.warning("SCIM replace_group: re-raising HTTPException")
+        raise
     except ProgrammingError:
         _log.warning("SCIM endpoint failed: database migration required")
         raise HTTPException(
@@ -694,6 +773,12 @@ async def replace_group(
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="SCIM provisioning is temporarily unavailable due to a database error",
+        ) from None
+    except Exception:
+        _log.exception("SCIM replace_group failed: unexpected error")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="SCIM replace_group failed due to an unexpected error",
         ) from None
 
     base_url = _get_base_url(settings)
@@ -795,6 +880,19 @@ async def patch_group(
                                     except ValueError:
                                         continue
                                     await scim_remove_group_member(session, group.id, uid)
+            base_url = _get_base_url(settings)
+            memberships = await scim_list_group_members(session, group.id)
+            members = [
+                {
+                    "value": str(m.user_id),
+                    "$ref": f"{base_url}/scim/v2/Users/{m.user_id}",
+                    "type": "User",
+                }
+                for m in memberships
+            ]
+    except HTTPException:
+        _log.warning("SCIM patch_group: re-raising HTTPException")
+        raise
     except ProgrammingError:
         _log.warning("SCIM endpoint failed: database migration required")
         raise HTTPException(
@@ -807,17 +905,13 @@ async def patch_group(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="SCIM provisioning is temporarily unavailable due to a database error",
         ) from None
+    except Exception:
+        _log.exception("SCIM patch_group failed: unexpected error")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="SCIM patch_group failed due to an unexpected error",
+        ) from None
 
-    base_url = _get_base_url(settings)
-    memberships = await scim_list_group_members(session, group.id)
-    members = [
-        {
-            "value": str(m.user_id),
-            "$ref": f"{base_url}/scim/v2/Users/{m.user_id}",
-            "type": "User",
-        }
-        for m in memberships
-    ]
     return _group_to_scim(group, members, base_url)
 
 
@@ -832,6 +926,9 @@ async def delete_group(
         async with session.begin():
             await set_rls_org(session, principal.organisation_id)
             deleted = await scim_delete_group_by_id(session, group_id)
+    except HTTPException:
+        _log.warning("SCIM delete_group: re-raising HTTPException")
+        raise
     except ProgrammingError:
         _log.warning("SCIM endpoint failed: database migration required")
         raise HTTPException(
@@ -843,6 +940,12 @@ async def delete_group(
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="SCIM provisioning is temporarily unavailable due to a database error",
+        ) from None
+    except Exception:
+        _log.exception("SCIM delete_group failed: unexpected error")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="SCIM delete_group failed due to an unexpected error",
         ) from None
 
     if not deleted:
