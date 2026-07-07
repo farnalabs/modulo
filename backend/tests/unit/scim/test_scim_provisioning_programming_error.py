@@ -8,6 +8,7 @@ Verifies all 12 SCIM route handlers return correct error status codes:
 
 import uuid
 from collections.abc import AsyncGenerator, Generator
+from datetime import UTC, datetime
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -19,11 +20,24 @@ from modulo.api.main import app
 from modulo.auth.scim_auth import ScimPrincipal, get_scim_principal
 from modulo.settings import Settings, get_settings
 
+_NOW = datetime(2025, 1, 1, tzinfo=UTC)
+
 _VALID_32 = "a" * 32
 _ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
 _USER_ID = uuid.UUID("00000000-0000-0000-0000-000000000002")
 _TEAM_ID = uuid.UUID("00000000-0000-0000-0000-000000000003")
 _SCIM_TOKEN = "test-scim-token-12345"
+
+_MOCK_USER = MagicMock()
+_MOCK_USER.id = _USER_ID
+_MOCK_USER.organisation_id = _ORG_ID
+_MOCK_USER.email = "jane@example.com"
+_MOCK_USER.display_name = "Jane Doe"
+_MOCK_USER.active = True
+_MOCK_USER.org_role = "runner"
+_MOCK_USER.auth_provider = "scim"
+_MOCK_USER.created_at = _NOW
+_MOCK_USER.updated_at = _NOW
 
 _PROGRAMMING_ERROR = ProgrammingError("mock statement", [], Exception("mock table does not exist"))
 
@@ -533,3 +547,62 @@ class TestDeleteGroupException:
         ):
             resp = client.delete(f"/scim/v2/Groups/{_TEAM_ID}", headers={"Authorization": f"Bearer {_SCIM_TOKEN}"})
         _assert_500(resp)
+
+
+# ===========================================================================
+# _get_base_url raises 500 when MODULO_PUBLIC_URL is unset
+# ===========================================================================
+
+
+def _make_settings_no_public_url() -> Settings:
+    return Settings(
+        database_url="postgresql+asyncpg://localhost/test",
+        secret_key=_VALID_32,
+        fernet_key=_VALID_32,
+        modulo_admin_password="testpass",
+        modulo_license_key="enterprise-license",
+        modulo_scim_token=_SCIM_TOKEN,
+        modulo_public_url="",
+    )
+
+
+class TestGetBaseUrlMissing:
+    """_get_base_url should raise 500 when modulo_public_url is not configured."""
+
+    def test_list_users_returns_500(self) -> None:
+        app.dependency_overrides[get_settings] = _make_settings_no_public_url
+        app.dependency_overrides[get_db_session] = lambda: _make_mock_session()
+        app.dependency_overrides[_get_engine] = lambda: MagicMock()
+        app.dependency_overrides[get_scim_principal] = lambda: ScimPrincipal(organisation_id=_ORG_ID)
+
+        with (
+            patch("modulo.api.routes.scim.scim_list_users", return_value=([_MOCK_USER], 1)),
+            patch("modulo.api.routes.scim.set_rls_org"),
+        ):
+            resp = TestClient(app).get(
+                "/scim/v2/Users",
+                headers={"Authorization": f"Bearer {_SCIM_TOKEN}"},
+            )
+        app.dependency_overrides.clear()
+        assert resp.status_code == 500
+        detail = resp.json().get("detail", "")
+        assert "MODULO_PUBLIC_URL" in detail, f"Expected mention of MODULO_PUBLIC_URL, got: {detail}"
+
+    def test_get_user_returns_500(self) -> None:
+        app.dependency_overrides[get_settings] = _make_settings_no_public_url
+        app.dependency_overrides[get_db_session] = lambda: _make_mock_session()
+        app.dependency_overrides[_get_engine] = lambda: MagicMock()
+        app.dependency_overrides[get_scim_principal] = lambda: ScimPrincipal(organisation_id=_ORG_ID)
+
+        with (
+            patch("modulo.api.routes.scim.scim_get_user", return_value=_MOCK_USER),
+            patch("modulo.api.routes.scim.set_rls_org"),
+        ):
+            resp = TestClient(app).get(
+                f"/scim/v2/Users/{_USER_ID}",
+                headers={"Authorization": f"Bearer {_SCIM_TOKEN}"},
+            )
+        app.dependency_overrides.clear()
+        assert resp.status_code == 500
+        detail = resp.json().get("detail", "")
+        assert "MODULO_PUBLIC_URL" in detail

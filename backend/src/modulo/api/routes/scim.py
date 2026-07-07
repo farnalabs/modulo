@@ -309,6 +309,12 @@ async def create_user(
     except HTTPException:
         _log.warning("SCIM create_user: re-raising HTTPException")
         raise
+    except IntegrityError:
+        _log.warning("SCIM create_user: duplicate key violation")
+        raise _scim_error(
+            status.HTTP_409_CONFLICT,
+            f"User with userName {req.userName} already exists",
+        ) from None
     except ProgrammingError:
         _log.warning("SCIM endpoint failed: database migration required")
         raise HTTPException(
@@ -645,6 +651,12 @@ async def create_group(
     except HTTPException:
         _log.warning("SCIM create_group: re-raising HTTPException")
         raise
+    except IntegrityError:
+        _log.warning("SCIM create_group: duplicate key violation")
+        raise _scim_error(
+            status.HTTP_409_CONFLICT,
+            f"Group with displayName {req.displayName} already exists",
+        ) from None
     except ProgrammingError:
         _log.warning("SCIM endpoint failed: database migration required")
         raise HTTPException(

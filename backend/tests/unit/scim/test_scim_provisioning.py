@@ -329,7 +329,7 @@ class TestInputValidation:
     def test_create_user_invalid_schemas_returns_422(self, client: TestClient) -> None:
         body = {**_USER_CREATE_BODY, "schemas": ["urn:ietf:params:scim:schemas:core:2.0:Group"]}
         with (
-            patch("modulo.db.crud.user.get_user_by_email", return_value=None),
+            patch("modulo.db.crud.account.get_account_by_email", return_value=None),
             patch("modulo.api.routes.scim.set_rls_org"),
             patch(
                 "modulo.api.routes.scim.scim_create_user",
@@ -357,7 +357,7 @@ class TestInputValidation:
         body = {**_GROUP_CREATE_BODY, "members": [{"value": "not-a-uuid", "type": "User"}]}
         with (
             patch("modulo.db.crud.team.get_team_by_name", return_value=None),
-            patch("modulo.db.crud.user.list_users_for_org", return_value=[_MOCK_USER]),
+            patch("modulo.db.crud.user.list_users_for_org", create=True, return_value=[_MOCK_USER]),
             patch("modulo.api.routes.scim.scim_create_group", return_value=_MOCK_TEAM),
             patch("modulo.api.routes.scim.set_rls_org"),
         ):
@@ -795,7 +795,7 @@ class TestCreateUser:
                 return_value=_MOCK_USER,
             ),
             patch(
-                "modulo.db.crud.user.get_user_by_email",
+                "modulo.db.crud.account.get_account_by_email",
                 return_value=None,
             ),
             patch("modulo.api.routes.scim.set_rls_org"),
@@ -813,7 +813,7 @@ class TestCreateUser:
     def test_duplicate_returns_409(self, client: TestClient) -> None:
         with (
             patch(
-                "modulo.db.crud.user.get_user_by_email",
+                "modulo.db.crud.account.get_account_by_email",
                 return_value=_MOCK_USER,
             ),
             patch("modulo.api.routes.scim.set_rls_org"),
@@ -1007,7 +1007,7 @@ class TestCreateGroup:
                 return_value=None,
             ),
             patch(
-                "modulo.db.crud.user.list_users_for_org",
+                "modulo.db.crud.user.list_users_for_org", create=True,
                 return_value=[_MOCK_USER],
             ),
             patch(
