@@ -11,6 +11,7 @@ import argparse
 import asyncio
 import hashlib
 import json
+import logging
 import uuid
 from datetime import UTC, datetime
 from decimal import Decimal
@@ -35,6 +36,8 @@ from modulo.db.models import (
     Team,
 )
 from modulo.db.session import AsyncSessionLocal
+
+_log = logging.getLogger(__name__)
 
 EXPORT_VERSION = 1
 PAGE_SIZE = 500
@@ -344,6 +347,7 @@ async def _do_import(
 
                     except Exception as exc:
                         rid = row.get("id", "?")
+                        _log.exception("Error importing %s row %s", table_name, rid)
                         tqdm.write(f"  ERROR importing {table_name} row {rid}: {exc}")
                         counts["errors"] += 1
 
@@ -400,8 +404,6 @@ def cmd_export(args: argparse.Namespace) -> None:
     bundle = asyncio.run(_do_export(org_id, output))
     _write_bundle(bundle, output, force=force)
 
-    _ = sum(len(v) for k, v in bundle.items() if isinstance(v, list))
-
 
 def cmd_import(args: argparse.Namespace) -> None:
     org_id = _parse_uuid(args.org_id, "organisation ID")
@@ -409,7 +411,6 @@ def cmd_import(args: argparse.Namespace) -> None:
     strategy: ConflictStrategy = args.conflict
 
     bundle = _load_bundle(input_path)
-    _ = sum(len(v) for k, v in bundle.items() if isinstance(v, list))
 
     asyncio.run(_do_import(bundle, org_id, strategy))
 

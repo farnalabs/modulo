@@ -76,7 +76,7 @@ Two implementations exist: `modulo-migrate` (click-based, JSONL format with auth
 - [x] Empty output directory creates it before writing
 - [ ] Large orgs >500 rows: migrate.py loads all in memory (OOM risk); migrate_org.py paginates safely
 - [ ] Slow DB: no timeout on DB operations (both CLIs)
-- [ ] Interrupted export: partial output file left on disk (both CLIs)
+- [x] Interrupted export: partial output file left on disk (both CLIs) — fixed for migrate.py with try/finally cleanup in _async_export_org
 - [ ] Hash collision during import (both CLIs)
 
 ### Resilience (QA pass 2026-07-05)
@@ -89,7 +89,7 @@ Two implementations exist: `modulo-migrate` (click-based, JSONL format with auth
 
 ## Known Gaps
 
-- No unit tests for migrate_org.py (argparse-based modulo CLI) — migrate.py (modulo-migrate) has 26+ tests; migrate_org.py has zero
+- [x] migrate_org.py unit tests now exist (10 tests in test_migrate_org.py) — migrate.py has 30+ tests
 - No BDD feature files for migration/export behaviour
 - modulo-migrate requires auth token or admin secret — no interactive login
 - modulo (argparse) has no auth — runs with direct DB access
@@ -98,3 +98,17 @@ Two implementations exist: `modulo-migrate` (click-based, JSONL format with auth
 - No integration tests for full export→verify→import cycle
 - No concurrency tests (parallel export/import, partial failure during import)
 - No tests for orgs with 500+ records (pagination boundary for migrate_org.py)
+
+## QA History
+
+### 2026-07-XX — Cross-cutting QA (index 308)
+
+**MAJOR fixes applied:**
+- Created `backend/tests/unit/cli/test_migrate_org.py` with 10 unit tests covering export-org (basic, not-found, existing-file-without-force, existing-file-with-force), import-org (basic, file-not-found, hash-mismatch, skip-existing), and parsing edge cases (valid UUID, invalid UUID). Previously migrate_org.py had zero unit tests.
+- Fixed partial-output-file leak: `_async_export_org` now removes the output file on failure via try/finally cleanup.
+- Fixed `_read_jsonl` ASYNC240 linter violation: replaced `os.path.exists(str(path))` with `path.exists()`.
+- Removed 2 dead-code lines (`_ = sum(...)`) from `cmd_export` and `cmd_import` in migrate_org.py.
+- Changed `_log.warning` to `_log.exception` in migrate.py import row loop to capture tracebacks on import errors.
+- Added TODO comments for known limitations (OOM on large orgs in migrate.py, no DB timeout) matching unchecked edge cases in product map.
+
+**Status:** partial (8 known gaps remain — 1 partially resolved by new tests)
