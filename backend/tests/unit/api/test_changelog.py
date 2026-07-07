@@ -78,3 +78,43 @@ class TestChangelog:
         entries = resp.json()
         assert len(entries) == 1
         assert entries[0]["migration_url"] == "https://example.com/migration"
+
+    def test_create_changelog_entry_returns_201(self):
+        """POST /api/v1/changelog returns 201 with the created entry."""
+        app = _make_app()
+        with TestClient(app) as client:
+            resp = client.post(
+                "/api/v1/changelog",
+                json={
+                    "version": "1.1",
+                    "date": "2026-07-01",
+                    "summary": "Bug fix release",
+                    "changes": ["Fixed issue with HITL timeout", "Improved dashboard performance"],
+                    "deprecations": ["Old config endpoint"],
+                    "migration_url": "/docs/operations/migrations/v1-config-to-admin",
+                },
+            )
+        assert resp.status_code == 201
+        entry = resp.json()
+        assert entry["version"] == "1.1"
+        assert entry["summary"] == "Bug fix release"
+        assert entry["deprecations"] == ["Old config endpoint"]
+
+    def test_created_entry_appears_in_list(self):
+        """An entry created via POST should appear in the GET list."""
+        app = _make_app()
+        with TestClient(app) as client:
+            client.post(
+                "/api/v1/changelog",
+                json={
+                    "version": "2.0",
+                    "date": "2026-12-01",
+                    "summary": "Major release",
+                    "changes": ["Breaking change 1", "Breaking change 2"],
+                },
+            )
+            resp = client.get("/api/v1/changelog")
+        assert resp.status_code == 200
+        entries = resp.json()
+        versions = [e["version"] for e in entries]
+        assert "2.0" in versions
