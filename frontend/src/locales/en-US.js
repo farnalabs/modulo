@@ -562,7 +562,8 @@ export default {
       "select_a_pipeline_and_run_it_with_a_prompt": "Choose a pipeline and configure its parameters before running it.",
       "invalid_dashboard_data": "Received invalid dashboard data from server.",
       "invalid_trends_data": "Received invalid trends data from server.",
-      "invalid_days_parameter": "Invalid days parameter: must be a positive integer."
+      "invalid_days_parameter": "Invalid days parameter: must be a positive integer.",
+      "failed_to_create_starter_pipeline": "Failed to create starter pipeline. Please try again."
     },
     "AdminFeatureFlagsView": {
       "team_tier": "Team tier",
