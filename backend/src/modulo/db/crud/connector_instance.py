@@ -92,14 +92,22 @@ async def list_connector_instances(
         total = (await session.execute(total_query)).scalar_one()
     except ProgrammingError:
         return PageResult(items=[], total=0, page=page, page_size=page_size)
-    items_stmt = select(ConnectorInstance).order_by(ConnectorInstance.created_at.desc()).offset(offset).limit(page_size)
-    if excluded_tiers:
-        items_stmt = items_stmt.where(~ConnectorInstance.tier.in_(excluded_tiers))
-    items = list(
-        (
-            await session.execute(items_stmt)
-        ).scalars()
-    )
+    try:
+        items_stmt = (
+            select(ConnectorInstance)
+            .order_by(ConnectorInstance.created_at.desc())
+            .offset(offset)
+            .limit(page_size)
+        )
+        if excluded_tiers:
+            items_stmt = items_stmt.where(~ConnectorInstance.tier.in_(excluded_tiers))
+        items = list(
+            (
+                await session.execute(items_stmt)
+            ).scalars()
+        )
+    except ProgrammingError:
+        return PageResult(items=[], total=0, page=page, page_size=page_size)
     return PageResult(items=items, total=total, page=page, page_size=page_size)
 
 
