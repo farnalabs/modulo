@@ -266,7 +266,7 @@ All connectors receive `_TracedConnector` wrapping at construction time. All use
 - [x] GraphQL errors in response body raise `ValueError("Linear API error: ...")`
 - [x] `health_check()` runs `viewer` query — returns `ok=False` with detail on HTTP errors or missing viewer
 - [x] Generic exceptions in health check are caught and returned as `ok=False` (never propagate)
-- [ ] BDD scenarios missing — `linear_connector.feature` is a placeholder
+- [x] BDD scenarios exist — `linear_connector.feature` has 8 scenarios (5 happy-path + 3 error-path) with real step definitions
 
 ### Slack Connector
 
@@ -363,4 +363,5 @@ All 5 CRUD routes in `connectors.py` have complete error handling chains:
 - **CI Runner connectors** have no BDD coverage — no dedicated feature files for GitHub Actions CI or GitLab CI.
 
 ### QA History
+- 2026-07-07: Cross-cutting QA (index 318). Fixed stale BDD checkbox for Linear connector (`linear_connector.feature` has 8 real scenarios since July 1 QA — no longer a placeholder). Status: partial.
 - 2026-07-08: Cross-cutting QA (index 249). Fixed CRITICAL — added IntegrityError→409 catch to create_connector_endpoint and update_connector_endpoint (FK/constraint violations previously returned misleading 503). Fixed MAJOR — created `test_connectors_programming_error.py` with 11 tests covering ProgrammingError→501, SQLAlchemyError→503, and IntegrityError→409 for all 5 CRUD routes. Added Error Handling and Test Coverage sections to product map.
