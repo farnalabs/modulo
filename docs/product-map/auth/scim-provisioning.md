@@ -167,7 +167,10 @@ SCIM-provisioned groups map to Team entities; memberships map to TeamMembership.
 - `members[value eq "..."]` remove path regex extraction fragile — malformed paths silently no-op
 - **Re-provisioning IDP user**: If user exists in another org (same email), `scim_create_user` adds a new membership but preserves the existing account — this re-membership path is undocumented in spec
 - **SCIM bypasses Team CRUD REST validation**: Calls `create_team` directly rather than Team CRUD API — no duplicate name validation at CRUD level beyond DB constraint
-- **Pre-existing test bug**: `test_scim_provisioning.py` and `test_scim_provisioning_bdd.py` patch `modulo.db.crud.user.get_user_by_email` which doesn't exist in `user.py` — mocks silently no-op, tests run without isolation
+- **Pre-existing test bug (fixed)**: `test_scim_provisioning.py`, `test_scim_provisioning_bdd.py`, and `bdd/steps/test_scim_provisioning.py` patched `modulo.db.crud.user.get_user_by_email` which doesn't exist — the function is `get_account_by_email` in `modulo.db.crud.account`. Patches silently no-opped. Fixed index 321.
+- **Pre-existing test bug (fixed)**: Same test files patched `modulo.db.crud.user.list_users_for_org` which doesn't exist — function is `list_memberships_for_org` in `modulo.db.crud.org_membership`. Fixed index 321.
+- **Test file duplication (fixed)**: `test_scim_resilience.py` duplicated the exact same 12× SQLAlchemyError→503 tests from `test_scim_provisioning_programming_error.py`. Removed `test_scim_resilience.py` (non-duplicate `_get_base_url` tests moved to `test_scim_provisioning_programming_error.py`). Fixed index 321.
+- **Dead import (fixed)**: `IntegrityError` was imported in `scim.py` but never caught — concurrent unique constraint violations propagated to `except Exception` → 500 instead of proper 409. Added `except IntegrityError` blocks returning 409 to `create_user` and `create_group` handlers. Fixed index 321.
 - **RLS leak (fixed)**: `scim_list_group_members` called outside transaction on `list_groups`, `get_group`, `patch_group` — response construction now inside the transaction block
 
 ## QA History
@@ -187,3 +190,12 @@ SCIM-provisioned groups map to Team entities; memberships map to TeamMembership.
 - **MAJOR**: Corrected product map "hard-deleted from DB" claim — `scim_delete_user_by_id` only removes OrgMembership, preserving Account (correct behavior for multi-org users)
 - **MAJOR**: Added 24 new unit tests (12× SQLAlchemyError→503 + 12× Exception→500) to `test_scim_provisioning_programming_error.py`
 - All 36 error-handling tests pass. Merged to main at vX.Y.Z.
+
+### Index 321 (2026-07-07) — feat-auth-scim-provisioning cross-cutting QA (index 321)
+- **CRITICAL**: Fixed `test_scim_provisioning.py`, `test_scim_provisioning_bdd.py`, and `bdd/steps/test_scim_provisioning.py` patching `modulo.db.crud.user.get_user_by_email` (non-existent) → changed all to `modulo.db.crud.account.get_account_by_email`. Patches were silent no-ops — tests ran without mock isolation.
+- **CRITICAL**: Fixed same files patching `modulo.db.crud.user.list_users_for_org` (non-existent) → changed all to `modulo.db.crud.org_membership.list_memberships_for_org`.
+- **MAJOR**: Removed duplicate test file `test_scim_resilience.py` (12 identical SQLAlchemyError→503 test classes already in `test_scim_provisioning_programming_error.py`). Moved unique `_get_base_url` tests into `test_scim_provisioning_programming_error.py`.
+- **MAJOR**: Added `except IntegrityError` → 409 Conflict catches to `create_user` and `create_group` route handlers — concurrent TOCTOU duplicate requests now return proper SCIM 409 instead of opaque 500.
+- **MAJOR**: Fixed BDD tests that patched `ValueError` expecting 409 — changed to `IntegrityError` to match the new catch chain.
+- Fixed tests: `test_scim_provisioning_bdd.py:test_duplicate_username_returns_409` and `test_scim_provisioning_bdd.py:test_duplicate_displayname_returns_409` used `ValueError` side effects expecting 409 — new `except IntegrityError` block catches `IntegrityError`, not `ValueError`.
+- All tests pass. Merged to main.

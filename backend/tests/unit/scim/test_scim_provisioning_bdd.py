@@ -146,7 +146,7 @@ class TestCreateScimUser:
         mock_user = _make_mock_user()
 
         with (
-            patch("modulo.db.crud.user.get_user_by_email", return_value=None),
+            patch("modulo.db.crud.account.get_account_by_email", return_value=None),
             patch("modulo.api.routes.scim.scim_create_user", return_value=mock_user),
             patch("modulo.api.routes.scim.set_rls_org"),
         ):
@@ -261,7 +261,7 @@ class TestJitProvisioning:
         mock_user = _make_mock_user(email="newcomer@example.com", auth_provider="scim", password_hash=None)
 
         with (
-            patch("modulo.db.crud.user.get_user_by_email", return_value=None),
+            patch("modulo.db.crud.account.get_account_by_email", return_value=None),
             patch("modulo.api.routes.scim.scim_create_user", return_value=mock_user),
             patch("modulo.api.routes.scim.set_rls_org"),
         ):
@@ -278,7 +278,7 @@ class TestJitProvisioning:
         mock_user.password_hash = None
 
         with (
-            patch("modulo.db.crud.user.get_user_by_email", return_value=None),
+            patch("modulo.db.crud.account.get_account_by_email", return_value=None),
             patch("modulo.api.routes.scim.scim_create_user", return_value=mock_user),
             patch("modulo.api.routes.scim.set_rls_org"),
         ):
@@ -292,8 +292,9 @@ class TestJitProvisioning:
             scim_routes.scim_create_user.assert_called_once()
 
     def test_duplicate_username_returns_409(self, client: TestClient) -> None:
+        from sqlalchemy.exc import IntegrityError
         with (
-            patch("modulo.api.routes.scim.scim_create_user", side_effect=ValueError("Duplicate userName")),
+            patch("modulo.api.routes.scim.scim_create_user", side_effect=IntegrityError("mock", {}, Exception("mock dup"))),
             patch("modulo.api.routes.scim.set_rls_org"),
         ):
             headers = {"Authorization": f"Bearer {_SCIM_TOKEN}"}
@@ -356,7 +357,7 @@ class TestCreateScimGroup:
 
         with (
             patch("modulo.db.crud.team.get_team_by_name", return_value=None),
-            patch("modulo.db.crud.user.list_users_for_org", return_value=[_make_mock_user()]),
+            patch("modulo.db.crud.user.list_users_for_org", create=True, return_value=[_make_mock_user()]),
             patch("modulo.api.routes.scim.scim_create_group", return_value=mock_team),
             patch("modulo.api.routes.scim.set_rls_org"),
         ):
@@ -370,8 +371,9 @@ class TestCreateScimGroup:
         assert body["displayName"] == "Engineering"
 
     def test_duplicate_displayname_returns_409(self, client: TestClient) -> None:
+        from sqlalchemy.exc import IntegrityError
         with (
-            patch("modulo.api.routes.scim.scim_create_group", side_effect=ValueError("Duplicate displayName")),
+            patch("modulo.api.routes.scim.scim_create_group", side_effect=IntegrityError("mock", {}, Exception("mock dup"))),
             patch("modulo.api.routes.scim.set_rls_org"),
         ):
             headers = {"Authorization": f"Bearer {_SCIM_TOKEN}"}
@@ -386,8 +388,8 @@ class TestCreateScimGroup:
 
         with (
             patch("modulo.db.crud.team.get_team_by_name", return_value=None),
-            patch("modulo.db.crud.user.list_users_for_org", return_value=[mock_user]),
-            patch("modulo.db.crud.user.get_user_by_email", return_value=mock_user),
+            patch("modulo.db.crud.user.list_users_for_org", create=True, return_value=[mock_user]),
+            patch("modulo.db.crud.account.get_account_by_email", return_value=mock_user),
             patch("modulo.api.routes.scim.scim_get_user", return_value=mock_user),
             patch("modulo.api.routes.scim.scim_create_group", return_value=mock_team),
             patch("modulo.api.routes.scim.scim_add_group_member", return_value=None),

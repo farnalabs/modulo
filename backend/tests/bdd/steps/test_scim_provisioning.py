@@ -277,7 +277,7 @@ def _when_post_user(email: str, scim_client: Any, request: Any, ctx: dict[str, A
     mock_user.password_hash = None
 
     with (
-        patch("modulo.db.crud.user.get_user_by_email", return_value=None),
+        patch("modulo.db.crud.account.get_account_by_email", return_value=None),
         patch("modulo.api.routes.scim.scim_create_user", return_value=mock_user) as mock_create,
         patch("modulo.api.routes.scim.set_rls_org"),
     ):
@@ -414,7 +414,7 @@ def _when_post_group(display_name: str, user_id: str, scim_client: Any, request:
 
     with (
         patch("modulo.db.crud.team.get_team_by_name", return_value=None),
-        patch("modulo.db.crud.user.list_users_for_org", return_value=[_MOCK_USER]),
+        patch("modulo.db.crud.user.list_users_for_org", create=True, return_value=[_MOCK_USER]),
         patch("modulo.api.routes.scim.scim_create_group", return_value=mock_team),
         patch("modulo.api.routes.scim.set_rls_org"),
     ):
