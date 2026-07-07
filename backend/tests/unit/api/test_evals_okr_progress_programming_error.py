@@ -33,28 +33,14 @@ def _make_settings() -> Settings:
     )
 
 
-def _make_session_raising_programming_error() -> AsyncMock:
+def _make_session_raising(exception: Exception) -> AsyncMock:
     session = AsyncMock()
     begin_cm = AsyncMock()
     begin_cm.__aenter__ = AsyncMock(return_value=None)
     begin_cm.__aexit__ = AsyncMock(return_value=False)
     session.begin = MagicMock(return_value=begin_cm)
     session.in_transaction = MagicMock(return_value=True)
-    session.execute = AsyncMock(side_effect=ProgrammingError("relation does not exist", None, None))
-    bind_mock = MagicMock()
-    bind_mock.dialect.name = "postgresql"
-    session.get_bind = AsyncMock(return_value=bind_mock)
-    return session
-
-
-def _make_session_raising_sqlalchemy_error() -> AsyncMock:
-    session = AsyncMock()
-    begin_cm = AsyncMock()
-    begin_cm.__aenter__ = AsyncMock(return_value=None)
-    begin_cm.__aexit__ = AsyncMock(return_value=False)
-    session.begin = MagicMock(return_value=begin_cm)
-    session.in_transaction = MagicMock(return_value=True)
-    session.execute = AsyncMock(side_effect=SQLAlchemyError("connection failed", None, None))
+    session.execute = AsyncMock(side_effect=exception)
     bind_mock = MagicMock()
     bind_mock.dialect.name = "postgresql"
     session.get_bind = AsyncMock(return_value=bind_mock)
@@ -77,7 +63,7 @@ def admin_client() -> TestClient:
 
 
 def test_okr_progress_returns_501_on_programming_error(admin_client: TestClient) -> None:
-    session = _make_session_raising_programming_error()
+    session = _make_session_raising(ProgrammingError("relation does not exist", None, None))
 
     async def _override_session() -> AsyncGenerator[AsyncMock, None]:
         yield session
@@ -89,7 +75,7 @@ def test_okr_progress_returns_501_on_programming_error(admin_client: TestClient)
 
 
 def test_okr_progress_returns_503_on_sqlalchemy_error(admin_client: TestClient) -> None:
-    session = _make_session_raising_sqlalchemy_error()
+    session = _make_session_raising(SQLAlchemyError("connection failed", None, None))
 
     async def _override_session() -> AsyncGenerator[AsyncMock, None]:
         yield session
@@ -98,3 +84,15 @@ def test_okr_progress_returns_503_on_sqlalchemy_error(admin_client: TestClient) 
     resp = admin_client.get("/api/v1/admin/evals/okr-progress/test-suite")
     assert resp.status_code == 503
     assert "database" in resp.json()["detail"].lower()
+
+
+def test_okr_progress_returns_500_on_unexpected_error(admin_client: TestClient) -> None:
+    session = _make_session_raising(RuntimeError("unexpected failure"))
+
+    async def _override_session() -> AsyncGenerator[AsyncMock, None]:
+        yield session
+
+    app.dependency_overrides[get_db_session] = _override_session
+    resp = admin_client.get("/api/v1/admin/evals/okr-progress/test-suite")
+    assert resp.status_code == 500
+    assert "unexpected error" in resp.json()["detail"].lower()
