@@ -342,7 +342,7 @@ class TestGetCostReport:
 
         mock_session.execute = AsyncMock(
             side_effect=[
-                MagicMock(one=MagicMock(return_value=row)),
+                MagicMock(one_or_none=MagicMock(return_value=row)),
                 org_result,
             ]
         )
@@ -364,7 +364,7 @@ class TestGetCostReport:
 
         mock_session.execute = AsyncMock(
             side_effect=[
-                MagicMock(one=MagicMock(return_value=row)),
+                MagicMock(one_or_none=MagicMock(return_value=row)),
                 org_result,
             ]
         )
