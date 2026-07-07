@@ -487,7 +487,6 @@ async def admin_remove_org_license(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Organisation not found")
 
     settings_json = dict(org.settings_json or {})
-    had_key = "license_key" in settings_json
     settings_json.pop("license_key", None)
 
     try:
