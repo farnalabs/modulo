@@ -197,6 +197,7 @@
               v-model="modelConfig.defaultProvider"
               class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm"
               data-testid="remy-model-provider"
+              aria-label="Default Provider"
             >
               <option v-for="p in availableProviders.native" :key="p.id" :value="p.id">{{ p.label }}</option>
             </select>
@@ -342,7 +343,7 @@
 
         <div class="mb-6">
           <label class="mb-1 block text-sm font-medium">Permission Mode</label>
-          <select v-model="toolPermMode" class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm" @change="applyModePreset">
+          <select v-model="toolPermMode" aria-label="Permission Mode" class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm" @change="applyModePreset">
             <option value="safe">Safe — read ops auto-allowed, destructive actions require approval (recommended)</option>
             <option value="full_auto">Full Auto — all actions auto-allowed (with destructive override)</option>
             <option value="locked_down">Locked Down — all write actions require approval</option>
@@ -364,7 +365,7 @@
                 <td class="px-4 py-3 font-mono text-xs">{{ toolName }}</td>
                 <td class="px-4 py-3 text-muted-foreground text-xs">{{ info.description }}</td>
                 <td class="px-4 py-3">
-                  <select v-model="toolPerms[toolName]" :disabled="toolPermMode !== 'custom'" class="rounded border border-input bg-background px-2 py-1 text-xs">
+                  <select v-model="toolPerms[toolName]" :disabled="toolPermMode !== 'custom'" aria-label="Tool permission" class="rounded border border-input bg-background px-2 py-1 text-xs">
                     <option value="always_allowed">Auto-allow</option>
                     <option value="requires_approval">Requires approval</option>
                     <option value="disabled">Disabled</option>
@@ -635,6 +636,7 @@
                   <select
                     v-model="contextSources[src.key]"
                     class="rounded border border-input bg-background px-2 py-1 text-xs"
+                    aria-label="Context source mode"
                     :disabled="contextSaving"
                     @change="saveContextSource(src.key)"
                   >
@@ -673,6 +675,7 @@
                   <select
                     v-model="skillModes[skill.id]"
                     class="rounded border border-input bg-background px-2 py-1 text-xs"
+                    aria-label="Skill knowledge mode"
                     :disabled="skillModeSaving[skill.id]"
                     @change="saveSkillSourceMode(skill)"
                   >

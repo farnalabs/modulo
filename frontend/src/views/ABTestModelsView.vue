@@ -22,6 +22,7 @@
           <select
             v-model="selectedPipelineId"
             data-testid="ab-test-models-pipeline-select"
+            aria-label="Pipeline"
             class="min-w-[280px] rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
           >
             <option value="" disabled>{{ $t('views.ABTestModelsView.select_a_pipeline') }}</option>
@@ -36,6 +37,7 @@
           <select
             v-model="selectedGroupId"
             data-testid="ab-test-models-group-select"
+            aria-label="Existing group"
             class="min-w-[200px] rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
           >
             <option value="">{{ $t('views.ABTestModelsView.new_group') }}</option>
@@ -127,6 +129,7 @@
                   <select
                     v-model="v.modelBackendId"
                     :data-testid="`ab-test-models-model-backend-${i}`"
+                    aria-label="Model backend"
                     class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                   >
                     <option value="" disabled>{{ $t('views.ABTestModelsView.select_model') }}</option>

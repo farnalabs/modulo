@@ -8,20 +8,20 @@
     <!-- Filters -->
     <div class="card p-4">
       <div class="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
-        <select v-model="filterLevel" class="rounded-md border bg-background px-3 py-2 text-sm">
+        <select v-model="filterLevel" aria-label="Filter by level" class="rounded-md border bg-background px-3 py-2 text-sm">
           <option value="">{{ $t('views.AdminErrorsView.all_levels') }}</option>
           <option value="error">Error</option>
           <option value="warning">Warning</option>
           <option value="info">Info</option>
           <option value="debug">Debug</option>
         </select>
-        <select v-model="filterScope" class="rounded-md border bg-background px-3 py-2 text-sm">
+        <select v-model="filterScope" aria-label="Filter by scope" class="rounded-md border bg-background px-3 py-2 text-sm">
           <option value="">{{ $t('views.NotificationsPage.all_scopes') }}</option>
           <option value="user">Personal</option>
           <option value="org">{{ $t('components.OwnershipPicker.orgwide') }}</option>
           <option value="admin">Admin</option>
         </select>
-        <select v-model="filterStatus" class="rounded-md border bg-background px-3 py-2 text-sm">
+        <select v-model="filterStatus" aria-label="Filter by status" class="rounded-md border bg-background px-3 py-2 text-sm">
           <option value="">{{ $t('views.NotificationsPage.all_status') }}</option>
           <option value="active">Active</option>
           <option value="dismissed_self">{{ $t('views.NotificationsPage.dismissed_self') }}</option>

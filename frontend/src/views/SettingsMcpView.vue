@@ -117,7 +117,7 @@
         <CardContent class="space-y-4">
           <div class="flex items-center gap-2">
             <label class="text-sm font-medium whitespace-nowrap">Client:</label>
-            <select v-model="selectedMcpClient" class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm">
+            <select v-model="selectedMcpClient" aria-label="Client" class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm">
               <option value="opencode">opencode / Claude Code</option>
               <option value="claude">Claude Desktop</option>
               <option value="cursor">Cursor</option>
@@ -173,6 +173,7 @@
             <select
               v-model="createKeyRole"
               data-testid="settings-mcp-create-key-role"
+              aria-label="Role"
               class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
             >
               <option value="operator">Operator</option>

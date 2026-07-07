@@ -145,6 +145,7 @@
             <dd>
               <select
                 v-model="edgeForm.edge_type"
+                aria-label="Edge type"
                 class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm"
               >
                 <option value="normal">Normal</option>
@@ -223,6 +224,7 @@
             <label class="mb-1 block text-xs font-medium text-muted-foreground">Condition Type</label>
             <select
               v-model="edgeForm.condition_type"
+              aria-label="Condition type"
               class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm"
             >
               <option value="none">None (always gate)</option>
@@ -268,6 +270,7 @@
                 <label class="mb-1 block text-xs font-medium text-muted-foreground">Operator</label>
                 <select
                   v-model="edgeForm.eval_operator"
+                  aria-label="Operator"
                   class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm"
                 >
                   <option value="lt">lt (score &lt; threshold)</option>
@@ -316,6 +319,7 @@
             <select
               v-model="pickerAgentId"
               data-testid="pipeline-editor-agent-select"
+              aria-label="Agent"
               class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm"
               @change="onAgentChange"
             >
@@ -328,6 +332,7 @@
             <select
               v-model="pickerConnectorId"
               data-testid="pipeline-editor-connector-select"
+              aria-label="Connector"
               class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm"
             >
               <option value="">{{ $t('views.PipelineEditorView.select_connector_placeholder') }}</option>
@@ -386,6 +391,7 @@
             <select
               v-model="revertSnapshotId"
               data-testid="pipeline-editor-snapshot-select"
+              aria-label="Snapshot"
               class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm"
             >
               <option value="">{{ $t('views.PipelineEditorView.select_snapshot_placeholder') }}</option>

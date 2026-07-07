@@ -287,6 +287,7 @@ async function detectPlaceholders() {
           >
           <select
             v-model="form.type"
+            aria-label="Port type"
             class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm"
           >
             <option value="string">String</option>

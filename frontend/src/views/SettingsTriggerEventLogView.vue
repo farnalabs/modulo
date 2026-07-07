@@ -12,6 +12,7 @@
           <select
             v-model="filterTriggerType"
             data-testid="settings-trigger-event-log-trigger-type"
+            aria-label="Trigger type"
             class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring"
           >
             <option value="">{{ $t('views.AdminNotificationDeliveryLogView.all_types') }}</option>
@@ -27,6 +28,7 @@
           <select
             v-model="filterResult"
             data-testid="settings-trigger-event-log-result"
+            aria-label="Result"
             class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring"
           >
             <option value="">{{ $t('views.SettingsTriggerEventLogView.all_results') }}</option>

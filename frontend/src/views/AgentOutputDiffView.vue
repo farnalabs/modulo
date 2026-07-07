@@ -16,6 +16,7 @@
           <div class="flex gap-2">
             <select
               data-testid="diff-recent-runs-a"
+              aria-label="Select run A"
               class="w-72 rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
               @change="onSelectRunA"
             >
@@ -49,6 +50,7 @@
           <div class="flex gap-2">
             <select
               data-testid="diff-recent-runs-b"
+              aria-label="Select run B"
               class="w-72 rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
               @change="onSelectRunB"
             >

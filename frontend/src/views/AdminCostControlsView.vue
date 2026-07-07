@@ -181,6 +181,7 @@
                   @change="onCurrencyChange"
                   class="w-full rounded-lg border border-border bg-background px-3 py-2 text-sm"
                   data-testid="cc-currency"
+                  aria-label="Currency"
                 >
                   <option value="USD">USD ($)</option>
                   <option value="EUR">EUR (€)</option>
@@ -195,6 +196,7 @@
                   @change="onBillingPeriodChange"
                   class="w-full rounded-lg border border-border bg-background px-3 py-2 text-sm"
                   data-testid="cc-billing-period"
+                  aria-label="Billing period"
                 >
                   <option value="monthly">Monthly</option>
                   <option value="quarterly">Quarterly</option>

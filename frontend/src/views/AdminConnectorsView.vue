@@ -41,6 +41,7 @@
                 v-model="formData.connector_type"
                 class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm"
                 data-testid="admin-connectors-type-select"
+                aria-label="Type"
               >
                 <option value="postgresql">PostgreSQL</option>
                 <option value="mysql">MySQL</option>
