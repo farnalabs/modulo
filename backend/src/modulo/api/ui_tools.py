@@ -116,6 +116,10 @@ _UI_TOOLS: dict[str, dict] = {
             },
         },
     },
+    "undo_last_action": {
+        "description": "Undo the last UI action. Navigates back or refills previous form values.",
+        "parameters": {},
+    },
 }
 
 UI_TOOL_NAMES: set[str] = set(_UI_TOOLS.keys())
@@ -129,6 +133,15 @@ WRITE_TOOLS: set[str] = {"click", "fill", "select", "press"}
 DESTRUCTIVE_PATTERNS: list[str] = [
     "delete", "remove", "destroy", "archive", "suspend",
     "ban", "terminate", "revoke", "disable", "wipe", "clear",
+]
+
+NOGO_SELECTOR_PATTERNS: list[str] = [
+    "delete-org", "destroy", "billing-action", "danger-zone",
+    "delete-account", "remove-org", "suspend-org",
+]
+
+NOGO_PAGE_PATTERNS: list[str] = [
+    "/admin/billing", "/admin/org/",
 ]
 
 
