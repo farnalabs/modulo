@@ -93,28 +93,51 @@ async def _dispatch_email(
     admin_url: str,
 ) -> None:
     """Send alert notification email to org admins via the configured SMTP provider."""
-    settings = get_settings()
-
-    if not settings.smtp_host:
-        _log.warning("alert.email_disabled_no_smtp_host", extra={"rule": alert.rule_name})
-        return
-
-    _log.info(
-        "alert.email_pending",
-        extra={
-            "rule": alert.rule_name,
-            "group_id": str(alert.error_group_id),
-            "summary": _build_summary(alert, sample_message),
-            "admin_url": admin_url,
-        },
-    )
+    from types import SimpleNamespace
 
     from modulo.api.dependencies import get_or_create_engine, get_or_create_session_factory
+    from modulo.db.models.organisation import Organisation
+
+    settings = get_settings()
 
     engine = get_or_create_engine(settings)
     factory = get_or_create_session_factory(engine)
 
     try:
+        # Fetch org for per-org SMTP config
+        async with factory() as session:
+            org = await session.get(Organisation, org_id)
+
+        if org:
+            email_cfg = (org.settings_json or {}).get("email", {})
+            smtp_host = email_cfg.get("smtp_host", "")
+        else:
+            smtp_host = ""
+            email_cfg = {}
+
+        effective_smtp_host = smtp_host or settings.smtp_host
+        if not effective_smtp_host:
+            _log.warning("alert.email_disabled_no_smtp_host", extra={"rule": alert.rule_name, "org_id": str(org_id)})
+            return
+
+        effective_settings = SimpleNamespace(
+            smtp_host=effective_smtp_host,
+            smtp_port=email_cfg.get("smtp_port", settings.smtp_port),
+            smtp_username=email_cfg.get("smtp_username", settings.smtp_username),
+            smtp_password=email_cfg.get("smtp_password", settings.smtp_password),
+            email_from=email_cfg.get("email_from", settings.email_from),
+        )
+
+        _log.info(
+            "alert.email_pending",
+            extra={
+                "rule": alert.rule_name,
+                "group_id": str(alert.error_group_id),
+                "summary": _build_summary(alert, sample_message),
+                "admin_url": admin_url,
+            },
+        )
+
         async with factory() as session:
             result = await session.execute(
                 select(OrgMembership).where(
@@ -172,7 +195,7 @@ async def _dispatch_email(
         try:
             success = await asyncio.to_thread(
                 send_email,
-                settings,
+                effective_settings,
                 to_emails,
                 subject,
                 body_html,
