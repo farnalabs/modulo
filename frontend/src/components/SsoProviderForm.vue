@@ -21,7 +21,7 @@
             })
           "
         >
-          OpenID Connect (OIDC)
+          {{ $t('components.SsoProviderForm.oidc_label') }}
         </button>
         <button
           class="flex-1 rounded-lg border px-4 py-2 text-sm font-medium transition-colors"
@@ -41,13 +41,13 @@
             })
           "
         >
-          SAML 2.0
+          {{ $t('components.SsoProviderForm.saml_label') }}
         </button>
       </div>
     </div>
 
     <div>
-      <label class="mb-1 block text-sm font-medium">Name</label>
+      <label class="mb-1 block text-sm font-medium">{{ $t('components.SsoProviderForm.name') }}</label>
       <input
         :value="data.name"
         type="text"
@@ -100,6 +100,7 @@
           type="url"
           class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
           placeholder="https://accounts.google.com/.well-known/openid-configuration"
+
           @input="
             emitUpdate({
               ...data,
@@ -109,7 +110,7 @@
         />
       </div>
       <div>
-        <label class="mb-1 block text-sm font-medium">Scopes</label>
+        <label class="mb-1 block text-sm font-medium">{{ $t('components.SsoProviderForm.scopes') }}</label>
         <input
           :value="data.scopes"
           type="text"
@@ -123,14 +124,14 @@
           "
         />
         <p class="mt-1 text-xs text-muted-foreground">
-          Comma-separated list of scopes
+          {{ $t('components.SsoProviderForm.scopes_hint') }}
         </p>
       </div>
     </template>
 
     <template v-if="data.provider_type === 'saml'">
       <div>
-        <label class="mb-1 block text-sm font-medium">Metadata URL</label>
+        <label class="mb-1 block text-sm font-medium">{{ $t('components.SsoProviderForm.metadata_url') }}</label>
         <input
           :value="data.metadata_url"
           type="url"
@@ -145,12 +146,12 @@
         />
       </div>
       <div>
-        <label class="mb-1 block text-sm font-medium">Metadata XML</label>
+        <label class="mb-1 block text-sm font-medium">{{ $t('components.SsoProviderForm.metadata_xml') }}</label>
         <textarea
           :value="data.metadata_xml"
           rows="4"
           class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring font-mono"
-          placeholder="Paste IdP metadata XML here..."
+          :placeholder="$t('components.SsoProviderForm.metadata_xml_placeholder')"
           @input="
             emitUpdate({
               ...data,
@@ -160,12 +161,12 @@
         />
       </div>
       <div>
-        <label class="mb-1 block text-sm font-medium">Entity ID</label>
+        <label class="mb-1 block text-sm font-medium">{{ $t('components.SsoProviderForm.entity_id') }}</label>
         <input
           :value="data.entity_id"
           type="text"
           class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-          placeholder="urn:example:entity"
+          :placeholder="$t('components.SsoProviderForm.entity_id_placeholder')"
           @input="
             emitUpdate({
               ...data,
@@ -177,10 +178,16 @@
     </template>
 
     <div>
-      <label class="mb-1 block text-sm font-medium">Auto-Provision</label>
+      <label class="mb-1 block text-sm font-medium">{{ $t('components.SsoProviderForm.auto_provision') }}</label>
       <div class="flex items-center gap-2">
         <label
           class="relative inline-flex cursor-pointer items-center"
+          role="switch"
+          :aria-checked="data.auto_provision"
+          :aria-label="$t('components.SsoProviderForm.auto_provision')"
+          tabindex="0"
+          @keydown.enter.prevent="emitUpdate({ ...data, auto_provision: !data.auto_provision })"
+          @keydown.space.prevent="emitUpdate({ ...data, auto_provision: !data.auto_provision })"
           @click.prevent="
             emitUpdate({ ...data, auto_provision: !data.auto_provision })
           "
@@ -203,18 +210,18 @@
         <span class="text-sm text-muted-foreground">
           {{
             data.auto_provision
-              ? "Users are auto-provisioned on first login"
-              : "Manual user creation required"
+              ? $t('components.SsoProviderForm.auto_provision_enabled')
+              : $t('components.SsoProviderForm.auto_provision_disabled')
           }}
         </span>
       </div>
     </div>
 
     <div>
-      <label class="mb-1 block text-sm font-medium">Default Role</label>
+      <label class="mb-1 block text-sm font-medium">{{ $t('components.SsoProviderForm.default_role') }}</label>
       <select
         :value="data.default_role"
-        aria-label="Default Role"
+        :aria-label="$t('components.SsoProviderForm.default_role')"
         class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
         @change="
           emitUpdate({
@@ -223,8 +230,8 @@
           })
         "
       >
-        <option value="runner">Runner</option>
-        <option value="operator">Operator</option>
+        <option value="runner">{{ $t('components.SsoProviderForm.role_runner') }}</option>
+        <option value="operator">{{ $t('components.SsoProviderForm.role_operator') }}</option>
       </select>
     </div>
 
@@ -242,7 +249,7 @@
         class="rounded-lg border border-input bg-background px-4 py-2 text-sm font-medium hover:bg-accent"
         @click="$emit('cancel')"
       >
-        Cancel
+        {{ $t('components.SsoProviderForm.cancel') }}
       </button>
     </div>
   </div>
