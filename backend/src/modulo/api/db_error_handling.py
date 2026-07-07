@@ -1,6 +1,9 @@
 import logging
+from functools import wraps
 
+import pydantic
 from fastapi import HTTPException, status
+from sqlalchemy.exc import IntegrityError, ProgrammingError, SQLAlchemyError
 
 _log = logging.getLogger(__name__)
 
@@ -13,17 +16,17 @@ def handle_db_errors(log_prefix: str = "api"):
         async def my_endpoint(...):
             ...
     """
-    from functools import wraps
-
-    import pydantic
-    from sqlalchemy.exc import ProgrammingError, SQLAlchemyError
-
     def decorator(func):
 
         @wraps(func)
         async def wrapper(*args, **kwargs):
             try:
                 return await func(*args, **kwargs)
+            except IntegrityError:
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail="Resource conflict. The operation could not be completed due to a conflict with the current state.",
+                )
             except ProgrammingError:
                 raise HTTPException(
                     status_code=status.HTTP_501_NOT_IMPLEMENTED,
