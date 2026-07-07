@@ -118,5 +118,5 @@ Basic org-level dashboard with run count summary and status breakdown. Root rout
 
 - **BDD feature file (`eval_dashboard.feature`) has 4 real scenarios** but they test eval run results, not the org dashboard summary. No BDD scenarios exist for the main org dashboard (`/api/v1/dashboard/summary` or `/api/v1/dashboard/trends` or the frontend `/` route).
 - **`GET /api/v1/dashboard/trends` endpoint is fully implemented** but has no dedicated frontend page consuming it — only the 7-day sparkline on the main dashboard uses trend data.
-- **No ProgrammingError→501 unit tests exist** for any of the 3 dashboard endpoints (summary, trends, daily-run-counts).
+- **ProgrammingError→501, SQLAlchemyError→503, and Exception→500 error paths** are all tested in `test_dashboard_programming_error.py` for all 3 endpoints.
 - **Sibling entry `feat-teams-org-dashboard-full`** (`docs/product-map/teams/org-dashboard-full.md`) tracks the full-feature dashboard (team breakdown, eval pass rate visualisation, trend charts, HITL/feedback analytics) that builds on this basic dashboard. 

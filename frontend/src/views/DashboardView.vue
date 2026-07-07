@@ -361,7 +361,7 @@ async function createStarterPipeline() {
       router.push(`/pipelines/${result.pipeline_id}/editor`)
     }
   } catch (err: any) {
-    const msg = err?.detail || err?.message || 'Failed to create starter pipeline. Please try again.'
+    const msg = err?.detail || err?.message || t('views.DashboardView.failed_to_create_starter_pipeline')
     pipelineError.value = msg
   } finally {
     creatingPipeline.value = false
