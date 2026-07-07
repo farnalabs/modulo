@@ -107,6 +107,7 @@
                     step="0.05"
                     data-testid="eval-editor-pass-threshold"
                     class="h-2 w-full cursor-pointer appearance-none rounded-full bg-input accent-primary"
+                    aria-label="Pass threshold"
                   />
                   <span class="text-xs text-muted-foreground">1.0</span>
                 </div>
