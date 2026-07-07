@@ -1280,7 +1280,7 @@ async def submit_ui_command_results(
     sid = str(session_id)
     event = _pending_ui_results.get(sid)
     if event is None:
-        raise HTTPException(status_code=404, detail="No pending UI command batch")
+        return {"status": "ok"}
     _ui_command_results[sid] = [r.model_dump() for r in req.results]
     event.set()
     return {"status": "ok"}
