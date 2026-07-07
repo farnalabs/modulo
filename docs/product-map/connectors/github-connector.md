@@ -4,6 +4,8 @@ prd: 8.6
 delivery-tasks: []
 bdd:
   - backend/tests/bdd/features/connectors/github_connector.feature
+  - backend/tests/features/connectors/github.feature
+  - backend/tests/features/connectors/github_issues.feature
 unit-tests:
   - backend/tests/unit/connectors/test_github.py
   - backend/tests/unit/connectors/test_github_scopes.py
@@ -193,4 +195,22 @@ Async GitHub REST API connector implementing `ConnectorBase`. Provides read/writ
 - [ ] **No machine-parseable error codes**: all errors raise `ValueError` with human-readable messages; no structured error type hierarchy
 - [ ] **No circuit breaker**: retries are unconditional up to max attempts; no circuit breaker pattern for sustained failures
 - [ ] **BDD coverage**: 8 scenarios exist covering basic CRUD + error paths; no BDD for PR operations, retry/backoff, pagination, or configurable base URL
+- [ ] **`test_github_issues.py` (550 lines)** and **`test_github_scopes.py` (89 lines)** now in `unit-tests:` frontmatter — were previously missing
+- [ ] **`github.feature` (5 scenarios)** and **`github_issues.feature` (15 scenarios)** now in `bdd:` frontmatter — were previously missing
+
+## QA History
+
+### 2026-07-07 — Cross-cutting QA feat-connectors-github (index 296)
+
+**Lens:** Correctness, bugs, maintainability/SOLID/DRY, error handling, edge cases, resilience.
+
+**Fixed (MINOR):** Removed dead `raise ValueError("GitHub API request failed after retries") from last_exc` in `_call_api()` (was unconditionally unreachable — every path through the retry loop either returns or raises before this line).
+
+**Fixed (MINOR):** Extracted `_parse_scopes_from_headers()` static method from duplicated scope-header parsing in `verify_scopes()` and `health_check()` — both methods previously independently parsed the `X-OAuth-Scopes` header into a set, violating DRY.
+
+**Fixed (MINOR):** Simplified `_parse_retry_after()` — removed redundant `or response.headers.get("retry-after")`. httpx `Headers` is case-insensitive, so the second lookup was redundant.
+
+**Product map fixed:** Added missing `bdd:` entries (`github.feature`, `github_issues.feature`) and missing `unit-tests:` entries (`test_github_issues.py`, `test_github_resilience.py`, `test_github_scopes.py`). Previously only `test_github.py` and `github_connector.feature` were listed.
+
+**All 5 GitHub connector unit test files pass** (test_github.py, test_github_resilience.py, test_github_scopes.py, test_github_issues.py). No regressions.
 
