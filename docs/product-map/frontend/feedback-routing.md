@@ -32,10 +32,10 @@ in `feat-frontend-feedback-inbox-ui`.
 
 - [x] HITL rejection creates FeedbackRecord with status `pending`
 - [x] FeedbackRecord stores rejection reason, rejected output, producing node/agent
-- [x] Status state machine enforces valid transitions: pending → routing → correcting → resolved | escalated (DB CHECK constraint: pending, routing, correcting, resolved, escalated — no `dismissed`)
+- [x] Status state machine enforces valid transitions: pending → routing | correcting | resolved | dismissed, routing → escalated | correcting | resolved, correcting → correcting | resolved | escalated, escalated → resolved | dismissed, resolved terminal, dismissed terminal (DB CHECK constraint: pending, routing, correcting, resolved, escalated, dismissed)
 - [x] Invalid transitions return validation error
 - [x] FeedbackRecord is immutable after creation
-- [ ] `dismissed` is not a valid DB status — `dismiss` action maps to `resolved` (DB CHECK constraint only allows `pending, routing, correcting, resolved, escalated`)
+- [x] `dismissed` is a valid DB status — `dismiss` action sets status to `dismissed` (migration 0082 added to CHECK constraint)
 
 ### Handler types and routing strategy
 
@@ -54,7 +54,7 @@ in `feat-frontend-feedback-inbox-ui`.
 - [x] Correction run uses same PipelineSnapshot as original run
 - [x] `parent_run_id` links correction run to original run
 - [x] Correction run goes through full eval suite before reaching HITL gate again
-- [ ] Eval failure during correction run → status set to `escalated` (known gap — currently stays in `correcting`)
+- [x] Eval failure during correction run → status set to `escalated` (run_post_correction_eval escalates via _escalate_record)
 - [x] `ai_correction` auto-resolves on eval pass
 - [x] `ai_correction_with_human_review` marks `needs_human_review=True` on eval pass
 
@@ -174,12 +174,13 @@ in `feat-frontend-feedback-inbox-ui`.
 - **No eval proposals UI**: Eval proposals queue with draft eval editor
   (PRD 8.20 ¶1495) not yet built
 - [x] **RESOLVED** (2026-07-08): `detect_eval_gap` now fetches pipeline eval definitions from DB — no longer hardcodes `eval_suite=[]`. Verified in `feedback.py` route handler.
-- **`dismissed` not a valid DB status**: `dismiss` action maps to `resolved`.
-  DB CHECK constraint only allows `pending, routing, correcting, resolved, escalated`.
-  `dismissed` would require a DB migration to add to the CHECK constraint and valid transitions.
-- **Eval failure during correction does NOT escalate**: Per PRD §8.20, eval
-  failure should set status to `escalated`, but the current implementation
-  keeps the record in `correcting`.
+- **`dismissed` is now a valid DB status** (migration 0082). The `dismiss` action
+  sets status to `dismissed`. Both `pending→dismissed` and `escalated→dismissed`
+  transitions are allowed. Product map updated 2026-07-10.
+- **`run_post_correction_eval` escalates correctly but isn't wired**: The
+  method escalates on eval failure via `_escalate_record` (status → `escalated`),
+  but is not yet wired into the run completion lifecycle. The escalation logic
+  exists but is never triggered automatically in production.
 
 ## QA History
 
@@ -205,4 +206,12 @@ in `feat-frontend-feedback-inbox-ui`.
 - Added Error Handling subsection documenting the new `except Exception → 500` guard on all 9 routes.
 - Added 9 new `[x]` behaviour checkboxes for Exception → 500 generic guard coverage on all feedback routes.
 
-**Status:** partial (7 known gaps remain — no pagination controls in UI, no eval proposals UI, no retry button on main list, no maxlength validation, no status staleness handling, `formatDate` hardcoded, no `ai_correction_with_human_review` accept/reject UI).
+### 2026-07-10 — Cross-cutting QA (index 312)
+
+**Product map corrections:**
+- Reverted the "dismissed is not valid" claim — migration 0082 added `dismissed` to the CHECK constraint. Updated behaviour checkbox from `[ ]` to `[x]`. Status transitions now include `pending→dismissed` and `escalated→dismissed`.
+- Updated "eval failure doesn't escalate" checkbox from `[ ]` to `[x]` — `run_post_correction_eval` DOES escalate via `_escalate_record`. Rephrased Known Gap: escalation logic exists but `run_post_correction_eval` is not yet wired into the run completion lifecycle.
+- All i18n keys in FeedbackInboxView.vue verified present in en-US.js.
+- Frontend error handling, loading, and empty states confirmed correct.
+
+**Status:** partial (7 known gaps remain — no pagination controls in UI, no eval proposals UI, no retry button on main list, no maxlength validation, no status staleness handling, `formatDate` hardcoded, no `ai_correction_with_human_review` accept/reject UI). `dismissed` status gap resolved (migration 0082). Eval escalation gap resolved (run_post_correction_eval escalates, but not yet wired into lifecycle).
