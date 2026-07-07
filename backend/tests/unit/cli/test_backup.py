@@ -18,6 +18,7 @@ from modulo.cli.backup import (
     _export_checkpoints_sync,
     _export_credentials_references_sync,
     _fernet_key_hash,
+    _file_checksum,
     _human_size,
     _re_encrypt_credentials_sync,
     _resolve_url,
@@ -986,6 +987,11 @@ class TestBackupCli:
         mock_export_cp.return_value = []
         mock_export_cw.return_value = []
 
+        def _fake_pg_dump(raw_url: str, output: Path, **kwargs: Any) -> None:
+            output.write_text("-- pg_dump output")
+
+        mock_pg_dump.side_effect = _fake_pg_dump
+
         runner = CliRunner()
         backup_dir = tmp_path / "mybackup"
         result = runner.invoke(cli, ["backup", "--output-dir", str(backup_dir)])
@@ -1034,6 +1040,11 @@ class TestBackupCli:
         mock_export_cp.return_value = []
         mock_export_cw.return_value = []
 
+        def _fake_pg_dump(raw_url: str, output: Path, **kwargs: Any) -> None:
+            output.write_text("-- pg_dump output")
+
+        mock_pg_dump.side_effect = _fake_pg_dump
+
         runner = CliRunner()
         backup_dir = tmp_path / "backup"
         runner.invoke(cli, ["backup", "--output-dir", str(backup_dir)])
@@ -1047,6 +1058,8 @@ class TestBackupCli:
         assert manifest["schema_versions"] == ["rev123"]
         assert manifest["fernet_key_hash"] == _fernet_key_hash(fernet_key)
         assert "timestamp" in manifest
+        assert "file_checksums" in manifest
+        assert manifest["file_checksums"]["database.sql"] is not None
 
     @patch("modulo.cli.backup.get_settings")
     def test_backup_failure_raises_click_exception(self, mock_settings: MagicMock, tmp_path: Path) -> None:
@@ -1085,6 +1098,11 @@ class TestBackupCli:
         mock_settings.return_value.fernet_key = "a" * 32
         mock_get_db_version.return_value = "PostgreSQL 16.0"
         mock_get_schema_versions.return_value = ["rev1"]
+
+        def _fake_pg_dump(raw_url: str, output: Path, **kwargs: Any) -> None:
+            output.write_text("-- pg_dump output")
+
+        mock_pg_dump.side_effect = _fake_pg_dump
 
         sample_blobs = [
             {
@@ -1153,6 +1171,12 @@ class TestBackupCli:
         mock_settings.return_value.fernet_key = "a" * 32
         mock_get_db_version.return_value = "PostgreSQL 16.0"
         mock_get_schema_versions.return_value = ["rev1"]
+
+        def _fake_pg_dump(raw_url: str, output: Path, **kwargs: Any) -> None:
+            output.write_text("-- pg_dump output")
+
+        mock_pg_dump.side_effect = _fake_pg_dump
+
         mock_export_blobs.return_value = []
         mock_export_creds.return_value = {"connector_instances": [], "model_backends": []}
         mock_export_cp.return_value = []
@@ -1525,3 +1549,259 @@ class TestRestoreCli:
 
         assert result.exit_code == 0, f"CLI failed: {result.output}"
         assert mock_re_encrypt.call_count == 0
+
+
+# ── _file_checksum ────────────────────────────────────────────────────────────
+
+
+class TestFileChecksum:
+    def test_returns_sha256_hex(self, tmp_path: Path) -> None:
+        path = tmp_path / "test.bin"
+        path.write_bytes(b"hello world")
+        h = _file_checksum(path)
+        assert h == "b94d27b9934d3e08a52e52d7da7dabfac484efe37a5380ee9088f7ace2efcde9"
+        assert len(h) == 64
+
+    def test_empty_file(self, tmp_path: Path) -> None:
+        path = tmp_path / "empty.bin"
+        path.write_bytes(b"")
+        h = _file_checksum(path)
+        assert h == "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+
+
+# ── CLI: restore with integrity checks ────────────────────────────────────────
+
+
+class TestRestoreIntegrity:
+    @patch("modulo.cli.backup._restore_checkpoint_writes_sync")
+    @patch("modulo.cli.backup._restore_checkpoints_sync")
+    @patch("modulo.cli.backup._re_encrypt_credentials_sync")
+    @patch("modulo.cli.backup._restore_checkpoint_blobs_sync")
+    @patch("modulo.cli.backup._run_psql")
+    @patch("modulo.cli.backup.get_settings")
+    def test_restore_with_checksum_verification(
+        self,
+        mock_settings: MagicMock,
+        mock_psql: MagicMock,
+        mock_restore_blobs: MagicMock,
+        mock_re_encrypt: MagicMock,
+        mock_restore_cp: MagicMock,
+        mock_restore_cw: MagicMock,
+        tmp_path: Path,
+    ) -> None:
+        fernet_key = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        mock_settings.return_value.fernet_key = fernet_key
+        mock_restore_blobs.return_value = 0
+        mock_restore_cp.return_value = 0
+        mock_restore_cw.return_value = 0
+
+        db_sql = tmp_path / "database.sql"
+        db_sql.write_text("-- SQL", encoding="utf-8")
+
+        manifest = {
+            "timestamp": "2024-01-01T00:00:00+00:00",
+            "backup_type": "full",
+            "db_version": "PostgreSQL 16.0",
+            "schema_versions": [],
+            "fernet_key_hash": _fernet_key_hash(fernet_key),
+            "file_checksums": {
+                "database.sql": _file_checksum(db_sql),
+            },
+        }
+        (tmp_path / "backup-info.json").write_text(json.dumps(manifest), encoding="utf-8")
+        (tmp_path / "checkpoints.json").write_text("[]", encoding="utf-8")
+        (tmp_path / "checkpoint_writes.json").write_text("[]", encoding="utf-8")
+        (tmp_path / "credentials_references.json").write_text(
+            '{"connector_instances": [], "model_backends": []}', encoding="utf-8"
+        )
+
+        runner = CliRunner()
+        result = runner.invoke(cli, ["restore", str(tmp_path), "--yes"])
+
+        assert result.exit_code == 0, f"CLI failed: {result.output}"
+        assert "All file checksums verified" in result.output
+
+    @patch("modulo.cli.backup.get_settings")
+    def test_restore_fails_on_checksum_mismatch(self, mock_settings: MagicMock, tmp_path: Path) -> None:
+        mock_settings.return_value.fernet_key = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+
+        db_sql = tmp_path / "database.sql"
+        db_sql.write_text("-- SQL", encoding="utf-8")
+
+        manifest = {
+            "timestamp": "2024-01-01T00:00:00+00:00",
+            "backup_type": "full",
+            "db_version": "PostgreSQL 16.0",
+            "schema_versions": [],
+            "fernet_key_hash": _fernet_key_hash("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"),
+            "file_checksums": {
+                "database.sql": "0000000000000000000000000000000000000000000000000000000000000000",
+            },
+        }
+        (tmp_path / "backup-info.json").write_text(json.dumps(manifest), encoding="utf-8")
+        (tmp_path / "checkpoints.json").write_text("[]", encoding="utf-8")
+        (tmp_path / "checkpoint_writes.json").write_text("[]", encoding="utf-8")
+        (tmp_path / "credentials_references.json").write_text(
+            '{"connector_instances": [], "model_backends": []}', encoding="utf-8"
+        )
+
+        runner = CliRunner()
+        result = runner.invoke(cli, ["restore", str(tmp_path), "--yes"])
+
+        assert result.exit_code != 0
+        assert "Checksum mismatch" in result.output
+
+    @patch("modulo.cli.backup.get_settings")
+    def test_restore_fails_on_missing_manifest_file(self, mock_settings: MagicMock, tmp_path: Path) -> None:
+        mock_settings.return_value.fernet_key = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+
+        (tmp_path / "database.sql").write_text("-- SQL", encoding="utf-8")
+        manifest = {
+            "timestamp": "2024-01-01T00:00:00+00:00",
+            "backup_type": "full",
+            "file_checksums": {"database.sql": _file_checksum(tmp_path / "database.sql"), "nonexistent.json": "...schecksum..."},
+        }
+        (tmp_path / "backup-info.json").write_text(json.dumps(manifest), encoding="utf-8")
+        (tmp_path / "checkpoints.json").write_text("[]", encoding="utf-8")
+        (tmp_path / "checkpoint_writes.json").write_text("[]", encoding="utf-8")
+        (tmp_path / "credentials_references.json").write_text(
+            '{"connector_instances": [], "model_backends": []}', encoding="utf-8"
+        )
+
+        runner = CliRunner()
+        result = runner.invoke(cli, ["restore", str(tmp_path), "--yes"])
+
+        assert result.exit_code != 0
+        assert "not found on disk" in result.output
+
+    @patch("modulo.cli.backup._restore_checkpoint_writes_sync")
+    @patch("modulo.cli.backup._restore_checkpoints_sync")
+    @patch("modulo.cli.backup._re_encrypt_credentials_sync")
+    @patch("modulo.cli.backup._restore_checkpoint_blobs_sync")
+    @patch("modulo.cli.backup._run_psql")
+    @patch("modulo.cli.backup.get_settings")
+    def test_restore_skips_checksums_when_not_in_manifest(
+        self,
+        mock_settings: MagicMock,
+        mock_psql: MagicMock,
+        mock_restore_blobs: MagicMock,
+        mock_re_encrypt: MagicMock,
+        mock_restore_cp: MagicMock,
+        mock_restore_cw: MagicMock,
+        tmp_path: Path,
+    ) -> None:
+        fernet_key = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        mock_settings.return_value.fernet_key = fernet_key
+        mock_restore_blobs.return_value = 0
+        mock_restore_cp.return_value = 0
+        mock_restore_cw.return_value = 0
+
+        manifest = {
+            "timestamp": "2024-01-01T00:00:00+00:00",
+            "backup_type": "full",
+            "fernet_key_hash": _fernet_key_hash(fernet_key),
+        }
+        (tmp_path / "backup-info.json").write_text(json.dumps(manifest), encoding="utf-8")
+        (tmp_path / "database.sql").write_text("-- SQL", encoding="utf-8")
+        (tmp_path / "checkpoints.json").write_text("[]", encoding="utf-8")
+        (tmp_path / "checkpoint_writes.json").write_text("[]", encoding="utf-8")
+        (tmp_path / "credentials_references.json").write_text(
+            '{"connector_instances": [], "model_backends": []}', encoding="utf-8"
+        )
+
+        runner = CliRunner()
+        result = runner.invoke(cli, ["restore", str(tmp_path), "--yes"])
+
+        assert result.exit_code == 0, f"CLI failed: {result.output}"
+        assert "All file checksums verified" not in result.output
+
+    @patch("modulo.cli.backup._restore_checkpoint_writes_sync")
+    @patch("modulo.cli.backup._restore_checkpoints_sync")
+    @patch("modulo.cli.backup._re_encrypt_credentials_sync")
+    @patch("modulo.cli.backup._restore_checkpoint_blobs_sync")
+    @patch("modulo.cli.backup._run_psql")
+    @patch("modulo.cli.backup.get_settings")
+    def test_restore_fails_on_corrupt_json(
+        self,
+        mock_settings: MagicMock,
+        mock_psql: MagicMock,
+        mock_restore_blobs: MagicMock,
+        mock_re_encrypt: MagicMock,
+        mock_restore_cp: MagicMock,
+        mock_restore_cw: MagicMock,
+        tmp_path: Path,
+    ) -> None:
+        fernet_key = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        mock_settings.return_value.fernet_key = fernet_key
+
+        manifest = {
+            "timestamp": "2024-01-01T00:00:00+00:00",
+            "backup_type": "full",
+            "fernet_key_hash": _fernet_key_hash(fernet_key),
+        }
+        (tmp_path / "backup-info.json").write_text(json.dumps(manifest), encoding="utf-8")
+        (tmp_path / "database.sql").write_text("-- SQL", encoding="utf-8")
+        (tmp_path / "checkpoints.json").write_text("{bad json}", encoding="utf-8")
+        (tmp_path / "checkpoint_writes.json").write_text("[]", encoding="utf-8")
+        (tmp_path / "credentials_references.json").write_text(
+            '{"connector_instances": [], "model_backends": []}', encoding="utf-8"
+        )
+
+        runner = CliRunner()
+        result = runner.invoke(cli, ["restore", str(tmp_path), "--yes"])
+
+        assert result.exit_code != 0
+        assert "Corrupt JSON" in result.output
+
+
+# ── _restore_checkpoints_sync: invalid UUID handling ──────────────────────────
+
+
+class TestRestoreCheckpointsSyncErrorPaths:
+    @patch("psycopg.connect")
+    def test_raises_on_invalid_uuid(self, mock_connect: MagicMock) -> None:
+        mock_conn = MagicMock()
+        mock_cur = MagicMock()
+        mock_conn.cursor.return_value.__enter__.return_value = mock_cur
+        mock_connect.return_value.__enter__.return_value = mock_conn
+
+        checkpoints = [
+            {
+                "organisation_id": "not-a-valid-uuid",
+                "thread_id": "t1",
+                "checkpoint_ns": "ns",
+                "checkpoint_id": "cp1",
+                "parent_checkpoint_id": None,
+                "checkpoint": None,
+                "metadata": None,
+            },
+        ]
+
+        with pytest.raises(RuntimeError, match="Invalid organisation_id in checkpoints"):
+            _restore_checkpoints_sync("postgresql://localhost/db", checkpoints)
+
+
+class TestRestoreCheckpointWritesSyncErrorPaths:
+    @patch("psycopg.connect")
+    def test_raises_on_invalid_uuid(self, mock_connect: MagicMock) -> None:
+        mock_conn = MagicMock()
+        mock_cur = MagicMock()
+        mock_conn.cursor.return_value.__enter__.return_value = mock_cur
+        mock_connect.return_value.__enter__.return_value = mock_conn
+
+        writes = [
+            {
+                "organisation_id": "not-a-valid-uuid",
+                "thread_id": "t1",
+                "checkpoint_ns": "ns",
+                "checkpoint_id": "cp1",
+                "task_id": "task1",
+                "idx": 0,
+                "channel": "ch",
+                "type": "json",
+                "blob": None,
+            },
+        ]
+
+        with pytest.raises(RuntimeError, match="Invalid organisation_id in checkpoint_writes"):
+            _restore_checkpoint_writes_sync("postgresql://localhost/db", writes)
