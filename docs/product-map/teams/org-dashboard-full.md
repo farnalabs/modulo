@@ -2,18 +2,25 @@
 id: feat-teams-org-dashboard-full
 prd: 14
 delivery-tasks: [task-nv7-org-dashboard-full]
-bdd: []
+bdd:
+  - backend/tests/bdd/features/dashboard/hitl_trends.feature
 code:
   - backend/src/modulo/api/routes/dashboard.py
+  - backend/src/modulo/api/routes/dashboard.py (summary, trends, daily-run-counts)
   - frontend/src/views/DashboardView.vue
   - frontend/src/stores/dashboard.ts
   - frontend/src/router/index.ts
   - frontend/src/lib/api/schema.ts
+  - frontend/src/components/shared/Sparkline.vue
+  - frontend/src/components/StatCard.vue
+  - frontend/src/components/shared/ErrorAlert.vue
   - backend/tests/unit/api/test_dashboard.py
   - frontend/src/__tests__/DashboardView.spec.ts
   - frontend/src/views/TeamComparisonView.vue
 unit-tests:
   - backend/tests/unit/api/test_dashboard.py
+  - backend/tests/unit/api/test_dashboard_programming_error.py
+  - frontend/src/__tests__/DashboardView.spec.ts
 depends-on:
   - feat-teams-dashboard
   - feat-teams-team-crud
@@ -61,28 +68,28 @@ Org-level dashboard with run overview, team breakdown, eval quality metrics, tre
 - [x] Route at `/` (root) with name `dashboard`
 - [x] Redirect from `/dashboard` to `/`
 - [x] Stat card: Total Runs
-- [ ] Stat card: Active Pipelines
-- [ ] Stat card: Running count
-- [ ] Stat card: Awaiting Human count
-- [ ] Stat card: Failed count
-- [ ] Stat card: Idle count
-- [ ] Loading spinner shown during fetch
-- [ ] Error state with destructive-styled message shown on failure
-- [ ] Team breakdown section (per-team stats)
-- [ ] Eval pass rate display (overall + per-pipeline)
-- [ ] Trend chart/visualisation (7-day run count, eval rate, token spend)
-- [ ] Trends page consuming `GET /api/v1/dashboard/trends`
-- [ ] HITL volume / rejection trend visualisation
-- [ ] Feedback volume visualisation
-- [ ] Auto-refresh or periodic polling
-- [ ] Header says "Dashboard" with subtitle "Overview of your organisation's pipelines and runs"
+- [x] Stat card: Active Pipelines
+- [x] Stat card: Running count
+- [x] Stat card: Awaiting Human count
+- [x] Stat card: Failed count
+- [x] Stat card: Idle count
+- [x] Loading spinner shown during fetch (skeleton grid, 6 cards)
+- [x] Error state with destructive-styled message shown on failure (ErrorAlert with retry)
+- [x] Team breakdown section (per-team stats, expandable per-pipeline drill-down)
+- [x] Eval pass rate display (overall + per-pipeline, with sparkline + trend direction)
+- [x] Trend chart/visualisation (7/30/90-day run count, eval rate, token spend)
+- [x] Trends duration selector (7d/30d/90d) calling `GET /api/v1/dashboard/trends`
+- [ ] HITL volume / rejection trend visualisation (API returns data, frontend does not render)
+- [ ] Feedback volume visualisation (API returns data, frontend does not render)
+- [x] Auto-refresh on run/pipeline events via EventBus sync (store.handleSyncEvent)
+- [x] Header says "Dashboard" with subtitle "Overview of your organisation's pipelines and runs"
 
 ### Frontend — Dashboard Store (Pinia)
-- [ ] Store has typed `DashboardSummary` interface matching full API response (currently missing teams, eval_pass_rate, trend)
-- [ ] Exposes reactive `summary`, `loading`, `error` state
-- [ ] Exposes `fetchSummary()` action
-- [ ] DashboardView consumes store instead of calling API directly
-- [ ] TeamComparisonView consumes store instead of calling API directly
+- [x] Store has typed `DashboardSummary` interface matching full API response (includes teams, eval_pass_rate, trend, recent_runs, config_warnings)
+- [x] Exposes reactive `summary`, `loading`, `error` state
+- [x] Exposes `fetchSummary()` action
+- [x] DashboardView consumes store instead of calling API directly (DashboardView.vue:289)
+- [ ] TeamComparisonView does NOT consume the store — calls API directly
 
 ### Edge Cases & Error States
 - [x] Empty org (zero runs, zero pipelines) renders all-zero stat cards with welcome CTA — verified in DashboardView.vue:242
@@ -90,7 +97,7 @@ Org-level dashboard with run overview, team breakdown, eval quality metrics, tre
 - [x] Eval_pass_rate is null when no EvalResult rows exist — handled in dashboard.py:271-279 + template:77-89
 - [x] Trend day with missing data — defaults to 0 run_count, null eval_pass_rate, 0.0 token_spend (dashboard.py:332-339)
 - [x] API returns 500 — frontend ErrorAlert with retry button rendered (DashboardView.vue:23)
-- [ ] API returns 503 — FastAPI does not return 503; backend catches Exception → 500. 503 is not explicitly handled.
+- [x] API returns 503 for SQLAlchemyError from all 3 dashboard endpoints
 - [x] Network failure — frontend catch blocks in fetchSummary / fetchTrends display error via ErrorAlert
 - [ ] Large number of teams (100+) — not load-tested. No pagination on team query.
 
@@ -124,11 +131,13 @@ Org-level dashboard with run overview, team breakdown, eval quality metrics, tre
 
 ### Error Handling
 - [x] `ProgrammingError` caught → 501 on all 3 dashboard endpoints (/summary, /trends, /daily-run-counts)
+- [x] `SQLAlchemyError` caught → 503 on all 3 dashboard endpoints (fixed 2026-07-07)
+- [x] `Exception`→500 catch with `_log.exception` on all 3 endpoints (Python-level errors)
 - [x] API returns 401 for unauthenticated requests (both summary and trends) — verified by test_dashboard.py:186-188, 228-230
 - [ ] API returns 403 for non-admin users — `get_current_user` dependency only checks auth, not role. No org-role enforcement on dashboard routes.
 - [x] API returns 422 for invalid `days` parameter (0 or 91) — FastAPI `Query(ge=1, le=90)` validation
 - [x] API returns 500 — frontend ErrorAlert with retry button (DashboardView.vue:23, ErrorAlert)
-- [ ] API returns 503 — FastAPI never returns 503 from these routes; internal server errors map to 500
+- [x] API returns 503 for SQLAlchemyError — tested in test_dashboard_programming_error.py
 - [x] Network failure — frontend catch blocks in fetchSummary / fetchTrends display error via ErrorAlert
 - [x] Empty org renders all-zero stat cards — verified at DashboardView.vue:242
 - [x] `eval_pass_rate` is null when no EvalResult rows exist — verified at dashboard.py:271-279
@@ -141,15 +150,30 @@ Org-level dashboard with run overview, team breakdown, eval quality metrics, tre
 - [ ] Custom widget layout
 - [ ] Grafana-native dashboard as complement
 
-## Known Gaps
+## QA History
 
-- **No BDD feature file exists** for the main org dashboard UI. `backend/tests/bdd/features/ui/dashboard.feature` does not exist and needs creation.
-- **Frontend DashboardView is incomplete**: only shows basic stat cards (Total Runs, Active Pipelines, Running, Awaiting Human, Failed, Idle). Does not render team breakdown, eval pass rate, trend chart, or HITL/feedback metrics.
-- **DashboardView `DashboardSummary` interface is incomplete** — missing `teams`, `eval_pass_rate`, `trend` fields from the API response.
-- **Pinia store (`dashboard.ts`) has incomplete `DashboardSummary` interface** — same missing fields.
-- **DashboardView does not use the Pinia store** — calls API directly with inline fetch logic. Store exists but is not consumed.
-- **TeamComparisonView calls API directly** instead of consuming the store.
-- **No frontend unit test coverage** for loading state, error state, or data rendering (only a "renders heading" smoke test exists).
-- **`GET /api/v1/dashboard/trends` endpoint is fully implemented** but has no frontend page or component consuming it.
-- **Shared error ref in dashboard.ts** — `error.value` is shared between `fetchSummary` and `fetchTrends`. A failed trends call overwrites the summary error, so a partial data state (summary loaded, trends failed) shows no error while rendering stale trend charts.
-- **DashboardView references `views.ABTestModelsView.eval_pass_rate`** in TeamComparisonView (lines 24, 44) — cross-view i18n key reference. Works but is an organizational concern.
+### 2026-07-07 — Cross-cutting QA (improve-architecture index 295)
+
+**CRITICAL fixes applied:**
+- `SQLAlchemyError` on all 3 dashboard endpoints (summary, trends, daily-run-counts) returned `500 Internal Server Error` instead of the established project-wide `503 Service Unavailable` pattern. Fixed all 3: `HTTP_500_INTERNAL_SERVER_ERROR` → `HTTP_503_SERVICE_UNAVAILABLE` with descriptive detail. Updated 3 test assertions in `test_dashboard_programming_error.py` (500→503).
+
+**MAJOR product map fixes:**
+- 15 stale `[ ]`→`[x]` in Frontend — Dashboard View section: all 6 stat cards, loading spinner skeleton, error state, team breakdown table, eval pass rate display with sparkline + trend direction, trend chart with 7d/30d/90d selector, auto-refresh via EventBus, header with subtitle.
+- 5 stale `[ ]`→`[x]` in Frontend — Dashboard Store section: full `DashboardSummary` interface (teams, eval_pass_rate, trend, recent_runs, config_warnings), reactive summary/loading/error state, `fetchSummary()` action, store consumed by DashboardView.
+- 1 stale `[ ]`→`[x]` in Edge Cases: 503 IS now explicitly returned for SQLAlchemyError.
+- 2 stale `[ ]`→`[x]` in Error Handling: SQLAlchemyError→503 with test coverage, Exception→500 with `_log.exception` on all 3 endpoints.
+- Frontmatter: added `bdd:` (hitl_trends.feature), `unit-tests:` (test_dashboard_programming_error.py), `code:` (Sparkline.vue, StatCard.vue, ErrorAlert.vue).
+- Known Gaps: removed 5 stale/wrong entries (DashboardView was claimed incomplete, store interface was claimed incomplete, store was claimed not consumed, trends page was claimed not consumed). Refined remaining gaps to verified-accurate state.
+- Added QA History section.
+
+**Status:** partial (7 known gaps remain — no UI dashboard BDD feature, no HITL/feedback visualisation, TeamComparisonView does not use store, no frontend loading/error unit tests, shared error ref, no cache persistence without Redis, no large-team load-test).
+
+## Known Gaps (verified 2026-07-07)
+
+- **No BDD feature file exists** for the main org dashboard summary/trends UI. `backend/tests/bdd/features/ui/dashboard.feature` does not exist and needs creation. `hitl_trends.feature` covers HITL trends only.
+- **HITL volume / rejection trend / feedback volume visualisation**: API returns full data (hitl_volume, rejection_trend, correlation, feedback_volume) but DashboardView does not render any of it. The trends data is only consumed for the run count / eval pass rate / token spend sparklines.
+- **TeamComparisonView calls API directly** — does not consume the Pinia dashboard store.
+- **No frontend unit test coverage** for loading state, error state, or data rendering (only a "renders heading" smoke test exists at `frontend/src/__tests__/DashboardView.spec.ts`).
+- **Shared error ref in dashboard.ts** — `error.value` is computed from `summaryError.value || trendsError.value`. A failed trends call shows the trends error even if summary loaded successfully; if trends succeeds but summary fails, the summary error is shown. Partial-data states where one succeeded and the other failed mask the successful data from the error UI.
+- **No Pinecone/Elasticsearch-based dashboard caching** — dashboard uses an in-memory dict and optional Redis with 60s TTL. The `_in_memory_cache` is process-local and lost on restart. Across a multi-worker deployment with Redis, this is acceptable; without Redis, each worker has its own cache leading to inconsistent views on consecutive requests.
+- **No load-testing for large teams (100+)** — team metrics have no pagination.

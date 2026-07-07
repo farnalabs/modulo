@@ -437,8 +437,8 @@ async def dashboard_summary(
         )
     except SQLAlchemyError:
         raise HTTPException(
-            status_code=http_status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="A database error occurred.",
+            status_code=http_status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="The database is temporarily unavailable.",
         )
     except Exception:
         _log.exception("dashboard.summary_failed")
@@ -651,8 +651,8 @@ async def dashboard_trends(
         )
     except SQLAlchemyError:
         raise HTTPException(
-            status_code=http_status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="A database error occurred.",
+            status_code=http_status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="The database is temporarily unavailable.",
         )
     except Exception:
         _log.exception("dashboard.trends_failed")
@@ -704,8 +704,8 @@ async def daily_run_counts(
         )
     except SQLAlchemyError:
         raise HTTPException(
-            status_code=http_status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="A database error occurred.",
+            status_code=http_status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="The database is temporarily unavailable.",
         )
     except Exception:
         _log.exception("dashboard.daily_run_counts_failed")

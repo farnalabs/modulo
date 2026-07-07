@@ -81,9 +81,9 @@ class TestDashboardSummarySQLAlchemyError:
         session = _make_failing_session(SQLAlchemyError("connection failure"))
         yield from _setup_client(session)
 
-    def test_sqlalchemy_error_returns_500(self, client: TestClient) -> None:
+    def test_sqlalchemy_error_returns_503(self, client: TestClient) -> None:
         response = client.get(_SUMMARY_URL)
-        assert response.status_code == 500
+        assert response.status_code == 503
 
 
 class TestDashboardSummaryGenericError:
@@ -115,9 +115,9 @@ class TestDashboardTrendsSQLAlchemyError:
         session = _make_failing_session(SQLAlchemyError("connection failure"))
         yield from _setup_client(session)
 
-    def test_sqlalchemy_error_returns_500(self, client: TestClient) -> None:
+    def test_sqlalchemy_error_returns_503(self, client: TestClient) -> None:
         response = client.get(_TRENDS_URL)
-        assert response.status_code == 500
+        assert response.status_code == 503
 
 
 class TestDashboardTrendsGenericError:
@@ -149,9 +149,9 @@ class TestDashboardDailyCountsSQLAlchemyError:
         session = _make_failing_session(SQLAlchemyError("connection failure"))
         yield from _setup_client(session)
 
-    def test_sqlalchemy_error_returns_500(self, client: TestClient) -> None:
+    def test_sqlalchemy_error_returns_503(self, client: TestClient) -> None:
         response = client.get(_DAILY_URL)
-        assert response.status_code == 500
+        assert response.status_code == 503
 
 
 class TestDashboardDailyCountsGenericError:
