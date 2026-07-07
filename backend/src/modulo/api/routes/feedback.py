@@ -59,7 +59,7 @@ class UpdateStatusRequest(BaseModel):
 
 
 class ReviewFeedbackRequest(BaseModel):
-    action: str = "mark_reviewed"  # mark_reviewed | dismiss | create_correction_run
+    action: str  # mark_reviewed | dismiss | create_correction_run
     annotation: str | None = None
 
 
