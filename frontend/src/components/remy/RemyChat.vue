@@ -164,22 +164,45 @@
             v-for="tool in store.pendingPermission.tools"
             :key="tool.name"
             class="remy-permission-tool"
+            :class="{ 'remy-permission-tool-nogo': (tool as any).nogo }"
           >
-            <span class="font-mono text-xs">{{ tool.name }}</span>
+            <div class="flex items-center gap-2 min-w-0">
+              <span class="font-mono text-xs truncate">{{ tool.name }}</span>
+              <span v-if="(tool as any).nogo" class="remy-nogo-badge">⚠️ Destructive Page</span>
+            </div>
             <span class="text-xs text-muted-foreground">{{ describeArgs(tool) }}</span>
           </div>
         </div>
         <div class="remy-permission-actions">
-          <Button variant="outline" size="sm" @click="store.approvePermission(store.pendingPermission.request_id, 'reject')">Deny</Button>
-          <Button variant="secondary" size="sm" @click="store.approvePermission(store.pendingPermission.request_id, 'approve')">Allow Once</Button>
-          <Button size="sm" @click="store.approvePermission(store.pendingPermission.request_id, 'approve_for_session')">Allow for Session</Button>
+          <Button
+            variant="outline"
+            size="sm"
+            :disabled="nogoCountdown > 0"
+            class="relative"
+            @click="store.approvePermission(store.pendingPermission.request_id, 'reject')"
+          >Deny{{ nogoCountdown > 0 ? ` (${nogoCountdown}s)` : '' }}</Button>
+          <Button
+            variant="secondary"
+            size="sm"
+            :disabled="nogoCountdown > 0"
+            @click="store.approvePermission(store.pendingPermission.request_id, 'approve')"
+          >Allow Once{{ nogoCountdown > 0 ? ` (${nogoCountdown}s)` : '' }}</Button>
+          <Button
+            size="sm"
+            :disabled="nogoCountdown > 0"
+            @click="store.approvePermission(store.pendingPermission.request_id, 'approve_for_session')"
+          >Allow for Session{{ nogoCountdown > 0 ? ` (${nogoCountdown}s)` : '' }}</Button>
         </div>
       </div>
 
       <div v-if="store.isExecutingUi" class="remy-executing-indicator">
         <LoaderIcon class="h-3 w-3 animate-spin" />
-        <span>Remy is performing actions in the browser...</span>
-        <Button variant="destructive" size="sm" @click="abortUiCommands">Stop</Button>
+        <span>{{ store.isPaused ? 'Remy is paused. Resume or stop?' : 'Remy is performing actions in the browser...' }}</span>
+        <div class="flex gap-2">
+          <Button v-if="!store.isPaused" variant="secondary" size="sm" @click="pauseRemy">⏸ Pause</Button>
+          <Button v-if="store.isPaused" variant="secondary" size="sm" @click="resumeRemy">▶ Resume</Button>
+          <Button variant="destructive" size="sm" @click="abortUiCommands">{{ store.isPaused ? '✋ Stop' : 'Stop' }}</Button>
+        </div>
       </div>
     </div>
 
@@ -217,7 +240,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, watch, nextTick, computed } from "vue";
+import { ref, watch, nextTick, computed, onUnmounted } from "vue";
 import { useRemyStore } from "@/composables/useRemyStore";
 import { useRemyStream } from "@/composables/useRemyStream";
 import { abortUiCommands } from "@/composables/useUiCommandExecutor";
@@ -252,6 +275,53 @@ function formatToolDetails(tc: { tool_call_id: string; tool_name: string; succes
   }
   return lines.join('\n')
 }
+
+const nogoCountdown = ref(0)
+let nogoCountdownTimer: ReturnType<typeof setInterval> | null = null
+
+function hasNogoTool(): boolean {
+  return store.pendingPermission?.tools.some((t: any) => t.nogo) ?? false
+}
+
+function startNogoCountdown() {
+  stopNogoCountdown()
+  if (!hasNogoTool()) return
+  nogoCountdown.value = 3
+  nogoCountdownTimer = setInterval(() => {
+    nogoCountdown.value--
+    if (nogoCountdown.value <= 0) {
+      stopNogoCountdown()
+    }
+  }, 1000)
+}
+
+function stopNogoCountdown() {
+  if (nogoCountdownTimer) {
+    clearInterval(nogoCountdownTimer)
+    nogoCountdownTimer = null
+  }
+  nogoCountdown.value = 0
+}
+
+watch(() => store.pendingPermission, (val) => {
+  if (val && hasNogoTool()) {
+    startNogoCountdown()
+  } else {
+    stopNogoCountdown()
+  }
+}, { immediate: true })
+
+async function pauseRemy() {
+  await store.pauseRemy()
+}
+
+async function resumeRemy() {
+  await store.resumeRemy()
+}
+
+onUnmounted(() => {
+  stopNogoCountdown()
+})
 
 const userEmail = computed(() => {
   const token = getAccessToken();
@@ -525,6 +595,15 @@ function renderMarkdown(text: string): string {
 .remy-permission-tool {
   @apply flex items-center gap-2 rounded-md px-2 py-1;
   background-color: hsl(var(--muted));
+}
+.remy-permission-tool-nogo {
+  border: 1px solid hsl(0 72% 51% / 0.3);
+  background-color: hsl(0 72% 51% / 0.05);
+}
+.remy-nogo-badge {
+  @apply text-[10px] font-semibold px-1.5 py-0.5 rounded;
+  background-color: hsl(0 72% 51% / 0.15);
+  color: hsl(0 72% 51%);
 }
 .remy-permission-actions {
   @apply flex items-center gap-2;

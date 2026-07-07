@@ -16,13 +16,41 @@ export interface UiCommandResult {
 
 const _abortControllers = new Set<AbortController>()
 const _navHistory: string[] = []
+let _actionSpeed: string = 'lightning'
+let _paused = false
+let _resumeResolver: (() => void) | null = null
 
 const HIGHLIGHT_OUTLINE = '2px solid #3b82f6'
 const HIGHLIGHT_BG = 'rgba(59, 130, 246, 0.1)'
 
 export function abortUiCommands() {
+  _paused = false
+  if (_resumeResolver) {
+    _resumeResolver()
+    _resumeResolver = null
+  }
   for (const ac of _abortControllers) ac.abort()
   _abortControllers.clear()
+}
+
+export function setActionSpeed(speed: string) {
+  _actionSpeed = speed
+}
+
+export function pauseUiCommands() {
+  _paused = true
+}
+
+export function resumeUiCommands() {
+  _paused = false
+  if (_resumeResolver) {
+    _resumeResolver()
+    _resumeResolver = null
+  }
+}
+
+export function isPaused(): boolean {
+  return _paused
 }
 
 const PER_COMMAND_TIMEOUT_MS = 30000
@@ -62,12 +90,33 @@ export async function executeCommandBatch(commands: UiCommand[]): Promise<UiComm
       }
     }
 
+    if (_paused) {
+      await new Promise<void>(resolve => {
+        _resumeResolver = resolve
+      })
+      if (abort.signal.aborted) {
+        results.push({ id: cmd.id, name: cmd.name, success: false, error: 'cancelled_by_user' })
+        continue
+      }
+    }
+
     let result = await executeWithTimeout(cmd, abort.signal)
     if (!result.success && cmd.name === 'navigate') {
       await new Promise(r => setTimeout(r, 1000))
       result = await executeWithTimeout(cmd, abort.signal)
     }
     results.push(result)
+
+    const speedDelays: Record<string, number> = {
+      lightning: 0,
+      fast: 200,
+      normal: 600,
+      slow: 1200,
+      step: 0,
+    }
+    const delay = speedDelays[_actionSpeed] ?? 0
+    if (delay > 0) await new Promise(r => setTimeout(r, delay))
+    if (_actionSpeed === 'step') _paused = true
   }
 
   cleanup()

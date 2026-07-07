@@ -75,6 +75,7 @@ export const useRemyStore = defineStore('remy', () => {
   const sessionsLoading = ref(false)
   const pendingPermission = ref<PermissionRequest | null>(null)
   const isExecutingUi = ref(false)
+  const isPaused = ref(false)
 
   const activeSession = computed(() =>
     Array.isArray(sessions.value) ? sessions.value.find(s => s.id === activeSessionId.value) ?? null : null,
@@ -256,6 +257,18 @@ export const useRemyStore = defineStore('remy', () => {
     }
   }
 
+  async function pauseRemy() {
+    isPaused.value = true
+    const { pauseUiCommands } = await import('./useUiCommandExecutor')
+    pauseUiCommands()
+  }
+
+  async function resumeRemy() {
+    isPaused.value = false
+    const { resumeUiCommands } = await import('./useUiCommandExecutor')
+    resumeUiCommands()
+  }
+
   function appendSystemMessage(content: string) {
     messages.value.push(createMessage('summary', content, {
       session_id: activeSessionId.value ?? '',
@@ -303,6 +316,7 @@ export const useRemyStore = defineStore('remy', () => {
     sessionsLoading,
     pendingPermission,
     isExecutingUi,
+    isPaused,
     activeSession,
     sortedSessions,
     fetchSessions,
@@ -320,6 +334,8 @@ export const useRemyStore = defineStore('remy', () => {
     setPendingPermission,
     approvePermission,
     resetSessionPermissions,
+    pauseRemy,
+    resumeRemy,
     appendSystemMessage,
     appendTurnSeparator,
     persistPosition,

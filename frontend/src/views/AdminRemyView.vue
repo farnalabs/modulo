@@ -381,6 +381,95 @@
         </button>
       </div>
 
+      <!-- Safety & Limits -->
+      <div class="card p-4">
+        <h2 class="mb-3 text-lg font-semibold">Safety & Limits</h2>
+        <p class="mb-4 text-sm text-muted-foreground">Configure rate limits, auto-execution thresholds, and no-go patterns for Remy's browser automation.</p>
+
+        <div class="space-y-4">
+          <div>
+            <label class="mb-1 block text-sm font-medium">Max actions per minute</label>
+            <p class="mb-2 text-xs text-muted-foreground">Maximum number of UI actions Remy can perform in a one-minute window.</p>
+            <input
+              v-model.number="safetyConfig.rateLimitMaxActions"
+              type="number"
+              min="1"
+              max="120"
+              class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm"
+              placeholder="30"
+              data-testid="remy-rate-limit-max-actions"
+            />
+          </div>
+          <div>
+            <label class="mb-1 block text-sm font-medium">Rate limit window (seconds)</label>
+            <p class="mb-2 text-xs text-muted-foreground">The sliding window duration for rate limit calculations.</p>
+            <input
+              v-model.number="safetyConfig.rateLimitWindowSeconds"
+              type="number"
+              min="1"
+              max="3600"
+              class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm"
+              placeholder="60"
+              data-testid="remy-rate-limit-window"
+            />
+          </div>
+          <div>
+            <label class="mb-1 block text-sm font-medium">Auto-execute confidence threshold</label>
+            <p class="mb-2 text-xs text-muted-foreground">Minimum confidence score (0.0–1.0) required for Remy to auto-execute an action without approval.</p>
+            <div class="flex items-center gap-3">
+              <input
+                v-model.number="safetyConfig.autoExecuteThreshold"
+                type="range"
+                min="0"
+                max="1"
+                step="0.05"
+                class="flex-1"
+                data-testid="remy-auto-execute-threshold"
+              />
+              <span class="text-sm font-mono w-12 text-right">{{ safetyConfig.autoExecuteThreshold.toFixed(2) }}</span>
+            </div>
+          </div>
+          <div>
+            <label class="mb-1 block text-sm font-medium">No-go page patterns</label>
+            <p class="mb-2 text-xs text-muted-foreground">URL patterns (comma-separated) that Remy must never navigate to. Supports wildcards.</p>
+            <textarea
+              v-model="safetyConfig.nogoPagePatterns"
+              rows="2"
+              class="w-full rounded-lg border border-input bg-background px-3 py-2 font-mono text-sm"
+              placeholder="/admin/settings/billing, /security*"
+              data-testid="remy-nogo-page-patterns"
+            />
+          </div>
+          <div>
+            <label class="mb-1 block text-sm font-medium">No-go selector patterns</label>
+            <p class="mb-2 text-xs text-muted-foreground">CSS selector patterns (comma-separated) for elements Remy must never interact with.</p>
+            <textarea
+              v-model="safetyConfig.nogoSelectorPatterns"
+              rows="2"
+              class="w-full rounded-lg border border-input bg-background px-3 py-2 font-mono text-sm"
+              placeholder="[data-testid=delete-account], .danger-zone button"
+              data-testid="remy-nogo-selector-patterns"
+            />
+          </div>
+          <div v-if="safetyError" class="text-sm text-destructive">{{ safetyError }}</div>
+          <Tooltip :delay-duration="300">
+            <TooltipTrigger as-child>
+              <button
+                :disabled="safetySaving"
+                class="rounded-lg bg-primary px-4 py-2 text-sm font-semibold text-primary-foreground hover:brightness-110 disabled:opacity-50 transition-all"
+                data-testid="remy-safety-save"
+                @click="saveSafetyConfig"
+              >
+                {{ safetySaving ? 'Saving...' : 'Save Safety Config' }}
+              </button>
+            </TooltipTrigger>
+            <TooltipContent side="top">
+              <p>Save rate limits, threshold, and no-go patterns.</p>
+            </TooltipContent>
+          </Tooltip>
+        </div>
+      </div>
+
       <!-- Skills Manager -->
       <div class="card p-4">
         <div class="flex items-center justify-between mb-4">
@@ -814,6 +903,44 @@ function loadPermsFromConfig(cfg: any) {
   toolPerms.value = cfg.tool_permissions || getDefaultPerms()
 }
 
+// Safety config
+const safetyConfig = reactive({
+  rateLimitMaxActions: 30,
+  rateLimitWindowSeconds: 60,
+  autoExecuteThreshold: 0.8,
+  nogoPagePatterns: '',
+  nogoSelectorPatterns: '',
+})
+const safetySaving = ref(false)
+const safetyError = ref<string | null>(null)
+
+function loadSafetyFromConfig(cfg: any) {
+  safetyConfig.rateLimitMaxActions = cfg.rate_limit_max_actions ?? 30
+  safetyConfig.rateLimitWindowSeconds = cfg.rate_limit_window_seconds ?? 60
+  safetyConfig.autoExecuteThreshold = cfg.auto_execute_threshold ?? 0.8
+  safetyConfig.nogoPagePatterns = (cfg.nogo_page_patterns ?? []).join(', ')
+  safetyConfig.nogoSelectorPatterns = (cfg.nogo_selector_patterns ?? []).join(', ')
+}
+
+async function saveSafetyConfig() {
+  if (configSaving.value) return
+  configSaving.value = true
+  safetySaving.value = true
+  safetyError.value = null
+  const nogoPagePatterns = safetyConfig.nogoPagePatterns.split(/[\s,]+/).map(s => s.trim()).filter(Boolean)
+  const nogoSelectorPatterns = safetyConfig.nogoSelectorPatterns.split(/[\s,]+/).map(s => s.trim()).filter(Boolean)
+  const err = await putConfig({
+    rate_limit_max_actions: safetyConfig.rateLimitMaxActions,
+    rate_limit_window_seconds: safetyConfig.rateLimitWindowSeconds,
+    auto_execute_threshold: safetyConfig.autoExecuteThreshold,
+    nogo_page_patterns: nogoPagePatterns,
+    nogo_selector_patterns: nogoSelectorPatterns,
+  })
+  if (err) safetyError.value = `Failed to save safety config: ${formatApiError(err)}`
+  safetySaving.value = false
+  configSaving.value = false
+}
+
 // Guidance
 const guidance = ref('')
 const guidanceSaving = ref(false)
@@ -1031,6 +1158,7 @@ async function loadConfig() {
       systemPrompt.value = cfg.system_prompt || ''
       guidance.value = cfg.additional_guidance || ''
       loadPermsFromConfig(cfg)
+      loadSafetyFromConfig(cfg)
     }
   } catch (e: unknown) {
     loadError.value = `Failed to load Remy config: ${e instanceof Error ? e.message : String(e)}`
