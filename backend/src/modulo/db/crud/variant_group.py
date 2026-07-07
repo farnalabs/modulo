@@ -145,21 +145,24 @@ def pick_variant_weighted(
     """
     if not variants:
         return None
-    if len(variants) == 1:
-        return variants[0]
+    clean = [v for v in variants if isinstance(v, dict)]
+    if not clean:
+        return None
+    if len(clean) == 1:
+        return clean[0]
 
-    weights = [float(v.get("weight", 1.0)) for v in variants]
+    weights = [float(v.get("weight", 1.0)) for v in clean]
     total = sum(weights)
     if total <= 0:
-        return random.choice(variants)  # noqa: S311 — variant selection is not cryptographic
+        return random.choice(clean)  # noqa: S311 — variant selection is not cryptographic
 
     r = random.random() * total  # noqa: S311 — variant selection is not cryptographic
     cumulative = 0.0
     for i, w in enumerate(weights):
         cumulative += w
         if r <= cumulative:
-            return variants[i]
-    return variants[-1]
+            return clean[i]
+    return clean[-1]
 
 
 async def run_variant_weighted(
@@ -305,8 +308,11 @@ async def get_prompt_diffs(
                 continue
 
             def _pins(snapshot: Any) -> dict[str, str | None]:
+                raw = snapshot.prompt_pins_json
+                if not isinstance(raw, list):
+                    return {}
                 return {p.get("agent_id"): p.get("prompt_version_hash")
-                        for p in snapshot.prompt_pins_json if p.get("agent_id")}
+                        for p in raw if p.get("agent_id")}
 
             bv_pins = _pins(bv_snapshot)
             cv_pins = _pins(cv_snapshot)

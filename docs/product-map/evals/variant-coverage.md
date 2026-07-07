@@ -78,6 +78,29 @@ Discovered from 1 completed delivery task.
 - [x] Prompt diffs returns agent-level diff entries per variant pair
 - [ ] Agents declare multiple prompt template versions and select by `run_context.prompt_version`
 
+### Edge Cases & Data Integrity
+- [x] Empty variant list in `pick_variant_weighted` returns None (graceful no-op)
+- [x] Single variant short-circuits weighted selection
+- [x] All-zero weights fall back to random selection
+- [x] Missing weight key defaults to 1.0
+- [x] Missing `snapshot_id` in variant dict — run aborted gracefully (None return)
+- [x] Missing `eval_definition_ids` key in variant — treated as empty list via `.get()`
+- [x] `run_context_overrides` not a dict — handled via `isinstance()` guard
+- [x] Non-dict variant elements in `pick_variant_weighted` — filtered out gracefully (new in 310)
+- [x] None `prompt_pins_json` on snapshot — `get_prompt_diffs` returns empty (new in 310)
+- [x] Non-list `prompt_pins_json` on snapshot — `get_prompt_diffs` returns empty (new in 310)
+- [ ] DB-level `selection_strategy` check constraint violations return 409 — should be 422 ValidationError
+- [ ] Negative weight bypasses Pydantic `ge=0` if variants are set directly via CRUD API (JSON column)
+- [ ] Concurrent delete + run race: run reads group then delete removes it before FOR UPDATE — run gets None
+
+### Resilience & Integration Robustness
+- [x] Row-level locking (`SELECT ... FOR UPDATE`) in `run_variant_weighted` prevents quota race conditions
+- [x] `increment_run_count` uses `with_for_update()` for safe concurrent increment
+- [x] `check_pipeline_run_quota` returns False when active >= max_concurrent_runs
+- [x] All 8 variant group route handlers have ProgrammingError→501, SQLAlchemyError→503, Exception→500 catches
+- [x] `list_variant_groups` CRUD gracefully handles missing table (returns [], 0 with warning log)
+- [x] 404 responses for all {group_id} sub-routes when group not found
+
 ## Error Handling
 
 | Checkbox | Route | Test |
@@ -106,12 +129,16 @@ Discovered from 1 completed delivery task.
 | [x] 403 | Admin eval dashboard for non-admin users | `admin.py:1599-1603` — built-in role check |
 
 ## Known Gaps
-- BDD feature file `run_variants.feature` is a placeholder — no scenarios implemented
-- Integration tests for variant group endpoints `@pytest.mark.skip(reason="awaiting-implementation")`
+- `run_variants.feature` has 1 of 5 scenarios tagged @awaiting-implementation (coverage gaps); remaining 4 scenarios are active
+- `variant_groups.feature` has 6 of 7 scenarios tagged @awaiting-implementation (weighted batch, sequential, comparison, coverage signal, cost breakdown, quota batch); only the zero-weight scenario is wired
+- Integration tests for variant group endpoints `@pytest.mark.skip(reason="awaiting-implementation")` — all 14 integration tests skipped due to pipeline `created_by` fixture gap
 - Variant comparison view is not yet implemented (PRD 8.19 comparison view)
 - Eval coverage gap warning on variant comparison view not wired (frontend + backend signal)
-- `detect_eval_gap` endpoint now fetches eval definitions but passes them as raw model objects — EvalEngine.evaluate expects specific format; integration test needed
+- `detect_eval_gap` endpoint fetches eval definitions but passes them as raw model objects — EvalEngine.evaluate expects specific format; integration test needed
+- `selection_strategy` check constraint violation returns 409 (IntegrityError) instead of 422 (ValidationError) — Pydantic model doesn't validate against allowed values
+- Concurrent delete + run race: run reads group then delete removes it before FOR UPDATE — run gets None rather than a clear error
 
 ## QA History
 - 2026-07-04: Cross-cutting QA (index 120). Fixed CRITICAL: detect_eval_gap endpoint passed eval_suite=[] instead of fetching pipeline's eval definitions — always returned False. Added 6 missing ProgrammingError→501 unit tests. Updated product map: marked ~20 behaviour checkboxes [ ]→[x], added Error Handling section (18 checkboxes), updated Known Gaps. Status: partial.
-- 2026-07-09: Cross-cutting QA (index 277). Fixed CRITICAL — `list_variant_groups` CRUD silently swallowed ProgrammingError without logging; added `_log.warning()`. Added 4 CRUD unit tests for `get_coverage_gaps` (happy path, missing eval detection, provided eval_def_ids, partial coverage, missing eval_definition_ids key). Added Exception→500 test for `eval_coverage` endpoint. Corrected product map: marked admin eval dashboard 403 [ ]→[x] (role check already exists at admin.py:1599-1603), added missing SQLAlchemyError→503 and Exception→500 rows for eval_coverage error handling table. Removed resolved Known Gap "No unit tests for get_coverage_gaps CRUD function". Status: partial. 
+- 2026-07-09: Cross-cutting QA (index 277). Fixed CRITICAL — `list_variant_groups` CRUD silently swallowed ProgrammingError without logging; added `_log.warning()`. Added 4 CRUD unit tests for `get_coverage_gaps` (happy path, missing eval detection, provided eval_def_ids, partial coverage, missing eval_definition_ids key). Added Exception→500 test for `eval_coverage` endpoint. Corrected product map: marked admin eval dashboard 403 [ ]→[x] (role check already exists at admin.py:1599-1603), added missing SQLAlchemyError→503 and Exception→500 rows for eval_coverage error handling table. Removed resolved Known Gap "No unit tests for get_coverage_gaps CRUD function". Status: partial.
+- 2026-07-11: Cross-cutting QA (index 310). Fixed CRITICAL — `get_prompt_diffs` `_pins()` crashes with TypeError when `snapshot.prompt_pins_json` is None; added `isinstance(raw, list)` guard. Fixed MAJOR — `pick_variant_weighted` crashes with AttributeError on non-dict variant elements; added isinstance filter. Added 4 new unit tests (None prompt_pins_json, non-list prompt_pins_json, non-dict variant filtered, all-non-dict returns None). Updated Known Gaps: corrected stale "run_variants.feature placeholder" claim (4 of 5 scenarios are active), added selection_strategy validation gap and concurrent delete+run race gap. Added Edge Cases & Data Integrity section (10 checkboxes, 9 verified [x], 2 unchecked). All 80 variant tests pass (76 active + 4 skipped awaiting-implementation). Status: partial. 
