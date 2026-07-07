@@ -1047,6 +1047,8 @@ async def list_primitives(
     """
     if excluded_tiers is None:
         excluded_tiers = ["in_dev"]
+    org_page = PageResult(items=[], total=0, page=page, page_size=page_size)
+    db_community: list[LibraryPrimitive] = []
     try:
         async with session.begin():
             await set_rls_org(session, org_id)
@@ -1060,9 +1062,12 @@ async def list_primitives(
                 cursor=cursor,
                 excluded_tiers=excluded_tiers,
             )
+            if include_community and (source is None or source == "community"):
+                db_community = await _fetch_published_community_from_db(
+                    session, org_id, primitive_type=primitive_type, search=search,
+                )
     except ProgrammingError:
         _log.warning("list_primitives — DB not migrated for org %s", org_id)
-        org_page = PageResult(items=[], total=0, page=page, page_size=page_size)
     except Exception:
         _log.exception("list_primitives — DB query failed for org %s", org_id)
         raise
@@ -1080,12 +1085,6 @@ async def list_primitives(
             modulo = _filter_modulo(primitive_type=primitive_type, search=search)
         if source is None or source == "community":
             community = _filter_community(primitive_type=primitive_type, search=search)
-            # Best-effort supplement: fetch published community items from DB
-            # (the in-memory cache at publish time is the primary mechanism;
-            # this handles warm-start scenarios after server restart)
-            db_community = await _fetch_published_community_from_db(
-                session, org_id, primitive_type=primitive_type, search=search,
-            )
             seen_ids = {p.id for p in community}
             for p in db_community:
                 if p.id not in seen_ids:
