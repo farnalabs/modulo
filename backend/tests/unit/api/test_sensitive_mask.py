@@ -354,6 +354,7 @@ def test_connector_response_masks_config_json(client: TestClient) -> None:
         "name": "My Connector",
         "url": "https://example.com",
     }
+    mock_connector.tier = "community"
     mock_connector.allowed_operations = []
     mock_connector.status = "active"
     mock_connector.visibility = "org"
