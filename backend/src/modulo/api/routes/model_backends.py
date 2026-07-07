@@ -295,9 +295,11 @@ async def update_model_backend_endpoint(
     settings: Settings = Depends(get_settings),
 ) -> ModelBackendResponse:
     updates: dict[str, Any] = req.model_dump(exclude_unset=True)
-    if "api_key" in updates:
+    if "api_key" in updates and updates["api_key"] is not None:
         _ct = _encrypt(updates.pop("api_key"), settings.fernet_key)
         updates["credentials_ciphertext"] = _ct  # nosemgrep: credential-not-in-state
+    elif "api_key" in updates:
+        updates.pop("api_key")
     try:
         async with session.begin():
             await set_rls_org(session, principal.organisation_id)
