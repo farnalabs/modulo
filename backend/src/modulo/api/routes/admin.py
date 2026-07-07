@@ -1917,6 +1917,12 @@ async def eval_regressions(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database error. Please try again later.",
         )
+    except Exception:
+        logger.exception("Eval regressions unexpected error")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="An unexpected error occurred while checking eval regressions.",
+        )
 
     return RegressionAlertsResponse(
         alerts=[
