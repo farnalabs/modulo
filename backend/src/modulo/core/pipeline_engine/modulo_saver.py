@@ -218,7 +218,7 @@ class ModuloPostgresSaver(AsyncPostgresSaver):
                 if wrapper.get("__encrypted__") and self._fernet is not None:
                     plain = self._decrypt_with_fallback(wrapper["data"].encode())
                     return _deserialize_checkpoint(plain.decode())
-            except Exception:
+            except (json.JSONDecodeError, KeyError, InvalidToken):
                 _log.exception("checkpoint.decrypt_failed")
                 raise
         return _deserialize_checkpoint(raw)
@@ -247,7 +247,7 @@ class ModuloPostgresSaver(AsyncPostgresSaver):
                 if raw is not None and self._fernet is not None:
                     try:
                         raw = self._decrypt_with_fallback(raw)
-                    except Exception:
+                    except InvalidToken:
                         _log.warning("blob.decrypt_fallback", exc_info=True)
                 result[blob[0].decode()] = raw
         return result
@@ -262,7 +262,7 @@ class ModuloPostgresSaver(AsyncPostgresSaver):
                 if self._fernet is not None:
                     try:
                         raw = self._decrypt_with_fallback(raw)
-                    except Exception:
+                    except InvalidToken:
                         _log.warning("write.decrypt_fallback", exc_info=True)
                 result.append((w[1].decode(), w[2].decode(), raw))
         return result

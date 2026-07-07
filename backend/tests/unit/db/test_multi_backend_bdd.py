@@ -5,6 +5,7 @@ MariaDB, and SQLite backends.  Mirrors the BDD scenarios in:
     backend/tests/features/organisation/multi_backend.feature
 """
 
+import logging
 import uuid
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -344,12 +345,28 @@ class TestAdvisoryLockAbstraction:
     async def test_postgres_lock_release_calls_pg_advisory_unlock(self) -> None:
         lock = PostgresLock()
         session = AsyncMock(spec=AsyncSession)
+        # result.scalar_one() is sync in real SQLAlchemy — use MagicMock
+        result_mock = MagicMock()
+        result_mock.scalar_one.return_value = True
+        session.execute.return_value = result_mock
 
         await lock.release_lock(session, "pipeline:42")
 
         session.execute.assert_awaited_once()
         call_text = str(session.execute.await_args[0][0].compile())
         assert "pg_advisory_unlock" in call_text
+
+    async def test_postgres_lock_release_warns_when_not_held(self, caplog: pytest.LogCaptureFixture) -> None:
+        lock = PostgresLock()
+        session = AsyncMock(spec=AsyncSession)
+        result_mock = MagicMock()
+        result_mock.scalar_one.return_value = False
+        session.execute.return_value = result_mock
+
+        with caplog.at_level(logging.WARNING):
+            await lock.release_lock(session, "pipeline:42")
+
+        assert "pg_advisory_unlock returned false" in caplog.text
 
     async def test_generic_lock_uses_asyncio_lock(self) -> None:
         lock = GenericLock()
