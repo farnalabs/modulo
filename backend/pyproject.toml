@@ -11,11 +11,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "farnalabs-modulo"
-<<<<<<< HEAD
-version = "0.3.248"
-=======
 version = "0.3.249"
->>>>>>> qa/arch-285
 description = "Governed orchestration for your agentic SDLC"
 license = "MIT"
 authors = [
