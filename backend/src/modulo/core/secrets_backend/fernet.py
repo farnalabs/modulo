@@ -7,17 +7,24 @@ table.
 
 from __future__ import annotations
 
+import asyncio
+import logging
 import uuid
 from typing import TYPE_CHECKING
 
 from cryptography.fernet import Fernet, InvalidToken
 from sqlalchemy import delete, select, text
+from sqlalchemy.exc import IntegrityError, OperationalError, ProgrammingError
 
 from modulo.core.secrets_backend import SecretsBackend, validate_key
 from modulo.db.models.secret import Secret
 
 if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession
+
+
+logger = logging.getLogger(__name__)
+_DB_TIMEOUT: float = 10.0
 
 
 class FernetSecretsBackend(SecretsBackend):
@@ -66,25 +73,35 @@ class FernetSecretsBackend(SecretsBackend):
             raise RuntimeError("FernetSecretsBackend: no DB session set")
 
         org_id = await self._read_org_id_from_session()
-        result = await self._session.execute(
-            select(Secret).where(Secret.key == key, Secret.organisation_id == org_id).limit(1)
+        result = await asyncio.wait_for(
+            self._session.execute(
+                select(Secret).where(Secret.key == key, Secret.organisation_id == org_id).limit(1)
+            ),
+            timeout=_DB_TIMEOUT,
         )
         row = result.scalar_one_or_none()
         if row is None:
             raise KeyError(key)
 
-        try:
-            plaintext = self._fernet.decrypt(row.encrypted_value)
-        except InvalidToken:
-            if self._fernet_old is not None:
-                try:
-                    plaintext = self._fernet_old.decrypt(row.encrypted_value)
-                except InvalidToken as exc:
-                    raise ValueError(f"Failed to decrypt secret: {key}") from exc
-            else:
-                raise ValueError(f"Failed to decrypt secret: {key}") from None
+        encrypted = row.encrypted_value
+        if encrypted is None:
+            logger.error("FernetSecretsBackend: stored secret %s has no encrypted value", key)
+            raise ValueError(f"Failed to decrypt secret: {key} (corrupted data)")
 
+        plaintext = self._decrypt_value(encrypted, key)
         return plaintext.decode()
+
+    def _decrypt_value(self, encrypted: bytes, key: str) -> bytes:
+        """Try decryption with current key, then fallback key."""
+        for fernet in [self._fernet, self._fernet_old]:
+            if fernet is None:
+                continue
+            try:
+                return fernet.decrypt(encrypted)
+            except InvalidToken:
+                continue
+        logger.error("FernetSecretsBackend: failed to decrypt secret %s with any key", key)
+        raise ValueError(f"Failed to decrypt secret: {key}")
 
     async def _read_org_id_from_session(self) -> uuid.UUID:
         """Read ``app.organisation_id`` from the current session configuration.
@@ -105,10 +122,13 @@ class FernetSecretsBackend(SecretsBackend):
         org_id_str: str | None = None
 
         try:
-            result = await self._session.execute(text("SELECT current_setting('app.organisation_id', true)"))
+            result = await asyncio.wait_for(
+                self._session.execute(text("SELECT current_setting('app.organisation_id', true)")),
+                timeout=_DB_TIMEOUT,
+            )
             org_id_str = result.scalar()
-        except Exception:
-            pass
+        except (OperationalError, ProgrammingError):
+            logger.debug("FernetSecretsBackend: current_setting not available (non-Postgres backend), falling back to session.info")
 
         if not org_id_str:
             info = getattr(self._session, "info", {})
@@ -120,7 +140,12 @@ class FernetSecretsBackend(SecretsBackend):
                 "FernetSecretsBackend: RLS organisation context not set. "
                 "Call set_rls_org(session, org_id) before set_secret."
             )
-        self._org_id = uuid.UUID(str(org_id_str))
+        try:
+            self._org_id = uuid.UUID(str(org_id_str))
+        except (ValueError, AttributeError) as exc:
+            raise RuntimeError(
+                f"FernetSecretsBackend: invalid organisation_id format: {org_id_str!r}"
+            ) from exc
         return self._org_id
 
     async def set_secret(self, key: str, value: str) -> None:
@@ -132,22 +157,37 @@ class FernetSecretsBackend(SecretsBackend):
         encrypted = self._fernet.encrypt(value.encode())
         org_id = await self._read_org_id_from_session()
 
-        stmt = select(Secret).where(Secret.key == key, Secret.organisation_id == org_id).limit(1).with_for_update()
-        result = await self._session.execute(stmt)
-        existing = result.scalar_one_or_none()
-
-        if existing is not None:
-            existing.encrypted_value = encrypted
-        else:
-            self._session.add(
-                Secret(
-                    id=uuid.uuid4(),
-                    organisation_id=org_id,
-                    key=key,
-                    encrypted_value=encrypted,
+        for attempt in range(2):
+            try:
+                stmt = (
+                    select(Secret)
+                    .where(Secret.key == key, Secret.organisation_id == org_id)
+                    .limit(1)
+                    .with_for_update()
                 )
-            )
-        await self._session.flush()
+                result = await asyncio.wait_for(self._session.execute(stmt), timeout=_DB_TIMEOUT)
+                existing = result.scalar_one_or_none()
+
+                if existing is not None:
+                    existing.encrypted_value = encrypted
+                else:
+                    self._session.add(
+                        Secret(
+                            id=uuid.uuid4(),
+                            organisation_id=org_id,
+                            key=key,
+                            encrypted_value=encrypted,
+                        )
+                    )
+                await asyncio.wait_for(self._session.flush(), timeout=_DB_TIMEOUT)
+                break
+            except IntegrityError:
+                if attempt == 0:
+                    logger.warning("FernetSecretsBackend: TOCTOU retry on set_secret for key %s", key)
+                    await self._session.rollback()
+                    continue
+                logger.error("FernetSecretsBackend: TOCTOU retry exhausted for key %s", key)
+                raise
 
     async def delete_secret(self, key: str) -> None:
         """Remove the record for *key* from the secrets table."""
@@ -157,5 +197,9 @@ class FernetSecretsBackend(SecretsBackend):
 
         org_id = await self._read_org_id_from_session()
         stmt = delete(Secret).where(Secret.key == key, Secret.organisation_id == org_id)
-        await self._session.execute(stmt)
-        await self._session.flush()
+        try:
+            await asyncio.wait_for(self._session.execute(stmt), timeout=_DB_TIMEOUT)
+            await asyncio.wait_for(self._session.flush(), timeout=_DB_TIMEOUT)
+        except Exception:
+            logger.exception("FernetSecretsBackend: error deleting secret %s", key)
+            raise
