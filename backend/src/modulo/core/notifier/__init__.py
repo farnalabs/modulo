@@ -104,7 +104,9 @@ class Notifier:
     async def _get_client(self) -> httpx.AsyncClient:
         async with self._http_client_lock:
             if self._http_client is None or self._http_client.is_closed:
-                self._http_client = httpx.AsyncClient(timeout=httpx.Timeout(connect=10.0, read=25.0, pool=30.0))
+                self._http_client = httpx.AsyncClient(
+                    timeout=httpx.Timeout(connect=10.0, read=25.0, write=25.0, pool=30.0)
+                )
         return self._http_client
 
     async def dispatch_event(
@@ -131,18 +133,12 @@ class Notifier:
 
         Returns a list of DispatchResult, one per endpoint.
         """
-        try:
-            if self._use_celery:
-                return await self._dispatch_via_celery(
-                    org_id, event_type, payload, run_id=run_id, retain_payload=retain_payload, team_id=team_id
-                )
+        if self._use_celery:
+            return await self._dispatch_via_celery(
+                org_id, event_type, payload, run_id=run_id, retain_payload=retain_payload, team_id=team_id
+            )
 
-            return await self._dispatch_inline(org_id, event_type, payload, run_id, retain_payload, team_id)
-        except asyncio.CancelledError:
-            raise
-        except Exception:
-            _log.exception("notifier.dispatch_failed", extra={"event_type": event_type, "org_id": str(org_id)})
-            return []
+        return await self._dispatch_inline(org_id, event_type, payload, run_id, retain_payload, team_id)
 
     async def _dispatch_via_celery(
         self,
@@ -166,16 +162,45 @@ class Notifier:
                 retain_payload=retain_payload,
                 team_id=team_id,
             )
-            return [
-                DispatchResult(
-                    endpoint_id=uuid.UUID(r["endpoint_id"]) if r["endpoint_id"] != "celery-enqueued" else uuid.uuid4(),
-                    status=r["status"],
-                    attempt_count=r["attempt_count"],
-                    response_code=r["response_code"],
-                    last_error=r["last_error"],
-                )
-                for r in results
-            ]
+            parsed: list[DispatchResult] = []
+            for r in results:
+                eid = r["endpoint_id"]
+                if eid == "celery-enqueued":
+                    parsed.append(
+                        DispatchResult(
+                            endpoint_id=uuid.uuid4(),
+                            status=r["status"],
+                            attempt_count=r["attempt_count"],
+                            response_code=r["response_code"],
+                            last_error=r["last_error"],
+                        )
+                    )
+                else:
+                    try:
+                        parsed.append(
+                            DispatchResult(
+                                endpoint_id=uuid.UUID(eid),
+                                status=r["status"],
+                                attempt_count=r["attempt_count"],
+                                response_code=r["response_code"],
+                                last_error=r["last_error"],
+                            )
+                        )
+                    except (ValueError, TypeError, AttributeError):
+                        _log.error(
+                            "notifier.invalid_endpoint_id",
+                            extra={"endpoint_id": eid, "org_id": str(org_id)},
+                        )
+                        parsed.append(
+                            DispatchResult(
+                                endpoint_id=uuid.uuid4(),
+                                status="error",
+                                attempt_count=0,
+                                response_code=None,
+                                last_error=f"Invalid endpoint_id: {eid}",
+                            )
+                        )
+            return parsed
         except Exception as exc:
             _log.warning(
                 "notifier.celery_fallback",
@@ -198,41 +223,26 @@ class Notifier:
 
         When ``team_id`` is None, returns only org-wide endpoints.
         """
-        async with self._session_factory() as session:
-            if team_id is not None:
-                team_stmt = (
-                    select(NotificationEndpoint)
-                    .where(
-                        NotificationEndpoint.organisation_id == org_id,
-                        NotificationEndpoint.team_id == team_id,
-                        NotificationEndpoint.auto_disabled.is_(False),
-                    )
-                )
-                result = await session.execute(team_stmt)
-                subscribed = self._filter_subscribed(list(result.scalars()), event_type)
-                if subscribed:
-                    return subscribed
-                fallback_stmt = (
-                    select(NotificationEndpoint)
-                    .where(
-                        NotificationEndpoint.organisation_id == org_id,
-                        NotificationEndpoint.team_id.is_(None),
-                        NotificationEndpoint.auto_disabled.is_(False),
-                    )
-                )
-                result = await session.execute(fallback_stmt)
-                return self._filter_subscribed(list(result.scalars()), event_type)
-
+        async def _query(team_filter: uuid.UUID | None) -> list[NotificationEndpoint]:
             stmt = (
                 select(NotificationEndpoint)
                 .where(
                     NotificationEndpoint.organisation_id == org_id,
-                    NotificationEndpoint.team_id.is_(None),
+                    NotificationEndpoint.team_id.is_(team_filter),
                     NotificationEndpoint.auto_disabled.is_(False),
                 )
             )
-            result = await session.execute(stmt)
-            return self._filter_subscribed(list(result.scalars()), event_type)
+            async with self._session_factory() as session:
+                result = await session.execute(stmt)
+                return self._filter_subscribed(list(result.scalars()), event_type)
+
+        if team_id is not None:
+            subscribed = await _query(team_id)
+            if subscribed:
+                return subscribed
+            return await _query(None)
+
+        return await _query(None)
 
     def _filter_subscribed(
         self,
@@ -242,14 +252,18 @@ class Notifier:
         """Filter endpoints whose events JSON includes ``event_type``."""
         subscribed: list[NotificationEndpoint] = []
         for ep in endpoints:
-            try:
-                events_list = json.loads(ep.events)
-            except (json.JSONDecodeError, TypeError):
-                _log.warning(
-                    "notifier.unparseable_events_json",
-                    extra={"endpoint_id": str(ep.id), "org_id": str(ep.organisation_id)},
-                )
-                continue
+            raw_events = ep.events
+            if isinstance(raw_events, list):
+                events_list = raw_events
+            else:
+                try:
+                    events_list = json.loads(raw_events)
+                except (json.JSONDecodeError, TypeError):
+                    _log.warning(
+                        "notifier.unparseable_events_json",
+                        extra={"endpoint_id": str(ep.id), "org_id": str(ep.organisation_id)},
+                    )
+                    continue
             if event_type in events_list:
                 subscribed.append(ep)
         return subscribed
@@ -372,6 +386,7 @@ class Notifier:
     async def _sign_payload(self, body: bytes, endpoint: NotificationEndpoint) -> str:
         """Build HMAC-SHA256 signature over the JSON body.
         Returns empty string if the endpoint has no secret configured.
+        Returns empty string and logs an error if the secret cannot be decrypted.
         """
         if endpoint.secret_ciphertext is None:
             return ""
