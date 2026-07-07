@@ -483,3 +483,63 @@ class TestGetPromptDiffs:
         result = await get_prompt_diffs(session, group, base_snapshot_ids=[snap1.id])
 
         assert result == []
+
+    @patch("modulo.db.crud.variant_group.PipelineSnapshot", create=True)
+    async def test_handles_none_prompt_pins_json(self, _mock_pipeline_snapshot: MagicMock) -> None:
+        session = AsyncMock()
+        snap = MagicMock()
+        snap.id = uuid.uuid4()
+        snap.prompt_pins_json = None
+
+        group = MagicMock()
+        group.variants = [
+            {"name": "base", "snapshot_id": str(snap.id)},
+        ]
+
+        exec_result = MagicMock()
+        exec_result.scalars.return_value = [snap]
+        session.execute.return_value = exec_result
+
+        result = await get_prompt_diffs(session, group, base_snapshot_ids=[snap.id])
+
+        assert result == []
+
+
+class TestGetPromptDiffsNonDictSnapshot:
+    @patch("modulo.db.crud.variant_group.PipelineSnapshot", create=True)
+    async def test_handles_non_list_prompt_pins_json(self, _mock_pipeline_snapshot: MagicMock) -> None:
+        session = AsyncMock()
+        snap = MagicMock()
+        snap.id = uuid.uuid4()
+        snap.prompt_pins_json = "not-a-list"
+
+        group = MagicMock()
+        group.variants = [
+            {"name": "base", "snapshot_id": str(snap.id)},
+        ]
+
+        exec_result = MagicMock()
+        exec_result.scalars.return_value = [snap]
+        session.execute.return_value = exec_result
+
+        result = await get_prompt_diffs(session, group, base_snapshot_ids=[snap.id])
+
+        assert result == []
+
+
+class TestPickVariantWeightedNonDict:
+    def test_skips_non_dict_variants(self) -> None:
+        variants = [
+            {"name": "valid", "weight": 1.0},
+            "not-a-dict",
+            42,
+            None,
+        ]
+        result = pick_variant_weighted(variants)
+        assert result is not None
+        assert result["name"] == "valid"
+
+    def test_returns_none_when_all_are_non_dict(self) -> None:
+        variants = ["bad", 42, None, [1, 2, 3]]
+        result = pick_variant_weighted(variants)
+        assert result is None
