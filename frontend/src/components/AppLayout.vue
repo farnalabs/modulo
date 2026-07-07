@@ -17,6 +17,16 @@
         </router-link>
       </div>
 
+      <div class="flex flex-col flex-1 min-h-0">
+        <ViewModeToggle
+          :model-value="viewMode"
+          :options="viewModeOptions"
+          @update:model-value="setViewMode"
+        />
+
+        <SidebarNav class="flex-1" :is-system-admin="isSystemAdmin" :user-role="userRole" />
+      </div>
+
       <SidebarFooter
         compact
         :user-email="userEmail"
@@ -25,16 +35,6 @@
         @toggle-theme="toggleTheme"
         @logout="logout"
       />
-
-      <div class="flex flex-col flex-1 min-h-0">
-        <ViewModeToggle
-          :model-value="viewMode"
-          :options="[{ label: 'Essentials', value: 'simple' }, { label: 'All Features', value: 'advanced' }]"
-          @update:model-value="setViewMode"
-        />
-
-        <SidebarNav class="flex-1" :is-system-admin="isSystemAdmin" :user-role="userRole" />
-      </div>
     </aside>
 
     <!-- Mobile header -->
@@ -109,7 +109,7 @@
     >
       <ViewModeToggle
         :model-value="viewMode"
-        :options="[{ label: 'Essentials', value: 'simple' }, { label: 'All Features', value: 'advanced' }]"
+        :options="viewModeOptions"
         @update:model-value="setViewMode"
       />
 
@@ -169,6 +169,11 @@ import { TooltipProvider } from "./ui/tooltip";
 import { useSidebar } from "../composables/useSidebar";
 import { useRemyStore } from "../composables/useRemyStore";
 import { abortUiCommands } from "../composables/useUiCommandExecutor";
+
+const viewModeOptions = [
+  { label: 'Essentials', value: 'simple' },
+  { label: 'All Features', value: 'advanced' },
+] as const;
 
 const { viewMode, setViewMode } = useSidebar();
 

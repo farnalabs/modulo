@@ -2,13 +2,13 @@
   <div>
     <button
       type="button"
-      :aria-expanded="!effectiveCollapsed"
+      :aria-expanded="!collapsed"
       :aria-controls="`sidebar-group-${id}`"
       @click="$emit('toggle')"
       :class="['sidebar-group-header', { 'sidebar-group-header--active': isActive }]"
     >
       <span class="sidebar-group-label">{{ labelKey ? $t(labelKey) : label }}</span>
-      <span class="sidebar-group-chevron" :class="{ rotated: !effectiveCollapsed }">
+      <span class="sidebar-group-chevron" :class="{ rotated: !collapsed }">
         <svg
           xmlns="http://www.w3.org/2000/svg"
           width="14"
@@ -26,7 +26,7 @@
     </button>
     <Transition name="fade">
       <div
-        v-show="!effectiveCollapsed"
+        v-show="!collapsed"
         :id="`sidebar-group-${id}`"
         class="sidebar-group-items"
         role="region"
@@ -39,22 +39,17 @@
 </template>
 
 <script setup lang="ts">
-import { computed } from "vue";
-
-const props = withDefaults(defineProps<{
+defineProps<{
   id: string;
   label: string;
-  labelKey: string;
+  labelKey?: string;
   collapsed: boolean;
-  forceExpanded?: boolean;
   isActive?: boolean;
-}>(), { forceExpanded: false, isActive: false });
+}>();
 
 defineEmits<{
   toggle: [];
 }>();
-
-const effectiveCollapsed = computed(() => props.collapsed);
 </script>
 
 <style scoped>
