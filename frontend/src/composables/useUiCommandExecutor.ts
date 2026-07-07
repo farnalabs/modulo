@@ -113,7 +113,7 @@ export interface UiCommandResult {
 
 const _abortControllers = new Set<AbortController>()
 const _navHistory: string[] = []
-let _actionSpeed: string = 'lightning'
+let _actionSpeed: string = 'normal'
 let _paused = false
 let _resumeResolver: (() => void) | null = null
 
