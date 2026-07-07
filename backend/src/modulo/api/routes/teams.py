@@ -595,12 +595,20 @@ async def remove_member_endpoint(
     current_user: AuthenticatedPrincipal = Depends(get_current_user),
     session: AsyncSession = Depends(get_db_session),
 ) -> None:
-    _require_admin(current_user)
-
     try:
         async with session.begin():
             await set_rls_org(session, current_user.organisation_id)
             await set_rls_user_context(session, current_user.account_id, current_user.org_role)
+
+            is_admin = ORG_ROLE_HIERARCHY.get(current_user.org_role, -1) >= ORG_ROLE_HIERARCHY["admin"]
+            if not is_admin:
+                caller_membership = await get_membership_by_team_and_account(session, team_id, current_user.account_id)
+                if caller_membership is None or caller_membership.role != "operator":
+                    raise HTTPException(
+                        status_code=status.HTTP_403_FORBIDDEN,
+                        detail="Only admin users or team operators can remove members",
+                    )
+
             membership = await get_membership(session, membership_id)
             if membership is None or membership.team_id != team_id:
                 raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Membership not found")
