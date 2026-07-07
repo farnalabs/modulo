@@ -654,6 +654,7 @@ def test_clone_pipeline_returns_201(client: TestClient) -> None:
         patch("modulo.api.routes.pipelines.clone_pipeline", return_value=cloned) as mock_clone,
         patch("modulo.api.routes.pipelines.set_rls_org"),
         patch("modulo.api.routes.pipelines.set_rls_user_context"),
+        patch("modulo.api.routes.pipelines.append_audit_event", return_value=None),
     ):
         resp = client.post(f"/api/v1/pipelines/{_PIPELINE_ID}/clone", json={})
 
@@ -685,6 +686,7 @@ def test_clone_pipeline_with_custom_name(client: TestClient) -> None:
         patch("modulo.api.routes.pipelines.clone_pipeline", return_value=cloned) as mock_clone,
         patch("modulo.api.routes.pipelines.set_rls_org"),
         patch("modulo.api.routes.pipelines.set_rls_user_context"),
+        patch("modulo.api.routes.pipelines.append_audit_event", return_value=None),
     ):
         resp = client.post(
             f"/api/v1/pipelines/{_PIPELINE_ID}/clone",
