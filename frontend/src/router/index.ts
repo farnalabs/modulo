@@ -72,7 +72,7 @@ const StageBoardView = () => import('../views/StageBoardView.vue')
 const PipelineEditorView = () => import('../views/PipelineEditorView.vue')
 const CompositeEditorView = () => import('../views/pipeline/CompositeEditorView.vue')
 const CopyPipelineWizard = () => import('../views/CopyPipelineWizard.vue')
-const PipelineTemplateGallery = () => import('../views/PipelineTemplateGallery.vue')
+// removed: PipelineTemplateGallery — merged into /library
 const AdminUsersView = () => import('../views/AdminUsersView.vue')
 const AdminSpendLimitsView = () => import('../views/AdminSpendLimitsView.vue')
 const AdminCostBreakdownView = () => import('../views/AdminCostBreakdownView.vue')
@@ -385,8 +385,7 @@ const router = createRouter({
     },
     {
       path: '/templates',
-      name: 'pipeline-templates',
-      component: PipelineTemplateGallery,
+      redirect: '/library',
     },
     {
       path: '/pipelines/:id/editor',
