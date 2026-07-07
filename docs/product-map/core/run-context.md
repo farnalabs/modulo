@@ -127,6 +127,9 @@ status: partial
 - [x] Node timeout propagates TimeoutError to executor
 - [x] DB cancellation check failure (exception) caught and logged as WARNING — run continues (conservative degrade)
 - [x] DB cancellation check unset is no-op (no check performed)
+- [x] DB cancellation check has 5s `asyncio.wait_for` timeout — timeout treated as not-cancelled (resolved 2026-07-09)
+- [x] Frontend RunDetailView error handler uses `formatApiError(e)` — no `[object Object]` on API errors (resolved 2026-07-09)
+- [x] Frontend RunDetailView `formatTimestamp` uses `locale.value` from `useI18n()` — not hardcoded `en-US` (resolved 2026-07-09)
 - [ ] Invalid run_context_overrides type (non-dict) raises validation error
 - [ ] Retry with run_context_overrides merges correctly
 - [ ] Audit event emitted on context_write_by_non_setter violation with node_id and attempted_keys
@@ -171,8 +174,7 @@ status: partial
 - **No template rendering test for run_context**: The product map entry lists `{{ run_context.key }}` access as a behaviour, but there is no test verifying that run_context fields are interpolated in prompt templates.
 - **Parallel context-setter conflict warning**: PRD specifies a pipeline validation warning when parallel context-setters write the same key (v1). Not yet implemented.
 - **Complexity-reviewer end-to-end test**: No integration test verifying the canonical library primitive writes correct fields and downstream agents can consume them.
-- **DB cancellation check has no timeout**: The `_check_db_cancellation` closure in executor.py:484-488 opens a new DB session and queries the run table. If the DB is slow or unreachable, the entire node execution is blocked indefinitely — the check has no `asyncio.wait_for` timeout. Should default to a reasonable timeout (e.g. 5s) and treat timeout as not-cancelled.
-- **No frontend i18n for RunDetailView**: The RunDetailView has ~25 hardcoded English strings (`"Back to Dashboard"`, `"Copied!"`, `"Copy"`, `"Share Summary"`, `"Final Output"`, `"No node data available"`, table headers, `"Hide"`/`"Show"`, `"View"`, `"[Prompt hidden — click to reveal]"`, `"Input"`/`"Output"`, `"total tokens"`, `"Copy Prompt"`, `"No run ID provided"`, `"Failed to load run:"`) that are NOT wrapped in `$t()`. Violates the Definition of Done rule that all user-facing strings use `$t()`. Requires adding ~25 translation keys and wrapping template text in `$t()` calls. Requires `const { t } = useI18n()` for script-section strings.
+- **No frontend i18n for RunDetailView**: The RunDetailView previously had ~25 hardcoded English strings. As of 2026-07-09 (QA index 298), all template and script strings are wrapped in `$t()`. RunDetailView strings are now fully internationalized.
 - **test_missing_fuzzy_match test misaligned with code**: `test_autonomy.py` had `test_missing_fuzzy_match` asserting `AutonomyLevel("manual-approval")` matches `MANUAL_APPROVAL` via hyphen-to-underscore conversion, but `_missing_` only implements case-insensitive value matching, not hyphen-to-underscore. Renamed to `test_missing_case_insensitive_match` and fixed assertions to only test uppercase matching (which the code supports). The `test_missing_unmatched_raises_value_error` test correctly expects `ValueError` for `"notify-complete"` (hyphen variant) — no fuzzy matching needed.
 
 ### Testing Gaps
@@ -212,3 +214,14 @@ status: partial
 - **Marked [x]**: "All unit and BDD tests pass" — 66/66 unit tests pass.
 - **New Known Gap**: RunDetailView has ~25 hardcoded English strings without `$t()` i18n wrappers — violates Definition of Done.
 - **No backend code changes needed**: Existing architecture and error handling are sound for current scope.
+
+### 2026-07-09 — Cross-cutting QA for feat-core-run-context (index 298)
+- **Lens**: Behaviour verification, error-handling audit, i18n completeness, frontend QA, resilience, product map accuracy
+- **Fixed (MAJOR)**: RunDetailView.vue — replaced 15 hardcoded English strings with `$t()` wrappers (Back to Dashboard, Copy, Copied!, Share Summary, Final Output, No node data, table headers Node/Status/Duration/Cost/IO/Prompt, View button, Input/Output section headers, total tokens). Added 14 new i18n keys to en-US.js.
+- **Fixed (MAJOR)**: RunDetailView.vue error handler replaced `e instanceof Error ? e.message : String(e)` with `formatApiError(e)` — API error responses now render readable `error.detail` instead of `[object Object]`.
+- **Fixed (MAJOR)**: RunDetailView.vue `formatTimestamp` changed from hardcoded `toLocaleString('en-US')` to `toLocaleString(locale.value)` — respects user's i18n locale setting for date formatting. Added `isNaN(d.getTime())` guard against invalid date strings.
+- **Fixed (MAJOR)**: `_check_db_cancellation` in executor.py added 5s `asyncio.wait_for` timeout — a slow/unresponsive DB no longer blocks node execution indefinitely. Timeout treated as not-cancelled (conservative degrade).
+- **Added 3 new [x] behaviour checkboxes**: DB cancellation timeout, formatApiError in error handler, formatTimestamp locale.
+- **Resolved Known Gap**: "No frontend i18n for RunDetailView" — all template/script strings now use `$t()`/`t()`. 15 new i18n keys added to en-US.js.
+- **Resolved Known Gap**: "DB cancellation check has no timeout" — now has 5s `asyncio.wait_for` with TimeoutError→False degrade.
+- **Status:** partial (same remaining known gaps unchanged).

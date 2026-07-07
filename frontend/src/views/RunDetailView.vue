@@ -1,5 +1,5 @@
 ﻿<template>
-  <BackLink to="/" label="Back to Dashboard" />
+  <BackLink to="/" :label="$t('views.RunDetailView.back_to_dashboard')" />
   <div class="mx-auto max-w-6xl space-y-8 p-6">
     <LoadingSpinner v-if="loading" />
     <ErrorAlert v-else-if="error" :message="error" />
@@ -21,7 +21,7 @@
               class="ml-1 inline-flex items-center gap-1 rounded-md px-2 py-0.5 text-xs font-medium text-primary hover:bg-primary/10"
               @click="copyRunId"
             >
-              {{ copied ? 'Copied!' : 'Copy' }}
+              {{ copied ? $t('views.RunDetailView.copied') : $t('views.RunDetailView.copy') }}
             </button>
           </p>
         </div>
@@ -34,7 +34,7 @@
             class="mt-2 inline-flex items-center gap-1 rounded-md px-3 py-1.5 text-sm font-medium text-primary hover:bg-primary/10"
             @click="copyShareSummary"
           >
-            {{ shareCopied ? 'Copied!' : 'Share Summary' }}
+            {{ shareCopied ? $t('views.RunDetailView.copied') : $t('views.RunDetailView.share_summary') }}
           </button>
         </div>
       </header>
@@ -56,19 +56,19 @@
           class="inline-flex items-center gap-1 rounded-md px-2 py-1 text-xs font-medium text-primary hover:bg-primary/10"
           @click="copyTraceId"
         >
-          {{ copied ? 'Copied!' : 'Copy' }}
+          {{ copied ? $t('views.RunDetailView.copied') : $t('views.RunDetailView.copy') }}
         </button>
       </div>
 
       <div v-if="run?.status === 'complete' && lastNodeOutput" class="card p-5 mb-6">
         <div class="flex items-center justify-between mb-3">
-          <h2 class="text-lg font-semibold text-foreground">Final Output</h2>
+          <h2 class="text-lg font-semibold text-foreground">{{ $t('views.RunDetailView.final_output') }}</h2>
           <button
             class="px-3 py-1.5 text-xs font-medium rounded-lg border border-input bg-background hover:bg-accent transition-colors"
             @click="copyOutput"
             data-testid="run-detail-copy-output"
           >
-            {{ outputCopied ? 'Copied!' : 'Copy' }}
+            {{ outputCopied ? $t('views.RunDetailView.copied') : $t('views.RunDetailView.copy') }}
           </button>
         </div>
         <pre class="bg-muted/30 rounded-lg p-4 text-sm overflow-x-auto whitespace-pre-wrap">{{ formattedOutput }}</pre>
@@ -79,21 +79,21 @@
         <h2 class="text-lg font-semibold tracking-tight">{{ $t('views.RunDetailView.execution_trace') }}</h2>
 
         <div v-if="nodeEntries.length === 0" class="py-4 text-center text-sm text-muted-foreground">
-          No node data available for this run.
+          {{ $t('views.RunDetailView.no_node_data') }}
         </div>
 
         <table v-else class="w-full text-left text-sm">
           <thead>
             <tr class="border-b text-xs uppercase text-muted-foreground">
-              <th class="pb-2 pr-4 font-medium">Node</th>
-              <th class="pb-2 pr-4 font-medium">Status</th>
-              <th class="pb-2 pr-4 font-medium">Duration</th>
+              <th class="pb-2 pr-4 font-medium">{{ $t('views.RunDetailView.node') }}</th>
+              <th class="pb-2 pr-4 font-medium">{{ $t('views.RunDetailView.status') }}</th>
+              <th class="pb-2 pr-4 font-medium">{{ $t('views.RunDetailView.duration') }}</th>
               <th class="pb-2 pr-4 font-medium">{{ $t('views.RunDetailView.input_tokens') }}</th>
               <th class="pb-2 pr-4 font-medium">{{ $t('views.RunDetailView.output_tokens') }}</th>
-              <th class="pb-2 pr-4 font-medium">Cost</th>
+              <th class="pb-2 pr-4 font-medium">{{ $t('views.RunDetailView.cost') }}</th>
               <th class="pb-2 pr-4 font-medium">{{ $t('views.RunDetailView.trace_id') }}</th>
-              <th class="pb-2 pr-4 font-medium">IO</th>
-              <th class="pb-2 font-medium">Prompt</th>
+              <th class="pb-2 pr-4 font-medium">{{ $t('views.RunDetailView.io') }}</th>
+              <th class="pb-2 font-medium">{{ $t('views.RunDetailView.prompt') }}</th>
             </tr>
           </thead>
           <tbody>
@@ -141,7 +141,7 @@
                   class="inline-flex items-center gap-1 rounded-md px-2 py-1 text-xs font-medium text-primary hover:bg-primary/10"
                   @click="showPrompt(node.name)"
                 >
-                  View
+                  {{ $t('views.RunDetailView.view') }}
                 </button>
                 <button
                   v-else-if="revealedPrompts[node.name] === undefined"
@@ -163,11 +163,11 @@
             >
               <td colspan="9" class="space-y-3 px-0 pb-4 pt-1">
                 <div class="rounded-lg border bg-muted p-4">
-                  <h4 class="mb-2 text-xs font-semibold text-muted-foreground">Input</h4>
+                  <h4 class="mb-2 text-xs font-semibold text-muted-foreground">{{ $t('views.RunDetailView.input') }}</h4>
                   <pre class="max-h-48 overflow-auto rounded bg-background p-3 text-xs leading-relaxed"><code>{{ node.io?.input ? formatJson(node.io.input) : '—' }}</code></pre>
                 </div>
                 <div class="rounded-lg border bg-muted p-4">
-                  <h4 class="mb-2 text-xs font-semibold text-muted-foreground">Output</h4>
+                  <h4 class="mb-2 text-xs font-semibold text-muted-foreground">{{ $t('views.RunDetailView.output') }}</h4>
                   <pre class="max-h-48 overflow-auto rounded bg-background p-3 text-xs leading-relaxed"><code>{{ node.io?.output ? formatJson(node.io.output) : '—' }}</code></pre>
                 </div>
               </td>
@@ -183,7 +183,7 @@
           <span class="text-2xl font-bold tabular-nums">${{ formattedCost }}</span>
         </div>
         <p v-if="totalTokens != null" class="mt-1 text-xs text-muted-foreground">
-          {{ totalTokens.toLocaleString() }} total tokens
+          {{ $t('views.RunDetailView.total_tokens', { count: totalTokens.toLocaleString() }) }}
         </p>
       </section>
 
@@ -234,6 +234,7 @@ import DialogTitle from '../components/ui/dialog/DialogTitle.vue'
 import DialogDescription from '../components/ui/dialog/DialogDescription.vue'
 import DialogFooter from '../components/ui/dialog/DialogFooter.vue'
 import Button from '../components/ui/button/Button.vue'
+import { formatApiError } from '../lib/api/formatError'
 import { shortId, formatRun } from '../utils/format'
 
 type RunResponse = components['schemas']['RunResponse']
@@ -429,7 +430,9 @@ const runTimestamps = computed(() => {
 })
 
 function formatTimestamp(dateStr: string): string {
-  return new Date(dateStr).toLocaleString('en-US', {
+  const d = new Date(dateStr)
+  if (isNaN(d.getTime())) return '—'
+  return d.toLocaleString(locale.value, {
     month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit',
   })
 }
@@ -540,7 +543,7 @@ function startPolling(runId: string) {
 onMounted(async () => {
   const runId = route.params.id as string
   if (!runId) {
-    error.value = 'No run ID provided'
+    error.value = t('views.RunDetailView.no_run_id_provided')
     loading.value = false
     return
   }
@@ -553,7 +556,7 @@ onMounted(async () => {
     }
     startPolling(runId)
   } catch (e: unknown) {
-    error.value = `Failed to load run: ${e instanceof Error ? e.message : String(e)}`
+    error.value = `${t('views.RunDetailView.failed_to_load_run')} ${formatApiError(e)}`
   } finally {
     loading.value = false
   }
