@@ -438,7 +438,7 @@ async function createConnector() {
       body: buildCreateBody(),
     })
     if (err) {
-      formError.value = String(err)
+      formError.value = formatApiError(err)
     } else if (data) {
       connectors.value.push({
         id: data.id,
@@ -449,7 +449,7 @@ async function createConnector() {
       closeForm()
     }
   } catch (e: unknown) {
-    formError.value = e instanceof Error ? e.message : String(e)
+    formError.value = formatApiError(e)
   } finally {
     saving.value = false
   }
@@ -465,7 +465,7 @@ async function updateConnector() {
       body: buildUpdateBody(),
     })
     if (err) {
-      formError.value = String(err)
+      formError.value = formatApiError(err)
     } else if (data) {
       const idx = connectors.value.findIndex(c => c.id === editConnectorId.value)
       if (idx >= 0) {
@@ -479,7 +479,7 @@ async function updateConnector() {
       closeEditForm()
     }
   } catch (e: unknown) {
-    formError.value = e instanceof Error ? e.message : String(e)
+    formError.value = formatApiError(e)
   } finally {
     saving.value = false
   }
@@ -501,13 +501,13 @@ async function deleteConnector() {
       params: { path: { connector_id: deleteConfirmConnectorId.value } },
     })
     if (err) {
-      deleteError.value = String(err)
+      deleteError.value = formatApiError(err)
     } else if (response.status === 204 || response.ok) {
       connectors.value = connectors.value.filter(c => c.id !== deleteConfirmConnectorId.value)
       deleteConfirmConnectorId.value = null
     }
   } catch (e: unknown) {
-    deleteError.value = e instanceof Error ? e.message : String(e)
+    deleteError.value = formatApiError(e)
   } finally {
     deleting.value = false
   }

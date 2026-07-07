@@ -4,6 +4,7 @@ Credentials are encrypted at rest with Fernet. The ciphertext is never exposed
 in any response — only a boolean `has_credentials` field indicates presence.
 """
 
+import logging
 import uuid
 from datetime import datetime
 from typing import Any, Literal
@@ -30,6 +31,8 @@ from modulo.db.crud.connector_instance import (
 )
 from modulo.db.rls import set_rls_org, set_rls_user_context
 from modulo.settings import Settings, get_settings
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/v1/connectors", tags=["connectors"])
 
@@ -123,6 +126,14 @@ async def list_connectors_endpoint(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database error while listing connectors.",
         ) from None
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.exception("Unexpected error listing connectors: %s", exc)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="An unexpected error occurred while listing connectors.",
+        ) from None
     return ConnectorListResponse(
         items=[_to_response(ci) for ci in result.items],
         total=result.total,
@@ -179,7 +190,10 @@ async def create_connector_endpoint(
     except IntegrityError:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
-            detail="Connector cannot be created — a constraint violation occurred (e.g. duplicate name or invalid reference).",
+            detail=(
+                "Connector cannot be created — a constraint violation occurred "
+                "(e.g. duplicate name or invalid reference)."
+            ),
         ) from None
     except ProgrammingError:
         raise HTTPException(
@@ -190,6 +204,14 @@ async def create_connector_endpoint(
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database error while creating connector.",
+        ) from None
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.exception("Unexpected error creating connector: %s", exc)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="An unexpected error occurred while creating connector.",
         ) from None
     return _to_response(ci)
 
@@ -214,6 +236,14 @@ async def get_connector_endpoint(
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database error while fetching connector.",
+        ) from None
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.exception("Unexpected error fetching connector: %s", exc)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="An unexpected error occurred while fetching connector.",
         ) from None
     if ci is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Connector not found")
@@ -261,7 +291,10 @@ async def update_connector_endpoint(
     except IntegrityError:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
-            detail="Connector cannot be updated — a constraint violation occurred (e.g. duplicate name or invalid reference).",
+            detail=(
+                "Connector cannot be updated — a constraint violation occurred "
+                "(e.g. duplicate name or invalid reference)."
+            ),
         ) from None
     except ProgrammingError:
         raise HTTPException(
@@ -272,6 +305,14 @@ async def update_connector_endpoint(
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database error while updating connector.",
+        ) from None
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.exception("Unexpected error updating connector: %s", exc)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="An unexpected error occurred while updating connector.",
         ) from None
     if ci is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Connector not found")
@@ -298,6 +339,14 @@ async def delete_connector_endpoint(
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database error while deleting connector.",
+        ) from None
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.exception("Unexpected error deleting connector: %s", exc)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="An unexpected error occurred while deleting connector.",
         ) from None
     if not deleted:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Connector not found")
