@@ -55,6 +55,7 @@ AsyncSessionLocal = async_sessionmaker(
     expire_on_commit=False,
     autocommit=False,
     autoflush=False,
+    autobegin=False,
 )
 
 
@@ -66,4 +67,5 @@ async def get_session() -> AsyncGenerator[AsyncSession, None]:
             await session.commit()
         except Exception:
             await session.rollback()
+            session.info.clear()
             raise
