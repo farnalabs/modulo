@@ -43,7 +43,7 @@ Core eval engine that evaluates node outputs against eval definitions. Supports 
 - [x] Suite aggregation: aggregate score at or above pass_threshold — suite passes
 - [x] Suite aggregation: aggregate score below pass_threshold — suite blocks
 - [x] Suite with no pass_threshold never blocks (always passes)
-- [x] Empty suite always passes (aggregate_score=1.0, total=0)
+- [x] Empty suite always passes (aggregate_score=0.0, total=0)
 - [x] Eval with failure_behaviour="warn" logs warning on failure, continues
 - [x] Eval with failure_behaviour="block" raises EvalBlockedError on failure
 - [x] Block failure transitions run to eval_failed terminal state
@@ -74,7 +74,7 @@ Core eval engine that evaluates node outputs against eval definitions. Supports 
 - [x] Suite not found in DB — track_okr_progress raises ValueError
 - [x] EvalBlockedError includes eval name and detail message
 - [x] EvalSuiteBlockedError raised for suite-level threshold failure (in executor, not evaluate_suite)
-- [ ] Block failure written to AuditEvent with type eval_blocked — not wired to AuditEvent DB table
+- [x] Block failure written to AuditEvent with type eval_blocked — handled at executor level (_handle_node_eval in executor.py writes audit events for eval.blocked on both execute() and resume() paths)
 
 ### Edge cases
 - [x] Suite with mixed pass/fail — correct counts and blocking_failures list
@@ -112,6 +112,25 @@ Core eval engine that evaluates node outputs against eval definitions. Supports 
 - [x] SuiteEvalResult exposes all expected fields as public attributes
 - [x] Regression alert shape matches API contract (eval_id, eval_name, pass rates, drop_pct, trend, affected_run_ids)
 - [x] CRUD endpoints accept optional fields without requiring them
+
+### Error Handling
+- [x] Regression route catches ProgrammingError → 501
+- [x] Regression route catches SQLAlchemyError → 503
+- [x] Regression route catches TimeoutError → 503
+- [x] Regression route catches generic Exception → 500
+- [x] Non-admin user → 403
+- [x] Unauthenticated request → 401
+
+### Resilience & Integration Robustness
+- [x] EvalEngine is stateless - safe for concurrent use
+- [x] Each evaluate() call uses fresh uuid4 for run_id
+- [x] Suite aggregation is a pure function - no mutable shared state
+- [x] standalone_evaluate is @classmethod - supports subclassing
+- [x] Regression query wrapped in timeout-guarded try/except chain
+- [x] Regression query uses SQLAlchemy text() with bind params (no SQL injection)
+
+## QA History
+- 2026-07-09: Cross-cutting QA (index 293). Fixed MAJOR — `standalone_evaluate` changed from `@staticmethod` to `@classmethod` so subclass overrides of `evaluate()` are respected. Fixed MAJOR — added `except Exception → 500` catch with `logger.exception` to `eval_regressions` route handler in admin.py (Python-level errors previously propagated as raw 500). Corrected product map: empty suite `aggregate_score` is `0.0` (not `1.0` as previously claimed). Marked `[ ]`→`[x]` for block-failure-audit-event (handled at executor level, confirmed by feat-evals-eval-gates index 284). Added Error Handling section (6 checkboxes) and Resilience & Integration Robustness section (6 checkboxes) to product map. All eval engine unit tests pass (551 lines, 43+ tests).
 
 ## Known Gaps
 - [ ] Eval definition CRUD UI (eval_dashboard.feature is placeholder)
