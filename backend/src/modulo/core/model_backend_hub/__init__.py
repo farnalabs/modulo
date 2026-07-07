@@ -180,6 +180,9 @@ class ModelBackendHub:
                 logger.error("Failed to initialise backend %s: %s", mb.id, exc)
                 continue
 
+        if not backends_to_register:
+            logger.warning("No backends were registered during initialise — all instances failed or none provided")
+
         for backend_id, backend in backends_to_register:
             self.register(backend_id, backend)
 

@@ -81,6 +81,8 @@ class ModelBackendBase(ABC):
         except TimeoutError:
             logger.warning("Health check timed out for %s", type(self).__name__)
             return HealthResult(ok=False, detail="Health check timed out")
+        except asyncio.CancelledError:
+            raise
         except Exception as exc:
             logger.warning("Health check failed for %s: %s", type(self).__name__, exc)
             return HealthResult(ok=False, detail=str(exc)[:HEALTH_DETAIL_MAX_LENGTH])
