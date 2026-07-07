@@ -10,8 +10,11 @@ claim.  ``human_only`` gates additionally reject MCP-initiated approve requests
 
 from __future__ import annotations
 
+import logging
 import uuid
 from typing import Any
+
+logger = logging.getLogger(__name__)
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, Field
@@ -148,6 +151,14 @@ async def claim_gate(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database error. Please try again.",
         ) from exc
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.exception("hitl.claim_gate.unexpected_error")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="An unexpected error occurred",
+        ) from e
 
     if gate.claim_token is None or gate.expires_at is None:
         raise HTTPException(
@@ -211,6 +222,14 @@ async def approve_gate(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database error. Please try again.",
         ) from exc
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.exception("hitl.approve_gate.unexpected_error")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="An unexpected error occurred",
+        ) from e
 
     resume_data: dict[str, Any] = {"action": "approved"}
     if req.notes:
@@ -281,6 +300,14 @@ async def approve_gate_with_modification(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database error. Please try again.",
         ) from exc
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.exception("hitl.approve_gate_with_modification.unexpected_error")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="An unexpected error occurred",
+        ) from e
 
     resume_data: dict[str, Any] = {
         "action": "approved",
@@ -348,6 +375,14 @@ async def reject_gate(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database error. Please try again.",
         ) from exc
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.exception("hitl.reject_gate.unexpected_error")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="An unexpected error occurred",
+        ) from e
 
     # Resume the graph with rejection data so the gate router picks the
     # reject_target branch.
@@ -423,6 +458,14 @@ async def deliver_manual_output(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database error. Please try again.",
         ) from exc
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.exception("hitl.deliver_manual_output.unexpected_error")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="An unexpected error occurred",
+        ) from e
 
     resume_data: dict[str, Any] = {"action": "deliver_manual", "output": req.output}
     executor = PipelineExecutor(engine)
@@ -486,6 +529,14 @@ async def submit_manual_output(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database error. Please try again.",
         ) from exc
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.exception("hitl.submit_manual_output.unexpected_error")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="An unexpected error occurred",
+        ) from e
 
     resume_data: dict[str, Any] = {"action": "manual_output", "output": req.output}
     executor = PipelineExecutor(engine)
@@ -543,6 +594,14 @@ async def list_run_pending_gates(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database error. Please try again.",
         ) from exc
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.exception("hitl.list_run_pending_gates.unexpected_error")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="An unexpected error occurred",
+        ) from e
 
     return PendingGatesResponse(
         gates=[_gate_to_response(g, pipeline_name=pipeline_name) for g in gates]
@@ -582,6 +641,14 @@ async def list_org_pending_gates(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database error. Please try again.",
         ) from exc
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.exception("hitl.list_org_pending_gates.unexpected_error")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="An unexpected error occurred",
+        ) from e
 
     return PendingGatesResponse(
         gates=[_gate_to_response(g, pipeline_name=pipeline_map.get(g.pipeline_id)) for g in gates]

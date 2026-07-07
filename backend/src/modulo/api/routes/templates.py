@@ -1,11 +1,13 @@
 """Pipeline template REST API — browse templates and instantiate pipelines."""
 
+import logging
 import uuid
 from datetime import datetime
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, Field
+from sqlalchemy.exc import IntegrityError, ProgrammingError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.api.dependencies import get_db_session
@@ -20,6 +22,8 @@ from modulo.db.crud.template import (
 )
 from modulo.db.models.library_primitive import LibraryPrimitive
 from modulo.db.rls import set_rls_org
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/v1", tags=["templates"])
 
@@ -76,21 +80,31 @@ async def list_templates_endpoint(
     session: AsyncSession = Depends(get_db_session),
     principal: AuthenticatedPrincipal = Depends(get_current_user),
 ) -> TemplateListResponse:
-    async with session.begin():
-        await set_rls_org(session, principal.organisation_id)
-        result = await list_templates(
-            session,
-            page=page,
-            page_size=page_size,
-            category=category,
-            search=search,
+    try:
+        async with session.begin():
+            await set_rls_org(session, principal.organisation_id)
+            result = await list_templates(
+                session,
+                page=page,
+                page_size=page_size,
+                category=category,
+                search=search,
+            )
+        return TemplateListResponse(
+            items=[TemplateResponse.from_primitive(p) for p in result.items],
+            total=result.total,
+            page=result.page,
+            page_size=result.page_size,
         )
-    return TemplateListResponse(
-        items=[TemplateResponse.from_primitive(p) for p in result.items],
-        total=result.total,
-        page=result.page,
-        page_size=result.page_size,
-    )
+    except HTTPException:
+        raise
+    except ProgrammingError:
+        raise HTTPException(status_code=503, detail="Database not available. Run migrations.")
+    except IntegrityError:
+        raise HTTPException(status_code=409, detail="Resource already exists or constraint violation.")
+    except Exception as e:
+        logger.error("Unexpected error in list_templates_endpoint: %s", str(e))
+        raise HTTPException(status_code=500, detail="Internal server error")
 
 
 @router.post(
@@ -103,105 +117,115 @@ async def create_pipeline_from_template_endpoint(
     session: AsyncSession = Depends(get_db_session),
     principal: AuthenticatedPrincipal = Depends(get_current_user),
 ) -> FromTemplateResponse:
-    async with session.begin():
-        await set_rls_org(session, principal.organisation_id)
-        template = await get_template(session, template_id)
-    if template is None:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Template not found",
-        )
-
-    content = template.content_json or {}
-    agent_configs: list[dict[str, Any]] = content.get("agents", [])
-    graph_nodes: list[dict[str, Any]] = content.get("graph_nodes", [])
-    edges: list[dict[str, Any]] = content.get("edges", [])
-
-    agent_ids: dict[int, uuid.UUID] = {}
-    created_agents: list[dict[str, Any]] = []
-
-    async with session.begin():
-        await set_rls_org(session, principal.organisation_id)
-
-        for idx, agent_cfg in enumerate(agent_configs):
-            agent_id = uuid.uuid4()
-            agent_ids[idx] = agent_id
-            created_agents.append(
-                {
-                    "id": str(agent_id),
-                    "name": agent_cfg.get("name", f"Agent {idx + 1}"),
-                    "description": agent_cfg.get("description", ""),
-                }
+    try:
+        async with session.begin():
+            await set_rls_org(session, principal.organisation_id)
+            template = await get_template(session, template_id)
+        if template is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Template not found",
             )
 
-        pipeline = await create_pipeline(
-            session,
-            org_id=principal.organisation_id,
-            name=f"{template.name} (from template)",
-            account_id=principal.account_id,
-            description=template.description or f"Created from template: {template.name}",
-        )
+        content = template.content_json or {}
+        agent_configs: list[dict[str, Any]] = content.get("agents", [])
+        graph_nodes: list[dict[str, Any]] = content.get("graph_nodes", [])
+        edges: list[dict[str, Any]] = content.get("edges", [])
 
-        resolved_nodes: list[dict[str, Any]] = []
-        for node in graph_nodes:
-            agent_idx = node.get("agent_index", -1)
-            resolved_id_str = str(uuid.uuid4())
+        agent_ids: dict[int, uuid.UUID] = {}
+        created_agents: list[dict[str, Any]] = []
 
-            if agent_idx >= 0 and agent_idx in agent_ids:
-                resolved_nodes.append(
+        async with session.begin():
+            await set_rls_org(session, principal.organisation_id)
+
+            for idx, agent_cfg in enumerate(agent_configs):
+                agent_id = uuid.uuid4()
+                agent_ids[idx] = agent_id
+                created_agents.append(
                     {
-                        "id": resolved_id_str,
-                        "node_type": node.get("node_type", "agent"),
-                        "agent_id": str(agent_ids[agent_idx]),
-                        "label": node.get("label", agent_configs[agent_idx].get("name", "")),
-                        "position": node.get("position", {"x": 100, "y": 100}),
-                    }
-                )
-            else:
-                resolved_nodes.append(
-                    {
-                        "id": resolved_id_str,
-                        "node_type": node.get("node_type", "manual"),
-                        "label": node.get("label", "Manual Step"),
-                        "position": node.get("position", {"x": 100, "y": 100}),
+                        "id": str(agent_id),
+                        "name": agent_cfg.get("name", f"Agent {idx + 1}"),
+                        "description": agent_cfg.get("description", ""),
                     }
                 )
 
-        pipeline.graph_nodes_json = resolved_nodes
-
-        from modulo.db.models.pipeline_edge import PipelineEdge
-
-        persisted_edges: list[PipelineEdge] = []
-        node_id_by_label: dict[str, str] = {}
-        for n in resolved_nodes:
-            node_id_by_label[n["label"]] = n["id"]
-
-        source_map: dict[str, str] = {}
-        for i, n in enumerate(graph_nodes):
-            source_map[n.get("id", str(i))] = resolved_nodes[i]["id"]
-
-        for edge in edges:
-            source_id = source_map.get(edge.get("source_node_id", ""))
-            target_id = source_map.get(edge.get("target_node_id", ""))
-            if source_id is None or target_id is None:
-                continue
-            pe = PipelineEdge(
-                id=uuid.uuid4(),
-                organisation_id=principal.organisation_id,
-                pipeline_id=pipeline.id,
-                source_node_id=uuid.UUID(source_id),
-                target_node_id=uuid.UUID(target_id),
-                edge_type=edge.get("edge_type", "normal"),
-                hitl_gate_config=edge.get("hitl_gate_config"),
+            pipeline = await create_pipeline(
+                session,
+                org_id=principal.organisation_id,
+                name=f"{template.name} (from template)",
+                account_id=principal.account_id,
+                description=template.description or f"Created from template: {template.name}",
             )
-            session.add(pe)
-            persisted_edges.append(pe)
 
-        await session.flush()
+            resolved_nodes: list[dict[str, Any]] = []
+            for node in graph_nodes:
+                agent_idx = node.get("agent_index", -1)
+                resolved_id_str = str(uuid.uuid4())
 
-    return FromTemplateResponse(
-        pipeline_id=pipeline.id,
-        pipeline_name=pipeline.name,
-        agent_count=len(agent_configs),
-        edge_count=len(persisted_edges),
-    )
+                if agent_idx >= 0 and agent_idx in agent_ids:
+                    resolved_nodes.append(
+                        {
+                            "id": resolved_id_str,
+                            "node_type": node.get("node_type", "agent"),
+                            "agent_id": str(agent_ids[agent_idx]),
+                            "label": node.get("label", agent_configs[agent_idx].get("name", "")),
+                            "position": node.get("position", {"x": 100, "y": 100}),
+                        }
+                    )
+                else:
+                    resolved_nodes.append(
+                        {
+                            "id": resolved_id_str,
+                            "node_type": node.get("node_type", "manual"),
+                            "label": node.get("label", "Manual Step"),
+                            "position": node.get("position", {"x": 100, "y": 100}),
+                        }
+                    )
+
+            pipeline.graph_nodes_json = resolved_nodes
+
+            from modulo.db.models.pipeline_edge import PipelineEdge
+
+            persisted_edges: list[PipelineEdge] = []
+            node_id_by_label: dict[str, str] = {}
+            for n in resolved_nodes:
+                node_id_by_label[n["label"]] = n["id"]
+
+            source_map: dict[str, str] = {}
+            for i, n in enumerate(graph_nodes):
+                source_map[n.get("id", str(i))] = resolved_nodes[i]["id"]
+
+            for edge in edges:
+                source_id = source_map.get(edge.get("source_node_id", ""))
+                target_id = source_map.get(edge.get("target_node_id", ""))
+                if source_id is None or target_id is None:
+                    continue
+                pe = PipelineEdge(
+                    id=uuid.uuid4(),
+                    organisation_id=principal.organisation_id,
+                    pipeline_id=pipeline.id,
+                    source_node_id=uuid.UUID(source_id),
+                    target_node_id=uuid.UUID(target_id),
+                    edge_type=edge.get("edge_type", "normal"),
+                    hitl_gate_config=edge.get("hitl_gate_config"),
+                )
+                session.add(pe)
+                persisted_edges.append(pe)
+
+            await session.flush()
+
+        return FromTemplateResponse(
+            pipeline_id=pipeline.id,
+            pipeline_name=pipeline.name,
+            agent_count=len(agent_configs),
+            edge_count=len(persisted_edges),
+        )
+    except HTTPException:
+        raise
+    except ProgrammingError:
+        raise HTTPException(status_code=503, detail="Database not available. Run migrations.")
+    except IntegrityError:
+        raise HTTPException(status_code=409, detail="Resource already exists or constraint violation.")
+    except Exception as e:
+        logger.error("Unexpected error in create_pipeline_from_template_endpoint: %s", str(e))
+        raise HTTPException(status_code=500, detail="Internal server error")

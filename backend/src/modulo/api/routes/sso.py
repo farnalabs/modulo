@@ -132,6 +132,14 @@ async def oidc_callback(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database error. Please try again.",
         ) from exc
+    except HTTPException:
+        raise
+    except Exception as e:
+        _log.exception("sso.oidc_callback.unexpected_error")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="An unexpected error occurred",
+        ) from e
 
     await session.commit()
     return _redirect_to_frontend(tokens, settings)
@@ -170,6 +178,14 @@ async def saml_login(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database error. Please try again.",
         ) from exc
+    except HTTPException:
+        raise
+    except Exception as e:
+        _log.exception("sso.saml_login.unexpected_error")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="An unexpected error occurred",
+        ) from e
 
     return Response(status_code=status.HTTP_307_TEMPORARY_REDIRECT, headers={"Location": auth_url})
 
@@ -215,6 +231,14 @@ async def saml_acs(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database error. Please try again.",
         ) from exc
+    except HTTPException:
+        raise
+    except Exception as e:
+        _log.exception("sso.saml_acs.unexpected_error")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="An unexpected error occurred",
+        ) from e
 
     await session.commit()
     return _redirect_to_frontend(tokens, settings)

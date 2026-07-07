@@ -14,7 +14,7 @@ import uuid
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, Field, field_validator
 from sqlalchemy import select
-from sqlalchemy.exc import ProgrammingError
+from sqlalchemy.exc import ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.api.dependencies import get_db_session
@@ -91,6 +91,20 @@ async def list_endpoints(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Notifications are not available. Run database migrations to enable this feature.",
         ) from None
+    except SQLAlchemyError:
+        logger.exception("notifications.list_endpoints.sqlalchemy_error")
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Database operation failed. Please try again later.",
+        ) from None
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.exception("notifications.list_endpoints.unexpected_error")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="An unexpected error occurred",
+        ) from e
     return [_ep_to_response(ep) for ep in endpoints]
 
 
@@ -140,6 +154,20 @@ async def create_endpoint(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Notifications are not available. Run database migrations to enable this feature.",
         ) from None
+    except SQLAlchemyError:
+        logger.exception("notifications.create_endpoint.sqlalchemy_error")
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Database operation failed. Please try again later.",
+        ) from None
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.exception("notifications.create_endpoint.unexpected_error")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="An unexpected error occurred",
+        ) from e
 
     return _ep_to_response(ep)
 
@@ -163,6 +191,20 @@ async def get_endpoint(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Notifications are not available. Run database migrations to enable this feature.",
         ) from None
+    except SQLAlchemyError:
+        logger.exception("notifications")
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Database operation failed. Please try again later.",
+        ) from None
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.exception("notifications.get_endpoint.unexpected_error")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="An unexpected error occurred",
+        ) from e
     return _ep_to_response(ep)
 
 
@@ -209,6 +251,20 @@ async def update_endpoint(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Notifications are not available. Run database migrations to enable this feature.",
         ) from None
+    except SQLAlchemyError:
+        logger.exception("notifications.update_endpoint.sqlalchemy_error")
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Database operation failed. Please try again later.",
+        ) from None
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.exception("notifications.update_endpoint.unexpected_error")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="An unexpected error occurred",
+        ) from e
 
     return _ep_to_response(ep)
 
@@ -233,6 +289,20 @@ async def delete_endpoint(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Notifications are not available. Run database migrations to enable this feature.",
         ) from None
+    except SQLAlchemyError:
+        logger.exception("notifications.delete_endpoint.sqlalchemy_error")
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Database operation failed. Please try again later.",
+        ) from None
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.exception("notifications.delete_endpoint.unexpected_error")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="An unexpected error occurred",
+        ) from e
 
 
 def _ep_to_response(ep: NotificationEndpoint) -> NotificationEndpointResponse:

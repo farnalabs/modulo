@@ -15,6 +15,7 @@ from modulo.auth.dependencies import get_current_user
 from modulo.auth.jwt import AuthenticatedPrincipal
 from modulo.core.audit_logger import append_audit_event
 from modulo.settings import Settings, get_settings
+from sqlalchemy.exc import IntegrityError, ProgrammingError
 
 _MIN_KEY_LEN = 32
 
@@ -70,66 +71,78 @@ async def rotate_key(
     Re-encrypts all Fernet-encrypted data across all stores with the new key.
     The old key stays valid for reads until rotation completes (no-downtime).
     """
-    if current_user.org_role != "admin":
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Only admin users can rotate keys",
-        )
-
-    _validate_fernet_key(req.new_fernet_key, "new_fernet_key")
-
-    old_key = req.old_fernet_key or settings.fernet_key
-
-    global _rotation_in_progress
-    if _rotation_in_progress:
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail="A key rotation is already in progress",
-        )
-
-    # Log the rotation start to audit log FIRST
     try:
-        await append_audit_event(
-            session,
-            org_id=current_user.organisation_id,
-            event_type="fernet_key_rotation_started",
-            actor_user_id=current_user.account_id,
-            resource_type="encryption",
-            resource_id=current_user.organisation_id,
-            payload_json={
-                "initiated_by": str(current_user.account_id),
-                "old_key_provided": bool(req.old_fernet_key),
-            },
+        if current_user.org_role != "admin":
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Only admin users can rotate keys",
+            )
+
+        _validate_fernet_key(req.new_fernet_key, "new_fernet_key")
+
+        old_key = req.old_fernet_key or settings.fernet_key
+
+        global _rotation_in_progress
+        if _rotation_in_progress:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="A key rotation is already in progress",
+            )
+
+        # Log the rotation start to audit log FIRST
+        try:
+            await append_audit_event(
+                session,
+                org_id=current_user.organisation_id,
+                event_type="fernet_key_rotation_started",
+                actor_user_id=current_user.account_id,
+                resource_type="encryption",
+                resource_id=current_user.organisation_id,
+                payload_json={
+                    "initiated_by": str(current_user.account_id),
+                    "old_key_provided": bool(req.old_fernet_key),
+                },
+            )
+        except HTTPException:
+            raise
+        except Exception:
+            _log.exception("Failed to record fernet_key_rotation_started audit event")
+            raise
+
+        _rotation_in_progress = True
+
+        # Launch background rotation task.
+        # We use the global engine/session factory to avoid re-creating connections.
+        engine = get_or_create_engine(settings)
+        factory = get_or_create_session_factory(engine)
+
+        import asyncio
+
+        task = asyncio.create_task(
+            _run_rotation_background(
+                factory=factory,
+                new_key=req.new_fernet_key,
+                old_key=old_key,
+                org_id=current_user.organisation_id,
+                actor_user_id=current_user.account_id,
+            )
         )
-    except Exception:
-        _log.exception("Failed to record fernet_key_rotation_started audit event")
+        task_id = str(id(task))
+
+        return RotateKeyResponse(
+            status="accepted",
+            task_id=task_id,
+            message="Key rotation started — all encrypted data will be re-encrypted with the new key",
+        )
+    except HTTPException:
         raise
-
-    _rotation_in_progress = True
-
-    # Launch background rotation task.
-    # We use the global engine/session factory to avoid re-creating connections.
-    engine = get_or_create_engine(settings)
-    factory = get_or_create_session_factory(engine)
-
-    import asyncio
-
-    task = asyncio.create_task(
-        _run_rotation_background(
-            factory=factory,
-            new_key=req.new_fernet_key,
-            old_key=old_key,
-            org_id=current_user.organisation_id,
-            actor_user_id=current_user.account_id,
-        )
-    )
-    task_id = str(id(task))
-
-    return RotateKeyResponse(
-        status="accepted",
-        task_id=task_id,
-        message="Key rotation started — all encrypted data will be re-encrypted with the new key",
-    )
+    except ProgrammingError:
+        raise HTTPException(status_code=503, detail="Database not available. Run migrations.")
+    except IntegrityError:
+        raise HTTPException(status_code=409, detail="Resource already exists or constraint violation.")
+    except Exception as e:
+        _log.error("Unexpected error in rotate_key: %s", str(e))
+        raise HTTPException(status_code=500, detail="Internal server error")
 
 
 @router.get("/status", response_model=RotationStatusResponse)
@@ -137,16 +150,26 @@ async def rotation_status(
     current_user: AuthenticatedPrincipal = Depends(get_current_user),
 ) -> RotationStatusResponse:
     """Return the current rotation state."""
-    if current_user.org_role != "admin":
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Only admin users can view rotation status",
-        )
+    try:
+        if current_user.org_role != "admin":
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Only admin users can view rotation status",
+            )
 
-    return RotationStatusResponse(
-        rotation_in_progress=_rotation_in_progress,
-        last_rotation_result=_last_rotation_result,
-    )
+        return RotationStatusResponse(
+            rotation_in_progress=_rotation_in_progress,
+            last_rotation_result=_last_rotation_result,
+        )
+    except HTTPException:
+        raise
+    except ProgrammingError:
+        raise HTTPException(status_code=503, detail="Database not available. Run migrations.")
+    except IntegrityError:
+        raise HTTPException(status_code=409, detail="Resource already exists or constraint violation.")
+    except Exception as e:
+        _log.error("Unexpected error in rotation_status: %s", str(e))
+        raise HTTPException(status_code=500, detail="Internal server error")
 
 
 # ── Background task ────────────────────────────────────────────────────────
@@ -196,6 +219,8 @@ async def _run_rotation_background(
                 "total_rows": result.total_rows_reencrypted,
             },
         )
+    except HTTPException:
+        raise
     except Exception as exc:
         _log.exception("rotation.failed")
         _last_rotation_result = {

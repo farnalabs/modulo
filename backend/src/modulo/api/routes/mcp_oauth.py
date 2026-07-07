@@ -112,6 +112,14 @@ async def register_oauth_client(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database error occurred. Please try again.",
         )
+    except HTTPException:
+        raise
+    except Exception as e:
+        _log.exception("mcp_oauth.register_oauth_client.unexpected_error", extra={"org_id": str(principal.organisation_id)})
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="An unexpected error occurred",
+        ) from e
 
     return CreateOAuthClientResponse(
         id=str(client.id),
@@ -142,6 +150,14 @@ async def list_oauth_clients_endpoint(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database error occurred. Please try again.",
         )
+    except HTTPException:
+        raise
+    except Exception as e:
+        _log.exception("mcp_oauth.list_oauth_clients.unexpected_error", extra={"org_id": str(principal.organisation_id)})
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="An unexpected error occurred",
+        ) from e
     return [OAuthClientItem(**c) for c in clients]
 
 
@@ -173,6 +189,14 @@ async def remove_oauth_client(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database error occurred. Please try again.",
         )
+    except HTTPException:
+        raise
+    except Exception as e:
+        _log.exception("mcp_oauth.remove_oauth_client.unexpected_error", extra={"client_id": client_id, "org_id": str(principal.organisation_id)})
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="An unexpected error occurred",
+        ) from e
 
     if not deleted:
         raise HTTPException(
