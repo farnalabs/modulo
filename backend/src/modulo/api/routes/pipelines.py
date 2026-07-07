@@ -18,6 +18,7 @@ from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError, ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from modulo.api.db_error_handling import handle_db_errors
 from modulo.api.dependencies import get_db_session
 from modulo.auth.dependencies import get_current_user
 from modulo.auth.jwt import AuthenticatedPrincipal
@@ -364,6 +365,7 @@ async def _resolve_graph_references(
 
 
 @router.get("", response_model=PipelineListResponse)
+@handle_db_errors("pipelines.list")
 async def list_pipelines_endpoint(
     page: int = Query(default=1, ge=1),
     page_size: int = Query(default=20, ge=1, le=100),
@@ -371,29 +373,10 @@ async def list_pipelines_endpoint(
     session: AsyncSession = Depends(get_db_session),
     principal: AuthenticatedPrincipal = Depends(get_current_user),
 ) -> PipelineListResponse:
-    try:
-        async with session.begin():
-            await set_rls_org(session, principal.organisation_id)
-            await set_rls_user_context(session, principal.account_id, principal.org_role)
-            result = await list_pipelines(session, page=page, page_size=page_size, cursor=cursor)
-    except ProgrammingError:
-        raise HTTPException(
-            status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="Feature is not available. Run database migrations to enable it.",
-        )
-    except SQLAlchemyError:
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Database temporarily unavailable.",
-        )
-    except HTTPException:
-        raise
-    except Exception:
-        _log.exception("pipeline_execution.unexpected_error")
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="An unexpected error occurred.",
-        ) from None
+    async with session.begin():
+        await set_rls_org(session, principal.organisation_id)
+        await set_rls_user_context(session, principal.account_id, principal.org_role)
+        result = await list_pipelines(session, page=page, page_size=page_size, cursor=cursor)
     return PipelineListResponse(
         items=[PipelineResponse.model_validate(p) for p in result.items],
         total=result.total,
@@ -405,119 +388,66 @@ async def list_pipelines_endpoint(
 
 
 @router.post("", response_model=PipelineResponse, status_code=status.HTTP_201_CREATED)
+@handle_db_errors("pipelines.create")
 async def create_pipeline_endpoint(
     req: PipelineCreate,
     session: AsyncSession = Depends(get_db_session),
     principal: AuthenticatedPrincipal = Depends(get_current_user),
 ) -> PipelineResponse:
-    try:
-        async with session.begin():
-            await set_rls_org(session, principal.organisation_id)
-            await set_rls_user_context(session, principal.account_id, principal.org_role)
-            pipeline = await create_pipeline(
-                session,
-                org_id=principal.organisation_id,
-                name=req.name,
-                account_id=principal.account_id,
-                description=req.description,
-                visibility=req.visibility,
-                max_concurrent_runs=req.max_concurrent_runs,
-                lock_wait_timeout_seconds=req.lock_wait_timeout_seconds,
-                node_timeout_seconds=req.node_timeout_seconds,
-                run_context_defaults=req.run_context_defaults,
-                default_autonomy_level=req.default_autonomy_level,
-            )
-    except ProgrammingError:
-        raise HTTPException(
-            status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="Feature is not available. Run database migrations to enable it.",
+    async with session.begin():
+        await set_rls_org(session, principal.organisation_id)
+        await set_rls_user_context(session, principal.account_id, principal.org_role)
+        pipeline = await create_pipeline(
+            session,
+            org_id=principal.organisation_id,
+            name=req.name,
+            account_id=principal.account_id,
+            description=req.description,
+            visibility=req.visibility,
+            max_concurrent_runs=req.max_concurrent_runs,
+            lock_wait_timeout_seconds=req.lock_wait_timeout_seconds,
+            node_timeout_seconds=req.node_timeout_seconds,
+            run_context_defaults=req.run_context_defaults,
+            default_autonomy_level=req.default_autonomy_level,
         )
-    except SQLAlchemyError:
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Database temporarily unavailable.",
-        )
-    except HTTPException:
-        raise
-    except Exception:
-        _log.exception("pipeline_execution.unexpected_error")
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="An unexpected error occurred.",
-        ) from None
     return PipelineResponse.model_validate(pipeline)
 
 
 @router.get("/{pipeline_id}", response_model=PipelineResponse)
+@handle_db_errors("pipelines.get")
 async def get_pipeline_endpoint(
     pipeline_id: uuid.UUID,
     session: AsyncSession = Depends(get_db_session),
     principal: AuthenticatedPrincipal = Depends(get_current_user),
 ) -> PipelineResponse:
-    try:
-        async with session.begin():
-            await set_rls_org(session, principal.organisation_id)
-            await set_rls_user_context(session, principal.account_id, principal.org_role)
-            pipeline = await get_pipeline(session, pipeline_id)
-    except ProgrammingError:
-        raise HTTPException(
-            status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="Feature is not available. Run database migrations to enable it.",
-        )
-    except SQLAlchemyError:
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Database temporarily unavailable.",
-        )
-    except HTTPException:
-        raise
-    except Exception:
-        _log.exception("pipeline_execution.unexpected_error")
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="An unexpected error occurred.",
-        ) from None
+    async with session.begin():
+        await set_rls_org(session, principal.organisation_id)
+        await set_rls_user_context(session, principal.account_id, principal.org_role)
+        pipeline = await get_pipeline(session, pipeline_id)
     if pipeline is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Pipeline not found")
     return PipelineResponse.model_validate(pipeline)
 
 
 @router.get("/{pipeline_id}/graph", response_model=PipelineGraphResponse)
+@handle_db_errors("pipelines.get_graph")
 async def get_pipeline_graph_endpoint(
     pipeline_id: uuid.UUID,
     session: AsyncSession = Depends(get_db_session),
     principal: AuthenticatedPrincipal = Depends(get_current_user),
 ) -> PipelineGraphResponse:
-    try:
-        async with session.begin():
-            await set_rls_org(session, principal.organisation_id)
-            await set_rls_user_context(session, principal.account_id, principal.org_role)
-            graph = await get_pipeline_graph(session, pipeline_id)
-        if graph is None:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Pipeline not found")
-        nodes, edges = graph
-        return _graph_response(nodes, edges)
-    except ProgrammingError:
-        raise HTTPException(
-            status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="Feature is not available. Run database migrations to enable it.",
-        )
-    except SQLAlchemyError:
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Database temporarily unavailable.",
-        )
-    except HTTPException:
-        raise
-    except Exception:
-        _log.exception("pipeline_execution.unexpected_error")
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="An unexpected error occurred.",
-        ) from None
+    async with session.begin():
+        await set_rls_org(session, principal.organisation_id)
+        await set_rls_user_context(session, principal.account_id, principal.org_role)
+        graph = await get_pipeline_graph(session, pipeline_id)
+    if graph is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Pipeline not found")
+    nodes, edges = graph
+    return _graph_response(nodes, edges)
 
 
 @router.patch("/{pipeline_id}/graph", response_model=PipelineGraphResponse)
+@handle_db_errors("pipelines.replace_graph")
 async def replace_pipeline_graph_endpoint(
     pipeline_id: uuid.UUID,
     req: PipelineGraphUpdate,
@@ -562,48 +492,29 @@ async def replace_pipeline_graph_endpoint(
         if node.connector_binding is not None
     ]
 
-    try:
-        async with session.begin():
-            await set_rls_org(session, principal.organisation_id)
-            await set_rls_user_context(session, principal.account_id, principal.org_role)
-            schema_pins, model_backend_pins = await _resolve_graph_references(
-                session,
-                req.nodes,
-                principal.organisation_id,
-            )
-            graph = await replace_pipeline_graph(
-                session,
-                pipeline_id=pipeline_id,
-                org_id=principal.organisation_id,
-                nodes=node_data,
-                edges=edge_data,
-            )
-            if graph is not None:
-                validation = await GraphValidator().validate_definition(
-                    validator_graph,
-                    session,
-                    connector_bindings=connector_bindings,
-                    schema_pins=schema_pins,
-                    model_backend_pins=model_backend_pins,
-                )
-    except ProgrammingError:
-        raise HTTPException(
-            status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="Feature is not available. Run database migrations to enable it.",
+    async with session.begin():
+        await set_rls_org(session, principal.organisation_id)
+        await set_rls_user_context(session, principal.account_id, principal.org_role)
+        schema_pins, model_backend_pins = await _resolve_graph_references(
+            session,
+            req.nodes,
+            principal.organisation_id,
         )
-    except SQLAlchemyError:
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Database temporarily unavailable.",
+        graph = await replace_pipeline_graph(
+            session,
+            pipeline_id=pipeline_id,
+            org_id=principal.organisation_id,
+            nodes=node_data,
+            edges=edge_data,
         )
-    except HTTPException:
-        raise
-    except Exception:
-        _log.exception("pipeline_execution.unexpected_error")
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="An unexpected error occurred.",
-        ) from None
+        if graph is not None:
+            validation = await GraphValidator().validate_definition(
+                validator_graph,
+                session,
+                connector_bindings=connector_bindings,
+                schema_pins=schema_pins,
+                model_backend_pins=model_backend_pins,
+            )
     if graph is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Pipeline not found")
     nodes, edges = graph
@@ -620,6 +531,7 @@ async def replace_pipeline_graph_endpoint(
 
 
 @router.patch("/{pipeline_id}", response_model=PipelineResponse)
+@handle_db_errors("pipelines.update")
 async def update_pipeline_endpoint(
     pipeline_id: uuid.UUID,
     req: PipelineUpdate,
@@ -627,80 +539,43 @@ async def update_pipeline_endpoint(
     principal: AuthenticatedPrincipal = Depends(get_current_user),
 ) -> PipelineResponse:
     updates = req.model_dump(exclude_unset=True)
-    try:
-        async with session.begin():
-            await set_rls_org(session, principal.organisation_id)
-            await set_rls_user_context(session, principal.account_id, principal.org_role)
-            if "default_autonomy_level" in updates:
-                previous = await get_pipeline(session, pipeline_id)
-                prev_level = previous.default_autonomy_level if previous else None
-                if prev_level != updates["default_autonomy_level"]:
-                    await append_audit_event(
-                        session,
-                        org_id=principal.organisation_id,
-                        event_type="pipeline.autonomy_level_changed",
-                        actor_user_id=principal.account_id,
-                        resource_type="pipeline",
-                        resource_id=pipeline_id,
-                        payload_json=autonomy_change_payload(
-                            previous=prev_level,
-                            current=updates["default_autonomy_level"],
-                        ),
-                        request_id=getattr(principal, "request_id", None),
-                    )
-            pipeline = await update_pipeline(session, pipeline_id, updates)
-    except ProgrammingError:
-        raise HTTPException(
-            status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="Feature is not available. Run database migrations to enable it.",
-        )
-    except SQLAlchemyError:
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Database temporarily unavailable.",
-        )
-    except HTTPException:
-        raise
-    except Exception:
-        _log.exception("pipeline_execution.unexpected_error")
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="An unexpected error occurred.",
-        ) from None
+    async with session.begin():
+        await set_rls_org(session, principal.organisation_id)
+        await set_rls_user_context(session, principal.account_id, principal.org_role)
+        if "default_autonomy_level" in updates:
+            previous = await get_pipeline(session, pipeline_id)
+            prev_level = previous.default_autonomy_level if previous else None
+            if prev_level != updates["default_autonomy_level"]:
+                await append_audit_event(
+                    session,
+                    org_id=principal.organisation_id,
+                    event_type="pipeline.autonomy_level_changed",
+                    actor_user_id=principal.account_id,
+                    resource_type="pipeline",
+                    resource_id=pipeline_id,
+                    payload_json=autonomy_change_payload(
+                        previous=prev_level,
+                        current=updates["default_autonomy_level"],
+                    ),
+                    request_id=getattr(principal, "request_id", None),
+                )
+        pipeline = await update_pipeline(session, pipeline_id, updates)
     if pipeline is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Pipeline not found")
     return PipelineResponse.model_validate(pipeline)
 
 
 @router.delete("/{pipeline_id}", status_code=status.HTTP_204_NO_CONTENT)
+@handle_db_errors("pipelines.delete")
 async def delete_pipeline_endpoint(
     pipeline_id: uuid.UUID,
     session: AsyncSession = Depends(get_db_session),
     principal: AuthenticatedPrincipal = Depends(get_current_user),
 ) -> None:
-    try:
-        async with session.begin():
-            await set_rls_org(session, principal.organisation_id)
-            await set_rls_user_context(session, principal.account_id, principal.org_role)
-            deleted = await delete_pipeline(session, pipeline_id)
-    except ProgrammingError:
-        raise HTTPException(
-            status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="Feature is not available. Run database migrations to enable it.",
-        )
-    except SQLAlchemyError:
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Database temporarily unavailable.",
-        )
-    except HTTPException:
-        raise
-    except Exception:
-        _log.exception("pipeline_execution.unexpected_error")
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="An unexpected error occurred.",
-        ) from None
+    async with session.begin():
+        await set_rls_org(session, principal.organisation_id)
+        await set_rls_user_context(session, principal.account_id, principal.org_role)
+        deleted = await delete_pipeline(session, pipeline_id)
     if not deleted:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Pipeline not found")
 
@@ -720,6 +595,7 @@ class PipelineCloneRequest(BaseModel):
 
 
 @router.post("/{pipeline_id}/clone", response_model=PipelineResponse, status_code=status.HTTP_201_CREATED)
+@handle_db_errors("pipelines.clone")
 async def clone_pipeline_endpoint(
     pipeline_id: uuid.UUID,
     req: PipelineCloneRequest,
@@ -739,80 +615,60 @@ async def clone_pipeline_endpoint(
             detail="Only organisation members and admins can clone pipelines",
         )
 
-    try:
-        async with session.begin():
-            await set_rls_org(session, principal.organisation_id)
-            await set_rls_user_context(session, principal.account_id, principal.org_role)
+    async with session.begin():
+        await set_rls_org(session, principal.organisation_id)
+        await set_rls_user_context(session, principal.account_id, principal.org_role)
 
-            # Step 1 — validate source exists
-            _log.info("Step 1/4: verifying source pipeline %s exists", pipeline_id)
-            source = await get_pipeline(session, pipeline_id)
-            if source is None:
-                _log.warning("Copy aborted: source pipeline %s not found", pipeline_id)
-                raise HTTPException(
-                    status_code=status.HTTP_404_NOT_FOUND,
-                    detail=f"pipeline_copy_failed: Source pipeline not found [pipeline_id: {pipeline_id}]",
-                )
-
-            # Step 2 — validate name availability
-            target_name = req.name or f"Copy of {source.name}"
-            _log.info("Step 2/4: checking name '%s' is available", target_name)
-            if not await check_pipeline_name_available(session, principal.organisation_id, target_name):
-                _log.warning("Copy aborted: name '%s' already exists in org %s", target_name, principal.organisation_id)
-                raise HTTPException(
-                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-                    detail=f"pipeline_copy_failed: A pipeline named '{target_name}' already exists in this organisation",
-                )
-
-            # Step 3 — execute copy
-            _log.info("Step 3/4: cloning pipeline %s -> '%s'", pipeline_id, target_name)
-            cloned = await clone_pipeline(
-                session,
-                org_id=principal.organisation_id,
-                pipeline_id=pipeline_id,
-                account_id=principal.account_id,
-                new_name=req.name,
+        # Step 1 — validate source exists
+        _log.info("Step 1/4: verifying source pipeline %s exists", pipeline_id)
+        source = await get_pipeline(session, pipeline_id)
+        if source is None:
+            _log.warning("Copy aborted: source pipeline %s not found", pipeline_id)
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"pipeline_copy_failed: Source pipeline not found [pipeline_id: {pipeline_id}]",
             )
-            if cloned is None:
-                _log.warning("Step 3/4 failed: source pipeline %s disappeared during copy", pipeline_id)
-                raise HTTPException(
-                    status_code=status.HTTP_404_NOT_FOUND,
-                    detail=f"pipeline_copy_failed: Source pipeline disappeared during copy [pipeline_id: {pipeline_id}]",
-                )
 
-            # Step 4 — audit event
-            _log.info("Step 4/4: recording audit event for clone %s -> %s", pipeline_id, cloned.id)
-            await append_audit_event(
-                session,
-                org_id=principal.organisation_id,
-                event_type="pipeline.cloned",
-                actor_user_id=principal.account_id,
-                resource_type="pipeline",
-                resource_id=pipeline_id,
-                payload_json={
-                    "cloned_pipeline_id": str(cloned.id),
-                    "target_name": target_name,
-                },
+        # Step 2 — validate name availability
+        target_name = req.name or f"Copy of {source.name}"
+        _log.info("Step 2/4: checking name '%s' is available", target_name)
+        if not await check_pipeline_name_available(session, principal.organisation_id, target_name):
+            _log.warning("Copy aborted: name '%s' already exists in org %s", target_name, principal.organisation_id)
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=f"pipeline_copy_failed: A pipeline named '{target_name}' already exists in this organisation",
             )
-    except ProgrammingError:
-        raise HTTPException(
-            status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="Feature is not available. Run database migrations to enable it.",
-        )
-    except SQLAlchemyError:
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Database temporarily unavailable.",
-        )
 
-    except HTTPException:
-        raise
-    except Exception:
-        _log.exception("pipeline_execution.unexpected_error")
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="An unexpected error occurred.",
-        ) from None
+        # Step 3 — execute copy
+        _log.info("Step 3/4: cloning pipeline %s -> '%s'", pipeline_id, target_name)
+        cloned = await clone_pipeline(
+            session,
+            org_id=principal.organisation_id,
+            pipeline_id=pipeline_id,
+            account_id=principal.account_id,
+            new_name=req.name,
+        )
+        if cloned is None:
+            _log.warning("Step 3/4 failed: source pipeline %s disappeared during copy", pipeline_id)
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"pipeline_copy_failed: Source pipeline disappeared during copy [pipeline_id: {pipeline_id}]",
+            )
+
+        # Step 4 — audit event
+        _log.info("Step 4/4: recording audit event for clone %s -> %s", pipeline_id, cloned.id)
+        await append_audit_event(
+            session,
+            org_id=principal.organisation_id,
+            event_type="pipeline.cloned",
+            actor_user_id=principal.account_id,
+            resource_type="pipeline",
+            resource_id=pipeline_id,
+            payload_json={
+                "cloned_pipeline_id": str(cloned.id),
+                "target_name": target_name,
+            },
+        )
     _log.info("Copy complete: %s -> %s (%s)", pipeline_id, cloned.id, target_name)
     return PipelineResponse.model_validate(cloned)
 
@@ -832,106 +688,87 @@ _PARAM_PATTERN = re.compile(r"\{\{parameter\.(\w+)\}\}")
 
 
 @router.post("/{pipeline_id}/save-as-composite", status_code=status.HTTP_201_CREATED)
+@handle_db_errors("pipelines.save_as_composite")
 async def save_as_composite_endpoint(
     pipeline_id: uuid.UUID,
     req: SaveAsCompositeRequest,
     session: AsyncSession = Depends(get_db_session),
     principal: AuthenticatedPrincipal = Depends(get_current_user),
 ) -> dict[str, Any]:
-    try:
-        async with session.begin():
-            await set_rls_org(session, principal.organisation_id)
-            await set_rls_user_context(session, principal.account_id, principal.org_role)
+    async with session.begin():
+        await set_rls_org(session, principal.organisation_id)
+        await set_rls_user_context(session, principal.account_id, principal.org_role)
 
-            pipeline = await get_pipeline(session, pipeline_id)
-            if pipeline is None:
-                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Pipeline not found")
+        pipeline = await get_pipeline(session, pipeline_id)
+        if pipeline is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Pipeline not found")
 
-            all_nodes = pipeline.graph_nodes_json
-            selected_ids_str = {str(nid) for nid in req.selected_node_ids}
-            sub_nodes = [n for n in all_nodes if str(n.get("id")) in selected_ids_str]
-            if not sub_nodes:
-                raise HTTPException(
-                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-                    detail="No valid nodes selected",
-                )
-
-            sub_node_ids_str = {str(n.get("id")) for n in sub_nodes}
-
-            # Auto-detect parameter placeholders: scan all agent prompts referenced by selected nodes
-            agent_ids = {n.get("agent_id") for n in sub_nodes if n.get("agent_id") is not None}
-            detected_ports: list[dict[str, Any]] = []
-            if agent_ids:
-                agents_result = await session.execute(
-                    select(Agent).where(Agent.id.in_(agent_ids), Agent.organisation_id == principal.organisation_id)
-                )
-                for agent in agents_result.scalars().all():
-                    matches = _PARAM_PATTERN.findall(agent.prompt_template or "")
-                    for param_name in matches:
-                        # Avoid duplicates
-                        if not any(p.get("name") == param_name for p in detected_ports):
-                            detected_ports.append({
-                                "id": str(uuid.uuid4()),
-                                "name": param_name,
-                                "label": param_name.replace("_", " ").title(),
-                                "description": None,
-                                "type": "string",
-                                "required": False,
-                                "default_value": None,
-                                "options": None,
-                                "target_injection": {
-                                    "mode": "prompt_replace",
-                                    "node_id": str(agent.id),
-                                    "injection_point": "prompt_template",
-                                },
-                            })
-
-            # Extract edges that connect selected nodes
-            all_edges_raw = await session.execute(
-                select(PipelineEdge).where(PipelineEdge.pipeline_id == pipeline_id)
+        all_nodes = pipeline.graph_nodes_json
+        selected_ids_str = {str(nid) for nid in req.selected_node_ids}
+        sub_nodes = [n for n in all_nodes if str(n.get("id")) in selected_ids_str]
+        if not sub_nodes:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="No valid nodes selected",
             )
-            sub_edges = []
-            for edge in all_edges_raw.scalars().all():
-                if str(edge.source_node_id) in sub_node_ids_str and str(edge.target_node_id) in sub_node_ids_str:
-                    sub_edges.append({
-                        "id": str(edge.id),
-                        "source_node_id": str(edge.source_node_id),
-                        "target_node_id": str(edge.target_node_id),
-                        "edge_type": edge.edge_type,
-                        "condition_expression": edge.condition_expression,
-                        "hitl_gate_config": edge.hitl_gate_config,
-                    })
 
-            # Create the composite template
-            template = await create_composite_template(
-                session,
-                org_id=principal.organisation_id,
-                account_id=principal.account_id,
-                name=req.name,
-                description=req.description,
-                sub_pipeline_graph_json={"nodes": [dict(n) for n in sub_nodes], "edges": sub_edges},
-                parameter_ports_json=detected_ports,
-                version="0.1.0",
+        sub_node_ids_str = {str(n.get("id")) for n in sub_nodes}
+
+        # Auto-detect parameter placeholders: scan all agent prompts referenced by selected nodes
+        agent_ids = {n.get("agent_id") for n in sub_nodes if n.get("agent_id") is not None}
+        detected_ports: list[dict[str, Any]] = []
+        if agent_ids:
+            agents_result = await session.execute(
+                select(Agent).where(Agent.id.in_(agent_ids), Agent.organisation_id == principal.organisation_id)
             )
-    except ProgrammingError:
-        raise HTTPException(
-            status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="Feature is not available. Run database migrations to enable it.",
-        )
-    except SQLAlchemyError:
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Database temporarily unavailable.",
-        )
+            for agent in agents_result.scalars().all():
+                matches = _PARAM_PATTERN.findall(agent.prompt_template or "")
+                for param_name in matches:
+                    # Avoid duplicates
+                    if not any(p.get("name") == param_name for p in detected_ports):
+                        detected_ports.append({
+                            "id": str(uuid.uuid4()),
+                            "name": param_name,
+                            "label": param_name.replace("_", " ").title(),
+                            "description": None,
+                            "type": "string",
+                            "required": False,
+                            "default_value": None,
+                            "options": None,
+                            "target_injection": {
+                                "mode": "prompt_replace",
+                                "node_id": str(agent.id),
+                                "injection_point": "prompt_template",
+                            },
+                        })
 
-    except HTTPException:
-        raise
-    except Exception:
-        _log.exception("pipeline_execution.unexpected_error")
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="An unexpected error occurred.",
-        ) from None
+        # Extract edges that connect selected nodes
+        all_edges_raw = await session.execute(
+            select(PipelineEdge).where(PipelineEdge.pipeline_id == pipeline_id)
+        )
+        sub_edges = []
+        for edge in all_edges_raw.scalars().all():
+            if str(edge.source_node_id) in sub_node_ids_str and str(edge.target_node_id) in sub_node_ids_str:
+                sub_edges.append({
+                    "id": str(edge.id),
+                    "source_node_id": str(edge.source_node_id),
+                    "target_node_id": str(edge.target_node_id),
+                    "edge_type": edge.edge_type,
+                    "condition_expression": edge.condition_expression,
+                    "hitl_gate_config": edge.hitl_gate_config,
+                })
+
+        # Create the composite template
+        template = await create_composite_template(
+            session,
+            org_id=principal.organisation_id,
+            account_id=principal.account_id,
+            name=req.name,
+            description=req.description,
+            sub_pipeline_graph_json={"nodes": [dict(n) for n in sub_nodes], "edges": sub_edges},
+            parameter_ports_json=detected_ports,
+            version="0.1.0",
+        )
 
     return {
         "id": str(template.id),
@@ -959,66 +796,42 @@ class QualityReportResponse(BaseModel):
     "/{pipeline_id}/quality-report",
     response_model=QualityReportResponse,
 )
+@handle_db_errors("pipelines.trigger_quality_report")
 async def trigger_quality_report(
     pipeline_id: uuid.UUID,
     session: AsyncSession = Depends(get_db_session),
     principal: AuthenticatedPrincipal = Depends(get_current_user),
 ) -> QualityReportResponse:
-    try:
-        async with session.begin():
-            await set_rls_org(session, principal.organisation_id)
-            await set_rls_user_context(session, principal.account_id, principal.org_role)
+    async with session.begin():
+        await set_rls_org(session, principal.organisation_id)
+        await set_rls_user_context(session, principal.account_id, principal.org_role)
 
-            pipeline = await get_pipeline(session, pipeline_id)
-            if pipeline is None:
-                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Pipeline not found")
+        pipeline = await get_pipeline(session, pipeline_id)
+        if pipeline is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Pipeline not found")
 
-            report = await generate_quality_report(session, principal.organisation_id)
+        report = await generate_quality_report(session, principal.organisation_id)
 
-            endpoints = (
-                await session.execute(
-                    select(NotificationEndpoint).where(
-                        NotificationEndpoint.organisation_id == principal.organisation_id,
-                    )
+        endpoints = (
+            await session.execute(
+                select(NotificationEndpoint).where(
+                    NotificationEndpoint.organisation_id == principal.organisation_id,
                 )
-            ).scalars()
+            )
+        ).scalars()
 
-            recipient_urls: list[str] = []
-            for ep in endpoints:
-                try:
-                    events = json.loads(ep.events) if ep.events else []
-                except (json.JSONDecodeError, TypeError):
-                    events = []
-                if "quality_report" in events:
-                    recipient_urls.append(ep.url)
+        recipient_urls: list[str] = []
+        for ep in endpoints:
+            try:
+                events = json.loads(ep.events) if ep.events else []
+            except (json.JSONDecodeError, TypeError):
+                events = []
+            if "quality_report" in events:
+                recipient_urls.append(ep.url)
 
-            deliveries: list[dict[str, Any]] = []
-            if recipient_urls:
-                deliveries = await deliver_quality_report(report, {"webhook_urls": recipient_urls})
-
-    except ProgrammingError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="Feature is not available. Run database migrations to enable it.",
-        ) from exc
-
-    except HTTPException:
-        raise
-    except SQLAlchemyError:
-        _log.warning("route.db_error")
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Database temporarily unavailable.",
-        ) from None
-
-    except HTTPException:
-        raise
-    except Exception:
-        _log.exception("pipeline_execution.unexpected_error")
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="An unexpected error occurred.",
-        ) from None
+        deliveries: list[dict[str, Any]] = []
+        if recipient_urls:
+            deliveries = await deliver_quality_report(report, {"webhook_urls": recipient_urls})
     return QualityReportResponse(
         period=report["period"],
         summary=report["summary"],
