@@ -107,6 +107,23 @@ _resume_events: dict[str, asyncio.Event] = {}
 _session_approvals: dict[str, dict[str, dict]] = {}
 _SESSION_APPROVAL_TTL = timedelta(minutes=30)
 
+# ── Redis registry (lazy-init, multi-worker capable) ─────────────────────
+
+_redis_registry: Any | None = None
+_SENTINEL: Any = object()
+
+
+def _get_registry() -> Any | None:
+    global _redis_registry
+    if _redis_registry is None:
+        try:
+            from modulo.core.remy.redis_registry import RemyRedisRegistry
+
+            _redis_registry = RemyRedisRegistry(get_settings().redis_url)
+        except Exception:
+            _redis_registry = _SENTINEL  # don't retry
+    return _redis_registry if _redis_registry is not _SENTINEL else None
+
 # ── Action rate limiter ──────────────────────────────────────────────────
 
 
@@ -401,7 +418,10 @@ def _resolve_tool_permission(config: RemyConfig, tool_name: str, args: dict[str,
     return base
 
 
-def _is_approved_for_session(session_id: str, tool_name: str, page_path: str) -> bool:
+async def _is_approved_for_session(session_id: str, tool_name: str, page_path: str) -> bool:
+    registry = _get_registry()
+    if registry is not None:
+        return await registry.is_session_approved(session_id, tool_name, page_path)
     session_approvals = _session_approvals.get(session_id)
     if not session_approvals:
         return False
@@ -413,7 +433,11 @@ def _is_approved_for_session(session_id: str, tool_name: str, page_path: str) ->
     return bool(approval and now < approval["expires_at"] and approval["page_path"] == page_path)
 
 
-def _set_session_approval(session_id: str, tool_name: str, page_path: str) -> None:
+async def _set_session_approval(session_id: str, tool_name: str, page_path: str) -> None:
+    registry = _get_registry()
+    if registry is not None:
+        await registry.set_session_approval(session_id, tool_name, page_path)
+        return
     if session_id not in _session_approvals:
         _session_approvals[session_id] = {}
     _session_approvals[session_id][tool_name] = {
@@ -422,8 +446,19 @@ def _set_session_approval(session_id: str, tool_name: str, page_path: str) -> No
     }
 
 
+async def _clear_session_approvals(session_id: str) -> None:
+    registry = _get_registry()
+    if registry is not None:
+        await registry.clear_session_approvals(session_id)
+        return
+    _session_approvals.pop(session_id, None)
+
+
 def clear_all_session_approvals() -> None:
-    """Clear all in-memory session approvals (called on logout)."""
+    """Clear all in-memory session approvals (called on logout).
+    NOTE: Does NOT clear Redis-backed approvals — multi-worker logout
+    needs an async variant that calls RemyRedisRegistry.clear_session_approvals.
+    """
     _session_approvals.clear()
 
 
@@ -1151,15 +1186,25 @@ async def stream_chat(
                             config = await config_service.get_config(principal.organisation_id)
 
                         # Check if session is paused — wait for resume
-                        resume_ev = _resume_events.get(session_id_str)
-                        if resume_ev is not None:
+                        registry = _get_registry()
+                        if registry is not None:
+                            paused = session_id_str in _resume_events
+                        else:
+                            paused = session_id_str in _resume_events
+                        if paused:
                             yield (
                                 "event: paused\ndata: "
                                 + json.dumps({"detail": "Session paused. Waiting for resume."})
                                 + "\n\n"
                             )
-                            with contextlib.suppress(TimeoutError):
-                                await asyncio.wait_for(resume_ev.wait(), timeout=300.0)
+                            registry = _get_registry()
+                            if registry is not None:
+                                await registry.subscribe_resume(session_id_str, timeout=300.0)
+                            else:
+                                resume_ev = _resume_events.get(session_id_str)
+                                if resume_ev is not None:
+                                    with contextlib.suppress(TimeoutError):
+                                        await asyncio.wait_for(resume_ev.wait(), timeout=300.0)
 
                         approved_calls: list[dict[str, Any]] = []
                         pending_permission_calls: list[dict[str, Any]] = []
@@ -1170,7 +1215,7 @@ async def stream_chat(
                                 continue
                             elif perm in ("requires_approval", "nogo_requires_approval"):
                                 page_path = req.page_context or ""
-                                if not _is_approved_for_session(
+                                if not await _is_approved_for_session(
                                     session_id_str, tc["name"], page_path,
                                 ):
                                     if perm == "nogo_requires_approval":
@@ -1193,16 +1238,28 @@ async def stream_chat(
                                 ],
                             })}\n\n"
 
+                            # Register permission request — Redis pub/sub for cross-worker,
+                            # in-memory Event for local fast-path
+                            registry = _get_registry()
                             event = asyncio.Event()
                             _pending_permissions[req_id] = (event, session_id_str)
+                            if registry is not None:
+                                await registry.set_permission_request(
+                                    req_id, session_id_str,
+                                    [{"name": tc["name"], "args": tc["args"]} for tc in pending_permission_calls],
+                                )
                             try:
-                                await asyncio.wait_for(event.wait(), timeout=60.0)
-                                decision = _permission_decisions.pop(req_id, {"action": "reject"})
+                                if registry is not None:
+                                    decision_data = await registry.subscribe_permission_response(req_id, timeout=60.0)
+                                    decision = {"action": "reject"} if decision_data is None else decision_data
+                                else:
+                                    await asyncio.wait_for(event.wait(), timeout=60.0)
+                                    decision = _permission_decisions.pop(req_id, {"action": "reject"})
                                 if decision["action"] in ("approve", "approve_for_session"):
                                     approved_calls.extend(pending_permission_calls)
                                     if decision["action"] == "approve_for_session":
                                         for tc in pending_permission_calls:
-                                            _set_session_approval(
+                                            await _set_session_approval(
                                                 session_id_str, tc["name"], req.page_context or "",
                                             )
                             except TimeoutError:
@@ -1231,12 +1288,20 @@ async def stream_chat(
                                 'commands': approved_calls,
                             })}\n\n"
 
+                            registry = _get_registry()
                             event = asyncio.Event()
                             _pending_ui_results[session_id_str] = event
 
                             try:
-                                await asyncio.wait_for(event.wait(), timeout=120.0)
-                                results = _ui_command_results.pop(session_id_str, [])
+                                if registry is not None:
+                                    ready = await registry.subscribe_ui_results(session_id_str, timeout=120.0)
+                                    if ready:
+                                        results = await registry.get_and_clear_ui_command_results(session_id_str)
+                                    else:
+                                        results = []
+                                else:
+                                    await asyncio.wait_for(event.wait(), timeout=120.0)
+                                    results = _ui_command_results.pop(session_id_str, [])
                             except TimeoutError:
                                 results = []
                             finally:
@@ -1367,6 +1432,18 @@ async def submit_permission_response(
             detail="Database error. Please try again later.",
         ) from None
 
+    registry = _get_registry()
+    if registry is not None:
+        req_data = await registry.get_permission_request(req.request_id)
+        if req_data is None:
+            raise HTTPException(status_code=404, detail="Permission request not found or expired")
+        if req_data["session_id"] != str(session_id):
+            raise HTTPException(status_code=403, detail="Permission request does not belong to this session")
+        decision = {"action": req.action}
+        await registry.set_permission_decision(req.request_id, decision)
+        await registry.publish_permission_response(req.request_id, decision)
+        return {"status": "ok"}
+
     entry = _pending_permissions.get(req.request_id)
     if entry is None:
         raise HTTPException(status_code=404, detail="Permission request not found or expired")
@@ -1407,6 +1484,12 @@ async def submit_ui_command_results(
         ) from None
 
     sid = str(session_id)
+    registry = _get_registry()
+    if registry is not None:
+        results = [r.model_dump() for r in req.results]
+        await registry.set_ui_command_results(sid, results)
+        await registry.publish_ui_results(sid)
+        return {"status": "ok"}
     event = _pending_ui_results.get(sid)
     if event is None:
         return {"status": "ok"}
@@ -1437,7 +1520,7 @@ async def reset_session_permissions(
             detail="Database error. Please try again later.",
         ) from None
 
-    _session_approvals.pop(str(session_id), None)
+    await _clear_session_approvals(str(session_id))
     return {"status": "ok"}
 
 
@@ -1464,6 +1547,10 @@ async def resume_session(
         ) from None
 
     sid = str(session_id)
+    registry = _get_registry()
+    if registry is not None:
+        await registry.publish_resume(sid)
+        return {"status": "ok"}
     event = _resume_events.get(sid)
     if event is not None:
         event.set()
@@ -1493,10 +1580,15 @@ async def stop_session(
         ) from None
 
     sid = str(session_id)
+    cancelled_result = [{"id": "", "name": "", "success": False, "error": "cancelled_by_user"}]
+    registry = _get_registry()
+    if registry is not None:
+        await registry.set_ui_command_results(sid, cancelled_result)
+        await registry.publish_ui_results(sid)
+        await registry.publish_resume(sid)
+        return {"status": "stopped"}
     # Set cancelled results so the loop sees cancel
-    _ui_command_results[sid] = [
-        {"id": "", "name": "", "success": False, "error": "cancelled_by_user"}
-    ]
+    _ui_command_results[sid] = cancelled_result
     # Wake up the loop if paused
     resume_ev = _resume_events.pop(sid, None)
     if resume_ev is not None:
