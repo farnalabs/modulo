@@ -72,38 +72,38 @@
 
       <!-- Node Properties Panel -->
       <aside v-if="selectedNodeData && !selectedEdgeData" class="w-96 overflow-y-auto border-l bg-card p-4">
-        <h2 class="mb-4 text-lg font-semibold">Node Properties</h2>
+        <h2 class="mb-4 text-lg font-semibold">{{ $t('views.PipelineEditorView.node_properties') }}</h2>
         <dl class="space-y-3 text-sm">
           <div>
             <dt class="text-muted-foreground">ID</dt>
             <dd class="font-mono text-xs">{{ shortId(selectedNodeData.id) }}</dd>
           </div>
           <div>
-            <dt class="text-muted-foreground">Type</dt>
+            <dt class="text-muted-foreground">{{ $t('views.PipelineEditorView.type_label') }}</dt>
             <dd>
               <span
                 :class="selectedNodeData.node_type === 'manual'
                   ? 'badge badge-status-warning'
                   : 'badge badge-status-primary'"
               >
-                {{ selectedNodeData.node_type === 'manual' ? 'Manual' : 'Agent' }}
+                {{ selectedNodeData.node_type === 'manual' ? $t('views.PipelineEditorView.manual') : $t('views.PipelineEditorView.agent') }}
               </span>
             </dd>
           </div>
           <div>
-            <dt class="text-muted-foreground">Label</dt>
+            <dt class="text-muted-foreground">{{ $t('views.PipelineEditorView.label_field') }}</dt>
             <dd>{{ selectedNodeData.label || '-' }}</dd>
           </div>
           <div v-if="selectedNodeData.node_type === 'manual' && selectedNodeData.output_schema_id">
-            <dt class="text-muted-foreground">Output Schema</dt>
+            <dt class="text-muted-foreground">{{ $t('views.PipelineEditorView.output_schema') }}</dt>
             <dd class="font-mono text-xs">{{ shortId(selectedNodeData.output_schema_id) }}</dd>
           </div>
           <div v-if="selectedNodeData.node_type === 'agent' && selectedNodeData.agent_id">
-            <dt class="text-muted-foreground">Agent</dt>
+            <dt class="text-muted-foreground">{{ $t('views.PipelineEditorView.agent') }}</dt>
             <dd class="font-mono text-xs">{{ shortId(selectedNodeData.agent_id) }}</dd>
           </div>
           <div v-if="selectedNodeData.node_type === 'agent' && selectedNodeData.connector_binding">
-            <dt class="text-muted-foreground">Connector</dt>
+            <dt class="text-muted-foreground">{{ $t('views.PipelineEditorView.connector') }}</dt>
             <dd class="font-mono text-xs">{{ selectedNodeData.connector_binding.type }}{{ selectedNodeData.connector_binding.instance_id ? ' / ' + shortId(selectedNodeData.connector_binding.instance_id) : '' }}</dd>
           </div>
         </dl>
@@ -141,7 +141,7 @@
             <dd class="font-mono text-xs">{{ shortId(selectedEdgeData.target_node_id) }}</dd>
           </div>
           <div>
-            <dt class="text-muted-foreground">Type</dt>
+            <dt class="text-muted-foreground">{{ $t('views.PipelineEditorView.type_label') }}</dt>
             <dd>
               <select
                 v-model="edgeForm.edge_type"
@@ -309,35 +309,35 @@
 
     <div v-if="showAgentPicker" class="fixed inset-0 z-50 flex items-center justify-center bg-black/50" @click.self="showAgentPicker = false">
       <div class="w-full max-w-lg rounded-lg border bg-card p-6 shadow-lg">
-        <h3 class="mb-4 text-lg font-semibold">Convert to Agent</h3>
+        <h3 class="mb-4 text-lg font-semibold">{{ $t('views.PipelineEditorView.convert_to_agent') }}</h3>
         <div class="space-y-4">
           <div>
-            <label class="mb-1 block text-sm font-medium">Agent</label>
+            <label class="mb-1 block text-sm font-medium">{{ $t('views.PipelineEditorView.agent') }}</label>
             <select
               v-model="pickerAgentId"
               data-testid="pipeline-editor-agent-select"
               class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm"
               @change="onAgentChange"
             >
-              <option value="">Select an agent...</option>
+              <option value="">{{ $t('views.PipelineEditorView.select_agent_placeholder') }}</option>
               <option v-for="a in agents" :key="a.id" :value="a.id">{{ a.name }}</option>
             </select>
           </div>
           <div v-if="selectedAgent">
-            <label class="mb-1 block text-sm font-medium">Connector</label>
+            <label class="mb-1 block text-sm font-medium">{{ $t('views.PipelineEditorView.connector') }}</label>
             <select
               v-model="pickerConnectorId"
               data-testid="pipeline-editor-connector-select"
               class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm"
             >
-              <option value="">Select a connector...</option>
+              <option value="">{{ $t('views.PipelineEditorView.select_connector_placeholder') }}</option>
               <option v-for="c in eligibleConnectors" :key="c.id" :value="c.id">{{ c.name }} ({{ c.connector_type_id }})</option>
             </select>
           </div>
           <div v-if="selectedAgent">
-            <label class="mb-1 block text-sm font-medium">Model Backend</label>
+            <label class="mb-1 block text-sm font-medium">{{ $t('views.PipelineEditorView.model_backend_label') }}</label>
             <div class="rounded-lg border bg-muted px-3 py-2 text-sm">
-              {{ modelBackendName || 'Loading...' }}
+              {{ modelBackendName || $t('views.PipelineEditorView.loading') }}
             </div>
           </div>
           <div v-if="selectedAgent" class="rounded-lg border bg-muted p-3 text-sm">
