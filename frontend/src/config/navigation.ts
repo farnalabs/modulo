@@ -77,6 +77,8 @@ const routeConfigMap: Record<string, { icon: string; labelKey: string }> = {
 const groupLabelKeyMap: Record<string, string> = {
   core: 'components.SidebarNav.group_core',
   analysis: 'components.SidebarNav.group_analysis',
+  schemas: 'components.SidebarNav.group_schemas',
+  evals: 'components.SidebarNav.group_evals',
   remy: 'components.SidebarNav.group_remy',
   settings: 'components.SidebarNav.group_settings',
   'access-control': 'components.SidebarNav.group_access_control',
