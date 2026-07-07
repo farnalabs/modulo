@@ -1,5 +1,5 @@
 import { defineStore } from 'pinia'
-import { ref, computed } from 'vue'
+import { ref, computed, watch } from 'vue'
 import { api, getAuthHeaders } from '@/lib/api/client'
 import { formatApiError } from '@/lib/api/formatError'
 import type { ChatSession, ChatMessage, PageContext } from '@/types/remy'
@@ -11,6 +11,7 @@ export interface PermissionRequest {
 
 const POSITION_KEY = 'remy_panel_position'
 const SIZE_KEY = 'remy_panel_size'
+const ACTIVE_SESSION_KEY = 'remy_active_session_id'
 const DEFAULT_CONTEXT_WINDOW_TOKENS = 200000
 
 function loadPosition(): { x: number; y: number } {
@@ -100,6 +101,18 @@ export const useRemyStore = defineStore('remy', () => {
     localStorage.setItem(SIZE_KEY, JSON.stringify(panelSize.value))
   }
 
+  function persistActiveSessionId() {
+    if (activeSessionId.value) {
+      localStorage.setItem(ACTIVE_SESSION_KEY, activeSessionId.value)
+    } else {
+      localStorage.removeItem(ACTIVE_SESSION_KEY)
+    }
+  }
+
+  function loadActiveSessionId(): string | null {
+    return localStorage.getItem(ACTIVE_SESSION_KEY)
+  }
+
   async function fetchSessions() {
     sessionsLoading.value = true
     error.value = null
@@ -173,6 +186,7 @@ export const useRemyStore = defineStore('remy', () => {
       if (activeSessionId.value === id) {
         activeSessionId.value = null
         messages.value = []
+        persistActiveSessionId()
       }
     } catch (e: unknown) {
       error.value = e instanceof Error ? e.message : extractErrorMessage(e)
@@ -299,6 +313,8 @@ export const useRemyStore = defineStore('remy', () => {
     }
   }
 
+  watch(activeSessionId, persistActiveSessionId)
+
   function appendToolCall(tc: { tool_call_id: string; tool_name: string; success: boolean; result?: unknown; error?: string }) {
     const summary = tc.success
       ? `Tool: ${tc.tool_name} — completed`
@@ -329,6 +345,7 @@ export const useRemyStore = defineStore('remy', () => {
     fetchSessions,
     createSession,
     loadSession,
+    loadActiveSessionId,
     deleteSession,
     sendMessage,
     setPanelState,

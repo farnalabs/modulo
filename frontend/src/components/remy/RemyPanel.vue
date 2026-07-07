@@ -436,7 +436,10 @@ function onWindowResize() {
 onMounted(async () => {
   window.addEventListener("resize", onWindowResize)
   await store.fetchSessions();
-  if (!store.activeSessionId) {
+  const savedId = store.loadActiveSessionId()
+  if (savedId && store.sessions.some(s => s.id === savedId)) {
+    await store.loadSession(savedId)
+  } else if (!store.activeSessionId) {
     await handleNewSession();
   }
 });
