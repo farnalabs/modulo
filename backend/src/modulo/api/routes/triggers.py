@@ -9,6 +9,8 @@ URLs:
 """
 
 import datetime
+import hashlib
+import json
 import logging
 import uuid
 from typing import Any
@@ -75,6 +77,14 @@ async def list_triggers(
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database operation failed. Please try again later.",
+        ) from None
+    except HTTPException:
+        raise
+    except Exception:
+        _log.exception("list_triggers failed")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Internal server error",
         ) from None
 
     return {
@@ -184,6 +194,14 @@ async def update_cron_config(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database operation failed. Please try again later.",
         ) from None
+    except HTTPException:
+        raise
+    except Exception:
+        _log.exception("update_cron_config failed")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Internal server error",
+        ) from None
 
     return {
         "id": str(trigger.id),
@@ -238,6 +256,14 @@ async def preview_cron_schedule(
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database operation failed. Please try again later.",
+        ) from None
+    except HTTPException:
+        raise
+    except Exception:
+        _log.exception("preview_cron_schedule failed")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Internal server error",
         ) from None
 
     return {
@@ -338,6 +364,14 @@ async def update_polling_config(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database operation failed. Please try again later.",
         ) from None
+    except HTTPException:
+        raise
+    except Exception:
+        _log.exception("update_polling_config failed")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Internal server error",
+        ) from None
 
     return {
         "id": str(trigger.id),
@@ -394,6 +428,14 @@ async def test_polling_condition(
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database operation failed. Please try again later.",
+        ) from None
+    except HTTPException:
+        raise
+    except Exception:
+        _log.exception("test_polling_condition failed")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Internal server error",
         ) from None
 
     # Evaluate outside the transaction (connector ops are I/O, not DB)
@@ -464,6 +506,14 @@ async def create_trigger(
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database operation failed. Please try again later.",
+        ) from None
+    except HTTPException:
+        raise
+    except Exception:
+        _log.exception("create_trigger failed")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Internal server error",
         ) from None
 
     return {
@@ -550,6 +600,14 @@ async def update_trigger(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database operation failed. Please try again later.",
         ) from None
+    except HTTPException:
+        raise
+    except Exception:
+        _log.exception("update_trigger failed")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Internal server error",
+        ) from None
 
     return {
         "id": str(trigger.id),
@@ -595,6 +653,14 @@ async def delete_trigger(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database operation failed. Please try again later.",
         ) from None
+    except HTTPException:
+        raise
+    except Exception:
+        _log.exception("delete_trigger failed")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Internal server error",
+        ) from None
 
 
 @router.post("/triggers/{trigger_id}/toggle", status_code=status.HTTP_200_OK)
@@ -629,6 +695,14 @@ async def toggle_trigger(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database operation failed. Please try again later.",
         ) from None
+    except HTTPException:
+        raise
+    except Exception:
+        _log.exception("toggle_trigger failed")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Internal server error",
+        ) from None
 
     return {"id": str(trigger.id), "active": trigger.active}
 
@@ -661,9 +735,6 @@ async def test_trigger(
             trigger = result.scalar_one_or_none()
             if trigger is None:
                 raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Trigger not found")
-
-            import hashlib
-            import json
 
             raw_body = json.dumps(req.payload, sort_keys=True).encode()
             payload_hash = hashlib.sha256(raw_body).hexdigest()
@@ -714,6 +785,14 @@ async def test_trigger(
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database operation failed. Please try again later.",
+        ) from None
+    except HTTPException:
+        raise
+    except Exception:
+        _log.exception("test_trigger failed")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Internal server error",
         ) from None
 
     return {
@@ -781,6 +860,14 @@ async def list_trigger_events(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database operation failed. Please try again later.",
         ) from None
+    except HTTPException:
+        raise
+    except Exception:
+        _log.exception("list_trigger_events failed")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Internal server error",
+        ) from None
 
     has_more = len(rows) > limit
     if has_more:
@@ -846,6 +933,14 @@ async def list_pipeline_triggers(
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database operation failed. Please try again later.",
+        ) from None
+    except HTTPException:
+        raise
+    except Exception:
+        _log.exception("list_pipeline_triggers failed")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Internal server error",
         ) from None
 
     return {

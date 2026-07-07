@@ -134,6 +134,14 @@ async def receive_webhook(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database operation failed. Please try again later.",
         ) from None
+    except HTTPException:
+        raise
+    except Exception:
+        _log.exception("receive_webhook failed")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Internal server error",
+        ) from None
 
     run_id = run.id
     executor = PipelineExecutor(engine)
@@ -204,6 +212,14 @@ async def replay_webhook(
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database operation failed. Please try again later.",
+        ) from None
+    except HTTPException:
+        raise
+    except Exception:
+        _log.exception("replay_webhook failed")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Internal server error",
         ) from None
 
     run_id = run.id

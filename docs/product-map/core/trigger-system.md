@@ -26,6 +26,7 @@ unit-tests:
   - backend/tests/unit/api/test_trigger_programming_error.py
   - backend/tests/unit/mcp/test_get_trigger_events.py
   - backend/tests/unit/cleanup_jobs/test_webhook_dedup_cleanup.py
+  - backend/tests/unit/api/test_trigger_exception_guard.py
 status: partial
 ---
 
@@ -180,6 +181,7 @@ concurrency management via `max_concurrent_runs`.
 - [x] `replay_webhook` catches `ProgrammingError` → 501 and `SQLAlchemyError` → 503
 - [x] `cleanup_expired` distinguishes `ProgrammingError` (→ 501), `SQLAlchemyError` (→ 503), and other exceptions (→ 500)
 - [x] `list_trigger_events` cursor parsing logs warning on malformed cursor instead of silent `pass`
+- [x] All 15 trigger route handlers catch `Exception` → 500 with `except HTTPException: raise` guard and `_log.exception`
 
 ### Resilience & Integration Robustness
 
@@ -203,10 +205,11 @@ concurrency management via `max_concurrent_runs`.
 - Polling trigger has no `retain_payload` equivalent (webhook has it for replay)
 - `max_concurrent_runs` uses pipeline-level active-run counting; PRD 8.5 suggests trigger-level counting
 - Daily spend limit applies to cron triggers only — polling has no spend limit check
-- No unit tests for `admin_triggers.py` ProgrammingError → 501 path
-- No unit tests for `webhooks.py` ProgrammingError → 501 path
-- No unit tests for SQLAlchemyError→503 existed before QA pass — now covered in test_trigger_sqlalchemy_error.py
+- (Resolved) No unit tests for `admin_triggers.py` ProgrammingError → 501 path — covered in test_trigger_programming_error.py
+- (Resolved) No unit tests for `webhooks.py` ProgrammingError → 501 path — covered in test_trigger_programming_error.py
+- (Resolved) No unit tests for generic Exception→500 on trigger routes — covered in test_trigger_exception_guard.py
 
 ## QA History
 
 - 2026-07-05: Cross-cutting QA (index 169): Added `SQLAlchemyError` catch → 503 to all 16 trigger route handlers (triggers.py: 12, admin_triggers.py: 1 route with 2 try/except blocks, webhooks.py: 3). Fixed silent cursor-parsing error swallowing in admin_triggers.py (now logs warning). Added test_trigger_sqlalchemy_error.py with 18 tests covering SQLAlchemyError→503 for all trigger route handlers. Updated product map: marked all 50+ previously unchecked behaviours as [x] (verified against code implementation), added Error Handling checkbox for SQLAlchemyError→503, added Resilience & Integration Robustness section (8 checkboxes: 4 [x] + 4 [ ]). All existing unit tests continue to pass. Status: partial.
+- 2026-07-09: Cross-cutting QA (index 287): Fixed CRITICAL — added `except Exception → 500` with `except HTTPException: raise` guard and `_log.exception` to 14 trigger route handlers (12 in triggers.py, 1 in admin_triggers.py with 2 try/except blocks, 2 in webhooks.py). `cleanup_expired` already had the guard. Moved lazy `hashlib`/`json` imports to module level in test_trigger endpoint. Created test_trigger_exception_guard.py with 15 tests covering Exception→500 on all routes (12 triggers.py + admin_triggers.py + 2 webhooks.py). Removed 3 resolved Known Gaps. Updated product map Error Handling section. All tests pass. Merged to main. Status: partial.
