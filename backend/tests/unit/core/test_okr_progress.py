@@ -200,8 +200,7 @@ _SUITE_THRESHOLD = 0.75
 def _setup_suite_results_mock(session: AsyncMock) -> None:
     """Configure the mock session to return typical suite query results."""
     session.execute.side_effect = [
-        _make_first_result(_make_row()),  # exists check
-        _make_first_result(_make_row(pass_threshold=_SUITE_THRESHOLD)),  # threshold
+        _make_first_result(_make_row(def_count=1, pass_threshold=_SUITE_THRESHOLD)),  # info_q
         _make_first_result(
             _make_row(  # trend data
                 total_7d=20,
@@ -261,8 +260,7 @@ class TestTrackOkrProgressDirect:
     async def test_breach_true_when_below_threshold(self) -> None:
         session = _make_mock_session()
         session.execute.side_effect = [
-            _make_first_result(_make_row()),
-            _make_first_result(_make_row(pass_threshold=0.95)),
+            _make_first_result(_make_row(def_count=1, pass_threshold=0.95)),
             _make_first_result(
                 _make_row(
                     total_7d=20,
@@ -284,8 +282,7 @@ class TestTrackOkrProgressDirect:
     async def test_no_threshold_no_breach(self) -> None:
         session = _make_mock_session()
         session.execute.side_effect = [
-            _make_first_result(_make_row()),
-            _make_first_result(None),  # no threshold
+            _make_first_result(_make_row(def_count=1, pass_threshold=None)),
             _make_first_result(
                 _make_row(
                     total_7d=10,
@@ -322,18 +319,17 @@ class TestTrackOkrProgressDirect:
     async def test_trend_direction_declining(self) -> None:
         session = _make_mock_session()
         session.execute.side_effect = [
-            _make_first_result(_make_row()),
-            _make_first_result(_make_row(pass_threshold=0.5)),
+            _make_first_result(_make_row(def_count=1, pass_threshold=0.5)),
             _make_first_result(
                 _make_row(
                     total_7d=20,
                     passed_7d=5,  # 0.25
                     total_14d=20,
-                    passed_14d=16,  # 0.80
+                    passed_14d=19,  # 0.95
                     total_30d=20,
-                    passed_30d=18,
+                    passed_30d=16,  # 0.80 — 30d→14d declining (0.80→0.95)
                     total_all=60,
-                    passed_all=39,
+                    passed_all=40,
                 )
             ),
         ]
@@ -344,8 +340,7 @@ class TestTrackOkrProgressDirect:
     async def test_no_data_yet_returns_zero_score(self) -> None:
         session = _make_mock_session()
         session.execute.side_effect = [
-            _make_first_result(_make_row()),
-            _make_first_result(_make_row(pass_threshold=0.5)),
+            _make_first_result(_make_row(def_count=1, pass_threshold=0.5)),
             _make_first_result(
                 _make_row(
                     total_7d=0,
@@ -425,8 +420,7 @@ class TestOkrProgressEndpoint:
         def _setup(mock_session: AsyncMock) -> None:
             mock_session.execute.side_effect = [
                 _make_result(scalar_value=None),  # set_rls_org
-                _make_first_result(_make_row()),  # exists check
-                _make_first_result(_make_row(pass_threshold=0.75)),  # threshold
+                _make_first_result(_make_row(def_count=1, pass_threshold=0.75)),  # info_q
                 _make_first_result(
                     _make_row(  # trend data
                         total_7d=20,
@@ -520,8 +514,7 @@ class TestOkrProgressEndpoint:
         mock_session = _make_mock_session()
         mock_session.execute.side_effect = [
             _make_result(scalar_value=None),
-            _make_first_result(_make_row()),
-            _make_first_result(_make_row(pass_threshold=0.75)),
+            _make_first_result(_make_row(def_count=1, pass_threshold=0.75)),
             _make_first_result(
                 _make_row(
                     total_7d=20,
@@ -575,8 +568,7 @@ class TestOkrProgressEndpoint:
         mock_session = _make_mock_session()
         mock_session.execute.side_effect = [
             _make_result(scalar_value=None),
-            _make_first_result(_make_row()),
-            _make_first_result(_make_row(pass_threshold=0.95)),
+            _make_first_result(_make_row(def_count=1, pass_threshold=0.95)),
             _make_first_result(
                 _make_row(
                     total_7d=20,

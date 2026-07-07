@@ -1984,6 +1984,8 @@ async def okr_progress(
                 suite_id=suite_id,
                 target_date=target_date,
             )
+    except HTTPException:
+        raise
     except ValueError as exc:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -1999,6 +2001,12 @@ async def okr_progress(
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database error. Please try again later.",
+        )
+    except Exception:
+        logger.exception("Unexpected error in OKR progress endpoint")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="An unexpected error occurred. Please try again later.",
         )
 
     return OkrProgressResponse(
