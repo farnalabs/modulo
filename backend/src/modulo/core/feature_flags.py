@@ -188,6 +188,11 @@ _KNOWN_FLAGS: list[FeatureFlag] = [
         description="Version history and diff for schema definitions",
         tier="team",
     ),
+    FeatureFlag(
+        name="remy_ui_driving",
+        description="Remy browser UI driving — allows Remy to navigate, click, and fill forms on your behalf.",
+        tier="community",
+    ),
 ]
 
 

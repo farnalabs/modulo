@@ -52,6 +52,7 @@ from modulo.api.ui_tools import (
 )
 from modulo.auth.dependencies import get_current_user
 from modulo.auth.jwt import AuthenticatedPrincipal
+from modulo.core.feature_flags import FeatureFlagRegistry
 from modulo.core.remy.config_service import RemyConfig, RemyConfigService
 from modulo.core.remy.skill_loader import SkillLoader
 from modulo.db.models.model_backend import ModelBackend
@@ -317,6 +318,18 @@ async def _reconstruct_messages(session: AsyncSession, session_id: uuid.UUID) ->
     return [_message_to_langchain(m) for m in db_messages]
 
 
+def _is_ui_driving_enabled() -> bool:
+    """Check if the remy_ui_driving feature flag is enabled.
+
+    Returns True by default (community tier). Overrides set via the
+    admin feature flags page are respected.
+    """
+    override = FeatureFlagRegistry._overrides.get("remy_ui_driving")
+    if override is not None:
+        return override
+    return True
+
+
 # ── UI command helpers ───────────────────────────────────────────────────
 
 
@@ -543,21 +556,22 @@ _MCP_TOOL_DEFINITIONS: list[dict[str, Any]] = [
 ]
 
 
-def _get_all_tool_definitions() -> list[dict[str, Any]]:
+def _get_all_tool_definitions(include_ui_tools: bool = True) -> list[dict[str, Any]]:
     """Combine UI tool and MCP tool definitions for the LLM's tools parameter."""
     tools: list[dict[str, Any]] = []
-    for name, schema in _UI_TOOLS.items():
-        tools.append({
-            "type": "function",
-            "function": {
-                "name": name,
-                "description": schema["description"],
-                "parameters": {
-                    "type": "object",
-                    "properties": schema["parameters"],
+    if include_ui_tools:
+        for name, schema in _UI_TOOLS.items():
+            tools.append({
+                "type": "function",
+                "function": {
+                    "name": name,
+                    "description": schema["description"],
+                    "parameters": {
+                        "type": "object",
+                        "properties": schema["parameters"],
+                    },
                 },
-            },
-        })
+            })
     tools.extend(_MCP_TOOL_DEFINITIONS)
     return tools
 
@@ -991,7 +1005,9 @@ async def stream_chat(
 
                     tools_param = None
                     if getattr(backend, 'supports_tools', False):
-                        tools_param = _get_all_tool_definitions()
+                        tools_param = _get_all_tool_definitions(
+                            include_ui_tools=_is_ui_driving_enabled(),
+                        )
 
                     async for chunk in backend.stream(langchain_messages, tools=tools_param):
                         if await request.is_disconnected():
@@ -1112,7 +1128,16 @@ async def stream_chat(
                         yield f"event: tool_call\ndata: {json.dumps(tool_results[-1])}\n\n"
 
                     # Handle UI tools
-                    if ui_tool_calls:
+                    if ui_tool_calls and not _is_ui_driving_enabled():
+                        for tc in ui_tool_calls:
+                            tool_results.append({
+                                "tool_call_id": tc["id"],
+                                "tool_name": tc["name"],
+                                "success": False,
+                                "error": "UI driving is disabled by your organisation.",
+                            })
+                            yield f"event: tool_call\ndata: {json.dumps(tool_results[-1])}\n\n"
+                    elif ui_tool_calls:
                         async with db_session.begin():
                             await set_rls_org(db_session, principal.organisation_id)
                             config_service = RemyConfigService(db_session)
@@ -1314,6 +1339,11 @@ async def submit_permission_response(
     session: AsyncSession = Depends(get_db_session),
     principal: AuthenticatedPrincipal = Depends(get_current_user),
 ) -> dict[str, str]:
+    if not _is_ui_driving_enabled():
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="UI driving is disabled by your organisation.",
+        )
     try:
         async with session.begin():
             await set_rls_org(session, principal.organisation_id)
@@ -1348,6 +1378,11 @@ async def submit_ui_command_results(
     session: AsyncSession = Depends(get_db_session),
     principal: AuthenticatedPrincipal = Depends(get_current_user),
 ) -> dict[str, str]:
+    if not _is_ui_driving_enabled():
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="UI driving is disabled by your organisation.",
+        )
     try:
         async with session.begin():
             await set_rls_org(session, principal.organisation_id)
