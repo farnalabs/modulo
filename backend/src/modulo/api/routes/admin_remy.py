@@ -564,12 +564,8 @@ async def reset_org_context_sources(
     _require_admin(principal)
     try:
         async with session.begin():
-            from modulo.core.remy.context_source_service import (
-                RemyContextSourceService,
-            )
             from modulo.db.models.remy_context_source import RemyContextSource
 
-            service = RemyContextSourceService(session)
             result = await session.execute(
                 select(RemyContextSource).where(
                     RemyContextSource.organisation_id == principal.organisation_id,

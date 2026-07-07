@@ -582,6 +582,12 @@ async def list_run_pending_gates(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database error. Please try again.",
         ) from exc
+    except Exception as e:
+        logger.exception("hitl.list_run_pending_gates.unexpected_error")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="An unexpected error occurred",
+        ) from e
 
     return PendingGatesResponse(
         gates=[_gate_to_response(g, pipeline_name=pipeline_name) for g in gates]
@@ -621,6 +627,12 @@ async def list_org_pending_gates(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database error. Please try again.",
         ) from exc
+    except Exception as e:
+        logger.exception("hitl.list_org_pending_gates.unexpected_error")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="An unexpected error occurred",
+        ) from e
 
     return PendingGatesResponse(
         gates=[_gate_to_response(g, pipeline_name=pipeline_map.get(g.pipeline_id)) for g in gates]

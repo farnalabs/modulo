@@ -139,6 +139,12 @@ async def login(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Authentication service is temporarily unavailable. Please try again.",
         )
+    except Exception:
+        _log.exception("Unexpected error in login")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Internal server error",
+        ) from None
 
     access_token = create_access_token(
         account.email,
@@ -216,6 +222,12 @@ async def refresh(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Token refresh is temporarily unavailable. Please try again.",
         )
+    except Exception:
+        _log.exception("Unexpected error in refresh")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Internal server error",
+        ) from None
     if theft_detected:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
@@ -289,6 +301,12 @@ async def logout(
                     status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
                     detail="Logout is temporarily unavailable. Please try again.",
                 )
+            except Exception:
+                _log.exception("Unexpected error in logout (inner)")
+                raise HTTPException(
+                    status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                    detail="Internal server error",
+                ) from None
         except ValueError:
             _log.warning("logout.invalid_token_family", extra={"token_family": family_id_val})
 
@@ -305,48 +323,55 @@ async def ws_token(
     current_user: AuthenticatedPrincipal = Depends(get_current_user),
     settings: Settings = Depends(get_settings),
 ) -> WsTokenResponse:
-    principal_json = {
-        "sub": current_user.username,
-        "org_id": str(current_user.organisation_id) if current_user.organisation_id else "",
-        "account_id": str(current_user.account_id),
-        "org_role": current_user.org_role or "",
-    }
+    try:
+        principal_json = {
+            "sub": current_user.username,
+            "org_id": str(current_user.organisation_id) if current_user.organisation_id else "",
+            "account_id": str(current_user.account_id),
+            "org_role": current_user.org_role or "",
+        }
 
-    if settings.redis_url:
-        redis = None
-        try:
-            from redis.asyncio import Redis
+        if settings.redis_url:
+            redis = None
+            try:
+                from redis.asyncio import Redis
 
-            redis = Redis.from_url(settings.redis_url, decode_responses=False)
-            token = await create_opaque_ws_token(
-                redis,
-                principal_json,
-                ttl=settings.modulo_ws_token_ttl_seconds,
-            )
-            return WsTokenResponse(
-                ws_token=token,
-                token_type="ws-opaque",
-                expires_in_seconds=settings.modulo_ws_token_ttl_seconds,
-            )
-        except Exception as exc:
-            _log.warning("ws_token.redis_fallback", extra={"error": str(exc)})
-        finally:
-            if redis is not None:
-                await redis.aclose()
+                redis = Redis.from_url(settings.redis_url, decode_responses=False)
+                token = await create_opaque_ws_token(
+                    redis,
+                    principal_json,
+                    ttl=settings.modulo_ws_token_ttl_seconds,
+                )
+                return WsTokenResponse(
+                    ws_token=token,
+                    token_type="ws-opaque",
+                    expires_in_seconds=settings.modulo_ws_token_ttl_seconds,
+                )
+            except Exception as exc:
+                _log.warning("ws_token.redis_fallback", extra={"error": str(exc)})
+            finally:
+                if redis is not None:
+                    await redis.aclose()
 
-    token = create_jwt_ws_token(
-        current_user.username,
-        settings.secret_key,
-        organisation_id=str(current_user.organisation_id) if current_user.organisation_id else "",
-        account_id=str(current_user.account_id),
-        org_role=current_user.org_role or "",
-        ttl_minutes=max(1, settings.modulo_ws_token_ttl_seconds // 60),
-    )
-    return WsTokenResponse(
-        ws_token=token,
-        token_type="ws-jwt",
-        expires_in_seconds=settings.modulo_ws_token_ttl_seconds,
-    )
+        token = create_jwt_ws_token(
+            current_user.username,
+            settings.secret_key,
+            organisation_id=str(current_user.organisation_id) if current_user.organisation_id else "",
+            account_id=str(current_user.account_id),
+            org_role=current_user.org_role or "",
+            ttl_minutes=max(1, settings.modulo_ws_token_ttl_seconds // 60),
+        )
+        return WsTokenResponse(
+            ws_token=token,
+            token_type="ws-jwt",
+            expires_in_seconds=settings.modulo_ws_token_ttl_seconds,
+        )
+    except Exception:
+        _log.exception("Unexpected error in ws_token")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Internal server error",
+        ) from None
 
 
 @router.get("/me", response_model=MeResponse)
@@ -369,6 +394,12 @@ async def me(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Account service is temporarily unavailable. Please try again.",
         )
+    except Exception:
+        _log.exception("Unexpected error in me")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Internal server error",
+        ) from None
     if account is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Account not found")
     return MeResponse(
@@ -391,11 +422,18 @@ async def csrf_token(
     current_user: AuthenticatedPrincipal = Depends(get_current_user),
     settings: Settings = Depends(get_settings),
 ) -> JSONResponse:
-    token = secrets.token_hex(32)
-    content = CsrfTokenResponse(csrf_token=token).model_dump()
-    response = JSONResponse(content=content)
-    _set_csrf_cookie(response, token, settings)
-    return response
+    try:
+        token = secrets.token_hex(32)
+        content = CsrfTokenResponse(csrf_token=token).model_dump()
+        response = JSONResponse(content=content)
+        _set_csrf_cookie(response, token, settings)
+        return response
+    except Exception:
+        _log.exception("Unexpected error in csrf_token")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Internal server error",
+        ) from None
 
 
 def _set_auth_cookies(response: Response, access_token: str, settings: Settings) -> None:

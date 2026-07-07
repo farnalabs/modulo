@@ -95,6 +95,12 @@ async def get_costs(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="A database error occurred. Please try again.",
         ) from None
+    except Exception:
+        _log.exception("Unexpected error in get_costs")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Internal server error",
+        ) from None
 
     return CostReportResponse(
         period=period,
@@ -129,6 +135,12 @@ async def get_spend_limits(
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="A database error occurred. Please try again.",
+        ) from None
+    except Exception:
+        _log.exception("Unexpected error in get_spend_limits")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Internal server error",
         ) from None
 
     return SpendLimitResponse(
@@ -173,6 +185,12 @@ async def set_org_spend_limit(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="A database error occurred. Please try again.",
         ) from None
+    except Exception:
+        _log.exception("Unexpected error in set_org_spend_limit")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Internal server error",
+        ) from None
 
     return {
         "organisation_id": str(org.id),
@@ -208,6 +226,12 @@ async def set_team_spend_limit(
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="A database error occurred. Please try again.",
+        ) from None
+    except Exception:
+        _log.exception("Unexpected error in set_team_spend_limit")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Internal server error",
         ) from None
 
     return {
@@ -256,6 +280,12 @@ async def get_cost_controls(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="A database error occurred. Please try again.",
         ) from None
+    except Exception:
+        _log.exception("Unexpected error in get_cost_controls")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Internal server error",
+        ) from None
 
     return CostControlsResponse(
         teams=[
@@ -301,6 +331,12 @@ async def update_cost_controls(
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="A database error occurred. Please try again.",
+        ) from None
+    except Exception:
+        _log.exception("Unexpected error in update_cost_controls")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Internal server error",
         ) from None
 
     return CostControlsResponse(
@@ -357,6 +393,12 @@ async def export_costs(
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="A database error occurred. Please try again.",
+        ) from None
+    except Exception:
+        _log.exception("Unexpected error in export_costs")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Internal server error",
         ) from None
 
     output = io.StringIO()
@@ -427,6 +469,12 @@ async def create_report(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="A database error occurred. Please try again.",
         ) from None
+    except Exception:
+        _log.exception("Unexpected error in create_report")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Internal server error",
+        ) from None
 
     return ReportResponse(
         id=str(report.id),
@@ -464,6 +512,12 @@ async def list_reports(
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="A database error occurred. Please try again.",
+        ) from None
+    except Exception:
+        _log.exception("Unexpected error in list_reports")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Internal server error",
         ) from None
 
     return [
@@ -507,6 +561,12 @@ async def delete_report(
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="A database error occurred. Please try again.",
+        ) from None
+    except Exception:
+        _log.exception("Unexpected error in delete_report")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Internal server error",
         ) from None
 
     if not deleted:
@@ -624,6 +684,12 @@ async def get_anomalies(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="A database error occurred. Please try again.",
         ) from None
+    except Exception:
+        _log.exception("Unexpected error in get_anomalies")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Internal server error",
+        ) from None
 
 
 @router.get("/anomalies/dismiss/{anomaly_id}", status_code=204)
@@ -653,6 +719,12 @@ async def dismiss_anomaly_endpoint(
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="A database error occurred. Please try again.",
+        ) from None
+    except Exception:
+        _log.exception("Unexpected error in dismiss_anomaly_endpoint")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Internal server error",
         ) from None
 
     if not dismissed:

@@ -163,6 +163,12 @@ async def list_profiles(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database error occurred. Please try again later.",
         ) from None
+    except Exception:
+        _log.exception("Unexpected error in list_profiles")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Internal server error",
+        ) from None
     return ProfileListResponse(
         items=[_to_response(p) for p in result.items],
         total=result.total,
@@ -208,6 +214,12 @@ async def create_profile(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database error occurred. Please try again later.",
         ) from None
+    except Exception:
+        _log.exception("Unexpected error in create_profile")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Internal server error",
+        ) from None
     return _to_response(profile)
 
 
@@ -230,6 +242,12 @@ async def get_profile(
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database error occurred. Please try again later.",
+        ) from None
+    except Exception:
+        _log.exception("Unexpected error in get_profile")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Internal server error",
         ) from None
     return _to_response(profile)
 
@@ -263,6 +281,12 @@ async def update_profile(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database error occurred. Please try again later.",
         ) from None
+    except Exception:
+        _log.exception("Unexpected error in update_profile")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Internal server error",
+        ) from None
     if profile is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -290,6 +314,12 @@ async def delete_profile(
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database error occurred. Please try again later.",
+        ) from None
+    except Exception:
+        _log.exception("Unexpected error in delete_profile")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Internal server error",
         ) from None
     if not deleted:
         raise HTTPException(
@@ -407,6 +437,12 @@ async def test_profile(
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database error occurred. Please try again later.",
+        ) from None
+    except Exception:
+        _log.exception("Unexpected error in test_profile")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Internal server error",
         ) from None
     return StreamingResponse(
         _sandbox_test_stream(profile),
