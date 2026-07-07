@@ -28,7 +28,7 @@ Schema Inference (8.16) samples records from a connected tool and uses an LLM to
 - [x] Raises `SchemaInferenceError` on LLM timeout (configurable, default 60s)
 - [x] Raises `SchemaInferenceError` on unparseable LLM response (invalid JSON, non-dict)
 - [x] Raises `SchemaInferenceError` on non-string `AIMessage.content`
-- [x] Raises `ValueError` on non-dict samples input
+- [x] Raises `SchemaInferenceError` on non-dict samples input
 - [x] Handles empty sample list (returns backend response)
 - [x] Supports custom system prompt injection via constructor
 - [x] Nested object/array structures in samples inferred correctly
@@ -180,4 +180,13 @@ Schema Inference (8.16) samples records from a connected tool and uses an LLM to
 - Stale [ ]→[x]: configurable sample count (IS configurable with `max_sample_records`, default mismatch noted in Known Gaps)
 - Added QA History section
 
-**Status:** partial (5 known PRD scope gaps remain: sample cap 50 vs 200, no enum detection, no rare-field flagging, no abstract_name, no SandboxedEnvironment, no data lifecycle) 
+**Status:** partial (5 known PRD scope gaps remain: sample cap 50 vs 200, no enum detection, no rare-field flagging, no abstract_name, no SandboxedEnvironment, no data lifecycle)
+
+### 2026-07-10 — Cross-cutting QA (improve-architecture index 299)
+
+**MINOR fixes applied:**
+- Product map line 30: corrected `Raises ValueError` → `Raises SchemaInferenceError` on non-dict samples input (code `inference.py:71` raises `SchemaInferenceError`, not `ValueError`)
+- `schemas.py`: moved lazy `append_audit_event` import from function body to module level
+- `schemas.py`: added `from None` to 6 exception handlers (`create_secrets_backend` ×2, `ConnectorHub.initialise`, `ConnectorHub.sample`, `ModelBackendHub.initialise`, `ModelBackendHub.get`) — prevents internal exception context leaking in 502/500 responses, matching established `from None` pattern elsewhere in the file
+
+**Test results:** All schema inference/generation/endpoint tests pass (no behaviour change). 
