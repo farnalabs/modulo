@@ -247,6 +247,7 @@
         <Button
           :disabled="!inputText.trim() || store.isStreaming || store.isExecutingUi"
           @click="handleSend"
+          :aria-label="$t('remy.send_message')"
         >
           <svg
             xmlns="http://www.w3.org/2000/svg"

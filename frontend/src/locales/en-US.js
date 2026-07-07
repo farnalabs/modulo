@@ -1260,6 +1260,19 @@ export default {
       "building2": "Building2"
     },
     "remy": {
+      "send_message": "Send message",
+      "export_transcript": "Export transcript",
+      "reset_permissions": "Reset permissions",
+      "dock_panel": "Dock panel",
+      "undock_panel": "Undock panel",
+      "maximise": "Maximise",
+      "minimise": "Minimise",
+      "close_panel": "Close panel",
+      "dismiss_error": "Dismiss error",
+      "open_remy": "Open Remy",
+      "new_skill": "New skill",
+      "new_session": "New session",
+      "delete_session": "Delete session",
       "RemySkillDialog": {
         "body_markdown": "Body (Markdown)",
         "delete_skill": "Delete Skill",
