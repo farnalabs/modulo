@@ -451,6 +451,28 @@
               data-testid="remy-nogo-selector-patterns"
             />
           </div>
+          <div>
+            <label class="mb-1 block text-sm font-medium">Allowed CSS Selectors</label>
+            <p class="mb-2 text-xs text-muted-foreground">When set, Remy can ONLY interact with elements matching these CSS selectors or data-testid prefixes. Leave empty to allow all.</p>
+            <textarea
+              v-model="safetyConfig.allowedSelectors"
+              rows="2"
+              class="w-full rounded-lg border border-input bg-background px-3 py-2 font-mono text-sm"
+              placeholder="[data-testid=pipeline-], .btn-primary"
+              data-testid="remy-allowed-selectors"
+            />
+          </div>
+          <div>
+            <label class="mb-1 block text-sm font-medium">Allowed Page URL Patterns</label>
+            <p class="mb-2 text-xs text-muted-foreground">When set, Remy can ONLY navigate to pages matching these URL patterns. Leave empty to allow all.</p>
+            <textarea
+              v-model="safetyConfig.allowedPagePatterns"
+              rows="2"
+              class="w-full rounded-lg border border-input bg-background px-3 py-2 font-mono text-sm"
+              placeholder="/admin/pipelines, /admin/schemas"
+              data-testid="remy-allowed-page-patterns"
+            />
+          </div>
           <div v-if="safetyError" class="text-sm text-destructive">{{ safetyError }}</div>
           <Tooltip :delay-duration="300">
             <TooltipTrigger as-child>
@@ -464,7 +486,7 @@
               </button>
             </TooltipTrigger>
             <TooltipContent side="top">
-              <p>Save rate limits, threshold, and no-go patterns.</p>
+              <p>Save rate limits, threshold, no-go patterns, and allowlist.</p>
             </TooltipContent>
           </Tooltip>
         </div>
@@ -910,6 +932,8 @@ const safetyConfig = reactive({
   autoExecuteThreshold: 0.8,
   nogoPagePatterns: '',
   nogoSelectorPatterns: '',
+  allowedSelectors: '',
+  allowedPagePatterns: '',
 })
 const safetySaving = ref(false)
 const safetyError = ref<string | null>(null)
@@ -920,6 +944,8 @@ function loadSafetyFromConfig(cfg: any) {
   safetyConfig.autoExecuteThreshold = cfg.auto_execute_threshold ?? 0.8
   safetyConfig.nogoPagePatterns = (cfg.nogo_page_patterns ?? []).join(', ')
   safetyConfig.nogoSelectorPatterns = (cfg.nogo_selector_patterns ?? []).join(', ')
+  safetyConfig.allowedSelectors = (cfg.allowed_selectors ?? []).join(', ')
+  safetyConfig.allowedPagePatterns = (cfg.allowed_page_patterns ?? []).join(', ')
 }
 
 async function saveSafetyConfig() {
@@ -929,12 +955,16 @@ async function saveSafetyConfig() {
   safetyError.value = null
   const nogoPagePatterns = safetyConfig.nogoPagePatterns.split(/[\s,]+/).map(s => s.trim()).filter(Boolean)
   const nogoSelectorPatterns = safetyConfig.nogoSelectorPatterns.split(/[\s,]+/).map(s => s.trim()).filter(Boolean)
+  const allowedSelectors = safetyConfig.allowedSelectors.split(/[\s,]+/).map(s => s.trim()).filter(Boolean)
+  const allowedPagePatterns = safetyConfig.allowedPagePatterns.split(/[\s,]+/).map(s => s.trim()).filter(Boolean)
   const err = await putConfig({
     rate_limit_max_actions: safetyConfig.rateLimitMaxActions,
     rate_limit_window_seconds: safetyConfig.rateLimitWindowSeconds,
     auto_execute_threshold: safetyConfig.autoExecuteThreshold,
     nogo_page_patterns: nogoPagePatterns,
     nogo_selector_patterns: nogoSelectorPatterns,
+    allowed_selectors: allowedSelectors,
+    allowed_page_patterns: allowedPagePatterns,
   })
   if (err) safetyError.value = `Failed to save safety config: ${formatApiError(err)}`
   safetySaving.value = false

@@ -391,6 +391,21 @@ def _resolve_tool_permission(config: RemyConfig, tool_name: str, args: dict[str,
             return "disabled"
         return "nogo_requires_approval"
 
+    # 0b. Allowlist enforcement (second priority — restricts which elements/pages are auto-allowed)
+    if config.allowed_selectors and tool_name in ("click", "fill", "select", "extract"):
+        selector = args.get("selector", "") or args.get("data-testid", "")
+        if not any(allowed in selector for allowed in config.allowed_selectors):
+            if config.permission_mode == "full_auto":
+                return "disabled"
+            return "requires_approval"
+
+    if config.allowed_page_patterns and tool_name == "navigate":
+        path = args.get("path", "")
+        if not any(pattern in path for pattern in config.allowed_page_patterns):
+            if config.permission_mode == "full_auto":
+                return "disabled"
+            return "requires_approval"
+
     # 1. Per-tool user override
     overrides = config.tool_permissions or {}
     if tool_name in overrides:
