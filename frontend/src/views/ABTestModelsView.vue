@@ -143,15 +143,16 @@
                   <label class="mb-1 block text-xs font-medium text-muted-foreground">
                     Weight: <span class="font-mono tabular-nums">{{ v.weight }}%</span>
                   </label>
-                  <input
-                    v-model.number="v.weight"
-                    :data-testid="`ab-test-models-weight-${i}`"
-                    type="range"
-                    min="0"
-                    max="100"
-                    step="1"
-                    class="w-full accent-primary"
-                  />
+                    <input
+                        v-model.number="v.weight"
+                        :data-testid="`ab-test-models-weight-${i}`"
+                        type="range"
+                        min="0"
+                        max="100"
+                        step="1"
+                        class="w-full accent-primary"
+                        aria-label="Weight"
+                      />
                 </div>
               </div>
             </div>

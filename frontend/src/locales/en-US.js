@@ -957,9 +957,12 @@ export default {
       "eg_issues_repositories_pullrequests": "e.g. issues, repositories, pull requests",
       "eg_stateopensortupdatede": "e.g. state=open, sort=updated, desc"
     },
-    "pipeline": {
-      "hide_ports": "Hide Ports"
-    },
+  "pipeline": {
+    "hide_ports": "Hide Ports"
+  },
+  "remy": {
+    "auto_execute_threshold": "Auto-execute confidence threshold"
+  },
     "SettingsRuntimeConfigView": {
       "failed_to_reload_config": "Failed to reload config:",
       "requires_server_restart": "Requires server restart",

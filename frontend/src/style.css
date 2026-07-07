@@ -380,6 +380,11 @@
     color: hsl(var(--primary));
   }
 
+  .badge-context-green {
+    color: hsl(142 71% 45%);
+    background-color: hsla(142 71% 45% / 0.1);
+  }
+
 @media (prefers-reduced-motion: no-preference) {
   html {
     scroll-behavior: smooth;
