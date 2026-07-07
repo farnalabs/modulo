@@ -424,7 +424,7 @@ async function fetchGroups() {
       selectedGroupId.value = list[0].id
     }
   } catch (e: unknown) {
-    error.value = `${t('views.variantCompare.failedToLoadGroups')} ${e instanceof Error ? e.message : String(e)}`
+    error.value = `${t('views.variantCompare.failedToLoadGroups')} ${formatApiError(e)}`
   } finally {
     loading.value = false
   }
@@ -442,7 +442,7 @@ async function fetchGroupDetail(id: string) {
     }
     selectedGroup.value = data as unknown as VariantGroup
   } catch (e: unknown) {
-    error.value = `${t('views.variantCompare.failedToLoadGroup')} ${e instanceof Error ? e.message : String(e)}`
+    error.value = `${t('views.variantCompare.failedToLoadGroup')} ${formatApiError(e)}`
   }
 }
 
@@ -484,7 +484,7 @@ async function runVariants() {
 
     await pollRunStatus(run_id, variant_name)
   } catch (e: unknown) {
-    error.value = `${t('views.variantCompare.failedToRunVariants')} ${e instanceof Error ? e.message : String(e)}`
+    error.value = `${t('views.variantCompare.failedToRunVariants')} ${formatApiError(e)}`
   }
 }
 
