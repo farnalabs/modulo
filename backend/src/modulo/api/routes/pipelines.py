@@ -486,6 +486,10 @@ async def get_pipeline_graph_endpoint(
             await set_rls_org(session, principal.organisation_id)
             await set_rls_user_context(session, principal.account_id, principal.org_role)
             graph = await get_pipeline_graph(session, pipeline_id)
+        if graph is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Pipeline not found")
+        nodes, edges = graph
+        return _graph_response(nodes, edges)
     except ProgrammingError:
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
@@ -504,10 +508,6 @@ async def get_pipeline_graph_endpoint(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="An unexpected error occurred.",
         ) from None
-    if graph is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Pipeline not found")
-    nodes, edges = graph
-    return _graph_response(nodes, edges)
 
 
 @router.patch("/{pipeline_id}/graph", response_model=PipelineGraphResponse)
