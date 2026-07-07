@@ -116,3 +116,43 @@ class TestDeprecationHeaderMiddleware:
         assert resp.status_code == 200
         assert "Deprecation" not in resp.headers
         assert "Sunset" not in resp.headers
+
+    def test_410_gone_when_sunset_past(self):
+        """A deprecated route whose sunset date has passed returns 410 Gone."""
+        DeprecationHeaderMiddleware.deprecate("/api/v1/old-endpoint", sunset="2020-01-01")
+        app = _make_app()
+        with TestClient(app) as client:
+            resp = client.get("/api/v1/old-endpoint")
+        assert resp.status_code == 410
+        body = resp.json()
+        assert "detail" in body
+        assert "no longer available" in body["detail"]
+
+    def test_200_with_headers_when_sunset_future(self):
+        """A deprecated route with a future sunset date returns 200 with headers."""
+        DeprecationHeaderMiddleware.deprecate("/api/v1/old-endpoint", sunset="2099-12-31")
+        app = _make_app()
+        with TestClient(app) as client:
+            resp = client.get("/api/v1/old-endpoint")
+        assert resp.status_code == 200
+        assert resp.headers.get("Deprecation") == "true"
+        assert resp.headers.get("Sunset") == "2099-12-31"
+
+    def test_410_includes_deprecation_header(self):
+        """410 Gone response still includes Deprecation: true header."""
+        DeprecationHeaderMiddleware.deprecate("/api/v1/old-endpoint", sunset="2020-06-15")
+        app = _make_app()
+        with TestClient(app) as client:
+            resp = client.get("/api/v1/old-endpoint")
+        assert resp.status_code == 410
+        assert resp.headers.get("Deprecation") == "true"
+        assert resp.headers.get("Sunset") == "2020-06-15"
+
+    def test_non_matching_path_no_410(self):
+        """Unrelated paths should not trigger 410 even if a deprecation exists."""
+        DeprecationHeaderMiddleware.deprecate("/api/v1/old-endpoint", sunset="2020-01-01")
+        app = _make_app()
+        with TestClient(app) as client:
+            resp = client.get("/api/v2/new-endpoint")
+        assert resp.status_code == 200
+        assert "Deprecation" not in resp.headers
