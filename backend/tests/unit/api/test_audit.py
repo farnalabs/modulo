@@ -396,6 +396,26 @@ class TestExportChain:
 class TestVerifyChain:
     URL = "/api/v1/admin/audit/verify"
 
+    def test_verify_programming_error_returns_501(self, client: TestClient) -> None:
+        with (
+            patch("modulo.api.routes.audit.verify_chain", side_effect=ProgrammingError("stmt", {}, "table not found")),
+            patch("modulo.api.routes.audit.set_rls_org"),
+        ):
+            resp = client.get(self.URL)
+        assert resp.status_code == 501
+
+    def test_verify_sqlalchemy_error_returns_503(self, client: TestClient) -> None:
+        with (
+            patch("modulo.api.routes.audit.verify_chain", side_effect=SQLAlchemyError("connection failed")),
+            patch("modulo.api.routes.audit.set_rls_org"),
+        ):
+            resp = client.get(self.URL)
+        assert resp.status_code == 503
+
+    def test_verify_non_admin_returns_403(self, non_admin_client: TestClient) -> None:
+        resp = non_admin_client.get(self.URL)
+        assert resp.status_code == 403
+
     def test_verify_returns_valid(self, client: TestClient) -> None:
         with (
             patch(
