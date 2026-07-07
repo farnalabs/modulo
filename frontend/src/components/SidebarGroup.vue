@@ -5,8 +5,7 @@
       :aria-expanded="!effectiveCollapsed"
       :aria-controls="`sidebar-group-${id}`"
       @click="$emit('toggle')"
-      :disabled="forceExpanded"
-      class="sidebar-group-header"
+      :class="['sidebar-group-header', { 'sidebar-group-header--active': isActive }]"
     >
       <span class="sidebar-group-label">{{ labelKey ? $t(labelKey) : label }}</span>
       <span class="sidebar-group-chevron" :class="{ rotated: !effectiveCollapsed }">
@@ -48,16 +47,14 @@ const props = withDefaults(defineProps<{
   labelKey: string;
   collapsed: boolean;
   forceExpanded?: boolean;
-}>(), { forceExpanded: false });
+  isActive?: boolean;
+}>(), { forceExpanded: false, isActive: false });
 
 defineEmits<{
   toggle: [];
 }>();
 
-const effectiveCollapsed = computed(() => {
-  if (props.forceExpanded) return false
-  return props.collapsed
-});
+const effectiveCollapsed = computed(() => props.collapsed);
 </script>
 
 <style scoped>
@@ -88,13 +85,12 @@ const effectiveCollapsed = computed(() => {
   color: hsl(var(--foreground));
 }
 
-.sidebar-group-header:disabled {
-  cursor: default;
-  opacity: 0.7;
+.sidebar-group-header--active {
+  color: hsl(var(--primary));
 }
 
-.sidebar-group-header:disabled:hover {
-  background: transparent;
+.sidebar-group-header--active .sidebar-group-label {
+  border-left-color: hsl(var(--primary));
 }
 
 .sidebar-group-header:focus-visible {
