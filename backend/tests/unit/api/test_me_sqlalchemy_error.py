@@ -85,7 +85,7 @@ class TestChangePasswordSQLAlchemyError:
         ):
             resp = client.put("/api/v1/me/password", json=self._PASSWORD_PAYLOAD)
         assert resp.status_code == 503
-        assert "database error" in resp.json()["detail"].lower()
+        assert "database temporarily unavailable" in resp.json()["detail"].lower()
 
     def test_get_settings_programming_error_returns_501(self, client: TestClient) -> None:
         with patch("modulo.api.routes.me.get_account_by_id", side_effect=ProgrammingError("stmt", {}, None)):
