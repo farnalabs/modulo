@@ -268,6 +268,11 @@ class TestGetLicense:
         resp = operator_client.get(self.URL)
         assert resp.status_code == 403
 
+    def test_returns_500_on_unexpected_error(self, client: TestClient) -> None:
+        with patch("modulo.api.routes.admin_license.get_organisation", side_effect=RuntimeError("boom")):
+            resp = client.get(self.URL)
+        assert resp.status_code == 500
+
 
 class TestUploadLicense:
     URL = "/api/v1/admin/license"

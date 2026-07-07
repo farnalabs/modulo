@@ -4,6 +4,7 @@ GET /api/v1/me       — current user info (canonical; auth/me also works)
 GET /api/v1/viewmodel/current — single-request aggregate for the frontend
 """
 
+import logging
 import uuid
 from datetime import datetime
 from typing import Any
@@ -11,7 +12,7 @@ from typing import Any
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, Field
 from sqlalchemy import select
-from sqlalchemy.exc import ProgrammingError
+from sqlalchemy.exc import ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.api.dependencies import get_db_session
@@ -29,6 +30,8 @@ from modulo.db.models.team import Team
 from modulo.db.models.view import SavedView
 from modulo.db.rls import set_rls_org, set_rls_user_context
 from modulo.settings import Settings, get_settings
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=["viewmodel"])
 
@@ -301,6 +304,20 @@ async def viewmodel_current(
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
+        )
+    except SQLAlchemyError:
+        logger.exception("viewmodel.current_failed")
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Database error while loading viewmodel data.",
+        )
+    except HTTPException:
+        raise
+    except Exception:
+        logger.exception("viewmodel.current_failed")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to load viewmodel data.",
         )
     enabled_features = plan_ctx.list_enabled_features()
     feature_flags = [

@@ -128,6 +128,14 @@ async def get_license_status(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database error while fetching license status.",
         ) from None
+    except HTTPException:
+        raise
+    except Exception:
+        logger.exception("license.get_failed")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to retrieve license status.",
+        )
 
 
 @router.post("", response_model=LicenseUploadResponse, status_code=status.HTTP_200_OK)

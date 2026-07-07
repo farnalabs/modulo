@@ -162,9 +162,11 @@ Feature flag inspection dashboard at `/admin/feature-flags` listing all known fl
 - [x] Frontend planStore.fetchPlan() uses Promise.allSettled — one failing API doesn't cascade to block other data
 - [x] Frontend planStore.fetchPlan() has 15s timeout for each API call via Promise.race
 - [ ] Frontend planStore has no retry mechanism on failure — error is recorded but not retried
-- [ ] `GET /api/v1/admin/license` (admin_license.py) has no ProgrammingError handling — missing DB tables propagate as 500
-- [ ] `GET /api/v1/license` (viewmodel.py) has no error handling at all — no try/except wrapper
-- [ ] `_build_registry` `has_key` does not check org-level license keys — org-level keys are ignored in the `has_license_key` response field
+- [x] `GET /api/v1/admin/license` (admin_license.py) has ProgrammingError→501 + SQLAlchemyError→503 handling; missing `except Exception→500` before index 286
+- [x] `GET /api/v1/license` (viewmodel.py) has `except Exception→500` but `logger` was undefined (NameError at runtime) — fixed at index 286
+- [x] `_build_registry` `has_key` checks org-level license keys (admin_feature_flags.py lines 88-92)
+- [ ] `viewmodel_current` route missing `except SQLAlchemyError→503` and `except Exception→500` guards — both added at index 286
+- [ ] `get_license_status` in admin_license.py missing `except Exception→500` guard — added at index 286
 
 ### Resilience
 
@@ -206,6 +208,17 @@ Feature flag inspection dashboard at `/admin/feature-flags` listing all known fl
 - [ ] No frontend tests for error/loading/empty states in AdminFeatureFlagsView
 - [ ] No tests for SettingsLicenseView or planStore
 
+## QA History (index 286 — cross-cutting re-check)
+
+### Findings fixed
+
+- **CRITICAL:** `viewmodel.py` had `logger.exception()` call at line 185 with no `import logging` and no `logger` defined. If the `license_info` endpoint's `except Exception` handler was ever triggered, it would crash with `NameError: name 'logger' is not defined`. Added `import logging` and `logger = logging.getLogger(__name__)`.
+- **CRITICAL:** `viewmodel_current` route in viewmodel.py only caught `ProgrammingError→501` — missing `SQLAlchemyError→503` (connection/deadlock failures propagated as opaque 500) and `Exception→500` with `except HTTPException: raise` guard (Python-level errors from model_validate, dict access, etc. propagated as opaque 500). Added both guards.
+- **CRITICAL:** `get_license_status` route in admin_license.py caught `ProgrammingError` and `SQLAlchemyError` but not generic `Exception` — Python-level errors from `_resolve_effective_license` (TypeError, KeyError, etc.) propagated as opaque 500. Added `except Exception→500` with `except HTTPException: raise` guard.
+- **MAJOR:** Added `test_viewmodel_current_returns_503_on_sqlalchemy_error` and `test_viewmodel_current_returns_500_on_unexpected_error` to test_viewmodel_endpoint.py.
+- **MAJOR:** Added `test_returns_500_on_unexpected_error` to test_admin_license.py `TestGetLicense` class.
+- **MAJOR:** Resolved 3 stale product map claims: `GET /api/v1/admin/license` already has ProgrammingError→501 + SQLAlchemyError→503; `GET /api/v1/license` already had `except Exception` (now with fixed logger); `_build_registry` `has_key` already checks org-level keys. Added 2 new checkboxes for the Exception→500 guards added in this session.
+
 ## QA History (index 136 — cross-cutting)
 
 ### Findings fixed
@@ -235,7 +248,7 @@ Feature flag inspection dashboard at `/admin/feature-flags` listing all known fl
 
 ### License verification
 - `is_valid` is always `True` in `admin_feature_flags.py` (list endpoint) and `viewmodel.py` (GET /api/v1/license) — no cryptographic license verification. The `_build_registry` function checks string presence only, not signature validity. The admin license management endpoint (`admin_license.py`) correctly validates via `parse_and_verify()`.
-- `GET /api/v1/license` (viewmodel.py) has zero try/except — settings access is trusted but unguarded.
+- `GET /api/v1/license` (viewmodel.py) had `except Exception` handler but `logger` was undefined (NameError) — fixed at index 286
 
 ### Thread safety & persistence
 - Flag overrides (`_overrides` ClassVar) are not thread-safe in async context — race conditions on concurrent toggle operations.
