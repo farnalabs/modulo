@@ -24,9 +24,11 @@ export default {
       "passed_count": "{count} passed"
     },
     "LibraryView": {
+      "title": "Library",
       "failed_to_load_primitives": "Failed to load modules",
       "test_fixtures": "Test Fixtures",
       "failed_to_toggle_autoupdate": "Failed to toggle auto-update",
+      "auto_update": "Auto-update",
       "pipeline_templates": "Pipeline Templates",
       "search_primitives": "Search modules...",
       "no_primitives_found": "No modules found",
