@@ -206,15 +206,35 @@
       </div>
     </div>
 
-    <div class="remy-input-area border-t p-3">
+    <div class="remy-input-area border-t p-3 relative">
+      <div
+        v-if="showSlashMenu"
+        class="remy-slash-menu"
+      >
+        <button
+          v-for="(cmd, idx) in filteredSlashCommands"
+          :key="cmd.command"
+          class="remy-slash-item"
+          :class="{ active: slashHighlightIdx === idx }"
+          @click="executeSlashCommand(cmd)"
+          @mouseenter="slashHighlightIdx = idx"
+        >
+          <span class="remy-slash-command">{{ cmd.command }}</span>
+          <span class="remy-slash-desc">{{ cmd.description }}</span>
+        </button>
+        <div v-if="filteredSlashCommands.length === 0" class="remy-slash-empty">
+          {{ $t('components.remy.RemyChat.no_slash_commands') }}
+        </div>
+      </div>
       <div class="flex gap-2">
         <textarea
+          ref="textareaRef"
           v-model="inputText"
           class="remy-input flex-1"
           :placeholder="$t('components.remy.RemyChat.ask_remy')"
           rows="1"
           @keydown="onInputKeydown"
-          @input="resizeInput"
+          @input="onInput"
           :disabled="store.isStreaming || store.isExecutingUi"
         />
         <Button
@@ -235,6 +255,20 @@
           </svg>
         </Button>
       </div>
+      <div
+        v-if="showDeleteConfirm"
+        class="remy-delete-confirm"
+      >
+        <p class="text-sm font-medium">{{ $t('components.remy.RemyChat.delete_confirm') }}</p>
+        <div class="flex gap-2 mt-2">
+          <Button variant="destructive" size="sm" @click="deleteCurrentSession">
+            {{ $t('common.delete') }}
+          </Button>
+          <Button variant="outline" size="sm" @click="showDeleteConfirm = false">
+            {{ $t('common.cancel') }}
+          </Button>
+        </div>
+      </div>
     </div>
   </div>
 </template>
@@ -254,6 +288,136 @@ const planStore = usePlanStore();
 const { connectStream } = useRemyStream();
 const scrollRef = ref<HTMLDivElement | null>(null);
 const inputText = ref("");
+const textareaRef = ref<HTMLTextAreaElement | null>(null);
+
+interface SlashCommand {
+  command: string
+  description: string
+  action: () => void
+}
+
+const slashCommands: SlashCommand[] = [
+  {
+    command: '/rename',
+    description: 'Rename current session',
+    action: () => {
+      showSlashMenu.value = false
+      store.triggerRename()
+    },
+  },
+  {
+    command: '/exit',
+    description: 'Close Remy panel',
+    action: () => {
+      showSlashMenu.value = false
+      store.setPanelState('closed')
+    },
+  },
+  {
+    command: '/help',
+    description: 'Show available commands',
+    action: () => {
+      showSlashMenu.value = false
+      const names = slashCommands.map(c => c.command).join(', ')
+      store.appendSystemMessage(`Available commands: ${names}`)
+    },
+  },
+  {
+    command: '/clear',
+    description: 'Clear current input',
+    action: () => {
+      inputText.value = ''
+      showSlashMenu.value = false
+    },
+  },
+  {
+    command: '/new',
+    description: 'Create a new session',
+    action: async () => {
+      showSlashMenu.value = false
+      await store.createSession()
+    },
+  },
+  {
+    command: '/delete',
+    description: 'Delete current session',
+    action: () => {
+      showSlashMenu.value = false
+      showDeleteConfirm.value = true
+    },
+  },
+]
+
+const showSlashMenu = ref(false)
+const slashHighlightIdx = ref(0)
+const showDeleteConfirm = ref(false)
+
+const filteredSlashCommands = computed(() => {
+  const text = inputText.value
+  if (!text.startsWith('/')) return []
+  const partial = text.slice(1).toLowerCase()
+  if (!partial) return slashCommands
+  return slashCommands.filter(c => c.command.slice(1).toLowerCase().startsWith(partial))
+})
+
+function onInput() {
+  resizeInput()
+  if (inputText.value.startsWith('/') && !inputText.value.includes(' ')) {
+    showSlashMenu.value = true
+    slashHighlightIdx.value = 0
+  } else {
+    showSlashMenu.value = false
+  }
+}
+
+function executeSlashCommand(cmd: SlashCommand) {
+  inputText.value = ''
+  showSlashMenu.value = false
+  cmd.action()
+}
+
+function onInputKeydown(e: KeyboardEvent) {
+  if (showSlashMenu.value && filteredSlashCommands.value.length > 0) {
+    if (e.key === 'ArrowDown') {
+      e.preventDefault()
+      slashHighlightIdx.value = (slashHighlightIdx.value + 1) % filteredSlashCommands.value.length
+      return
+    }
+    if (e.key === 'ArrowUp') {
+      e.preventDefault()
+      slashHighlightIdx.value = (slashHighlightIdx.value - 1 + filteredSlashCommands.value.length) % filteredSlashCommands.value.length
+      return
+    }
+    if (e.key === 'Enter' || e.key === 'Tab') {
+      e.preventDefault()
+      executeSlashCommand(filteredSlashCommands.value[slashHighlightIdx.value])
+      return
+    }
+    if (e.key === 'Escape') {
+      e.preventDefault()
+      showSlashMenu.value = false
+      return
+    }
+  }
+
+  if (e.key === 'Enter' && !e.shiftKey && !e.ctrlKey && !e.metaKey) {
+    e.preventDefault()
+    handleSend()
+  }
+}
+
+async function deleteCurrentSession() {
+  if (!store.activeSessionId) return
+  showDeleteConfirm.value = false
+  const id = store.activeSessionId
+  await store.deleteSession(id)
+  const sessions = store.sortedSessions
+  if (sessions.length > 0) {
+    await store.loadSession(sessions[0].id)
+  } else {
+    await store.createSession()
+  }
+}
 
 const uiDrivingEnabled = computed(() => planStore.featureEnabled('remy_ui_driving'))
 
@@ -658,5 +822,37 @@ function renderMarkdown(text: string): string {
 .remy-tool-details pre {
   @apply text-xs leading-relaxed whitespace-pre-wrap;
   color: hsl(var(--muted-foreground));
+}
+.remy-slash-menu {
+  @apply absolute bottom-full left-3 right-3 mb-1 rounded-lg border shadow-lg overflow-hidden z-50;
+  background-color: hsl(var(--popover));
+  border-color: hsl(var(--border));
+  max-height: 240px;
+  overflow-y: auto;
+}
+.remy-slash-item {
+  @apply flex items-center gap-3 w-full px-3 py-2 text-left text-sm transition-colors cursor-pointer;
+  color: hsl(var(--popover-foreground));
+}
+.remy-slash-item:hover,
+.remy-slash-item.active {
+  background-color: hsl(var(--accent));
+}
+.remy-slash-command {
+  @apply font-mono font-medium shrink-0;
+  color: hsl(var(--primary));
+}
+.remy-slash-desc {
+  @apply text-xs truncate;
+  color: hsl(var(--muted-foreground));
+}
+.remy-slash-empty {
+  @apply px-3 py-2 text-sm;
+  color: hsl(var(--muted-foreground));
+}
+.remy-delete-confirm {
+  @apply rounded-lg border p-3 mt-2;
+  background-color: hsl(var(--card));
+  border-color: hsl(var(--border));
 }
 </style>

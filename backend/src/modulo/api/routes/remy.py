@@ -1114,6 +1114,30 @@ async def stream_chat(
                             db_session.add(assistant_msg)
                             await db_session.flush()
                             msg_id = str(assistant_msg.id)
+
+                            # Auto-name session if it has no custom name
+                            if not chat_session.name:
+                                msg_count_q = select(func.count(ChatMessage.id)).where(
+                                    ChatMessage.session_id == session_id,
+                                    ChatMessage.role == "user",
+                                )
+                                msg_count = (await db_session.execute(msg_count_q)).scalar() or 0
+                                auto_name = None
+                                if msg_count == 1:
+                                    # First message: use first 40 chars of user's first message
+                                    name_seed = req.content[:40].strip()
+                                    auto_name = name_seed + ("..." if len(req.content) > 40 else "")
+                                elif msg_count >= 10:
+                                    # After 10 messages: use first user message prefix
+                                    first_msg_q = select(ChatMessage.content).where(
+                                        ChatMessage.session_id == session_id,
+                                        ChatMessage.role == "user",
+                                    ).order_by(ChatMessage.created_at.asc()).limit(1)
+                                    first_msg = (await db_session.execute(first_msg_q)).scalar() or ""
+                                    name_seed = first_msg[:30].strip()
+                                    auto_name = f"{name_seed}... ({msg_count} msgs)" if first_msg else None
+                                if auto_name:
+                                    chat_session.name = auto_name
                         break
 
                     # Separate UI vs MCP tool calls
