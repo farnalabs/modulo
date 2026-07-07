@@ -12,6 +12,8 @@ Checks:
 
 import re
 import uuid
+from collections import deque
+from types import MappingProxyType
 from typing import Any
 
 import jmespath
@@ -34,14 +36,14 @@ from modulo.db.models.pipeline_snapshot import PipelineSnapshot
 from modulo.db.models.schema import SchemaVersion
 
 _SKIPPED_EDGE_TYPES = frozenset({"reject", "kickback"})
-_JSON_TYPE_MAP: dict[str, type | tuple[type, ...]] = {
+_JSON_TYPE_MAP: MappingProxyType[str, type | tuple[type, ...]] = MappingProxyType({
     "string": str,
     "number": (int, float),
     "integer": int,
     "boolean": bool,
     "object": dict,
     "array": list,
-}
+})
 
 
 class GraphValidator:
@@ -220,11 +222,13 @@ class GraphValidator:
             src, tgt = str(edge["source"]), str(edge["target"])
             adj[src].append(tgt)
 
-        # Reachability BFS from all entry candidates over forwarding edges.
+        # BFS from the first entry candidate over forwarding edges.
+        # Nodes not visited (including other entry candidates) are unreachable.
         visited: set[str] = set()
-        queue = list(entry_candidates)
+        primary_entry = entry_candidates[0]
+        queue: deque[str] = deque([primary_entry])
         while queue:
-            nid = queue.pop()
+            nid = queue.popleft()
             if nid in visited:
                 continue
             visited.add(nid)
@@ -491,12 +495,12 @@ class GraphValidator:
         parsed_uuids, _ = try_parse_uuids(list(schema_ids))
         if not parsed_uuids:
             return {}
-        uuids = parsed_uuids
+
         rows = (
             (
                 await session.execute(
                     select(SchemaVersion).where(
-                        SchemaVersion.schema_id.in_(uuids),
+                        SchemaVersion.schema_id.in_(parsed_uuids),
                         SchemaVersion.published.is_(True),
                     )
                 )
@@ -505,12 +509,14 @@ class GraphValidator:
             .all()
         )
         latest: dict[uuid.UUID, dict[str, Any]] = {}
+        version_tracker: dict[uuid.UUID, int] = {}
         for row in rows:
             existing = latest.get(row.schema_id)
-            if existing is None or row.version_number > existing.get("_version_number", -1):
+            current_version = version_tracker.get(row.schema_id, -1)
+            if existing is None or row.version_number > current_version:
                 defn = dict(row.definition_json) if row.definition_json else {}
-                defn["_version_number"] = row.version_number
                 latest[row.schema_id] = defn
+                version_tracker[row.schema_id] = row.version_number
 
         return {str(k): v for k, v in latest.items()}
 
