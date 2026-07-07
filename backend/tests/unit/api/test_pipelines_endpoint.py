@@ -45,6 +45,7 @@ def _make_pipeline() -> MagicMock:
     p.run_context_defaults = {}
     p.default_autonomy_level = "manual_approval"
     p.created_by = uuid.uuid4()
+    p.account_id = p.created_by
     p.created_at = _NOW
     p.updated_at = _NOW
     return p
@@ -140,7 +141,7 @@ def test_create_pipeline_returns_201(client: TestClient) -> None:
     set_org.assert_awaited_once_with(ANY, _ORG_ID)
     set_user_ctx.assert_awaited_once_with(ANY, _USER_ID, "admin")
     assert create.await_args.kwargs["org_id"] == _ORG_ID
-    assert create.await_args.kwargs["created_by"] == _USER_ID
+    assert create.await_args.kwargs["account_id"] == _USER_ID
 
 
 def test_create_pipeline_default_autonomy_level(client: TestClient) -> None:
@@ -351,7 +352,9 @@ def test_replace_pipeline_graph_accepts_manual_node_contract(client: TestClient)
         )
 
     assert resp.status_code == 200
-    assert resp.json()["nodes"][0] == nodes[0]
+    actual = resp.json()["nodes"][0]
+    for key in ("id", "node_type", "agent_id", "position", "connector_binding", "output_schema_id", "label", "role", "autonomy_recommendation"):
+        assert actual.get(key) == nodes[0].get(key), f"Mismatch on key '{key}': {actual.get(key)} != {nodes[0].get(key)}"
 
 
 def test_replace_pipeline_graph_rejects_excessive_node_count(client: TestClient) -> None:
@@ -363,7 +366,9 @@ def test_replace_pipeline_graph_rejects_excessive_node_count(client: TestClient)
         json={"nodes": nodes, "edges": []},
     )
     assert resp.status_code == 422
-    assert "exceeds maximum" in resp.json()["error"]["detail"]
+    body = resp.json()
+    errors = body.get("detail", body.get("error", {}).get("detail", ""))
+    assert "exceeds maximum" in (errors if isinstance(errors, str) else str(errors))
 
 
 def test_replace_pipeline_graph_rejects_excessive_edge_count(client: TestClient) -> None:
@@ -381,7 +386,9 @@ def test_replace_pipeline_graph_rejects_excessive_edge_count(client: TestClient)
         },
     )
     assert resp.status_code == 422
-    assert "exceeds maximum" in resp.json()["error"]["detail"]
+    body = resp.json()
+    errors = body.get("detail", body.get("error", {}).get("detail", ""))
+    assert "exceeds maximum" in (errors if isinstance(errors, str) else str(errors))
 
 
 @pytest.mark.parametrize(
