@@ -59,6 +59,8 @@ def _make_run(
     r = MagicMock()
     r.id = _RUN_ID
     r.pipeline_id = _PIPELINE_ID
+    r.pipeline_name = "Test Pipeline"
+    r.pipeline = None
     r.status = status
     r.langgraph_thread_id = _THREAD_ID
     r.error_detail = error_detail
@@ -199,7 +201,7 @@ def test_trigger_run_body_includes_thread_id(client: TestClient) -> None:
 
     assert "langgraph_thread_id" in resp.json()
     assert create_run_mock.await_args.kwargs["snapshot_id"] == _SNAPSHOT_ID
-    assert create_snapshot.await_args.kwargs["created_by"] == _USER_ID
+    assert create_snapshot.await_args.kwargs["account_id"] == _USER_ID
 
 
 # ---------------------------------------------------------------------------
