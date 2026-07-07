@@ -22,7 +22,7 @@ ACCOUNT_ID = uuid.UUID("00000000-0000-0000-0000-000000000002")
 async def seed() -> None:
     settings = get_settings()
     engine = create_async_engine(settings.database_url)
-    async with AsyncSession(engine) as session:
+    async with AsyncSession(engine, autobegin=False) as session:
         for entry in SCHEMAS:
             existing = (
                 await session.execute(
