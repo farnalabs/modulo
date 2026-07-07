@@ -420,6 +420,22 @@ class PipelineExecutor:
             if final_status != "awaiting_human":
                 get_registry().close(run_id)
 
+        # Record audit events for block failures on resume.
+        if final_status == "eval_failed" and error_code == "eval_blocked":
+            async with self._session_factory() as session, session.begin():
+                await set_rls_org(session, org_id)
+                try:
+                    await append_audit_event(
+                        session,
+                        org_id=org_id,
+                        event_type="eval.blocked",
+                        resource_type="run",
+                        resource_id=run_id,
+                        payload_json={"error_detail": error_code},
+                    )
+                except Exception:
+                    _log.exception("audit.eval_blocked_failed", extra={"run_id": str(run_id)})
+
         total_tokens, total_cost, _ = self._compute_token_costs(
             node_token_usage, self._INPUT_TOKEN_RATE, self._OUTPUT_TOKEN_RATE,
         )

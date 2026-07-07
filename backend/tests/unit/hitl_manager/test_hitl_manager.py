@@ -889,6 +889,7 @@ async def test_executor_sets_awaiting_human_on_node_interrupt():
         ),
         patch("modulo.core.pipeline_engine.executor.GraphValidator", new=_mock_graph_validator()),
         patch.object(PipelineExecutor, "_wait_for_capacity_or_fail", _bypass_capacity),
+        patch("modulo.settings.get_settings", return_value=MagicMock(fernet_key="x" * 32)),
     ):
         executor = PipelineExecutor(MagicMock(), checkpointer_conn_string="a" * 32)
         result = await executor.execute(run_id=run.id, org_id=uuid.uuid4(), input_payload={})

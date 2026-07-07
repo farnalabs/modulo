@@ -196,7 +196,7 @@ def make_hitl_gate_fn(
         if condition_expr:
             try:
                 compiled = jmespath.compile(condition_expr)
-            except Exception:
+            except jmespath.exceptions.JMESPathError:
                 _log.exception("hitl_gate.invalid_condition", extra={"condition": condition_expr})
                 raise ValueError(f"Invalid HITL gate condition expression: {condition_expr}") from None
             result = compiled.search(state)

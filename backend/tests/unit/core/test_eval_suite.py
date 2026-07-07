@@ -4,6 +4,7 @@ from uuid import uuid4
 
 from modulo.core.eval_engine import (
     EvalResult,
+    EvalSuiteBlockedError,
     SuiteEvalResult,
     evaluate_suite,
 )
@@ -101,3 +102,33 @@ class TestEvaluateSuite:
         assert result.aggregate_score == 0.7
         assert result.passed is True
         assert result.blocking_failures == ["e1: failed"]
+
+
+class TestEvalSuiteBlockedError:
+    def test_constructor_sets_fields(self) -> None:
+        """EvalSuiteBlockedError stores suite_id, score, and threshold."""
+        err = EvalSuiteBlockedError("suite-1", 0.3, 0.8)
+        assert err.suite_id == "suite-1"
+        assert err.score == 0.3
+        assert err.threshold == 0.8
+        assert "0.30" in str(err)
+        assert "0.80" in str(err)
+        assert "suite-1" in str(err)
+
+    def test_constructor_boundary_threshold_exact(self) -> None:
+        """Boundary case: score equal to threshold should be treated as pass
+        by evaluate_suite; EvalSuiteBlockedError should still construct."""
+        err = EvalSuiteBlockedError("suite-1", 0.8, 0.8)
+        assert err.score == err.threshold
+
+    def test_constructor_zero_score(self) -> None:
+        """Boundary case: score of 0.0 models complete failure."""
+        err = EvalSuiteBlockedError("suite-1", 0.0, 0.5)
+        assert err.score == 0.0
+        assert err.threshold == 0.5
+
+    def test_constructor_high_threshold(self) -> None:
+        """Boundary case: threshold of 1.0 models perfection requirement."""
+        err = EvalSuiteBlockedError("suite-1", 0.99, 1.0)
+        assert err.score == 0.99
+        assert err.threshold == 1.0
