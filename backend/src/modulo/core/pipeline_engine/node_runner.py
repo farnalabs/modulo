@@ -82,6 +82,7 @@ def _evaluate_eval_condition(score: float, threshold: float, operator: str) -> b
         case "neq":
             return score != threshold
         case _:
+            _log.warning("hitl_gate.unknown_operator", extra={"operator": operator, "score": score, "threshold": threshold})
             return False
 
 
