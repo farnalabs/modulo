@@ -77,6 +77,11 @@ export const useRemyStore = defineStore('remy', () => {
   const pendingPermission = ref<PermissionRequest | null>(null)
   const isExecutingUi = ref(false)
   const isPaused = ref(false)
+  const requestRename = ref(0)
+
+  function triggerRename() {
+    requestRename.value++
+  }
 
   const activeSession = computed(() =>
     Array.isArray(sessions.value) ? sessions.value.find(s => s.id === activeSessionId.value) ?? null : null,
@@ -169,6 +174,29 @@ export const useRemyStore = defineStore('remy', () => {
       error.value = e instanceof Error ? e.message : extractErrorMessage(e)
     } finally {
       loading.value = false
+    }
+  }
+
+  async function renameSession(id: string, name: string): Promise<boolean> {
+    error.value = null
+    try {
+      const resp = await api.PATCH('/api/v1/remy/sessions/{id}', {
+        params: { path: { id } },
+        body: { name },
+      })
+      if (resp.error) {
+        error.value = extractErrorMessage(resp.error)
+        return false
+      }
+      const updated = resp.data!
+      if (Array.isArray(sessions.value)) {
+        const idx = sessions.value.findIndex(s => s.id === id)
+        if (idx >= 0) sessions.value[idx] = updated as any
+      }
+      return true
+    } catch (e: unknown) {
+      error.value = e instanceof Error ? e.message : extractErrorMessage(e)
+      return false
     }
   }
 
@@ -340,12 +368,15 @@ export const useRemyStore = defineStore('remy', () => {
     pendingPermission,
     isExecutingUi,
     isPaused,
+    requestRename,
+    triggerRename,
     activeSession,
     sortedSessions,
     fetchSessions,
     createSession,
     loadSession,
     loadActiveSessionId,
+    renameSession,
     deleteSession,
     sendMessage,
     setPanelState,

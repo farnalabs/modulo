@@ -23,7 +23,10 @@ from modulo.api.routes.auth import me as _me_handler
 from modulo.auth.dependencies import get_current_user
 from modulo.auth.jwt import AuthenticatedPrincipal
 from modulo.auth.passwords import hash_password, validate_password_strength, verify_password
-from modulo.core.remy.context_source_service import RemyContextSourceService
+from modulo.core.remy.context_source_service import (
+    ContextSourceResponseItem,
+    RemyContextSourceService,
+)
 from modulo.db.crud.account import get_account_by_id, update_account_preferences
 from modulo.db.crud.token_family import blacklist_family, list_families_for_account
 from modulo.db.models.remy_skill import RemySkill
@@ -377,14 +380,17 @@ class ContextSourceModeUpdate(BaseModel):
 async def get_user_context_sources(
     current_user: AuthenticatedPrincipal = Depends(get_current_user),
     session: AsyncSession = Depends(get_db_session),
-) -> dict[str, str]:
+) -> list[ContextSourceResponseItem]:
     try:
         async with session.begin():
             service = RemyContextSourceService(session)
             config = await service.get_effective_config(
                 current_user.organisation_id, current_user.account_id
             )
-        return config.context_sources
+            user_overrides = await service.get_user_overrides(
+                current_user.organisation_id, current_user.account_id
+            )
+        return service.build_effective_items(config.context_sources, user_overrides)
     except ProgrammingError:
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
@@ -411,7 +417,7 @@ async def set_user_context_source(
     req: ContextSourceModeUpdate,
     current_user: AuthenticatedPrincipal = Depends(get_current_user),
     session: AsyncSession = Depends(get_db_session),
-) -> dict[str, str]:
+) -> list[ContextSourceResponseItem]:
     try:
         async with session.begin():
             service = RemyContextSourceService(session)
@@ -424,7 +430,10 @@ async def set_user_context_source(
             config = await service.get_effective_config(
                 current_user.organisation_id, current_user.account_id
             )
-        return config.context_sources
+            user_overrides = await service.get_user_overrides(
+                current_user.organisation_id, current_user.account_id
+            )
+        return service.build_effective_items(config.context_sources, user_overrides)
     except ProgrammingError:
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
@@ -449,7 +458,7 @@ async def set_user_context_source(
 async def reset_user_context_sources(
     current_user: AuthenticatedPrincipal = Depends(get_current_user),
     session: AsyncSession = Depends(get_db_session),
-) -> dict[str, str]:
+) -> list[ContextSourceResponseItem]:
     try:
         async with session.begin():
             service = RemyContextSourceService(session)
@@ -459,9 +468,22 @@ async def reset_user_context_sources(
             config = await service.get_effective_config(
                 current_user.organisation_id, current_user.account_id
             )
-        return config.context_sources
+        return service.build_effective_items(config.context_sources, {})
     except ProgrammingError:
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
         ) from None
+    except SQLAlchemyError:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Database error",
+        ) from None
+    except HTTPException:
+        raise
+    except Exception as e:
+        _log.exception("me.reset_user_context_sources.unexpected_error")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="An unexpected error occurred",
+        ) from e

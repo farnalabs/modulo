@@ -1277,8 +1277,14 @@ export default {
         "start_a_new_chat": "Start a new chat",
         "new_session": "New session"
       },
+      "RemyPanel": {
+        "click_to_rename": "Click to rename session",
+        "session_label": "Session"
+      },
       "RemyChat": {
-        "ask_remy": "Ask Remy..."
+        "ask_remy": "Ask Remy...",
+        "no_slash_commands": "No matching commands",
+        "delete_confirm": "Delete this session?"
       },
       "RemySkillManager": {
         "triggers_commaseparated": "Triggers (comma-separated)",
