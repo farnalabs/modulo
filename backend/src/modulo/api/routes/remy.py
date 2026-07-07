@@ -477,6 +477,9 @@ async def _is_approved_for_session(session_id: str, tool_name: str, page_path: s
     stale_keys = [k for k, v in session_approvals.items() if now >= v["expires_at"]]
     for k in stale_keys:
         del session_approvals[k]
+    if not session_approvals:
+        _session_approvals.pop(session_id, None)
+        return False
     approval = session_approvals.get(tool_name)
     return bool(approval and now < approval["expires_at"] and approval["page_path"] == page_path)
 
@@ -862,6 +865,16 @@ async def delete_session(
                 raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Session not found")
 
             await session.delete(chat_session)
+
+        # Clean up in-memory state
+        session_id_str = str(session_id)
+        _pending_permissions.pop(session_id_str, None)
+        _permission_decisions.pop(session_id_str, None)
+        _pending_ui_results.pop(session_id_str, None)
+        _ui_command_results.pop(session_id_str, None)
+        _resume_events.pop(session_id_str, None)
+        _session_approvals.pop(session_id_str, None)
+        _rate_limiters.pop(session_id_str, None)
 
         return {"status": "deleted", "id": str(session_id)}
     except ProgrammingError:
@@ -1604,7 +1617,9 @@ async def reset_session_permissions(
             detail="Database error. Please try again later.",
         ) from None
 
-    await _clear_session_approvals(str(session_id))
+    session_id_str = str(session_id)
+    await _clear_session_approvals(session_id_str)
+    _rate_limiters.pop(session_id_str, None)
     return {"status": "ok"}
 
 
