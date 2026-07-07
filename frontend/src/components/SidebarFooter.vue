@@ -1,5 +1,5 @@
 <template>
-  <div :class="['space-y-3', compact ? 'mb-2' : 'border-t pt-4 mt-auto']">
+  <div :class="['space-y-2', compact ? 'mb-2' : 'border-t pt-4 mt-auto']">
     <div class="flex items-center gap-2">
       <div class="avatar-ring">
         <div
@@ -64,14 +64,15 @@
           :checked="isLight"
         />
       </label>
-      <button
-        type="button"
-        @click="$emit('logout')"
-        class="text-xs text-muted-foreground hover:text-foreground transition-colors"
-      >
-        {{ $t('common.sign_out') }}
-      </button>
     </div>
+
+    <button
+      type="button"
+      @click="$emit('logout')"
+      class="w-full text-xs text-muted-foreground hover:text-foreground transition-colors text-left"
+    >
+      {{ $t('common.sign_out') }}
+    </button>
   </div>
 </template>
 
