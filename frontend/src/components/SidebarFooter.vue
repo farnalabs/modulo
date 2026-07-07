@@ -15,29 +15,6 @@
       >
         {{ userEmail }}
       </router-link>
-      <router-link
-        to="/settings/license"
-        class="shrink-0"
-        :title="
-          planStore.isTeam && planStore.expiresAt
-            ? 'Expires: ' +
-              new Date(planStore.expiresAt).toLocaleDateString('en-US', {
-                year: 'numeric',
-                month: 'long',
-                day: 'numeric',
-              })
-            : undefined
-        "
-      >
-        <span
-          v-if="planStore.currentTier === 'team'"
-          class="badge-plan bg-primary/10 text-primary font-medium"
-          >{{ planStore.getTierLabel(planStore.currentTier) }}</span
-        >
-        <span v-else class="badge-plan">{{
-          planStore.getTierLabel(planStore.currentTier)
-        }}</span>
-      </router-link>
     </div>
 
     <div class="flex items-center justify-between">
