@@ -16,6 +16,7 @@ from modulo.core.pipeline_engine.graph_cache import (
     _make_gate_kickback_router,
     build_graph_from_json,
 )
+from modulo.core.pipeline_engine.node_runner import _evaluate_eval_condition
 
 # ---------------------------------------------------------------------------
 # _is_truthy — JMESPath truthiness semantics
@@ -49,6 +50,36 @@ def test_is_truthy_collections():
 def test_is_truthy_string():
     assert _is_truthy("") is False
     assert _is_truthy("hello") is True
+
+
+# ---------------------------------------------------------------------------
+# _evaluate_eval_condition — operator comparison
+# ---------------------------------------------------------------------------
+
+
+def test_eval_condition_lt():
+    assert _evaluate_eval_condition(0.3, 0.8, "lt") is True
+    assert _evaluate_eval_condition(0.9, 0.8, "lt") is False
+
+
+def test_eval_condition_gt():
+    assert _evaluate_eval_condition(0.9, 0.8, "gt") is True
+    assert _evaluate_eval_condition(0.3, 0.8, "gt") is False
+
+
+def test_eval_condition_eq():
+    assert _evaluate_eval_condition(0.5, 0.5, "eq") is True
+    assert _evaluate_eval_condition(0.5, 0.6, "eq") is False
+
+
+def test_eval_condition_neq():
+    assert _evaluate_eval_condition(0.5, 0.6, "neq") is True
+    assert _evaluate_eval_condition(0.5, 0.5, "neq") is False
+
+
+def test_eval_condition_unknown_operator_returns_false():
+    """Unknown operator returns False (gate is skipped) and logs a warning."""
+    assert _evaluate_eval_condition(0.5, 0.8, "gtt") is False
 
 
 # ---------------------------------------------------------------------------
