@@ -1450,11 +1450,13 @@ async def convert_node_to_agent_endpoint(
             detail="Resource integrity conflict.",
         ) from None
     except ProgrammingError:
+        _log.warning("convert_to_agent: DB table missing — returning 501")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
         ) from None
     except SQLAlchemyError:
+        _log.warning("convert_to_agent: DB error — returning 503")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database temporarily unavailable.",
@@ -1556,16 +1558,19 @@ async def revert_node_to_manual_endpoint(
 
             saved = await _save_graph(session, pipeline_id, principal.organisation_id, nodes, edges)
     except IntegrityError:
+        _log.warning("revert_to_manual: resource integrity conflict — returning 409")
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="Resource integrity conflict.",
         ) from None
     except ProgrammingError:
+        _log.warning("revert_to_manual: DB table missing — returning 501")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
         ) from None
     except SQLAlchemyError:
+        _log.warning("revert_to_manual: DB error — returning 503")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database temporarily unavailable.",
