@@ -15,10 +15,11 @@ Configured via environment variables:
 from __future__ import annotations
 
 import asyncio
+import logging
 import os
 from typing import Any
 
-from modulo.core.secrets_backend import SecretsBackend, validate_key
+from modulo.core.secrets_backend import SecretsBackend, logger, run_sync, validate_key
 
 _TIMEOUT: float = 30.0
 
@@ -31,6 +32,9 @@ try:
     _hvac = hvac
 except ImportError:
     _MODULE_AVAILABLE = False
+
+
+_VAULT_RATELIMIT_ERROR_CODES: set[int] = {429, 503}
 
 
 class VaultSecretsBackend(SecretsBackend):
@@ -49,15 +53,15 @@ class VaultSecretsBackend(SecretsBackend):
                 "The 'hvac' package is required for VaultSecretsBackend. Install it with: pip install hvac"
             )
 
-        self._addr: str = os.environ.get("VAULT_ADDR", "")
+        self._addr: str = (os.environ.get("VAULT_ADDR") or "").strip()
         if not self._addr:
             raise ValueError("VaultSecretsBackend: VAULT_ADDR is not set")
 
-        self._token: str | None = os.environ.get("VAULT_TOKEN") or None
-        self._role_id: str | None = os.environ.get("VAULT_ROLE_ID") or None
-        self._secret_id: str | None = os.environ.get("VAULT_SECRET_ID") or None
-        self._mount_point: str = os.environ.get("VAULT_MOUNT_POINT", "secret")
-        self._path_prefix: str = os.environ.get("VAULT_PATH_PREFIX", "modulo/secrets")
+        self._token: str | None = (os.environ.get("VAULT_TOKEN") or "").strip() or None
+        self._role_id: str | None = (os.environ.get("VAULT_ROLE_ID") or "").strip() or None
+        self._secret_id: str | None = (os.environ.get("VAULT_SECRET_ID") or "").strip() or None
+        self._mount_point: str = (os.environ.get("VAULT_MOUNT_POINT") or "secret").strip()
+        self._path_prefix: str = (os.environ.get("VAULT_PATH_PREFIX") or "modulo/secrets").strip()
 
         self._client: Any = None
         self._client_lock: asyncio.Lock = asyncio.Lock()
@@ -77,20 +81,28 @@ class VaultSecretsBackend(SecretsBackend):
 
             client = _hvac.Client(url=self._addr)
 
-            if self._token:
-                client.token = self._token
-            elif self._role_id and self._secret_id:
-                client.auth.approle.login(
-                    role_id=self._role_id,
-                    secret_id=self._secret_id,
-                )
-            else:
-                raise RuntimeError("VaultSecretsBackend: neither VAULT_TOKEN nor VAULT_ROLE_ID+VAULT_SECRET_ID are set")
+            try:
+                if self._token:
+                    client.token = self._token
+                elif self._role_id and self._secret_id:
+                    await run_sync(
+                        client.auth.approle.login,
+                        role_id=self._role_id,
+                        secret_id=self._secret_id,
+                        timeout=_TIMEOUT,
+                    )
+                else:
+                    raise RuntimeError("VaultSecretsBackend: neither VAULT_TOKEN nor VAULT_ROLE_ID+VAULT_SECRET_ID are set")
+            except Exception:
+                logger.exception("VaultSecretsBackend: failed to authenticate to Vault at %s", self._addr)
+                raise
 
             self._client = client
             return self._client
 
     def _secret_path(self, key: str) -> str:
+        if ".." in key or key.startswith("/"):
+            raise ValueError(f"VaultSecretsBackend: invalid secret key: {key!r}")
         return f"{self._path_prefix}/{key}"
 
     async def get_secret(self, key: str) -> str:
@@ -99,21 +111,28 @@ class VaultSecretsBackend(SecretsBackend):
         path = self._secret_path(key)
 
         try:
-            response = await asyncio.wait_for(
-                asyncio.to_thread(
-                    client.secrets.kv.v2.read_secret_version,
-                    path=path,
-                    mount_point=self._mount_point,
-                ),
+            response = await run_sync(
+                client.secrets.kv.v2.read_secret_version,
+                path=path,
+                mount_point=self._mount_point,
                 timeout=_TIMEOUT,
             )
         except _hvac.exceptions.InvalidPath:
             raise KeyError(key) from None
         except _hvac.exceptions.Forbidden as exc:
+            logger.warning("VaultSecretsBackend: permission denied reading secret %s", key)
             raise PermissionError("VaultSecretsBackend: permission denied reading secret") from exc
         except TimeoutError:
+            logger.error("VaultSecretsBackend: timeout reading secret %s", key)
             raise RuntimeError("VaultSecretsBackend: timeout reading secret") from None
+        except _hvac.exceptions.VaultError as exc:
+            if getattr(exc, "status_code", None) in _VAULT_RATELIMIT_ERROR_CODES:
+                logger.warning("VaultSecretsBackend: rate-limited reading secret %s", key)
+                raise RuntimeError("VaultSecretsBackend: rate-limited reading secret") from exc
+            logger.error("VaultSecretsBackend: Vault error reading secret %s: %s", key, exc)
+            raise RuntimeError(f"VaultSecretsBackend: unexpected error reading secret: {exc}") from exc
         except Exception as exc:
+            logger.error("VaultSecretsBackend: unexpected error reading secret %s: %s", key, exc)
             raise RuntimeError(f"VaultSecretsBackend: unexpected error reading secret: {exc}") from exc
 
         data: dict[str, Any] = response.get("data", {})
@@ -131,18 +150,24 @@ class VaultSecretsBackend(SecretsBackend):
         path = self._secret_path(key)
 
         try:
-            await asyncio.wait_for(
-                asyncio.to_thread(
-                    client.secrets.kv.v2.create_or_update_secret,
-                    path=path,
-                    secret={"value": value},
-                    mount_point=self._mount_point,
-                ),
+            await run_sync(
+                client.secrets.kv.v2.create_or_update_secret,
+                path=path,
+                secret={"value": value},
+                mount_point=self._mount_point,
                 timeout=_TIMEOUT,
             )
         except TimeoutError:
+            logger.error("VaultSecretsBackend: timeout writing secret %s", key)
             raise RuntimeError("VaultSecretsBackend: timeout writing secret") from None
+        except _hvac.exceptions.VaultError as exc:
+            if getattr(exc, "status_code", None) in _VAULT_RATELIMIT_ERROR_CODES:
+                logger.warning("VaultSecretsBackend: rate-limited writing secret %s", key)
+                raise RuntimeError("VaultSecretsBackend: rate-limited writing secret") from exc
+            logger.error("VaultSecretsBackend: Vault error writing secret %s: %s", key, exc)
+            raise RuntimeError(f"VaultSecretsBackend: unexpected error writing secret: {exc}") from exc
         except Exception as exc:
+            logger.error("VaultSecretsBackend: unexpected error writing secret %s: %s", key, exc)
             raise RuntimeError(f"VaultSecretsBackend: unexpected error writing secret: {exc}") from exc
 
     async def delete_secret(self, key: str) -> None:
@@ -151,17 +176,23 @@ class VaultSecretsBackend(SecretsBackend):
         path = self._secret_path(key)
 
         try:
-            await asyncio.wait_for(
-                asyncio.to_thread(
-                    client.secrets.kv.v2.delete_metadata_and_all_versions,
-                    path=path,
-                    mount_point=self._mount_point,
-                ),
+            await run_sync(
+                client.secrets.kv.v2.delete_metadata_and_all_versions,
+                path=path,
+                mount_point=self._mount_point,
                 timeout=_TIMEOUT,
             )
         except _hvac.exceptions.InvalidPath:
             pass
         except TimeoutError:
+            logger.error("VaultSecretsBackend: timeout deleting secret %s", key)
             raise RuntimeError("VaultSecretsBackend: timeout deleting secret") from None
+        except _hvac.exceptions.VaultError as exc:
+            if getattr(exc, "status_code", None) in _VAULT_RATELIMIT_ERROR_CODES:
+                logger.warning("VaultSecretsBackend: rate-limited deleting secret %s", key)
+                raise RuntimeError("VaultSecretsBackend: rate-limited deleting secret") from exc
+            logger.error("VaultSecretsBackend: Vault error deleting secret %s: %s", key, exc)
+            raise RuntimeError(f"VaultSecretsBackend: unexpected error deleting secret: {exc}") from exc
         except Exception as exc:
+            logger.error("VaultSecretsBackend: unexpected error deleting secret %s: %s", key, exc)
             raise RuntimeError(f"VaultSecretsBackend: unexpected error deleting secret: {exc}") from exc
