@@ -39,9 +39,9 @@ Mapping eval suites to organisational OKRs so teams can track quality targets ov
 ### Target Date Management
 - [x] target_date parsing failure returns None days_to_target (graceful degradation)
 - [ ] Suite target_date persisted as a DB column (currently Pydantic-only on OkrSuite)
-- [ ] days_to_target computed from now to ISO 8601 target_date
-- [ ] Target date in the past returns days_to_target = 0
-- [ ] No target_date returns days_to_target = None
+- [x] days_to_target computed from now to ISO 8601 target_date
+- [x] Target date in the past returns days_to_target = 0
+- [x] No target_date returns days_to_target = None
 
 ### Breach Detection & Notification
 - [x] alert_on_breach returns True when current_pass_rate < pass_threshold
@@ -133,4 +133,20 @@ Status: partial (10 known gaps remain — all infrastructure/features, not code 
 - MAJOR — Added `test_okr_progress_returns_500_on_unexpected_error()` to the programming error test file, verifying that unexpected RuntimeError returns 500 with descriptive detail.
 
 **Test results:** All 55+ OKR progress tests pass (52 existing + 3 new exception guard tests).
-**Status:** partial (9 known gaps remain — resolved SQLite dialect gap removed from Known Gaps). 
+**Status:** partial (9 known gaps remain — resolved SQLite dialect gap removed from Known Gaps).
+
+### 2026-07-07 — Cross-cutting QA (okr-alignment-314)
+
+**What was fixed:**
+- MINOR — Updated 3 stale `[ ]` behaviour checkboxes → `[x]` in Target Date Management: `days_to_target computed from now to ISO 8601` (implemented in `_days_between`), `Target date in the past returns days_to_target = 0` (tested), and `No target_date returns days_to_target = None` (default behavior, tested). These were already implemented but not marked as verified.
+- CONFIRMED — 9 known gaps remain accurate. No new gaps discovered.
+
+**Lens findings:**
+1. Behaviour Completeness: 3 Target Date Management items fixed (were `[ ]` despite full implementation). All other unchecked `[ ]` validated as genuine gaps.
+2. Edge Case & Boundary Coverage: okr.py handles empty suite_id, zero results (fallback to 0.0), no threshold (no breach), overflow via `or 0` pattern. No unlisted edge cases found.
+3. Error Path & Presentation: Route handler has proper 403/404/501/503/500 cascade with `except HTTPException: raise` guard. okr.py catches `TimeoutError` and `SQLAlchemyError` with logging.
+4. Cross-Module Contract: Depends on eval_definitions and eval_results raw SQL queries — schema changes to those tables require updating okr.py queries. No explicit contract tests.
+5. Gap Freshness: All 9 known gaps still accurate. No stale entries.
+6. Resilience: TimeoutError caught for both queries (info_q + trend_q). DB connection failures → SQLAlchemyError → 503. TimeoutError → Exception → 500.
+
+**Test results:** All 59+ OKR progress tests pass. No code changes — product map only. 
