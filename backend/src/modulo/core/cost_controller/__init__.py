@@ -10,6 +10,7 @@ from decimal import Decimal
 from typing import Any
 
 from sqlalchemy import func, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.db.models.daily_run_count import OrgDailyRunCount
@@ -27,8 +28,8 @@ def _safe_float(value: Decimal | None) -> float:
     return float(value) if value is not None else 0.0
 
 
-def _safe_int(value: int | None) -> int:
-    return value if value is not None else 0
+def _safe_int(value: Decimal | int | None) -> int:
+    return int(value) if value is not None else 0
 
 
 async def get_or_create_daily_count(
@@ -58,16 +59,25 @@ async def get_or_create_daily_count(
     if row is not None:
         return row
 
-    row = OrgDailyRunCount(
-        organisation_id=org_id,
-        run_date=run_date,
-        team_id=team_id,
-        run_count=0,
-        total_spend_usd=Decimal(0),
-    )
-    session.add(row)
-    await session.flush()
-    return row
+    savepoint = await session.begin_nested()
+    try:
+        row = OrgDailyRunCount(
+            organisation_id=org_id,
+            run_date=run_date,
+            team_id=team_id,
+            run_count=0,
+            total_spend_usd=Decimal(0),
+        )
+        session.add(row)
+        await session.flush()
+        return row
+    except IntegrityError:
+        await savepoint.rollback()
+        result = await session.execute(q)
+        row = result.scalar_one_or_none()
+        if row is not None:
+            return row
+        raise
 
 
 async def check_and_record_spend(
@@ -83,8 +93,12 @@ async def check_and_record_spend(
     If the spend would exceed the daily limit, returns (False, "Daily spend limit exceeded").
     Otherwise increments the daily count and returns (True, None).
     """
+    if cost_usd is None:
+        return False, "Cost must not be None"
     if cost_usd < 0:
         return False, "Cost must be non-negative"
+    if cost_usd.is_nan() or cost_usd.is_infinite():
+        return False, "Cost must be a finite non-negative number"
 
     today = datetime.now(UTC).date()
 
@@ -202,7 +216,7 @@ async def get_cost_report(
             report.append(
                 {
                     "entity_id": str(row.team_id),
-                    "entity_name": team.name if team else "Unknown",
+                    "entity_name": team.name or "Unknown" if team else "Unknown",
                     "total_spend_usd": _safe_float(row.total_spend_usd),
                     "total_runs": _safe_int(row.total_runs),
                 }
@@ -219,7 +233,9 @@ async def get_cost_report(
         OrgDailyRunCount.team_id.is_(None),
     )
     result = await session.execute(org_q)
-    row = result.one()
+    org_row = result.one_or_none()
+    org_spend = _safe_float(org_row.total_spend_usd if org_row else None)
+    org_runs = _safe_int(org_row.total_runs if org_row else None)
 
     org_result = await session.execute(select(Organisation.name).where(Organisation.id == org_id))
     org_name = org_result.scalar_one_or_none() or "Unknown"
@@ -228,7 +244,7 @@ async def get_cost_report(
         {
             "entity_id": str(org_id),
             "entity_name": org_name,
-            "total_spend_usd": _safe_float(row.total_spend_usd),
-            "total_runs": _safe_int(row.total_runs),
+            "total_spend_usd": org_spend,
+            "total_runs": org_runs,
         }
     ]
