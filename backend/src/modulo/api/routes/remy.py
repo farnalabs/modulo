@@ -33,6 +33,7 @@ from typing import Any
 
 from cryptography.fernet import Fernet
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
+import httpx
 from httpx import AsyncClient
 from langchain_core.messages import AIMessage, AIMessageChunk, BaseMessage, HumanMessage, SystemMessage, ToolMessage
 from pydantic import BaseModel, Field
@@ -305,14 +306,40 @@ async def _call_mcp_tool(
     mcp_api_key: str,
     base_url: str,
 ) -> dict[str, Any]:
-    async with AsyncClient(timeout=60.0) as client:
-        resp = await client.post(
-            f"{base_url}/mcp/tools/call",
-            json={"tool": tool_name, "arguments": arguments},
-            headers={"Authorization": f"Bearer {mcp_api_key}"},
-        )
-        resp.raise_for_status()
-        return resp.json()
+    last_exc: Exception | None = None
+    for attempt in range(3):
+        try:
+            async with AsyncClient(timeout=60.0) as client:
+                resp = await client.post(
+                    f"{base_url}/mcp/tools/call",
+                    json={"tool": tool_name, "arguments": arguments},
+                    headers={"Authorization": f"Bearer {mcp_api_key}"},
+                )
+                if resp.status_code == 429:
+                    retry_after = int(resp.headers.get("Retry-After", "5"))
+                    await asyncio.sleep(min(retry_after, 30))
+                    continue
+                resp.raise_for_status()
+                return resp.json()
+        except httpx.TimeoutException:
+            logger.warning("MCP tool %r timed out (attempt %d/3)", tool_name, attempt + 1)
+            last_exc = None
+            await asyncio.sleep(2 ** attempt)
+        except httpx.HTTPStatusError as e:
+            if e.response.status_code in (502, 503, 504):
+                logger.warning("MCP tool %r returned %d (attempt %d/3)", tool_name, e.response.status_code, attempt + 1)
+                last_exc = e
+                await asyncio.sleep(2 ** attempt)
+                continue
+            raise
+        except httpx.RequestError as e:
+            logger.warning("MCP tool %r request failed (attempt %d/3): %s", tool_name, attempt + 1, e)
+            last_exc = e
+            await asyncio.sleep(2 ** attempt)
+    raise HTTPException(
+        status_code=status.HTTP_502_BAD_GATEWAY,
+        detail=f"MCP tool call '{tool_name}' failed after 3 attempts.",
+    ) from last_exc
 
 
 def _reconstruct_tool_calls(buffers: dict[int, dict[str, Any]]) -> list[dict[str, Any]]:
