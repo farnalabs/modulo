@@ -532,8 +532,9 @@ class EvalEngine:
     # Standalone evaluate() path for Feedback System (§8.20)
     # ------------------------------------------------------------------
 
-    @staticmethod
+    @classmethod
     def standalone_evaluate(
+        cls,
         output: dict[str, Any],
         *,
         name: str = "standalone",
@@ -556,7 +557,7 @@ class EvalEngine:
             config=config or {},
             failure_behaviour=failure_behaviour,
         )
-        return EvalEngine().evaluate(output, eval_def)
+        return cls().evaluate(output, eval_def)
 
 
 def evaluate_suite(
