@@ -447,6 +447,17 @@
   --dot-color: rgba(0, 0, 0, 0.04);
 }
 
+.light .bg-destructive\/10 {
+  background-color: hsl(0 84.2% 48% / 0.2);
+}
+.light .badge-context-purple { color: hsl(270 60% 35%); background-color: hsla(270 60% 35% / 0.1); }
+.light .badge-context-indigo { color: hsl(240 60% 35%); background-color: hsla(240 60% 35% / 0.1); }
+.light .badge-context-cyan { color: hsl(190 80% 30%); background-color: hsla(190 80% 30% / 0.1); }
+.light .badge-context-orange { color: hsl(25 90% 38%); background-color: hsla(25 90% 38% / 0.1); }
+.light .badge-context-pink { color: hsl(340 80% 35%); background-color: hsla(340 80% 35% / 0.1); }
+.light .badge-context-rose { color: hsl(350 80% 35%); background-color: hsla(350 80% 35% / 0.1); }
+.light .badge-context-amber { color: hsl(38 92% 35%); background-color: hsla(38 92% 35% / 0.1); }
+
 [data-theme="agent"] {
   --background: 222 30% 8%;
   --foreground: 210 30% 96%;
