@@ -26,13 +26,15 @@
         @logout="logout"
       />
 
-      <ViewModeToggle
-        :model-value="viewMode"
-        :options="[{ label: 'Essentials', value: 'simple' }, { label: 'All Features', value: 'advanced' }]"
-        @update:model-value="setViewMode"
-      />
+      <div class="flex flex-col flex-1 min-h-0">
+        <ViewModeToggle
+          :model-value="viewMode"
+          :options="[{ label: 'Essentials', value: 'simple' }, { label: 'All Features', value: 'advanced' }]"
+          @update:model-value="setViewMode"
+        />
 
-      <SidebarNav class="flex-1" :is-system-admin="isSystemAdmin" :user-role="userRole" />
+        <SidebarNav class="flex-1" :is-system-admin="isSystemAdmin" :user-role="userRole" />
+      </div>
     </aside>
 
     <!-- Mobile header -->
