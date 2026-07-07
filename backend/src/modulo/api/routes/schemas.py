@@ -80,7 +80,7 @@ class SchemaResponse(BaseModel):
     deprecated: bool = False
     deprecated_at: datetime | None = None
 
-    model_config = {"from_attributes": True}
+    model_config = {"from_attributes": True, "populate_by_name": True}
 
 
 class SchemaListResponse(BaseModel):
@@ -114,7 +114,7 @@ class SchemaVersionResponse(BaseModel):
     created_at: datetime
     updated_at: datetime
 
-    model_config = {"from_attributes": True}
+    model_config = {"from_attributes": True, "populate_by_name": True}
 
 
 class SchemaVersionListResponse(BaseModel):
