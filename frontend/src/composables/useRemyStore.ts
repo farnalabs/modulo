@@ -1,6 +1,6 @@
 import { defineStore } from 'pinia'
 import { ref, computed, watch } from 'vue'
-import { api, getAuthHeaders } from '@/lib/api/client'
+import { api } from '@/lib/api/client'
 import { formatApiError } from '@/lib/api/formatError'
 import type { ChatSession, ChatMessage, PageContext } from '@/types/remy'
 
@@ -274,18 +274,13 @@ export const useRemyStore = defineStore('remy', () => {
       console.warn("Cannot approve permission: no active session");
       return;
     }
-    const headers = getAuthHeaders()
     try {
-      const resp = await fetch(`/api/v1/remy/sessions/${activeSessionId.value}/permission-response`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          ...headers,
-        },
-        body: JSON.stringify({ request_id: requestId, action }),
+      const resp = await api.POST('/api/v1/remy/sessions/{session_id}/permission-response', {
+        params: { path: { session_id: activeSessionId.value } },
+        body: { request_id: requestId, action },
       })
-      if (!resp.ok) {
-        console.warn('[RemyStore] Permission response failed', resp.status)
+      if (resp.error) {
+        console.warn('[RemyStore] Permission response failed', resp.error)
       }
       pendingPermission.value = null
     } catch (e) {
@@ -296,14 +291,12 @@ export const useRemyStore = defineStore('remy', () => {
 
   async function resetSessionPermissions() {
     if (!activeSessionId.value) return
-    const headers = getAuthHeaders()
     try {
-      const resp = await fetch(`/api/v1/remy/sessions/${activeSessionId.value}/reset-permissions`, {
-        method: 'POST',
-        headers: { ...headers },
+      const resp = await api.POST('/api/v1/remy/sessions/{session_id}/reset-permissions', {
+        params: { path: { session_id: activeSessionId.value } },
       })
-      if (!resp.ok) {
-        console.warn('[RemyStore] Reset permissions failed', resp.status)
+      if (resp.error) {
+        console.warn('[RemyStore] Reset permissions failed', resp.error)
       }
     } catch (e) {
       console.warn('[RemyStore] Reset permissions error', e)
