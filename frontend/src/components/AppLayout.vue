@@ -11,6 +11,9 @@
             <LogoMark :size="24" transparent />
           </div>
           <h2 class="text-lg font-bold tracking-tight">Modulo</h2>
+          <Badge v-if="planStore.currentTier" variant="outline" class="text-[10px] px-1.5 py-0 leading-none opacity-70">
+            {{ planStore.getTierLabel(planStore.currentTier) }}
+          </Badge>
         </router-link>
       </div>
 
@@ -80,6 +83,9 @@
           <LogoMark :size="24" transparent />
         </div>
         <h2 class="text-lg font-bold tracking-tight">Modulo</h2>
+        <Badge v-if="planStore.currentTier" variant="outline" class="text-[10px] px-1.5 py-0 leading-none opacity-70">
+          {{ planStore.getTierLabel(planStore.currentTier) }}
+        </Badge>
       </router-link>
     </header>
 
@@ -149,6 +155,7 @@
 import { ref, computed, onMounted, watch, nextTick } from "vue";
 import { getAccessToken, clearAccessToken } from "../lib/api/client";
 import { usePlanStore } from "../stores/planStore";
+import Badge from "./ui/badge/Badge.vue";
 import Breadcrumb from "./Breadcrumb.vue";
 import LogoMark from "./LogoMark.vue";
 import NotificationBell from "./NotificationBell.vue";
