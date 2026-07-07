@@ -10,7 +10,7 @@ from typing import Any, Literal
 from fastapi import APIRouter, Depends, File, HTTPException, Query, Response, UploadFile, status
 from pydantic import BaseModel, Field, model_validator
 from sqlalchemy import select
-from sqlalchemy.exc import ProgrammingError, SQLAlchemyError
+from sqlalchemy.exc import IntegrityError, ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.api.dependencies import get_db_session
@@ -434,6 +434,16 @@ async def create_library_primitive_endpoint(
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
+        ) from None
+    except IntegrityError:
+        _log.warning(
+            "create_library_primitive_endpoint: IntegrityError — slug collision on %s/%s",
+            req.primitive_type,
+            req.slug,
+        )
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"Primitive with type '{req.primitive_type}' and slug '{req.slug}' already exists",
         ) from None
     except SQLAlchemyError:
         _log.exception("create_library_primitive_endpoint: SQLAlchemyError")
@@ -873,6 +883,12 @@ async def list_ratings_endpoint(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
         ) from None
+    except SQLAlchemyError:
+        _log.exception("list_ratings_endpoint: SQLAlchemyError")
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="The library feature is temporarily unavailable due to a database issue. Please retry.",
+        ) from None
     return RatingListResponse(
         items=[RatingResponse.model_validate(r) for r in result.items],
         total=result.total,
@@ -894,6 +910,12 @@ async def get_rating_aggregate_endpoint(
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
+        ) from None
+    except SQLAlchemyError:
+        _log.exception("get_rating_aggregate_endpoint: SQLAlchemyError")
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="The library feature is temporarily unavailable due to a database issue. Please retry.",
         ) from None
     return RatingAggregateResponse(
         average_rating=float(avg) if avg is not None else None,
@@ -930,6 +952,12 @@ async def submit_rating_endpoint(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
         ) from None
+    except SQLAlchemyError:
+        _log.exception("submit_rating_endpoint: SQLAlchemyError")
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="The library feature is temporarily unavailable due to a database issue. Please retry.",
+        ) from None
     return RatingResponse.model_validate(rating)
 
 
@@ -960,6 +988,12 @@ async def submit_abuse_report_endpoint(
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
+        ) from None
+    except SQLAlchemyError:
+        _log.exception("submit_abuse_report_endpoint: SQLAlchemyError")
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="The library feature is temporarily unavailable due to a database issue. Please retry.",
         ) from None
     return AbuseReportResponse.model_validate(report)
 
@@ -1153,6 +1187,12 @@ async def community_contribute_endpoint(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
         ) from None
+    except SQLAlchemyError:
+        _log.exception("community_contribute_endpoint: SQLAlchemyError")
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="The library feature is temporarily unavailable due to a database issue. Please retry.",
+        ) from None
     return LibraryPrimitiveResponse.model_validate(result)
 
 
@@ -1232,6 +1272,12 @@ async def admin_publish_contribution_endpoint(
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
+        ) from None
+    except SQLAlchemyError:
+        _log.exception("admin_publish_contribution_endpoint: SQLAlchemyError")
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="The library feature is temporarily unavailable due to a database issue. Please retry.",
         ) from None
     return LibraryPrimitiveResponse.model_validate(result)
 
