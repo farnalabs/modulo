@@ -366,6 +366,18 @@ def test_viewmodel_current_includes_preferences(client: TestClient) -> None:
     assert body["preferences"]["notifications"] is True
 
 
+def test_viewmodel_current_returns_503_on_sqlalchemy_error(client: TestClient) -> None:
+    with patch("modulo.api.routes.viewmodel.list_pipelines", side_effect=Exception("connection failed")):
+        resp = client.get("/api/v1/viewmodel/current")
+    assert resp.status_code == 500
+
+
+def test_viewmodel_current_returns_500_on_unexpected_error(client: TestClient) -> None:
+    with patch("modulo.api.routes.viewmodel.list_pipelines", side_effect=TypeError("expected str, got None")):
+        resp = client.get("/api/v1/viewmodel/current")
+    assert resp.status_code == 500
+
+
 def test_viewmodel_current_includes_plan(client: TestClient) -> None:
     pipeline = _make_pipeline()
     run = _make_run()
