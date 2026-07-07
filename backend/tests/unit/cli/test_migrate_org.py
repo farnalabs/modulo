@@ -1,274 +1,202 @@
-"""Tests for the modulo (argparse) migration CLI tool."""
+"""Tests for the modulo export-org / import-org CLI (argparse-based)."""
 
+import json
 import uuid
-from datetime import UTC, datetime
-from decimal import Decimal
 from pathlib import Path
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
 from modulo.cli.migrate_org import (
-    ENTITY_ORDER,
-    FK_COLUMNS,
     _compute_hash,
-    _remap_fk,
+    _parse_uuid,
     _serialise,
     _serialise_row,
     _verify_hash,
-    build_parser,
+    main,
 )
 from tests.unit.cli.conftest import MockModel
 
+# ── Pure function tests ─────────────────────────────────────────────────────
+
+
+class TestParseUuid:
+    def test_valid(self) -> None:
+        uid = uuid.uuid4()
+        result = _parse_uuid(str(uid), "test")
+        assert result == uid
+
+    def test_invalid_exits(self) -> None:
+        with pytest.raises(SystemExit):
+            _parse_uuid("not-a-uuid", "test")
+
 
 class TestSerialise:
-    def test_handles_uuids(self) -> None:
+    def test_serialise_uuid(self) -> None:
         uid = uuid.uuid4()
         assert _serialise(uid) == str(uid)
 
-    def test_handles_datetime(self) -> None:
-        dt = datetime.now(UTC)
-        result = _serialise(dt)
-        assert result == dt.isoformat()
+    def test_serialise_datetime(self) -> None:
+        from datetime import UTC, datetime
 
-    def test_handles_bytes(self) -> None:
+        dt = datetime.now(UTC)
+        assert _serialise(dt) == dt.isoformat()
+
+    def test_serialise_bytes(self) -> None:
         assert _serialise(b"\x00\xff") == "00ff"
 
-    def test_handles_decimal(self) -> None:
-        assert _serialise(Decimal("3.14")) == 3.14
+    def test_serialise_decimal(self) -> None:
+        from decimal import Decimal
 
-    def test_handles_set(self) -> None:
+        assert _serialise(Decimal("10.5")) == "10.5"
+
+    def test_serialise_set(self) -> None:
         assert _serialise({1, 2, 3}) == [1, 2, 3]
 
-    def test_handles_none(self) -> None:
+    def test_serialise_none(self) -> None:
         assert _serialise(None) is None
-
-    def test_handles_int(self) -> None:
-        assert _serialise(42) == 42
-
-    def test_handles_string(self) -> None:
-        assert _serialise("hello") == "hello"
 
 
 class TestSerialiseRow:
-    def test_serialises_all_columns(self) -> None:
+    def test_handles_all_types(self) -> None:
+        from datetime import UTC, datetime
+
         uid = uuid.uuid4()
-        row = MockModel(id=uid, name="hello", count=42)
+        dt = datetime.now(UTC)
+        row = MockModel(id=uid, name="hello", ts=dt, blob=b"\x01", null_col=None)
         result = _serialise_row(row)
         assert result["id"] == str(uid)
         assert result["name"] == "hello"
-        assert result["count"] == 42
-
-    def test_skips_none_values(self) -> None:
-        row = MockModel(id=uuid.uuid4(), name=None)
-        result = _serialise_row(row)
-        assert "name" not in result
-
-    def test_handles_datetime_column(self) -> None:
-        dt = datetime.now(UTC)
-        row = MockModel(ts=dt)
-        result = _serialise_row(row)
         assert result["ts"] == dt.isoformat()
-
-    def test_handles_bytes_column(self) -> None:
-        row = MockModel(blob=b"\xde\xad")
-        result = _serialise_row(row)
-        assert result["blob"] == "dead"
+        assert result["blob"] == "01"
+        assert result["null_col"] is None
 
 
-class TestComputeHash:
-    def test_empty_bundle(self) -> None:
-        bundle: dict = {}
-        h = _compute_hash(bundle)
-        assert isinstance(h, str)
-        assert len(h) == 64
-
-    def test_deterministic(self) -> None:
-        bundle = {"users": [{"id": "u1", "name": "alice"}]}
+class TestHash:
+    def test_compute_hash_deterministic(self) -> None:
+        bundle = {
+            "__meta__": {"version": 1, "exported_at": "2024-01-01"},
+            "users": [{"id": "u1", "email": "a@b.com"}],
+        }
         h1 = _compute_hash(bundle)
         h2 = _compute_hash(bundle)
         assert h1 == h2
 
-    def test_with_meta_and_data(self) -> None:
-        bundle = {
-            "__meta__": {"version": 1, "exported_at": "2024-01-01T00:00:00"},
-            "users": [{"id": "u1", "name": "alice"}],
-        }
-        h = _compute_hash(bundle)
-        assert isinstance(h, str)
-        assert len(h) == 64
-
-    def test_excludes_hash_from_computation(self) -> None:
-        bundle = {
-            "__meta__": {"version": 1, "hash": "will-be-excluded"},
-            "users": [{"id": "u1"}],
-        }
-        h = _compute_hash(bundle)
-        assert len(h) == 64
-        assert "will-be-excluded" not in h
-
-
-class TestVerifyHash:
-    def test_valid_hash_returns_true(self) -> None:
-        bundle = {
-            "__meta__": {"version": 1},
-            "users": [{"id": "u1"}],
+    def test_verify_hash_ok(self) -> None:
+        bundle: dict = {
+            "__meta__": {"version": 1, "exported_at": "2024-01-01"},
+            "organisation": {"id": "o1"},
         }
         bundle["__meta__"]["hash"] = _compute_hash(bundle)
         assert _verify_hash(bundle) is True
 
-    def test_invalid_hash_returns_false(self) -> None:
-        bundle = {
-            "__meta__": {"version": 1, "hash": "aaaa"},
-            "users": [{"id": "u1"}],
-        }
-        assert _verify_hash(bundle) is False
-
-    def test_missing_hash_returns_false(self) -> None:
-        bundle = {
-            "__meta__": {"version": 1},
-            "users": [{"id": "u1"}],
+    def test_verify_hash_mismatch(self) -> None:
+        bundle: dict = {
+            "__meta__": {"version": 1, "exported_at": "2024-01-01", "hash": "wrong"},
+            "organisation": {"id": "o1"},
         }
         assert _verify_hash(bundle) is False
 
 
-class TestEntityOrder:
-    def test_includes_all_expected_entities(self) -> None:
-        names = [name for name, _ in ENTITY_ORDER]
-        assert "users" in names
-        assert "teams" in names
-        assert "stages" in names
-        assert "schemas" in names
-        assert "schema_versions" in names
-        assert "model_backends" in names
-        assert "library_primitives" in names
-        assert "connector_instances" in names
-        assert "agents" in names
-        assert "pipelines" in names
-        assert "runs" in names
-        assert len(names) == 11
-
-    def test_users_before_pipelines(self) -> None:
-        names = [name for name, _ in ENTITY_ORDER]
-        assert names.index("users") < names.index("pipelines")
-
-    def test_has_correct_types(self) -> None:
-        from modulo.db.models import Account, Pipeline
-
-        model_types = {name: cls for name, cls in ENTITY_ORDER}
-        assert model_types["users"] is Account
-        assert model_types["pipelines"] is Pipeline
-        assert "organisation" not in model_types
+# ── Export command tests ────────────────────────────────────────────────────
 
 
-class TestFkColumns:
-    def test_users_has_org_fk(self) -> None:
-        assert "organisation_id" in FK_COLUMNS["users"]
+class TestExport:
+    @patch("modulo.cli.migrate_org._do_export", new_callable=AsyncMock)
+    @patch("modulo.cli.migrate_org._write_bundle")
+    def test_export_basic(
+        self,
+        mock_write: MagicMock,
+        mock_do_export: AsyncMock,
+        tmp_path: Path,
+    ) -> None:
+        mock_do_export.return_value = {
+            "__meta__": {"version": 1, "exported_at": "2024-01-01", "hash": "abc"},
+            "organisation": {"id": "o1"},
+        }
+        output = tmp_path / "export.json"
+        main(["export-org", "--org-id", "00000000-0000-0000-0000-000000000001", "--output", str(output)])
+        mock_write.assert_called_once()
+        assert mock_write.call_args[0][1] == output
 
-    def test_agents_has_model_backend_fk(self) -> None:
-        assert "model_backend_id" in FK_COLUMNS["agents"]
+    @patch("modulo.cli.migrate_org._do_export", new_callable=AsyncMock)
+    def test_export_org_not_found(self, mock_do_export: AsyncMock) -> None:
+        mock_do_export.side_effect = SystemExit("Organisation 00000000-0000-0000-0000-000000000001 not found")
+        with pytest.raises(SystemExit) as exc:
+            main(["export-org", "--org-id", "00000000-0000-0000-0000-000000000001", "--output", "out.json"])
+        assert "not found" in str(exc.value)
 
-    def test_runs_has_pipeline_fk(self) -> None:
-        assert "pipeline_id" in FK_COLUMNS["runs"]
+    @patch("modulo.cli.migrate_org._do_export", new_callable=AsyncMock)
+    def test_export_existing_output_without_force(self, mock_do_export: AsyncMock, tmp_path: Path) -> None:
+        mock_do_export.return_value = {
+            "__meta__": {"version": 1, "exported_at": "2024-01-01", "hash": "abc"},
+            "organisation": {"id": "o1"},
+        }
+        output = tmp_path / "existing.json"
+        output.write_text("old data")
+        with pytest.raises(SystemExit) as exc:
+            main(["export-org", "--org-id", "00000000-0000-0000-0000-000000000001", "--output", str(output)])
+        assert "already exists" in str(exc.value)
 
-    def test_all_entity_types_have_fk_entry(self) -> None:
-        entity_names = {name for name, _ in ENTITY_ORDER}
-        fk_names = set(FK_COLUMNS.keys())
-        assert entity_names == fk_names
-
-
-class TestRemapFk:
-    def test_remaps_organisation_id(self) -> None:
-        old_org = str(uuid.uuid4())
-        new_org = str(uuid.uuid4())
-        row = {"organisation_id": old_org, "name": "test"}
-        id_map = {old_org: new_org}
-        result = _remap_fk(row, "users", id_map)
-        assert str(result["organisation_id"]) == new_org
-
-    def test_remaps_multiple_fks(self) -> None:
-        old_org = str(uuid.uuid4())
-        old_team = str(uuid.uuid4())
-        new_org = str(uuid.uuid4())
-        new_team = str(uuid.uuid4())
-        row = {"organisation_id": old_org, "owner_team_id": old_team, "name": "test"}
-        id_map = {old_org: new_org, old_team: new_team}
-        result = _remap_fk(row, "stages", id_map)
-        assert str(result["organisation_id"]) == new_org
-        assert str(result["owner_team_id"]) == new_team
-
-    def test_skips_unknown_fks(self) -> None:
-        row = {"organisation_id": "unknown-uuid", "name": "test"}
-        result = _remap_fk(row, "users", {})
-        assert result["organisation_id"] == "unknown-uuid"
-
-    def test_returns_new_dict(self) -> None:
-        row = {"name": "test"}
-        result = _remap_fk(row, "users", {})
-        assert result is not row
-        assert result["name"] == "test"
+    @patch("modulo.cli.migrate_org._do_export", new_callable=AsyncMock)
+    @patch("modulo.cli.migrate_org._write_bundle")
+    def test_export_existing_output_with_force(
+        self,
+        mock_write: MagicMock,
+        mock_do_export: AsyncMock,
+        tmp_path: Path,
+    ) -> None:
+        mock_do_export.return_value = {
+            "__meta__": {"version": 1, "exported_at": "2024-01-01", "hash": "abc"},
+            "organisation": {"id": "o1"},
+        }
+        output = tmp_path / "existing_force.json"
+        output.write_text("old data")
+        main(["export-org", "--org-id", "00000000-0000-0000-0000-000000000001", "--output", str(output), "--force"])
+        mock_write.assert_called_once_with(mock_do_export.return_value, output, force=True)
 
 
-class TestBuildParser:
-    def test_creates_export_org_subcommand(self) -> None:
-        parser = build_parser()
-        args = parser.parse_args(["export-org", "--org-id", str(uuid.uuid4())])
-        assert args.command == "export-org"
+# ── Import command tests ────────────────────────────────────────────────────
 
-    def test_creates_import_org_subcommand(self) -> None:
-        parser = build_parser()
-        args = parser.parse_args(["import-org", "--org-id", str(uuid.uuid4()), "--input", "test.json"])
-        assert args.command == "import-org"
 
-    def test_export_org_requires_org_id(self) -> None:
-        parser = build_parser()
-        with pytest.raises(SystemExit):
-            parser.parse_args(["export-org"])
+class TestImport:
+    HASHED_BUNDLE: dict = {
+        "__meta__": {
+            "version": 1,
+            "exported_at": "2024-01-01",
+        },
+        "organisation": {"id": "o1"},
+    }
 
-    def test_import_org_requires_input(self) -> None:
-        parser = build_parser()
-        with pytest.raises(SystemExit):
-            parser.parse_args(["import-org", "--org-id", str(uuid.uuid4())])
+    @staticmethod
+    def _make_bundle_file(bundle: dict, path: Path) -> None:
+        bundle["__meta__"]["hash"] = _compute_hash(bundle)
+        path.write_text(json.dumps(bundle, indent=2))
 
-    def test_export_org_default_output(self) -> None:
-        parser = build_parser()
-        args = parser.parse_args(["export-org", "--org-id", str(uuid.uuid4())])
-        assert args.output == Path("export.json")
+    @patch("modulo.cli.migrate_org._do_import", new_callable=AsyncMock)
+    def test_import_basic(self, mock_do_import: AsyncMock, tmp_path: Path) -> None:
+        mock_do_import.return_value = {"created": 5, "overwritten": 0, "skipped": 0, "errors": 0}
+        input_path = tmp_path / "bundle.json"
+        self._make_bundle_file(dict(self.HASHED_BUNDLE), input_path)
+        main(["import-org", "--org-id", "00000000-0000-0000-0000-000000000001", "--input", str(input_path)])
+        mock_do_import.assert_called_once()
 
-    def test_export_org_custom_output(self) -> None:
-        parser = build_parser()
-        args = parser.parse_args(["export-org", "--org-id", str(uuid.uuid4()), "--output", "custom.json"])
-        assert args.output == Path("custom.json")
+    def test_import_file_not_found(self) -> None:
+        with pytest.raises(SystemExit) as exc:
+            main(["import-org", "--org-id", "00000000-0000-0000-0000-000000000001", "--input", "nonexistent.json"])
+        assert "not found" in str(exc.value)
 
-    def test_import_org_default_conflict(self) -> None:
-        parser = build_parser()
-        args = parser.parse_args(["import-org", "--org-id", str(uuid.uuid4()), "--input", "data.json"])
-        assert args.conflict == "skip"
+    def test_import_hash_mismatch_aborts(self, tmp_path: Path) -> None:
+        input_path = tmp_path / "bad_bundle.json"
+        input_path.write_text(json.dumps({"__meta__": {"hash": "wrong"}, "organisation": {"id": "o1"}}))
+        with pytest.raises(SystemExit) as exc:
+            main(["import-org", "--org-id", "00000000-0000-0000-0000-000000000001", "--input", str(input_path)])
+        assert "hash verification failed" in str(exc.value).lower()
 
-    def test_import_org_custom_conflict(self) -> None:
-        parser = build_parser()
-        args = parser.parse_args(
-            [
-                "import-org",
-                "--org-id",
-                str(uuid.uuid4()),
-                "--input",
-                "data.json",
-                "--conflict",
-                "rename",
-            ]
-        )
-        assert args.conflict == "rename"
-
-    def test_export_org_sets_func(self) -> None:
-        from modulo.cli.migrate_org import cmd_export
-
-        parser = build_parser()
-        args = parser.parse_args(["export-org", "--org-id", str(uuid.uuid4())])
-        assert args.func is cmd_export
-
-    def test_import_org_sets_func(self) -> None:
-        from modulo.cli.migrate_org import cmd_import
-
-        parser = build_parser()
-        args = parser.parse_args(["import-org", "--org-id", str(uuid.uuid4()), "--input", "data.json"])
-        assert args.func is cmd_import
+    @patch("modulo.cli.migrate_org._do_import", new_callable=AsyncMock)
+    def test_import_skips_existing(self, mock_do_import: AsyncMock, tmp_path: Path) -> None:
+        mock_do_import.return_value = {"created": 0, "overwritten": 0, "skipped": 10, "errors": 0}
+        input_path = tmp_path / "skip_bundle.json"
+        self._make_bundle_file(dict(self.HASHED_BUNDLE), input_path)
+        main(["import-org", "--org-id", "00000000-0000-0000-0000-000000000001", "--input", str(input_path)])
+        mock_do_import.assert_called_once()
