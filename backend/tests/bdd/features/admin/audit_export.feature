@@ -21,6 +21,11 @@ Feature: Admin Audit Export
     Then the response status is 200
     And the verify response contains event_count field
 
+  Scenario: Non-admin access returns 403
+    Given I am authenticated as a non-admin user
+    When I request GET /api/v1/admin/audit/export
+    Then the response status is 403
+
   Scenario: Unauthenticated access returns 401
     Given I am not authenticated
     When I request GET /api/v1/admin/audit/export
