@@ -135,10 +135,21 @@ export default {
       "primer_regenerated": "Primer regenerated."
     },
     "PipelineListView": {
+      "title": "Pipelines",
       "no_pipelines_match_your_search": "No pipelines match your search",
       "search_pipelines": "Search pipelines...",
       "try_a_different_search_term": "Try a different search term.",
-      "no_pipelines_yet": "No pipelines yet"
+      "no_pipelines_yet": "No pipelines yet",
+      "new_pipeline": "New Pipeline",
+      "open_in_editor": "Open in Editor",
+      "run": "Run",
+      "run_pipeline": "Run Pipeline",
+      "prompt": "Prompt",
+      "advanced": "Advanced",
+      "running": "Running...",
+      "previous": "Previous",
+      "next": "Next",
+      "page_x_of_y": "Page {page} of {total}"
     },
     "SettingsRateLimitsView": {
       "rate_limits": "Rate Limits",
@@ -1269,7 +1280,8 @@ export default {
       "RemyChat": {
         "ask_remy": "Ask Remy...",
         "no_slash_commands": "No matching commands",
-        "delete_confirm": "Delete this session?"
+        "delete_confirm": "Delete this session?",
+        "intro_text": "Hi! I'm Remy, your Modulo AI assistant. I can help you build pipelines, run evaluations, manage your workspace, and answer questions about your data. What would you like help with?"
       },
       "RemySkillManager": {
         "triggers_commaseparated": "Triggers (comma-separated)",
