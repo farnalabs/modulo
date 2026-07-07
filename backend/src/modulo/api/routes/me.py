@@ -32,8 +32,6 @@ from modulo.db.crud.account import get_account_by_id, update_account_preferences
 from modulo.db.crud.token_family import blacklist_family, list_families_for_account
 from modulo.db.models.remy_skill import RemySkill
 
-_log = logging.getLogger(__name__)
-
 router = APIRouter(prefix="/api/v1", tags=["user"])
 
 
@@ -129,7 +127,7 @@ async def change_password(
             except HTTPException:
                 raise
             except Exception:
-                _log.warning("Failed to blacklist previous token family during password change for account %s", current_user.account_id)
+                logging.getLogger(__name__).warning("Failed to blacklist previous token family during password change for account %s", current_user.account_id)
 
     return {"detail": "Password changed successfully"}
 
