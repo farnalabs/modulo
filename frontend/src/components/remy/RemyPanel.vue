@@ -302,7 +302,9 @@ const speedDescriptions: Record<string, string> = {
   normal: 'Navigates at a pace you can comfortably follow',
   lightning: 'Navigates as fast as possible',
 }
-const currentSpeed = ref(localStorage.getItem('remy-action-speed') || 'normal')
+let savedSpeed: string | null = null
+try { savedSpeed = localStorage.getItem('remy-action-speed') } catch {}
+const currentSpeed = ref(savedSpeed ?? 'normal')
 const currentSpeedLabel = computed(() => {
   const idx = speedLabels.indexOf(currentSpeed.value)
   return speedLabels[idx >= 0 ? idx : 1]
@@ -525,6 +527,7 @@ onMounted(async () => {
 });
 
 onUnmounted(() => {
+  if (speedFlashTimer) clearTimeout(speedFlashTimer)
   window.removeEventListener("resize", onWindowResize)
   document.removeEventListener("mousemove", onDrag);
   document.removeEventListener("mouseup", stopDrag);
