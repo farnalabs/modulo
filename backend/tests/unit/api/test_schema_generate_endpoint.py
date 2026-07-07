@@ -185,7 +185,7 @@ def test_generate_schema_generation_failure_returns_502(client: TestClient) -> N
             side_effect=SchemaGenerationError("LLM returned garbage"),
         ),
         patch("modulo.api.routes.schemas.create_secrets_backend"),
-        patch("modulo.api.routes.schemas.append_audit_event", return_value=None),
+        patch("modulo.core.audit_logger.append_audit_event", return_value=None),
     ):
         resp = client.post(
             "/api/v1/schemas/generate",
