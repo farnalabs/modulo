@@ -1,6 +1,10 @@
 {
     "name": "modulo-frontend",
+<<<<<<< HEAD
 "version": "0.3.248",
+=======
+"version": "0.3.249",
+>>>>>>> qa/arch-285
     "private": true,
     "scripts": {
         "generate:api": "powershell -ExecutionPolicy Bypass -File scripts/generate-api-types.ps1",
