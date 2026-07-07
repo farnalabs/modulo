@@ -126,6 +126,14 @@ class RemyRedisRegistry:
             return
         await r.delete(f"remy:approval:{session_id}")
 
+    async def clear_session(self, session_id: str) -> None:
+        """Remove all Redis keys for a given session."""
+        r = await self._get_redis()
+        if r is None:
+            return
+        keys = [f"remy:ui_results:{session_id}", f"remy:approval:{session_id}"]
+        await r.delete(*keys)
+
     # ── Publish / subscribe for cross-worker event signalling ──────────────
 
     async def publish_permission_response(self, request_id: str, decision: dict) -> None:

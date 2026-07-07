@@ -717,7 +717,7 @@ async def list_sessions(
     except SQLAlchemyError:
         logger.exception("remy.database_error")
         raise HTTPException(
-            status_code=status.HTTP_502_BAD_GATEWAY,
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database error. Please try again later.",
         ) from None
 
@@ -784,7 +784,7 @@ async def create_session(
     except SQLAlchemyError:
         logger.exception("remy.database_error")
         raise HTTPException(
-            status_code=status.HTTP_502_BAD_GATEWAY,
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database error. Please try again later.",
         ) from None
 
@@ -815,7 +815,7 @@ async def get_session(
     except SQLAlchemyError:
         logger.exception("remy.database_error")
         raise HTTPException(
-            status_code=status.HTTP_502_BAD_GATEWAY,
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database error. Please try again later.",
         ) from None
 
@@ -846,7 +846,7 @@ async def rename_session(
     except SQLAlchemyError:
         logger.exception("remy.database_error")
         raise HTTPException(
-            status_code=status.HTTP_502_BAD_GATEWAY,
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database error. Please try again later.",
         ) from None
 
@@ -876,6 +876,14 @@ async def delete_session(
         _session_approvals.pop(session_id_str, None)
         _rate_limiters.pop(session_id_str, None)
 
+        # Clean up Redis registries if active
+        registry = _get_registry()
+        if registry is not None:
+            try:
+                await registry.clear_session(session_id_str)
+            except Exception:
+                logger.exception("remy.redis_cleanup_failed")
+
         return {"status": "deleted", "id": str(session_id)}
     except ProgrammingError:
         raise HTTPException(
@@ -885,7 +893,7 @@ async def delete_session(
     except SQLAlchemyError:
         logger.exception("remy.database_error")
         raise HTTPException(
-            status_code=status.HTTP_502_BAD_GATEWAY,
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database error. Please try again later.",
         ) from None
 
@@ -936,7 +944,7 @@ async def list_messages(
     except SQLAlchemyError:
         logger.exception("remy.database_error")
         raise HTTPException(
-            status_code=status.HTTP_502_BAD_GATEWAY,
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database error. Please try again later.",
         ) from None
 
@@ -977,7 +985,7 @@ async def append_message(
     except SQLAlchemyError:
         logger.exception("remy.database_error")
         raise HTTPException(
-            status_code=status.HTTP_502_BAD_GATEWAY,
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database error. Please try again later.",
         ) from None
     except Exception:
@@ -1015,7 +1023,7 @@ async def stream_chat(
     except SQLAlchemyError:
         logger.exception("remy.database_error")
         raise HTTPException(
-            status_code=status.HTTP_502_BAD_GATEWAY,
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database error. Please try again later.",
         ) from None
 
@@ -1525,7 +1533,7 @@ async def submit_permission_response(
     except SQLAlchemyError:
         logger.exception("remy.database_error")
         raise HTTPException(
-            status_code=status.HTTP_502_BAD_GATEWAY,
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database error. Please try again later.",
         ) from None
 
@@ -1576,7 +1584,7 @@ async def submit_ui_command_results(
     except SQLAlchemyError:
         logger.exception("remy.database_error")
         raise HTTPException(
-            status_code=status.HTTP_502_BAD_GATEWAY,
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database error. Please try again later.",
         ) from None
 
@@ -1613,7 +1621,7 @@ async def reset_session_permissions(
     except SQLAlchemyError:
         logger.exception("remy.database_error")
         raise HTTPException(
-            status_code=status.HTTP_502_BAD_GATEWAY,
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database error. Please try again later.",
         ) from None
 
@@ -1641,7 +1649,7 @@ async def resume_session(
     except SQLAlchemyError:
         logger.exception("remy.database_error")
         raise HTTPException(
-            status_code=status.HTTP_502_BAD_GATEWAY,
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database error. Please try again later.",
         ) from None
 
@@ -1674,7 +1682,7 @@ async def stop_session(
     except SQLAlchemyError:
         logger.exception("remy.database_error")
         raise HTTPException(
-            status_code=status.HTTP_502_BAD_GATEWAY,
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database error. Please try again later.",
         ) from None
 
@@ -1745,7 +1753,7 @@ async def get_audit_trail(
     except SQLAlchemyError:
         logger.exception("remy.database_error")
         raise HTTPException(
-            status_code=status.HTTP_502_BAD_GATEWAY,
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database error. Please try again later.",
         ) from None
 
@@ -1811,6 +1819,6 @@ async def undo_last_action(
     except SQLAlchemyError:
         logger.exception("remy.database_error")
         raise HTTPException(
-            status_code=status.HTTP_502_BAD_GATEWAY,
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database error. Please try again later.",
         ) from None
