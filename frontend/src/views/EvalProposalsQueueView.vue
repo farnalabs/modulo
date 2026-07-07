@@ -189,7 +189,7 @@ async function publishProposal(p: EvalProposalItem) {
   delete actionMessages.value[p.id]
   try {
     await patch(`/api/v1/feedback/${p.id}/status`, { status: 'resolved' })
-    actionMessages.value[p.id] = { type: 'success', text: 'Proposal published. Eval definition created.' }
+    actionMessages.value[p.id] = { type: 'success', text: 'Proposal marked as published. Eval definition creation not yet implemented.' }
     p.feedback_status = 'resolved'
     setTimeout(() => { delete actionMessages.value[p.id] }, 3000)
   } catch (e: unknown) {
