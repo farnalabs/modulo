@@ -60,7 +60,7 @@ const activeGroupIds = computed(() => {
   return ids
 })
 
-const tierInfoLoaded = computed(() => Object.keys(planStore.tierRanks).length > 0);
+const tierInfoLoaded = computed(() => planStore.tierRanks ? Object.keys(planStore.tierRanks).length > 0 : false);
 
 const visibleSidebarGroups = computed(() =>
   getNavGroups()

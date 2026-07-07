@@ -77,8 +77,6 @@
 </template>
 
 <script setup lang="ts">
-import { usePlanStore } from "../stores/planStore";
-
 defineProps<{
   userEmail: string;
   userInitial: string;
@@ -90,6 +88,4 @@ defineEmits<{
   toggleTheme: [];
   logout: [];
 }>();
-
-const planStore = usePlanStore();
 </script>
