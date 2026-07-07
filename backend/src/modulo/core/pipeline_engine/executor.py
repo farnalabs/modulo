@@ -28,6 +28,7 @@ from langgraph.errors import NodeInterrupt
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker
 
+from modulo.core.audit_logger import append_audit_event
 from modulo.core.eval_engine import (
     EvalBlockedError,
     EvalSuiteBlockedError,
@@ -554,6 +555,22 @@ class PipelineExecutor:
             final_status = "failed"
             error_code = type(exc).__name__
 
+        # Record audit events for block failures.
+        if final_status == "eval_failed" and error_code == "eval_blocked":
+            async with self._session_factory() as session, session.begin():
+                await set_rls_org(session, org_id)
+                try:
+                    await append_audit_event(
+                        session,
+                        org_id=org_id,
+                        event_type="eval.blocked",
+                        resource_type="run",
+                        resource_id=run_id,
+                        payload_json={"error_detail": error_detail},
+                    )
+                except Exception:
+                    _log.exception("audit.eval_blocked_failed", extra={"run_id": str(run_id)})
+
         # If the run completed, check for eval suite thresholds.
         if final_status == "complete":
             async with self._session_factory() as session, session.begin():
@@ -573,6 +590,21 @@ class PipelineExecutor:
                             "score": exc.score,
                         },
                     )
+                    try:
+                        await append_audit_event(
+                            session,
+                            org_id=org_id,
+                            event_type="eval.suite_blocked",
+                            resource_type="run",
+                            resource_id=run_id,
+                            payload_json={
+                                "error_detail": error_detail,
+                                "suite_id": exc.suite_id,
+                                "score": exc.score,
+                            },
+                        )
+                    except Exception:
+                        _log.exception("audit.eval_suite_blocked_failed", extra={"run_id": str(run_id)})
 
             # Fire agent_signal triggers for each completed node.
             if completed_node_outputs:
