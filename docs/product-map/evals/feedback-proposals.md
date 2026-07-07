@@ -73,8 +73,8 @@ Discovered from 1 completed delivery task.
 - [x] Multiple proposals with same run_id: node name resolution handles deduplication via dict
 - [x] No run_ids in proposal set: node name resolution short-circuits, returns empty map
 - [ ] Double gap detection on same record: eval_gap stays True after first run (idempotent read)
-- [ ] Proposals endpoint with eval_gap=True but wrong status (e.g. "resolved"): excluded by filter
-- [ ] Pipeline with 0 eval definitions returns empty eval_suite → gap assumed
+- [x] Proposals endpoint with eval_gap=True but wrong status (e.g. "resolved"): excluded by filter
+- [x] Pipeline with 0 eval definitions returns empty eval_suite → gap assumed
 
 ### Resilience
 
@@ -101,3 +101,9 @@ Discovered from 1 completed delivery task.
 - Added Error Handling section (11 checkboxes: 11 [x]), Edge Cases section (8 checkboxes: 5 [x] + 3 [ ]), Resilience section (6 checkboxes: 6 [x]) to product map
 - Added SQLAlchemyError → 503 test file (test_feedback_sqlalchemy_error.py) with 22 tests covering 10 routes
 - Status remains `partial` (AI correction agent, eval proposal model, draft eval editor, BDD proposals scenarios all still gaps)
+
+### 2026-07-07 — Cross-cutting QA (improve-architecture index 326)
+- Fixed CRITICAL — `routing → dismissed` not allowed in `_VALID_STATUS_TRANSITIONS` despite `EvalProposalsQueueView` showing "Dismiss" button for `routing` proposals (409 on click). Added `"dismissed"` to `routing`'s allowed transitions.
+- Fixed MAJOR — `publishProposal` success message falsely claimed "Eval definition created" when no eval is actually created. Message now says "Eval definition creation not yet implemented."
+- Fixed MAJOR — `ReviewFeedbackRequest.action` had default value `"mark_reviewed"`, silently accepting empty POST bodies. Default removed; action is now required.
+- Updated Edge Cases: `[x]` proposals endpoint excludes wrong-status records, `[x]` pipeline with 0 eval definitions returns gap assumed
