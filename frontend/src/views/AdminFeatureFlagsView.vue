@@ -109,6 +109,7 @@
                     <th class="px-4 py-3">{{ $t('views.AdminFeatureFlagsView.flag') }}</th>
                     <th class="px-4 py-3">{{ $t('views.AdminFeatureFlagsView.status') }}</th>
                     <th class="px-4 py-3">{{ $t('views.AdminFeatureFlagsView.description') }}</th>
+                    <th class="px-4 py-3 w-32">{{ $t('views.AdminFeatureFlagsView.org_override') }}</th>
                   </tr>
                 </thead>
                 <tbody class="divide-y divide-border">
@@ -156,6 +157,11 @@
                       </span>
                     </td>
                     <td class="px-4 py-3 text-sm text-muted-foreground">{{ flag.description }}</td>
+                    <td class="px-4 py-3 text-right">
+                      <Button variant="outline" size="sm" @click.stop="openOverrideDialog(flag)">
+                        {{ getCurrentOverride(flag.name) === null ? $t('views.AdminFeatureFlagsView.default') : (getCurrentOverride(flag.name) ? $t('common.enabled') : $t('common.disabled')) }}
+                      </Button>
+                    </td>
                   </tr>
                 </tbody>
               </table>
@@ -188,6 +194,30 @@
         </template>
       </template>
     </div>
+    <Dialog v-if="overrideDialogFlag" :open="overrideDialogOpen" @update:open="overrideDialogOpen = $event">
+      <DialogContent class="sm:max-w-[400px]">
+        <DialogHeader>
+          <DialogTitle>{{ $t('views.AdminFeatureFlagsView.org_override_for') }} "{{ overrideDialogFlag.name }}"</DialogTitle>
+          <DialogDescription>{{ $t('views.AdminFeatureFlagsView.org_override_description') }}</DialogDescription>
+        </DialogHeader>
+        <div class="py-4">
+          <Select v-model="overrideDialogValue">
+            <SelectTrigger>
+              <SelectValue :placeholder="$t('views.AdminFeatureFlagsView.select_override')" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="null">{{ $t('views.AdminFeatureFlagsView.system_default') }}</SelectItem>
+              <SelectItem value="true">{{ $t('views.AdminFeatureFlagsView.force_enabled') }}</SelectItem>
+              <SelectItem value="false">{{ $t('views.AdminFeatureFlagsView.force_disabled') }}</SelectItem>
+            </SelectContent>
+          </Select>
+        </div>
+        <DialogFooter>
+          <Button variant="outline" @click="overrideDialogOpen = false">{{ $t('common.cancel') }}</Button>
+          <Button @click="saveOverride">{{ $t('common.save') }}</Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   </div>
 </template>
 
@@ -200,6 +230,21 @@ import LoadingSpinner from '../components/shared/LoadingSpinner.vue'
 import ErrorAlert from '../components/shared/ErrorAlert.vue'
 import { Input } from '../components/ui/input'
 import { Button } from '../components/ui/button'
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '../components/ui/dialog'
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '../components/ui/select'
 import {
   TooltipProvider,
   Tooltip,
@@ -325,6 +370,10 @@ async function loadFlags() {
       flags.value = resp.flags
       license.value = resp.license ?? { tier: 'community', has_license_key: false, is_valid: true }
       wouldActivate.value = resp.would_activate ?? []
+      for (const flag of resp.flags) {
+        const override = await planStore.fetchOrgFlagOverride(flag.name)
+        planStore.orgOverrides[flag.name] = override
+      }
     }
   } catch (e: unknown) {
     error.value = `Failed to load feature flags: ${formatApiError(e)}`
@@ -334,6 +383,31 @@ async function loadFlags() {
 }
 
 const flagToggling = ref<Record<string, boolean>>({})
+
+const overrideDialogFlag = ref<FlagItem | null>(null)
+const overrideDialogOpen = ref(false)
+const overrideDialogValue = ref<string>('null')
+
+function openOverrideDialog(flag: FlagItem) {
+  const current = planStore.orgOverrides[flag.name]
+  overrideDialogFlag.value = flag
+  overrideDialogValue.value = current === true ? 'true' : current === false ? 'false' : 'null'
+  overrideDialogOpen.value = true
+}
+
+function getCurrentOverride(flagName: string): boolean | null {
+  return planStore.orgOverrides[flagName] ?? null
+}
+
+async function saveOverride() {
+  const flag = overrideDialogFlag.value
+  if (!flag) return
+  const val = overrideDialogValue.value
+  const enabled = val === 'null' ? null : val === 'true'
+  await planStore.setOrgFlagOverride(flag.name, enabled)
+  overrideDialogOpen.value = false
+  overrideDialogFlag.value = null
+}
 
 async function toggleFlag(flag: FlagItem) {
   flagToggling.value[flag.name] = true

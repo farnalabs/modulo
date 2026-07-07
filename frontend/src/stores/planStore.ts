@@ -161,6 +161,46 @@ export const usePlanStore = defineStore("plan", () => {
     syncingIds.value.clear();
   }
 
+  const orgOverrides = ref<Record<string, boolean | null>>({});
+
+  async function fetchOrgFlagOverride(flagName: string): Promise<boolean | null> {
+    try {
+      const { data, error: err } = await (api as any).GET(
+        '/api/v1/admin/feature-flags/{flag_name}/org-override',
+        { params: { path: { flag_name: flagName } } },
+      );
+      if (err) return null;
+      return data?.override ?? null;
+    } catch {
+      return null;
+    }
+  }
+
+  async function setOrgFlagOverride(flagName: string, enabled: boolean | null): Promise<boolean> {
+    try {
+      if (enabled === null) {
+        const { error: err } = await (api as any).DELETE(
+          '/api/v1/admin/feature-flags/{flag_name}/org-override',
+          { params: { path: { flag_name: flagName } } },
+        );
+        if (err) return false;
+      } else {
+        const { error: err } = await (api as any).PUT(
+          '/api/v1/admin/feature-flags/{flag_name}/org-override',
+          {
+            params: { path: { flag_name: flagName } },
+            body: { enabled },
+          },
+        );
+        if (err) return false;
+      }
+      orgOverrides.value[flagName] = enabled;
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
   return {
     currentTier,
     features,
@@ -172,10 +212,13 @@ export const usePlanStore = defineStore("plan", () => {
     orgName: orgId,
     tierLabels,
     tierRanks,
+    orgOverrides,
     fetchPlan,
     featureEnabled,
     getTierLabel,
     isAtMinimumTier,
+    fetchOrgFlagOverride,
+    setOrgFlagOverride,
     disposeHandlers,
   };
 });
