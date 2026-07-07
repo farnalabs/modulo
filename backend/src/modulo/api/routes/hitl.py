@@ -137,6 +137,7 @@ async def claim_gate(
             except AlreadyClaimedError as exc:
                 raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
             except NotTeamMemberError as exc:
+                logger.warning("hitl.claim_gate.team_access_denied: %s", exc)
                 raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)) from exc
 
             # Update run status to "claimed".
@@ -235,12 +236,19 @@ async def approve_gate(
     if req.notes:
         resume_data["notes"] = req.notes
 
-    executor = PipelineExecutor(engine)
-    await executor.resume(
-        run_id=run_id,
-        org_id=principal.organisation_id,
-        resume_data=resume_data,
-    )
+    try:
+        executor = PipelineExecutor(engine)
+        await executor.resume(
+            run_id=run_id,
+            org_id=principal.organisation_id,
+            resume_data=resume_data,
+        )
+    except Exception as exc:
+        logger.exception("hitl.approve_gate.resume_failed")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to resume pipeline after approval",
+        ) from exc
 
     return {"status": "approved", "run_id": str(run_id)}
 
@@ -316,12 +324,19 @@ async def approve_gate_with_modification(
     if req.notes:
         resume_data["notes"] = req.notes
 
-    executor = PipelineExecutor(engine)
-    await executor.resume(
-        run_id=run_id,
-        org_id=principal.organisation_id,
-        resume_data=resume_data,
-    )
+    try:
+        executor = PipelineExecutor(engine)
+        await executor.resume(
+            run_id=run_id,
+            org_id=principal.organisation_id,
+            resume_data=resume_data,
+        )
+    except Exception as exc:
+        logger.exception("hitl.approve_with_modification.resume_failed")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to resume pipeline after approval with modification",
+        ) from exc
 
     return {"status": "approved_with_modification", "run_id": str(run_id)}
 
@@ -387,12 +402,19 @@ async def reject_gate(
     # Resume the graph with rejection data so the gate router picks the
     # reject_target branch.
     resume_data: dict[str, Any] = {"action": "rejected", "reason": req.reason}
-    executor = PipelineExecutor(engine)
-    await executor.resume(
-        run_id=run_id,
-        org_id=principal.organisation_id,
-        resume_data=resume_data,
-    )
+    try:
+        executor = PipelineExecutor(engine)
+        await executor.resume(
+            run_id=run_id,
+            org_id=principal.organisation_id,
+            resume_data=resume_data,
+        )
+    except Exception as exc:
+        logger.exception("hitl.reject_gate.resume_failed")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to resume pipeline after rejection",
+        ) from exc
 
     return {"status": "rejected", "run_id": str(run_id)}
 
@@ -468,12 +490,19 @@ async def deliver_manual_output(
         ) from e
 
     resume_data: dict[str, Any] = {"action": "deliver_manual", "output": req.output}
-    executor = PipelineExecutor(engine)
-    await executor.resume(
-        run_id=run_id,
-        org_id=principal.organisation_id,
-        resume_data=resume_data,
-    )
+    try:
+        executor = PipelineExecutor(engine)
+        await executor.resume(
+            run_id=run_id,
+            org_id=principal.organisation_id,
+            resume_data=resume_data,
+        )
+    except Exception as exc:
+        logger.exception("hitl.deliver_manual_output.resume_failed")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to resume pipeline after manual delivery",
+        ) from exc
 
     return {"status": "delivered_manual", "run_id": str(run_id)}
 
@@ -539,12 +568,19 @@ async def submit_manual_output(
         ) from e
 
     resume_data: dict[str, Any] = {"action": "manual_output", "output": req.output}
-    executor = PipelineExecutor(engine)
-    await executor.resume(
-        run_id=run_id,
-        org_id=principal.organisation_id,
-        resume_data=resume_data,
-    )
+    try:
+        executor = PipelineExecutor(engine)
+        await executor.resume(
+            run_id=run_id,
+            org_id=principal.organisation_id,
+            resume_data=resume_data,
+        )
+    except Exception as exc:
+        logger.exception("hitl.submit_manual_output.resume_failed")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to resume pipeline after manual output submission",
+        ) from exc
 
     return {"status": "submitted", "run_id": str(run_id)}
 

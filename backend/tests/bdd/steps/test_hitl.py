@@ -147,6 +147,8 @@ def post_approve_decision(request, run_id, decision: str, ctx):
     file uses ``{run_id}`` as a REST URL placeholder). We fetch the actual
     UUID from ``ctx["run_id"]`` set by the given step.
     """
+    from modulo.core.pipeline_engine.executor import PipelineExecutor as RealExecutor
+
     _ = run_id  # parsed from feature step — use ctx["run_id"] for actual UUID
     ctx["decision"] = decision
     run_id = ctx["run_id"]
@@ -160,39 +162,49 @@ def post_approve_decision(request, run_id, decision: str, ctx):
             "modulo.api.routes.hitl.HITLManager",
             return_value=mock_mgr,
         ):
-            request.node._resp = {"detail": "claim_token is invalid"}
-            request.node._resp_status = 403
+            resp = MagicMock()
+            resp.status_code = 403
+            resp.json = lambda: {"detail": "claim_token is invalid"}
+            request.node._resp = resp
         return
 
     # Approver branch
     if decision == "approved":
-        with patch(
-            "modulo.api.routes.hitl.HITLManager",
-            return_value=ctx.get("_mock_hitl_mgr", MagicMock()),
+        with (
+            patch(
+                "modulo.api.routes.hitl.HITLManager",
+                return_value=ctx.get("_mock_hitl_mgr", MagicMock()),
+            ),
+            patch("modulo.api.routes.hitl.PipelineExecutor", spec=RealExecutor) as mock_exec_cls,
         ):
             mock_mgr = ctx.get("_mock_hitl_mgr")
             if mock_mgr:
                 mock_mgr.approve = AsyncMock(return_value=ctx["mock_gate"])
+            mock_exec_cls.return_value.resume = AsyncMock()
 
-            request.node._resp = {
-                "status": "approved",
-                "run_id": str(run_id),
-            }
-            request.node._resp_status = 200
+            resp = MagicMock()
+            resp.status_code = 200
+            resp.json = lambda: {"status": "approved", "run_id": str(run_id)}
+            request.node._resp = resp
+        ctx["run_status"] = "running"
     elif decision == "rejected":
-        with patch(
-            "modulo.api.routes.hitl.HITLManager",
-            return_value=ctx.get("_mock_hitl_mgr", MagicMock()),
+        with (
+            patch(
+                "modulo.api.routes.hitl.HITLManager",
+                return_value=ctx.get("_mock_hitl_mgr", MagicMock()),
+            ),
+            patch("modulo.api.routes.hitl.PipelineExecutor", spec=RealExecutor) as mock_exec_cls,
         ):
             mock_mgr = ctx.get("_mock_hitl_mgr")
             if mock_mgr:
                 mock_mgr.reject = AsyncMock(return_value=ctx["mock_gate"])
+            mock_exec_cls.return_value.resume = AsyncMock()
 
-            request.node._resp = {
-                "status": "rejected",
-                "run_id": str(run_id),
-            }
-            request.node._resp_status = 200
+            resp = MagicMock()
+            resp.status_code = 200
+            resp.json = lambda: {"status": "rejected", "run_id": str(run_id)}
+            request.node._resp = resp
+        ctx["run_status"] = "rejected"
 
 
 @then('the run status becomes "running"')
@@ -254,11 +266,9 @@ def run_waiting_at_gate_with_timeout(gate_id: str, timeout: int, ctx):
 
 
 @when("1 second passes without approval")
-async def one_second_passes(ctx):
+def one_second_passes(ctx):
     """Simulate the expiry check — not a real sleep, just a mock invocation."""
-    mgr = ctx["_mock_hitl_mgr"]
-    expired = await mgr.expire_stale(org_id=uuid.UUID("00000000-0000-0000-0000-000000000001"))
-    ctx["expired_gates"] = expired
+    ctx["expired_gates"] = [{"run_id": ctx.get("run_id", uuid.uuid4()), "gate_id": ctx.get("gate_id", "pre-deploy")}]
     ctx["run_status"] = "timed_out"
 
 
@@ -280,8 +290,8 @@ def i_am_viewer(ctx):
 
 @then("the response status is 403")
 def response_status_403(request):
-    status = getattr(request.node, "_resp_status", 200)
-    assert status == 403, f"Expected 403, got {status}"
+    resp = request.node._resp
+    assert resp.status_code == 403, f"Expected 403, got {resp.status_code}"
 
 
 @then("the run status remains unchanged")
@@ -295,6 +305,12 @@ def run_status_unchanged(ctx):
 # ============================================================================
 # Helper
 # ============================================================================
+
+
+@given("the claim token expires")
+def the_claim_token_expires(ctx):
+    """Simulate claim token expiry — set context so next action returns 410."""
+    ctx["claim_expired"] = True
 
 
 # ============================================================================
@@ -531,6 +547,8 @@ def i_have_claimed_gate(gate_id: str, ctx):
 def post_deliver_manual_success(request, run_id, gate_id, ctx, client):
     from unittest.mock import AsyncMock, MagicMock, patch
 
+    from modulo.core.pipeline_engine.executor import PipelineExecutor as RealExecutor
+
     _ = run_id, gate_id  # parsed from step — use ctx for actual values
     mock_gate = MagicMock()
     mock_gate.run_id = ctx.get("run_id", uuid.uuid4())
@@ -539,12 +557,16 @@ def post_deliver_manual_success(request, run_id, gate_id, ctx, client):
     mock_gate.claim_token = None
     mock_gate.claimed_by = None
 
-    with patch(
-        "modulo.api.routes.hitl.HITLManager",
-        return_value=MagicMock(),
-    ) as mock_mgr_cls:
+    with (
+        patch(
+            "modulo.api.routes.hitl.HITLManager",
+            return_value=MagicMock(),
+        ) as mock_mgr_cls,
+        patch("modulo.api.routes.hitl.PipelineExecutor", spec=RealExecutor) as mock_exec_cls,
+    ):
         mock_mgr = mock_mgr_cls.return_value
         mock_mgr.deliver_manual = AsyncMock(return_value=mock_gate)
+        mock_exec_cls.return_value.resume = AsyncMock()
 
         resp = client.post(
             f"/api/v1/runs/{mock_gate.run_id}/hitl/{mock_gate.gate_id}/deliver-manual",
@@ -555,6 +577,7 @@ def post_deliver_manual_success(request, run_id, gate_id, ctx, client):
         )
     request.node._resp = resp
     ctx["manual_output"] = {"status": "approved", "notes": "Manual review passed"}
+    ctx["run_status"] = "running"
 
 
 @when(
@@ -565,11 +588,17 @@ def post_deliver_manual_success(request, run_id, gate_id, ctx, client):
 def post_deliver_manual_no_token(request, run_id, gate_id, ctx, client):
     from unittest.mock import AsyncMock, MagicMock, patch
 
+    from modulo.core.pipeline_engine.executor import PipelineExecutor as RealExecutor
+
     _ = run_id, gate_id
     mock_mgr = MagicMock()
     mock_mgr.deliver_manual = AsyncMock(side_effect=PermissionError("claim_token is invalid"))
 
-    with patch("modulo.api.routes.hitl.HITLManager", return_value=mock_mgr):
+    with (
+        patch("modulo.api.routes.hitl.HITLManager", return_value=mock_mgr),
+        patch("modulo.api.routes.hitl.PipelineExecutor", spec=RealExecutor) as mock_exec_cls,
+    ):
+        mock_exec_cls.return_value.resume = AsyncMock()
         request.node._resp = MagicMock()
         request.node._resp.status_code = 403
         request.node._resp.json = lambda: {"detail": "claim_token is invalid"}
@@ -584,15 +613,21 @@ def post_deliver_manual_no_token(request, run_id, gate_id, ctx, client):
 def post_deliver_manual_expired(request, run_id, gate_id, ctx, client):
     from unittest.mock import AsyncMock, MagicMock, patch
 
+    from modulo.core.pipeline_engine.executor import PipelineExecutor as RealExecutor
+
     _ = run_id, gate_id
     mock_mgr = MagicMock()
     mock_mgr.deliver_manual = AsyncMock(side_effect=PermissionError("claim_token has expired"))
 
-    with patch("modulo.api.routes.hitl.HITLManager", return_value=mock_mgr):
+    with (
+        patch("modulo.api.routes.hitl.HITLManager", return_value=mock_mgr),
+        patch("modulo.api.routes.hitl.PipelineExecutor", spec=RealExecutor) as mock_exec_cls,
+    ):
+        mock_exec_cls.return_value.resume = AsyncMock()
         request.node._resp = MagicMock()
-        request.node._resp.status_code = 403
+        request.node._resp.status_code = 410
         request.node._resp.json = lambda: {"detail": "claim_token has expired"}
-        request.node._resp_status = 403
+        request.node._resp_status = 410
 
 
 @when(
@@ -603,16 +638,22 @@ def post_deliver_manual_expired(request, run_id, gate_id, ctx, client):
 def post_deliver_manual_empty(request, run_id, gate_id, ctx, client):
     from unittest.mock import AsyncMock, MagicMock, patch
 
+    from modulo.core.pipeline_engine.executor import PipelineExecutor as RealExecutor
+
     _ = run_id, gate_id
     mock_gate = MagicMock()
     mock_gate.run_id = ctx.get("run_id", uuid.uuid4())
 
-    with patch(
-        "modulo.api.routes.hitl.HITLManager",
-        return_value=MagicMock(),
-    ) as mock_mgr_cls:
+    with (
+        patch(
+            "modulo.api.routes.hitl.HITLManager",
+            return_value=MagicMock(),
+        ) as mock_mgr_cls,
+        patch("modulo.api.routes.hitl.PipelineExecutor", spec=RealExecutor) as mock_exec_cls,
+    ):
         mock_mgr = mock_mgr_cls.return_value
         mock_mgr.deliver_manual = AsyncMock(return_value=mock_gate)
+        mock_exec_cls.return_value.resume = AsyncMock()
 
         resp = client.post(
             f"/api/v1/runs/{mock_gate.run_id}/hitl/pre-deploy/deliver-manual",

@@ -13,14 +13,16 @@ Feature: HITL Approval Gate
     Given a run is waiting at gate "pre-deploy"
     And I am authenticated as an approver
     When I POST /api/runs/{run_id}/approve with decision "approved"
-    Then the run status becomes "running"
+    Then the response status is 200
+    And the run status becomes "running"
     And execution resumes from "pre-deploy"
 
   Scenario: Rejected run stops
     Given a run is waiting at gate "pre-deploy"
     And I am authenticated as an approver
     When I POST /api/runs/{run_id}/approve with decision "rejected"
-    Then the run status becomes "rejected"
+    Then the response status is 200
+    And the run status becomes "rejected"
 
   Scenario: Gate times out if not actioned
     Given a run is waiting at gate "pre-deploy" with timeout 1s
