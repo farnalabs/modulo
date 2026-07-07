@@ -2,6 +2,7 @@
 
 import asyncio
 import json
+import random
 from typing import Any
 
 import httpx
@@ -22,14 +23,24 @@ _MAX_DELAY = 30.0
 
 
 def _parse_retry_after(response: httpx.Response) -> float | None:
-    """Parse Retry-After header from Jira API response."""
-    value = response.headers.get("Retry-After") or response.headers.get("retry-after")
+    """Parse Retry-After header from API response."""
+    value = response.headers.get("Retry-After")
     if value:
         try:
             return float(value)
         except (ValueError, TypeError):
             pass
     return None
+
+
+def _compute_delay(attempt: int, response: httpx.Response | None = None) -> float:
+    """Compute retry delay with exponential backoff, jitter, and optional Retry-After."""
+    if response:
+        retry_after = _parse_retry_after(response)
+        if retry_after is not None:
+            return min(retry_after, _MAX_DELAY)
+    jitter = random.uniform(0, 1)
+    return min(_BASE_DELAY * (2 ** attempt) + jitter, _MAX_DELAY)
 
 
 class JiraConnector(ConnectorBase):
@@ -108,8 +119,7 @@ class JiraConnector(ConnectorBase):
                     if r.status_code == 304:
                         raise ValueError("Jira API returned 304 Not Modified — resource unchanged")
                     if r.status_code in _RETRYABLE_STATUSES and attempt < _MAX_RETRIES:
-                        retry_after = _parse_retry_after(r)
-                        delay = min(retry_after, _MAX_DELAY) if retry_after else min(_BASE_DELAY * (2 ** attempt), _MAX_DELAY)
+                        delay = _compute_delay(attempt, r)
                         await asyncio.sleep(delay)
                         continue
                     r.raise_for_status()
@@ -117,22 +127,21 @@ class JiraConnector(ConnectorBase):
             except httpx.HTTPStatusError as exc:
                 last_exc = exc
                 if exc.response.status_code in _RETRYABLE_STATUSES and attempt < _MAX_RETRIES:
-                    retry_after = _parse_retry_after(exc.response)
-                    delay = min(retry_after, _MAX_DELAY) if retry_after else min(_BASE_DELAY * (2 ** attempt), _MAX_DELAY)
+                    delay = _compute_delay(attempt, exc.response)
                     await asyncio.sleep(delay)
                     continue
                 raise ValueError(f"Jira API HTTP {exc.response.status_code}: {exc.response.text[:200]}") from exc
             except httpx.TimeoutException as exc:
                 last_exc = exc
                 if attempt < _MAX_RETRIES:
-                    delay = min(_BASE_DELAY * (2 ** attempt), _MAX_DELAY)
+                    delay = _compute_delay(attempt)
                     await asyncio.sleep(delay)
                     continue
                 raise ValueError("Jira API timeout") from exc
             except httpx.ConnectError as exc:
                 last_exc = exc
                 if attempt < _MAX_RETRIES:
-                    delay = min(_BASE_DELAY * (2 ** attempt), _MAX_DELAY)
+                    delay = _compute_delay(attempt)
                     await asyncio.sleep(delay)
                     continue
                 raise ValueError("Jira API connection error") from exc
@@ -160,9 +169,9 @@ class JiraConnector(ConnectorBase):
     async def query(self, q: ConnectorQuery) -> ConnectorResult:
         match q.resource:
             case "issue":
-                issue_key = q.filters.get("issue_key")
-                if not issue_key:
+                if "issue_key" not in q.filters:
                     raise ValueError("Jira issue query requires 'issue_key' filter")
+                issue_key = q.filters["issue_key"]
                 r = await self._call_api("GET", f"/issue/{issue_key}")
                 data: dict[str, Any] = await self._parse_json(r)
                 return ConnectorResult(records=[data])
@@ -183,9 +192,9 @@ class JiraConnector(ConnectorBase):
                     next_cursor = str(start_at + max_results)
                 return ConnectorResult(records=issues, total=total, next_cursor=next_cursor)
             case "issue_comments":
-                issue_key = q.filters.get("issue_key")
-                if not issue_key:
+                if "issue_key" not in q.filters:
                     raise ValueError("Jira issue_comments query requires 'issue_key' filter")
+                issue_key = q.filters["issue_key"]
                 params: dict[str, Any] = {}
                 if q.cursor:
                     params["startAt"] = int(q.cursor)
@@ -200,9 +209,9 @@ class JiraConnector(ConnectorBase):
                     next_cursor = str(start_at + max_results)
                 return ConnectorResult(records=comments, total=total, next_cursor=next_cursor)
             case "transitions":
-                issue_key = q.filters.get("issue_key")
-                if not issue_key:
+                if "issue_key" not in q.filters:
                     raise ValueError("Jira transitions query requires 'issue_key' filter")
+                issue_key = q.filters["issue_key"]
                 r = await self._call_api("GET", f"/issue/{issue_key}/transitions")
                 body = await self._parse_json(r)
                 transitions = body.get("transitions", [])
@@ -229,21 +238,21 @@ class JiraConnector(ConnectorBase):
                 r = await self._call_api("PUT", f"/issue/{issue_key}", json={"fields": fields})
                 return {"issue_key": issue_key, "updated": True}
             case "issue_comment":
-                issue_key = payload.data.get("issue_key")
-                if not issue_key:
+                if "issue_key" not in payload.data:
                     raise ValueError("Jira issue comment requires 'issue_key' in data")
-                body = payload.data.get("body")
-                if not body:
+                issue_key = payload.data["issue_key"]
+                if "body" not in payload.data:
                     raise ValueError("Jira issue comment requires 'body' in data")
+                body = payload.data["body"]
                 r = await self._call_api("POST", f"/issue/{issue_key}/comment", json={"body": body})
                 return await self._parse_json(r)
             case "transition":
-                issue_key = payload.data.get("issue_key")
-                if not issue_key:
+                if "issue_key" not in payload.data:
                     raise ValueError("Jira transition requires 'issue_key' in data")
-                transition_id = payload.data.get("transition_id")
-                if not transition_id:
+                issue_key = payload.data["issue_key"]
+                if "transition_id" not in payload.data:
                     raise ValueError("Jira transition requires 'transition_id' in data")
+                transition_id = payload.data["transition_id"]
                 r = await self._call_api(
                     "POST", f"/issue/{issue_key}/transitions",
                     json={"transition": {"id": transition_id}},

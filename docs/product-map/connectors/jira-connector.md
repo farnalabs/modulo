@@ -5,7 +5,9 @@ delivery-tasks: []
 bdd:
   - backend/tests/bdd/features/connectors/connector_health.feature
   - backend/tests/bdd/features/connectors/jira_connector.feature
-unit-tests: [backend/tests/unit/connectors/test_jira.py]
+unit-tests:
+  - backend/tests/unit/connectors/test_jira.py
+  - backend/tests/unit/connectors/test_jira_resilience.py
 code:
   - backend/src/modulo/connectors/jira/__init__.py
   - backend/src/modulo/connectors/base.py
@@ -100,6 +102,18 @@ Async Jira Cloud REST API v3 connector implementing `ConnectorBase`. Provides re
 - [x] `_call_api` respects `Retry-After` header from Jira API
 - [x] `_parse_json` narrowed to `json.JSONDecodeError` only — prevents masking programming errors
 
+### Resilience & Integration Robustness
+
+- [x] `_compute_delay` includes random jitter — prevents thundering herd on retry
+- [x] `_compute_delay` respects `Retry-After` header when present
+- [x] `_compute_delay` capped at `_MAX_DELAY` (30s)
+- [x] `_compute_delay` extracted as shared helper — eliminates duplication across 3 retry paths
+- [x] `_parse_retry_after` simplified to single case-insensitive header lookup
+- [x] Retry delay formula deduplicated via `_compute_delay` helper
+- [x] Required field validation uses `key not in` pattern — rejects empty/None without falsy ambiguity
+- [x] `test_jira_resilience.py` covers jitter, exponential backoff, Retry-After, retry 502/503/504 → success, 429 exhaustion
+- [x] Required field validation edge cases tested (missing issue_key, missing body, missing transition_id)
+
 ## Known Gaps
 
 - [ ] **Jira Data Center not supported**: URL format is `https://{instance}/rest/api/3` — Jira Server/Data Center uses a different path structure
@@ -109,4 +123,15 @@ Async Jira Cloud REST API v3 connector implementing `ConnectorBase`. Provides re
 - [ ] **No issue labels management**: cannot add/remove labels via dedicated write resource
 - [ ] **No issue delete**: deletion not exposed through connector interface
 - [ ] **No X-RateLimit-* header inspection**: rate-limit retry is blind (no remaining/quota tracking)
+
+---
+
+## QA History
+
+### Index 304 — 2026-07-10: Cross-cutting architecture QA
+- **Fixed CRITICAL** — added `random` import and `_compute_delay()` helper with jitter (`random.uniform(0, 1)`) to all 3 retry delay paths (normal response, HTTPStatusError, TimeoutException/ConnectError). Previous code used pure exponential backoff without jitter despite product map claiming "exponential backoff + jitter". All 3 retry paths now produce varied delays, preventing thundering herd on retry.
+- **Fixed MAJOR** — extracted `_compute_delay(attempt, response=None)` helper, consolidating 3 duplicated delay computation formulas into one shared function. The helper handles Retry-After parsing, exponential backoff, jitter, and capping at `_MAX_DELAY` (30s).
+- **Fixed MAJOR** — simplified `_parse_retry_after` (removed redundant `or response.headers.get("retry-after")` — httpx headers are case-insensitive, single lookup suffices).
+- **Fixed MAJOR** — changed all 5 falsy-check validations (`if not issue_key:`, `if not body:`, `if not transition_id:`) to `key not in filters/data` pattern, matching the established project convention and eliminating falsy-value ambiguity.
+- **Added** 9 new resilience tests in `test_jira_resilience.py`: `_compute_delay` jitter verification, exponential backoff, capping, Retry-After parsing and capping, retry 502/503/504 → success, 429 exhaustion, required field validation edge cases (missing issue_key, missing body).
 
