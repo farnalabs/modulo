@@ -70,12 +70,12 @@ Paginated JSON export of audit events for SOC 2 compliance evidence. Builds on t
 - [x] SQLAlchemyError → 503 on all 4 routes
 - [x] 401/403 on no auth (all endpoints)
 - [x] Admin role required (all endpoints)
-- [x] 402 when feature not in license (require_feature("audit_viewer") on list, batch-detail, export)
+- [x] 402 when feature not in license (require_feature("audit_viewer") on batch-detail and export; list is intentionally Community per PRD)
 - [x] Invalid page/page_size → 422 validation error
 - [x] Malformed UUID in user_id query param → 422
 - [x] Cursor decode failure logged in list_audit_events
 - [x] Export failure surfaces user-facing error in frontend
-- [ ] No non-admin BDD scenario for 403 on export
+- [x] No non-admin BDD scenario for 403 on export
 - [ ] No integration test for export flow end-to-end
 
 ### Edge Cases
@@ -94,6 +94,13 @@ Paginated JSON export of audit events for SOC 2 compliance evidence. Builds on t
 - [ ] No circuit breaker for export of very large orgs (100k+)
 
 ### QA History
+
+#### 2026-07-07 — Cross-cutting QA (feat-core-soc2-evidence-export index 315)
+- FIXED: Added unit tests for /verify endpoint: ProgrammingError→501, SQLAlchemyError→503, non-admin→403
+- FIXED: Added non-admin 403 BDD scenario to audit_export.feature
+- FIXED: Product map incorrectly claimed list endpoint has require_feature("audit_viewer") — list is per-PRD Community (no gate); corrected checkbox
+- FIXED: Removed "No BDD feature files for audit export flow" from Known Gaps (audit_export.feature exists)
+- Status: partial (12 known gaps remain, 1 resolved)
 
 #### 2026-07-04 — Cross-cutting QA (improve-architecture index 165)
 - Fixed CRITICAL: Added SQLAlchemyError → 503 catch to all 4 audit routes (previously only caught ProgrammingError, allowing connection/deadlock failures to propagate as 500)
@@ -115,8 +122,7 @@ Paginated JSON export of audit events for SOC 2 compliance evidence. Builds on t
 - No export bundle checksum/signature for tamper-evident SOC 2 artifacts
 - No chain verification data bundled with export (auditor must call /verify separately)
 - Export uses offset-based pagination which may skip/duplicate events if new events created during export
-- No BDD feature files for audit export flow
-- No unit tests for the `/verify` endpoint ProgrammingError path (not covered)
+- [x] No unit tests for the `/verify` endpoint ProgrammingError path — added with SQLAlchemyError + non-admin tests in cross-cutting QA 315
 - No integration test verifying full export flow (API → DB → paginated response)
 - No CLI export command for offline/automated evidence collection (e.g., monthly audit bundle)
 - No retention-aware export — deleted/expired events are invisible to export (no gap marking)
