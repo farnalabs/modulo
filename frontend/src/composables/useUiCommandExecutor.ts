@@ -209,11 +209,11 @@ export async function executeCommandBatch(commands: UiCommand[]): Promise<UiComm
       fast: 200,
       normal: 600,
       slow: 1200,
-      step: 0,
+      review: 0,
     }
     const delay = speedDelays[_actionSpeed] ?? 0
     if (delay > 0) await new Promise(r => setTimeout(r, delay))
-    if (_actionSpeed === 'step') _paused = true
+    if (_actionSpeed === 'review') _paused = true
   }
 
   cleanup()

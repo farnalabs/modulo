@@ -103,8 +103,9 @@
           class="remy-titlebar-btn text-xs font-medium px-1.5"
           @click="cycleSpeed"
           :title="`Speed: ${currentSpeedLabel}`"
+          :aria-label="`Speed: ${currentSpeedLabel} — ${speedDescriptions[currentSpeed.value] ?? ''}`"
         >
-          {{ speedIcon }}
+          <span>{{ speedIcon }}</span><span class="ml-0.5 text-[10px] uppercase tracking-wider">{{ currentSpeedLabel }}</span>
         </button>
         <button
           v-if="store.panelState !== 'maximised'"
@@ -177,6 +178,10 @@
       >
         &times;
       </button>
+    </div>
+    <div v-if="currentSpeed === 'review' && store.activeSession" class="flex items-center justify-between px-3 py-1.5 text-xs border-b bg-muted/30">
+      <span>⏸ Stops after each navigation</span>
+      <button class="text-xs font-medium underline hover:no-underline" @click="resumeUiCommands">Resume</button>
     </div>
     <div class="remy-body">
       <div class="remy-sidebar" :class="{ open: showSidebar }">
@@ -260,7 +265,7 @@ import { ref, computed, watch, nextTick, onMounted, onUnmounted } from "vue";
 import { shortId } from "@/utils/format";
 import { useRemyStore } from "@/composables/useRemyStore";
 import { useRemyContext } from "@/composables/useRemyContext";
-import { setActionSpeed } from "@/composables/useUiCommandExecutor";
+import { setActionSpeed, resumeUiCommands } from "@/composables/useUiCommandExecutor";
 import { Button } from "@/components/ui/button";
 import RemyChat from "./RemyChat.vue";
 import RemySessionDrawer from "./RemySessionDrawer.vue";
@@ -280,16 +285,23 @@ const chatRef = ref<InstanceType<typeof RemyChat> | null>(null);
 const showSidebar = ref(false);
 const activeTab = ref<"chat" | "skills" | "sessions" | "sources">("chat");
 
-const speedLabels = ['lightning', 'fast', 'normal', 'slow', 'step']
+const speedLabels = ['lightning', 'fast', 'normal', 'slow', 'review']
 const speedIcons = ['⚡', '▶', '▶▶', '▶▶▶', '⏸']
-const currentSpeed = ref(localStorage.getItem('remy-action-speed') || 'lightning')
+const speedDescriptions: Record<string, string> = {
+  lightning: 'Fastest — no delays',
+  fast: 'Quick — brief pauses',
+  normal: 'Balanced speed',
+  slow: 'Slower — watch each step',
+  review: 'Stops after each navigation so you can review',
+}
+const currentSpeed = ref(localStorage.getItem('remy-action-speed') || 'normal')
 const currentSpeedLabel = computed(() => {
   const idx = speedLabels.indexOf(currentSpeed.value)
-  return speedLabels[idx >= 0 ? idx : 0]
+  return speedLabels[idx >= 0 ? idx : 2]
 })
 const speedIcon = computed(() => {
   const idx = speedLabels.indexOf(currentSpeed.value)
-  return speedIcons[idx >= 0 ? idx : 0]
+  return speedIcons[idx >= 0 ? idx : 2]
 })
 function cycleSpeed() {
   const idx = speedLabels.indexOf(currentSpeed.value)
@@ -297,6 +309,7 @@ function cycleSpeed() {
   currentSpeed.value = next
   localStorage.setItem('remy-action-speed', next)
   setActionSpeed(next)
+  if (next !== 'review') resumeUiCommands()
 }
 
 const editingName = ref(false)
