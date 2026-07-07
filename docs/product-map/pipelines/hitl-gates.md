@@ -166,13 +166,15 @@ to an intermediate LangGraph gate node at runtime.
 - [x] Pipeline name lookups inside session.begin() transaction for RLS consistency
 - [x] All 7 route handlers have except ProgrammingError → 501
 - [x] All 7 route handlers have except SQLAlchemyError → 503
-- [ ] claim_gate notifies on NotTeamMemberError (403) consistently logged
-- [ ] PipelineExecutor.resume() exceptions not caught in route handlers (propagates as 500)
+- [x] claim_gate logs warning on NotTeamMemberError (403) — logger.warning with context
+- [x] PipelineExecutor.resume() exceptions caught in all 5 route handlers — returns 500 instead of raw propagation
 - [ ] No retry/backoff on HITL DB operations
 
 ## QA History
 
 - 2026-07-06: feat-pipelines-hitl-gates cross-cutting QA (arch-230): Fixed CRITICAL — claim_gate route missing NotTeamMemberError→403 catch (non-member team-scoped claim returned 500 instead of 403). Fixed CRITICAL — all 7 route handlers added SQLAlchemyError→503 catches (connection/deadlock failures propagated as 500). Fixed MAJOR — submit_manual_output returned 403 for expired tokens instead of 410 (inconsistent with all other HITL decision routes). Fixed MAJOR — pipeline name lookups moved inside session.begin() in list_run_pending_gates and list_org_pending_gates. Updated product map: marked 2 [ ]→[x], added Resilience section (6 checkboxes: 4 [x] + 2 [ ]). Added 14 SQLAlchemyError→503 + NotTeamMemberError→403 tests.
+
+- 2026-07-07: feat-pipelines-hitl-gates cross-cutting QA (idx-322): Fixed CRITICAL — duplicate BDD scenario registrations for claim.feature and approve.feature (StepDefinitionAlreadyRegistered). Fixed CRITICAL — test_alpha_hitl.py imported from non-existent modulo.hitl_manager module (ClaimResult/ApproveResult). Fixed MAJOR — BDD deliver_manual.feature "HITL gate" step text mismatched step definition. Fixed MAJOR — BDD deliver_manual expired token step returned 403 instead of 410. Fixed MAJOR — approval_gate.feature missing response status assertions. Fixed MAJOR — frontend claimGate read claimed_by/claimed_at from ClaimResponse (model doesn't include those fields). Fixed MAJOR — NotTeamMemberError in claim_gate not logged. Fixed MAJOR — PipelineExecutor.resume() exceptions not caught in 5 route handlers (resume failure propagated as raw 500). Updated product map: marked 2 [ ]→[x] in Resilience section.
 
 ## Known Gaps
 

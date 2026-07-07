@@ -452,7 +452,7 @@ async function claimGate(gate: GateItem) {
       claimTokens.value[key] = d.claim_token
       const idx = gates.value.findIndex(g => expandKey(g) === key)
       if (idx !== -1) {
-        gates.value[idx] = { ...gates.value[idx], claimed_by: d.claimed_by ? String(d.claimed_by) : null, claimed_at: d.claimed_at ? String(d.claimed_at) : new Date().toISOString(), expires_at: d.expires_at }
+        gates.value[idx] = { ...gates.value[idx], claimed_by: 'You', claimed_at: new Date().toISOString(), expires_at: d.expires_at }
       }
       actionMessage.value[key] = { type: 'success', text: 'Gate claimed. You can now approve or reject.' }
       setTimeout(() => { actionMessage.value[key] = null }, 5000)
