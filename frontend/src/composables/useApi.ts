@@ -1,46 +1,61 @@
-const BASE = ''
+import {
+  getAuthHeaders,
+  attemptTokenRefresh,
+  clearAccessToken,
+  redirectToLogin,
+} from '../lib/api/auth'
 
-const TOKEN_KEY = 'modulo_access_token'
+const BASE = ''
 
 interface ApiOptions {
   headers?: Record<string, string>
 }
 
-function authHeader(): Record<string, string> {
-  try {
-    const token = localStorage.getItem(TOKEN_KEY)
-    return token ? { Authorization: `Bearer ${token}` } : {}
-  } catch {
-    return {}
-  }
-}
-
 const REQUEST_TIMEOUT_MS = 30000
 
-async function request<T>(method: string, path: string, body?: unknown, options?: ApiOptions): Promise<T> {
+async function requestWorker<T>(method: string, path: string, body?: unknown, options?: ApiOptions): Promise<Response> {
   const controller = new AbortController()
   const timer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS)
   try {
+    const headers = {
+      'Content-Type': 'application/json',
+      ...getAuthHeaders(),
+      ...options?.headers,
+    }
     const res = await fetch(`${BASE}${path}`, {
       method,
       signal: controller.signal,
-      headers: {
-        'Content-Type': 'application/json',
-        ...authHeader(),
-        ...options?.headers,
-      },
+      headers,
       body: body != null ? JSON.stringify(body) : undefined,
       credentials: 'include',
     })
-    if (!res.ok) {
-      const detail = await res.json().catch(() => ({ detail: res.statusText }))
-      throw new Error(detail.detail ?? `Request failed: ${res.status}`)
-    }
-    if (res.status === 204) return undefined as T
-    return res.json()
+    return res
   } finally {
     clearTimeout(timer)
   }
+}
+
+async function request<T>(method: string, path: string, body?: unknown, options?: ApiOptions): Promise<T> {
+  let res = await requestWorker<T>(method, path, body, options)
+
+  if (res.status === 401) {
+    const refreshed = await attemptTokenRefresh()
+    if (refreshed) {
+      res = await requestWorker<T>(method, path, body, options)
+    }
+    if (!refreshed || res.status === 401) {
+      clearAccessToken()
+      redirectToLogin()
+      throw new Error('Session expired. Please log in again.')
+    }
+  }
+
+  if (!res.ok) {
+    const detail = await res.json().catch(() => ({ detail: res.statusText }))
+    throw new Error(detail.detail ?? `Request failed: ${res.status}`)
+  }
+  if (res.status === 204) return undefined as T
+  return res.json()
 }
 
 export function useApi() {
