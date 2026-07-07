@@ -11,7 +11,7 @@ import uuid
 
 from pydantic import BaseModel
 from sqlalchemy import select
-from sqlalchemy.exc import ProgrammingError, SQLAlchemyError
+from sqlalchemy.exc import IntegrityError, ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.api.dependencies import get_db_session
@@ -383,6 +383,11 @@ async def create_starter_pipeline(
         return StarterPipelineResponse(
             pipeline_id=pipeline.id,
             name=pipeline.name,
+        )
+    except IntegrityError:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="A starter pipeline or schema with this name already exists.",
         )
     except ProgrammingError:
         raise HTTPException(
