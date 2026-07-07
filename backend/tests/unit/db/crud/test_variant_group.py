@@ -284,7 +284,6 @@ class TestRunVariantWeighted:
 
 
 @pytest.mark.asyncio
-@pytest.mark.asyncio
 class TestGetCoverageGaps:
     async def test_returns_empty_when_no_gaps(self) -> None:
         session = AsyncMock()
