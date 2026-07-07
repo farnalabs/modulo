@@ -771,9 +771,9 @@ function toggleRole(role: string) {
 async function putConfig(body: Record<string, unknown>): Promise<string | null> {
   try {
     const { error: err } = await (api as any).PUT('/api/v1/admin/remy/config', { body })
-    return err ? String(err) : null
+    return err ? formatApiError(err) : null
   } catch (e: unknown) {
-    return e instanceof Error ? e.message : String(e)
+    return formatApiError(e)
   }
 }
 
@@ -1207,7 +1207,7 @@ async function loadAll() {
   loading.value = true
   loadError.value = null
   try {
-    await Promise.all([
+    const results = await Promise.allSettled([
       loadConfig(),
       loadAvailableProviders(),
       loadUsers(),
@@ -1215,6 +1215,10 @@ async function loadAll() {
       loadSkills(),
       loadContextSources(),
     ])
+    const errors = results.filter(r => r.status === 'rejected').map(r => (r as PromiseRejectedResult).reason)
+    if (errors.length > 0) {
+      loadError.value = `Failed to load some data: ${errors.map(e => formatApiError(e)).join('; ')}`
+    }
     await loadProviders()
     initSkillModes()
   } finally {
