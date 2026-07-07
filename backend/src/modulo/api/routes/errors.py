@@ -6,7 +6,7 @@ import json
 import logging
 import time as _time
 import uuid
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
@@ -55,6 +55,21 @@ _public_daily_event_count: dict[str, dict[str, int]] = {}  # IP -> {YYYY-MM-DD: 
 
 # Orphan org ID for unauthenticated public ingest events
 ORPHAN_ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000000")
+
+
+def _prune_stale_ip_counters() -> None:
+    """Remove IP entries with no activity in the last 48 hours."""
+    global _public_daily_event_count
+    threshold = (datetime.now(UTC) - timedelta(hours=48)).strftime("%Y-%m-%d")
+    stale_ips = []
+    for ip, days in _public_daily_event_count.items():
+        for date_str in list(days.keys()):
+            if date_str < threshold:
+                del days[date_str]
+        if not days:
+            stale_ips.append(ip)
+    for ip in stale_ips:
+        del _public_daily_event_count[ip]
 
 
 def _get_key_store(settings: Settings | None = None) -> SessionKeyStore:
@@ -144,6 +159,8 @@ async def ingest_errors(
                     detail="Authenticated principal has no organisation",
                 )
             results = await _service.ingest_batch(session, org_id, events_data)
+    except HTTPException:
+        raise
     except ProgrammingError:
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
@@ -154,6 +171,12 @@ async def ingest_errors(
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Error tracking is temporarily unavailable. Please try again.",
+        )
+    except Exception:
+        _log.exception("error_tracking.ingest_error")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="An unexpected error occurred while processing your request.",
         )
 
     return {"results": [ErrorGroupResult(**r) for r in results]}
@@ -249,9 +272,16 @@ async def ingest_errors_public(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Error tracking is temporarily unavailable. Please try again.",
         )
+    except Exception:
+        _log.exception("error_tracking.public_ingest_error")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="An unexpected error occurred while processing your request.",
+        )
 
     # Update daily cap count after successful ingest
     ip_counts[today] = today_count + len(valid_events)
+    _prune_stale_ip_counters()
 
     _log.info("public_error_ingest ip=%s count=%d", client_ip, len(valid_events))
 
@@ -370,6 +400,12 @@ async def list_error_groups(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Error tracking is temporarily unavailable. Please try again.",
         )
+    except Exception:
+        _log.exception("error_tracking.list_groups_error")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="An unexpected error occurred while processing your request.",
+        )
 
     return {"items": items, "total": total, "limit": limit, "offset": offset}
 
@@ -391,6 +427,8 @@ async def get_error_group_detail(
             if group is None:
                 raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Error group not found")
             sample = await _fetch_sample_event(session, org_id, group)
+    except HTTPException:
+        raise
     except ProgrammingError:
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
@@ -401,6 +439,12 @@ async def get_error_group_detail(
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Error tracking is temporarily unavailable. Please try again.",
+        )
+    except Exception:
+        _log.exception("error_tracking.get_group_detail_error")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="An unexpected error occurred while processing your request.",
         )
 
     return {
@@ -442,6 +486,8 @@ async def patch_error_group(
                 raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
 
             sample = await _fetch_sample_event(session, org_id, group)
+    except HTTPException:
+        raise
     except ProgrammingError:
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
@@ -452,6 +498,12 @@ async def patch_error_group(
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Error tracking is temporarily unavailable. Please try again.",
+        )
+    except Exception:
+        _log.exception("error_tracking.patch_group_error")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="An unexpected error occurred while processing your request.",
         )
 
     return {
@@ -490,6 +542,8 @@ async def list_error_events(
                 session=session, org_id=org_id, group_id=error_id, limit=limit, offset=offset
             )
             total = await count_error_events_by_group(session=session, org_id=org_id, group_id=error_id)
+    except HTTPException:
+        raise
     except ProgrammingError:
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
@@ -500,6 +554,12 @@ async def list_error_events(
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Error tracking is temporarily unavailable. Please try again.",
+        )
+    except Exception:
+        _log.exception("error_tracking.list_events_error")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="An unexpected error occurred while processing your request.",
         )
 
     items = [_serialize_error_event_detail(e) for e in events]

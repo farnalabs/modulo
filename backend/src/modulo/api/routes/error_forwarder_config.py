@@ -97,6 +97,12 @@ async def list_forwarders(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Error tracking is temporarily unavailable. Please try again.",
         )
+    except Exception:
+        _log.exception("error_tracking.list_forwarders_error")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="An unexpected error occurred while processing your request.",
+        )
 
     items: list[ForwarderListItem] = []
     for ftype in _FORWARDER_TYPES:
@@ -170,6 +176,12 @@ async def configure_forwarder(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Error tracking is temporarily unavailable. Please try again.",
         )
+    except Exception:
+        _log.exception("error_tracking.configure_forwarder_error")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="An unexpected error occurred while processing your request.",
+        )
 
     return ForwarderConfigResponse.from_orm_model(cfg)
 
@@ -222,6 +234,12 @@ async def test_forwarder(
                 status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
                 detail="Error tracking is temporarily unavailable. Please try again.",
             )
+        except Exception:
+            _log.exception("error_tracking.test_forwarder_config_read_error")
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="An unexpected error occurred while processing your request.",
+            )
 
     test_group = ErrorGroup(
         organisation_id=org_id,
@@ -268,6 +286,12 @@ async def test_forwarder(
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Error tracking is temporarily unavailable. Please try again.",
+        )
+    except Exception:
+        _log.exception("error_tracking.test_forwarder_save_error")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="An unexpected error occurred while processing your request.",
         )
 
     name = _FORWARDER_DISPLAY_NAMES.get(forwarder_type, forwarder_type)

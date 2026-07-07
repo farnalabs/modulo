@@ -64,6 +64,10 @@ def _make_app():
         cm.__aenter__.return_value = session
         cm.__aexit__.return_value = None
         session.begin.return_value = cm
+        exec_result = MagicMock()
+        exec_result.scalar_one_or_none.return_value = None
+        exec_result.scalars.return_value.all.return_value = []
+        session.execute = AsyncMock(return_value=exec_result)
         return session
 
     from modulo.api.dependencies import get_db_session
