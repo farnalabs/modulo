@@ -204,6 +204,7 @@
                             <select
                               v-model="field.type"
                               data-testid="schema-editor-field-type"
+                              aria-label="Field type"
                               class="w-full rounded-lg border border-input bg-background px-2.5 py-1.5 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                             >
                               <option value="string">string</option>

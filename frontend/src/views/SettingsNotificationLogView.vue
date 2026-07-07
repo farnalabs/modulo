@@ -12,6 +12,7 @@
           <select
             v-model="filterStatus"
             data-testid="settings-notification-log-status"
+            aria-label="Status"
             class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring"
           >
             <option value="">{{ $t('views.AdminErrorsView.all_statuses') }}</option>

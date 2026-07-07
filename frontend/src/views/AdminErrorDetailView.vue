@@ -79,6 +79,7 @@
             <span class="text-xs text-muted-foreground">{{ $t('views.AdminErrorDetailView.assign_to') }}</span>
             <select
               v-model="assigneeId"
+              aria-label="Assign to"
               class="rounded-lg border border-input bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring"
               @change="updateAssignee"
             >

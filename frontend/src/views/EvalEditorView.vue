@@ -25,6 +25,7 @@
           <select
             v-model="selectedPipelineId"
             data-testid="eval-editor-pipeline"
+            aria-label="Pipeline"
             class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
             @change="onPipelineChange"
           >
@@ -39,6 +40,7 @@
             v-model="form.node_id"
             :disabled="!selectedPipelineId || nodesLoading"
             data-testid="eval-editor-node"
+            aria-label="Node"
             class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-50"
           >
             <option value="">{{ $t('views.EvalEditorView.all_pipeline_outputs') }}</option>
@@ -71,6 +73,7 @@
                 <select
                   v-model="form.eval_type"
                   data-testid="eval-editor-eval-type"
+                  aria-label="Eval type"
                   class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                 >
                   <option value="llm_judge">{{ $t('views.EvalEditorView.llm_judge') }}</option>

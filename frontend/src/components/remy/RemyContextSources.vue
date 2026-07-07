@@ -48,6 +48,7 @@
           </div>
           <select
             class="remy-cs-select"
+            aria-label="Knowledge source mode"
             :value="source.source_mode"
             :disabled="savingKey === source.key"
             @change="updateSource(source.key, ($event.target as HTMLSelectElement).value as ContextSourceMode)"

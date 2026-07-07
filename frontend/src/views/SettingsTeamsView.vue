@@ -212,6 +212,7 @@
                       <select
                         v-model="member.role"
                         data-testid="settings-teams-member-role"
+                        aria-label="Member role"
                         class="rounded border border-input bg-background px-2 py-1 text-xs ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                         @change="changeMemberRole(team.id, member)"
                       >
@@ -242,6 +243,7 @@
               <select
                 v-model="addMemberUserId"
                 data-testid="settings-teams-add-member-user"
+                aria-label="Select user"
                 class="flex-1 rounded border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
               >
                 <option value="" disabled>Select a user...</option>
@@ -256,6 +258,7 @@
               <select
                 v-model="addMemberRole"
                 data-testid="settings-teams-add-member-role"
+                aria-label="Select role"
                 class="rounded border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
               >
                 <option value="viewer">Viewer</option>

@@ -121,6 +121,7 @@ const evalCount = computed(() => props.evalDefinitions.length);
           <label class="text-xs text-muted-foreground">Type</label>
           <select
             :value="evalDef.type"
+            aria-label="Eval type"
             class="bg-background border-input focus-visible:border-ring h-8 w-full rounded-lg border px-2.5 py-1 text-sm"
             @change="
               (e: Event) =>
@@ -141,6 +142,7 @@ const evalCount = computed(() => props.evalDefinitions.length);
         <label class="text-xs text-muted-foreground">{{ $t('components.pipeline.composite.OutputValidationTab.failure_behaviour') }}</label>
         <select
           :value="evalDef.failure_behaviour"
+          aria-label="Failure behaviour"
           class="bg-background border-input focus-visible:border-ring h-8 w-full rounded-lg border px-2.5 py-1 text-sm"
           @change="
             (e: Event) =>
