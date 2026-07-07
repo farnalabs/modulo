@@ -1,3 +1,4 @@
+import asyncio
 import logging
 import uuid
 
@@ -32,6 +33,7 @@ class EmailSettingsUpdate(BaseModel):
     smtp_username: str = ""
     smtp_password: str = ""
     email_from: str = ""
+    clear_password: bool = False
 
 
 class TestEmailRequest(BaseModel):
@@ -122,7 +124,9 @@ async def admin_update_email_settings(
     merged["smtp_host"] = req.smtp_host
     merged["smtp_port"] = req.smtp_port
     merged["smtp_username"] = req.smtp_username
-    if req.smtp_password:
+    if req.clear_password:
+        merged["smtp_password"] = ""
+    elif req.smtp_password:
         merged["smtp_password"] = req.smtp_password
     merged["email_from"] = req.email_from
     settings_json["email"] = merged
@@ -208,7 +212,8 @@ async def admin_test_email_settings(
     temp_settings.email_from = email_cfg.get("email_from", "")
 
     try:
-        success = send_email(
+        success = await asyncio.to_thread(
+            send_email,
             temp_settings,
             [req.to],
             "Modulo Test Email",
