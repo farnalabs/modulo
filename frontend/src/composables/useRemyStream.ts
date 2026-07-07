@@ -1,5 +1,6 @@
 import { ref, onUnmounted } from 'vue'
 import { useRemyStore } from './useRemyStore'
+import { usePlanStore } from '../stores/planStore'
 import { getAuthHeaders } from '@/lib/api/client'
 import { parseSSEStream } from '@/lib/sse'
 import { executeCommandBatch } from './useUiCommandExecutor'
@@ -101,6 +102,17 @@ export function useRemyStream() {
           } else if (currentEvent === 'permission_request') {
             store.setPendingPermission(parsed)
           } else if (currentEvent === 'ui_command_batch') {
+            const planStore = usePlanStore()
+            if (!planStore.featureEnabled('remy_ui_driving')) {
+              console.warn('[RemyStream] UI driving disabled — skipping command batch')
+              const body = JSON.stringify({ results: [] })
+              await fetch(`/api/v1/remy/sessions/${sessionId}/ui-command-results`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json', ...headers },
+                body,
+              })
+              continue
+            }
             const commands = parsed.commands ?? parsed
             store.isExecutingUi = true
             try {
