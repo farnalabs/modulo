@@ -164,7 +164,7 @@ and checkpoint resume.
 
 ### Error Paths
 
-- [x] RunNotFoundError — returns "failed" with error_code="KeyError" and error_detail
+- [x] RunNotFoundError — returns "failed" with error_code="RunNotFoundError" and error_detail
 - [x] GraphValidationError — blocks run start, transitions run to "failed" with error_code="GraphValidationError"
 - [x] NodeInterrupt — transitions run to "awaiting_human" with gate payload
 - [x] Runaway run (exceeds max steps) — terminates with "runaway_max_steps"
@@ -194,7 +194,7 @@ and checkpoint resume.
 ### @awaiting-implementation BDD scenarios
 
 - webhook_trigger.feature — 5/5 scenarios tagged @awaiting-implementation (entire webhook trigger feature not yet wired to real endpoints)
-- scheduling.feature — 1/5 scenarios tagged @awaiting-implementation (cron trigger fire scenario)
+- scheduling.feature — 4/8 scenarios tagged @awaiting-implementation (cron trigger fire + all 3 polling trigger scenarios)
 - run_variants.feature — 1/5 scenarios tagged @awaiting-implementation (coverage gaps scenario)
 
 ### Resume API not yet implemented
@@ -218,7 +218,22 @@ and checkpoint resume.
 
 - Stage board kanban with search/filter/sort — not covered by pipeline feature tests
 
+### Post-Stream Error Handling Gap (executor.py)
+
+- Post-stream operations (eval suite checks, agent_signal firing, broker cleanup) at `executor.py:609-676` are NOT wrapped in an outer try/finally. If any post-stream DB operation raises an unexpected exception, `RunEventBroker.close()` is never called, leaking the broker and its subscribers. Fixed in index 309 by wrapping post-stream code in try/finally.
+
+### Graph Cache Eval Definition Staleness
+
+- The graph cache key is `(pipeline_id, snapshot_id)` only — it does NOT include eval definitions. If eval definitions change between runs using the same snapshot, the cached graph contains stale eval definitions for HITL gate eval-before-interrupt evaluation. Cache invalidation on eval definition change is not implemented.
+
 ## QA History
+
+### Index 309 (2026-07-11): Cross-cutting QA
+- Fixed MAJOR — post-stream operations in `executor.py` (eval suite checks, agent signal firing) were outside the main try/except. An unexpected exception there would skip `RunEventBroker.close()` and leak the broker. Wrapped in try/finally to guarantee closure.
+- Fixed MAJOR — product map claimed scheduling.feature had "1/5" @awaiting-implementation scenarios, but actual count is 4/8 (feature file expanded since last QA). Updated count.
+- Fixed MINOR — product map claimed RunNotFoundError → error_code="KeyError", but code produces error_code="RunNotFoundError" (type(obj).__name__). Updated to match reality.
+- Added 2 new Known Gaps: (1) Post-Stream Error Handling Gap — broker leak risk, fixed in this pass; (2) Graph Cache Eval Definition Staleness — cache key excludes eval defs, documented for future fix.
+- All 16 pipeline engine unit test files pass.
 
 ### Index 282 (2026-07-09): Cross-cutting QA
 - Fixed MAJOR — runs.py all 14 route handlers had duplicated `except HTTPException: raise` blocks (redundant pattern). Standardized to single `except HTTPException: raise` at the end of each try/except chain, matching pipelines.py convention.
