@@ -43,6 +43,7 @@ def _make_observation(
 ) -> MagicMock:
     obs = MagicMock()
     obs.human_observed_by = observed_by
+    obs.account_id = observed_by
     obs.human_observed_at = observed_at or datetime(2026, 6, 29, 12, 0, 0, tzinfo=UTC)
     return obs
 
