@@ -93,6 +93,14 @@ async def list_trigger_events(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database operation failed. Please try again later.",
         ) from None
+    except HTTPException:
+        raise
+    except Exception:
+        _log.exception("admin list_trigger_events failed")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Internal server error",
+        ) from None
 
     has_more = len(rows) > limit
     if has_more:
@@ -137,6 +145,14 @@ async def list_trigger_events(
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database operation failed. Please try again later.",
+        ) from None
+    except HTTPException:
+        raise
+    except Exception:
+        _log.exception("admin list_trigger_events count query failed")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Internal server error",
         ) from None
 
     return TriggerEventListResponse(
