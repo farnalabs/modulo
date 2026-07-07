@@ -371,14 +371,14 @@ async function testConnection() {
       body: { otlp_endpoint: otlpEndpoint.value, otlp_headers: headers },
     })
     if (err) {
-      testResult.value = { success: false, message: String(err) }
+      testResult.value = { success: false, message: formatApiError(err) }
     } else if (data) {
       testResult.value = data as unknown as TestSpanResult
       if (observabilityTestTimeout) clearTimeout(observabilityTestTimeout)
       observabilityTestTimeout = setTimeout(() => { testResult.value = null }, 10000)
     }
   } catch (e: unknown) {
-    testResult.value = { success: false, message: e instanceof Error ? e.message : String(e) }
+    testResult.value = { success: false, message: formatApiError(e) }
   } finally {
     testing.value = false
   }
