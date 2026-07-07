@@ -260,6 +260,7 @@ async def fire_polling_trigger(
                 result="poll_error",
                 error_detail=f"Connector instance {connector_instance_id} not found",
             )
+            await _update_next_fire_no_last(session, trigger)
             return {"status": "error", "reason": "connector_not_found"}
 
         # Decrypt credentials and build connector
@@ -281,6 +282,7 @@ async def fire_polling_trigger(
                 result="poll_error",
                 error_detail=f"Failed to initialise connector: {str(exc)[:200]}",
             )
+            await _update_next_fire_no_last(session, trigger)
             return {"status": "error", "reason": "connector_init_failed"}
 
         # Run poll query
@@ -296,6 +298,7 @@ async def fire_polling_trigger(
                 result="poll_error",
                 error_detail="Poll query timed out after 60s",
             )
+            await _update_next_fire_no_last(session, trigger)
             return {"status": "error", "reason": "query_timeout"}
         except Exception as exc:
             _log.warning("Poll query failed for trigger %s: %s", trigger_id, str(exc)[:200])
@@ -306,6 +309,7 @@ async def fire_polling_trigger(
                 result="poll_error",
                 error_detail=f"Poll query failed: {str(exc)[:200]}",
             )
+            await _update_next_fire_no_last(session, trigger)
             return {"status": "error", "reason": "query_failed", "error": str(exc)[:200]}
 
         # Evaluate condition
@@ -320,6 +324,7 @@ async def fire_polling_trigger(
                 result="poll_error",
                 error_detail=f"Condition evaluation failed: {exc}",
             )
+            await _update_next_fire_no_last(session, trigger)
             return {"status": "error", "reason": "condition_eval_failed", "error": str(exc)}
 
         if not condition_met:

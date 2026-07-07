@@ -24,7 +24,7 @@ Discovered from 1 completed delivery tasks. Also specified in PRD 8.5 (Trigger S
 
 - [x] DatabasePollingScheduler queries `triggers` table for `trigger_type='polling'` and `next_fire_at <= now()` on each beat tick
 - [x] DatabasePollingEntry is created per matching trigger row
-- [x] PollingFireTask fires asynchronously via Celery with `autoretry_for=(Exception,)`, `max_retries=2`, `default_retry_delay=30`
+- [x] PollingFireTask fires asynchronously via Celery with `autoretry_for=(ConnectionError, TimeoutError, OSError)`, `max_retries=2`, `default_retry_delay=30`
 - [x] Trigger row re-read with `FOR UPDATE` lock to serialise concurrent fire attempts
 - [x] `schedule_polling_trigger()` in TriggerEngine computes `next_fire_at` from `poll_interval_seconds` and persists it
 - [x] `next_fire_at` and `last_fired_at` updated after each fire cycle (both on condition_met and no_match)
@@ -87,6 +87,7 @@ Discovered from 1 completed delivery tasks. Also specified in PRD 8.5 (Trigger S
 - [x] Error detail strings truncated to 200 characters (prevents internal details leaking)
 - [x] Broad `except Exception` in `_fetch_due_triggers` caught and logged (returns empty list gracefully)
 - [x] TriggerEvent rows written for all outcomes: condition_met, no_match, poll_error, concurrency_limit_reached
+- [x] `next_fire_at` advanced on all error paths (connector_not_found, connector_init_failed, query_timeout, query_failed, condition_eval_failed) — prevents perpetual re-fetch on every beat tick
 
 ## Edge Cases
 
@@ -107,7 +108,7 @@ Discovered from 1 completed delivery tasks. Also specified in PRD 8.5 (Trigger S
 ## Resilience & Integration Robustness
 
 - [x] `_fetch_due_triggers` wraps all DB queries in try/except — returns `[]` on failure (degrade)
-- [x] `PollingFireTask` has `autoretry_for=(Exception,)` with 2 retries and 30s delay
+- [x] `PollingFireTask` has `autoretry_for=(ConnectionError, TimeoutError, OSError)` with 2 retries and 30s delay
 - [x] Each polling trigger fire uses its own DB session — failure isolation
 - [x] FOR UPDATE lock serialises concurrent fire attempts for same trigger
 - [x] Connector errors logged as TriggerEvents — no silent data loss
@@ -148,3 +149,11 @@ Discovered from 1 completed delivery tasks. Also specified in PRD 8.5 (Trigger S
 
 **Test results:** 45/45 polling unit tests pass (42 existing + 3 new logging/hash tests).
 **Status:** partial (10 known gaps remain unchanged — see Known Gaps Remaining).
+
+### 2026-07-09 — Cross-cutting QA (improve-architecture index 289)
+
+**Findings fixed:**
+- CRITICAL: `TestPollingFireTask.test_task_attributes` asserted `PollingFireTask.autoretry_for == (Exception,)` but the code defines `autoretry_for = (ConnectionError, TimeoutError, OSError)`. The narrowed exception set is correct (avoids retrying on programming errors), but the test assertion contradicted the source code and would fail at runtime. Updated test and product map to match the actual code.
+- MAJOR: All 5 error paths in `fire_polling_trigger` (connector_not_found, connector_init_failed, query_timeout, query_failed, condition_eval_failed) did not advance `next_fire_at` on the trigger row. This caused broken triggers to be re-fetched and re-failed on every beat tick (every ~30s) forever. Added `_update_next_fire_no_last(session, trigger)` call before each error return.
+
+**Test results:** 48/48 polling unit tests pass (45 existing + 3 updated assertion).
