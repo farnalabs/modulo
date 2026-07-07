@@ -1,4 +1,4 @@
-﻿<template>
+<template>
   <div class="remy-chat flex flex-col flex-1 overflow-hidden">
     <div
       ref="scrollRef"
@@ -51,11 +51,11 @@
           class="remy-tool-card"
         >
           <button class="remy-tool-header" @click="toggleToolExpand(msg.id)">
-            <span class="remy-tool-name">🛠 Tool Called: {{ (msg.tool_results_json as any).tool_name }}</span>
+            <span class="remy-tool-name">?? Tool Called: {{ (msg.tool_results_json as any).tool_name }}</span>
             <span class="tool-badge" :class="(msg.tool_results_json as any).success ? 'success' : 'failed'">
               {{ (msg.tool_results_json as any).success ? 'Completed' : 'Failed' }}
             </span>
-            <span class="tool-chevron" :class="{ expanded: expandedTools.has(msg.id) }">▼</span>
+            <span class="tool-chevron" :class="{ expanded: expandedTools.has(msg.id) }">?</span>
           </button>
           <div v-if="expandedTools.has(msg.id)" class="remy-tool-details">
             <pre>{{ formatToolDetails(msg.tool_results_json as any) }}</pre>
@@ -168,7 +168,7 @@
           >
             <div class="flex items-center gap-2 min-w-0">
               <span class="font-mono text-xs truncate">{{ tool.name }}</span>
-              <span v-if="(tool as any).nogo" class="remy-nogo-badge">⚠️ Destructive Page</span>
+              <span v-if="(tool as any).nogo" class="remy-nogo-badge">?? Destructive Page</span>
             </div>
             <span class="text-xs text-muted-foreground">{{ describeArgs(tool) }}</span>
           </div>
@@ -199,9 +199,9 @@
         <LoaderIcon class="h-3 w-3 animate-spin" />
         <span>{{ store.isPaused ? 'Remy is paused. Resume or stop?' : 'Remy is performing actions in the browser...' }}</span>
         <div class="flex gap-2">
-          <Button v-if="!store.isPaused" variant="secondary" size="sm" @click="pauseRemy">⏸ Pause</Button>
-          <Button v-if="store.isPaused" variant="secondary" size="sm" @click="resumeRemy">▶ Resume</Button>
-          <Button variant="destructive" size="sm" @click="abortUiCommands">{{ store.isPaused ? '✋ Stop' : 'Stop' }}</Button>
+          <Button v-if="!store.isPaused" variant="secondary" size="sm" @click="pauseRemy">? Pause</Button>
+          <Button v-if="store.isPaused" variant="secondary" size="sm" @click="resumeRemy">? Resume</Button>
+          <Button variant="destructive" size="sm" @click="abortUiCommands">{{ store.isPaused ? '? Stop' : 'Stop' }}</Button>
         </div>
       </div>
     </div>
@@ -227,16 +227,23 @@
         </div>
       </div>
       <div class="flex gap-2">
-        <textarea
-          ref="textareaRef"
-          v-model="inputText"
-          class="remy-input flex-1"
-          :placeholder="$t('components.remy.RemyChat.ask_remy')"
-          rows="1"
-          @keydown="onInputKeydown"
-          @input="onInput"
-          :disabled="store.isStreaming || store.isExecutingUi"
-        />
+        <div class="remy-input-wrapper flex-1">
+          <div
+            class="remy-input-highlight"
+            aria-hidden="true"
+            v-html="styledInput"
+          />
+          <textarea
+            ref="textareaRef"
+            v-model="inputText"
+            class="remy-input"
+            rows="1"
+            @keydown="onInputKeydown"
+            @input="onInput"
+            @scroll="syncHighlightScroll"
+            :disabled="store.isStreaming || store.isExecutingUi"
+          />
+        </div>
         <Button
           :disabled="!inputText.trim() || store.isStreaming || store.isExecutingUi"
           @click="handleSend"
@@ -274,13 +281,13 @@
 </template>
 
 <script setup lang="ts">
-import { ref, watch, nextTick, computed, onUnmounted } from "vue";
+import { ref, watch, nextTick, computed, onMounted, onUnmounted } from "vue";
 import { useRemyStore } from "@/composables/useRemyStore";
 import { usePlanStore } from "@/stores/planStore";
 import { useRemyStream } from "@/composables/useRemyStream";
 import { abortUiCommands } from "@/composables/useUiCommandExecutor";
 import { Button } from "@/components/ui/button";
-import { getAccessToken } from "@/lib/api/client";
+import { api, getAccessToken } from "@/lib/api/client";
 import { ShieldAlertIcon, LoaderIcon } from "@lucide/vue";
 
 const store = useRemyStore();
@@ -575,8 +582,16 @@ function resizeInput() {
     if (el) {
       el.style.height = 'auto'
       el.style.height = Math.min(el.scrollHeight, 200) + 'px'
-    }
   })
+}
+
+function syncHighlightScroll() {
+  const el = document.querySelector('.remy-input') as HTMLTextAreaElement | null
+  const hl = document.querySelector('.remy-input-highlight') as HTMLElement | null
+  if (el && hl) {
+    hl.scrollTop = el.scrollTop
+    hl.scrollLeft = el.scrollLeft
+  }
 }
 
 function copyMessage(text: string) {
@@ -715,14 +730,45 @@ function renderMarkdown(text: string): string {
   background-color: hsl(var(--card));
   border-color: hsl(var(--border));
 }
+.remy-input-wrapper {
+  position: relative;
+  min-height: 38px;
+}
+
+.remy-input-highlight {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  padding: 8px 12px;
+  font-size: 0.875rem;
+  line-height: 1.4;
+  white-space: pre-wrap;
+  word-wrap: break-word;
+  overflow: hidden;
+  pointer-events: none;
+  color: hsl(var(--foreground));
+  border: 1px solid transparent;
+  border-radius: var(--radius-lg, 0.5rem);
+}
+
 .remy-input {
   @apply rounded-lg px-3 py-2 text-sm outline-none resize-none;
-  background-color: hsl(var(--background));
+  position: relative;
+  background: transparent;
   border: 1px solid hsl(var(--input));
-  color: hsl(var(--foreground));
+  color: transparent;
+  caret-color: hsl(var(--foreground));
   min-height: 38px;
   line-height: 1.4;
+  width: 100%;
 }
+
+.remy-input::placeholder {
+  color: hsl(var(--muted-foreground));
+}
+
 .remy-input:focus {
   border-color: hsl(var(--ring));
   box-shadow: 0 0 0 1px hsla(var(--ring) / 0.3);
@@ -847,5 +893,24 @@ function renderMarkdown(text: string): string {
   @apply rounded-lg border p-3 mt-2;
   background-color: hsl(var(--card));
   border-color: hsl(var(--border));
+}
+@keyframes skill-shimmer {
+  0%, 100% {
+    color: #00FFD1;
+    text-shadow: 0 0 4px rgba(0, 255, 209, 0.3);
+  }
+  33% {
+    color: #4DFFCB;
+    text-shadow: 0 0 6px rgba(77, 255, 203, 0.2);
+  }
+  66% {
+    color: #00CCA8;
+    text-shadow: 0 0 4px rgba(0, 204, 168, 0.3);
+  }
+}
+
+.skill-inline {
+  animation: skill-shimmer 3s ease-in-out infinite;
+  font-weight: 600;
 }
 </style>
