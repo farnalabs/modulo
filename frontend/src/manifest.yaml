@@ -187,8 +187,8 @@ routes:
     parent: /
     product_map: null
     i18n_key: nav.evals
-    sidebar_group: analysis
-    sidebar_order: 2
+    sidebar_group: evals
+    sidebar_order: 1
     type: form_page
     <<: *community
     deprecated: false
@@ -200,8 +200,8 @@ routes:
     parent: /
     product_map: null
     i18n_key: nav.eval_proposals
-    sidebar_group: analysis
-    sidebar_order: 3
+    sidebar_group: evals
+    sidebar_order: 2
     type: list_page
     <<: *community
     deprecated: false
@@ -213,8 +213,8 @@ routes:
     parent: /
     product_map: null
     i18n_key: nav.variants
-    sidebar_group: analysis
-    sidebar_order: 4
+    sidebar_group: evals
+    sidebar_order: 3
     type: page
     <<: *community
     deprecated: false
@@ -226,8 +226,8 @@ routes:
     parent: /
     product_map: null
     i18n_key: nav.ab_test_models
-    sidebar_group: analysis
-    sidebar_order: 5
+    sidebar_group: evals
+    sidebar_order: 4
     type: page
     <<: *community
     deprecated: false
@@ -239,8 +239,8 @@ routes:
     parent: /
     product_map: null
     i18n_key: nav.schemas
-    sidebar_group: core
-    sidebar_order: 9
+    sidebar_group: schemas
+    sidebar_order: 1
     type: list_page
     <<: *community
     deprecated: false
@@ -253,8 +253,8 @@ routes:
     parent: /schemas
     product_map: null
     i18n_key: nav.schema_editor
-    sidebar_group: core
-    sidebar_order: 10
+    sidebar_group: schemas
+    sidebar_order: 2
     type: form_page
     pattern: /schemas/editor/:id
     dynamic_params:
@@ -269,8 +269,8 @@ routes:
     parent: /schemas
     product_map: null
     i18n_key: nav.schema_infer
-    sidebar_group: core
-    sidebar_order: 11
+    sidebar_group: schemas
+    sidebar_order: 3
     type: form_page
     <<: *community
     deprecated: false
@@ -984,45 +984,57 @@ sidebar_groups:
     default_expanded: true
     simple_mode: false
     labelKey: components.SidebarNav.group_analysis
+  evals:
+    label: Evals
+    order: 3
+    default_expanded: true
+    simple_mode: false
+    labelKey: components.SidebarNav.group_evals
+  schemas:
+    label: Schemas
+    order: 4
+    default_expanded: true
+    simple_mode: false
+    labelKey: components.SidebarNav.group_schemas
   remy:
     label: Remy
-    order: 3
+    order: 5
     default_expanded: true
     simple_mode: true
     labelKey: components.SidebarNav.group_remy
   settings:
     label: Settings
-    order: 4
+    order: 6
     default_expanded: true
     simple_mode: true
     labelKey: components.SidebarNav.group_settings
   access-control:
     label: Access Control
-    order: 5
+    order: 7
     default_expanded: true
     simple_mode: false
     labelKey: components.SidebarNav.group_access_control
   cost-management:
     label: Cost Management
-    order: 6
+    order: 8
     default_expanded: true
     simple_mode: false
     labelKey: components.SidebarNav.group_cost_management
   system:
     label: System
-    order: 7
+    order: 9
     default_expanded: true
     simple_mode: false
     labelKey: components.SidebarNav.group_system
   monitoring:
     label: Monitoring
-    order: 8
+    order: 10
     default_expanded: true
     simple_mode: false
     labelKey: components.SidebarNav.group_monitoring
   extensions:
     label: Extensions
-    order: 9
+    order: 11
     default_expanded: true
     simple_mode: false
     labelKey: components.SidebarNav.group_extensions
