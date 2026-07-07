@@ -81,6 +81,13 @@
           </svg>
         </button>
         <button
+          class="remy-titlebar-btn text-xs font-medium px-1.5"
+          @click="cycleSpeed"
+          :title="`Speed: ${currentSpeedLabel}`"
+        >
+          {{ speedIcon }}
+        </button>
+        <button
           v-if="store.panelState !== 'maximised'"
           class="remy-titlebar-btn"
           @click="store.setPanelState('maximised')"
@@ -140,11 +147,13 @@
 
     <div
       v-if="store.error"
-      class="flex items-center justify-between px-3 py-2 text-sm text-destructive bg-destructive/5 border-b"
+      class="flex items-center justify-between px-3 py-2 text-sm border-b"
+      :class="isRateLimitError ? 'text-orange-600 bg-orange-50 border-orange-200' : 'text-destructive bg-destructive/5'"
     >
       <span>{{ store.error }}</span>
       <button
-        class="text-destructive hover:brightness-110 shrink-0 ml-2"
+        class="shrink-0 ml-2 hover:brightness-110"
+        :class="isRateLimitError ? 'text-orange-600' : 'text-destructive'"
         @click="store.error = null"
       >
         &times;
@@ -232,6 +241,7 @@ import { ref, computed, watch, onMounted, onUnmounted } from "vue";
 import { shortId } from "@/utils/format";
 import { useRemyStore } from "@/composables/useRemyStore";
 import { useRemyContext } from "@/composables/useRemyContext";
+import { setActionSpeed } from "@/composables/useUiCommandExecutor";
 import { Button } from "@/components/ui/button";
 import RemyChat from "./RemyChat.vue";
 import RemySessionDrawer from "./RemySessionDrawer.vue";
@@ -250,6 +260,32 @@ watch(
 const chatRef = ref<InstanceType<typeof RemyChat> | null>(null);
 const showSidebar = ref(false);
 const activeTab = ref<"chat" | "skills" | "sessions" | "sources">("chat");
+
+const speedLabels = ['lightning', 'fast', 'normal', 'slow', 'step']
+const speedIcons = ['⚡', '▶', '▶▶', '▶▶▶', '⏸']
+const currentSpeed = ref(localStorage.getItem('remy-action-speed') || 'lightning')
+const currentSpeedLabel = computed(() => {
+  const idx = speedLabels.indexOf(currentSpeed.value)
+  return speedLabels[idx >= 0 ? idx : 0]
+})
+const speedIcon = computed(() => {
+  const idx = speedLabels.indexOf(currentSpeed.value)
+  return speedIcons[idx >= 0 ? idx : 0]
+})
+function cycleSpeed() {
+  const idx = speedLabels.indexOf(currentSpeed.value)
+  const next = speedLabels[(idx + 1) % speedLabels.length]
+  currentSpeed.value = next
+  localStorage.setItem('remy-action-speed', next)
+  setActionSpeed(next)
+}
+
+const isRateLimitError = computed(() => {
+  return store.error ? store.error.toLowerCase().includes('rate limit') : false
+})
+
+// Init speed from localStorage on mount
+setActionSpeed(currentSpeed.value)
 
 const DOCKED_MIN_WIDTH = 320
 const DOCKED_MAX_WIDTH = 800

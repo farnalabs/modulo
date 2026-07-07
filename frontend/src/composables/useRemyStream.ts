@@ -2,7 +2,7 @@ import { ref, onUnmounted } from 'vue'
 import { useRemyStore } from './useRemyStore'
 import { getAuthHeaders } from '@/lib/api/client'
 import { parseSSEStream } from '@/lib/sse'
-import { executeCommandBatch } from './useUiCommandExecutor'
+import { executeCommandBatch, isPaused as isExecutorPaused, resumeUiCommands } from './useUiCommandExecutor'
 import type { UiCommandResult } from './useUiCommandExecutor'
 
 export interface ToolCallEvent {
@@ -103,9 +103,13 @@ export function useRemyStream() {
           } else if (currentEvent === 'ui_command_batch') {
             const commands = parsed.commands ?? parsed
             store.isExecutingUi = true
+            store.isPaused = false
             try {
               const results = await executeCommandBatch(commands)
               store.isExecutingUi = false
+              while (isExecutorPaused()) {
+                await new Promise(r => setTimeout(r, 200))
+              }
               const body = JSON.stringify({ results })
               let retries = 0
               const maxRetries = 3
