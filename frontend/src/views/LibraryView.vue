@@ -2,14 +2,14 @@
   <div class="min-h-screen">
     <header class="bg-card border-b border-border px-6 py-4">
       <div class="max-w-6xl mx-auto flex items-center justify-between gap-3">
-        <h1 class="text-xl font-semibold text-foreground">Library</h1>
+        <h1 class="text-xl font-semibold text-foreground">{{ $t('views.LibraryView.title') }}</h1>
         <div class="flex items-center gap-3">
           <router-link
             to="/templates"
             class="rounded-lg bg-primary px-4 py-1.5 text-sm font-semibold text-primary-foreground hover:brightness-110 transition-all"
             data-testid="library-create-pipeline-header"
           >
-            Create Pipeline
+            {{ $t('views.LibraryView.create_pipeline') }}
           </router-link>
           <input
             v-model="search"
@@ -131,7 +131,7 @@
           </div>
 
           <div v-if="prim.forked_from" class="flex items-center gap-2 mb-3">
-            <span class="text-xs text-muted-foreground">Auto-update</span>
+            <span class="text-xs text-muted-foreground">{{ $t('views.LibraryView.auto_update') }}</span>
             <button
               class="relative inline-flex h-5 w-9 items-center rounded-full transition-colors focus:outline-none disabled:opacity-50"
               :class="prim.auto_update ? 'bg-primary' : 'bg-muted'"
@@ -155,14 +155,14 @@
               @click="createPipeline(prim)"
               data-testid="library-create-pipeline"
             >
-              Create Pipeline
+              {{ $t('views.LibraryView.create_pipeline') }}
             </button>
             <button
               class="flex-1 px-3 py-2 border border-border bg-background text-foreground text-sm font-medium rounded-lg hover:bg-accent transition-colors"
               @click="viewPrimitive(prim)"
               data-testid="library-view-details"
             >
-              View Details
+              {{ $t('views.LibraryView.view_details') }}
             </button>
           </div>
         </div>
@@ -232,7 +232,7 @@
               class="text-xs text-muted-foreground font-medium bg-muted px-2 py-0.5 rounded"
               data-testid="library-community-badge"
             >
-              Community — not verified
+              {{ $t('views.LibraryView.community_badge') }}
             </div>
           </div>
 
@@ -260,14 +260,14 @@
               @click="createPipeline(prim)"
               data-testid="library-create-pipeline"
             >
-              Create Pipeline
+              {{ $t('views.LibraryView.create_pipeline') }}
             </button>
             <button
               class="flex-1 px-3 py-2 border border-border bg-background text-foreground text-sm font-medium rounded-lg hover:bg-accent transition-colors"
               @click="viewPrimitive(prim)"
               data-testid="library-view-details"
             >
-              View Details
+              {{ $t('views.LibraryView.view_details') }}
             </button>
           </div>
         </div>
@@ -303,6 +303,7 @@ import { ref, computed, onMounted, onBeforeUnmount } from 'vue'
 import { useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import { useApi } from '../composables/useApi'
+import { formatApiError } from '../lib/api/formatError'
 
 let searchTimer: ReturnType<typeof setTimeout> | null = null
 
@@ -386,7 +387,7 @@ async function loadPrimitives() {
       section.value === 'native' ? data.items.filter((p) => p.source !== 'community') : data.items
     total.value = section.value === 'native' ? primitives.value.length : data.total
   } catch (e) {
-    error.value = e instanceof Error ? e.message : t('views.LibraryView.failed_to_load_primitives')
+    error.value = formatApiError(e)
   } finally {
     loading.value = false
   }
@@ -448,8 +449,7 @@ async function toggleAutoUpdate(prim: LibraryPrimitive) {
     const idx = primitives.value.findIndex(x => x.id === prim.id)
     if (idx !== -1) primitives.value[idx] = data
   } catch (e) {
-    const msg = e instanceof Error ? e.message : 'Failed to toggle auto-update'
-    error.value = msg
+    error.value = formatApiError(e)
   } finally {
     toggleLoading.value[prim.id] = false
   }

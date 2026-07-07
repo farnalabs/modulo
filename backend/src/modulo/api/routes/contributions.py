@@ -1,10 +1,11 @@
 """Library contribution REST API — fixture contribution flow."""
 
+import logging
 import uuid
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, Field
-from sqlalchemy.exc import ProgrammingError
+from sqlalchemy.exc import ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.api.dependencies import get_db_session
@@ -24,6 +25,8 @@ from modulo.core.library_service import (
 from modulo.db.rls import set_rls_org
 
 router = APIRouter(prefix="/api/v1/library/contribute", tags=["library-contributions"])
+
+_log = logging.getLogger(__name__)
 
 
 class ContributeFixtureRequest(BaseModel):
@@ -85,6 +88,20 @@ async def create_contribution(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
         ) from None
+    except SQLAlchemyError:
+        _log.exception("create_contribution: SQLAlchemyError")
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="The contribution feature is temporarily unavailable due to a database issue. Please retry.",
+        ) from None
+    except HTTPException:
+        raise
+    except Exception:
+        _log.exception("create_contribution: unexpected error")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="An unexpected error occurred while creating the contribution.",
+        ) from None
     return ContributeFixtureResponse(
         id=prim.id,
         contribution_status=prim.contribution_status,
@@ -116,6 +133,20 @@ async def submit_for_review(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Contribution not found") from None
     except ContributionInvalidTransitionError as e:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(e)) from None
+    except SQLAlchemyError:
+        _log.exception("submit_for_review: SQLAlchemyError")
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="The contribution feature is temporarily unavailable due to a database issue. Please retry.",
+        ) from None
+    except HTTPException:
+        raise
+    except Exception:
+        _log.exception("submit_for_review: unexpected error")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="An unexpected error occurred while submitting the contribution for review.",
+        ) from None
     return ContributionStatusResponse(
         id=prim.id,
         contribution_status=prim.contribution_status,
@@ -158,6 +189,20 @@ async def publish_contribution_endpoint(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Contribution not found") from None
     except ContributionInvalidTransitionError as e:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(e)) from None
+    except SQLAlchemyError:
+        _log.exception("publish_contribution_endpoint: SQLAlchemyError")
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="The contribution feature is temporarily unavailable due to a database issue. Please retry.",
+        ) from None
+    except HTTPException:
+        raise
+    except Exception:
+        _log.exception("publish_contribution_endpoint: unexpected error")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="An unexpected error occurred while publishing the contribution.",
+        ) from None
     return ContributionStatusResponse(
         id=prim.id,
         contribution_status=prim.contribution_status,
@@ -220,6 +265,20 @@ async def submit_contribution_version_endpoint(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Contribution not found") from None
     except ContributionInvalidTransitionError as e:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(e)) from None
+    except SQLAlchemyError:
+        _log.exception("submit_contribution_version_endpoint: SQLAlchemyError")
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="The contribution feature is temporarily unavailable due to a database issue. Please retry.",
+        ) from None
+    except HTTPException:
+        raise
+    except Exception:
+        _log.exception("submit_contribution_version_endpoint: unexpected error")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="An unexpected error occurred while submitting the contribution version.",
+        ) from None
     return ContributeFixtureResponse(
         id=prim.id,
         contribution_status=prim.contribution_status,
@@ -248,6 +307,20 @@ async def list_contribution_versions_endpoint(
         ) from None
     except ContributionNotFoundError:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Contribution not found") from None
+    except SQLAlchemyError:
+        _log.exception("list_contribution_versions_endpoint: SQLAlchemyError")
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="The contribution feature is temporarily unavailable due to a database issue. Please retry.",
+        ) from None
+    except HTTPException:
+        raise
+    except Exception:
+        _log.exception("list_contribution_versions_endpoint: unexpected error")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="An unexpected error occurred while listing contribution versions.",
+        ) from None
     return VersionListResponse(
         versions=[
             VersionResponse(
@@ -287,6 +360,20 @@ async def list_contributions_endpoint(
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
+        ) from None
+    except SQLAlchemyError:
+        _log.exception("list_contributions_endpoint: SQLAlchemyError")
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="The contribution feature is temporarily unavailable due to a database issue. Please retry.",
+        ) from None
+    except HTTPException:
+        raise
+    except Exception:
+        _log.exception("list_contributions_endpoint: unexpected error")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="An unexpected error occurred while listing contributions.",
         ) from None
     return {
         "items": [LibraryPrimitiveResponse.model_validate(p) for p in result.items],
