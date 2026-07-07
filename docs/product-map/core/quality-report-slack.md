@@ -66,7 +66,7 @@ Weekly quality report generated from run volume, eval pass rate, and cost data, 
 ### Remaining
 - No unit tests for `format_slack_message` output structure or Slack Block Kit schema compliance
 - PRD 8.11 says "V1: native Slack" but Slack delivery is already implemented — PRD may be outdated on this point
-- PRD 8.11 describes HMAC-SHA256 signing and retry logic for notification webhooks but `deliver_quality_report` does not implement signing, retries, or dead-letter queue
+- PRD 8.11 describes HMAC-SHA256 signing and retry logic for notification webhooks but `deliver_quality_report` does not implement signing or dead-letter queue (retry logic exists in `_deliver_to_urls`: 3 attempts, expo backoff, 429 handling)
 - Scheduled report CRUD exists (ScheduledReport model, CRUD, REST routes in costs.py) but is not connected to quality report generation — only cost reports
 - No org-level webhook URL configuration UI or API for quality report recipients
 - `deliver_quality_report` accepts `recipient_urls` directly — no persistent endpoint config is consulted
@@ -76,9 +76,9 @@ Weekly quality report generated from run volume, eval pass rate, and cost data, 
 
 ## Known Gaps
 
-- Scheduled delivery (cron-triggered quality reports) not yet implemented
+- Scheduled delivery infrastructure exists (DatabaseReportScheduler, quality report type registered in reports/__init__.py) but no user-facing API or UI to create quality-type scheduled reports
 - No HMAC-SHA256 signing of webhook payloads
-- No retry logic or dead-letter queue for failed deliveries
+- No dead-letter queue for failed deliveries (retry logic exists: 3 attempts, exponential backoff, 429 retry-after in `_deliver_to_urls`)
 - No org-level webhook URL configuration UI
 - No team-scoped quality reports
 
@@ -90,11 +90,11 @@ Weekly quality report generated from run volume, eval pass rate, and cost data, 
 - [x] Non-2xx webhook responses distinguished from HTTP errors in delivery results
 - [x] Invalid cron expressions caught in `_fire_scheduled_report` — auto-deactivates the report
 - [x] `json.JSONDecodeError` handled when parsing notification endpoint events (line 865)
-- [ ] No retry logic for failed webhook deliveries — single attempt only
+- [x] Retry logic exists in `_deliver_to_urls` — 3 attempts, exponential backoff, 429 handling with Retry-After
 - [ ] No dead-letter queue for persistently failing webhook URLs
 - [ ] No timeout configuration exposed to callers — hardcoded 30s in `_deliver_to_urls`
 - [ ] No health check or pre-flight validation of webhook URLs before delivery
-- [ ] `generate_quality_report` has no try/except around DB queries — non-DB errors (TypeError, ValueError during data processing) propagate to CatchAllMiddleware as opaque 500
+- [x] `generate_quality_report` wraps DB queries in try/except (SQLAlchemyError + Exception) — non-DB errors are caught and logged
 
 ## Resilience
 
@@ -121,10 +121,22 @@ Weekly quality report generated from run volume, eval pass rate, and cost data, 
 - [ ] Report with zero runs and zero evals produces mostly-None output — no "no data" message in Slack blocks
 - [ ] What happens when `OrgDailyRunCount` table exists but has no rows for the org? → empty weekly, everything zero or None
 - [ ] Trend block with all-None eval_pass_rate renders em-dashes for every entry — no visual distinction from "no data available"
+- [ ] Sequential URL delivery — `_deliver_to_urls` reuses a single httpx client for all URLs; a slow/blocking URL delays subsequent deliveries
+- [ ] Delivery timeout is hardcoded at 30s and shared across all URLs — no per-URL timeout or caller-configurable timeout
 
 ## QA History
 
-### 2026-07-05 — Cross-cutting QA (current)
+### 2026-07-07 — Cross-cutting QA (current)
+
+**Findings fixed:**
+- MAJOR: Error handling checkbox `generate_quality_report has no try/except` was stale — code DOES have try/except Exception. Marked `[x]`.
+- MAJOR: Known Gaps claimed "Scheduled delivery not yet implemented" — scheduler infrastructure EXISTS (DatabaseReportScheduler, registered quality report type). Updated to reflect actual gap: no user-facing API/UI for quality-type scheduled reports.
+- MAJOR: Known Gaps claimed "No retry logic" — `_deliver_to_urls` HAS 3-attempt retry with expo backoff and 429 handling. Updated description.
+- MAJOR: Error Handling checkbox "No retry logic" was unchecked — retry logic exists. Marked `[x]`.
+- MAJOR: "Remaining" section claimed deliver_quality_report doesn't implement retries — inaccurate. Updated to reflect actual gaps (signing, dead-letter).
+- MINOR: Added edge cases for sequential URL delivery (single httpx client shared) and hardcoded timeout.
+
+### 2026-07-05 — Cross-cutting QA
 
 **Findings fixed:**
 - MAJOR: 5 `_trend_symbol` tests had wrong expectations — asserted UP/DOWN for values within ±5% threshold. Fixed to expect FLAT. Tests pass 63/63.
