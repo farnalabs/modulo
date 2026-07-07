@@ -8,7 +8,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from fastapi import HTTPException, status
-from sqlalchemy.exc import ProgrammingError
+from sqlalchemy.exc import IntegrityError, ProgrammingError, SQLAlchemyError
 
 from modulo.api.routes.pipelines import (
     ConvertToAgentRequest,
@@ -531,3 +531,91 @@ class TestRevertToManual:
                 )
 
         assert excinfo.value.status_code == status.HTTP_422_UNPROCESSABLE_ENTITY
+
+    async def test_integrity_error_returns_409(self):
+        session = make_session()
+        setup_execute_side_effect(session, [make_pipeline_row(nodes=[make_agent_node()])])
+        principal = make_principal()
+        snapshot = make_snapshot()
+
+        with (
+            patch("modulo.api.routes.pipelines.get_snapshot_detail", return_value=snapshot),
+            patch("modulo.api.routes.pipelines._save_graph", side_effect=IntegrityError("stmt", "params", "orig")),
+            patch("modulo.api.routes.pipelines.append_audit_event", AsyncMock()),
+        ):
+            with pytest.raises(HTTPException) as excinfo:
+                await revert_node_to_manual_endpoint(
+                    pipeline_id=PIPELINE_ID,
+                    node_id=NODE_ID,
+                    snapshot_id=SNAPSHOT_ID,
+                    session=session,
+                    principal=principal,
+                )
+
+        assert excinfo.value.status_code == status.HTTP_409_CONFLICT
+
+    async def test_programming_error_returns_501(self):
+        session = make_session()
+        setup_execute_side_effect(session, [make_pipeline_row(nodes=[make_agent_node()])])
+        principal = make_principal()
+        snapshot = make_snapshot()
+
+        with (
+            patch("modulo.api.routes.pipelines.get_snapshot_detail", return_value=snapshot),
+            patch("modulo.api.routes.pipelines._save_graph", side_effect=ProgrammingError("stmt", "params", "orig")),
+            patch("modulo.api.routes.pipelines.append_audit_event", AsyncMock()),
+        ):
+            with pytest.raises(HTTPException) as excinfo:
+                await revert_node_to_manual_endpoint(
+                    pipeline_id=PIPELINE_ID,
+                    node_id=NODE_ID,
+                    snapshot_id=SNAPSHOT_ID,
+                    session=session,
+                    principal=principal,
+                )
+
+        assert excinfo.value.status_code == status.HTTP_501_NOT_IMPLEMENTED
+
+    async def test_sqlalchemy_error_returns_503(self):
+        session = make_session()
+        setup_execute_side_effect(session, [make_pipeline_row(nodes=[make_agent_node()])])
+        principal = make_principal()
+        snapshot = make_snapshot()
+
+        with (
+            patch("modulo.api.routes.pipelines.get_snapshot_detail", return_value=snapshot),
+            patch("modulo.api.routes.pipelines._save_graph", side_effect=SQLAlchemyError("stmt", "params", "orig")),
+            patch("modulo.api.routes.pipelines.append_audit_event", AsyncMock()),
+        ):
+            with pytest.raises(HTTPException) as excinfo:
+                await revert_node_to_manual_endpoint(
+                    pipeline_id=PIPELINE_ID,
+                    node_id=NODE_ID,
+                    snapshot_id=SNAPSHOT_ID,
+                    session=session,
+                    principal=principal,
+                )
+
+        assert excinfo.value.status_code == status.HTTP_503_SERVICE_UNAVAILABLE
+
+    async def test_unexpected_exception_returns_500(self):
+        session = make_session()
+        setup_execute_side_effect(session, [make_pipeline_row(nodes=[make_agent_node()])])
+        principal = make_principal()
+        snapshot = make_snapshot()
+
+        with (
+            patch("modulo.api.routes.pipelines.get_snapshot_detail", return_value=snapshot),
+            patch("modulo.api.routes.pipelines._save_graph", side_effect=ValueError("unexpected")),
+            patch("modulo.api.routes.pipelines.append_audit_event", AsyncMock()),
+        ):
+            with pytest.raises(HTTPException) as excinfo:
+                await revert_node_to_manual_endpoint(
+                    pipeline_id=PIPELINE_ID,
+                    node_id=NODE_ID,
+                    snapshot_id=SNAPSHOT_ID,
+                    session=session,
+                    principal=principal,
+                )
+
+        assert excinfo.value.status_code == status.HTTP_500_INTERNAL_SERVER_ERROR
