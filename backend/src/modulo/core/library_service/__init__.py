@@ -150,7 +150,7 @@ def _make_modulo(
     p.created_at = _EPOCH
     p.updated_at = _EPOCH
     p.auto_update = True
-    p.contribution_status = "published" if primitive_type == "test_fixture" else None
+    p.contribution_status = CONTRIBUTION_PUBLISHED if primitive_type == "test_fixture" else None
     p.tier = "native"
     return p
 
@@ -970,13 +970,27 @@ _MODULO_PRIMITIVES: list[LibraryPrimitive] = [
 
 
 def _bump_version(version: str) -> str:
-    """Increment the minor (last) segment of a semver string."""
+    """Increment the last segment of a version string."""
+    if not version:
+        _log.warning("_bump_version called with empty string, defaulting to 1.0")
+        return "1.0"
     parts = version.split(".")
     try:
         parts[-1] = str(int(parts[-1]) + 1)
-    except (ValueError, IndexError):
+    except ValueError:
+        _log.warning("_bump_version: non-numeric last segment in '%s', defaulting to 1.0", version)
         parts = ["1", "0"]
     return ".".join(parts)
+
+
+def _parse_version_key(version: str | None) -> tuple[int, ...]:
+    """Parse a dotted version string into a sortable tuple of ints."""
+    if not version:
+        return (0,)
+    try:
+        return tuple(int(x) for x in version.split("."))
+    except ValueError:
+        return (0,)
 
 
 def _filter_primitives(
@@ -985,13 +999,15 @@ def _filter_primitives(
     primitive_type: str | None,
     search: str | None,
 ) -> list[LibraryPrimitive]:
-    results = primitives
+    if not primitives:
+        return []
     if primitive_type is not None:
-        results = [p for p in results if p.primitive_type == primitive_type]
+        primitives = [p for p in primitives if p.primitive_type == primitive_type]
     if search:
         term = search.strip().lower()
-        results = [p for p in results if term in p.name.lower() or term in (p.description or "").lower()]
-    return results
+        if term:
+            primitives = [p for p in primitives if term in p.name.lower() or term in (p.description or "").lower()]
+    return primitives
 
 
 def _filter_modulo(
@@ -1031,18 +1047,22 @@ async def list_primitives(
     """
     if excluded_tiers is None:
         excluded_tiers = ["in_dev"]
-    await set_rls_org(session, org_id)
     try:
-        org_page = await list_library_primitives(
-        session,
-        org_id=org_id,
-        page=page,
-        page_size=page_size,
-        primitive_type=primitive_type,
-        search=search,
-        cursor=cursor,
-        excluded_tiers=excluded_tiers,
-        )
+        async with session.begin():
+            await set_rls_org(session, org_id)
+            org_page = await list_library_primitives(
+                session,
+                org_id=org_id,
+                page=page,
+                page_size=page_size,
+                primitive_type=primitive_type,
+                search=search,
+                cursor=cursor,
+                excluded_tiers=excluded_tiers,
+            )
+    except ProgrammingError:
+        _log.warning("list_primitives — DB not migrated for org %s", org_id)
+        org_page = PageResult(items=[], total=0, page=page, page_size=page_size)
     except Exception:
         _log.exception("list_primitives — DB query failed for org %s", org_id)
         raise
@@ -1073,6 +1093,8 @@ async def list_primitives(
                     seen_ids.add(p.id)
 
     if excluded_tiers:
+        org_items = [p for p in org_items if p.tier not in excluded_tiers]
+        org_total = len(org_items)
         modulo = [p for p in modulo if p.tier not in excluded_tiers]
         community = [p for p in community if p.tier not in excluded_tiers]
 
@@ -1110,7 +1132,7 @@ async def get_primitive(
         return None
     except SQLAlchemyError:
         _log.exception("get_primitive — DB error for %s", primitive_id)
-        return None
+        raise
     if item is not None:
         return item
     return _MODULO_BY_ID.get(primitive_id) or _COMMUNITY_BY_ID.get(primitive_id)
@@ -1150,7 +1172,7 @@ async def get_primitive_by_slug(
         return None
     except SQLAlchemyError:
         _log.exception("get_primitive_by_slug — DB error for %s/%s", primitive_type, slug)
-        return None
+        raise
     if item is not None:
         return item
     return _MODULO_BY_SLUG.get((primitive_type, slug)) or _COMMUNITY_BY_SLUG.get((primitive_type, slug))
@@ -1180,34 +1202,41 @@ async def copy_to_adapt(
             "Community primitives may only be adapted via the browser UI, not via MCP."
         )
 
-    # Bump the minor version for the copy.
-    new_version = _bump_version(source.version)
-
     async with session.begin():
         await set_rls_org(session, org_id)
         if created_by is not None:
             await set_rls_user_context(session, created_by, org_role)
+
+        # Re-read source inside the transaction to avoid TOCTOU;
+        # fall back to the in-memory cache for modulo/community primitives.
+        refreshed = await get_library_primitive(session, primitive_id)
+        if refreshed is None:
+            refreshed = _MODULO_BY_ID.get(primitive_id) or _COMMUNITY_BY_ID.get(primitive_id)
+        if refreshed is None:
+            raise LookupError(f"Primitive {primitive_id} not found for org {org_id} during copy")
+        new_version = _bump_version(refreshed.version)
+
         # Increment download count atomically on registry primitives.
-        if source.source == "registry":
+        if refreshed.source == "registry":
             await session.execute(
                 sa_update(LibraryPrimitive)
-                .where(LibraryPrimitive.id == source.id)
+                .where(LibraryPrimitive.id == refreshed.id)
                 .values(download_count=func.coalesce(LibraryPrimitive.download_count, 0) + 1)
             )
         return await create_library_primitive(
             session,
             org_id=org_id,
             source="local",
-            primitive_type=source.primitive_type,
-            name=source.name,
-            slug=f"{source.slug}-copy",
-            description=source.description,
-            author=source.author,
+            primitive_type=refreshed.primitive_type,
+            name=refreshed.name,
+            slug=f"{refreshed.slug}-copy",
+            description=refreshed.description,
+            author=refreshed.author,
             version=new_version,
-            tags=list(source.tags or []),
-            content_json=dict(source.content_json) if source.content_json is not None else {},
+            tags=list(refreshed.tags or []),
+            content_json=dict(refreshed.content_json) if refreshed.content_json is not None else {},
             source_url=None,
-            forked_from=source.id,
+            forked_from=refreshed.id,
             checksum=None,
             ed25519_signature=None,
             verified=None,
@@ -1833,8 +1862,8 @@ async def contribute_fixture(
             prim.id,
             {"contribution_status": CONTRIBUTION_DRAFT},
         )
-    if update is None:
-        raise ContributionNotFoundError(f"Contribution {prim.id} not found after creation")
+        if update is None:
+            raise ContributionNotFoundError(f"Contribution {prim.id} not found after creation")
     return update
 
 
@@ -1888,8 +1917,8 @@ async def contribute_primitive(
             prim.id,
             {"contribution_status": CONTRIBUTION_DRAFT},
         )
-    if update is None:
-        raise ContributionNotFoundError(f"Contribution {prim.id} not found after creation")
+        if update is None:
+            raise ContributionNotFoundError(f"Contribution {prim.id} not found after creation")
     return update
 
 
@@ -1923,8 +1952,8 @@ async def submit_contribution_for_review(
             primitive_id,
             {"contribution_status": CONTRIBUTION_REVIEW_QUEUE},
         )
-    if updated is None:
-        raise ContributionNotFoundError(f"Contribution {primitive_id} not found")
+        if updated is None:
+            raise ContributionNotFoundError(f"Contribution {primitive_id} not found")
     return updated
 
 
@@ -1964,15 +1993,18 @@ async def publish_contribution(
                 "organisation_id": MODULO_ORG_ID,
             },
         )
-    if updated is None:
-        raise ContributionNotFoundError(f"Contribution {primitive_id} not found")
-    await notify_importers_of_update(session, org_id, primitive_id)
+        if updated is None:
+            raise ContributionNotFoundError(f"Contribution {primitive_id} not found")
 
     # Add to in-memory community cache so it appears in community listings immediately.
     async with _COMMUNITY_CACHE_LOCK:
-        _COMMUNITY_PRIMITIVES.append(updated)
-        _COMMUNITY_BY_ID[updated.id] = updated
-        _COMMUNITY_BY_SLUG[(updated.primitive_type, updated.slug)] = updated
+        if updated.id not in _COMMUNITY_BY_ID:
+            _COMMUNITY_PRIMITIVES.append(updated)
+            _COMMUNITY_BY_ID[updated.id] = updated
+            _COMMUNITY_BY_SLUG[(updated.primitive_type, updated.slug)] = updated
+
+    # Notify importers using MODULO_ORG_ID since the primitive now belongs to the sentinel org
+    await notify_importers_of_update(session, MODULO_ORG_ID, primitive_id)
 
     return updated
 
@@ -2048,6 +2080,12 @@ async def submit_contribution_version(
     via version_group_id.  The new version must go through
     review_queue -> published independently.
     """
+    content: dict[str, Any] = {
+        "fixture_map": fixture_map,
+        "source_run_id": str(source_run_id) if source_run_id else None,
+        "source_pipeline_id": str(source_pipeline_id) if source_pipeline_id else None,
+    }
+
     async with session.begin():
         await set_rls_org(session, org_id)
         existing = await get_library_primitive(session, primitive_id)
@@ -2061,28 +2099,18 @@ async def submit_contribution_version(
                 f"expected status '{CONTRIBUTION_PUBLISHED}', got '{existing.contribution_status}'"
             )
 
-        # Auto-increment the minor version
         new_version = _bump_version(existing.version)
+        group_id = existing.version_group_id or existing.id
 
-    # Establish a version group if this is the first versioned submission
-    group_id = existing.version_group_id or existing.id
-
-    content: dict[str, Any] = {
-        "fixture_map": fixture_map,
-        "source_run_id": str(source_run_id) if source_run_id else None,
-        "source_pipeline_id": str(source_pipeline_id) if source_pipeline_id else None,
-    }
-
-    async with session.begin():
-        await set_rls_org(session, org_id)
-        # Seed version_group_id on the original if it was created before
-        # this feature existed
         if existing.version_group_id is None:
-            await update_library_primitive(
+            seed_update = await update_library_primitive(
                 session,
                 primitive_id,
                 {"version_group_id": group_id},
             )
+            if seed_update is None:
+                raise ContributionNotFoundError(f"Contribution {primitive_id} not found for version group seeding")
+
         prim = await create_library_primitive(
             session,
             org_id=org_id,
@@ -2115,8 +2143,8 @@ async def submit_contribution_version(
                 "version_group_id": group_id,
             },
         )
-    if update is None:
-        raise ContributionNotFoundError(f"Contribution version {prim.id} not found after creation")
+        if update is None:
+            raise ContributionNotFoundError(f"Contribution version {prim.id} not found after creation")
     return update
 
 
@@ -2130,18 +2158,13 @@ async def list_contribution_versions(
         await set_rls_org(session, org_id)
         prim = await get_library_primitive(session, primitive_id)
 
-    if prim is None:
-        raise ContributionNotFoundError(f"Contribution {primitive_id} not found")
+        if prim is None:
+            raise ContributionNotFoundError(f"Contribution {primitive_id} not found")
 
-    # If the target primitive has no version_group_id yet, return just itself
-    if prim.version_group_id is None:
-        return [prim]
+        if prim.version_group_id is None:
+            return [prim]
 
-    group_id = prim.version_group_id
-
-    async with session.begin():
-        await set_rls_org(session, org_id)
-        results = await list_primitives_by_version_group(session, group_id)
+        results = await list_primitives_by_version_group(session, prim.version_group_id)
 
     # Include the seed primitive (the one whose version_group_id was set to
     # its own id) — it won't appear in the version-group query because it
@@ -2149,7 +2172,7 @@ async def list_contribution_versions(
     if not any(r.id == prim.id for r in results):
         results.append(prim)
 
-    return sorted(results, key=lambda p: [int(x) for x in p.version.split(".")], reverse=True)
+    return sorted(results, key=lambda p: _parse_version_key(p.version), reverse=True)
 
 
 async def notify_importers_of_update(
@@ -2187,12 +2210,13 @@ async def notify_importers_of_update(
             for copy in fork_copies:
                 if not copy.auto_update:
                     continue
-                await update_library_primitive(
-                    session,
-                    copy.id,
-                    {"update_available_version_id": prim.id},
-                )
+                try:
+                    await update_library_primitive(
+                        session,
+                        copy.id,
+                        {"update_available_version_id": prim.id},
+                    )
+                except SQLAlchemyError:
+                    _log.exception("notify_importers_of_update: failed to update copy %s", copy.id)
     except ProgrammingError:
         _log.warning("notify_importers_of_update failed (DB not migrated): %s", primitive_id)
-    except Exception:
-        _log.exception("notify_importers_of_update failed for %s", primitive_id)
