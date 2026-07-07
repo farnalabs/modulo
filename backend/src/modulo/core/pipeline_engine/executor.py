@@ -282,11 +282,29 @@ class PipelineExecutor:
     ) -> Callable[[], Awaitable[bool]]:
         """Build a DB-backed cancellation check closure for a run."""
         async def _check() -> bool:
-            async with self._session_factory() as session:
-                await set_rls_org(session, org_id)
-                run = await get_run(session, run_id)
-                return run is not None and run.cancellation_requested
+            try:
+                return await asyncio.wait_for(
+                    self._do_db_cancellation_check(org_id, run_id),
+                    timeout=5.0,
+                )
+            except TimeoutError:
+                _log.warning(
+                    "run_context.cancellation_db_timeout",
+                    extra={"run_id": str(run_id)},
+                )
+                return False
         return _check
+
+    async def _do_db_cancellation_check(
+        self,
+        org_id: uuid.UUID,
+        run_id: uuid.UUID,
+    ) -> bool:
+        """Execute the DB cancellation check query."""
+        async with self._session_factory() as session:
+            await set_rls_org(session, org_id)
+            run = await get_run(session, run_id)
+            return run is not None and run.cancellation_requested
 
     @staticmethod
     def _compute_token_costs(
