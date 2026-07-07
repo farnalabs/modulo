@@ -1,0 +1,242 @@
+<template>
+  <div data-theme="agent" class="mx-auto max-w-4xl space-y-8 p-6">
+    <header>
+      <h1 class="text-3xl font-bold tracking-tight">{{ $t('views.SettingsEmailView.email_settings') }}</h1>
+      <p class="mt-1 text-muted-foreground">{{ $t('views.SettingsEmailView.configure_smtp_provider_for_transactional_emails') }}</p>
+    </header>
+
+    <FeatureGate feature-name="email_config" required-tier="team" show-disabled>
+
+      <LoadingSpinner v-if="loading" />
+
+      <ErrorAlert v-else-if="loadError" :message="loadError" :on-retry="loadSettings" />
+
+      <div v-else class="space-y-6">
+        <div class="rounded-lg border bg-card shadow-sm">
+          <div class="p-6 space-y-4">
+            <div>
+              <label class="mb-1 block text-sm font-medium">{{ $t('views.SettingsEmailView.smtp_host') }}</label>
+              <input
+                v-model="form.smtp_host"
+                type="text"
+                class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                :placeholder="$t('views.SettingsEmailView.smtp_host_placeholder')"
+              />
+            </div>
+            <div>
+              <label class="mb-1 block text-sm font-medium">{{ $t('views.SettingsEmailView.smtp_port') }}</label>
+              <input
+                v-model.number="form.smtp_port"
+                type="number"
+                class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                placeholder="587"
+              />
+            </div>
+            <div>
+              <label class="mb-1 block text-sm font-medium">{{ $t('views.SettingsEmailView.smtp_username') }}</label>
+              <input
+                v-model="form.smtp_username"
+                type="text"
+                class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                :placeholder="$t('views.SettingsEmailView.smtp_username_placeholder')"
+              />
+            </div>
+            <div>
+              <label class="mb-1 block text-sm font-medium">{{ $t('views.SettingsEmailView.smtp_password') }}</label>
+              <input
+                v-model="form.smtp_password"
+                type="password"
+                class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                :placeholder="$t('views.SettingsEmailView.smtp_password_placeholder')"
+              />
+            </div>
+            <div>
+              <label class="mb-1 block text-sm font-medium">{{ $t('views.SettingsEmailView.email_from') }}</label>
+              <input
+                v-model="form.email_from"
+                type="email"
+                class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                :placeholder="$t('views.SettingsEmailView.email_from_placeholder')"
+              />
+            </div>
+
+            <div class="flex items-center gap-3 pt-2">
+              <button
+                type="button"
+                :disabled="saving"
+                class="rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
+                @click="saveSettings"
+              >
+                {{ saving ? $t('views.SettingsEmailView.saving') : $t('views.SettingsEmailView.save') }}
+              </button>
+              <button
+                type="button"
+                :disabled="testing"
+                class="rounded-lg border border-input bg-background px-4 py-2 text-sm font-medium hover:bg-accent disabled:opacity-50"
+                @click="testSettings"
+              >
+                {{ testing ? $t('views.SettingsEmailView.testing') : $t('views.SettingsEmailView.test_email') }}
+              </button>
+            </div>
+          </div>
+        </div>
+
+        <div
+          v-if="successMessage"
+          class="rounded-lg border border-success/50 bg-success/10 p-3 text-sm text-success"
+        >
+          {{ successMessage }}
+        </div>
+        <div
+          v-if="errorMessage"
+          class="rounded-lg border border-destructive/50 bg-destructive/10 p-3 text-sm text-destructive"
+        >
+          {{ errorMessage }}
+        </div>
+      </div>
+    </FeatureGate>
+  </div>
+</template>
+
+<script setup lang="ts">
+import { ref, reactive, onMounted, onBeforeUnmount } from 'vue'
+import { formatApiError, type ProblemDetail } from '../lib/api/formatError'
+import { usePlanStore } from '../stores/planStore'
+import { api } from '../lib/api/client'
+import FeatureGate from '../components/FeatureGate.vue'
+import LoadingSpinner from '../components/shared/LoadingSpinner.vue'
+import ErrorAlert from '../components/shared/ErrorAlert.vue'
+
+interface EmailForm {
+  smtp_host: string
+  smtp_port: number
+  smtp_username: string
+  smtp_password: string
+  email_from: string
+}
+
+const planStore = usePlanStore()
+
+const loading = ref(true)
+const loadError = ref<string | null>(null)
+const saving = ref(false)
+const testing = ref(false)
+const successMessage = ref<string | null>(null)
+const errorMessage = ref<string | null>(null)
+let clearTimeoutId: ReturnType<typeof setTimeout> | null = null
+
+const form = reactive<EmailForm>({
+  smtp_host: '',
+  smtp_port: 587,
+  smtp_username: '',
+  smtp_password: '',
+  email_from: '',
+})
+
+function getOrgId(): string | null {
+  return planStore.orgId
+}
+
+async function loadSettings() {
+  loading.value = true
+  loadError.value = null
+  try {
+    const orgId = getOrgId()
+    if (!orgId) {
+      loadError.value = 'Organisation ID not available'
+      return
+    }
+    const { data, error: err } = await (api as any).GET('/api/v1/admin/org/{org_id}/email-settings', {
+      params: { path: { org_id: orgId } },
+    })
+    if (err) {
+      loadError.value = err && typeof err === 'object' && 'detail' in err
+        ? `Failed to load email settings: ${(err as ProblemDetail).detail}`
+        : `Failed to load email settings: ${formatApiError(err)}`
+    } else if (data) {
+      form.smtp_host = data.smtp_host || ''
+      form.smtp_port = data.smtp_port || 587
+      form.smtp_username = data.smtp_username || ''
+      form.smtp_password = ''
+      form.email_from = data.email_from || ''
+    }
+  } catch (e: unknown) {
+    loadError.value = `Failed to load email settings: ${e instanceof Error ? e.message : String(e)}`
+  } finally {
+    loading.value = false
+  }
+}
+
+async function saveSettings() {
+  saving.value = true
+  errorMessage.value = null
+  successMessage.value = null
+  try {
+    const orgId = getOrgId()
+    if (!orgId) return
+    const { data, error: err } = await (api as any).PUT('/api/v1/admin/org/{org_id}/email-settings', {
+      params: { path: { org_id: orgId } },
+      body: {
+        smtp_host: form.smtp_host,
+        smtp_port: form.smtp_port,
+        smtp_username: form.smtp_username,
+        smtp_password: form.smtp_password,
+        email_from: form.email_from,
+      },
+    })
+    if (err) {
+      errorMessage.value = err && typeof err === 'object' && 'detail' in err
+        ? `Save failed: ${(err as ProblemDetail).detail}`
+        : `Save failed: ${formatApiError(err)}`
+    } else {
+      successMessage.value = 'Email settings saved.'
+      if (clearTimeoutId) clearTimeout(clearTimeoutId)
+      clearTimeoutId = setTimeout(() => { successMessage.value = null }, 3000)
+    }
+  } catch (e: unknown) {
+    errorMessage.value = `Save failed: ${e instanceof Error ? e.message : String(e)}`
+  } finally {
+    saving.value = false
+  }
+}
+
+async function testSettings() {
+  testing.value = true
+  errorMessage.value = null
+  successMessage.value = null
+  try {
+    const orgId = getOrgId()
+    if (!orgId) return
+    const { data, error: err } = await (api as any).POST('/api/v1/admin/org/{org_id}/email-settings/test', {
+      params: { path: { org_id: orgId } },
+      body: { to: 'test@example.com' },
+    })
+    if (err) {
+      errorMessage.value = err && typeof err === 'object' && 'detail' in err
+        ? `Test failed: ${(err as ProblemDetail).detail}`
+        : `Test failed: ${formatApiError(err)}`
+    } else if (data) {
+      if (data.ok) {
+        successMessage.value = data.message || 'Test email sent successfully.'
+        if (clearTimeoutId) clearTimeout(clearTimeoutId)
+        clearTimeoutId = setTimeout(() => { successMessage.value = null }, 5000)
+      } else {
+        errorMessage.value = data.message || 'Test failed.'
+      }
+    }
+  } catch (e: unknown) {
+    errorMessage.value = `Test failed: ${e instanceof Error ? e.message : String(e)}`
+  } finally {
+    testing.value = false
+  }
+}
+
+onBeforeUnmount(() => {
+  if (clearTimeoutId) clearTimeout(clearTimeoutId)
+})
+
+onMounted(() => {
+  planStore.fetchPlan()
+  loadSettings()
+})
+</script>

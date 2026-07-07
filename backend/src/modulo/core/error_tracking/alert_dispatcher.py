@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import re
@@ -9,9 +10,14 @@ import uuid
 from typing import TYPE_CHECKING, Any
 
 import httpx
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from modulo.core.email_service import EmailSendingError, send_email
+from modulo.db.models.account import Account
 from modulo.db.models.error_group import ErrorGroup
+from modulo.db.models.org_membership import OrgMembership
+from modulo.settings import get_settings
 
 if TYPE_CHECKING:
     from modulo.core.error_tracking.alerting import TriggeredAlert
@@ -81,18 +87,20 @@ async def _dispatch_in_app(
 
 
 async def _dispatch_email(
-    _org_id: uuid.UUID,
+    org_id: uuid.UUID,
     alert: TriggeredAlert,
     sample_message: str,
     admin_url: str,
 ) -> None:
-    """Placeholder — sends email to org admins.
+    """Send alert notification email to org admins via the configured SMTP provider."""
+    settings = get_settings()
 
-    In production this would use the org's email provider (SendGrid, SMTP, etc.).
-    For now we log the intent.
-    """
+    if not settings.smtp_host:
+        _log.warning("alert.email_disabled_no_smtp_host", extra={"rule": alert.rule_name})
+        return
+
     _log.info(
-        "alert.email",
+        "alert.email_pending",
         extra={
             "rule": alert.rule_name,
             "group_id": str(alert.error_group_id),
@@ -100,6 +108,88 @@ async def _dispatch_email(
             "admin_url": admin_url,
         },
     )
+
+    from modulo.api.dependencies import get_or_create_engine, get_or_create_session_factory
+
+    engine = get_or_create_engine(settings)
+    factory = get_or_create_session_factory(engine)
+
+    try:
+        async with factory() as session:
+            result = await session.execute(
+                select(OrgMembership).where(
+                    OrgMembership.organisation_id == org_id,
+                    OrgMembership.role.in_(["admin", "owner"]),
+                    OrgMembership.deactivated_at.is_(None),
+                )
+            )
+            memberships = list(result.scalars().all())
+
+        if not memberships:
+            _log.warning("alert.email_no_admins", extra={"org_id": str(org_id), "rule": alert.rule_name})
+            return
+
+        account_ids = [m.account_id for m in memberships]
+
+        async with factory() as session:
+            result = await session.execute(
+                select(Account).where(Account.id.in_(account_ids), Account.active.is_(True))
+            )
+            admin_accounts = list(result.scalars().all())
+
+        if not admin_accounts:
+            _log.warning("alert.email_no_active_admins", extra={"org_id": str(org_id), "rule": alert.rule_name})
+            return
+
+        to_emails = [a.email for a in admin_accounts]
+
+        subject = f"[Modulo Alert] {alert.level}: {alert.rule_name}"
+
+        body_html = (
+            "<html><body>"
+            f"<h2>Modulo Alert: {alert.rule_name}</h2>"
+            f"<p><strong>Level:</strong> {alert.level}</p>"
+            f"<p><strong>Rule:</strong> {alert.rule_name}</p>"
+            f"<p><strong>Message:</strong> {_escape_html(sample_message[:1000])}</p>"
+            f"<p><strong>Count:</strong> {alert.count}</p>"
+            f"<p><strong>Fingerprint:</strong> {alert.fingerprint}</p>"
+            f"<p><strong>Environment:</strong> {_escape_html(alert.environment or 'N/A')}</p>"
+            f"<p><a href=\"{_escape_html(admin_url)}\">View in Modulo</a></p>"
+            "</body></html>"
+        )
+
+        body_text = (
+            f"Modulo Alert: {alert.rule_name}\n"
+            f"Level: {alert.level}\n"
+            f"Rule: {alert.rule_name}\n"
+            f"Message: {sample_message[:500]}\n"
+            f"Count: {alert.count}\n"
+            f"Fingerprint: {alert.fingerprint}\n"
+            f"Environment: {alert.environment or 'N/A'}\n"
+            f"View: {admin_url}"
+        )
+
+        try:
+            success = await asyncio.to_thread(
+                send_email,
+                settings,
+                to_emails,
+                subject,
+                body_html,
+                body_text,
+            )
+            if success:
+                _log.info(
+                    "alert.email_sent",
+                    extra={"rule": alert.rule_name, "to_count": len(to_emails)},
+                )
+        except EmailSendingError as exc:
+            _log.warning(
+                "alert.email_send_failed",
+                extra={"rule": alert.rule_name, "error": str(exc)},
+            )
+    except Exception:
+        _log.exception("alert.email_dispatch_error", extra={"rule": alert.rule_name})
 
 
 async def _dispatch_webhook(
@@ -165,6 +255,10 @@ def _format_slack_payload(payload: dict[str, Any], emoji: str) -> dict[str, Any]
         f"• Environment: {payload['environment']}\n"
         f"• <{payload['url']}|View in Modulo>",
     }
+
+
+def _escape_html(text: str) -> str:
+    return text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace('"', "&quot;")
 
 
 def _build_summary(alert: TriggeredAlert, sample_message: str) -> str:

@@ -97,6 +97,7 @@ const AdminRemyView = () => import('../views/AdminRemyView.vue')
 const AdminErrorsView = () => import('../views/AdminErrorsView.vue')
 const AdminErrorDetailView = () => import('../views/AdminErrorDetailView.vue')
 const UserRemySkillsView = () => import('../views/UserRemySkillsView.vue')
+const SettingsEmailView = () => import('../views/SettingsEmailView.vue')
 const SettingsErrorForwardersView = () => import('../views/SettingsErrorForwardersView.vue')
 const SettingsMonitorConfigView = () => import('../views/SettingsMonitorConfigView.vue')
 const PipelineListView = () => import('../views/PipelineListView.vue')
@@ -129,6 +130,11 @@ const router = createRouter({
       component: LibraryPipelineWizard,
       props: true,
       meta: { breadcrumb: 'Create Pipeline', parent: 'library' },
+    },
+    {
+      path: '/settings/email',
+      name: 'settings-email',
+      component: SettingsEmailView,
     },
     {
       path: '/settings/error-forwarders',
