@@ -384,4 +384,4 @@ class TestCreateStageException:
         _override_session(session)
         resp = admin_client.post("/api/v1/stages", json={"name": "Test Stage"})
         assert resp.status_code == 500
-        assert "migrations" in resp.json()["detail"].lower()
+        assert "unexpected error" in resp.json()["detail"].lower()
