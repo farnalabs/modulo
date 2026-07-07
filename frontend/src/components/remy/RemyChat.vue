@@ -356,6 +356,14 @@ const slashCommands: SlashCommand[] = [
   },
 ]
 
+const styledInput = computed(() => {
+  if (!inputText.value) return ''
+  return inputText.value
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+})
+
 const showSlashMenu = ref(false)
 const slashHighlightIdx = ref(0)
 const showDeleteConfirm = ref(false)
