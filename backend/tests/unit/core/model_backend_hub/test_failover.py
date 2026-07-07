@@ -202,13 +202,14 @@ async def test_get_does_not_call_audit_logger_when_healthy(
 # ---------------------------------------------------------------------------
 
 
-def test_get_with_rotation_unrotated(
+@pytest.mark.anyio
+async def test_get_with_rotation_unrotated(
     hub: ModelBackendHub,
     backend_a: StubModelBackend,
 ) -> None:
     bid = uuid.uuid4()
     hub.register(bid, backend_a)
-    result = hub.get_with_rotation(bid)
+    result = await hub.get_with_rotation(bid)
     assert result.backend is backend_a
     assert result.rotated is False
     assert result.original_id == bid
@@ -220,7 +221,8 @@ def test_get_with_rotation_unrotated(
 # ---------------------------------------------------------------------------
 
 
-def test_get_with_rotation_uses_fallback(
+@pytest.mark.anyio
+async def test_get_with_rotation_uses_fallback(
     hub: ModelBackendHub,
     backend_a: StubModelBackend,
     backend_b: StubModelBackend,
@@ -232,7 +234,7 @@ def test_get_with_rotation_uses_fallback(
     hub.mark_unhealthy(primary_id)
     hub._fallbacks[primary_id] = [fallback_id]
 
-    result = hub.get_with_rotation(primary_id)
+    result = await hub.get_with_rotation(primary_id)
     assert result.backend is backend_b
     assert result.rotated is True
     assert result.original_id == primary_id
@@ -244,7 +246,8 @@ def test_get_with_rotation_uses_fallback(
 # ---------------------------------------------------------------------------
 
 
-def test_get_with_rotation_scans_all_when_no_fallback_configured(
+@pytest.mark.anyio
+async def test_get_with_rotation_scans_all_when_no_fallback_configured(
     hub: ModelBackendHub,
     backend_a: StubModelBackend,
     backend_b: StubModelBackend,
@@ -254,10 +257,52 @@ def test_get_with_rotation_scans_all_when_no_fallback_configured(
     hub.register(primary_id, backend_a)
     hub.register(other_id, backend_b)
     hub.mark_unhealthy(primary_id)
-    result = hub.get_with_rotation(primary_id)
+    result = await hub.get_with_rotation(primary_id)
     assert result.rotated is True
     assert result.backend is backend_b
     assert result.used_fallback_id == other_id
+
+
+# ---------------------------------------------------------------------------
+# get_with_rotation() — audit_logger called on failover
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.anyio
+async def test_get_with_rotation_calls_audit_logger_on_failover(
+    hub: ModelBackendHub,
+    backend_a: StubModelBackend,
+    backend_b: StubModelBackend,
+) -> None:
+    primary_id = uuid.uuid4()
+    fallback_id = uuid.uuid4()
+    hub.register(primary_id, backend_a)
+    hub.register(fallback_id, backend_b)
+    hub.mark_unhealthy(primary_id)
+    hub._fallbacks[primary_id] = [fallback_id]
+
+    audit_logger = AsyncMock()
+    result = await hub.get_with_rotation(primary_id, audit_logger=audit_logger)
+    assert result.backend is backend_b
+    audit_logger.assert_awaited_once_with(
+        {
+            "event_type": "model_failover",
+            "primary_id": str(primary_id),
+            "fallback_id": str(fallback_id),
+        }
+    )
+
+
+@pytest.mark.anyio
+async def test_get_with_rotation_does_not_call_audit_logger_when_healthy(
+    hub: ModelBackendHub,
+    backend_a: StubModelBackend,
+) -> None:
+    bid = uuid.uuid4()
+    hub.register(bid, backend_a)
+    audit_logger = AsyncMock()
+    await hub.get_with_rotation(bid, audit_logger=audit_logger)
+    audit_logger.assert_not_awaited()
 
 
 # ---------------------------------------------------------------------------

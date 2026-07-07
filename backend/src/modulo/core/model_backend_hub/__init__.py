@@ -230,18 +230,25 @@ class ModelBackendHub:
 
         raise BackendUnavailableError(backend_id)
 
-    def get_with_rotation(self, backend_id: uuid.UUID) -> RotatedResult:
+    async def get_with_rotation(
+        self,
+        backend_id: uuid.UUID,
+        *,
+        audit_logger: Callable[[dict[str, Any]], Awaitable[None]] | None = None,
+    ) -> RotatedResult:
         """Return the requested backend if healthy; else rotate through fallbacks.
 
         Uses the configured ``fallback_backend_ids`` in order. Falls back to
         scanning all registered backends if no configured fallback is healthy.
 
         Returns a RotatedResult so the caller can detect when a fallback was used.
-        Raises BackendNotFoundError if the backend is not registered.
+        Raises BackendUnavailableError if the backend is not registered.
         Raises BackendUnavailableError if no backend (primary or fallback) is healthy.
+        If *audit_logger* is provided and a fallback is used, the logger is called
+        with a dict containing event_type, primary_id, fallback_id.
         """
         if backend_id not in self._backends:
-            raise BackendNotFoundError(backend_id)
+            raise BackendUnavailableError(backend_id)
         if self._healthy.get(backend_id, False):
             return RotatedResult(
                 backend=self._backends[backend_id],
@@ -250,6 +257,17 @@ class ModelBackendHub:
             )
         fallback_id = self._find_healthy_fallback(backend_id)
         if fallback_id is not None:
+            if audit_logger is not None:
+                try:
+                    await audit_logger(
+                        {
+                            "event_type": "model_failover",
+                            "primary_id": str(backend_id),
+                            "fallback_id": str(fallback_id),
+                        }
+                    )
+                except Exception:
+                    logger.exception("Audit logger failed during failover for backend %s", backend_id)
             return RotatedResult(
                 backend=self._backends[fallback_id],
                 rotated=True,
@@ -300,6 +318,34 @@ class ModelBackendHub:
         return frozenset(self._backends)
 
 
+_SIMPLE_API_KEY_BACKENDS: dict[str, type[ModelBackendBase]] = {
+    "ai21": Ai21Backend,
+    "anthropic": AnthropicBackend,
+    "cohere": CohereBackend,
+    "deepseek": DeepSeekBackend,
+    "fireworks": FireworksBackend,
+    "gemini": GeminiBackend,
+    "grok": GrokBackend,
+    "groq": GroqBackend,
+    "mistral": MistralBackend,
+    "openai": OpenAIBackend,
+    "opencode": OpenCodeBackend,
+    "openrouter": OpenRouterBackend,
+    "perplexity": PerplexityBackend,
+    "qwen": QwenBackend,
+    "togetherai": TogetherAIBackend,
+}
+
+_LOCAL_BACKENDS: dict[str, tuple[type[ModelBackendBase], str]] = {
+    "jan": (JanBackend, "http://localhost:1337/v1"),
+    "llamacpp": (LLamaCppBackend, _LOCALHOST_V1_URL),
+    "lm_studio": (LmStudioBackend, "http://localhost:1234/v1"),
+    "localai": (LocalAIBackend, _LOCALHOST_V1_URL),
+    "ollama": (OllamaBackend, "http://localhost:11434/v1"),
+    "tgi": (TgiBackend, _LOCALHOST_V1_URL),
+    "vllm": (VllmBackend, "http://localhost:8000/v1"),
+}
+
 _API_KEY_REQUIRED_PROVIDERS: frozenset[str] = frozenset({
     "ai21", "anthropic", "cohere", "azure_openai", "openai", "opencode", "openrouter",
     "mistral", "togetherai", "deepseek", "gemini", "grok", "fireworks",
@@ -340,129 +386,59 @@ def _build_backend(
         )
     if provider in _API_KEY_REQUIRED_PROVIDERS and "api_key" not in creds:
         raise ValueError(f"Missing 'api_key' in credentials for provider {provider!r}")
-    match provider:
-        case "ai21":
-            return Ai21Backend(api_key=creds["api_key"], model_id=model_id, **default_params)
-        case "anthropic":
-            return AnthropicBackend(api_key=creds["api_key"], model_id=model_id, **default_params)
-        case "cohere":
-            return CohereBackend(api_key=creds["api_key"], model_id=model_id, **default_params)
-        case "azure_openai":
-            azure_endpoint = creds.get("azure_endpoint", "")
-            if not azure_endpoint:
-                raise ValueError("Missing 'azure_endpoint' in credentials for provider 'azure_openai'")
-            api_version = creds.get("api_version", "2024-10-01-preview")
-            return AzureOpenAIBackend(
-                api_key=creds["api_key"],
-                model_id=model_id,
-                azure_endpoint=azure_endpoint,
-                api_version=api_version,
-                **default_params,
+
+    cls = _SIMPLE_API_KEY_BACKENDS.get(provider)
+    if cls is not None:
+        return cls(api_key=creds["api_key"], model_id=model_id, **default_params)
+
+    local_config = _LOCAL_BACKENDS.get(provider)
+    if local_config is not None:
+        cls, default_url = local_config
+        base_url = creds.get("base_url", default_url)
+        return cls(
+            api_key=creds.get("api_key", ""),
+            model_id=model_id,
+            base_url=base_url,
+            **default_params,
+        )
+
+    if provider == "azure_openai":
+        azure_endpoint = creds.get("azure_endpoint", "")
+        if not azure_endpoint:
+            raise ValueError("Missing 'azure_endpoint' in credentials for provider 'azure_openai'")
+        api_version = creds.get("api_version", "2024-10-01-preview")
+        return AzureOpenAIBackend(
+            api_key=creds["api_key"],
+            model_id=model_id,
+            azure_endpoint=azure_endpoint,
+            api_version=api_version,
+            **default_params,
+        )
+
+    if provider == "watsonx":
+        if "project_id" not in creds:
+            raise ValueError(
+                "Missing 'project_id' in credentials for provider 'watsonx'"
             )
-        case "openai":
-            return OpenAIBackend(api_key=creds["api_key"], model_id=model_id, **default_params)
-        case "opencode":
-            return OpenCodeBackend(api_key=creds["api_key"], model_id=model_id, **default_params)
-        case "openrouter":
-            return OpenRouterBackend(api_key=creds["api_key"], model_id=model_id, **default_params)
-        case "lm_studio":
-            base_url = creds.get("base_url", "http://localhost:1234/v1")
-            return LmStudioBackend(
-                api_key=creds.get("api_key", ""),
-                model_id=model_id,
-                base_url=base_url,
-                **default_params,
+        return WatsonXBackend(
+            api_key=creds["api_key"],
+            model_id=model_id,
+            project_id=creds["project_id"],
+            url=creds.get("url", "https://us-south.ml.cloud.ibm.com"),
+            **default_params,
+        )
+
+    registry = get_plugin_registry()
+    if registry.has_model_backend(provider):
+        api_key = creds.get("api_key")
+        if not api_key:
+            raise ValueError(
+                f"Missing 'api_key' in credentials for provider {provider!r}"
             )
-        case "localai":
-            base_url = creds.get("base_url", _LOCALHOST_V1_URL)
-            return LocalAIBackend(
-                api_key=creds.get("api_key", ""),
-                model_id=model_id,
-                base_url=base_url,
-                **default_params,
-            )
-        case "mistral":
-            return MistralBackend(api_key=creds["api_key"], model_id=model_id, **default_params)
-        case "ollama":
-            base_url = creds.get("base_url", "http://localhost:11434/v1")
-            return OllamaBackend(
-                api_key=creds.get("api_key", ""),
-                model_id=model_id,
-                base_url=base_url,
-                **default_params,
-            )
-        case "tgi":
-            base_url = creds.get("base_url", _LOCALHOST_V1_URL)
-            return TgiBackend(
-                api_key=creds.get("api_key", ""),
-                model_id=model_id,
-                base_url=base_url,
-                **default_params,
-            )
-        case "togetherai":
-            return TogetherAIBackend(api_key=creds["api_key"], model_id=model_id, **default_params)
-        case "deepseek":
-            return DeepSeekBackend(api_key=creds["api_key"], model_id=model_id, **default_params)
-        case "gemini":
-            return GeminiBackend(api_key=creds["api_key"], model_id=model_id, **default_params)
-        case "grok":
-            return GrokBackend(api_key=creds["api_key"], model_id=model_id, **default_params)
-        case "jan":
-            base_url = creds.get("base_url", "http://localhost:1337/v1")
-            return JanBackend(
-                api_key=creds.get("api_key", ""),
-                model_id=model_id,
-                base_url=base_url,
-                **default_params,
-            )
-        case "llamacpp":
-            base_url = creds.get("base_url", _LOCALHOST_V1_URL)
-            return LLamaCppBackend(
-                api_key=creds.get("api_key", ""),
-                model_id=model_id,
-                base_url=base_url,
-                **default_params,
-            )
-        case "fireworks":
-            return FireworksBackend(api_key=creds["api_key"], model_id=model_id, **default_params)
-        case "groq":
-            return GroqBackend(api_key=creds["api_key"], model_id=model_id, **default_params)
-        case "perplexity":
-            return PerplexityBackend(api_key=creds["api_key"], model_id=model_id, **default_params)
-        case "qwen":
-            return QwenBackend(api_key=creds["api_key"], model_id=model_id, **default_params)
-        case "vllm":
-            base_url = creds.get("base_url", "http://localhost:8000/v1")
-            return VllmBackend(
-                api_key=creds.get("api_key", ""),
-                model_id=model_id,
-                base_url=base_url,
-                **default_params,
-            )
-        case "watsonx":
-            if "project_id" not in creds:
-                raise ValueError(
-                    "Missing 'project_id' in credentials for provider 'watsonx'"
-                )
-            return WatsonXBackend(
-                api_key=creds["api_key"],
-                model_id=model_id,
-                project_id=creds["project_id"],
-                url=creds.get("url", "https://us-south.ml.cloud.ibm.com"),
-                **default_params,
-            )
-        case _:
-            registry = get_plugin_registry()
-            if registry.has_model_backend(provider):
-                api_key = creds.get("api_key")
-                if not api_key:
-                    raise ValueError(
-                        f"Missing 'api_key' in credentials for provider {provider!r}"
-                    )
-                try:
-                    return registry.build_model_backend(provider, model_id, api_key, **default_params)
-                except Exception as exc:
-                    raise ValueError(
-                        f"Failed to build plugin model backend for provider {provider!r}: {exc}"
-                    ) from exc
-            raise ValueError(f"Unknown model backend provider: {provider!r}")
+        try:
+            return registry.build_model_backend(provider, model_id, api_key, **default_params)
+        except Exception as exc:
+            raise ValueError(
+                f"Failed to build plugin model backend for provider {provider!r}: {exc}"
+            ) from exc
+    raise ValueError(f"Unknown model backend provider: {provider!r}")
