@@ -1,3 +1,4 @@
+import { ref } from 'vue'
 import router from '@/router'
 
 export interface UiCommand {
@@ -14,8 +15,41 @@ export interface UiCommandResult {
   error?: string
 }
 
+export type ActionSpeed = 'lightning' | 'fast' | 'normal' | 'slow' | 'step'
+
+interface ActionHistoryEntry {
+  type: 'navigate' | 'click' | 'fill' | 'select'
+  beforeUrl: string
+  afterUrl: string
+  selector: string
+  previousValue?: string
+}
+
+export interface DomSnapshot {
+  url: string
+  title: string
+  extractedText: string
+  visibleButtons: string[]
+}
+
 const _abortControllers = new Set<AbortController>()
 const _navHistory: string[] = []
+
+const SPEED_DELAYS: Record<ActionSpeed, number> = {
+  lightning: 0, fast: 300, normal: 800, slow: 2000, step: -1,
+}
+
+function loadSpeedPreference(): ActionSpeed {
+  return (localStorage.getItem('remy-action-speed') as ActionSpeed) || 'lightning'
+}
+
+const actionSpeed = ref<ActionSpeed>(loadSpeedPreference())
+const actionHistory = ref<ActionHistoryEntry[]>([])
+
+const TAB_ID = crypto.randomUUID ? crypto.randomUUID() : Date.now().toString(36)
+const lockChannel = typeof BroadcastChannel !== 'undefined' ? new BroadcastChannel('remy-element-locks') : null
+
+let _stepResolve: (() => void) | null = null
 
 const HIGHLIGHT_OUTLINE = '2px solid #3b82f6'
 const HIGHLIGHT_BG = 'rgba(59, 130, 246, 0.1)'
@@ -36,7 +70,8 @@ export async function executeCommandBatch(commands: UiCommand[]): Promise<UiComm
     _abortControllers.delete(abort)
   }
 
-  for (const cmd of commands) {
+  for (let i = 0; i < commands.length; i++) {
+    const cmd = commands[i]
     if (abort.signal.aborted) {
       results.push({ id: cmd.id, name: cmd.name, success: false, error: 'cancelled_by_user' })
       continue
@@ -62,12 +97,50 @@ export async function executeCommandBatch(commands: UiCommand[]): Promise<UiComm
       }
     }
 
+    if (actionSpeed.value === 'step' && i > 0) {
+      await new Promise<void>(resolve => { _stepResolve = resolve })
+      if (abort.signal.aborted) {
+        results.push({ id: cmd.id, name: cmd.name, success: false, error: 'cancelled_by_user' })
+        continue
+      }
+    }
+
+    const beforeSnapshot = await captureSnapshot()
+
     let result = await executeWithTimeout(cmd, abort.signal)
     if (!result.success && cmd.name === 'navigate') {
       await new Promise(r => setTimeout(r, 1000))
       result = await executeWithTimeout(cmd, abort.signal)
     }
+
+    const afterSnapshot = await captureSnapshot()
+
+    if (result.success) {
+      const entry: ActionHistoryEntry = {
+        type: cmd.name as ActionHistoryEntry['type'],
+        beforeUrl: beforeSnapshot.url,
+        afterUrl: afterSnapshot.url,
+        selector: typeof cmd.args.selector === 'string' ? cmd.args.selector : '',
+      }
+      if (cmd.name === 'fill') {
+        const el = await resolveElement(cmd.args.selector as string)
+        if (el) entry.previousValue = (el as HTMLInputElement).value
+      }
+      actionHistory.value.push(entry)
+    }
+
+    result.result = {
+      ...(result.result || {}),
+      snapshotBefore: beforeSnapshot,
+      snapshotAfter: afterSnapshot,
+    }
+
     results.push(result)
+
+    if (i < commands.length - 1 && actionSpeed.value !== 'step') {
+      const delay = SPEED_DELAYS[actionSpeed.value]
+      if (delay > 0) await new Promise(r => setTimeout(r, delay))
+    }
   }
 
   cleanup()
@@ -141,7 +214,7 @@ async function navigate(path: string): Promise<UiCommandResult> {
 }
 
 async function click(selector: string): Promise<UiCommandResult> {
-  const el = resolveElement(selector)
+  const el = await resolveElement(selector)
   if (!el) {
     return { id: `click-${Date.now()}`, name: 'click', success: false, error: `Element not found: ${selector}` }
   }
@@ -157,7 +230,7 @@ async function click(selector: string): Promise<UiCommandResult> {
 }
 
 async function fill(selector: string, value: string): Promise<UiCommandResult> {
-  const el = resolveElement(selector)
+  const el = await resolveElement(selector)
   if (!el) {
     return { id: `fill-${Date.now()}`, name: 'fill', success: false, error: `Element not found: ${selector}` }
   }
@@ -215,7 +288,7 @@ async function fill(selector: string, value: string): Promise<UiCommandResult> {
 }
 
 async function select(selector: string, value: string): Promise<UiCommandResult> {
-  const el = resolveElement(selector)
+  const el = await resolveElement(selector)
   if (!el) {
     return { id: `select-${Date.now()}`, name: 'select', success: false, error: `Element not found: ${selector}` }
   }
@@ -243,7 +316,7 @@ async function select(selector: string, value: string): Promise<UiCommandResult>
 }
 
 async function doExtract(selector: string): Promise<UiCommandResult> {
-  const el = resolveElement(selector)
+  const el = await resolveElement(selector)
   if (!el) {
     return { id: `extract-${Date.now()}`, name: 'extract', success: false, error: `Element not found: ${selector}` }
   }
@@ -290,7 +363,7 @@ async function doWait(args: Record<string, unknown>): Promise<UiCommandResult> {
     const timeout = (args.timeout as number) ?? 10000
     const start = Date.now()
     while (Date.now() - start < timeout) {
-      const el = resolveElement(args.selector as string)
+      const el = await resolveElement(args.selector as string)
       if (el) {
         return { id: `wait-${Date.now()}`, name: 'wait', success: true, result: { found: true, selector: args.selector } }
       }
@@ -340,13 +413,34 @@ function buildSelector(el: Element): string | null {
   return null
 }
 
-function resolveElement(selector: string): Element | null {
-  if (!selector.startsWith('[') && !selector.startsWith('.') && !selector.startsWith('#')) {
-    const testid = `[data-testid="${CSS.escape(selector)}"]`
-    const byTestId = document.querySelector(testid)
-    if (byTestId) return byTestId
+async function resolveElement(selector: string, options?: { text?: string }): Promise<Element | null> {
+  const candidates = new Map<Element, number>()
+
+  for (const el of document.querySelectorAll(`[data-testid="${CSS.escape(selector)}"]`)) {
+    candidates.set(el, (candidates.get(el) || 0) + 3)
   }
-  return document.querySelector(selector)
+
+  try {
+    for (const el of document.querySelectorAll(selector)) {
+      candidates.set(el, (candidates.get(el) || 0) + 1)
+    }
+  } catch { /* invalid CSS — skip */ }
+
+  if (options?.text) {
+    for (const el of document.querySelectorAll('button, a, [role="button"], [role="menuitem"], label')) {
+      if (el.textContent?.trim() === options.text) {
+        candidates.set(el, (candidates.get(el) || 0) + 2)
+      }
+    }
+  }
+
+  for (const el of document.querySelectorAll(`[aria-label="${CSS.escape(selector)}"], [role="${CSS.escape(selector)}"]`)) {
+    candidates.set(el, (candidates.get(el) || 0) + 2)
+  }
+
+  const sorted = [...candidates.entries()].sort((a, b) => b[1] - a[1])
+  if (sorted.length === 0) return null
+  return sorted[0][0]
 }
 
 function highlightElement(el: Element, duration = 500) {
@@ -418,4 +512,48 @@ export function waitForDomStable(timeout = 10000): Promise<void> {
       done()
     }, timeout)
   })
+}
+
+export function setActionSpeed(speed: ActionSpeed) {
+  actionSpeed.value = speed
+  localStorage.setItem('remy-action-speed', speed)
+}
+
+export async function undoLastAction(): Promise<{ success: boolean; error?: string; reverted?: string }> {
+  const last = actionHistory.value.pop()
+  if (!last) return { success: false, error: 'Nothing to undo' }
+  if (last.type === 'navigate' || (last.type === 'click' && last.beforeUrl !== last.afterUrl)) {
+    window.history.go(last.beforeUrl === last.afterUrl ? 0 : -1)
+    await waitForDomStable()
+  }
+  if (last.type === 'fill' && last.previousValue !== undefined && last.selector) {
+    const el = document.querySelector(`[data-testid="${CSS.escape(last.selector)}"], [name="${CSS.escape(last.selector)}"]`)
+    if (el) (el as HTMLInputElement).value = last.previousValue
+  }
+  return { success: true, reverted: last.type }
+}
+
+export function confirmStep() {
+  _stepResolve?.()
+  _stepResolve = null
+}
+
+export async function captureSnapshot(): Promise<DomSnapshot> {
+  return {
+    url: window.location.href,
+    title: document.title,
+    extractedText: (document.body.innerText || '').slice(0, 2000),
+    visibleButtons: [...document.querySelectorAll('button, a[href]')]
+      .filter(el => {
+        const style = window.getComputedStyle(el)
+        return style.display !== 'none' && style.visibility !== 'hidden'
+      })
+      .map(el => (el.textContent || '').trim())
+      .filter(Boolean)
+      .slice(0, 50),
+  }
+}
+
+async function acquireElementLock(selector: string): Promise<boolean> {
+  return true
 }
