@@ -12,6 +12,7 @@
         size="icon"
         @click="openCreateForm"
         :title="$t('components.remy.RemySkillManager.new_skill')"
+        :aria-label="$t('remy.new_skill')"
       >
         <svg
           xmlns="http://www.w3.org/2000/svg"
@@ -96,6 +97,7 @@
               class="remy-skill-action"
               @click="editSkill(skill)"
               title="Edit"
+              :aria-label="$t('common.edit')"
             >
               <svg
                 xmlns="http://www.w3.org/2000/svg"
@@ -118,6 +120,7 @@
               class="remy-skill-action text-destructive hover:bg-destructive/10"
               @click="deleteSkill(skill.id)"
               title="Delete"
+              :aria-label="$t('common.delete')"
             >
               <svg
                 xmlns="http://www.w3.org/2000/svg"

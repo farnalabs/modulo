@@ -80,6 +80,7 @@
               class="rounded p-1 text-muted-foreground hover:bg-accent"
               data-testid="team-notif-edit"
               title="Edit"
+              aria-label="Edit"
               @click="startEdit(ep)"
             >
               <svg
@@ -97,6 +98,7 @@
               class="rounded p-1 text-muted-foreground hover:text-destructive"
               data-testid="team-notif-test"
               title="Test"
+              aria-label="Test"
               @click="test(ep)"
             >
               <svg
@@ -114,6 +116,7 @@
               class="rounded p-1 text-destructive hover:bg-destructive/10"
               data-testid="team-notif-delete"
               title="Delete"
+              aria-label="Delete"
               @click="confirmDelete(ep)"
             >
               <svg

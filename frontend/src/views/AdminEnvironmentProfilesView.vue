@@ -137,6 +137,7 @@
                       class="rounded p-1 text-destructive hover:bg-destructive/10"
                       :data-testid="`admin-envprofiles-env-remove-${idx}`"
                       @click="removeEnvVar(idx)"
+                      aria-label="Remove"
                     >
                       <svg class="h-4 w-4" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                         <path d="M18 6 6 18" /><path d="m6 6 12 12" />

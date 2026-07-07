@@ -11,6 +11,7 @@
         size="icon"
         @click="handleNewSession"
         :title="$t('components.remy.RemySessionDrawer.new_session')"
+        :aria-label="$t('remy.new_session')"
       >
         <svg
           xmlns="http://www.w3.org/2000/svg"
@@ -60,6 +61,7 @@
             class="remy-session-delete shrink-0"
             @click.stop="handleDelete(session.id)"
             title="Delete"
+            :aria-label="$t('remy.delete_session')"
           >
             <svg
               xmlns="http://www.w3.org/2000/svg"
