@@ -22,6 +22,7 @@ logger = logging.getLogger(__name__)
 _SECTION_ORG_SKILLS = "## Organisation Skills"
 _SECTION_USER_SKILLS = "## User Skills"
 _SECTION_PAGE_CONTEXT = "## Page Context"
+_SECTION_BEHAVIOR = "## Behaviour"
 _SECTION_PRODUCT_OVERVIEW = "## Product Overview"
 _SECTION_USER_PROFILE = "## User Profile"
 _SECTION_KNOWLEDGE_TOOLS = "## Available Knowledge Tools"
@@ -227,6 +228,14 @@ class SkillLoader:
         page_ctx = self._build_page_context_section(ctx_sources, page_context)
         if page_ctx:
             parts.append(page_ctx)
+
+        parts.append(
+            f"{_SECTION_BEHAVIOR}\n\n"
+            "The user has direct visual access to the application UI. Do NOT dump tables, "
+            "lists, or structured summaries of page content — the user can see the page "
+            "themselves. You can reference what is visible (e.g. 'I can see 12 pipelines "
+            "are running') but never reproduce the page verbatim. Keep responses concise."
+        )
 
         profile = await self._build_profile_section(org_id, user_id, ctx_sources)
         if profile:
