@@ -48,6 +48,10 @@ class RemyConfig(BaseModel):
     auto_execute_threshold: float = 0.8
     rate_limit_max_actions: int = 15
     rate_limit_window_seconds: int = 60
+    allowed_selectors: list[str] = Field(default_factory=list,
+        description="If non-empty, Remy can only interact with elements matching these CSS selectors or data-testid prefixes")  # noqa: E501
+    allowed_page_patterns: list[str] = Field(default_factory=list,
+        description="If non-empty, Remy can only navigate to pages matching these URL patterns")
     context_sources: dict[str, str] = Field(
         default_factory=lambda: {
             "page_context": "always_on",
