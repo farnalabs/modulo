@@ -1,5 +1,6 @@
 """Admin-only routes for cross-tenant organisation management."""
 
+import logging
 import uuid
 
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -21,6 +22,8 @@ from modulo.db.crud.organisation import (
     list_organisations,
     update_organisation,
 )
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/v1/admin/orgs", tags=["admin"])
 
@@ -92,6 +95,12 @@ async def admin_create_org(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database error while creating organisation.",
         )
+    except Exception:
+        logger.exception("Unexpected error in admin_create_org")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Internal server error",
+        ) from None
 
 
 # ── List Orgs ──────────────────────────────────────────────────────────
@@ -127,6 +136,12 @@ async def admin_list_orgs(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database error while listing organisations.",
         )
+    except Exception:
+        logger.exception("Unexpected error in admin_list_orgs")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Internal server error",
+        ) from None
     return [
         ListOrgItem(
             id=str(o.id),
@@ -244,6 +259,12 @@ async def admin_create_org_user(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database error while creating org user.",
         )
+    except Exception:
+        logger.exception("Unexpected error in admin_create_org_user")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Internal server error",
+        ) from None
 
 
 # ── Delete Org ─────────────────────────────────────────────────────────
@@ -277,6 +298,12 @@ async def admin_delete_org(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database error while deleting organisation.",
         )
+    except Exception:
+        logger.exception("Unexpected error in admin_delete_org")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Internal server error",
+        ) from None
 
 
 # ── Org License Management ──────────────────────────────────────────────
@@ -315,6 +342,12 @@ async def admin_get_org_license(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database error while fetching org license.",
         )
+    except Exception:
+        logger.exception("Unexpected error in admin_get_org_license")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Internal server error",
+        ) from None
     if org is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Organisation not found")
 
@@ -369,6 +402,12 @@ async def admin_set_org_license(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database error while fetching org for set-license.",
         )
+    except Exception:
+        logger.exception("Unexpected error in admin_set_org_license (fetch)")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Internal server error",
+        ) from None
     if org is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Organisation not found")
 
@@ -400,6 +439,12 @@ async def admin_set_org_license(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database error while updating org license.",
         )
+    except Exception:
+        logger.exception("Unexpected error in admin_set_org_license (update)")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Internal server error",
+        ) from None
 
     d = validation.license_data
     return OrgLicenseResponse(
@@ -432,6 +477,12 @@ async def admin_remove_org_license(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database error while fetching org for remove-license.",
         )
+    except Exception:
+        logger.exception("Unexpected error in admin_remove_org_license (fetch)")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Internal server error",
+        ) from None
     if org is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Organisation not found")
 
@@ -451,5 +502,11 @@ async def admin_remove_org_license(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database error while removing org license.",
         )
+    except Exception:
+        logger.exception("Unexpected error in admin_remove_org_license (remove)")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Internal server error",
+        ) from None
 
     return OrgLicenseResponse(has_license=False)

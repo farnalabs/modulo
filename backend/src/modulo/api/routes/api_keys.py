@@ -1,5 +1,6 @@
 """API key management — create, list, revoke. Returns MCP config snippet."""
 
+import logging
 import uuid
 from datetime import datetime
 from typing import Any
@@ -17,6 +18,8 @@ from modulo.auth.team_rbac import ORG_ROLE_HIERARCHY
 from modulo.core.feature_flags import resolve_plan_context
 from modulo.db.rls import set_rls_org, set_rls_user_context
 from modulo.settings import Settings, get_settings
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/v1/api-keys", tags=["api-keys"])
 
