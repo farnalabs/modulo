@@ -6,7 +6,7 @@
         :label="group.label"
         :label-key="group.labelKey"
         :collapsed="isGroupCollapsed(group.id, group.defaultCollapsed)"
-        :force-expanded="activeGroupIds.has(group.id)"
+        :is-active="activeGroupIds.has(group.id)"
         @toggle="toggleGroup(group.id, group.defaultCollapsed)"
       >
         <SidebarLink
