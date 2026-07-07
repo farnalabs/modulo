@@ -134,6 +134,7 @@ status: partial
 ### Remove member
 
 - [x] Admin can remove a member from a team
+- [x] Team operator can remove a member from their own team (privilege cap enforced)
 - [x] Membership not found returns 404
 - [x] Member count decremented locally on remove
 - [x] Remove shows loading state
@@ -210,7 +211,29 @@ The following behaviours are tracked in dedicated product map entries:
 - Added `test_teams_exception_guard.py` to unit-tests frontmatter
 - Added QA History section
 
-**Status:** partial (12 known gaps unchanged)
+**Status:** partial (11 known gaps unchanged)
+
+## QA History
+
+### 2026-07-08 — Cross-cutting QA (improve-architecture index 311)
+
+**CRITICAL fixes applied:**
+- Frontend `SettingsTeamsView.vue` `changeMemberRole`: switched from `POST /{team_id}/members` (upsert) to `PATCH /{team_id}/members/{membership_id}` — the POST upsert caused `IntegrityError` on existing members, which propagated through `except SQLAlchemyError:` as misleading 503 "Database temporarily unavailable". The dedicated PATCH endpoint handles role changes correctly via `update_member_role()`.
+
+**MAJOR fixes applied:**
+- Backend `teams.py` `remove_member_endpoint`: replaced bare `_require_admin(current_user)` (org-admin-only) with team-operator privilege cap matching `add_member_endpoint` — team operators can now remove members from their own teams, aligning with PRD §9.3 ("A team operator can add or remove members from their own team only"). Privilege escalation check: operator cannot remove members from teams they don't belong to.
+- Frontend `SettingsTeamsView.vue`: on role change success, the entry in `membersByTeam` is replaced with the API response (`data`) rather than reloading all members — ensures local state matches server state without extra HTTP round trip.
+
+**MINOR fixes applied:**
+- Frontend `SettingsTeamsView.vue` delete confirm cancel: `deleteError` now cleared when user clicks Cancel, preventing stale error display when re-opening the dialog.
+
+**Product map updates:**
+- Fixed `changeMemberRole` known gap (now uses PATCH endpoint)
+- Added `remove_member_endpoint` operator access fix as new checkbox
+- Updated QA History section
+- Deferred: `deleteError` clearance is not a behaviours-level change (render-only)
+
+**Status:** partial (11 known gaps unchanged)
 
 ## Known Gaps
 
@@ -219,7 +242,6 @@ The following behaviours are tracked in dedicated product map entries:
 - PRD 9.3 specifies bulk "Reassign all resources to org-wide" action — not implemented
 - PRD 9.3 specifies team badge on pipeline/stage cards — not implemented
 - PRD 9.3 specifies "My Teams" in user profile panel — not implemented
-- `changeMemberRole` frontend uses POST /members (upsert) instead of the dedicated PATCH endpoint; backend has both
 - No guard against removing the last admin/operator from a team (both backend and frontend)
 - No audit event assertion in tests for `team_deleted`
 - No concurrency tests — no coverage for concurrent rename, member add during deletion, role change race, or self-removal
