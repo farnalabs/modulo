@@ -22,6 +22,7 @@ Endpoints:
 """
 
 import asyncio
+import contextlib
 import json
 import logging
 import time as _time
@@ -41,7 +42,14 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from starlette.responses import StreamingResponse
 
 from modulo.api.dependencies import get_db_session
-from modulo.api.ui_tools import _UI_TOOLS, DESTRUCTIVE_PATTERNS, UI_TOOL_NAMES, WRITE_TOOLS
+from modulo.api.ui_tools import (
+    _UI_TOOLS,
+    DESTRUCTIVE_PATTERNS,
+    NOGO_PAGE_PATTERNS,
+    NOGO_SELECTOR_PATTERNS,
+    UI_TOOL_NAMES,
+    WRITE_TOOLS,
+)
 from modulo.auth.dependencies import get_current_user
 from modulo.auth.jwt import AuthenticatedPrincipal
 from modulo.core.remy.config_service import RemyConfig, RemyConfigService
@@ -94,8 +102,30 @@ _pending_permissions: dict[str, tuple[asyncio.Event, str]] = {}
 _permission_decisions: dict[str, dict] = {}
 _pending_ui_results: dict[str, asyncio.Event] = {}
 _ui_command_results: dict[str, list[dict]] = {}
+_resume_events: dict[str, asyncio.Event] = {}
 _session_approvals: dict[str, dict[str, dict]] = {}
 _SESSION_APPROVAL_TTL = timedelta(minutes=30)
+
+# ── Action rate limiter ──────────────────────────────────────────────────
+
+
+class ActionRateLimiter:
+    def __init__(self, max_actions: int = 15, window_seconds: int = 60) -> None:
+        self._max_actions = max_actions
+        self._window_seconds = window_seconds
+        self._timestamps: list[float] = []
+
+    def check(self) -> bool:
+        now = _time.monotonic()
+        cutoff = now - self._window_seconds
+        self._timestamps = [ts for ts in self._timestamps if ts > cutoff]
+        if len(self._timestamps) >= self._max_actions:
+            return False
+        self._timestamps.append(now)
+        return True
+
+
+_rate_limiters: dict[str, ActionRateLimiter] = {}
 
 # ── Pydantic schemas ─────────────────────────────────────────────────────
 
@@ -306,9 +336,28 @@ def _has_destructive_pattern(selector: str) -> bool:
     return any(p in lower for p in DESTRUCTIVE_PATTERNS)
 
 
+def _check_nogo(config: RemyConfig, tool_name: str, args: dict[str, Any]) -> bool:
+    page_path = args.get("page_path", "")
+    for pattern in NOGO_PAGE_PATTERNS:
+        if pattern in page_path:
+            return True
+    if tool_name in WRITE_TOOLS:
+        selector = args.get("selector", "")
+        for pattern in NOGO_SELECTOR_PATTERNS:
+            if pattern in selector.lower():
+                return True
+    return False
+
+
 def _resolve_tool_permission(config: RemyConfig, tool_name: str, args: dict[str, Any]) -> str:
-    """Returns 'always_allowed', 'requires_approval', or 'disabled'."""
-    # 1. Per-tool user override (highest priority)
+    """Returns 'always_allowed', 'requires_approval', 'nogo_requires_approval', or 'disabled'."""
+    # 0. No-go zone check (highest priority)
+    if _check_nogo(config, tool_name, args):
+        if config.permission_mode == "full_auto":
+            return "disabled"
+        return "nogo_requires_approval"
+
+    # 1. Per-tool user override
     overrides = config.tool_permissions or {}
     if tool_name in overrides:
         return overrides[tool_name]
@@ -319,6 +368,9 @@ def _resolve_tool_permission(config: RemyConfig, tool_name: str, args: dict[str,
         base = "requires_approval" if tool_name in WRITE_TOOLS or tool_name == "press" else "always_allowed"
     elif mode == "full_auto":
         base = "always_allowed"
+        confidence = args.get("confidence", 1.0)
+        if confidence < config.auto_execute_threshold:
+            return "requires_approval"
     else:
         base = "requires_approval" if tool_name == "press" else "always_allowed"
 
@@ -1066,6 +1118,17 @@ async def stream_chat(
                             config_service = RemyConfigService(db_session)
                             config = await config_service.get_config(principal.organisation_id)
 
+                        # Check if session is paused — wait for resume
+                        resume_ev = _resume_events.get(session_id_str)
+                        if resume_ev is not None:
+                            yield (
+                                "event: paused\ndata: "
+                                + json.dumps({"detail": "Session paused. Waiting for resume."})
+                                + "\n\n"
+                            )
+                            with contextlib.suppress(TimeoutError):
+                                await asyncio.wait_for(resume_ev.wait(), timeout=300.0)
+
                         approved_calls: list[dict[str, Any]] = []
                         pending_permission_calls: list[dict[str, Any]] = []
 
@@ -1073,11 +1136,13 @@ async def stream_chat(
                             perm = _resolve_tool_permission(config, tc["name"], tc["args"])
                             if perm == "disabled":
                                 continue
-                            elif perm == "requires_approval":
+                            elif perm in ("requires_approval", "nogo_requires_approval"):
                                 page_path = req.page_context or ""
                                 if not _is_approved_for_session(
                                     session_id_str, tc["name"], page_path,
                                 ):
+                                    if perm == "nogo_requires_approval":
+                                        tc["_nogo"] = True
                                     pending_permission_calls.append(tc)
                                     continue
                             approved_calls.append(tc)
@@ -1086,8 +1151,14 @@ async def stream_chat(
                             req_id = str(uuid.uuid4())
                             yield f"event: permission_request\ndata: {json.dumps({
                                 'request_id': req_id,
-                                'tools': [{'name': tc['name'], 'args': tc['args']}
-                                          for tc in pending_permission_calls],
+                                'tools': [
+                                    {
+                                        'name': tc['name'],
+                                        'args': tc['args'],
+                                        **({'nogo': True} if tc.get('_nogo') else {}),
+                                    }
+                                    for tc in pending_permission_calls
+                                ],
                             })}\n\n"
 
                             event = asyncio.Event()
@@ -1108,6 +1179,22 @@ async def stream_chat(
                                 _pending_permissions.pop(req_id, None)
 
                         if approved_calls:
+                            # Rate limiter check before yielding commands
+                            rate_limiter = _rate_limiters.get(session_id_str)
+                            if rate_limiter is None:
+                                rate_limiter = ActionRateLimiter(
+                                    max_actions=config.rate_limit_max_actions,
+                                    window_seconds=config.rate_limit_window_seconds,
+                                )
+                                _rate_limiters[session_id_str] = rate_limiter
+                            if not rate_limiter.check():
+                                yield (
+                                    "event: error\ndata: "
+                                    + json.dumps({"detail": "Rate limited. Too many UI actions in quick succession."})
+                                    + "\n\n"
+                                )
+                                break
+
                             event = asyncio.Event()
                             _pending_ui_results[session_id_str] = event
 
@@ -1123,7 +1210,7 @@ async def stream_chat(
                             finally:
                                 _pending_ui_results.pop(session_id_str, None)
 
-                            for ac, r in zip(approved_calls, results):
+                            for ac, r in zip(approved_calls, results, strict=False):
                                 tool_results.append({
                                     "tool_call_id": ac["id"],
                                     "tool_name": r.get("name", ""),
@@ -1310,3 +1397,190 @@ async def reset_session_permissions(
 
     _session_approvals.pop(str(session_id), None)
     return {"status": "ok"}
+
+
+@router.post("/sessions/{session_id}/resume")
+async def resume_session(
+    session_id: uuid.UUID,
+    session: AsyncSession = Depends(get_db_session),
+    principal: AuthenticatedPrincipal = Depends(get_current_user),
+) -> dict[str, str]:
+    try:
+        async with session.begin():
+            await set_rls_org(session, principal.organisation_id)
+            await _validate_session_ownership(session_id, principal, session)
+    except ProgrammingError:
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="Feature is not available. Run database migrations to enable it.",
+        ) from None
+    except SQLAlchemyError:
+        logger.exception("remy.database_error")
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="Database error. Please try again later.",
+        ) from None
+
+    sid = str(session_id)
+    event = _resume_events.get(sid)
+    if event is not None:
+        event.set()
+    return {"status": "ok"}
+
+
+@router.post("/sessions/{session_id}/stop")
+async def stop_session(
+    session_id: uuid.UUID,
+    session: AsyncSession = Depends(get_db_session),
+    principal: AuthenticatedPrincipal = Depends(get_current_user),
+) -> dict[str, str]:
+    try:
+        async with session.begin():
+            await set_rls_org(session, principal.organisation_id)
+            await _validate_session_ownership(session_id, principal, session)
+    except ProgrammingError:
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="Feature is not available. Run database migrations to enable it.",
+        ) from None
+    except SQLAlchemyError:
+        logger.exception("remy.database_error")
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="Database error. Please try again later.",
+        ) from None
+
+    sid = str(session_id)
+    # If paused, resume instead of abort
+    resume_ev = _resume_events.get(sid)
+    if resume_ev is not None:
+        resume_ev.set()
+        return {"status": "resumed"}
+
+    # If running, abort by cancelling pending UI results
+    ui_event = _pending_ui_results.get(sid)
+    if ui_event is not None:
+        _ui_command_results[sid] = [
+            {"id": "", "name": "", "success": False, "error": "cancelled_by_user"}
+        ]
+        ui_event.set()
+        return {"status": "aborted"}
+
+    return {"status": "ok"}
+
+
+@router.get("/sessions/{session_id}/audit-trail", status_code=status.HTTP_200_OK)
+async def get_audit_trail(
+    session_id: uuid.UUID,
+    session: AsyncSession = Depends(get_db_session),
+    principal: AuthenticatedPrincipal = Depends(get_current_user),
+) -> dict[str, Any]:
+    if not principal.is_system_admin:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Only system admins can access the audit trail.",
+        )
+    try:
+        async with session.begin():
+            await set_rls_org(session, principal.organisation_id)
+            result = await session.execute(
+                select(ChatMessage)
+                .where(
+                    ChatMessage.session_id == session_id,
+                    ChatMessage.role == "tool_result",
+                )
+                .order_by(ChatMessage.created_at.asc())
+            )
+            messages = result.scalars().all()
+
+        trail = []
+        for m in messages:
+            tr = m.tool_results_json or {}
+            snapshot = tr.get("result", {}).get("snapshotBefore", {}) if isinstance(tr.get("result"), dict) else {}
+            trail.append({
+                "timestamp": m.created_at.isoformat() if m.created_at else None,
+                "action": tr.get("tool_name", ""),
+                "args": tr.get("result", {}).get("args", {}) if isinstance(tr.get("result"), dict) else {},
+                "url": snapshot.get("url", ""),
+                "success": tr.get("success", False),
+                "error": tr.get("error"),
+            })
+
+        return {"items": trail}
+    except ProgrammingError:
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="Feature is not available. Run database migrations to enable it.",
+        ) from None
+    except SQLAlchemyError:
+        logger.exception("remy.database_error")
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="Database error. Please try again later.",
+        ) from None
+
+
+@router.post("/sessions/{session_id}/undo")
+async def undo_last_action(
+    session_id: uuid.UUID,
+    session: AsyncSession = Depends(get_db_session),
+    principal: AuthenticatedPrincipal = Depends(get_current_user),
+) -> dict[str, Any]:
+    try:
+        async with session.begin():
+            await set_rls_org(session, principal.organisation_id)
+            await _validate_session_ownership(session_id, principal, session)
+
+            result = await session.execute(
+                select(ChatMessage)
+                .where(
+                    ChatMessage.session_id == session_id,
+                    ChatMessage.role == "tool_result",
+                )
+                .order_by(ChatMessage.created_at.desc())
+                .limit(1)
+            )
+            last_result = result.scalar_one_or_none()
+
+        if last_result is None:
+            return {"status": "no_action", "detail": "No previous action to undo."}
+
+        tr = last_result.tool_results_json or {}
+        tool_name = tr.get("tool_name", "")
+        tool_args = {}
+        inner_result = tr.get("result")
+        if isinstance(inner_result, dict):
+            tool_args = inner_result.get("args", {})
+
+        inverse: dict | None = None
+        match tool_name:
+            case "navigate":
+                inverse = {"name": "go_back", "args": {}}
+            case "go_back":
+                inverse = {"name": "reload", "args": {}}
+            case "fill":
+                prior = tool_args.get("prior_value", tool_args.get("value", ""))
+                inverse = {
+                    "name": "fill",
+                    "args": {"selector": tool_args.get("selector", ""), "value": prior},
+                }
+            case _:
+                if tool_name in ("click", "select", "press"):
+                    inverse = {"name": tool_name, "args": tool_args, "reversible": False}
+
+        return {
+            "status": "found" if inverse else "no_inverse",
+            "last_action": tool_name,
+            "undo_action": inverse,
+        }
+    except ProgrammingError:
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="Feature is not available. Run database migrations to enable it.",
+        ) from None
+    except SQLAlchemyError:
+        logger.exception("remy.database_error")
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="Database error. Please try again later.",
+        ) from None

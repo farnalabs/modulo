@@ -45,6 +45,9 @@ class RemyConfig(BaseModel):
     allowed_models: list[str] = []  # empty = all models for allowed providers
     tool_permissions: dict[str, str] = Field(default_factory=dict)
     permission_mode: str = "safe"
+    auto_execute_threshold: float = 0.8
+    rate_limit_max_actions: int = 15
+    rate_limit_window_seconds: int = 60
     context_sources: dict[str, str] = Field(
         default_factory=lambda: {
             "page_context": "always_on",
