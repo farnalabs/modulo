@@ -615,7 +615,7 @@ class TestPollingFireTask:
         assert PollingFireTask.name == "modulo.polling.fire_trigger"
 
     def test_task_attributes(self) -> None:
-        assert PollingFireTask.autoretry_for == (Exception,)
+        assert PollingFireTask.autoretry_for == (ConnectionError, TimeoutError, OSError)
         assert PollingFireTask.max_retries == 2
         assert PollingFireTask.default_retry_delay == 30
 
