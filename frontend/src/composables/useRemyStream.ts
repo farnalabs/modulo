@@ -63,6 +63,7 @@ export function useRemyStream() {
           model: session.model,
           context_window_tokens: session.context_window_tokens,
           api_key: '',
+          mcp_api_key: headers.Authorization?.replace('Bearer ', '') || '',
           page_context: (() => {
             if (!pageCtx.route) return undefined
             let ctx = `Page: ${pageCtx.route}`
