@@ -59,7 +59,7 @@ class ValidationError(FeedbackManagerError):
 
 _VALID_STATUS_TRANSITIONS: dict[str, set[str]] = {
     "pending": {"routing", "correcting", "resolved", "dismissed"},
-    "routing": {"escalated", "correcting", "resolved"},
+    "routing": {"escalated", "correcting", "resolved", "dismissed"},
     "correcting": {"correcting", "resolved", "escalated"},
     "escalated": {"resolved", "dismissed"},
     "resolved": set(),
