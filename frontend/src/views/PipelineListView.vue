@@ -164,7 +164,7 @@
             <label class="block text-sm font-medium text-foreground">Prompt</label>
             <textarea
               v-model="prompt"
-              placeholder="Enter your prompt..."
+              placeholder="Enter a prompt (optional)"
               rows="4"
               class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm resize-none focus:outline-none focus:ring-2 focus:ring-primary"
               data-testid="pipeline-list-run-prompt"
@@ -216,7 +216,7 @@
               Cancel
             </button>
             <button
-              :disabled="running || !prompt.trim()"
+              :disabled="running"
               class="px-4 py-2 bg-primary text-primary-foreground text-sm font-medium rounded-lg border border-primary/30 hover:brightness-110 transition-all disabled:opacity-50 flex items-center gap-2"
               @click="triggerRun"
               data-testid="pipeline-list-run-submit"
@@ -344,7 +344,7 @@ function closeRunDialog() {
 }
 
 async function triggerRun() {
-  if (!selectedPipeline.value || !prompt.value.trim()) return
+  if (!selectedPipeline.value) return
   running.value = true
   runError.value = null
   try {
@@ -357,8 +357,10 @@ async function triggerRun() {
         running.value = false
         return
       }
-    } else {
+    } else if (prompt.value.trim()) {
       inputPayload = { prompt: prompt.value }
+    } else {
+      inputPayload = {}
     }
     const result = await post<{ id: string }>('/api/v1/runs', {
       pipeline_id: selectedPipeline.value.id,

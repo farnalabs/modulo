@@ -547,7 +547,7 @@ export default {
       "trend_30d": "30d",
       "trend_90d": "90d",
       "run_a_pipeline": "Run a Pipeline",
-      "select_a_pipeline_and_run_it_with_a_prompt": "Select a pipeline and run it with a prompt",
+      "select_a_pipeline_and_run_it_with_a_prompt": "Choose a pipeline and configure its parameters before running it.",
       "invalid_dashboard_data": "Received invalid dashboard data from server.",
       "invalid_trends_data": "Received invalid trends data from server.",
       "invalid_days_parameter": "Invalid days parameter: must be a positive integer."
