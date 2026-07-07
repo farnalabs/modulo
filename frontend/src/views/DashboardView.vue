@@ -44,37 +44,70 @@
         </div>
       </div>
 
-      <!-- Empty state CTA for fresh organisations -->
-      <div v-if="summary.total_runs === 0 && summary.active_pipelines === 0" class="rounded-lg border bg-card p-8 text-center space-y-6">
-        <div>
-          <p class="text-lg font-medium">{{ $t('views.DashboardView.welcome_to_modulo') }}</p>
-          <p class="mt-1 text-sm text-muted-foreground">{{ $t('views.DashboardView.welcome_subtitle') }}</p>
-        </div>
-        <div class="flex flex-col items-center gap-4">
-          <a
-            href="/onboarding"
-            class="inline-flex items-center gap-2 rounded-lg bg-primary px-6 py-3 text-sm font-semibold text-primary-foreground hover:brightness-110 transition-all"
+      <!-- Collapsible Welcome section -->
+      <div class="rounded-lg border bg-card p-4">
+        <button
+          @click="toggleWelcome"
+          class="flex w-full items-center justify-between gap-2 text-left"
+          :aria-expanded="welcomeExpanded"
+          aria-controls="welcome-content"
+        >
+          <h2 class="text-lg font-semibold">{{ $t('views.DashboardView.welcome_to_modulo') }}</h2>
+          <svg
+            xmlns="http://www.w3.org/2000/svg"
+            width="20"
+            height="20"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="2"
+            :class="{ 'rotate-180': welcomeExpanded }"
+            class="shrink-0 text-muted-foreground transition-transform duration-200"
           >
-            <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
-            {{ $t('views.DashboardView.see_what_modulo_can_do') }}
-          </a>
-          <div class="flex items-center justify-center gap-3">
-            <a
-              href="/library"
-              class="rounded-lg border border-input bg-background px-4 py-2 text-sm font-medium hover:bg-accent transition-all"
+            <polyline points="6 9 12 15 18 9" />
+          </svg>
+        </button>
+        <div
+          v-if="welcomeExpanded"
+          id="welcome-content"
+          role="region"
+          :aria-label="$t('views.DashboardView.welcome_to_modulo')"
+          class="mt-4 space-y-4"
+        >
+          <p class="text-sm text-muted-foreground">{{ $t('views.DashboardView.welcome_subtitle') }}</p>
+          <div class="flex flex-wrap items-center gap-3">
+            <button
+              @click="createStarterPipeline"
+              :disabled="creatingPipeline"
+              class="inline-flex items-center gap-2 rounded-lg bg-primary px-5 py-2.5 text-sm font-semibold text-primary-foreground hover:brightness-110 transition-all disabled:opacity-50 disabled:pointer-events-none"
             >
-              {{ $t('views.DashboardView.create_pipeline') }}
-            </a>
+              <svg
+                v-if="creatingPipeline"
+                class="h-4 w-4 animate-spin"
+                xmlns="http://www.w3.org/2000/svg"
+                fill="none"
+                viewBox="0 0 24 24"
+              >
+                <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4" />
+                <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+              </svg>
+              <svg v-else xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="5 3 19 12 5 21 5 3"/></svg>
+              {{ $t('views.DashboardView.map_your_sdlc') }}
+            </button>
             <a
-              href="/library?type=pipeline_template"
-              class="rounded-lg border border-input bg-background px-4 py-2 text-sm font-medium hover:bg-accent transition-all"
+              href="/onboarding"
+              class="inline-flex items-center gap-2 rounded-lg border border-input bg-background px-4 py-2.5 text-sm font-medium hover:bg-accent transition-all"
             >
-              {{ $t('views.DashboardView.browse_templates') }}
+              <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+              {{ $t('views.DashboardView.see_what_modulo_can_do') }}
             </a>
           </div>
-          <div class="text-sm text-muted-foreground">
-            <p>{{ $t('views.DashboardView.configure_ai_provider_description') }}</p>
-            <a href="/admin/model-backends" class="text-primary hover:underline font-medium">{{ $t('views.DashboardView.configure_ai_provider') }}</a>
+          <div class="flex flex-wrap items-center gap-3 text-sm">
+            <a href="/library" class="font-medium text-primary hover:underline">{{ $t('views.DashboardView.create_pipeline') }}</a>
+            <span class="text-muted-foreground">·</span>
+            <a href="/templates" class="font-medium text-primary hover:underline">{{ $t('views.DashboardView.browse_templates') }}</a>
+            <span class="text-muted-foreground">·</span>
+            <a href="/admin/model-backends" class="font-medium text-primary hover:underline">{{ $t('views.DashboardView.configure_ai_provider') }}</a>
           </div>
         </div>
       </div>
@@ -269,7 +302,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed, onMounted, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import DashboardNotificationsPanel from '../components/DashboardNotificationsPanel.vue'
 import { usePlanStore } from '../stores/planStore'
@@ -277,6 +310,8 @@ import { useDashboardStore } from '../stores/dashboard'
 import ErrorAlert from '../components/shared/ErrorAlert.vue'
 import Sparkline from '../components/shared/Sparkline.vue'
 import StatCard from '../components/StatCard.vue'
+import { useRouter } from 'vue-router'
+import { useApi } from '../composables/useApi'
 import {
   Tooltip,
   TooltipTrigger,
@@ -294,6 +329,38 @@ const summary = computed(() => dashboardStore.summary)
 const totalSpend = computed(() => dashboardStore.totalSpend)
 
 const isTeam = computed(() => planStore.isTeam)
+
+const router = useRouter()
+const { post } = useApi()
+
+const welcomeExpanded = ref(true)
+const userToggledWelcome = ref(false)
+const creatingPipeline = ref(false)
+
+watch(summary, (s) => {
+  if (s && !userToggledWelcome.value) {
+    welcomeExpanded.value = s.total_runs === 0 && s.active_pipelines === 0
+  }
+})
+
+function toggleWelcome() {
+  userToggledWelcome.value = true
+  welcomeExpanded.value = !welcomeExpanded.value
+}
+
+async function createStarterPipeline() {
+  creatingPipeline.value = true
+  try {
+    const result = await post<{ pipeline_id: string; name: string }>('/api/v1/onboarding/starter-pipeline')
+    if (result.pipeline_id) {
+      router.push(`/pipelines/${result.pipeline_id}/editor`)
+    }
+  } catch (err: any) {
+    console.error('Failed to create starter pipeline:', err)
+  } finally {
+    creatingPipeline.value = false
+  }
+}
 
 const expandedTeam = ref<string | null>(null)
 

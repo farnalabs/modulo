@@ -535,6 +535,7 @@ export default {
       "configure_ai_provider_description": "Enable Remy, the Modulo AI Assistant, by configuring an AI provider",
       "configure_ai_provider": "Configure an AI Provider",
       "get_started_description": "Get started by creating your first pipeline or exploring a template.",
+      "map_your_sdlc": "Map your SDLC as a Pipeline",
       "create_pipeline": "Create Pipeline",
       "browse_templates": "Browse Templates",
       "no_data_trends": "No data yet. Run a pipeline to see activity trends here.",
