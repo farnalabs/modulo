@@ -154,7 +154,7 @@
         </div>
       </div>
 
-      <div v-if="store.pendingPermission" class="remy-permission-card">
+      <div v-if="uiDrivingEnabled && store.pendingPermission" class="remy-permission-card">
         <div class="remy-permission-header">
           <ShieldAlertIcon class="h-4 w-4" />
           <span>Remy wants to perform actions on your behalf</span>
@@ -176,7 +176,7 @@
         </div>
       </div>
 
-      <div v-if="store.isExecutingUi" class="remy-executing-indicator">
+      <div v-if="uiDrivingEnabled && store.isExecutingUi" class="remy-executing-indicator">
         <LoaderIcon class="h-3 w-3 animate-spin" />
         <span>Remy is performing actions in the browser...</span>
         <Button variant="destructive" size="sm" @click="abortUiCommands">Stop</Button>
@@ -219,6 +219,7 @@
 <script setup lang="ts">
 import { ref, watch, nextTick, computed } from "vue";
 import { useRemyStore } from "@/composables/useRemyStore";
+import { usePlanStore } from "@/stores/planStore";
 import { useRemyStream } from "@/composables/useRemyStream";
 import { abortUiCommands } from "@/composables/useUiCommandExecutor";
 import { Button } from "@/components/ui/button";
@@ -226,9 +227,12 @@ import { getAccessToken } from "@/lib/api/client";
 import { ShieldAlertIcon, LoaderIcon } from "@lucide/vue";
 
 const store = useRemyStore();
+const planStore = usePlanStore();
 const { connectStream } = useRemyStream();
 const scrollRef = ref<HTMLDivElement | null>(null);
 const inputText = ref("");
+
+const uiDrivingEnabled = computed(() => planStore.featureEnabled('remy_ui_driving'))
 
 const expandedTools = ref(new Set<string>())
 
