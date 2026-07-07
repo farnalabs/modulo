@@ -107,7 +107,7 @@ async def org_a_profile(
             org_id=org_a,
             name="integration-profile",
             image_ref="python:3.12-slim",
-            created_by=user_a,
+            account_id=user_a,
             description="Integration test profile",
             capabilities=["docker", "python3.12"],
             egress_policy="allow_all",
@@ -141,7 +141,7 @@ class TestCreateProfileRoundTrip:
                     org_id=org_a,
                     name="roundtrip-profile",
                     image_ref="ubuntu:22.04",
-                    created_by=user_a,
+                    account_id=user_a,
                     description="Round trip test",
                     capabilities=["docker"],
                     egress_policy="deny_all",
@@ -207,7 +207,7 @@ class TestCreateProfileRoundTrip:
                     org_id=org_a,
                     name="delete-me",
                     image_ref="alpine:3.19",
-                    created_by=user_a,
+                    account_id=user_a,
                 )
                 pid = profile.id
 
@@ -315,7 +315,7 @@ class TestDeleteProfileWithLeases:
                 org_id=org_a,
                 name="restrict-test-profile",
                 image_ref="python:3.12-slim",
-                created_by=user_a,
+                account_id=user_a,
             )
             pid = profile.id
 

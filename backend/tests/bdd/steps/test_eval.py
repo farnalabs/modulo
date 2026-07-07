@@ -428,7 +428,7 @@ def step_create_eval_def(name, eval_type, request, ctx):
             eval_type=eval_type,
             config_json={},
             failure_behaviour="warn",
-            created_by=USER_ID,
+            account_id=USER_ID,
         )
         ed.id = eval_def_id
         mock_session.add(ed)

@@ -38,7 +38,7 @@ async def _make_prerequisites(
         session,
         org_id=test_org,
         name=f"AgentSchema-{uuid.uuid4().hex[:6]}",
-        created_by=test_user,
+        account_id=test_user,
     )
     sv = await create_schema_version(
         session,
@@ -47,7 +47,7 @@ async def _make_prerequisites(
         version="1.0",
         version_number=1,
         definition_json={"type": "object"},
-        created_by=test_user,
+        account_id=test_user,
     )
     mb = await create_model_backend(
         session,
@@ -57,7 +57,7 @@ async def _make_prerequisites(
         provider="anthropic",
         model_id="stub-model",
         credentials_ciphertext=b"fake-cipher",
-        created_by=test_user,
+        account_id=test_user,
     )
     return schema.id, sv.version, mb.id
 
@@ -68,7 +68,7 @@ async def test_create_agent(rls_session: AsyncSession, test_org: uuid.UUID, test
         rls_session,
         org_id=test_org,
         name="My Agent",
-        created_by=test_user,
+        account_id=test_user,
         input_schema_id=schema_id,
         input_schema_version=version,
         output_schema_id=schema_id,
@@ -87,7 +87,7 @@ async def test_get_agent_returns_existing(rls_session: AsyncSession, test_org: u
         rls_session,
         org_id=test_org,
         name="Fetch Agent",
-        created_by=test_user,
+        account_id=test_user,
         input_schema_id=schema_id,
         input_schema_version=version,
         output_schema_id=schema_id,
@@ -111,7 +111,7 @@ async def test_list_agents_pagination(rls_session: AsyncSession, test_org: uuid.
             rls_session,
             org_id=test_org,
             name=f"List Agent {i}",
-            created_by=test_user,
+            account_id=test_user,
             input_schema_id=schema_id,
             input_schema_version=version,
             output_schema_id=schema_id,
@@ -131,7 +131,7 @@ async def test_update_agent(rls_session: AsyncSession, test_org: uuid.UUID, test
         rls_session,
         org_id=test_org,
         name="Update Agent",
-        created_by=test_user,
+        account_id=test_user,
         input_schema_id=schema_id,
         input_schema_version=version,
         output_schema_id=schema_id,
@@ -154,7 +154,7 @@ async def test_delete_agent(rls_session: AsyncSession, test_org: uuid.UUID, test
         rls_session,
         org_id=test_org,
         name="Delete Agent",
-        created_by=test_user,
+        account_id=test_user,
         input_schema_id=schema_id,
         input_schema_version=version,
         output_schema_id=schema_id,
