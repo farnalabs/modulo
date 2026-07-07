@@ -85,6 +85,8 @@ async def list_notification_rules(
                 )
             )
             total = count_result.scalar_one() or 0
+    except HTTPException:
+        raise
     except ProgrammingError:
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
@@ -95,6 +97,12 @@ async def list_notification_rules(
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Error tracking is temporarily unavailable. Please try again.",
+        )
+    except Exception:
+        _log.exception("error_tracking.list_rules_error")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="An unexpected error occurred while processing your request.",
         )
 
     return {
@@ -149,6 +157,8 @@ async def create_notification_rule(
             )
             session.add(rule)
             await session.flush()
+    except HTTPException:
+        raise
     except ProgrammingError:
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
@@ -159,6 +169,12 @@ async def create_notification_rule(
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Error tracking is temporarily unavailable. Please try again.",
+        )
+    except Exception:
+        _log.exception("error_tracking.create_rule_error")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="An unexpected error occurred while processing your request.",
         )
 
     return _serialize_rule(rule)
@@ -211,6 +227,8 @@ async def update_notification_rule(
 
             rule.updated_at = datetime.now(UTC)
             await session.flush()
+    except HTTPException:
+        raise
     except ProgrammingError:
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
@@ -221,6 +239,12 @@ async def update_notification_rule(
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Error tracking is temporarily unavailable. Please try again.",
+        )
+    except Exception:
+        _log.exception("error_tracking.update_rule_error")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="An unexpected error occurred while processing your request.",
         )
 
     return _serialize_rule(rule)
@@ -254,6 +278,8 @@ async def delete_notification_rule(
                 raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Notification rule not found")
 
             await session.delete(rule)
+    except HTTPException:
+        raise
     except ProgrammingError:
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
@@ -264,4 +290,10 @@ async def delete_notification_rule(
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Error tracking is temporarily unavailable. Please try again.",
+        )
+    except Exception:
+        _log.exception("error_tracking.delete_rule_error")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="An unexpected error occurred while processing your request.",
         )

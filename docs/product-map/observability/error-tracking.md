@@ -213,8 +213,21 @@ Datadog, PagerDuty, Rollbar, OpsGenie, Loki) sources.
 - [x] Dashboard list/detail/update/events routes wrap DB in ProgrammingError→501
 - [x] Notification rule CRUD routes wrap DB in ProgrammingError→501
 - [x] Forwarder config CRUD + test routes wrap DB in ProgrammingError→501
-- [x] All 16 error-tracking route handlers also catch SQLAlchemyError→503 (connection failures, deadlocks)
+- [x] All 13 DB-accessing error-tracking route handlers also catch SQLAlchemyError→503 (connection failures, deadlocks)
 - [x] `resolved_at` set on error group when `update_error_group` sets status to `"resolved"`
+- [x] `POST /api/v1/errors/ingest` — catches Exception → 500
+- [x] `POST /api/v1/errors/ingest/public` — catches Exception → 500
+- [x] `GET /api/v1/errors` — catches Exception → 500
+- [x] `GET /api/v1/errors/{error_id}` — catches Exception → 500
+- [x] `PATCH /api/v1/errors/{error_id}` — catches Exception → 500
+- [x] `GET /api/v1/errors/{error_id}/events` — catches Exception → 500
+- [x] `GET /api/v1/errors/notification-rules` — catches Exception → 500
+- [x] `POST /api/v1/errors/notification-rules` — catches Exception → 500
+- [x] `PUT /api/v1/errors/notification-rules/{rule_id}` — catches Exception → 500
+- [x] `DELETE /api/v1/errors/notification-rules/{rule_id}` — catches Exception → 500
+- [x] `GET /api/v1/errors/forwarders` — catches Exception → 500
+- [x] `PUT /api/v1/errors/forwarders/{forwarder_type}` — catches Exception → 500
+- [x] `POST /api/v1/errors/forwarders/{forwarder_type}/test` — catches Exception → 500
 - [x] All error-tracking error paths tested with 26 unit tests (ProgrammingError→501 + SQLAlchemyError→503 for all 3 router files)
 
 ### Known Gaps
@@ -237,8 +250,13 @@ Datadog, PagerDuty, Rollbar, OpsGenie, Loki) sources.
   on restart
 - **Append-only trigger conflicts with CASCADE delete:** On org deletion, cascade
   FK conflicts with append-only trigger on `error_events`
+- **Public ingest daily cap memory leak:** `_public_daily_event_count` entries for stale IPs are never cleaned up, causing unbounded memory growth under sustained public error ingestion.
 
 ## QA History
+
+### 2026-07-07 — Cross-cutting QA (improve-architecture index 297)
+- **CRITICAL**: Added `except Exception → 500` catches with `_log.exception` to all 13 DB-accessing error-tracking route handlers across errors.py (6 routes), error_notification_rules.py (4 routes), and error_forwarder_config.py (3 routes). Python-level errors (TypeError, KeyError, ValueError) previously propagated as opaque 500 to CatchAllMiddleware.
+- **MAJOR**: Added `_prune_stale_ip_counters()` cleanup to `ingest_errors_public` to prevent unbounded memory growth from `_public_daily_event_count` dictionary.
 
 ### Cross-cutting QA (2026-07-05) — index 170 — feat-qa-error-tracking-170
 
