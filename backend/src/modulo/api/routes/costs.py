@@ -95,6 +95,8 @@ async def get_costs(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="A database error occurred. Please try again.",
         ) from None
+    except HTTPException:
+        raise
     except Exception:
         _log.exception("Unexpected error in get_costs")
         raise HTTPException(
@@ -136,6 +138,8 @@ async def get_spend_limits(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="A database error occurred. Please try again.",
         ) from None
+    except HTTPException:
+        raise
     except Exception:
         _log.exception("Unexpected error in get_spend_limits")
         raise HTTPException(
@@ -185,6 +189,8 @@ async def set_org_spend_limit(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="A database error occurred. Please try again.",
         ) from None
+    except HTTPException:
+        raise
     except Exception:
         _log.exception("Unexpected error in set_org_spend_limit")
         raise HTTPException(
@@ -227,6 +233,8 @@ async def set_team_spend_limit(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="A database error occurred. Please try again.",
         ) from None
+    except HTTPException:
+        raise
     except Exception:
         _log.exception("Unexpected error in set_team_spend_limit")
         raise HTTPException(
@@ -280,6 +288,8 @@ async def get_cost_controls(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="A database error occurred. Please try again.",
         ) from None
+    except HTTPException:
+        raise
     except Exception:
         _log.exception("Unexpected error in get_cost_controls")
         raise HTTPException(
@@ -332,6 +342,8 @@ async def update_cost_controls(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="A database error occurred. Please try again.",
         ) from None
+    except HTTPException:
+        raise
     except Exception:
         _log.exception("Unexpected error in update_cost_controls")
         raise HTTPException(
@@ -394,6 +406,8 @@ async def export_costs(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="A database error occurred. Please try again.",
         ) from None
+    except HTTPException:
+        raise
     except Exception:
         _log.exception("Unexpected error in export_costs")
         raise HTTPException(
@@ -469,6 +483,8 @@ async def create_report(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="A database error occurred. Please try again.",
         ) from None
+    except HTTPException:
+        raise
     except Exception:
         _log.exception("Unexpected error in create_report")
         raise HTTPException(
@@ -513,6 +529,8 @@ async def list_reports(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="A database error occurred. Please try again.",
         ) from None
+    except HTTPException:
+        raise
     except Exception:
         _log.exception("Unexpected error in list_reports")
         raise HTTPException(
@@ -562,6 +580,8 @@ async def delete_report(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="A database error occurred. Please try again.",
         ) from None
+    except HTTPException:
+        raise
     except Exception:
         _log.exception("Unexpected error in delete_report")
         raise HTTPException(
@@ -684,6 +704,8 @@ async def get_anomalies(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="A database error occurred. Please try again.",
         ) from None
+    except HTTPException:
+        raise
     except Exception:
         _log.exception("Unexpected error in get_anomalies")
         raise HTTPException(
@@ -720,6 +742,8 @@ async def dismiss_anomaly_endpoint(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="A database error occurred. Please try again.",
         ) from None
+    except HTTPException:
+        raise
     except Exception:
         _log.exception("Unexpected error in dismiss_anomaly_endpoint")
         raise HTTPException(

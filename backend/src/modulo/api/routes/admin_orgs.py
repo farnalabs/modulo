@@ -95,6 +95,8 @@ async def admin_create_org(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database error while creating organisation.",
         )
+    except HTTPException:
+        raise
     except Exception:
         logger.exception("Unexpected error in admin_create_org")
         raise HTTPException(
@@ -136,6 +138,8 @@ async def admin_list_orgs(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database error while listing organisations.",
         )
+    except HTTPException:
+        raise
     except Exception:
         logger.exception("Unexpected error in admin_list_orgs")
         raise HTTPException(
@@ -259,6 +263,8 @@ async def admin_create_org_user(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database error while creating org user.",
         )
+    except HTTPException:
+        raise
     except Exception:
         logger.exception("Unexpected error in admin_create_org_user")
         raise HTTPException(
@@ -298,6 +304,8 @@ async def admin_delete_org(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database error while deleting organisation.",
         )
+    except HTTPException:
+        raise
     except Exception:
         logger.exception("Unexpected error in admin_delete_org")
         raise HTTPException(
@@ -342,6 +350,8 @@ async def admin_get_org_license(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database error while fetching org license.",
         )
+    except HTTPException:
+        raise
     except Exception:
         logger.exception("Unexpected error in admin_get_org_license")
         raise HTTPException(
@@ -402,6 +412,8 @@ async def admin_set_org_license(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database error while fetching org for set-license.",
         )
+    except HTTPException:
+        raise
     except Exception:
         logger.exception("Unexpected error in admin_set_org_license (fetch)")
         raise HTTPException(
@@ -415,6 +427,8 @@ async def admin_set_org_license(
 
     try:
         validation = parse_and_verify(req.license_key)
+    except HTTPException:
+        raise
     except Exception as exc:
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from exc
 
@@ -439,6 +453,8 @@ async def admin_set_org_license(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database error while updating org license.",
         )
+    except HTTPException:
+        raise
     except Exception:
         logger.exception("Unexpected error in admin_set_org_license (update)")
         raise HTTPException(
@@ -477,6 +493,8 @@ async def admin_remove_org_license(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database error while fetching org for remove-license.",
         )
+    except HTTPException:
+        raise
     except Exception:
         logger.exception("Unexpected error in admin_remove_org_license (fetch)")
         raise HTTPException(
@@ -501,6 +519,8 @@ async def admin_remove_org_license(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database error while removing org license.",
         )
+    except HTTPException:
+        raise
     except Exception:
         logger.exception("Unexpected error in admin_remove_org_license (remove)")
         raise HTTPException(

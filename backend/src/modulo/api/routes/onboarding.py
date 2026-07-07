@@ -139,6 +139,8 @@ async def get_onboarding_status(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database error. Please try again.",
         )
+    except HTTPException:
+        raise
     except Exception as e:
         logger.exception("onboarding.get_onboarding_status.unexpected_error")
         raise HTTPException(
@@ -207,6 +209,8 @@ async def mark_step_completed(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database error. Please try again.",
         )
+    except HTTPException:
+        raise
     except Exception as e:
         logger.exception("onboarding.mark_step_completed.unexpected_error")
         raise HTTPException(
@@ -283,6 +287,8 @@ async def get_step_data(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database error. Please try again.",
         )
+    except HTTPException:
+        raise
     except Exception as e:
         logger.exception("onboarding.get_step_data.unexpected_error")
         raise HTTPException(

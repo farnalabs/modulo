@@ -50,6 +50,8 @@ async def current_user_profile(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database error",
         ) from None
+    except HTTPException:
+        raise
     except Exception as e:
         _log.exception("me.current_user_profile.unexpected_error")
         raise HTTPException(
@@ -86,6 +88,8 @@ async def get_user_settings(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database error",
         ) from None
+    except HTTPException:
+        raise
     except Exception as e:
         _log.exception("me.get_user_settings.unexpected_error")
         raise HTTPException(
@@ -110,29 +114,20 @@ async def update_user_settings(
         try:
             async with session.begin():
                 account = await get_account_by_id(session, current_user.account_id)
-    except ProgrammingError:
-        raise HTTPException(
-            status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="Feature is not available. Run database migrations to enable it.",
-        ) from None
-    except SQLAlchemyError:
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Database error",
-        ) from None
-    except Exception as e:
-        _log.exception("me.reset_user_context_sources.unexpected_error")
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="An unexpected error occurred",
-        ) from e
+        except ProgrammingError:
+            raise HTTPException(
+                status_code=status.HTTP_501_NOT_IMPLEMENTED,
+                detail="Feature is not available. Run database migrations to enable it.",
+            ) from None
         except SQLAlchemyError:
             raise HTTPException(
                 status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
                 detail="Database error",
             ) from None
+        except HTTPException:
+            raise
         except Exception as e:
-            _log.exception("me.update_user_settings.fetch.unexpected_error")
+            _log.exception("me.reset_user_context_sources.unexpected_error")
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail="An unexpected error occurred",
@@ -158,6 +153,8 @@ async def update_user_settings(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database error",
         ) from None
+    except HTTPException:
+        raise
     except Exception as e:
         _log.exception("me.update_user_settings.update.unexpected_error")
         raise HTTPException(
@@ -198,6 +195,8 @@ async def change_password(
             for family in families:
                 try:
                     await blacklist_family(session, family.family_id)
+                except HTTPException:
+                    raise
                 except Exception:
                     _log.warning("Failed to blacklist token family %s during password change", family.family_id)
     except ProgrammingError:
@@ -210,6 +209,8 @@ async def change_password(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database error",
         ) from None
+    except HTTPException:
+        raise
     except Exception as e:
         _log.exception("me.change_password.unexpected_error")
         raise HTTPException(
@@ -242,6 +243,8 @@ async def list_user_skills(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database error",
         ) from None
+    except HTTPException:
+        raise
     except Exception as e:
         _log.exception("me.list_user_skills.unexpected_error")
         raise HTTPException(
@@ -281,6 +284,8 @@ async def create_user_skill(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database error",
         ) from None
+    except HTTPException:
+        raise
     except Exception as e:
         _log.exception("me.create_user_skill.unexpected_error")
         raise HTTPException(
@@ -321,6 +326,8 @@ async def update_user_skill(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database error",
         ) from None
+    except HTTPException:
+        raise
     except Exception as e:
         _log.exception("me.update_user_skill.unexpected_error")
         raise HTTPException(
@@ -349,6 +356,8 @@ async def delete_user_skill(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database error",
         ) from None
+    except HTTPException:
+        raise
     except Exception as e:
         _log.exception("me.delete_user_skill.unexpected_error")
         raise HTTPException(
@@ -386,6 +395,8 @@ async def get_user_context_sources(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database error",
         ) from None
+    except HTTPException:
+        raise
     except Exception as e:
         _log.exception("me.get_user_context_sources.unexpected_error")
         raise HTTPException(
@@ -424,6 +435,8 @@ async def set_user_context_source(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database error",
         ) from None
+    except HTTPException:
+        raise
     except Exception as e:
         _log.exception("me.set_user_context_source.unexpected_error")
         raise HTTPException(

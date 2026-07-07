@@ -180,6 +180,8 @@ async def get_remy_config(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database error while fetching Remy config.",
         ) from None
+    except HTTPException:
+        raise
     except Exception:
         logger.exception("Unexpected error in get_remy_config")
         raise HTTPException(
@@ -211,6 +213,8 @@ async def get_available_providers(
             if v.value not in native_ids
         ]
         return AvailableProvidersResponse(native=native, custom_types=custom_types)
+    except HTTPException:
+        raise
     except Exception:
         logger.exception("Unexpected error in get_available_providers")
         raise HTTPException(
@@ -288,6 +292,8 @@ async def update_remy_config(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database error while updating Remy config.",
         ) from None
+    except HTTPException:
+        raise
     except Exception:
         logger.exception("Unexpected error in update_remy_config")
         raise HTTPException(
@@ -355,6 +361,8 @@ async def list_org_skills(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database error while listing skills.",
         ) from None
+    except HTTPException:
+        raise
     except Exception:
         logger.exception("Unexpected error in list_org_skills")
         raise HTTPException(
@@ -396,6 +404,8 @@ async def create_org_skill(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database error while creating skill.",
         ) from None
+    except HTTPException:
+        raise
     except Exception:
         logger.exception("Unexpected error in create_org_skill")
         raise HTTPException(
@@ -438,6 +448,8 @@ async def update_org_skill(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database error while updating skill.",
         ) from None
+    except HTTPException:
+        raise
     except Exception:
         logger.exception("Unexpected error in update_org_skill")
         raise HTTPException(
@@ -468,6 +480,8 @@ async def delete_org_skill(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database error while deleting skill.",
         ) from None
+    except HTTPException:
+        raise
     except Exception:
         logger.exception("Unexpected error in delete_org_skill")
         raise HTTPException(
@@ -511,6 +525,8 @@ async def get_org_context_sources(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database error while fetching context sources.",
         ) from None
+    except HTTPException:
+        raise
     except Exception:
         logger.exception("Unexpected error in get_org_context_sources")
         raise HTTPException(
@@ -548,6 +564,8 @@ async def set_org_context_source(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database error while updating context source.",
         ) from None
+    except HTTPException:
+        raise
     except Exception:
         logger.exception("Unexpected error in set_org_context_source")
         raise HTTPException(
@@ -586,6 +604,8 @@ async def reset_org_context_sources(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database error while resetting context sources.",
         ) from None
+    except HTTPException:
+        raise
     except Exception:
         logger.exception("Unexpected error in reset_org_context_sources")
         raise HTTPException(

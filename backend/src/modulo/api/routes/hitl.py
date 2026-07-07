@@ -151,6 +151,8 @@ async def claim_gate(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database error. Please try again.",
         ) from exc
+    except HTTPException:
+        raise
     except Exception as e:
         logger.exception("hitl.claim_gate.unexpected_error")
         raise HTTPException(
@@ -220,6 +222,8 @@ async def approve_gate(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database error. Please try again.",
         ) from exc
+    except HTTPException:
+        raise
     except Exception as e:
         logger.exception("hitl.approve_gate.unexpected_error")
         raise HTTPException(
@@ -296,6 +300,8 @@ async def approve_gate_with_modification(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database error. Please try again.",
         ) from exc
+    except HTTPException:
+        raise
     except Exception as e:
         logger.exception("hitl.approve_gate_with_modification.unexpected_error")
         raise HTTPException(
@@ -369,6 +375,8 @@ async def reject_gate(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database error. Please try again.",
         ) from exc
+    except HTTPException:
+        raise
     except Exception as e:
         logger.exception("hitl.reject_gate.unexpected_error")
         raise HTTPException(
@@ -450,6 +458,8 @@ async def deliver_manual_output(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database error. Please try again.",
         ) from exc
+    except HTTPException:
+        raise
     except Exception as e:
         logger.exception("hitl.deliver_manual_output.unexpected_error")
         raise HTTPException(
@@ -519,6 +529,8 @@ async def submit_manual_output(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database error. Please try again.",
         ) from exc
+    except HTTPException:
+        raise
     except Exception as e:
         logger.exception("hitl.submit_manual_output.unexpected_error")
         raise HTTPException(
@@ -582,6 +594,8 @@ async def list_run_pending_gates(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database error. Please try again.",
         ) from exc
+    except HTTPException:
+        raise
     except Exception as e:
         logger.exception("hitl.list_run_pending_gates.unexpected_error")
         raise HTTPException(
@@ -627,6 +641,8 @@ async def list_org_pending_gates(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database error. Please try again.",
         ) from exc
+    except HTTPException:
+        raise
     except Exception as e:
         logger.exception("hitl.list_org_pending_gates.unexpected_error")
         raise HTTPException(

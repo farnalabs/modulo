@@ -86,6 +86,8 @@ async def list_node_categories_endpoint(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database operation failed. Please try again later.",
         ) from None
+    except HTTPException:
+        raise
     except Exception as e:
         logger.exception("node_categories.list.unexpected_error")
         raise HTTPException(
@@ -130,6 +132,8 @@ async def create_node_category_endpoint(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database operation failed. Please try again later.",
         ) from None
+    except HTTPException:
+        raise
     except Exception as e:
         logger.exception("node_categories.create.unexpected_error")
         raise HTTPException(
@@ -160,6 +164,8 @@ async def get_node_category_endpoint(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database operation failed. Please try again later.",
         ) from None
+    except HTTPException:
+        raise
     except Exception as e:
         logger.exception("node_categories.get.unexpected_error")
         raise HTTPException(
@@ -194,6 +200,8 @@ async def update_node_category_endpoint(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database operation failed. Please try again later.",
         ) from None
+    except HTTPException:
+        raise
     except Exception as e:
         logger.exception("node_categories.update.unexpected_error")
         raise HTTPException(
@@ -226,6 +234,8 @@ async def delete_node_category_endpoint(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database operation failed. Please try again later.",
         ) from None
+    except HTTPException:
+        raise
     except Exception as e:
         logger.exception("node_categories.delete.unexpected_error")
         raise HTTPException(

@@ -97,6 +97,8 @@ async def list_views_endpoint(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database operation failed. Please try again later.",
         ) from None
+    except HTTPException:
+        raise
     except Exception as e:
         logger.exception("views.list.unexpected_error")
         raise HTTPException(
@@ -145,6 +147,8 @@ async def create_view_endpoint(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database operation failed. Please try again later.",
         ) from None
+    except HTTPException:
+        raise
     except Exception as e:
         logger.exception("views.create.unexpected_error")
         raise HTTPException(
@@ -177,6 +181,8 @@ async def get_view_endpoint(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database operation failed. Please try again later.",
         ) from None
+    except HTTPException:
+        raise
     except Exception as e:
         logger.exception("views.get.unexpected_error")
         raise HTTPException(
@@ -213,6 +219,8 @@ async def update_view_endpoint(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database operation failed. Please try again later.",
         ) from None
+    except HTTPException:
+        raise
     except Exception as e:
         logger.exception("views.update.unexpected_error")
         raise HTTPException(
@@ -247,6 +255,8 @@ async def delete_view_endpoint(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database operation failed. Please try again later.",
         ) from None
+    except HTTPException:
+        raise
     except Exception as e:
         logger.exception("views.delete.unexpected_error")
         raise HTTPException(

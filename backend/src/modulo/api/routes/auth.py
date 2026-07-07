@@ -139,6 +139,8 @@ async def login(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Authentication service is temporarily unavailable. Please try again.",
         )
+    except HTTPException:
+        raise
     except Exception:
         _log.exception("Unexpected error in login")
         raise HTTPException(
@@ -222,6 +224,8 @@ async def refresh(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Token refresh is temporarily unavailable. Please try again.",
         )
+    except HTTPException:
+        raise
     except Exception:
         _log.exception("Unexpected error in refresh")
         raise HTTPException(
@@ -301,6 +305,8 @@ async def logout(
                     status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
                     detail="Logout is temporarily unavailable. Please try again.",
                 )
+            except HTTPException:
+                raise
             except Exception:
                 _log.exception("Unexpected error in logout (inner)")
                 raise HTTPException(
@@ -347,6 +353,8 @@ async def ws_token(
                     token_type="ws-opaque",
                     expires_in_seconds=settings.modulo_ws_token_ttl_seconds,
                 )
+            except HTTPException:
+                raise
             except Exception as exc:
                 _log.warning("ws_token.redis_fallback", extra={"error": str(exc)})
             finally:
@@ -366,6 +374,8 @@ async def ws_token(
             token_type="ws-jwt",
             expires_in_seconds=settings.modulo_ws_token_ttl_seconds,
         )
+    except HTTPException:
+        raise
     except Exception:
         _log.exception("Unexpected error in ws_token")
         raise HTTPException(
@@ -394,6 +404,8 @@ async def me(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Account service is temporarily unavailable. Please try again.",
         )
+    except HTTPException:
+        raise
     except Exception:
         _log.exception("Unexpected error in me")
         raise HTTPException(
@@ -428,6 +440,8 @@ async def csrf_token(
         response = JSONResponse(content=content)
         _set_csrf_cookie(response, token, settings)
         return response
+    except HTTPException:
+        raise
     except Exception:
         _log.exception("Unexpected error in csrf_token")
         raise HTTPException(
