@@ -40,7 +40,7 @@ def _fake_endpoint(
     ep.id = uuid.uuid4()
     ep.organisation_id = _ORG
     ep.url = "https://hooks.example.com/notify"
-    ep.events = json.dumps(events or ["hitl_awaiting"])
+    ep.events = events or ["hitl_awaiting"]
     ep.secret_ciphertext = _encrypt(secret) if secret else None
     ep.auto_disabled = auto_disabled
     ep.consecutive_dead_letter_count = dead_letter_count
@@ -94,7 +94,7 @@ def notifier() -> Notifier:
 
 async def test_get_subscribed_endpoints_returns_matching() -> None:
     ep = _fake_endpoint()
-    ep.events = json.dumps(["hitl_awaiting", "run_failed"])
+    ep.events = ["hitl_awaiting", "run_failed"]
 
     result = MagicMock()
     result.scalars.return_value.__iter__ = lambda self: iter([ep])

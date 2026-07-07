@@ -216,7 +216,11 @@ class NotificationEventMapper:
             return template.format(**payload)
         except KeyError as exc:
             _log.warning("mapper.template_key_missing", extra={"template": template, "key": str(exc)})
-            return template.replace(f"{{{exc.args[0]}}}", "[unknown]")
+            result = template.replace(f"{{{exc.args[0]}}}", "[unknown]")
+            try:
+                return result.format(**payload)
+            except KeyError:
+                return result
         except (ValueError, IndexError, TypeError):
             _log.warning("mapper.template_format_error", extra={"template": template})
             return template
