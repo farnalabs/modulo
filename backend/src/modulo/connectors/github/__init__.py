@@ -33,7 +33,7 @@ _LINK_HEADER_RE = re.compile(r'<([^>]+)>\s*;\s*rel="(\w+)"')
 
 def _parse_retry_after(response: httpx.Response) -> float | None:
     """Parse Retry-After header from GitHub API response."""
-    value = response.headers.get("Retry-After") or response.headers.get("retry-after")
+    value = response.headers.get("Retry-After")
     if value:
         try:
             return float(value)
@@ -150,8 +150,6 @@ class GitHubConnector(ConnectorBase):
                     await asyncio.sleep(delay)
                     continue
                 raise ValueError("GitHub API connection error") from exc
-        raise ValueError("GitHub API request failed after retries") from last_exc
-
 
 
     async def _parse_json(self, response: httpx.Response) -> Any:
@@ -160,6 +158,13 @@ class GitHubConnector(ConnectorBase):
             return response.json()
         except json.JSONDecodeError as exc:
             raise ValueError(f"GitHub API returned invalid JSON: {response.text[:200]}") from exc
+
+    @staticmethod
+    def _parse_scopes_from_headers(response: httpx.Response) -> set[str]:
+        header_value = response.headers.get("X-OAuth-Scopes", "")
+        if header_value.strip():
+            return {s.strip() for s in header_value.split(",")}
+        return set()
 
     async def verify_scopes(self) -> set[str]:
         """Verify the token has required OAuth scopes via ``X-OAuth-Scopes`` header.
@@ -172,11 +177,7 @@ class GitHubConnector(ConnectorBase):
         except ValueError as exc:
             raise ValueError(f"Cannot verify scopes: {exc}") from exc
 
-        header_value = r.headers.get("X-OAuth-Scopes", "")
-        token_scopes: set[str] = set()
-        if header_value.strip():
-            token_scopes = {s.strip() for s in header_value.split(",")}
-
+        token_scopes = self._parse_scopes_from_headers(r)
         return set(REQUIRED_SCOPES - token_scopes)
 
     async def health_check(self) -> HealthResult:
@@ -194,11 +195,7 @@ class GitHubConnector(ConnectorBase):
         except ValueError as exc:
             return HealthResult(ok=False, detail=str(exc)[:200])
 
-        header_value = r.headers.get("X-OAuth-Scopes", "")
-        token_scopes: set[str] = set()
-        if header_value.strip():
-            token_scopes = {s.strip() for s in header_value.split(",")}
-
+        token_scopes = self._parse_scopes_from_headers(r)
         missing = REQUIRED_SCOPES - token_scopes
         if missing:
             return HealthResult(
