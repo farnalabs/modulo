@@ -18,7 +18,7 @@
         <p class="text-sm text-muted-foreground">{{ $t('common.loading') }}</p>
       </div>
       <template v-else>
-        <div class="remy-cs-header grid grid-cols-[1fr_auto_auto] gap-3 px-3 py-2 text-xs font-medium text-muted-foreground border-b items-center">
+        <div class="remy-cs-header grid grid-cols-[1.5fr_auto_auto] gap-3 px-3 py-2 text-xs font-medium text-muted-foreground border-b items-center">
           <span>{{ $t('components.remy.RemyContextSources.source') }}</span>
           <span>{{ $t('components.remy.RemyContextSources.mode') }}</span>
           <span></span>
@@ -26,12 +26,24 @@
         <div
           v-for="source in sources"
           :key="source.key"
-          class="remy-cs-row grid grid-cols-[1fr_auto_auto] gap-3 px-3 py-2 text-sm items-center border-b"
+          class="remy-cs-row grid grid-cols-[1.5fr_auto_auto] gap-3 px-3 py-2 text-sm items-center border-b"
         >
           <div class="min-w-0">
-            <p class="text-sm font-medium">{{ source.name }}</p>
-            <p v-if="source.description" class="text-xs text-muted-foreground truncate">
-              {{ source.description }}
+            <p class="text-sm font-medium truncate" :title="source.name">
+              {{ source.name }}
+              <span
+                class="inline-flex items-center ml-1 align-middle cursor-help"
+                :title="`Key: ${source.key}`"
+              >
+                <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="text-muted-foreground/50">
+                  <circle cx="12" cy="12" r="10"/>
+                  <path d="M12 16v-4"/>
+                  <path d="M12 8h.01"/>
+                </svg>
+              </span>
+            </p>
+            <p class="text-xs text-muted-foreground truncate" :title="source.description || ''">
+              {{ source.description || '—' }}
             </p>
           </div>
           <select
@@ -127,9 +139,7 @@ async function updateSource(key: string, mode: ContextSourceMode) {
       return;
     }
     if (data && prev) {
-      const updated = data as ContextSourceItem;
-      prev.source_mode = updated.source_mode;
-      prev.is_overridden = updated.is_overridden;
+      sources.value = data as ContextSourceItem[];
     }
   } catch (e: unknown) {
     error.value = e instanceof Error ? e.message : "Failed to update source";
