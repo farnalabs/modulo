@@ -425,6 +425,7 @@
                 step="0.05"
                 class="flex-1"
                 data-testid="remy-auto-execute-threshold"
+                :aria-label="t('remy.auto_execute_threshold')"
               />
               <span class="text-sm font-mono w-12 text-right">{{ safetyConfig.autoExecuteThreshold.toFixed(2) }}</span>
             </div>
