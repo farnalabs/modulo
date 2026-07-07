@@ -1,5 +1,6 @@
 """API key management — create, list, revoke. Returns MCP config snippet."""
 
+import logging
 import uuid
 from datetime import datetime
 from typing import Any
@@ -17,6 +18,8 @@ from modulo.auth.team_rbac import ORG_ROLE_HIERARCHY
 from modulo.core.feature_flags import resolve_plan_context
 from modulo.db.rls import set_rls_org, set_rls_user_context
 from modulo.settings import Settings, get_settings
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/v1/api-keys", tags=["api-keys"])
 
@@ -112,6 +115,14 @@ async def create_api_key_endpoint(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="API keys are not available. Run database migrations to enable this feature.",
         ) from None
+    except HTTPException:
+        raise
+    except Exception:
+        logger.exception("Unexpected error in create_api_key_endpoint")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Internal server error",
+        ) from None
     return ApiKeyCreatedResponse(
         id=key.id,
         name=key.name,
@@ -137,6 +148,14 @@ async def list_api_keys_endpoint(
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="API keys are not available. Run database migrations to enable this feature.",
+        ) from None
+    except HTTPException:
+        raise
+    except Exception:
+        logger.exception("Unexpected error in list_api_keys_endpoint")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Internal server error",
         ) from None
 
 
@@ -179,6 +198,14 @@ async def update_api_key_endpoint(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="API keys are not available. Run database migrations to enable this feature.",
         ) from None
+    except HTTPException:
+        raise
+    except Exception:
+        logger.exception("Unexpected error in update_api_key_endpoint")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Internal server error",
+        ) from None
     if key is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="API key not found")
     return {
@@ -206,6 +233,14 @@ async def revoke_api_key_endpoint(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="API keys are not available. Run database migrations to enable this feature.",
         ) from None
+    except HTTPException:
+        raise
+    except Exception:
+        logger.exception("Unexpected error in revoke_api_key_endpoint")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Internal server error",
+        ) from None
     if not revoked:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="API key not found")
     return ApiKeyRevokeResponse(id=key_id, revoked=True)
@@ -217,14 +252,21 @@ async def mcp_config_endpoint(
     _: str = Depends(get_current_user),
 ) -> McpConfigResponse:
     """Return the MCP server URL and config snippet for Claude Desktop / Cursor."""
-    mcp_url = f"{settings.modulo_public_url}/mcp"
-    snippet = {
-        "mcpServers": {
-            "modulo": {
-                "url": mcp_url,
-                "apiKey": "mk_<your-api-key>",
-                "description": "Governed orchestration for your agentic SDLC",
+    try:
+        mcp_url = f"{settings.modulo_public_url}/mcp"
+        snippet = {
+            "mcpServers": {
+                "modulo": {
+                    "url": mcp_url,
+                    "apiKey": "mk_<your-api-key>",
+                    "description": "Governed orchestration for your agentic SDLC",
+                }
             }
         }
-    }
-    return McpConfigResponse(mcp_url=mcp_url, config_snippet=snippet)
+        return McpConfigResponse(mcp_url=mcp_url, config_snippet=snippet)
+    except Exception:
+        logger.exception("Unexpected error in mcp_config_endpoint")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Internal server error",
+        ) from None

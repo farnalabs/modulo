@@ -1,9 +1,11 @@
 """Determination API — read-only SDLC assessment and pipeline draft generation."""
 
+import logging
 import uuid
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel
+from sqlalchemy.exc import IntegrityError, ProgrammingError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.api.dependencies import get_db_session
@@ -18,6 +20,8 @@ from modulo.determination.draft import generate_draft
 from modulo.determination.inference import Finding, infer
 from modulo.determination.scanner import ScanSample, run_scan
 from modulo.settings import Settings, get_settings
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/v1/determination", tags=["determination"])
 
@@ -141,35 +145,45 @@ async def run_determination(
     settings: Settings = Depends(get_settings),
 ) -> DeterminationResponse:
     """Scan all connected tools and produce an SDLC maturity assessment."""
-    async with session.begin():
-        await set_rls_org(session, _PLACEHOLDER_ORG_ID)
-        instances = await list_connector_instances(session, page_size=100)
+    try:
+        async with session.begin():
+            await set_rls_org(session, _PLACEHOLDER_ORG_ID)
+            instances = await list_connector_instances(session, page_size=100)
 
-    relevant: list[ConnectorInstance] = [
-        ci for ci in instances.items if ci.connector_type_id in {t.value for t in _DETERMINATION_SCOPES}
-    ]
+        relevant: list[ConnectorInstance] = [
+            ci for ci in instances.items if ci.connector_type_id in {t.value for t in _DETERMINATION_SCOPES}
+        ]
 
-    async with ConnectorHub(secrets_backend=create_secrets_backend(fernet_key=settings.fernet_key)) as hub:
-        try:
-            await hub.initialise(relevant)
-        except ConnectorDecryptError as exc:
-            raise HTTPException(
-                status_code=status.HTTP_502_BAD_GATEWAY,
-                detail=f"Failed to decrypt credentials for connector {exc.connector_id}",
-            ) from exc
+        async with ConnectorHub(secrets_backend=create_secrets_backend(fernet_key=settings.fernet_key)) as hub:
+            try:
+                await hub.initialise(relevant)
+            except ConnectorDecryptError as exc:
+                raise HTTPException(
+                    status_code=status.HTTP_502_BAD_GATEWAY,
+                    detail=f"Failed to decrypt credentials for connector {exc.connector_id}",
+                ) from exc
 
-        samples = await run_scan(hub)
+            samples = await run_scan(hub)
 
-    findings = infer(samples)
+        findings = infer(samples)
 
-    stage_findings = [f for f in findings if f.category == "overview"]
-    summary = stage_findings[0].finding if stage_findings else "No SDLC stages detected"
+        stage_findings = [f for f in findings if f.category == "overview"]
+        summary = stage_findings[0].finding if stage_findings else "No SDLC stages detected"
 
-    return DeterminationResponse(
-        samples=[_sample_to_response(s) for s in samples],
-        findings=[_finding_to_response(f) for f in findings],
-        summary=summary,
-    )
+        return DeterminationResponse(
+            samples=[_sample_to_response(s) for s in samples],
+            findings=[_finding_to_response(f) for f in findings],
+            summary=summary,
+        )
+    except HTTPException:
+        raise
+    except ProgrammingError:
+        raise HTTPException(status_code=503, detail="Database not available. Run migrations.")
+    except IntegrityError:
+        raise HTTPException(status_code=409, detail="Resource already exists or constraint violation.")
+    except Exception as e:
+        logger.error("Unexpected error in run_determination: %s", str(e))
+        raise HTTPException(status_code=500, detail="Internal server error")
 
 
 @router.post("/draft", response_model=DraftResponse)
@@ -184,59 +198,69 @@ async def create_determination_draft(
     automation suggestions, and all supporting evidence.
     No changes are made to any connected system.
     """
-    async with session.begin():
-        await set_rls_org(session, _PLACEHOLDER_ORG_ID)
-        instances = await list_connector_instances(session, page_size=100)
+    try:
+        async with session.begin():
+            await set_rls_org(session, _PLACEHOLDER_ORG_ID)
+            instances = await list_connector_instances(session, page_size=100)
 
-    relevant: list[ConnectorInstance] = [
-        ci for ci in instances.items if ci.connector_type_id in {t.value for t in _DETERMINATION_SCOPES}
-    ]
+        relevant: list[ConnectorInstance] = [
+            ci for ci in instances.items if ci.connector_type_id in {t.value for t in _DETERMINATION_SCOPES}
+        ]
 
-    async with ConnectorHub(secrets_backend=create_secrets_backend(fernet_key=settings.fernet_key)) as hub:
-        try:
-            await hub.initialise(relevant)
-        except ConnectorDecryptError as exc:
-            raise HTTPException(
-                status_code=status.HTTP_502_BAD_GATEWAY,
-                detail=f"Failed to decrypt credentials for connector {exc.connector_id}",
-            ) from exc
+        async with ConnectorHub(secrets_backend=create_secrets_backend(fernet_key=settings.fernet_key)) as hub:
+            try:
+                await hub.initialise(relevant)
+            except ConnectorDecryptError as exc:
+                raise HTTPException(
+                    status_code=status.HTTP_502_BAD_GATEWAY,
+                    detail=f"Failed to decrypt credentials for connector {exc.connector_id}",
+                ) from exc
 
-        samples = await run_scan(hub)
+            samples = await run_scan(hub)
 
-    findings = infer(samples)
-    draft = generate_draft(samples, findings)
+        findings = infer(samples)
+        draft = generate_draft(samples, findings)
 
-    stage_findings = [f for f in findings if f.category == "overview"]
-    summary = stage_findings[0].finding if stage_findings else "No SDLC stages detected"
+        stage_findings = [f for f in findings if f.category == "overview"]
+        summary = stage_findings[0].finding if stage_findings else "No SDLC stages detected"
 
-    return DraftResponse(
-        nodes=[
-            DraftNodeResponse(
-                id=n.id,
-                node_type=n.node_type,
-                label=n.label,
-                connector_type=n.connector_type,
-                required_capabilities=n.required_capabilities,
-            )
-            for n in draft.nodes
-        ],
-        edges=[
-            DraftEdgeResponse(
-                source=e.source,
-                target=e.target,
-                edge_type=e.edge_type,
-                hitl_gate=e.hitl_gate,
-            )
-            for e in draft.edges
-        ],
-        findings=[_finding_to_response(f) for f in draft.findings],
-        automation_suggestions=[
-            AutomationSuggestion(
-                stage=s["stage"],
-                suggestion=s["suggestion"],
-                connector_type=s.get("connector_type"),
-            )
-            for s in draft.automation_suggestions
-        ],
-        summary=summary,
-    )
+        return DraftResponse(
+            nodes=[
+                DraftNodeResponse(
+                    id=n.id,
+                    node_type=n.node_type,
+                    label=n.label,
+                    connector_type=n.connector_type,
+                    required_capabilities=n.required_capabilities,
+                )
+                for n in draft.nodes
+            ],
+            edges=[
+                DraftEdgeResponse(
+                    source=e.source,
+                    target=e.target,
+                    edge_type=e.edge_type,
+                    hitl_gate=e.hitl_gate,
+                )
+                for e in draft.edges
+            ],
+            findings=[_finding_to_response(f) for f in draft.findings],
+            automation_suggestions=[
+                AutomationSuggestion(
+                    stage=s["stage"],
+                    suggestion=s["suggestion"],
+                    connector_type=s.get("connector_type"),
+                )
+                for s in draft.automation_suggestions
+            ],
+            summary=summary,
+        )
+    except HTTPException:
+        raise
+    except ProgrammingError:
+        raise HTTPException(status_code=503, detail="Database not available. Run migrations.")
+    except IntegrityError:
+        raise HTTPException(status_code=409, detail="Resource already exists or constraint violation.")
+    except Exception as e:
+        logger.error("Unexpected error in create_determination_draft: %s", str(e))
+        raise HTTPException(status_code=500, detail="Internal server error")

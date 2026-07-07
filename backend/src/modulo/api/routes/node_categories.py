@@ -1,7 +1,10 @@
 """NodeCategory CRUD REST API."""
 
+import logging
 import uuid
 from datetime import datetime
+
+logger = logging.getLogger(__name__)
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, Field
@@ -83,6 +86,14 @@ async def list_node_categories_endpoint(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database operation failed. Please try again later.",
         ) from None
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.exception("node_categories.list.unexpected_error")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="An unexpected error occurred",
+        ) from e
     return NodeCategoryListResponse(
         items=[NodeCategoryResponse.model_validate(c) for c in result.items],
         total=result.total,
@@ -121,6 +132,14 @@ async def create_node_category_endpoint(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database operation failed. Please try again later.",
         ) from None
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.exception("node_categories.create.unexpected_error")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="An unexpected error occurred",
+        ) from e
     return NodeCategoryResponse.model_validate(category)
 
 
@@ -145,6 +164,14 @@ async def get_node_category_endpoint(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database operation failed. Please try again later.",
         ) from None
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.exception("node_categories.get.unexpected_error")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="An unexpected error occurred",
+        ) from e
     if category is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Node category not found")
     return NodeCategoryResponse.model_validate(category)
@@ -173,6 +200,14 @@ async def update_node_category_endpoint(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database operation failed. Please try again later.",
         ) from None
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.exception("node_categories.update.unexpected_error")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="An unexpected error occurred",
+        ) from e
     if category is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Node category not found")
     return NodeCategoryResponse.model_validate(category)
@@ -199,5 +234,13 @@ async def delete_node_category_endpoint(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database operation failed. Please try again later.",
         ) from None
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.exception("node_categories.delete.unexpected_error")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="An unexpected error occurred",
+        ) from e
     if not deleted:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Node category not found")

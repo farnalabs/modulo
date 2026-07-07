@@ -38,7 +38,26 @@ async def current_user_profile(
     current_user: AuthenticatedPrincipal = Depends(get_current_user),
     session: AsyncSession = Depends(get_db_session),
 ) -> MeResponse:
-    return await _me_handler(current_user, session)
+    try:
+        return await _me_handler(current_user, session)
+    except ProgrammingError:
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="Feature is not available. Run database migrations to enable it.",
+        ) from None
+    except SQLAlchemyError:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Database error",
+        ) from None
+    except HTTPException:
+        raise
+    except Exception as e:
+        _log.exception("me.current_user_profile.unexpected_error")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="An unexpected error occurred",
+        ) from e
 
 
 class SettingsResponse(BaseModel):
@@ -69,6 +88,14 @@ async def get_user_settings(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database error",
         ) from None
+    except HTTPException:
+        raise
+    except Exception as e:
+        _log.exception("me.get_user_settings.unexpected_error")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="An unexpected error occurred",
+        ) from e
     if account is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Account not found")
     return account.preferences
@@ -97,6 +124,14 @@ async def update_user_settings(
                 status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
                 detail="Database error",
             ) from None
+        except HTTPException:
+            raise
+        except Exception as e:
+            _log.exception("me.reset_user_context_sources.unexpected_error")
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="An unexpected error occurred",
+            ) from e
         if account is None:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Account not found")
         return account.preferences
@@ -118,6 +153,14 @@ async def update_user_settings(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database error",
         ) from None
+    except HTTPException:
+        raise
+    except Exception as e:
+        _log.exception("me.update_user_settings.update.unexpected_error")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="An unexpected error occurred",
+        ) from e
 
 
 class PasswordChangeRequest(BaseModel):
@@ -152,6 +195,8 @@ async def change_password(
             for family in families:
                 try:
                     await blacklist_family(session, family.family_id)
+                except HTTPException:
+                    raise
                 except Exception:
                     _log.warning("Failed to blacklist token family %s during password change", family.family_id)
     except ProgrammingError:
@@ -164,6 +209,14 @@ async def change_password(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database error",
         ) from None
+    except HTTPException:
+        raise
+    except Exception as e:
+        _log.exception("me.change_password.unexpected_error")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="An unexpected error occurred",
+        ) from e
 
     return {"detail": "Password changed successfully"}
 
@@ -190,6 +243,14 @@ async def list_user_skills(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database error",
         ) from None
+    except HTTPException:
+        raise
+    except Exception as e:
+        _log.exception("me.list_user_skills.unexpected_error")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="An unexpected error occurred",
+        ) from e
 
 
 @router.post("/me/remy/skills", response_model=SkillResponse, status_code=status.HTTP_201_CREATED)
@@ -223,6 +284,14 @@ async def create_user_skill(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database error",
         ) from None
+    except HTTPException:
+        raise
+    except Exception as e:
+        _log.exception("me.create_user_skill.unexpected_error")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="An unexpected error occurred",
+        ) from e
 
 
 @router.put("/me/remy/skills/{skill_id}", response_model=SkillResponse)
@@ -257,6 +326,14 @@ async def update_user_skill(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database error",
         ) from None
+    except HTTPException:
+        raise
+    except Exception as e:
+        _log.exception("me.update_user_skill.unexpected_error")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="An unexpected error occurred",
+        ) from e
 
 
 @router.delete("/me/remy/skills/{skill_id}", status_code=status.HTTP_204_NO_CONTENT)
@@ -279,6 +356,14 @@ async def delete_user_skill(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database error",
         ) from None
+    except HTTPException:
+        raise
+    except Exception as e:
+        _log.exception("me.delete_user_skill.unexpected_error")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="An unexpected error occurred",
+        ) from e
 
 
 # ── User-level Context Sources ─────────────────────────────────────────
@@ -310,6 +395,14 @@ async def get_user_context_sources(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database error",
         ) from None
+    except HTTPException:
+        raise
+    except Exception as e:
+        _log.exception("me.get_user_context_sources.unexpected_error")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="An unexpected error occurred",
+        ) from e
 
 
 @router.put("/me/remy/context-sources/{source_key}")
@@ -342,6 +435,14 @@ async def set_user_context_source(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database error",
         ) from None
+    except HTTPException:
+        raise
+    except Exception as e:
+        _log.exception("me.set_user_context_source.unexpected_error")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="An unexpected error occurred",
+        ) from e
 
 
 @router.delete("/me/remy/context-sources", status_code=status.HTTP_200_OK)

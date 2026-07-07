@@ -274,6 +274,8 @@ async def _resolve_api_key(
     try:
         fernet = Fernet(fernet_key.encode())
         return fernet.decrypt(backend.credentials_ciphertext).decode()
+    except HTTPException:
+        raise
     except Exception:
         logger.exception("Failed to decrypt credentials for provider %r", provider)
         return None
@@ -1087,6 +1089,8 @@ async def stream_chat(
                                     "success": True, "result": result,
                                 })
                                 yield f"event: tool_call\ndata: {json.dumps(tool_results[-1])}\n\n"
+                            except HTTPException:
+                                raise
                             except Exception as exc:
                                 logger.exception("MCP tool call failed: %r", tc["name"])
                                 err_msg = f"{type(exc).__name__}: {exc}"[:200]
