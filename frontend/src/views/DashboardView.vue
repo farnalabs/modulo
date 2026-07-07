@@ -102,6 +102,9 @@
               {{ $t('views.DashboardView.see_what_modulo_can_do') }}
             </a>
           </div>
+          <div v-if="pipelineError" class="rounded-md bg-destructive/10 px-3 py-2 text-sm text-destructive">
+            {{ pipelineError }}
+          </div>
           <div class="flex flex-wrap items-center gap-3 text-sm">
             <a href="/library" class="font-medium text-primary hover:underline">{{ $t('views.DashboardView.create_pipeline') }}</a>
             <span class="text-muted-foreground">·</span>
@@ -336,6 +339,7 @@ const { post } = useApi()
 const welcomeExpanded = ref(true)
 const userToggledWelcome = ref(false)
 const creatingPipeline = ref(false)
+const pipelineError = ref<string | null>(null)
 
 watch(summary, (s) => {
   if (s && !userToggledWelcome.value) {
@@ -349,6 +353,7 @@ function toggleWelcome() {
 }
 
 async function createStarterPipeline() {
+  pipelineError.value = null
   creatingPipeline.value = true
   try {
     const result = await post<{ pipeline_id: string; name: string }>('/api/v1/onboarding/starter-pipeline')
@@ -356,7 +361,8 @@ async function createStarterPipeline() {
       router.push(`/pipelines/${result.pipeline_id}/editor`)
     }
   } catch (err: any) {
-    console.error('Failed to create starter pipeline:', err)
+    const msg = err?.detail || err?.message || 'Failed to create starter pipeline. Please try again.'
+    pipelineError.value = msg
   } finally {
     creatingPipeline.value = false
   }
