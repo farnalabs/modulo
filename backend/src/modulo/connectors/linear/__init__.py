@@ -31,6 +31,7 @@ _ISSUE_FIELDS = """
   state { id name }
   assignee { id name email }
   team { id name key }
+  labels { nodes { id name color } }
   createdAt
   updatedAt
   url
@@ -294,6 +295,13 @@ class LinearConnector(ConnectorBase):
                     last_exc = exc
                     continue
                 raise ValueError("Linear API connection error") from exc
+            except httpx.ProtocolError as exc:
+                if attempt < _MAX_RETRIES:
+                    delay = min(_BASE_DELAY * (2**attempt), _MAX_DELAY)
+                    await asyncio.sleep(delay)
+                    last_exc = exc
+                    continue
+                raise ValueError("Linear API protocol error") from exc
             try:
                 body: dict[str, Any] = r.json()
             except json.JSONDecodeError as exc:
