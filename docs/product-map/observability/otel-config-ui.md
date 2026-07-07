@@ -85,6 +85,16 @@ Settings page at `/settings/observability`.
 - [x] 4 scenarios in otel_traces.feature: chain span capture, tool child spans, no credentials in attributes, disabled produces no spans
 - [ ] Step definitions exist but are mock-based — no DB-level or integration-level coverage
 
+### Test Coverage
+
+- [x] 6 cache unit tests (hit, miss, copy, invalidate, isolation, unknown org)
+- [x] 4 degraded-response unit tests (no cache, stale cache, field completeness, missing keys)
+- [x] 5 config-to-response unit tests (no env, env override, langsmith key true/false, sensitive masking)
+- [x] 4 GET resilience tests (timeout degraded, error degraded, timeout stale cache, error stale cache)
+- [x] 3 Preview resilience tests (timeout defaults, timeout stale cache, error defaults)
+- [x] 7 PUT resilience tests (timeout→500, error→500, success, langsmith key/clear, ProgrammingError→501, SQLAlchemyError→503)
+- [x] 6 POST /test endpoint tests (empty endpoint, timeout, connect error, server error, success, <s>formatApiError</s>)
+
 ### Not yet implemented — gaps
 
 - [ ] ExportPreview wired into frontend UI — GET /preview API exists but no frontend button or display
@@ -100,6 +110,7 @@ Settings page at `/settings/observability`.
 - [x] `GET /preview` endpoint catches `ProgrammingError` → returns 501 Not Implemented
 - [x] `POST /test` no DB access — no ProgrammingError risk
 - [x] All ProgrammingError catches use `except ProgrammingError` (not broad `except SQLAlchemyError`)
+- [x] `PUT` endpoint catches `SQLAlchemyError` → returns 503 Service Unavailable (connection/deadlock failures)
 - [x] `GET` endpoint catches `TimeoutError` → falls back to degraded response with cached/default config
 - [x] `PUT` endpoint catches `TimeoutError` → re-raises as 500
 - [x] `GET /preview` endpoint catches `TimeoutError` → falls back to cached/default config
@@ -124,9 +135,28 @@ Settings page at `/settings/observability`.
 - [x] Test endpoint distinguishes TimeoutException vs ConnectError vs generic errors with user-friendly messages
 - [x] Test endpoint returns 200 with `success: false` if no endpoint configured
 
+## QA History
+
+### 2026-07-10 — Cross-cutting QA (improve-architecture index 307)
+
+**Fixed (CRITICAL):** Added `except SQLAlchemyError → 503 Service Unavailable` catch to `PUT /api/v1/settings/observability` endpoint. Connection/deadlock failures (connection pool exhaustion, DB restart) previously fell through to `except Exception → 500` with generic "Internal server error" instead of the established project-wide 503 pattern.
+
+**Fixed (MAJOR):** Replaced `String(err)` and `e instanceof Error ? e.message : String(e)` with `formatApiError(err/e)` in both error paths of `testConnection()` in `SettingsObservabilityView.vue`. API errors from `openapi-fetch` are objects, not strings — bare `String(err)` produced `[object Object]` on API failures.
+
+**Fixed (MAJOR):** Added 3 new unit tests in `test_observability_routes.py`:
+- `test_put_returns_501_on_programming_error` — PUT endpoint returns 501 with migration hint when DB table missing
+- `test_put_returns_503_on_sqlalchemy_error` — PUT endpoint returns 503 when SQLAlchemyError raised
+- `test_get_returns_501_on_programming_error` — GET endpoint returns 501 with migration hint when DB table missing
+- `test_preview_returns_501_on_programming_error` — Preview endpoint returns 501 when DB table missing
+
+**Fixed (MAJOR):** Resolved 2 stale Known Gaps in product map:
+- "Frontend i18n gap: ~20+ hardcoded English strings" — template already uses `$t()` everywhere; gap removed from Known Gaps
+- "API error formatting in saveSettings/loadSettings" — both already use `formatApiError()`; gap was specific to `testConnection()` which is now fixed
+
+**Remaining gaps unchanged:** No website docs, no true BDD integration tests.
+
 ## Known Gaps
 
 - **BDD step definitions are mock-only:** `otel_traces.feature` has 4 real scenarios and matching step definitions, but they use mock/patch rather than real DB or OTel exporter integration
-- **Frontend i18n gap:** SettingsObservabilityView.vue has ~20+ hardcoded English strings not using `$t()` (page title, section headings, labels, button text, placeholders, status messages, aria-labels)
-- **API error formatting:** `saveSettings()` and `loadSettings()` embed `${err}` directly in template literals instead of using `formatApiError(err)` — `openapi-fetch` returns error objects, causing `[object Object]` in user-facing error messages
 - **No website docs:** No observability/otel page exists under `Website/modulo-website/src/docs/`
+- **`testConnection()` had `formatApiError` gap (resolved):** Both error-formatting paths (line 374 `String(err)`, line 381 `e instanceof Error ? e.message : String(e)`) now use `formatApiError()` — fixed at improve-architecture index 307

@@ -13,6 +13,8 @@ import httpx
 import pytest
 from fastapi.testclient import TestClient
 
+from sqlalchemy.exc import ProgrammingError, SQLAlchemyError
+
 from modulo.api.dependencies import _get_engine, get_db_session, get_plan_context
 from modulo.api.main import app
 from modulo.api.routes.observability import (
@@ -226,6 +228,15 @@ class TestDefaultConfig:
 class TestObservabilityGetEndpoint:
     """Test GET endpoint's timeout and error fallback to degraded response."""
 
+    def test_get_returns_501_on_programming_error(self, free_client: TestClient) -> None:
+        with (
+            patch("modulo.api.routes.observability._fetch_and_cache", side_effect=ProgrammingError("stmt", {}, "table not found")),
+        ):
+            resp = free_client.get("/api/v1/settings/observability")
+        assert resp.status_code == 501
+        body = resp.json()
+        assert "migration" in body["detail"].lower()
+
     def test_get_returns_degraded_on_db_timeout(self, free_client: TestClient) -> None:
         with (
             patch("modulo.api.routes.observability._fetch_and_cache", side_effect=TimeoutError("db timeout")),
@@ -276,6 +287,15 @@ class TestObservabilityGetEndpoint:
 class TestObservabilityPreviewEndpoint:
     """Test preview endpoint's timeout and error fallback."""
 
+    def test_preview_returns_501_on_programming_error(self, free_client: TestClient) -> None:
+        with (
+            patch("modulo.api.routes.observability._fetch_and_cache", side_effect=ProgrammingError("stmt", {}, "table not found")),
+        ):
+            resp = free_client.get("/api/v1/settings/observability/preview")
+        assert resp.status_code == 501
+        body = resp.json()
+        assert "migration" in body["detail"].lower()
+
     def test_preview_returns_defaults_on_db_timeout(self, free_client: TestClient) -> None:
         with (
             patch("modulo.api.routes.observability._fetch_and_cache", side_effect=TimeoutError("db timeout")),
@@ -314,6 +334,30 @@ class TestObservabilityPreviewEndpoint:
 
 class TestObservabilityPutEndpoint:
     """Test PUT endpoint re-raises TimeoutError and generic errors."""
+
+    def test_put_returns_501_on_programming_error(self, free_client: TestClient) -> None:
+        with (
+            patch(
+                "modulo.api.routes.observability.update_otel_config",
+                side_effect=ProgrammingError("stmt", {}, "table not found"),
+            ),
+        ):
+            resp = free_client.put("/api/v1/settings/observability", json={"otlp_endpoint": "http://e:4318"})
+        assert resp.status_code == 501
+        body = resp.json()
+        assert "migration" in body["detail"].lower()
+
+    def test_put_returns_503_on_sqlalchemy_error(self, free_client: TestClient) -> None:
+        with (
+            patch(
+                "modulo.api.routes.observability.update_otel_config",
+                side_effect=SQLAlchemyError("connection refused"),
+            ),
+        ):
+            resp = free_client.put("/api/v1/settings/observability", json={"otlp_endpoint": "http://e:4318"})
+        assert resp.status_code == 503
+        body = resp.json()
+        assert "temporarily unavailable" in body["detail"].lower()
 
     def test_put_reraises_on_db_timeout(self, free_client: TestClient) -> None:
         with (
