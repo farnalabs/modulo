@@ -5,6 +5,7 @@ handler invocation, catching mid-session revocations and OAuth family
 blacklisting that occur between SSE events.
 """
 
+import hashlib
 import uuid
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -417,7 +418,7 @@ class TestMcpAuthMiddlewareContext:
         mock_result = MagicMock()
         mock_result.scalar_one_or_none = MagicMock()
         mock_result.scalar_one_or_none.return_value = MagicMock()
-        mock_result.scalar_one_or_none.return_value.hashed_secret = "s" * 64
+        mock_result.scalar_one_or_none.return_value.hashed_secret = hashlib.sha256(_API_KEY.encode()).hexdigest()
         mock_sess = MagicMock()
         mock_sess.begin = MagicMock()
         mock_sess.begin.return_value.__aenter__ = AsyncMock(return_value=None)

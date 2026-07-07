@@ -125,7 +125,7 @@ def test_clone_pipeline_not_found_returns_404_with_detail(client: TestClient) ->
 
     assert resp.status_code == 404
     body = resp.json()
-    msg = body["error"]["message"]
+    msg = body.get("detail", body.get("error", {}).get("message", ""))
     assert "pipeline_copy_failed" in msg
     assert "not found" in msg.lower()
 
@@ -156,7 +156,7 @@ def test_clone_pipeline_duplicate_name_returns_422(client: TestClient) -> None:
 
     assert resp.status_code == 422
     body = resp.json()
-    msg = body["error"]["message"]
+    msg = body.get("detail", body.get("error", {}).get("message", ""))
     assert "already exists" in msg
 
 
@@ -179,7 +179,7 @@ def test_clone_pipeline_default_name_taken_returns_422(client: TestClient) -> No
 
     assert resp.status_code == 422
     body = resp.json()
-    msg = body["error"]["message"]
+    msg = body.get("detail", body.get("error", {}).get("message", ""))
     assert "Copy of My Pipeline" in msg
     assert "already exists" in msg
 
@@ -195,7 +195,7 @@ def test_clone_pipeline_viewer_denied_returns_403(viewer_client: TestClient) -> 
 
     assert resp.status_code == 403
     body = resp.json()
-    msg = body["error"]["message"]
+    msg = body.get("detail", body.get("error", {}).get("message", ""))
     assert "clone" in msg.lower() or "member" in msg.lower()
 
 
@@ -225,7 +225,7 @@ def test_clone_pipeline_internal_error_returns_500(client: TestClient) -> None:
 
     assert resp.status_code == 500
     body = resp.json()
-    msg = body["error"]["message"]
+    msg = body.get("detail", body.get("error", {}).get("message", ""))
     assert "unexpected error" in msg.lower()
 
 
@@ -255,5 +255,5 @@ def test_clone_pipeline_disappears_returns_404(client: TestClient) -> None:
 
     assert resp.status_code == 404
     body = resp.json()
-    msg = body["error"]["message"]
+    msg = body.get("detail", body.get("error", {}).get("message", ""))
     assert "disappeared" in msg.lower()

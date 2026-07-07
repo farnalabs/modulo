@@ -51,6 +51,7 @@ def _fake_stage(**overrides: Any) -> MagicMock:
     s.owner_team_id = overrides.get("owner_team_id")
     s.visibility = overrides.get("visibility", "org")
     s.created_by = overrides.get("created_by", _USER_ID)
+    s.account_id = overrides.get("account_id", _USER_ID)
     s.created_at = overrides.get("created_at", datetime.now())
     s.updated_at = overrides.get("updated_at", datetime.now())
     return s
