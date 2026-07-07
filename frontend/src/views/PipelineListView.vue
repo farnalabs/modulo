@@ -16,7 +16,7 @@
         </div>
           <router-link
             v-if="allPipelines.length > 0 && !loading"
-            to="/templates"
+            to="/library"
             class="px-4 py-2 bg-primary text-primary-foreground text-sm font-medium rounded-lg hover:brightness-110 transition-all"
             data-testid="pipeline-list-new-pipeline"
           >
