@@ -27,7 +27,7 @@ async def test_create_pipeline(rls_session: AsyncSession, test_org: uuid.UUID, t
         rls_session,
         org_id=test_org,
         name="My Pipeline",
-        created_by=test_user,
+        account_id=test_user,
     )
     assert p.id is not None
     assert p.name == "My Pipeline"
@@ -37,7 +37,7 @@ async def test_create_pipeline(rls_session: AsyncSession, test_org: uuid.UUID, t
 async def test_get_pipeline_returns_existing(
     rls_session: AsyncSession, test_org: uuid.UUID, test_user: uuid.UUID,
 ) -> None:
-    p = await create_pipeline(rls_session, org_id=test_org, name="Fetch Me", created_by=test_user)
+    p = await create_pipeline(rls_session, org_id=test_org, name="Fetch Me", account_id=test_user)
     fetched = await get_pipeline(rls_session, p.id)
     assert fetched is not None
     assert fetched.id == p.id
@@ -51,7 +51,7 @@ async def test_get_pipeline_returns_none_for_unknown(
 
 async def test_list_pipelines_pagination(rls_session: AsyncSession, test_org: uuid.UUID, test_user: uuid.UUID) -> None:
     for i in range(3):
-        await create_pipeline(rls_session, org_id=test_org, name=f"Pipeline {i}", created_by=test_user)
+        await create_pipeline(rls_session, org_id=test_org, name=f"Pipeline {i}", account_id=test_user)
 
     page1 = await list_pipelines(rls_session, page=1, page_size=2)
     assert page1.total >= 3
@@ -60,7 +60,7 @@ async def test_list_pipelines_pagination(rls_session: AsyncSession, test_org: uu
 
 
 async def test_update_pipeline(rls_session: AsyncSession, test_org: uuid.UUID, test_user: uuid.UUID) -> None:
-    p = await create_pipeline(rls_session, org_id=test_org, name="Old Name", created_by=test_user)
+    p = await create_pipeline(rls_session, org_id=test_org, name="Old Name", account_id=test_user)
     updated = await update_pipeline(rls_session, p.id, {"name": "New Name"})
     assert updated is not None
     assert updated.name == "New Name"
@@ -73,7 +73,7 @@ async def test_update_pipeline_unknown_returns_none(
 
 
 async def test_delete_pipeline(rls_session: AsyncSession, test_org: uuid.UUID, test_user: uuid.UUID) -> None:
-    p = await create_pipeline(rls_session, org_id=test_org, name="Delete Me", created_by=test_user)
+    p = await create_pipeline(rls_session, org_id=test_org, name="Delete Me", account_id=test_user)
     assert await delete_pipeline(rls_session, p.id) is True
     assert await get_pipeline(rls_session, p.id) is None
 
@@ -91,7 +91,7 @@ async def test_replace_pipeline_graph_persists_nodes_and_first_class_edges(
         rls_session,
         org_id=test_org,
         name="Graph persistence",
-        created_by=test_user,
+        account_id=test_user,
     )
     first_node = uuid.uuid4()
     second_node = uuid.uuid4()
@@ -143,7 +143,7 @@ async def test_clone_pipeline_returns_new_id_and_name_prefix(
         rls_session,
         org_id=test_org,
         name="Original Pipeline",
-        created_by=test_user,
+        account_id=test_user,
     )
     first_node = uuid.uuid4()
     second_node = uuid.uuid4()
@@ -172,7 +172,7 @@ async def test_clone_pipeline_returns_new_id_and_name_prefix(
         rls_session,
         org_id=test_org,
         pipeline_id=source.id,
-        created_by=test_user,
+        account_id=test_user,
     )
 
     assert cloned is not None
@@ -197,7 +197,7 @@ async def test_clone_pipeline_independent_from_original(
         rls_session,
         org_id=test_org,
         name="Independent Test",
-        created_by=test_user,
+        account_id=test_user,
     )
     node_id = uuid.uuid4()
     nodes = [{"id": str(node_id), "agent_id": str(uuid.uuid4()), "position": {"x": 0, "y": 0}}]
@@ -213,7 +213,7 @@ async def test_clone_pipeline_independent_from_original(
         rls_session,
         org_id=test_org,
         pipeline_id=source.id,
-        created_by=test_user,
+        account_id=test_user,
     )
     assert cloned is not None
 
@@ -243,7 +243,7 @@ async def test_clone_pipeline_not_found_returns_none(
         rls_session,
         org_id=uuid.uuid4(),
         pipeline_id=uuid.uuid4(),
-        created_by=uuid.uuid4(),
+        account_id=uuid.uuid4(),
     )
     assert result is None
 
@@ -255,7 +255,7 @@ async def test_replace_pipeline_graph_removes_stale_edges(
         rls_session,
         org_id=test_org,
         name="Graph edge replacement",
-        created_by=test_user,
+        account_id=test_user,
     )
     node_id = uuid.uuid4()
     await replace_pipeline_graph(

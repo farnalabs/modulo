@@ -129,7 +129,7 @@ async def test_upsert_daily_run_count_with_team(
             text("SELECT set_config('app.organisation_id', :oid, true)"),
             {"oid": str(org)},
         )
-        team = await create_team(session, org_id=org, name="Cost Team", created_by=user)
+        team = await create_team(session, org_id=org, name="Cost Team", account_id=user)
         await session.flush()
 
         org_row = await upsert_daily_run_count(session, org_id=org, increment_count=5, increment_spend=Decimal(50))
@@ -159,7 +159,7 @@ async def test_get_daily_run_counts_filters(
             text("SELECT set_config('app.organisation_id', :oid, true)"),
             {"oid": str(org)},
         )
-        team = await create_team(session, org_id=org, name="Filter Team", created_by=user)
+        team = await create_team(session, org_id=org, name="Filter Team", account_id=user)
         await session.flush()
 
         await upsert_daily_run_count(session, org_id=org, increment_count=1)
@@ -210,7 +210,7 @@ async def test_get_org_spend_total_excludes_team_rows(
             text("SELECT set_config('app.organisation_id', :oid, true)"),
             {"oid": str(org)},
         )
-        team = await create_team(session, org_id=org, name="Spend Team", created_by=user)
+        team = await create_team(session, org_id=org, name="Spend Team", account_id=user)
         await session.flush()
 
         await upsert_daily_run_count(session, org_id=org, increment_spend=Decimal(100))
@@ -308,8 +308,8 @@ async def test_check_and_record_spend_with_team_enforces_team_limit(
             text("SELECT set_config('app.organisation_id', :oid, true)"),
             {"oid": str(org)},
         )
-        team1 = await create_team(session, org_id=org, name="Team 1", created_by=user)
-        team2 = await create_team(session, org_id=org, name="Team 2", created_by=user)
+        team1 = await create_team(session, org_id=org, name="Team 1", account_id=user)
+        team2 = await create_team(session, org_id=org, name="Team 2", account_id=user)
         await session.flush()
 
     await _set_org_limit(db_engine, org, Decimal(1000))
@@ -389,8 +389,8 @@ async def test_get_cost_report_by_team(
             text("SELECT set_config('app.organisation_id', :oid, true)"),
             {"oid": str(org)},
         )
-        team_a = await create_team(session, org_id=org, name="Report A", created_by=user)
-        team_b = await create_team(session, org_id=org, name="Report B", created_by=user)
+        team_a = await create_team(session, org_id=org, name="Report A", account_id=user)
+        team_b = await create_team(session, org_id=org, name="Report B", account_id=user)
         await session.flush()
 
         # Record some spend
@@ -425,7 +425,7 @@ async def test_get_cost_report_by_org(
             text("SELECT set_config('app.organisation_id', :oid, true)"),
             {"oid": str(org)},
         )
-        team = await create_team(session, org_id=org, name="Inner Team", created_by=user)
+        team = await create_team(session, org_id=org, name="Inner Team", account_id=user)
         await session.flush()
 
         # Org-level spend (no team_id)
@@ -459,7 +459,7 @@ async def test_unique_constraint_enforced(
             text("SELECT set_config('app.organisation_id', :oid, true)"),
             {"oid": str(org)},
         )
-        team = await create_team(session, org_id=org, name="Unique DRC Team", created_by=user)
+        team = await create_team(session, org_id=org, name="Unique DRC Team", account_id=user)
         await session.flush()
 
         await check_and_record_spend(session, org_id=org, cost_usd=Decimal(10), team_id=team.id)
@@ -505,7 +505,7 @@ async def test_daily_run_count_isolation_between_orgs(
             text("SELECT set_config('app.organisation_id', :oid, true)"),
             {"oid": str(org_a)},
         )
-        team_a = await create_team(session, org_id=org_a, name="Iso Team A", created_by=user_a)
+        team_a = await create_team(session, org_id=org_a, name="Iso Team A", account_id=user_a)
         await session.flush()
         await upsert_daily_run_count(session, org_id=org_a, team_id=team_a.id, increment_count=5)
         await session.flush()
@@ -515,7 +515,7 @@ async def test_daily_run_count_isolation_between_orgs(
             text("SELECT set_config('app.organisation_id', :oid, true)"),
             {"oid": str(org_b)},
         )
-        team_b = await create_team(session, org_id=org_b, name="Iso Team B", created_by=user_b)
+        team_b = await create_team(session, org_id=org_b, name="Iso Team B", account_id=user_b)
         await session.flush()
         await upsert_daily_run_count(session, org_id=org_b, team_id=team_b.id, increment_count=3)
         await session.flush()
