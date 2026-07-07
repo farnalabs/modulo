@@ -120,6 +120,14 @@ class Settings(BaseSettings):
     aws_region: str = Field("us-east-1")
     aws_profile: str = Field("")
 
+    # SMTP — self-hosted email sending. When smtp_host is empty, email dispatch
+    # is disabled (logs a warning and returns silently).
+    smtp_host: str = Field("")
+    smtp_port: int = Field(587)
+    smtp_username: str = Field("")
+    smtp_password: str = Field(default="", repr=False)
+    email_from: str = Field("")
+
     model_config = {"env_file": ".env", "case_sensitive": False, "extra": "ignore"}
 
     @field_validator("secret_key")

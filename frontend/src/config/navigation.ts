@@ -50,6 +50,7 @@ const routeConfigMap: Record<string, { icon: string; labelKey: string }> = {
   'settings-monitoring': { icon: 'Eye', labelKey: 'components.SidebarNav.item_browser_monitoring' },
   'settings-hitl-review': { icon: 'ShieldQuestion', labelKey: 'components.SidebarNav.item_hitl_review' },
   'settings-observability': { icon: 'Eye', labelKey: 'components.SidebarNav.item_observability' },
+  'settings-email': { icon: 'Mail', labelKey: 'components.SidebarNav.item_email_settings' },
   'settings-error-forwarders': { icon: 'AlertTriangle', labelKey: 'components.SidebarNav.item_error_forwarders' },
   'admin-users': { icon: 'UserCircle', labelKey: 'components.SidebarNav.item_users' },
   'admin-org': { icon: 'Building', labelKey: 'components.SidebarNav.item_org_settings' },
