@@ -100,9 +100,10 @@
           </svg>
         </button>
         <button
+          v-if="planStore.featureEnabled('remy_ui_driving')"
           class="remy-titlebar-btn text-xs font-medium px-1.5"
           @click="cycleSpeed"
-          :title="`Speed: ${currentSpeedLabel}`"
+          :title="`UI Navigation Speed — ${currentSpeedLabel} — ${speedDescriptions[currentSpeed.value] ?? ''}`"
           :aria-label="`Speed: ${currentSpeedLabel} — ${speedDescriptions[currentSpeed.value] ?? ''}`"
         >
           <span>{{ speedIcon }}</span><span class="ml-0.5 text-[10px] uppercase tracking-wider">{{ currentSpeedLabel }}</span>
@@ -163,6 +164,13 @@
           </svg>
         </button>
       </div>
+    </div>
+
+    <div
+      v-if="speedFlash"
+      class="text-center text-xs text-muted-foreground/60 py-1 px-3 border-b select-none"
+    >
+      {{ speedFlash }}
     </div>
 
     <div
@@ -266,6 +274,7 @@ import { shortId } from "@/utils/format";
 import { useRemyStore } from "@/composables/useRemyStore";
 import { useRemyContext } from "@/composables/useRemyContext";
 import { setActionSpeed, resumeUiCommands } from "@/composables/useUiCommandExecutor";
+import { usePlanStore } from "@/stores/planStore";
 import { Button } from "@/components/ui/button";
 import RemyChat from "./RemyChat.vue";
 import RemySessionDrawer from "./RemySessionDrawer.vue";
@@ -273,6 +282,7 @@ import RemySkillManager from "./RemySkillManager.vue";
 import RemyContextSources from "./RemyContextSources.vue";
 
 const store = useRemyStore();
+const planStore = usePlanStore();
 const { pageContext } = useRemyContext();
 watch(
   pageContext,
@@ -285,30 +295,37 @@ const chatRef = ref<InstanceType<typeof RemyChat> | null>(null);
 const showSidebar = ref(false);
 const activeTab = ref<"chat" | "skills" | "sessions" | "sources">("chat");
 
-const speedLabels = ['lightning', 'fast', 'normal', 'slow', 'review']
-const speedIcons = ['⚡', '▶', '▶▶', '▶▶▶', '⏸']
+const speedLabels = ['review', 'normal', 'lightning']
+const speedIcons = ['⏸', '▶', '⚡']
 const speedDescriptions: Record<string, string> = {
-  lightning: 'Fastest — no delays',
-  fast: 'Quick — brief pauses',
-  normal: 'Balanced speed',
-  slow: 'Slower — watch each step',
   review: 'Stops after each navigation so you can review',
+  normal: 'Navigates at a pace you can comfortably follow',
+  lightning: 'Navigates as fast as possible',
 }
 const currentSpeed = ref(localStorage.getItem('remy-action-speed') || 'normal')
 const currentSpeedLabel = computed(() => {
   const idx = speedLabels.indexOf(currentSpeed.value)
-  return speedLabels[idx >= 0 ? idx : 2]
+  return speedLabels[idx >= 0 ? idx : 1]
 })
 const speedIcon = computed(() => {
   const idx = speedLabels.indexOf(currentSpeed.value)
-  return speedIcons[idx >= 0 ? idx : 2]
+  return speedIcons[idx >= 0 ? idx : 1]
 })
+const speedFlash = ref('')
+let speedFlashTimer: ReturnType<typeof setTimeout> | null = null
+function showSpeedFlash(msg: string) {
+  speedFlash.value = msg
+  if (speedFlashTimer) clearTimeout(speedFlashTimer)
+  speedFlashTimer = setTimeout(() => { speedFlash.value = '' }, 2500)
+}
 function cycleSpeed() {
   const idx = speedLabels.indexOf(currentSpeed.value)
   const next = speedLabels[(idx + 1) % speedLabels.length]
   currentSpeed.value = next
   localStorage.setItem('remy-action-speed', next)
   setActionSpeed(next)
+  const desc = speedDescriptions[next]
+  if (desc) showSpeedFlash(`UI Nav: ${speedIcons[speedLabels.indexOf(next)]} ${desc}`)
   if (next !== 'review') resumeUiCommands()
 }
 

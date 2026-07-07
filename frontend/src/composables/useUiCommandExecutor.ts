@@ -206,12 +206,10 @@ export async function executeCommandBatch(commands: UiCommand[]): Promise<UiComm
 
     const speedDelays: Record<string, number> = {
       lightning: 0,
-      fast: 200,
       normal: 600,
-      slow: 1200,
       review: 0,
     }
-    const delay = speedDelays[_actionSpeed] ?? 0
+    const delay = speedDelays[_actionSpeed] ?? 600
     if (delay > 0) await new Promise(r => setTimeout(r, delay))
     if (_actionSpeed === 'review') _paused = true
   }
