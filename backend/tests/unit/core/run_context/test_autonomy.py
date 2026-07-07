@@ -153,6 +153,16 @@ class TestEffectiveAutonomyLevel:
         assert result == AutonomyLevel.MANUAL_APPROVAL
         assert len(caplog.records) == 2
 
+    def test_non_dict_run_context_logs_warning(self, caplog: pytest.LogCaptureFixture) -> None:
+        with caplog.at_level(logging.WARNING):
+            result = effective_autonomy_level(
+                pipeline_default="notify_on_complete",
+                run_context="unexpected_string",
+            )
+        assert result == AutonomyLevel.NOTIFY_ON_COMPLETE
+        assert len(caplog.records) == 1
+        assert "not a dict" in caplog.records[0].message
+
 
 class TestShouldSkipHitlGate:
     def test_fully_autonomous_skips(self) -> None:
