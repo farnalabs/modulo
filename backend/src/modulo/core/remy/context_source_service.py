@@ -1,18 +1,14 @@
 from __future__ import annotations
 
-import logging
 import uuid
 
 from pydantic import BaseModel
 from sqlalchemy import delete as sa_delete
 from sqlalchemy import select
-from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.core.remy.config_service import RemyConfig
 from modulo.db.models.remy_context_source import RemyContextSource
-
-logger = logging.getLogger(__name__)
 
 _VALID_SOURCE_MODES = {"always_on", "tool", "opt_in", "disabled"}
 
@@ -77,23 +73,19 @@ class RemyContextSourceService:
         return await self._query_by_user_id(org_id, user_id=user_id)
 
     async def _query_by_user_id(self, org_id: uuid.UUID, user_id: uuid.UUID | None) -> dict[str, str]:
-        try:
-            if user_id is None:
-                stmt = select(RemyContextSource).where(
-                    RemyContextSource.organisation_id == org_id,
-                    RemyContextSource.user_id.is_(None),
-                )
-            else:
-                stmt = select(RemyContextSource).where(
-                    RemyContextSource.organisation_id == org_id,
-                    RemyContextSource.user_id == user_id,
-                )
-            result = await self._session.execute(stmt)
-            rows = list(result.scalars())
-            return {r.source_key: r.source_mode for r in rows}
-        except SQLAlchemyError:
-            logger.exception("Failed to query context sources for org %s, user %s", org_id, user_id)
-            return {}
+        if user_id is None:
+            stmt = select(RemyContextSource).where(
+                RemyContextSource.organisation_id == org_id,
+                RemyContextSource.user_id.is_(None),
+            )
+        else:
+            stmt = select(RemyContextSource).where(
+                RemyContextSource.organisation_id == org_id,
+                RemyContextSource.user_id == user_id,
+            )
+        result = await self._session.execute(stmt)
+        rows = list(result.scalars())
+        return {r.source_key: r.source_mode for r in rows}
 
     def build_effective_items(
         self, effective: dict[str, str], user_overrides: dict[str, str]
