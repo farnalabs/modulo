@@ -1,5 +1,6 @@
 """CompositeTemplate CRUD REST API."""
 
+import logging
 import uuid
 from datetime import datetime
 from typing import Any, Literal
@@ -20,6 +21,8 @@ from modulo.db.crud.composite_template import (
     update_composite_template,
 )
 from modulo.db.rls import set_rls_org
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/v1/composite-templates", tags=["composite-templates"])
 

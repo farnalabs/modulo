@@ -180,6 +180,12 @@ async def get_remy_config(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database error while fetching Remy config.",
         ) from None
+    except Exception:
+        logger.exception("Unexpected error in get_remy_config")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Internal server error",
+        ) from None
 
 
 @router.get("/available-providers", response_model=AvailableProvidersResponse)
@@ -187,23 +193,30 @@ async def get_available_providers(
     principal: AuthenticatedPrincipal = Depends(get_current_user),
 ) -> AvailableProvidersResponse:
     _require_admin(principal)
-    from modulo.api.routes.remy import _SIMPLE_BACKENDS
-    from modulo.db.enums import ModelBackendProvider
+    try:
+        from modulo.api.routes.remy import _SIMPLE_BACKENDS
+        from modulo.db.enums import ModelBackendProvider
 
-    native_ids = set(_SIMPLE_BACKENDS.keys())
-    native = [
-        AvailableProviderInfo(id=k, label=_PROVIDER_LABELS.get(k, k.replace("_", " ").title()))
-        for k in sorted(native_ids)
-    ]
-    custom_types = [
-        AvailableProviderInfo(
-            id=v.value,
-            label=_PROVIDER_LABELS.get(v.value, v.name.replace("_", " ").title())
-        )
-        for v in ModelBackendProvider
-        if v.value not in native_ids
-    ]
-    return AvailableProvidersResponse(native=native, custom_types=custom_types)
+        native_ids = set(_SIMPLE_BACKENDS.keys())
+        native = [
+            AvailableProviderInfo(id=k, label=_PROVIDER_LABELS.get(k, k.replace("_", " ").title()))
+            for k in sorted(native_ids)
+        ]
+        custom_types = [
+            AvailableProviderInfo(
+                id=v.value,
+                label=_PROVIDER_LABELS.get(v.value, v.name.replace("_", " ").title())
+            )
+            for v in ModelBackendProvider
+            if v.value not in native_ids
+        ]
+        return AvailableProvidersResponse(native=native, custom_types=custom_types)
+    except Exception:
+        logger.exception("Unexpected error in get_available_providers")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Internal server error",
+        ) from None
 
 
 @router.put("/config", response_model=RemyConfigResponse)
@@ -275,6 +288,12 @@ async def update_remy_config(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database error while updating Remy config.",
         ) from None
+    except Exception:
+        logger.exception("Unexpected error in update_remy_config")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Internal server error",
+        ) from None
 
 
 # ── Org-level Skills CRUD ─────────────────────────────────────────────
@@ -336,6 +355,12 @@ async def list_org_skills(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database error while listing skills.",
         ) from None
+    except Exception:
+        logger.exception("Unexpected error in list_org_skills")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Internal server error",
+        ) from None
 
 
 @router.post("/skills", response_model=SkillResponse, status_code=status.HTTP_201_CREATED)
@@ -370,6 +395,12 @@ async def create_org_skill(
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database error while creating skill.",
+        ) from None
+    except Exception:
+        logger.exception("Unexpected error in create_org_skill")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Internal server error",
         ) from None
 
 
@@ -407,6 +438,12 @@ async def update_org_skill(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database error while updating skill.",
         ) from None
+    except Exception:
+        logger.exception("Unexpected error in update_org_skill")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Internal server error",
+        ) from None
 
 
 @router.delete("/skills/{skill_id}", status_code=status.HTTP_204_NO_CONTENT)
@@ -430,6 +467,12 @@ async def delete_org_skill(
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database error while deleting skill.",
+        ) from None
+    except Exception:
+        logger.exception("Unexpected error in delete_org_skill")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Internal server error",
         ) from None
 
 
@@ -468,6 +511,12 @@ async def get_org_context_sources(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database error while fetching context sources.",
         ) from None
+    except Exception:
+        logger.exception("Unexpected error in get_org_context_sources")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Internal server error",
+        ) from None
 
 
 @router.put("/context-sources/{source_key}")
@@ -498,6 +547,12 @@ async def set_org_context_source(
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database error while updating context source.",
+        ) from None
+    except Exception:
+        logger.exception("Unexpected error in set_org_context_source")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Internal server error",
         ) from None
 
 
@@ -534,6 +589,12 @@ async def reset_org_context_sources(
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database error while resetting context sources.",
+        ) from None
+    except Exception:
+        logger.exception("Unexpected error in reset_org_context_sources")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Internal server error",
         ) from None
 
 
