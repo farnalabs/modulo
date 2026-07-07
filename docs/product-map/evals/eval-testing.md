@@ -202,6 +202,7 @@ Discovered from 1 completed delivery task (task-nv2-eval-bdd-tests). Tests valid
 
 ### QA History
 - 2026-07-06: Cross-cutting QA (index 229). Fixed CRITICAL — eval_dashboard route in admin.py was missing SQLAlchemyError→503 catch (connection/deadlock failures propagated as 500). Fixed CRITICAL — okr_progress route in admin.py was missing SQLAlchemyError→503 catch (same pattern). Added except SQLAlchemyError handlers + 4 new tests (dashboard + regressions + okr_progress SQLAlchemyError→503, okr_progress ProgrammingError→501). Added json_schema and custom_function eval type behaviour sections to product map. Added Resilience section. Status: partial.
+- 2026-07-07: Cross-cutting QA (index 324). Fixed CRITICAL — detect_regressions() only returned alerts for declining trends; improving/stable trends were silently dropped despite product map claiming they were returned. Unit tests (test_improving_not_alerted, test_stable_not_alerted) caught the gap — moved alerts.append() outside the if/elif/else block so all trends produce alerts. Status: covered.
 
 ## Known Gaps
 - **eval_scorer.feature is a placeholder**: 6 abstract scenarios — not executable without concrete step values.
