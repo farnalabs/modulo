@@ -178,14 +178,29 @@ Two categories exist:
 - [ ] Duplicate prompt version label on apply is accepted (no uniqueness check)
 - [ ] Schema version FK changability — input/output schemas are fixed after create (no PATCH support)
 
+## Error Handling — Exception→500 guards
+
+- [x] list_agents_endpoint catches Exception→500 with `_log.exception`
+- [x] create_agent_endpoint catches Exception→500 with `_log.exception`
+- [x] get_agent_endpoint catches Exception→500 with `_log.exception`
+- [x] update_agent_endpoint (read path) catches Exception→500 with `_log.exception`
+- [x] update_agent_endpoint (write path) catches Exception→500 with `_log.exception`
+- [x] optimize_prompt catches Exception→500 with `_log.exception`
+- [x] apply_optimized_prompt catches Exception→500 with `_log.exception`
+- [x] list_prompt_versions catches Exception→500 with `_log.exception`
+- [x] get_prompt_version_endpoint catches Exception→500 with `_log.exception`
+- [x] rollback_prompt catches Exception→500 with `_log.exception`
+- [x] diff_prompt_versions catches Exception→500 with `_log.exception`
+- [x] delete_agent_endpoint catches Exception→500 with `_log.exception`
+
 ## Resilience & Integration Robustness
 
 - [x] ProgrammingError→501 on all 14 DB-accessing endpoints (missing migrations)
 - [x] SQLAlchemyError→503 on all 14 DB-accessing endpoints (connection/deadlock)
 - [x] IntegrityError→422 on create endpoint (FK reference not found)
-- [ ] No LLM timeout in optimize_prompt — `backend.invoke()` has no connect/read timeout
-- [ ] No retry on LLM call failure in optimize_prompt — single failure causes 500
-- [ ] No fallback if PromptOptimizer LLM call fails — entire endpoint fails
+- [x] LLM timeout in optimize_prompt — `asyncio.wait_for` with `_LLM_TIMEOUT=60.0` in prompt_optimizer/__init__.py:220-223
+- [x] Retry on LLM call failure in optimize_prompt — 3 retries with exponential backoff + jitter in prompt_optimizer/__init__.py:213-251
+- [x] OptimizationFailedError raised after retries exhausted — caught in agents.py:499-503 returning structured 500 with descriptive message
 - [ ] No connection pooling error handling — DB connection pool exhaustion returns 5xx
 
 ## QA History
@@ -223,6 +238,6 @@ Two categories exist:
   "ProgrammingError→501 catches lack test coverage" (8 tests now exercise all catch paths);
   added "required_environment_capabilities was missing from API models" (now fixed); website
   docs gap changed from "doesn't exist" to "exists but could be deeper" (stub created).
-   All 59/59 agent unit tests pass. Status: partial (10 known gaps remain — 6 pre-existing + 4
-   resilience gaps + 2 edge case gaps, minus 2 resolved).
+  All 59/59 agent unit tests pass. Status: partial (10 known gaps remain — 6 pre-existing + 4
+  resilience gaps + 2 edge case gaps, minus 2 resolved).
 - **2026-07-10 — improve-architecture index 303**: Cross-cutting QA. Fixed CRITICAL — added `except Exception → 500` with `except HTTPException: raise` guard and `_log.exception` to 11 route handlers in agents.py (list, create, get, update-read, update-write, apply, list_versions, get_version, rollback, diff, delete) — previously only `optimize_prompt` had the generic exception guard. Python-level errors (TypeError, KeyError, ValueError from `model_validate`, dict access) would propagate as opaque 500 to CatchAllMiddleware on all other routes. Fixed MAJOR — corrected 3 stale resilience checkboxes in product map: `_LLM_TIMEOUT=60.0`, `_MAX_RETRIES=3` with exponential backoff + jitter, and `OptimizationFailedError` catch all verified as implemented in `prompt_optimizer/__init__.py`. Added Error Handling — Exception→500 guards section (12 checkboxes). Status: partial (7 known gaps unchanged + 1 resilience gap remains — connection pooling).

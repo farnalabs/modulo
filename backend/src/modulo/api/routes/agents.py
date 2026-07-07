@@ -246,6 +246,12 @@ async def list_agents_endpoint(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database operation failed. Please try again.",
         ) from None
+    except Exception:
+        _log.exception("Unexpected error listing agents")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="An unexpected error occurred. Please try again.",
+        ) from None
     return AgentListResponse(
         items=[AgentResponse.model_validate(a) for a in result.items],
         total=result.total,
@@ -307,6 +313,12 @@ async def create_agent_endpoint(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database operation failed. Please try again.",
         ) from None
+    except Exception:
+        _log.exception("Unexpected error creating agent")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="An unexpected error occurred. Please try again.",
+        ) from None
     return AgentResponse.model_validate(agent)
 
 
@@ -329,6 +341,12 @@ async def get_agent_endpoint(
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database operation failed. Please try again.",
+        ) from None
+    except Exception:
+        _log.exception("Unexpected error getting agent")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="An unexpected error occurred. Please try again.",
         ) from None
     if agent is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Agent not found")
@@ -355,6 +373,12 @@ async def update_agent_endpoint(
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database operation failed. Please try again.",
+        ) from None
+    except Exception:
+        _log.exception("Unexpected error updating agent")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="An unexpected error occurred. Please try again.",
         ) from None
     if agent is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Agent not found")
@@ -385,6 +409,12 @@ async def update_agent_endpoint(
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database operation failed. Please try again.",
+        ) from None
+    except Exception:
+        _log.exception("Unexpected error updating agent (write path)")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="An unexpected error occurred. Please try again.",
         ) from None
     if updated is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Agent not found")
@@ -548,6 +578,12 @@ async def apply_optimized_prompt(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database operation failed. Please try again.",
         ) from None
+    except Exception:
+        _log.exception("Unexpected error applying optimized prompt")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="An unexpected error occurred. Please try again.",
+        ) from None
     if agent is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Agent not found")
     return AgentResponse.model_validate(agent)
@@ -572,6 +608,12 @@ async def list_prompt_versions(
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database operation failed. Please try again.",
+        ) from None
+    except Exception:
+        _log.exception("Unexpected error listing prompt versions")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="An unexpected error occurred. Please try again.",
         ) from None
     if agent is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Agent not found")
@@ -610,6 +652,12 @@ async def get_prompt_version_endpoint(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database operation failed. Please try again.",
         ) from None
+    except Exception:
+        _log.exception("Unexpected error getting prompt version")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="An unexpected error occurred. Please try again.",
+        ) from None
     if entry is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Version not found")
     return PromptVersionDetail(
@@ -643,6 +691,12 @@ async def rollback_prompt(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database operation failed. Please try again.",
         ) from None
+    except Exception:
+        _log.exception("Unexpected error rolling back prompt")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="An unexpected error occurred. Please try again.",
+        ) from None
     if agent is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -674,6 +728,12 @@ async def diff_prompt_versions(
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database operation failed. Please try again.",
+        ) from None
+    except Exception:
+        _log.exception("Unexpected error diffing prompt versions")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="An unexpected error occurred. Please try again.",
         ) from None
     if agent is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Agent not found")
@@ -795,6 +855,12 @@ async def delete_agent_endpoint(
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database operation failed. Please try again.",
+        ) from None
+    except Exception:
+        _log.exception("Unexpected error deleting agent")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="An unexpected error occurred. Please try again.",
         ) from None
     if not deleted:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Agent not found")
