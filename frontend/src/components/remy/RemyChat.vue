@@ -429,9 +429,7 @@ function copyMessage(text: string) {
 }
 
 function escapeHtml(text: string): string {
-  const div = document.createElement("div");
-  div.textContent = text;
-  return div.innerHTML;
+  return text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
 }
 
 function renderMarkdown(text: string): string {
@@ -464,7 +462,9 @@ function renderMarkdown(text: string): string {
   html = html.replace(/\n\n/g, '</p><p class="remy-p">');
   html = html.replace(/\n/g, "<br/>");
 
-  html = '<p class="remy-p">' + html + "</p>";
+  if (!html.trim().startsWith('<')) {
+    html = '<p class="remy-p">' + html + "</p>";
+  }
 
   html = html.replace(/\x00CODE_BLOCK_(\d+)\x00/g, (_, i) => codeBlocks[Number(i)] ?? "");
 

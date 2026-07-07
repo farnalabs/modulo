@@ -52,7 +52,7 @@ from modulo.api.ui_tools import (
 )
 from modulo.auth.dependencies import get_current_user
 from modulo.auth.jwt import AuthenticatedPrincipal
-from modulo.core.feature_flags import FeatureFlagRegistry
+from modulo.core.feature_flags import resolve_plan_context
 from modulo.core.remy.config_service import RemyConfig, RemyConfigService
 from modulo.core.remy.skill_loader import SkillLoader
 from modulo.db.models.model_backend import ModelBackend
@@ -318,16 +318,18 @@ async def _reconstruct_messages(session: AsyncSession, session_id: uuid.UUID) ->
     return [_message_to_langchain(m) for m in db_messages]
 
 
-def _is_ui_driving_enabled() -> bool:
-    """Check if the remy_ui_driving feature flag is enabled.
+async def _is_ui_driving_enabled(org_id: uuid.UUID, db_session: AsyncSession) -> bool:
+    """Check if the remy_ui_driving feature flag is enabled for the given org.
 
-    Returns True by default (community tier). Overrides set via the
-    admin feature flags page are respected.
+    Uses FeatureFlagRegistry backed by the DB tier catalog. Falls back to
+    the hardcoded _KNOWN_FLAGS list when DB data is unavailable.
     """
-    override = FeatureFlagRegistry._overrides.get("remy_ui_driving")
-    if override is not None:
-        return override
-    return True
+    try:
+        plan = await resolve_plan_context(get_settings(), db_session)
+        return plan.feature_enabled("remy_ui_driving")
+    except Exception:
+        logger.warning("Failed to resolve plan context for ui_driving check, defaulting to True", exc_info=True)
+        return True
 
 
 # ── UI command helpers ───────────────────────────────────────────────────
@@ -349,8 +351,8 @@ def _has_destructive_pattern(selector: str) -> bool:
     return any(p in lower for p in DESTRUCTIVE_PATTERNS)
 
 
-def _check_nogo(config: RemyConfig, tool_name: str, args: dict[str, Any]) -> bool:
-    page_path = args.get("page_path", "")
+def _check_nogo(config: RemyConfig, tool_name: str, args: dict[str, Any], page_context: str) -> bool:
+    page_path = page_context
     for pattern in NOGO_PAGE_PATTERNS:
         if pattern in page_path:
             return True
@@ -362,10 +364,10 @@ def _check_nogo(config: RemyConfig, tool_name: str, args: dict[str, Any]) -> boo
     return False
 
 
-def _resolve_tool_permission(config: RemyConfig, tool_name: str, args: dict[str, Any]) -> str:
+def _resolve_tool_permission(config: RemyConfig, tool_name: str, args: dict[str, Any], page_context: str = "") -> str:
     """Returns 'always_allowed', 'requires_approval', 'nogo_requires_approval', or 'disabled'."""
     # 0. No-go zone check (highest priority)
-    if _check_nogo(config, tool_name, args):
+    if _check_nogo(config, tool_name, args, page_context):
         if config.permission_mode == "full_auto":
             return "disabled"
         return "nogo_requires_approval"
@@ -381,7 +383,8 @@ def _resolve_tool_permission(config: RemyConfig, tool_name: str, args: dict[str,
         base = "requires_approval" if tool_name in WRITE_TOOLS or tool_name == "press" else "always_allowed"
     elif mode == "full_auto":
         base = "always_allowed"
-        confidence = args.get("confidence", 1.0)
+        raw_confidence = args.get("confidence", 1.0)
+        confidence = raw_confidence if isinstance(raw_confidence, (int, float)) else 1.0
         if confidence < config.auto_execute_threshold:
             return "requires_approval"
     else:
@@ -1006,7 +1009,7 @@ async def stream_chat(
                     tools_param = None
                     if getattr(backend, 'supports_tools', False):
                         tools_param = _get_all_tool_definitions(
-                            include_ui_tools=_is_ui_driving_enabled(),
+                            include_ui_tools=await _is_ui_driving_enabled(principal.organisation_id, db_session),
                         )
 
                     async for chunk in backend.stream(langchain_messages, tools=tools_param):
@@ -1128,7 +1131,7 @@ async def stream_chat(
                         yield f"event: tool_call\ndata: {json.dumps(tool_results[-1])}\n\n"
 
                     # Handle UI tools
-                    if ui_tool_calls and not _is_ui_driving_enabled():
+                    if ui_tool_calls and not await _is_ui_driving_enabled(principal.organisation_id, db_session):
                         for tc in ui_tool_calls:
                             tool_results.append({
                                 "tool_call_id": tc["id"],
@@ -1158,7 +1161,7 @@ async def stream_chat(
                         pending_permission_calls: list[dict[str, Any]] = []
 
                         for tc in ui_tool_calls:
-                            perm = _resolve_tool_permission(config, tc["name"], tc["args"])
+                            perm = _resolve_tool_permission(config, tc["name"], tc["args"], req.page_context or "")
                             if perm == "disabled":
                                 continue
                             elif perm in ("requires_approval", "nogo_requires_approval"):
@@ -1220,12 +1223,12 @@ async def stream_chat(
                                 )
                                 break
 
-                            event = asyncio.Event()
-                            _pending_ui_results[session_id_str] = event
-
                             yield f"event: ui_command_batch\ndata: {json.dumps({
                                 'commands': approved_calls,
                             })}\n\n"
+
+                            event = asyncio.Event()
+                            _pending_ui_results[session_id_str] = event
 
                             try:
                                 await asyncio.wait_for(event.wait(), timeout=120.0)
@@ -1339,7 +1342,7 @@ async def submit_permission_response(
     session: AsyncSession = Depends(get_db_session),
     principal: AuthenticatedPrincipal = Depends(get_current_user),
 ) -> dict[str, str]:
-    if not _is_ui_driving_enabled():
+    if not await _is_ui_driving_enabled(principal.organisation_id, session):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="UI driving is disabled by your organisation.",
@@ -1378,7 +1381,7 @@ async def submit_ui_command_results(
     session: AsyncSession = Depends(get_db_session),
     principal: AuthenticatedPrincipal = Depends(get_current_user),
 ) -> dict[str, str]:
-    if not _is_ui_driving_enabled():
+    if not await _is_ui_driving_enabled(principal.organisation_id, session):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="UI driving is disabled by your organisation.",
@@ -1486,22 +1489,19 @@ async def stop_session(
         ) from None
 
     sid = str(session_id)
-    # If paused, resume instead of abort
-    resume_ev = _resume_events.get(sid)
+    # Set cancelled results so the loop sees cancel
+    _ui_command_results[sid] = [
+        {"id": "", "name": "", "success": False, "error": "cancelled_by_user"}
+    ]
+    # Wake up the loop if paused
+    resume_ev = _resume_events.pop(sid, None)
     if resume_ev is not None:
         resume_ev.set()
-        return {"status": "resumed"}
-
-    # If running, abort by cancelling pending UI results
-    ui_event = _pending_ui_results.get(sid)
+    # Wake up the loop if waiting for UI results
+    ui_event = _pending_ui_results.pop(sid, None)
     if ui_event is not None:
-        _ui_command_results[sid] = [
-            {"id": "", "name": "", "success": False, "error": "cancelled_by_user"}
-        ]
         ui_event.set()
-        return {"status": "aborted"}
-
-    return {"status": "ok"}
+    return {"status": "stopped"}
 
 
 @router.get("/sessions/{session_id}/audit-trail", status_code=status.HTTP_200_OK)

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import logging
 import uuid
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from typing import Any, ClassVar, Protocol
 
 from modulo.core.license import LicenseData
@@ -374,7 +374,7 @@ class FeatureFlagRegistry:
     def __init__(self, current_tier: str = "community", has_license_key: bool = False) -> None:
         self._current_tier = current_tier
         self._has_license_key = has_license_key
-        self._flags = _KNOWN_FLAGS
+        self._flags = [FeatureFlag(**asdict(f)) for f in _KNOWN_FLAGS]
         self._refresh()
 
     async def load_from_db(self, session: Any) -> None:
