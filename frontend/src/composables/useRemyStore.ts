@@ -2,6 +2,7 @@ import { defineStore } from 'pinia'
 import { ref, computed, watch } from 'vue'
 import { api } from '@/lib/api/client'
 import { formatApiError } from '@/lib/api/formatError'
+import { pauseUiCommands, resumeUiCommands } from './useUiCommandExecutor'
 import type { ChatSession, ChatMessage, PageContext } from '@/types/remy'
 
 export interface PermissionRequest {
@@ -303,15 +304,13 @@ export const useRemyStore = defineStore('remy', () => {
     }
   }
 
-  async function pauseRemy() {
+  function pauseRemy() {
     isPaused.value = true
-    const { pauseUiCommands } = await import('./useUiCommandExecutor')
     pauseUiCommands()
   }
 
-  async function resumeRemy() {
+  function resumeRemy() {
     isPaused.value = false
-    const { resumeUiCommands } = await import('./useUiCommandExecutor')
     resumeUiCommands()
   }
 
