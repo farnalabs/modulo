@@ -464,6 +464,113 @@ class FeatureFlagRegistry:
         community_rank = tier_rank.get("community", 0)
         return [f for f in self._flags if tier_rank.get(f.tier, 0) > community_rank and not f.currently_active]
 
+    async def resolve_flag(
+        self,
+        flag_name: str,
+        org_id: uuid.UUID | None = None,
+        team_id: uuid.UUID | None = None,
+        user_id: uuid.UUID | None = None,
+    ) -> bool:
+        """Resolve a flag with org/team/user overrides in resolution order:
+
+        user > team > org > system default.
+        """
+        sys_override = self._overrides.get(flag_name)
+        if sys_override is not None:
+            return sys_override
+
+        if user_id is not None:
+            user_val = await self._get_user_override(flag_name, user_id)
+            if user_val is not None:
+                return user_val
+
+        if team_id is not None:
+            team_val = await self._get_team_override(flag_name, team_id)
+            if team_val is not None:
+                return team_val
+
+        if org_id is not None:
+            org_val = await self._get_org_override(flag_name, org_id)
+            if org_val is not None:
+                return org_val
+
+        for flag in self._flags:
+            if flag.name == flag_name:
+                return flag.currently_active
+        return False
+
+    async def _get_org_override(self, flag_name: str, org_id: uuid.UUID) -> bool | None:
+        """Check org.settings_json.feature_overrides for this flag."""
+        try:
+            from sqlalchemy.ext.asyncio import AsyncSession
+
+            from modulo.api.dependencies import get_or_create_engine
+            from modulo.db.crud.organisation import get_organisation
+            from modulo.settings import get_settings
+
+            engine = get_or_create_engine(get_settings())
+            async with AsyncSession(engine, autobegin=False) as session:
+                org = await get_organisation(session, org_id)
+                if org and org.settings_json:
+                    overrides = org.settings_json.get("feature_overrides", {})
+                    if flag_name in overrides:
+                        return bool(overrides[flag_name])
+        except Exception:
+            logger.exception("Failed to check org flag override")
+        return None
+
+    async def _get_team_override(self, flag_name: str, team_id: uuid.UUID) -> bool | None:
+        """Check team.settings.feature_overrides for this flag."""
+        try:
+            from sqlalchemy.ext.asyncio import AsyncSession
+
+            from modulo.api.dependencies import get_or_create_engine
+            from modulo.db.crud.team import get_team
+            from modulo.settings import get_settings
+
+            engine = get_or_create_engine(get_settings())
+            async with AsyncSession(engine, autobegin=False) as session:
+                team = await get_team(session, team_id)
+                if team and team.settings:
+                    overrides = team.settings.get("feature_overrides", {})
+                    if flag_name in overrides:
+                        return bool(overrides[flag_name])
+        except Exception:
+            logger.exception("Failed to check team flag override")
+        return None
+
+    async def _get_user_override(self, flag_name: str, user_id: uuid.UUID) -> bool | None:
+        """Check account.preferences.feature_overrides for this flag."""
+        try:
+            from sqlalchemy.ext.asyncio import AsyncSession
+
+            from modulo.api.dependencies import get_or_create_engine
+            from modulo.db.crud.account import get_account_by_id
+            from modulo.settings import get_settings
+
+            engine = get_or_create_engine(get_settings())
+            async with AsyncSession(engine, autobegin=False) as session:
+                account = await get_account_by_id(session, user_id)
+                if account and account.preferences:
+                    overrides = account.preferences.get("feature_overrides", {})
+                    if flag_name in overrides:
+                        return bool(overrides[flag_name])
+        except Exception:
+            logger.exception("Failed to check user flag override")
+        return None
+
+
+def get_registry() -> FeatureFlagRegistry:
+    """Return a process-global default FeatureFlagRegistry.
+
+    The registry uses the hardcoded ``_KNOWN_FLAGS`` list with a ``"community"``
+    tier.  Granular overrides (org/team/user) are resolved from the DB at query
+    time via ``resolve_flag()``.
+    """
+    if not hasattr(get_registry, "_instance"):
+        get_registry._instance = FeatureFlagRegistry(current_tier="community")
+    return get_registry._instance
+
 
 async def get_plan_for_org(
     session: Any,

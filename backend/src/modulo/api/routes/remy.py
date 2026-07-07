@@ -52,7 +52,7 @@ from modulo.api.ui_tools import (
 )
 from modulo.auth.dependencies import get_current_user
 from modulo.auth.jwt import AuthenticatedPrincipal
-from modulo.core.feature_flags import resolve_plan_context
+from modulo.core.feature_flags import get_registry
 from modulo.core.remy.config_service import RemyConfig, RemyConfigService
 from modulo.core.remy.skill_loader import SkillLoader
 from modulo.db.models.model_backend import ModelBackend
@@ -337,15 +337,20 @@ async def _reconstruct_messages(session: AsyncSession, session_id: uuid.UUID) ->
     return [_message_to_langchain(m) for m in db_messages]
 
 
-async def _is_ui_driving_enabled(org_id: uuid.UUID, db_session: AsyncSession) -> bool:
+async def _is_ui_driving_enabled(
+    org_id: uuid.UUID,
+    db_session: AsyncSession,
+    user_id: uuid.UUID | None = None,
+) -> bool:
     """Check if the remy_ui_driving feature flag is enabled for the given org.
 
-    Uses FeatureFlagRegistry backed by the DB tier catalog. Falls back to
-    the hardcoded _KNOWN_FLAGS list when DB data is unavailable.
+    Uses FeatureFlagRegistry backed by the DB tier catalog, with granular
+    override resolution (user > team > org > system default).
+    Falls back to the hardcoded _KNOWN_FLAGS list when DB data is unavailable.
     """
     try:
-        plan = await resolve_plan_context(get_settings(), db_session)
-        return plan.feature_enabled("remy_ui_driving")
+        registry = get_registry()
+        return await registry.resolve_flag("remy_ui_driving", org_id=org_id, user_id=user_id)
     except Exception:
         logger.warning("Failed to resolve plan context for ui_driving check, defaulting to True", exc_info=True)
         return True
