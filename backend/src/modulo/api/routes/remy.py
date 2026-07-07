@@ -36,7 +36,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from httpx import AsyncClient
 from langchain_core.messages import AIMessage, AIMessageChunk, BaseMessage, HumanMessage, SystemMessage, ToolMessage
 from pydantic import BaseModel, Field
-from sqlalchemy import func, select
+from sqlalchemy import func, select, update
 from sqlalchemy.exc import ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 from starlette.responses import StreamingResponse
@@ -1137,7 +1137,16 @@ async def stream_chat(
                                     name_seed = first_msg[:30].strip()
                                     auto_name = f"{name_seed}... ({msg_count} msgs)" if first_msg else None
                                 if auto_name:
-                                    chat_session.name = auto_name
+                                    try:
+                                        async with db_session.begin():
+                                            stmt = (
+                                                update(ChatSession)
+                                                .where(ChatSession.id == session_id)
+                                                .values(name=auto_name)
+                                            )
+                                            await db_session.execute(stmt)
+                                    except Exception:
+                                        logger.exception("remy.auto_naming_failed")
                         break
 
                     # Separate UI vs MCP tool calls

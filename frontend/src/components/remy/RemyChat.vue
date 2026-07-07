@@ -567,13 +567,6 @@ async function handleSend() {
   }
 }
 
-function onInputKeydown(e: KeyboardEvent) {
-  if (e.key === 'Enter' && !e.shiftKey && !e.ctrlKey && !e.metaKey) {
-    e.preventDefault()
-    handleSend()
-  }
-}
-
 const inputRef = ref<HTMLTextAreaElement | null>(null)
 
 function resizeInput() {
