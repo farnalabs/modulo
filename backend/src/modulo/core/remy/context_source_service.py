@@ -128,39 +128,31 @@ class RemyContextSourceService:
             raise ValueError("source_key must not be empty")
         if source_mode not in _VALID_SOURCE_MODES:
             raise ValueError(f"Invalid source_mode '{source_mode}'. Must be one of {sorted(_VALID_SOURCE_MODES)}")
-        try:
-            if user_id is None:
-                stmt = select(RemyContextSource).where(
-                    RemyContextSource.organisation_id == org_id,
-                    RemyContextSource.source_key == source_key,
-                    RemyContextSource.user_id.is_(None),
-                ).with_for_update()
-            else:
-                stmt = select(RemyContextSource).where(
-                    RemyContextSource.organisation_id == org_id,
-                    RemyContextSource.source_key == source_key,
-                    RemyContextSource.user_id == user_id,
-                ).with_for_update()
-            result = await self._session.execute(stmt)
-            existing = result.scalar_one_or_none()
-            if existing:
-                existing.source_mode = source_mode
-            else:
-                self._session.add(RemyContextSource(
-                    id=uuid.uuid4(),
-                    organisation_id=org_id,
-                    user_id=user_id,
-                    source_key=source_key,
-                    source_mode=source_mode,
-                ))
-            await self._session.commit()
-        except SQLAlchemyError:
-            await self._session.rollback()
-            logger.exception(
-                "Failed to upsert context source for org %s, key %s, user %s",
-                org_id, source_key, user_id,
-            )
-            raise
+        if user_id is None:
+            stmt = select(RemyContextSource).where(
+                RemyContextSource.organisation_id == org_id,
+                RemyContextSource.source_key == source_key,
+                RemyContextSource.user_id.is_(None),
+            ).with_for_update()
+        else:
+            stmt = select(RemyContextSource).where(
+                RemyContextSource.organisation_id == org_id,
+                RemyContextSource.source_key == source_key,
+                RemyContextSource.user_id == user_id,
+            ).with_for_update()
+        result = await self._session.execute(stmt)
+        existing = result.scalar_one_or_none()
+        if existing:
+            existing.source_mode = source_mode
+        else:
+            self._session.add(RemyContextSource(
+                id=uuid.uuid4(),
+                organisation_id=org_id,
+                user_id=user_id,
+                source_key=source_key,
+                source_mode=source_mode,
+            ))
+        await self._session.flush()
 
     async def set_user_override(
         self, org_id: uuid.UUID, user_id: uuid.UUID, source_key: str, source_mode: str
@@ -173,14 +165,9 @@ class RemyContextSourceService:
         await self._upsert_context_source(org_id, source_key, source_mode, user_id=None)
 
     async def reset_user_overrides(self, org_id: uuid.UUID, user_id: uuid.UUID) -> None:
-        try:
-            stmt = sa_delete(RemyContextSource).where(
-                RemyContextSource.organisation_id == org_id,
-                RemyContextSource.user_id == user_id,
-            )
-            await self._session.execute(stmt)
-            await self._session.commit()
-        except SQLAlchemyError:
-            await self._session.rollback()
-            logger.exception("Failed to reset overrides for org %s, user %s", org_id, user_id)
-            raise
+        stmt = sa_delete(RemyContextSource).where(
+            RemyContextSource.organisation_id == org_id,
+            RemyContextSource.user_id == user_id,
+        )
+        await self._session.execute(stmt)
+        await self._session.flush()
