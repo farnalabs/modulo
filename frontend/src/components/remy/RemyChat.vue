@@ -489,9 +489,7 @@ function renderMarkdown(text: string): string {
   background-color: hsl(var(--background));
   border: 1px solid hsl(var(--input));
   color: hsl(var(--foreground));
-  overflow-y: auto;
   min-height: 38px;
-  max-height: 200px;
   line-height: 1.4;
 }
 .remy-input:focus {
