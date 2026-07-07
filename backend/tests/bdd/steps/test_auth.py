@@ -301,7 +301,7 @@ def step_create_api_key(
                 org_id=ORG_ID,
                 name=name,
                 role=role,
-                created_by=USER_ID,
+                account_id=USER_ID,
             )
         )
         ctx["api_key_name"] = name

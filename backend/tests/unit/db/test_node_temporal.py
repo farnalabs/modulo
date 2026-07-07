@@ -13,7 +13,7 @@ class TestNodeTemporalFields:
             organisation_id=uuid.uuid4(),
             pipeline_id=uuid.uuid4(),
             name="test",
-            created_by=uuid.uuid4(),
+            account_id=uuid.uuid4(),
         )
         assert node.timeout_seconds is None
 
@@ -22,7 +22,7 @@ class TestNodeTemporalFields:
             organisation_id=uuid.uuid4(),
             pipeline_id=uuid.uuid4(),
             name="test",
-            created_by=uuid.uuid4(),
+            account_id=uuid.uuid4(),
         )
         assert node.retry_count is None
 
@@ -31,7 +31,7 @@ class TestNodeTemporalFields:
             organisation_id=uuid.uuid4(),
             pipeline_id=uuid.uuid4(),
             name="test",
-            created_by=uuid.uuid4(),
+            account_id=uuid.uuid4(),
         )
         assert node.retry_delay_seconds is None
 
@@ -40,7 +40,7 @@ class TestNodeTemporalFields:
             organisation_id=uuid.uuid4(),
             pipeline_id=uuid.uuid4(),
             name="test",
-            created_by=uuid.uuid4(),
+            account_id=uuid.uuid4(),
             timeout_seconds=60,
             retry_count=3,
             retry_delay_seconds=10,
@@ -54,7 +54,7 @@ class TestNodeTemporalFields:
             organisation_id=uuid.uuid4(),
             pipeline_id=uuid.uuid4(),
             name="test",
-            created_by=uuid.uuid4(),
+            account_id=uuid.uuid4(),
             timeout_seconds=120,
         )
         assert node.timeout_seconds == 120
@@ -66,7 +66,7 @@ class TestNodeTemporalFields:
             organisation_id=uuid.uuid4(),
             pipeline_id=uuid.uuid4(),
             name="test",
-            created_by=uuid.uuid4(),
+            account_id=uuid.uuid4(),
             retry_count=0,
         )
         assert node.retry_count == 0
@@ -76,7 +76,7 @@ class TestNodeTemporalFields:
             organisation_id=uuid.uuid4(),
             pipeline_id=uuid.uuid4(),
             name="test",
-            created_by=uuid.uuid4(),
+            account_id=uuid.uuid4(),
             retry_delay_seconds=0,
         )
         assert node.retry_delay_seconds == 0
