@@ -138,6 +138,9 @@ async def _collect_org_data(
     elif users_only:
         tables_to_fetch = [(n, m) for n, m in tables_to_fetch if n == "accounts"]
 
+    # TODO: OOM risk — loads ALL rows into memory at once.
+    # For orgs with 500+ rows in any table, this will exhaust available memory.
+    # migrate_org.py uses paginated queries (PAGE_SIZE=500) as a safer pattern.
     for name, model_cls in tqdm(tables_to_fetch, desc="Exporting tables", unit="table"):
         query = select(model_cls)
         if hasattr(model_cls, "organisation_id"):
@@ -199,7 +202,7 @@ def _write_jsonl(bundle: dict[str, Any], path: Path) -> dict[str, str]:
 
 
 async def _read_jsonl(path: Path) -> tuple[dict[str, Any], list[dict[str, Any]]]:
-    if not os.path.exists(str(path)):  # noqa: ASYNC240
+    if not path.exists():
         raise click.ClickException(f"Input file not found: {path}")
     meta: dict[str, Any] = {}
     records: list[dict[str, Any]] = []
@@ -315,7 +318,7 @@ async def _import_org_data(
                         counts["created"] += 1
 
             except Exception as exc:
-                _log.warning("Error importing %s row %s: %s", table_name, row_id or "?", exc)
+                _log.exception("Error importing %s row %s: %s", table_name, row_id or "?", exc)
                 counts["errors"] += 1
 
         try:
@@ -434,11 +437,16 @@ async def _async_export_org(
     pipelines_only: bool,
     users_only: bool,
 ) -> None:
+    # TODO: no timeout on DB operations — a slow or hung database will block
+    # indefinitely. Consider wrapping the session context with asyncio.wait_for()
+    # or adding a statement_timeout at the connection level.
+    export_completed = False
     try:
         async with AsyncSessionLocal() as session:
             await _verify_admin_access(session, org_id, ctx.obj["admin_user_id"])
             bundle = await _collect_org_data(session, org_id, pipelines_only=pipelines_only, users_only=users_only)
             hashes = _write_jsonl(bundle, output)
+            export_completed = True
             record_count = sum(len(v) for k, v in bundle.items() if isinstance(v, list))
             click.echo(f"Exported {record_count} records to {output}")
             click.echo(f"Export hash: {hashes['__export__']}")
@@ -446,6 +454,9 @@ async def _async_export_org(
         raise
     except Exception as exc:
         raise click.ClickException(f"Export failed: {exc}") from exc
+    finally:
+        if not export_completed and output.exists():
+            output.unlink(missing_ok=True)
 
 
 @cli.command()
