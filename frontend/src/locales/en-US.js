@@ -1004,6 +1004,24 @@ export default {
       "configure_external_error_tracking_and_alerting_integrations": "Configure external error tracking and alerting integrations",
       "configuration_saved": "Configuration saved."
     },
+    "SettingsEmailView": {
+      "email_settings": "Email Settings",
+      "configure_smtp_provider_for_transactional_emails": "Configure your SMTP email provider for sending transactional emails (password resets, alert notifications, etc.).",
+      "smtp_host": "SMTP Host",
+      "smtp_host_placeholder": "smtp.example.com",
+      "smtp_port": "SMTP Port",
+      "smtp_username": "SMTP Username",
+      "smtp_username_placeholder": "username",
+      "smtp_password": "SMTP Password",
+      "smtp_password_placeholder": "your-smtp-password",
+      "email_from": "From Address",
+      "email_from_placeholder": "noreply at example.com",
+      "save": "Save",
+      "saving": "Saving...",
+      "test_email": "Send Test Email",
+      "testing": "Sending...",
+      "email_config_not_available": "Email configuration is not available on your current plan."
+    },
     "SettingsMonitorConfigView": {
       "feature_locked": "Monitoring configuration is not available on your current plan.",
       "browser_monitoring": "Browser Monitoring",
@@ -1384,6 +1402,7 @@ export default {
       "item_rate_limits": "Rate Limits",
       "item_hitl_review": "HITL Review",
       "item_observability": "Observability",
+      "item_email_settings": "Email",
       "item_error_forwarders": "Error Forwarders",
       "item_browser_monitoring": "Browser Monitoring",
       "item_users": "Users",
