@@ -73,6 +73,10 @@ disclosure; In-Dev items are hidden from the UI entirely. See ADR 010.
 - [x] The `create_connector_endpoint` has a separate `ProgrammingError` catch for the DB insert, distinct from the GitHub scope verification which raises 422
 - [x] `list_library_primitives_endpoint` has nested `try/except` blocks: the outer block catches `HTTPException` (re-raises) and generic `Exception` (500), while inner blocks catch `ProgrammingError` (501) and `model_validate` failures (500 with schema-sync message)
 - [x] `model_backends.py` CRUD `list_model_backends` wraps the `total_query` in `try/except ProgrammingError` returning an empty `PageResult` (graceful degradation when table doesn't exist yet)
+- [x] `connector_instance.py` CRUD `list_connector_instances` wraps BOTH `total_query` AND `items_stmt` in `try/except ProgrammingError` returning empty PageResult (graceful degradation when table doesn't exist yet)
+- [x] `model_backend.py` CRUD `list_model_backends` wraps BOTH `total_query` AND `items_stmt` in `try/except ProgrammingError` returning empty PageResult (graceful degradation when table doesn't exist yet)
+- [x] `connectors.py` all 5 routes catch `except HTTPException` (re-raise) and `except Exception` returning 500 with structured logging (consistency with `model_backends.py` pattern)
+- [x] `model_backends.py` all 5 routes catch `except HTTPException` (re-raise) and `except Exception` returning 500 with structured logging
 - [ ] `library_primitive.py` CRUD `list_library_primitives` catches `SQLAlchemyError` on both count and items queries but does NOT catch `ProgrammingError` separately — the route-level catch handles it, but with less specific messaging
 
 ### Edge Cases
@@ -82,6 +86,18 @@ disclosure; In-Dev items are hidden from the UI entirely. See ADR 010.
 - [x] `ConnectorResponse.tier` is typed as plain `str` (not `Literal`) — the Pydantic model accepts any string value from the DB, so an invalid DB value (e.g. from a direct SQL insert) would serialize but fail to re-parse if sent back to a Create/Update endpoint
 - [ ] `copy_to_adapt` in `library_primitive.py` CRUD does NOT propagate `tier` — copied primitives lose their tier classification and get `native` (server_default). This means a `preview` primitive copied via copy-to-adapt becomes `native` in the target org with no indication of changed status.
 - [ ] No test exercises the `excluded_tiers` parameter of `list_connector_instances`, `list_model_backends`, or `list_library_primitives` to verify that `in_dev` items are actually excluded from queries
+
+## QA History
+
+### 2026-07-09 — Cross-cutting QA (improve-architecture index 288)
+
+**Fixed (CRITICAL):** Added `except HTTPException: raise` + `except Exception → 500` with `logger.exception` guards to all 5 connector routes in `connectors.py` (list, create, get, update, delete). Previously only caught `ProgrammingError→501` and `SQLAlchemyError→503`, allowing Python-level errors (TypeError, KeyError, ValueError from model_validate/dict processing) to propagate as opaque 500 to CatchAllMiddleware. `model_backends.py` already had these guards — `connectors.py` was inconsistent.
+
+**Fixed (MAJOR):** Wrapped `items_stmt` in `try/except ProgrammingError` in both `connector_instance.py` and `model_backend.py` CRUD `list_*` functions. Previously only `total_query` had the guard — a ProgrammingError on the items query would propagate unhandled.
+
+**Fixed (MAJOR):** Replaced `String(err)` / `e instanceof Error ? e.message : String(e)` with `formatApiError(err)` in all 3 error handlers (create, update, delete) in `AdminConnectorsView.vue` frontend. API errors from openapi-fetch are objects, not strings — bare `String(err)` produced `[object Object]` on API failures.
+
+**Remaining gaps unchanged:** No API override for in-dev visibility, no tier promotion workflow, copy_to_adapt doesn't propagate tier, no BDD coverage, no migration rollback test, ConnectorResponse.tier typed as str.
 
 ## Known Gaps
 
