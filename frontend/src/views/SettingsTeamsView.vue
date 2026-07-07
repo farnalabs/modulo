@@ -171,11 +171,10 @@
                 <button
                   class="rounded-lg border border-input bg-background px-4 py-2 text-sm font-medium hover:bg-accent"
                   data-testid="settings-teams-delete-cancel"
-                  @click="deleteConfirmTeamId = null"
-                >
-                  Cancel
-                </button>
-              </div>
+                @click="deleteConfirmTeamId = null; deleteError = null"
+              >
+                Cancel
+              </button>
               <div v-if="deleteError" class="mt-2 text-sm text-destructive">{{ deleteError }}</div>
             </div>
 
@@ -571,16 +570,15 @@ async function addMember(teamId: string) {
 async function changeMemberRole(teamId: string, member: MembershipResponse) {
   memberActionError.value[teamId] = ''
   try {
-    const { error: err } = await api.POST('/api/v1/teams/{team_id}/members', {
-      params: { path: { team_id: teamId } },
-      body: {
-        user_id: member.user_id,
-        role: member.role,
-      },
+    const { data, error: err } = await api.PATCH('/api/v1/teams/{team_id}/members/{membership_id}', {
+      params: { path: { team_id: teamId, membership_id: member.id } },
+      body: { role: member.role },
     })
     if (err) {
       memberActionError.value[teamId] = `Role change failed: ${formatApiError(err)}`
       await loadMembers(teamId)
+    } else if (data) {
+      membersByTeam.value[teamId] = membersByTeam.value[teamId].map(m => m.id === data.id ? data : m)
     }
   } catch (e: unknown) {
     memberActionError.value[teamId] = `Role change failed: ${formatApiError(e)}`
