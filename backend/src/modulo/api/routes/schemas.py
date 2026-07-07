@@ -28,6 +28,7 @@ from modulo.core.schema_registry import (
     apply_migration,
     create_migration,
 )
+from modulo.core.audit_logger import append_audit_event
 from modulo.core.secrets_backend import create_secrets_backend
 from modulo.db.crud.connector_instance import get_connector_instance
 from modulo.db.crud.model_backend import list_model_backends
@@ -626,7 +627,6 @@ async def infer_schema_endpoint(
     The returned *definition_json* is a draft for the user to review and
     save via the standard POST /api/v1/schemas endpoint.
     """
-    from modulo.core.audit_logger import append_audit_event
 
     try:
         async with session.begin():
@@ -685,7 +685,7 @@ async def infer_schema_endpoint(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to initialize secrets backend for schema inference.",
-        )
+        ) from None
 
     async with ConnectorHub(secrets_backend=secrets_backend) as ch:
         try:
@@ -695,7 +695,7 @@ async def infer_schema_endpoint(
             raise HTTPException(
                 status_code=status.HTTP_502_BAD_GATEWAY,
                 detail="Failed to initialise connector for sampling.",
-            )
+            ) from None
         try:
             async with asyncio.timeout(30.0):
                 records = await ch.sample(
@@ -714,7 +714,7 @@ async def infer_schema_endpoint(
             raise HTTPException(
                 status_code=status.HTTP_502_BAD_GATEWAY,
                 detail="Failed to sample connector data.",
-            )
+            ) from None
 
     async with ModelBackendHub() as mh:
         try:
@@ -724,7 +724,7 @@ async def infer_schema_endpoint(
             raise HTTPException(
                 status_code=status.HTTP_502_BAD_GATEWAY,
                 detail="Failed to initialise model backend for inference.",
-            )
+            ) from None
         if not mh.backend_ids:
             raise HTTPException(
                 status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -738,7 +738,7 @@ async def infer_schema_endpoint(
             raise HTTPException(
                 status_code=status.HTTP_502_BAD_GATEWAY,
                 detail="Selected model backend is unavailable.",
-            )
+            ) from None
 
         service = SchemaInferenceService(backend)
         try:
@@ -845,7 +845,7 @@ async def generate_schema_endpoint(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to initialize secrets backend for schema generation.",
-        )
+        ) from None
 
     async with ModelBackendHub() as mh:
         try:
@@ -855,7 +855,7 @@ async def generate_schema_endpoint(
             raise HTTPException(
                 status_code=status.HTTP_502_BAD_GATEWAY,
                 detail="Failed to initialise model backend for generation.",
-            )
+            ) from None
         if not mh.backend_ids:
             raise HTTPException(
                 status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -869,7 +869,7 @@ async def generate_schema_endpoint(
             raise HTTPException(
                 status_code=status.HTTP_502_BAD_GATEWAY,
                 detail="Selected model backend is unavailable.",
-            )
+            ) from None
 
         service = SchemaGenerationService(backend)
         try:
