@@ -166,6 +166,9 @@ Service-layer internal functions (`notify_importers_of_update`) also catch Progr
 
 - [x] All ~12 library API routes catch ProgrammingError → 501
 - [x] All ~6 contribution API routes catch ProgrammingError → 501
+- [x] All 12 library API routes catch SQLAlchemyError → 503 (list, get, create, update, delete, adapt, export, analyse/confirm import, 4 rating routes, community_contribute, admin_publish)
+- [x] All 6 contribution API routes catch SQLAlchemyError → 503 (create, submit_for_review, publish, submit_version, list_versions, list_contributions)
+- [x] All 6 contribution API routes have outer `except Exception → 500` guard with structured detail
 - [x] notify_importers_of_update — ProgrammingError caught, logged as warning, returns gracefully
 - [x] Non-existent primitive returns 404 (get, update, delete, adapt)
 - [x] Invalid Pydantic input returns 422 (missing fields, invalid types)
@@ -173,6 +176,7 @@ Service-layer internal functions (`notify_importers_of_update`) also catch Progr
 - [x] Non-.zip upload returns 400
 - [x] Community primitive via MCP returns 403
 - [x] Contribution invalid status transition returns 409
+- [x] Create primitive duplicate slug returns 409 (app-level check + IntegrityError safety net)
 - [ ] Abuse report submit for non-existent primitive returns 404
 
 ## Edge Cases
@@ -206,3 +210,4 @@ Service-layer internal functions (`notify_importers_of_update`) also catch Progr
 
 - 2026-07-04: Cross-cutting QA (index 139): Fixed CRITICAL bugs — removed 4 sys.stderr debug calls, added ProgrammingError→501 catch + 404 check to create_pipeline_from_template_endpoint, fixed 2 keyword-arg mismatches in rating calls (user_id→account_id, reporter_user_id→reporter_account_id) that would crash with TypeError at runtime. Added ProgrammingError→501 catch to notify_importers_of_update. Created test_library_programming_error.py (18 tests covering all 12 library routes + 6 contribution routes). Marked ~100 behaviour checkboxes [ ]→[x] across all sections. Added Error Handling section (26 checkboxes). Added Edge Cases section (10 checkboxes). Updated frontmatter: 7 unit-test refs (was empty), 6 code paths (was 1), 6 BDD refs (was 3), 6 depends-on refs (was empty). Status: partial (8 known gaps remain).
 - 2026-07-05: Prodmap pipelines QA: Removed resolved Known Gap entry for `create-pipeline-from-template` ProgrammingError coverage (18 tests exist). Fixed "degredation" typo. Fixed depends-on frontmatter.
+- 2026-07-09: Cross-cutting QA (index 291): Fixed CRITICAL — added missing `except SQLAlchemyError → 503` catches to 12 DB-accessing route handlers: 4 rating routes (list, aggregate, submit, abuse), community_contribute, admin_publish, and all 6 contribution routes (create, submit_for_review, publish, submit_version, list_versions, list_contributions) — connection/deadlock failures previously propagated as raw 500 on all these routes. Fixed CRITICAL — added outer `except HTTPException: raise / except Exception → 500` with `_log.exception` and structured detail to all 6 contribution routes. Fixed CRITICAL — 9 hardcoded English strings in LibraryView.vue (title, header CTA, auto-update label, 3× Create Pipeline, 3× View Details, community badge) wrapped in `$t()`. Fixed CRITICAL — 2 error handlers using `e instanceof Error ? e.message : ...` replaced with `formatApiError(e)` to prevent `[object Object]` on API errors. Fixed MAJOR — added `IntegrityError → 409` catch to create_library_primitive_endpoint (TOCTOU race safety net for duplicate slug on concurrent creates). Updated product map: added SQLAlchemyError→503, Exception→500, IntegrityError→409, and Frontend i18n/formatApiError checkboxes. All tests pass. Merged to main.
