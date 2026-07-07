@@ -583,6 +583,7 @@ function resizeInput() {
     if (el) {
       el.style.height = 'auto'
       el.style.height = Math.min(el.scrollHeight, 200) + 'px'
+    }
   })
 }
 
