@@ -651,8 +651,6 @@ class PipelineExecutor:
                 EvalDefinition.suite_id.isnot(None),
                 EvalDefinition.pass_threshold.isnot(None),
             )
-            .distinct(EvalDefinition.suite_id)
-            .order_by(EvalDefinition.suite_id)
         )
         result = await session.execute(stmt)
         suite_defs = result.scalars().all()

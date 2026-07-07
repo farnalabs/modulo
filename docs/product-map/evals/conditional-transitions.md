@@ -15,6 +15,8 @@ code:
 unit-tests:
   - backend/tests/unit/core/test_eval_suite.py
   - backend/tests/unit/api/test_evals_endpoint.py
+  - backend/tests/unit/pipeline_engine/test_conditional_transitions.py
+  - backend/tests/unit/pipeline_engine/test_conditional_transitions_audit_events.py
 depends-on: [feat-evals-eval-engine]
 status: partial
 ---
@@ -102,6 +104,8 @@ Two conditional routing mechanisms within the LangGraph pipeline: (A) **conditio
 - [ ] Empty string `""` as `condition` on `hitl_gate_config` is treated as a JMESPath expression rather than "no condition". `jmespath.compile("")` does not raise, and `.search(state)` returns `None` which is falsy, causing the gate to be skipped. The correct behaviour should treat empty string the same as `null`/absent — gate proceeds normally.
 - [ ] Block failure audit event: when `EvalBlockedError` is raised during eval-before-interrupt (node_runner.py → executor.py:808-810), no audit event is written. The `_stream_graph` method publishes a broker event but does not call `append_audit_event`. The PRD §8.17 states block failures should be recorded as AuditEvents.
 - [ ] No timeout on eval evaluation: the `EvalEngine.evaluate()` method has no configurable timeout for `llm_judge` evals. If the LLM call hangs, the entire gate node hangs indefinitely. The node-level `timeout` parameter on the gate node (`make_hitl_gate_fn`) is the configured timeout field but it's not plumbed through to eval evaluation.
+- [ ] **RESOLVED** (2026-07-09): `_check_eval_suites()` used PostgreSQL-specific `DISTINCT ON (suite_id)` via `.distinct(EvalDefinition.suite_id)` which crashes on SQLite/MariaDB with `CompileError`. Removed the redundant `.distinct()` call — Python-level `set()` dedup at line 711 already provides correct deduplication.
+- [ ] **RESOLVED** (2026-07-09): `_evaluate_eval_condition()` silently returned `False` for unknown operators (e.g. "gtt" instead of "gt"), causing the gate to be skipped without logging. Added `_log.warning()` with operator, score, and threshold context so misconfigured operators are visible in logs.
 
 ## Error Handling
 
@@ -130,3 +134,4 @@ An empty string `""` for `condition` compiles as a valid JMESPath expression. `j
 
 - 2026-07-03: Cross-cutting QA (index 116). Verified all behaviour checkboxes against code — marked 47/48 implemented checkboxes as `[x]`. Found `replace_pipeline_graph_endpoint` missing ProgrammingError catch. Found empty-string condition edge case in node_runner.py. Confirmed BDD step definitions exist at `test_conditional_hitl.py` and wire all 8 scenarios. Confirmed eval-reference condition mechanism (node_runner.py:248-279) is implemented since product map was written. Found no `audit_event` recording for block failures. Found no timeout mechanism on eval evaluation. Status: partial (6 known gaps remain).
 - 2026-07-06: Quick follow-up QA. Confirmed `replace_pipeline_graph_endpoint` ProgrammingError catch is now in place (pipelines.py:530) — marked gap #4 resolved. Verified all 395 lines of unit tests in `test_conditional_transitions.py` pass. Created website docs stub at `Website/modulo-website/src/docs/evals/conditional-transitions.md`. Status: partial (5 known gaps remain).
+- 2026-07-09 (improve-architecture index 292): Cross-cutting QA. Fixed CRITICAL — `_check_eval_suites()` PostgreSQL-specific `DISTINCT ON (suite_id)` via `.distinct(EvalDefinition.suite_id)` crashes on SQLite/MariaDB with `CompileError`. Removed redundant `.distinct()` — Python-level `set()` dedup already correct. Fixed MAJOR — `_evaluate_eval_condition()` silently returned `False` for unknown operators (gate skipped with no indication); added `_log.warning()` with operator/score/threshold context. Added 5 tests for eval condition operators (lt, gt, eq, neq, unknown). Added `test_conditional_transitions_audit_events.py` to unit-tests frontmatter. All tests pass. Status: partial.
