@@ -1329,6 +1329,7 @@ export default {
       "group_runs_evaluation": "Runs & Evaluation",
       "group_analysis": "Analysis",
       "group_schemas": "Schemas",
+      "group_evals": "Evals",
       "group_remy": "Remy",
       "group_settings": "Settings",
       "group_access_control": "Access Control",
