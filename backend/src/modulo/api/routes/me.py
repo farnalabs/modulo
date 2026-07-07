@@ -129,7 +129,7 @@ async def change_password(
             except HTTPException:
                 raise
             except Exception:
-                _log.warning("Failed to blacklist token family %s during password change", family.family_id)
+                _log.warning("Failed to blacklist previous token family during password change for account %s", current_user.account_id)
 
     return {"detail": "Password changed successfully"}
 
