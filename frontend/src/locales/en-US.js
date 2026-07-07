@@ -1111,21 +1111,6 @@ export default {
       "failed_to_delete_trigger": "Failed to delete trigger:",
       "failed_to_toggle_trigger": "Failed to toggle trigger:"
     },
-    "PipelineTemplateGallery": {
-      "cron_scheduled": "Cron / Scheduled",
-      "failed_to_create_pipeline_from_template": "Failed to create pipeline from template",
-      "no_templates_available": "No templates available",
-      "no_templates_match_your_search": "No templates match your search",
-      "manual_run_on_demand": "Manual (run on demand)",
-      "use_template": "Use Template",
-      "failed_to_load_templates": "Failed to load templates",
-      "selectedtemplatename_pipeline": "Pipeline",
-      "check_back_later_for_new_templates": "Check back later for new templates.",
-      "try_a_different_search_term_or_clear_the_filter": "Try a different search term or clear the filter.",
-      "search_templates": "Search templates...",
-      "initial_trigger": "Initial Trigger",
-      "target_ownership": "Target Ownership"
-    },
     "SettingsTriggerEventLogView": {
       "no_trigger_events_found": "No trigger events found",
       "all_results": "All results",
