@@ -589,91 +589,94 @@ class PipelineExecutor:
             final_status = "failed"
             error_code = type(exc).__name__
 
-        # Record audit events for block failures.
-        if final_status == "eval_failed" and error_code == "eval_blocked":
-            async with self._session_factory() as session, session.begin():
-                await set_rls_org(session, org_id)
-                try:
-                    await append_audit_event(
-                        session,
-                        org_id=org_id,
-                        event_type="eval.blocked",
-                        resource_type="run",
-                        resource_id=run_id,
-                        payload_json={"error_detail": error_detail},
-                    )
-                except Exception:
-                    _log.exception("audit.eval_blocked_failed", extra={"run_id": str(run_id)})
-
-        # If the run completed, check for eval suite thresholds.
-        if final_status == "complete":
-            async with self._session_factory() as session, session.begin():
-                await set_rls_org(session, org_id)
-                try:
-                    await self._check_eval_suites(session, run_id, pipeline_id)
-                except EvalSuiteBlockedError as exc:
-                    final_status = "failed"
-                    error_code = "eval_suite_blocked"
-                    error_detail = str(exc)
-                    broker.publish("run_failed", {"error": "eval_suite_blocked", "detail": str(exc)})
-                    _log.warning(
-                        "eval.suite_blocked",
-                        extra={
-                            "run_id": str(run_id),
-                            "suite_id": exc.suite_id,
-                            "score": exc.score,
-                        },
-                    )
+        try:
+            # Record audit events for block failures.
+            if final_status == "eval_failed" and error_code == "eval_blocked":
+                async with self._session_factory() as session, session.begin():
+                    await set_rls_org(session, org_id)
                     try:
                         await append_audit_event(
                             session,
                             org_id=org_id,
-                            event_type="eval.suite_blocked",
+                            event_type="eval.blocked",
                             resource_type="run",
                             resource_id=run_id,
-                            payload_json={
-                                "error_detail": error_detail,
+                            payload_json={"error_detail": error_detail},
+                        )
+                    except Exception:
+                        _log.exception("audit.eval_blocked_failed", extra={"run_id": str(run_id)})
+
+            # If the run completed, check for eval suite thresholds.
+            if final_status == "complete":
+                async with self._session_factory() as session, session.begin():
+                    await set_rls_org(session, org_id)
+                    try:
+                        await self._check_eval_suites(session, run_id, pipeline_id)
+                    except EvalSuiteBlockedError as exc:
+                        final_status = "failed"
+                        error_code = "eval_suite_blocked"
+                        error_detail = str(exc)
+                        broker.publish("run_failed", {"error": "eval_suite_blocked", "detail": str(exc)})
+                        _log.warning(
+                            "eval.suite_blocked",
+                            extra={
+                                "run_id": str(run_id),
                                 "suite_id": exc.suite_id,
                                 "score": exc.score,
                             },
                         )
-                    except Exception:
-                        _log.exception("audit.eval_suite_blocked_failed", extra={"run_id": str(run_id)})
-
-            # Fire agent_signal triggers for each completed node.
-            if completed_node_outputs:
-                async with self._session_factory() as session, session.begin():
-                    await set_rls_org(session, org_id)
-                    for node_id, node_output in completed_node_outputs.items():
                         try:
-                            signal_results = await fire_agent_signal(
+                            await append_audit_event(
                                 session,
                                 org_id=org_id,
-                                source_run_id=run_id,
-                                source_pipeline_id=pipeline_id,
-                                completed_node_id=node_id,
-                                node_output=node_output,
-                            )
-                            for sr in signal_results:
-                                _log.info(
-                                    "agent_signal.%s trigger=%s run=%s",
-                                    sr["status"],
-                                    sr.get("trigger_id", "?"),
-                                    sr.get("run_id", "?"),
-                                )
-                        except Exception:
-                            _log.exception(
-                                "agent_signal.failed",
-                                extra={
-                                    "run_id": str(run_id),
-                                    "node_id": node_id,
+                                event_type="eval.suite_blocked",
+                                resource_type="run",
+                                resource_id=run_id,
+                                payload_json={
+                                    "error_detail": error_detail,
+                                    "suite_id": exc.suite_id,
+                                    "score": exc.score,
                                 },
                             )
+                        except Exception:
+                            _log.exception("audit.eval_suite_blocked_failed", extra={"run_id": str(run_id)})
 
-        # Close broker after all post-stream work (suite checks, signals).
-        set_cancellation_check(None)
-        if final_status != "awaiting_human":
-            get_registry().close(run_id)
+                # Fire agent_signal triggers for each completed node.
+                if completed_node_outputs:
+                    async with self._session_factory() as session, session.begin():
+                        await set_rls_org(session, org_id)
+                        for node_id, node_output in completed_node_outputs.items():
+                            try:
+                                signal_results = await fire_agent_signal(
+                                    session,
+                                    org_id=org_id,
+                                    source_run_id=run_id,
+                                    source_pipeline_id=pipeline_id,
+                                    completed_node_id=node_id,
+                                    node_output=node_output,
+                                )
+                                for sr in signal_results:
+                                    _log.info(
+                                        "agent_signal.%s trigger=%s run=%s",
+                                        sr["status"],
+                                        sr.get("trigger_id", "?"),
+                                        sr.get("run_id", "?"),
+                                    )
+                            except Exception:
+                                _log.exception(
+                                    "agent_signal.failed",
+                                    extra={
+                                        "run_id": str(run_id),
+                                        "node_id": node_id,
+                                    },
+                                )
+        except Exception:
+            _log.exception("pipeline.post_stream_error", extra={"run_id": str(run_id)})
+        finally:
+            # Close broker after all post-stream work (suite checks, signals).
+            set_cancellation_check(None)
+            if final_status != "awaiting_human":
+                get_registry().close(run_id)
 
         # Compute aggregate token/cost data from per-node usage.
         total_tokens, total_cost_usd_val, node_token_usage = self._compute_token_costs(
