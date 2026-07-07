@@ -218,7 +218,7 @@ async def scim_list_groups(
     count_q = select(func.count()).select_from(Team).where(*conditions)
     total = (await session.execute(count_q)).scalar() or 0
 
-    query = select(Team).where(*conditions).order_by(Team.created_at).offset(start_index - 1).limit(count)
+    query = select(Team).where(*conditions).order_by(Team.created_at).offset(max(0, start_index - 1)).limit(count)
     result = await session.execute(query)
     items = list(result.scalars().all())
     return items, total
