@@ -174,28 +174,45 @@ async def mark_step_completed(
     session: AsyncSession = Depends(get_db_session),
     principal: AuthenticatedPrincipal = Depends(get_current_user),
 ) -> MarkStepResponse:
-    valid_ids: set[str] = {str(s["id"]) for s in _ONBOARDING_STEPS}
-    if req.step_id not in valid_ids:
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
-            detail=(f"Invalid step_id '{req.step_id}'. Must be one of: {', '.join(sorted(valid_ids))}"),
+    try:
+        valid_ids: set[str] = {str(s["id"]) for s in _ONBOARDING_STEPS}
+        if req.step_id not in valid_ids:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+                detail=(f"Invalid step_id '{req.step_id}'. Must be one of: {', '.join(sorted(valid_ids))}"),
+            )
+
+        state = _load_onboarding_state()
+        if req.step_id not in state.completed_steps:
+            state.completed_steps.append(req.step_id)
+
+        all_completed = len(state.completed_steps) >= len(_ONBOARDING_STEPS)
+        if all_completed:
+            state.is_first_run = False
+
+        _save_onboarding_state(state)
+
+        return MarkStepResponse(
+            step_id=req.step_id,
+            completed=True,
+            completed_steps=state.completed_steps,
         )
-
-    state = _load_onboarding_state()
-    if req.step_id not in state.completed_steps:
-        state.completed_steps.append(req.step_id)
-
-    all_completed = len(state.completed_steps) >= len(_ONBOARDING_STEPS)
-    if all_completed:
-        state.is_first_run = False
-
-    _save_onboarding_state(state)
-
-    return MarkStepResponse(
-        step_id=req.step_id,
-        completed=True,
-        completed_steps=state.completed_steps,
-    )
+    except ProgrammingError:
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="Feature is not available. Run database migrations to enable it.",
+        )
+    except SQLAlchemyError:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Database error. Please try again.",
+        )
+    except Exception as e:
+        logger.exception("onboarding.mark_step_completed.unexpected_error")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="An unexpected error occurred",
+        ) from e
 
 
 @router.get("/step/{step_id}", response_model=OnboardingStepDataResponse)
@@ -204,54 +221,71 @@ async def get_step_data(
     session: AsyncSession = Depends(get_db_session),
     principal: AuthenticatedPrincipal = Depends(get_current_user),
 ) -> OnboardingStepDataResponse:
-    step = None
-    for s in _ONBOARDING_STEPS:
-        if s["id"] == step_id:
-            step = s
-            break
+    try:
+        step = None
+        for s in _ONBOARDING_STEPS:
+            if s["id"] == step_id:
+                step = s
+                break
 
-    if step is None:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Step '{step_id}' not found",
-        )
-
-    data = _STEP_DATA.get(step_id, {})
-
-    if step_id == "select_template":
-        try:
-            async with session.begin():
-                await set_rls_org(session, principal.organisation_id)
-                from modulo.db.models.library_primitive import LibraryPrimitive
-
-                templates_result = await session.execute(
-                    select(LibraryPrimitive)
-                    .where(
-                        LibraryPrimitive.organisation_id == principal.organisation_id,
-                        LibraryPrimitive.primitive_type == "pipeline_template",
-                    )
-                    .limit(3)
-                )
-                templates = templates_result.scalars().all()
-                data["templates"] = [
-                {
-                    "id": str(t.id),
-                    "name": t.name,
-                    "description": t.description,
-                    "category": t.category,
-                    "tags": t.tags or [],
-                }
-                for t in templates
-            ]
-        except ProgrammingError:
+        if step is None:
             raise HTTPException(
-                status_code=status.HTTP_501_NOT_IMPLEMENTED,
-                detail="Feature is not available. Run database migrations to enable it.",
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Step '{step_id}' not found",
             )
 
-    return OnboardingStepDataResponse(
-        step_id=step["id"],
-        label=step["label"],
-        order=step["order"],
-        data=data,
-    )
+        data = _STEP_DATA.get(step_id, {})
+
+        if step_id == "select_template":
+            try:
+                async with session.begin():
+                    await set_rls_org(session, principal.organisation_id)
+                    from modulo.db.models.library_primitive import LibraryPrimitive
+
+                    templates_result = await session.execute(
+                        select(LibraryPrimitive)
+                        .where(
+                            LibraryPrimitive.organisation_id == principal.organisation_id,
+                            LibraryPrimitive.primitive_type == "pipeline_template",
+                        )
+                        .limit(3)
+                    )
+                    templates = templates_result.scalars().all()
+                    data["templates"] = [
+                    {
+                        "id": str(t.id),
+                        "name": t.name,
+                        "description": t.description,
+                        "category": t.category,
+                        "tags": t.tags or [],
+                    }
+                    for t in templates
+                ]
+            except ProgrammingError:
+                raise HTTPException(
+                    status_code=status.HTTP_501_NOT_IMPLEMENTED,
+                    detail="Feature is not available. Run database migrations to enable it.",
+                )
+
+        return OnboardingStepDataResponse(
+            step_id=step["id"],
+            label=step["label"],
+            order=step["order"],
+            data=data,
+        )
+    except ProgrammingError:
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="Feature is not available. Run database migrations to enable it.",
+        )
+    except SQLAlchemyError:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Database error. Please try again.",
+        )
+    except Exception as e:
+        logger.exception("onboarding.get_step_data.unexpected_error")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="An unexpected error occurred",
+        ) from e

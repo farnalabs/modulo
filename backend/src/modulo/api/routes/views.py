@@ -6,7 +6,7 @@ from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, Field
-from sqlalchemy.exc import ProgrammingError
+from sqlalchemy.exc import ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.api.dependencies import get_db_session
@@ -91,6 +91,18 @@ async def list_views_endpoint(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="The saved_views feature is not available. Run database migrations to enable it.",
         ) from None
+    except SQLAlchemyError:
+        logger.exception("views.list.sqlalchemy_error")
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Database operation failed. Please try again later.",
+        ) from None
+    except Exception as e:
+        logger.exception("views.list.unexpected_error")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="An unexpected error occurred",
+        ) from e
     return ViewListResponse(
         items=[ViewResponse.model_validate(v) for v in result.items],
         total=result.total,
@@ -127,6 +139,18 @@ async def create_view_endpoint(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="The saved_views feature is not available. Run database migrations to enable it.",
         ) from None
+    except SQLAlchemyError:
+        logger.exception("views.create.sqlalchemy_error")
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Database operation failed. Please try again later.",
+        ) from None
+    except Exception as e:
+        logger.exception("views.create.unexpected_error")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="An unexpected error occurred",
+        ) from e
     return ViewResponse.model_validate(view)
 
 
@@ -147,6 +171,18 @@ async def get_view_endpoint(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="The saved_views feature is not available. Run database migrations to enable it.",
         ) from None
+    except SQLAlchemyError:
+        logger.exception("views.get.sqlalchemy_error")
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Database operation failed. Please try again later.",
+        ) from None
+    except Exception as e:
+        logger.exception("views.get.unexpected_error")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="An unexpected error occurred",
+        ) from e
     if view is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="View not found")
     return ViewResponse.model_validate(view)
@@ -171,6 +207,18 @@ async def update_view_endpoint(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="The saved_views feature is not available. Run database migrations to enable it.",
         ) from None
+    except SQLAlchemyError:
+        logger.exception("views.update.sqlalchemy_error")
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Database operation failed. Please try again later.",
+        ) from None
+    except Exception as e:
+        logger.exception("views.update.unexpected_error")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="An unexpected error occurred",
+        ) from e
     if view is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="View not found")
     return ViewResponse.model_validate(view)
@@ -193,5 +241,17 @@ async def delete_view_endpoint(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="The saved_views feature is not available. Run database migrations to enable it.",
         ) from None
+    except SQLAlchemyError:
+        logger.exception("views.delete.sqlalchemy_error")
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Database operation failed. Please try again later.",
+        ) from None
+    except Exception as e:
+        logger.exception("views.delete.unexpected_error")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="An unexpected error occurred",
+        ) from e
     if not deleted:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="View not found")
