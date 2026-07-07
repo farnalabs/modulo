@@ -39,6 +39,14 @@ def _parse_retry_after(response: httpx.Response) -> float | None:
     return None
 
 
+def _safe_json(response: httpx.Response) -> Any:
+    """Safely parse JSON response, handling decode errors."""
+    try:
+        return response.json()
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"GitLab API invalid response: {exc}") from exc
+
+
 def _project_path(project_id: str) -> str:
     """URL-encode a project path like 'group/subgroup/project'."""
     return quote(project_id, safe="")
@@ -130,6 +138,13 @@ class GitLabConnector(ConnectorBase):
                     await asyncio.sleep(delay)
                     continue
                 raise ValueError("GitLab API connection error") from exc
+            except httpx.HTTPError as exc:
+                last_exc = exc
+                if attempt < _MAX_RETRIES:
+                    delay = min(_BASE_DELAY * (2 ** attempt), _MAX_DELAY)
+                    await asyncio.sleep(delay)
+                    continue
+                raise ValueError(f"GitLab API HTTP error: {exc}") from exc
         raise ValueError("GitLab API request failed after retries") from last_exc
 
     async def _parse_json(self, response: httpx.Response) -> dict[str, Any]:
@@ -168,6 +183,8 @@ class GitLabConnector(ConnectorBase):
                 projects_r = await client.get("/projects", params={"per_page": 1})
                 if projects_r.status_code in (401, 403):
                     return HealthResult(ok=False, detail="Missing scopes: API access not granted")
+                if not projects_r.is_success:
+                    return HealthResult(ok=False, detail=f"Projects API returned HTTP {projects_r.status_code}: {projects_r.text[:200]}")
 
             return HealthResult(ok=True, detail=username)
         except httpx.RequestError as e:
@@ -176,11 +193,17 @@ class GitLabConnector(ConnectorBase):
     async def query(self, q: ConnectorQuery) -> ConnectorResult:
         match q.resource:
             case "projects":
-                r = await self._call_api("GET", "/projects", params={"per_page": q.limit})
-                try:
-                    data: list[dict[str, Any]] = r.json()
-                except Exception as exc:
-                    raise ValueError(f"GitLab API invalid response: {exc}") from exc
+                params: dict[str, Any] = {"per_page": q.limit}
+                if "search" in q.filters:
+                    params["search"] = q.filters["search"]
+                if "membership" in q.filters:
+                    params["membership"] = q.filters["membership"]
+                if "visibility" in q.filters:
+                    params["visibility"] = q.filters["visibility"]
+                if "owned" in q.filters:
+                    params["owned"] = q.filters["owned"]
+                r = await self._call_api("GET", "/projects", params=params)
+                data = _safe_json(r)
                 return ConnectorResult(records=data, total=len(data))
             case "file":
                 project = self._require_filter(q.filters, "project", q.resource)
@@ -192,10 +215,7 @@ class GitLabConnector(ConnectorBase):
                     f"/projects/{encoded}/repository/files/{quote(path, safe='')}",
                     params={"ref": ref},
                 )
-                try:
-                    info: dict[str, Any] = r.json()
-                except Exception as exc:
-                    raise ValueError(f"GitLab API invalid response: {exc}") from exc
+                info = _safe_json(r)
                 if "content" in info:
                     info["content"] = base64.b64decode(info["content"]).decode("utf-8")
                 return ConnectorResult(records=[info])
@@ -214,10 +234,7 @@ class GitLabConnector(ConnectorBase):
                     f"/projects/{encoded}/merge_requests",
                     params=params,
                 )
-                try:
-                    mrs: list[dict[str, Any]] = r.json()
-                except Exception as exc:
-                    raise ValueError(f"GitLab API invalid response: {exc}") from exc
+                mrs = _safe_json(r)
                 return ConnectorResult(records=mrs, total=len(mrs))
             case "merge_request":
                 project = self._require_filter(q.filters, "project", q.resource)
@@ -227,10 +244,7 @@ class GitLabConnector(ConnectorBase):
                     "GET",
                     f"/projects/{encoded}/merge_requests/{mr_iid}",
                 )
-                try:
-                    return ConnectorResult(records=[r.json()])
-                except Exception as exc:
-                    raise ValueError(f"GitLab API invalid response: {exc}") from exc
+                return ConnectorResult(records=[_safe_json(r)])
             case "issues":
                 project = self._require_filter(q.filters, "project", q.resource)
                 encoded = _project_path(project)
@@ -243,10 +257,7 @@ class GitLabConnector(ConnectorBase):
                     f"/projects/{encoded}/issues",
                     params=params,
                 )
-                try:
-                    issues: list[dict[str, Any]] = r.json()
-                except Exception as exc:
-                    raise ValueError(f"GitLab API invalid response: {exc}") from exc
+                issues = _safe_json(r)
                 return ConnectorResult(records=issues, total=len(issues))
             case "issue":
                 project = self._require_filter(q.filters, "project", q.resource)
@@ -256,10 +267,7 @@ class GitLabConnector(ConnectorBase):
                     "GET",
                     f"/projects/{encoded}/issues/{issue_iid}",
                 )
-                try:
-                    return ConnectorResult(records=[r.json()])
-                except Exception as exc:
-                    raise ValueError(f"GitLab API invalid response: {exc}") from exc
+                return ConnectorResult(records=[_safe_json(r)])
             case "labels":
                 project = self._require_filter(q.filters, "project", q.resource)
                 encoded = _project_path(project)
@@ -268,10 +276,7 @@ class GitLabConnector(ConnectorBase):
                     f"/projects/{encoded}/labels",
                     params={"per_page": q.limit},
                 )
-                try:
-                    labels: list[dict[str, Any]] = r.json()
-                except Exception as exc:
-                    raise ValueError(f"GitLab API invalid response: {exc}") from exc
+                labels = _safe_json(r)
                 return ConnectorResult(records=labels, total=len(labels))
             case "label":
                 project = self._require_filter(q.filters, "project", q.resource)
@@ -281,10 +286,7 @@ class GitLabConnector(ConnectorBase):
                     "GET",
                     f"/projects/{encoded}/labels/{label_id}",
                 )
-                try:
-                    return ConnectorResult(records=[r.json()])
-                except Exception as exc:
-                    raise ValueError(f"GitLab API invalid response: {exc}") from exc
+                return ConnectorResult(records=[_safe_json(r)])
             case "milestones":
                 project = self._require_filter(q.filters, "project", q.resource)
                 encoded = _project_path(project)
@@ -293,10 +295,7 @@ class GitLabConnector(ConnectorBase):
                     f"/projects/{encoded}/milestones",
                     params={"per_page": q.limit},
                 )
-                try:
-                    milestones: list[dict[str, Any]] = r.json()
-                except Exception as exc:
-                    raise ValueError(f"GitLab API invalid response: {exc}") from exc
+                milestones = _safe_json(r)
                 return ConnectorResult(records=milestones, total=len(milestones))
             case "issue_notes":
                 project = self._require_filter(q.filters, "project", q.resource)
@@ -311,10 +310,7 @@ class GitLabConnector(ConnectorBase):
                     f"/projects/{encoded}/issues/{issue_iid}/notes",
                     params=params,
                 )
-                try:
-                    notes: list[dict[str, Any]] = r.json()
-                except Exception as exc:
-                    raise ValueError(f"GitLab API invalid response: {exc}") from exc
+                notes = _safe_json(r)
                 return ConnectorResult(records=notes, total=len(notes))
             case "issue_discussions":
                 project = self._require_filter(q.filters, "project", q.resource)
@@ -325,10 +321,7 @@ class GitLabConnector(ConnectorBase):
                     f"/projects/{encoded}/issues/{issue_iid}/discussions",
                     params={"per_page": q.limit},
                 )
-                try:
-                    discussions: list[dict[str, Any]] = r.json()
-                except Exception as exc:
-                    raise ValueError(f"GitLab API invalid response: {exc}") from exc
+                discussions = _safe_json(r)
                 return ConnectorResult(records=discussions, total=len(discussions))
             case "branch":
                 project = self._require_filter(q.filters, "project", q.resource)
@@ -338,10 +331,7 @@ class GitLabConnector(ConnectorBase):
                     "GET",
                     f"/projects/{encoded}/repository/branches/{quote(branch_name, safe='')}",
                 )
-                try:
-                    return ConnectorResult(records=[r.json()])
-                except Exception as exc:
-                    raise ValueError(f"GitLab API invalid response: {exc}") from exc
+                return ConnectorResult(records=[_safe_json(r)])
             case "branches":
                 project = self._require_filter(q.filters, "project", q.resource)
                 encoded = _project_path(project)
@@ -350,10 +340,7 @@ class GitLabConnector(ConnectorBase):
                     f"/projects/{encoded}/repository/branches",
                     params={"per_page": q.limit},
                 )
-                try:
-                    branches: list[dict[str, Any]] = r.json()
-                except Exception as exc:
-                    raise ValueError(f"GitLab API invalid response: {exc}") from exc
+                branches = _safe_json(r)
                 return ConnectorResult(records=branches, total=len(branches))
             case "tags":
                 project = self._require_filter(q.filters, "project", q.resource)
@@ -363,10 +350,7 @@ class GitLabConnector(ConnectorBase):
                     f"/projects/{encoded}/repository/tags",
                     params={"per_page": q.limit},
                 )
-                try:
-                    tags: list[dict[str, Any]] = r.json()
-                except Exception as exc:
-                    raise ValueError(f"GitLab API invalid response: {exc}") from exc
+                tags = _safe_json(r)
                 return ConnectorResult(records=tags, total=len(tags))
             case "pipelines":
                 project = self._require_filter(q.filters, "project", q.resource)
@@ -376,10 +360,7 @@ class GitLabConnector(ConnectorBase):
                     f"/projects/{encoded}/pipelines",
                     params={"per_page": q.limit},
                 )
-                try:
-                    pipelines: list[dict[str, Any]] = r.json()
-                except Exception as exc:
-                    raise ValueError(f"GitLab API invalid response: {exc}") from exc
+                pipelines = _safe_json(r)
                 return ConnectorResult(records=pipelines, total=len(pipelines))
             case "jobs":
                 project = self._require_filter(q.filters, "project", q.resource)
@@ -390,10 +371,7 @@ class GitLabConnector(ConnectorBase):
                     f"/projects/{encoded}/pipelines/{pipeline_id}/jobs",
                     params={"per_page": q.limit},
                 )
-                try:
-                    jobs: list[dict[str, Any]] = r.json()
-                except Exception as exc:
-                    raise ValueError(f"GitLab API invalid response: {exc}") from exc
+                jobs = _safe_json(r)
                 return ConnectorResult(records=jobs, total=len(jobs))
             case _:
                 raise ValueError(f"Unsupported GitLab resource: {q.resource!r}")
@@ -415,10 +393,7 @@ class GitLabConnector(ConnectorBase):
                     f"/projects/{encoded}/repository/files/{quote(path, safe='')}",
                     json=body,
                 )
-                try:
-                    result: dict[str, Any] = r.json()
-                except Exception as exc:
-                    raise ValueError(f"GitLab API invalid response: {exc}") from exc
+                result = _safe_json(r)
                 return result
             case "mr" | "merge_request":
                 project = self._require_filter(payload.data, "project", payload.resource)
@@ -437,10 +412,7 @@ class GitLabConnector(ConnectorBase):
                     f"/projects/{encoded}/merge_requests",
                     json=body,
                 )
-                try:
-                    mr: dict[str, Any] = r.json()
-                except Exception as exc:
-                    raise ValueError(f"GitLab API invalid response: {exc}") from exc
+                mr = _safe_json(r)
                 return mr
             case "issue":
                 project = self._require_filter(payload.data, "project", payload.resource)
@@ -462,10 +434,7 @@ class GitLabConnector(ConnectorBase):
                     f"/projects/{encoded}/issues",
                     json=body,
                 )
-                try:
-                    issue: dict[str, Any] = r.json()
-                except Exception as exc:
-                    raise ValueError(f"GitLab API invalid response: {exc}") from exc
+                issue = _safe_json(r)
                 return issue
             case "issue_update":
                 project = self._require_filter(payload.data, "project", payload.resource)
@@ -480,10 +449,7 @@ class GitLabConnector(ConnectorBase):
                     f"/projects/{encoded}/issues/{issue_iid}",
                     json=body,
                 )
-                try:
-                    updated: dict[str, Any] = r.json()
-                except Exception as exc:
-                    raise ValueError(f"GitLab API invalid response: {exc}") from exc
+                updated = _safe_json(r)
                 return updated
             case "issue_note":
                 project = self._require_filter(payload.data, "project", payload.resource)
@@ -498,10 +464,7 @@ class GitLabConnector(ConnectorBase):
                     f"/projects/{encoded}/issues/{issue_iid}/notes",
                     json=body,
                 )
-                try:
-                    note: dict[str, Any] = r.json()
-                except Exception as exc:
-                    raise ValueError(f"GitLab API invalid response: {exc}") from exc
+                note = _safe_json(r)
                 return note
             case "issue_label":
                 project = self._require_filter(payload.data, "project", payload.resource)
@@ -516,10 +479,7 @@ class GitLabConnector(ConnectorBase):
                     f"/projects/{encoded}/issues/{issue_iid}",
                     json=body,
                 )
-                try:
-                    labeled: dict[str, Any] = r.json()
-                except Exception as exc:
-                    raise ValueError(f"GitLab API invalid response: {exc}") from exc
+                labeled = _safe_json(r)
                 return labeled
             case "label":
                 project = self._require_filter(payload.data, "project", payload.resource)
@@ -536,10 +496,7 @@ class GitLabConnector(ConnectorBase):
                     f"/projects/{encoded}/labels",
                     json=body,
                 )
-                try:
-                    label_res: dict[str, Any] = r.json()
-                except Exception as exc:
-                    raise ValueError(f"GitLab API invalid response: {exc}") from exc
+                label_res = _safe_json(r)
                 return label_res
             case "milestone":
                 project = self._require_filter(payload.data, "project", payload.resource)
@@ -557,10 +514,7 @@ class GitLabConnector(ConnectorBase):
                     f"/projects/{encoded}/milestones",
                     json=body,
                 )
-                try:
-                    ms: dict[str, Any] = r.json()
-                except Exception as exc:
-                    raise ValueError(f"GitLab API invalid response: {exc}") from exc
+                ms = _safe_json(r)
                 return ms
             case "pipeline_run":
                 project = self._require_filter(payload.data, "project", payload.resource)
@@ -576,10 +530,7 @@ class GitLabConnector(ConnectorBase):
                     f"/projects/{encoded}/pipeline",
                     json=body,
                 )
-                try:
-                    pipeline: dict[str, Any] = r.json()
-                except Exception as exc:
-                    raise ValueError(f"GitLab API invalid response: {exc}") from exc
+                pipeline = _safe_json(r)
                 return pipeline
             case _:
                 raise ValueError(f"Unsupported GitLab write resource: {payload.resource!r}")

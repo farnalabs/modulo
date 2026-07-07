@@ -49,7 +49,7 @@ Async GitLab REST API v4 connector implementing `ConnectorBase`. Provides read/w
 - [x] Return project ID, name, and web URL in results
 - [x] Raise `ValueError` for unsupported resources in `query()`
 - [ ] Support pagination cursor via `Link` header or pagination query params
-- [ ] Filter projects by membership, visibility, or ownership
+- [x] Filter projects by membership, visibility, or ownership
 - [x] Support `limit` parameter in project queries
 
 ### File Operations — read and write via Repository Files API
@@ -93,6 +93,7 @@ Async GitLab REST API v4 connector implementing `ConnectorBase`. Provides read/w
 - [x] Probe API access by calling `GET /projects` during health check
 - [x] Return authenticated user info in `detail` on success
 - [x] Skip per-project repository-level checks
+- [x] `GET /projects` non-2xx response (not just 401/403) returns HealthResult(ok=False)
 - [ ] Detect expired tokens vs insufficient scopes vs network errors
 - [ ] Per-operation scope verification — no granular check before `write()` calls
 - [ ] Report self-hosted GitLab version for diagnostic purposes
@@ -104,10 +105,12 @@ Async GitLab REST API v4 connector implementing `ConnectorBase`. Provides read/w
 - [x] HTTP 304 Not Modified wrapped as ValueError with descriptive message
 - [x] Connection errors (ConnectError) wrapped as ValueError (via _call_api)
 - [x] Timeout errors (TimeoutException) wrapped as ValueError with specific "GitLab API timeout" message
-- [x] Invalid JSON response wrapped as ValueError (via `_parse_json` narrowed to `json.JSONDecodeError`)
+- [x] Invalid JSON response wrapped as ValueError (via `_safe_json` narrowed to `json.JSONDecodeError`)
 - [x] Retryable statuses (429, 502, 503, 504) retried with exponential backoff + jitter (max 3 retries)
 - [x] `Retry-After` header respected for rate-limited responses
-- [x] `last_exc` assigned in every retry `except` block — exception chain preserved on exhaustion
+- [x] `last_exc` assigned in every retry `except` block — exception chain preserved on retry exhaustion
+- [x] Other `httpx.HTTPError` subclasses (StreamError, ProtocolError, DecodingError, TooManyRedirects) wrapped as ValueError
+- [x] All `query()` and `write()` `r.json()` calls use `_safe_json` — no bare `except Exception` in JSON parsing
 - [x] Health check catches httpx.RequestError returning HealthResult(ok=False)
 - [x] Health check catches JSON decode errors returning HealthResult(ok=False) — narrowed to `json.JSONDecodeError`
 - [ ] Missing token during construction is not validated until first API call
@@ -118,9 +121,10 @@ Async GitLab REST API v4 connector implementing `ConnectorBase`. Provides read/w
 - [x] `_call_api` retries 429/502/503/504 with exponential backoff + jitter (max 3 retries)
 - [x] `_call_api` raises ValueError for 304 Not Modified — resource unchanged
 - [x] `_call_api` respects `Retry-After` header from GitLab API
-- [x] `_parse_json` narrowed to `json.JSONDecodeError` only — prevents masking programming errors
+- [x] `_safe_json` narrowed to `json.JSONDecodeError` only — prevents masking programming errors in all query/write paths
 - [x] Health check consolidates /user and /projects calls into single client session
 - [x] Retry timeout treated separately from connection errors — distinct error messages
+- [x] Other `httpx.HTTPError` subclasses (StreamError, ProtocolError, etc.) caught and wrapped in retry loop
 
 ## Known Gaps
 
@@ -157,4 +161,23 @@ Async GitLab REST API v4 connector implementing `ConnectorBase`. Provides read/w
 - Fixed 1 test (test_query_timeout_returns_value_error) to assert "GitLab API timeout" instead of "GitLab API connection error" following retry refactor.
 
 **Status:** partial (6 known gaps unchanged). All 76 connector unit tests pass (69 existing + 7 new).
+
+### 2026-07-07 — Cross-cutting QA (improve-architecture index 320)
+
+**CRITICAL fixes applied:**
+- Narrowed all 21 inline `r.json()` calls in `query()` and `write()` from `except Exception` to `_safe_json()` (catches only `json.JSONDecodeError`). The previous fix (index 266) only narrowed `_parse_json` but the same bare `except Exception` pattern persisted in every query and write handler — systematic gap that masked programming errors (TypeError, AttributeError) as "invalid response".
+- Added `except httpx.HTTPError` catch-all to `_call_api` retry loop. Previously only `HTTPStatusError`, `TimeoutException`, and `ConnectError` were caught — `StreamError`, `ProtocolError`, `DecodingError`, `TooManyRedirects` propagated uncaught as 500s.
+
+**MAJOR fixes applied:**
+- Health check `/projects` response now validates all non-2xx status codes (not just 401/403). Previously a 500 from `/projects` silently passed the health check as `ok=True`.
+- `query("projects")` now forwards `search`, `membership`, `visibility`, `owned` filter params to the GitLab API.
+
+**Product map updates:**
+- Error Handling section: +2 [x] for `httpx.HTTPError` catch-all and `_safe_json` coverage of all query/write paths.
+- Health Check section: +1 [x] for `/projects` non-2xx validation.
+- Project Operations: `search` filter now [x]; `membership/visibility/ownership` filter now [x].
+- Resilience section: updated `_safe_json` description; added `httpx.HTTPError` catch-all [x].
+- Added `_safe_json` helper as the single JSON parsing path for all query/write responses.
+
+**Tests:** 76 passed (unchanged — all existing tests still pass with narrowed exception handlers).
 
