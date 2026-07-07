@@ -557,6 +557,11 @@ app.add_middleware(CsrfMiddleware)
 app.add_middleware(RateLimitMiddleware)  # type: ignore[arg-type]
 app.add_middleware(AuthRateLimitMiddleware)  # type: ignore[arg-type]
 app.add_middleware(DeprecationHeaderMiddleware)  # type: ignore[arg-type]
+DeprecationHeaderMiddleware.deprecate(
+    "/api/v1/system-admin/config",
+    sunset="2027-01-01",
+    migration_url="/docs/operations/migrations/v1-config-to-admin",
+)
 app.add_middleware(SecurityHeadersMiddleware)  # type: ignore[arg-type]
 app.add_middleware(CatchAllMiddleware)
 app.add_middleware(ShutdownMiddleware, manager=_shutdown_manager)  # type: ignore[arg-type]

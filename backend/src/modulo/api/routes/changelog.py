@@ -1,12 +1,21 @@
 """API changelog endpoint — lists version history for the Modulo API."""
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, status
 from pydantic import BaseModel
 
 router = APIRouter(prefix="/api/v1/changelog", tags=["changelog"])
 
 
 class ChangelogEntry(BaseModel):
+    version: str
+    date: str
+    summary: str
+    changes: list[str]
+    deprecations: list[str] | None = None
+    migration_url: str | None = None
+
+
+class CreateChangelogEntryRequest(BaseModel):
     version: str
     date: str
     summary: str
@@ -67,3 +76,18 @@ async def latest_changelog() -> ChangelogEntry:
     if not entries:
         raise HTTPException(status_code=404, detail="No changelog entries")
     return entries[0]
+
+
+@router.post("", response_model=ChangelogEntry, status_code=status.HTTP_201_CREATED)
+async def create_changelog_entry(req: CreateChangelogEntryRequest) -> ChangelogEntry:
+    """Add a new changelog entry (in-memory for alpha; persists across restarts via DB in v1)."""
+    entry = ChangelogEntry(
+        version=req.version,
+        date=req.date,
+        summary=req.summary,
+        changes=req.changes,
+        deprecations=req.deprecations,
+        migration_url=req.migration_url,
+    )
+    _SEED_ENTRIES.append(entry)
+    return entry
