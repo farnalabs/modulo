@@ -48,6 +48,7 @@
                 <label class="mb-1 block text-sm font-medium">{{ $t('views.AdminModelBackendsView.provider') }}</label>
                 <select
                   v-model="formData.provider"
+                  aria-label="Provider"
                   class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm"
                   data-testid="admin-model-backends-provider-select"
                 >
@@ -110,6 +111,7 @@
                 <label class="mb-1 block text-sm font-medium">{{ $t('views.AdminModelBackendsView.visibility') }}</label>
                 <select
                   v-model="formData.visibility"
+                  aria-label="Visibility"
                   class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm"
                   data-testid="admin-model-backends-visibility-select"
                 >
@@ -335,6 +337,7 @@
                 <label class="mb-1 block text-sm font-medium">{{ $t('views.AdminModelBackendsView.visibility') }}</label>
                 <select
                   v-model="formData.visibility"
+                  aria-label="Visibility"
                   class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm"
                   data-testid="admin-model-backends-edit-visibility"
                 >

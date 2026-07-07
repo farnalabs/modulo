@@ -214,6 +214,7 @@
       <label class="mb-1 block text-sm font-medium">Default Role</label>
       <select
         :value="data.default_role"
+        aria-label="Default Role"
         class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
         @change="
           emitUpdate({

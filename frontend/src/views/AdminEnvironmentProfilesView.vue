@@ -49,6 +49,7 @@
                 <label class="mb-1 block text-sm font-medium">Provider Type</label>
                 <select
                   v-model="formData.provider_type"
+                  aria-label="Provider type"
                   class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm"
                   data-testid="admin-envprofiles-provider-select"
                 >

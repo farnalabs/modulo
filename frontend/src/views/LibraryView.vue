@@ -24,6 +24,7 @@
             class="input-teal px-3 py-1.5 pr-8 border border-input bg-background rounded-lg text-sm"
             @change="onFilterChange"
             data-testid="library-type-filter"
+            aria-label="Filter by type"
           >
             <option value="">{{ $t('views.AdminNotificationDeliveryLogView.all_types') }}</option>
             <option value="pipeline_template">{{ $t('views.LibraryView.pipeline_templates') }}</option>

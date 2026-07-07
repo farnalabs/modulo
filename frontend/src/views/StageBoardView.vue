@@ -32,6 +32,7 @@
           <select
             v-model="teamFilter"
             data-testid="stage-board-team-filter"
+            aria-label="Team"
             class="rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
             @change="applyFilters"
           >
@@ -45,6 +46,7 @@
           <select
             v-model="statusFilter"
             data-testid="stage-board-status-filter"
+            aria-label="Status"
             class="rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
             @change="applyFilters"
           >
@@ -274,6 +276,7 @@
             <select
               v-model="createVisibility"
               data-testid="stage-board-create-visibility"
+              aria-label="Visibility"
               class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
             >
               <option value="org">Org</option>

@@ -124,6 +124,7 @@
               v-model="form.pipeline_id"
               class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm"
               data-testid="settings-triggers-form-pipeline"
+              aria-label="Pipeline"
               required
             >
               <option value="" disabled>Select pipeline</option>
@@ -137,6 +138,7 @@
               v-model="form.trigger_type"
               class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm"
               data-testid="settings-triggers-form-type"
+              aria-label="Trigger type"
               required
             >
               <option value="" disabled>Select type</option>
@@ -168,6 +170,7 @@
                 v-model="form.webhook_method"
                 class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm"
                 data-testid="settings-triggers-form-webhook-method"
+                aria-label="HTTP method"
               >
                 <option value="POST">POST</option>
                 <option value="GET">GET</option>
@@ -273,6 +276,7 @@
                 v-model="form.signal_source_pipeline"
                 class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm"
                 data-testid="settings-triggers-form-signal-pipeline"
+                aria-label="Source pipeline"
               >
                 <option value="" disabled>Select source pipeline</option>
                 <option v-for="p in pipelines" :key="p.id" :value="p.id">{{ p.name }}</option>
