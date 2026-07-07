@@ -7,6 +7,8 @@ logger = logging.getLogger(__name__)
 from typing import Any, cast
 
 from fastapi import APIRouter, Depends, HTTPException, status
+import uuid
+
 from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.exc import ProgrammingError, SQLAlchemyError
@@ -16,7 +18,9 @@ from modulo.api.dependencies import get_db_session
 from modulo.auth.dependencies import get_current_user
 from modulo.auth.jwt import AuthenticatedPrincipal
 from modulo.db.models.pipeline import Pipeline
-from modulo.db.rls import set_rls_org
+from modulo.db.rls import set_rls_org, set_rls_user_context
+from modulo.db.crud.schema import create_schema
+from modulo.db.crud.pipeline import create_pipeline, replace_pipeline_graph
 
 router = APIRouter(prefix="/api/v1/onboarding", tags=["onboarding"])
 
@@ -115,6 +119,11 @@ _STEP_DATA: dict[str, dict[str, Any]] = {
         "description": "Trigger a demo run and watch it complete step by step.",
     },
 }
+
+
+class StarterPipelineResponse(BaseModel):
+    pipeline_id: uuid.UUID
+    name: str
 
 
 @router.get("/status", response_model=OnboardingStatusResponse)
@@ -294,4 +303,102 @@ async def get_step_data(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="An unexpected error occurred",
+        ) from e
+
+
+@router.post("/starter-pipeline", response_model=StarterPipelineResponse, status_code=status.HTTP_201_CREATED)
+async def create_starter_pipeline(
+    session: AsyncSession = Depends(get_db_session),
+    principal: AuthenticatedPrincipal = Depends(get_current_user),
+) -> StarterPipelineResponse:
+    try:
+        async with session.begin():
+            await set_rls_org(session, principal.organisation_id)
+            await set_rls_user_context(session, principal.account_id, principal.org_role)
+
+            schema = await create_schema(
+                session,
+                org_id=principal.organisation_id,
+                name="Starter Pipeline Schema",
+                account_id=principal.account_id,
+                description="Auto-generated schema for the SDLC starter pipeline.",
+            )
+
+            pipeline = await create_pipeline(
+                session,
+                org_id=principal.organisation_id,
+                name="SDLC Starter Pipeline",
+                account_id=principal.account_id,
+                description="A starter pipeline mapping your SDLC workflow. Customise each stage to match your team's process.",
+            )
+
+            schema_id = schema.id
+            node_defs = [
+                ("Task Review", 50, 200),
+                ("Development", 350, 200),
+                ("Review & QA", 650, 200),
+                ("Promote to Staging", 950, 200),
+                ("Promote to Prod", 1250, 200),
+            ]
+
+            nodes = []
+            edges = []
+            prev_id = None
+            for label, x, y in node_defs:
+                node_id = uuid.uuid4()
+                nodes.append({
+                    "id": str(node_id),
+                    "node_type": "manual",
+                    "position": {"x": x, "y": y},
+                    "label": label,
+                    "output_schema_id": str(schema_id),
+                    "agent_id": None,
+                    "connector_binding": None,
+                    "role": None,
+                    "autonomy_recommendation": None,
+                    "composite_ref": None,
+                    "composite_parameter_values": None,
+                    "composite_input_mapping": None,
+                    "composite_output_mapping": None,
+                })
+                if prev_id is not None:
+                    edges.append({
+                        "id": str(uuid.uuid4()),
+                        "source_node_id": str(prev_id),
+                        "target_node_id": str(node_id),
+                        "edge_type": "normal",
+                        "condition_expression": None,
+                        "hitl_gate_config": None,
+                    })
+                prev_id = node_id
+
+            await replace_pipeline_graph(
+                session,
+                pipeline_id=pipeline.id,
+                org_id=principal.organisation_id,
+                nodes=nodes,
+                edges=edges,
+            )
+
+        return StarterPipelineResponse(
+            pipeline_id=pipeline.id,
+            name=pipeline.name,
+        )
+    except ProgrammingError:
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="Feature is not available. Run database migrations to enable it.",
+        )
+    except SQLAlchemyError:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Database temporarily unavailable.",
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.exception("onboarding.create_starter_pipeline.unexpected_error")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="An unexpected error occurred.",
         ) from e
