@@ -18,4 +18,5 @@ class Team(OrgScoped):
         Uuid(), ForeignKey("accounts.id", ondelete="RESTRICT"), nullable=False
     )
     notification_endpoints: Mapped[list[dict[str, Any]]] = mapped_column(JSON, nullable=False, default=list)
+    settings: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False, default=dict)
     daily_spend_limit: Mapped[Decimal | None] = mapped_column(Numeric(14, 6))

@@ -23,6 +23,11 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/v1/admin/feature-flags", tags=["admin-feature-flags"])
 
 
+def _require_admin(principal: AuthenticatedPrincipal) -> None:
+    if not principal.is_system_admin:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Admin access required")
+
+
 async def _resolve_tier(
     settings: Settings, session: AsyncSession, current_user: AuthenticatedPrincipal
 ) -> str:
@@ -258,3 +263,59 @@ async def toggle_feature_flag(
                 }
             },
         )
+
+
+@router.get("/{flag_name}/org-override")
+async def get_org_flag_override(
+    flag_name: str,
+    current_user: AuthenticatedPrincipal = Depends(get_current_user),
+    session: AsyncSession = Depends(get_db_session),
+) -> dict:
+    _require_admin(current_user)
+    async with session.begin():
+        org = await get_organisation(session, current_user.organisation_id)
+    if not org or not org.settings_json:
+        return {"override": None}
+    overrides = org.settings_json.get("feature_overrides", {})
+    return {"override": overrides.get(flag_name)}
+
+
+@router.put("/{flag_name}/org-override")
+async def set_org_flag_override(
+    flag_name: str,
+    req: ToggleFlagRequest,
+    current_user: AuthenticatedPrincipal = Depends(get_current_user),
+    session: AsyncSession = Depends(get_db_session),
+) -> dict:
+    _require_admin(current_user)
+    async with session.begin():
+        org = await get_organisation(session, current_user.organisation_id)
+        if not org:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, "Org not found")
+        settings = dict(org.settings_json or {})
+        overrides = dict(settings.get("feature_overrides", {}))
+        overrides[flag_name] = req.enabled
+        settings["feature_overrides"] = overrides
+        org.settings_json = settings
+        session.add(org)
+    return {"override": req.enabled}
+
+
+@router.delete("/{flag_name}/org-override")
+async def clear_org_flag_override(
+    flag_name: str,
+    current_user: AuthenticatedPrincipal = Depends(get_current_user),
+    session: AsyncSession = Depends(get_db_session),
+) -> dict:
+    _require_admin(current_user)
+    async with session.begin():
+        org = await get_organisation(session, current_user.organisation_id)
+        if not org or not org.settings_json:
+            return {"override": None}
+        settings = dict(org.settings_json)
+        overrides = dict(settings.get("feature_overrides", {}))
+        overrides.pop(flag_name, None)
+        settings["feature_overrides"] = overrides
+        org.settings_json = settings
+        session.add(org)
+    return {"override": None}
