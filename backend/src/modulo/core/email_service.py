@@ -1,10 +1,14 @@
 import logging
 import smtplib
+import time
 from email.message import EmailMessage
 
 from modulo.settings import Settings
 
 _log = logging.getLogger(__name__)
+
+_MAX_RETRIES = 2
+_RETRY_DELAY = 1.0
 
 
 class EmailSendingError(Exception):
@@ -32,14 +36,26 @@ def send_email(
 
     msg.add_alternative(body_html, subtype="html")
 
-    try:
-        with smtplib.SMTP(settings.smtp_host, settings.smtp_port, timeout=30) as server:
-            server.starttls()
-            if settings.smtp_username:
-                server.login(settings.smtp_username, settings.smtp_password)
-            server.send_message(msg)
-        _log.info("email.sent", extra={"to": to, "subject": subject})
-        return True
-    except smtplib.SMTPException as exc:
-        _log.error("email.send_failed", extra={"to": to, "subject": subject, "error": str(exc)})
-        raise EmailSendingError(str(exc)) from exc
+    last_exc: smtplib.SMTPException | None = None
+
+    for attempt in range(_MAX_RETRIES + 1):
+        try:
+            with smtplib.SMTP(settings.smtp_host, settings.smtp_port, timeout=30) as server:
+                server.starttls()
+                if settings.smtp_username:
+                    server.login(settings.smtp_username, settings.smtp_password)
+                server.send_message(msg)
+            _log.info("email.sent", extra={"to": to, "subject": subject})
+            return True
+        except smtplib.SMTPException as exc:
+            last_exc = exc
+            if attempt < _MAX_RETRIES:
+                _log.warning(
+                    "email.send_retry",
+                    extra={"to": to, "subject": subject, "attempt": attempt + 1, "error": str(exc)},
+                )
+                time.sleep(_RETRY_DELAY)
+                continue
+
+    _log.error("email.send_failed", extra={"to": to, "subject": subject, "error": str(last_exc)})
+    raise EmailSendingError(str(last_exc)) from last_exc
