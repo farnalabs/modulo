@@ -4,15 +4,15 @@
     <div class="mx-auto max-w-4xl space-y-8 p-6">
       <header class="flex items-center justify-between">
         <div>
-          <h1 class="text-3xl font-bold tracking-tight">SSO Providers</h1>
-          <p class="mt-1 text-muted-foreground">Manage OIDC and SAML single sign-on providers</p>
+          <h1 class="text-3xl font-bold tracking-tight">{{ $t('views.SettingsSsoView.title') }}</h1>
+          <p class="mt-1 text-muted-foreground">{{ $t('views.SettingsSsoView.description') }}</p>
         </div>
         <button
           class="btn-glow rounded-lg bg-primary px-4 py-2 text-sm font-semibold text-primary-foreground border border-primary/30 hover:border-primary/60 hover:brightness-110 transition-all duration-150"
           data-testid="settings-sso-add-provider"
           @click="openAddForm"
         >
-          Add Provider
+          {{ $t('views.SettingsSsoView.add_provider') }}
         </button>
       </header>
 
@@ -22,12 +22,12 @@
 
       <template v-else>
         <div v-if="formMode === 'add'" class="card p-6">
-          <h2 class="mb-4 text-lg font-semibold">New SSO Provider</h2>
+          <h2 class="mb-4 text-lg font-semibold">{{ $t('views.SettingsSsoView.new_sso_provider') }}</h2>
           <SsoProviderForm
             :data="formData"
             :saving="saving"
-            :submit-label="'Create'"
-            :saving-label="'Creating...'"
+            :submit-label="$t('views.SettingsSsoView.create')"
+            :saving-label="$t('views.SettingsSsoView.creating')"
             :error="formError"
             @update:data="onFormUpdate($event)"
             @submit="createProvider"
@@ -36,9 +36,9 @@
         </div>
 
         <div v-if="providers.length === 0" class="card p-8 text-center">
-          <p class="text-lg font-medium">No SSO providers configured</p>
+          <p class="text-lg font-medium">{{ $t('views.SettingsSsoView.no_providers_title') }}</p>
           <p class="mt-1 text-sm text-muted-foreground">
-            Add an OIDC or SAML provider to enable single sign-on for your organisation.
+            {{ $t('views.SettingsSsoView.no_providers_description') }}
           </p>
         </div>
 
@@ -70,16 +70,16 @@
                   :disabled="testingId === provider.id"
                   class="rounded-lg border border-input bg-background px-3 py-1.5 text-xs font-medium hover:bg-accent disabled:opacity-50"
                   data-testid="settings-sso-test"
-                  title="Test connection"
+                  :title="$t('views.SettingsSsoView.test')"
                   @click="testConnection(provider.id)"
                 >
-                  {{ testingId === provider.id ? 'Testing...' : 'Test' }}
+                  {{ testingId === provider.id ? $t('views.SettingsSsoView.testing') : $t('views.SettingsSsoView.test') }}
                 </button>
                 <button
                   class="rounded p-1 text-muted-foreground hover:bg-accent"
                   data-testid="settings-sso-edit"
-                  :aria-label="'Edit provider'"
-                  title="Edit provider"
+                  :aria-label="$t('views.SettingsSsoView.edit_provider')"
+                  :title="$t('views.SettingsSsoView.edit_provider')"
                   @click="openEditForm(provider)"
                 >
                   <svg class="h-4 w-4" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -89,8 +89,8 @@
                 <button
                   class="rounded p-1 text-destructive hover:bg-destructive/10"
                   data-testid="settings-sso-delete"
-                  :aria-label="'Delete provider'"
-                  title="Delete provider"
+                  :aria-label="$t('views.SettingsSsoView.delete_provider')"
+                  :title="$t('views.SettingsSsoView.delete_provider')"
                   @click="confirmDelete(provider)"
                 >
                   <svg class="h-4 w-4" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -100,8 +100,10 @@
                 <label
                   class="relative inline-flex cursor-pointer items-center"
                   data-testid="settings-sso-toggle"
-                  :aria-label="'Toggle provider'"
+                  :aria-label="$t('views.SettingsSsoView.toggle_provider')"
                   role="switch"
+                  :aria-checked="provider.enabled"
+                  :class="{ 'opacity-50 pointer-events-none': togglingId === provider.id }"
                   @click.prevent.stop="toggleProvider(provider)"
                 >
                   <div
@@ -122,8 +124,8 @@
               <SsoProviderForm
                 :data="formData"
                 :saving="saving"
-                :submit-label="'Save'"
-                :saving-label="'Saving...'"
+                :submit-label="$t('views.SettingsSsoView.save')"
+                :saving-label="$t('views.SettingsSsoView.saving')"
                 :error="formError"
                 @update:data="onFormUpdate($event)"
                 @submit="updateProvider"
@@ -132,8 +134,8 @@
             </div>
 
             <div v-if="deleteConfirmProviderId === provider.id" class="border-t border-destructive/50 bg-destructive/10 p-4">
-              <p class="text-sm font-medium text-destructive">Delete "{{ provider.name }}"?</p>
-              <p class="mt-1 text-sm text-destructive/80">This action cannot be undone.</p>
+              <p class="text-sm font-medium text-destructive">{{ $t('views.SettingsSsoView.delete_confirm', { name: provider.name }) }}</p>
+              <p class="mt-1 text-sm text-destructive/80">{{ $t('views.SettingsSsoView.delete_warning') }}</p>
               <div class="mt-3 flex items-center gap-2">
                 <button
                   :disabled="deleting"
@@ -141,14 +143,14 @@
                   class="rounded-lg bg-destructive px-4 py-2 text-sm font-medium text-destructive-foreground hover:brightness-110 disabled:opacity-50 transition-all"
                   @click="deleteProvider(provider.id)"
                 >
-                  {{ deleting ? 'Deleting...' : 'Delete' }}
+                  {{ deleting ? $t('views.SettingsSsoView.deleting') : $t('views.SettingsSsoView.delete') }}
                 </button>
                 <button
                   class="rounded-lg border border-input bg-background px-4 py-2 text-sm font-medium hover:bg-accent"
                   data-testid="settings-sso-delete-cancel"
                   @click="deleteConfirmProviderId = null"
                 >
-                  Cancel
+                  {{ $t('views.SettingsSsoView.cancel') }}
                 </button>
               </div>
               <div v-if="deleteError" class="mt-2 text-sm text-destructive">{{ deleteError }}</div>
@@ -159,7 +161,7 @@
                   class="rounded-lg p-3 text-sm"
                   :class="testResult?.success ? 'bg-success/10 text-success' : 'bg-destructive/10 text-destructive'"
                 >
-                <p class="font-medium">{{ testResult?.success ? 'Connection successful' : 'Connection failed' }}</p>
+                <p class="font-medium">{{ testResult?.success ? $t('views.SettingsSsoView.connection_successful') : $t('views.SettingsSsoView.connection_failed') }}</p>
                 <p class="mt-1">{{ testResult?.message }}</p>
                 <pre
                   v-if="testResult?.provider_info"
@@ -235,6 +237,7 @@ const deleteConfirmProviderId = ref<string | null>(null)
 const deleting = ref(false)
 const deleteError = ref<string | null>(null)
 
+const togglingId = ref<string | null>(null)
 const testingId = ref<string | null>(null)
 const testResultProviderId = ref<string | null>(null)
 const testResult = ref<SsoProviderTestResult | null>(null)
@@ -359,7 +362,10 @@ function buildUpdateBody(): SsoProviderUpdate {
 }
 
 async function createProvider() {
-  if (!formData.name.trim()) return
+  if (!formData.name.trim()) {
+    formError.value = 'Provider name is required'
+    return
+  }
   saving.value = true
   formError.value = null
   try {
@@ -380,7 +386,11 @@ async function createProvider() {
 }
 
 async function updateProvider() {
-  if (!editProviderId.value || !formData.name.trim()) return
+  if (!editProviderId.value) return
+  if (!formData.name.trim()) {
+    formError.value = 'Provider name is required'
+    return
+  }
   saving.value = true
   formError.value = null
   try {
@@ -403,6 +413,7 @@ async function updateProvider() {
 }
 
 async function toggleProvider(provider: SsoProviderResponse) {
+  togglingId.value = provider.id
   try {
     const { data, error: err } = await api.PUT('/api/v1/admin/sso/providers/{provider_id}/toggle', {
       params: { path: { provider_id: provider.id } },
@@ -415,6 +426,8 @@ async function toggleProvider(provider: SsoProviderResponse) {
     }
   } catch (e: unknown) {
     error.value = `Toggle failed: ${e instanceof Error ? e.message : String(e)}`
+  } finally {
+    togglingId.value = null
   }
 }
 
