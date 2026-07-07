@@ -88,14 +88,14 @@ correction trigger, and resolution.
 
 ## Error Handling
 
-- [x] Main list fetch failure shows `<ErrorAlert>` with error message
+- [x] Main list fetch failure shows `<ErrorAlert>` with error message and Retry button
 - [x] Detail load failure shows inline error with Retry button
 - [x] "Save Annotation" failure shows error message inline, buttons re-enabled
 - [x] "Mark Resolved" failure shows error message inline, buttons re-enabled
 - [x] "Trigger Correction Run" failure shows error message inline, button re-enabled
 - [x] "Dismiss" failure shows error message inline, button re-enabled
-- [x] Pipeline load failure shows inline destructive alert with error message
-- [ ] Main list does NOT have a Retry button on error (Known Gap — see below)
+- [x] Pipeline load failure shows inline destructive alert with error message and Retry button
+- [x] Main list has Retry button on error via `ErrorAlert` `:on-retry` prop
 
 ## Edge Cases
 
@@ -116,7 +116,6 @@ correction trigger, and resolution.
 - No `producing_agent` filter in frontend (API schema includes `agent_id` but UI does not expose it)
 - No `ai_correction_with_human_review` accept/reject UI (PRD requires it for that handler type)
 - "Save Annotation" and "Mark Resolved" buttons send identical API payloads (`action: mark_reviewed`) — no semantic difference exists in the API for saving annotation without resolving
-- No retry button on main list fetch error
 - No explicit API request timeouts
 
 ## QA History
@@ -132,3 +131,8 @@ correction trigger, and resolution.
 - **Fixed MINOR**: Added `maxlength="2000"` on annotation textarea (client-side hint; backend uses `Text` column with no limit).
 - **Fixed MINOR**: Added 4 new i18n keys: `dismiss_failed`, `dismissed`, `dismissing`, `failed_to_load_pipelines`.
 - **Added product map**: Dismiss action behaviour checkbox, annotation maxlength edge case as [x].
+
+### 2026-07-10 — Cross-cutting QA (index 300)
+- **Fixed CRITICAL**: DB CHECK constraint `ck_feedback_records_status` excluded `'dismissed'` — every dismiss call to `POST /feedback/inbox/{record_id}/review` with `action: dismiss` crashed with `IntegrityError`. Created migration `0082_feedback_dismissed_status` to add `'dismissed'` to the allowed statuses. Updated model CHECK constraint to match.
+- **Fixed MAJOR**: Main list error state now shows a Retry button via `<ErrorAlert :on-retry="loadFeedback">` — previously the error was displayed inline with no recovery action other than manual page reload.
+- **Removed Known Gap**: "No retry button on main list fetch error" — now resolved.

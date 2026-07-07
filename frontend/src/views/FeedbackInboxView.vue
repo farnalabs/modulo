@@ -65,13 +65,11 @@
       </div>
     </div>
 
-    <div v-if="pipelinesError" class="rounded-lg border border-destructive/50 bg-destructive/10 p-3 text-sm text-destructive">
-      {{ pipelinesError }}
-    </div>
+    <ErrorAlert v-if="pipelinesError" :message="pipelinesError" :on-retry="loadPipelines" />
 
     <LoadingSpinner v-if="loading" />
 
-    <ErrorAlert v-else-if="error" :message="error" />
+    <ErrorAlert v-else-if="error" :message="error" :on-retry="loadFeedback" />
 
     <template v-else>
       <div v-if="records.length === 0" data-testid="feedback-inbox-empty" class="rounded-lg border bg-card p-8 text-center">
