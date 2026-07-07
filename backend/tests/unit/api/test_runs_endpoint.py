@@ -59,6 +59,8 @@ def _make_run(
     r = MagicMock()
     r.id = _RUN_ID
     r.pipeline_id = _PIPELINE_ID
+    r.pipeline_name = "Test Pipeline"
+    r.pipeline = None
     r.status = status
     r.langgraph_thread_id = _THREAD_ID
     r.error_detail = error_detail
