@@ -52,6 +52,10 @@ def _fernet_key_hash(key: str) -> str:
     return hashlib.sha256(key.encode()).hexdigest()[:16]
 
 
+def _file_checksum(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
 # ── JSON serialisation helpers ────────────────────────────────────────────────
 
 
@@ -290,7 +294,13 @@ def _restore_checkpoints_sync(raw_url: str, checkpoints: list[dict[str, Any]]) -
             cur.execute("TRUNCATE TABLE checkpoints CASCADE")
             for row in checkpoints:
                 org_id_raw = row.get("organisation_id")
-                org_uuid = uuid.UUID(org_id_raw) if org_id_raw else None
+                if org_id_raw:
+                    try:
+                        org_uuid = uuid.UUID(org_id_raw)
+                    except (ValueError, TypeError) as exc:
+                        raise RuntimeError(f"Invalid organisation_id in checkpoints: {org_id_raw!r}") from exc
+                else:
+                    org_uuid = None
                 cur.execute(
                     "INSERT INTO checkpoints "
                     "(organisation_id, thread_id, checkpoint_ns, checkpoint_id, "
@@ -322,7 +332,13 @@ def _restore_checkpoint_writes_sync(raw_url: str, writes: list[dict[str, Any]]) 
                 if raw_blob is not None:
                     blob = bytes.fromhex(raw_blob) if raw_blob else b""
                 org_id_raw = row.get("organisation_id")
-                org_uuid = uuid.UUID(org_id_raw) if org_id_raw else None
+                if org_id_raw:
+                    try:
+                        org_uuid = uuid.UUID(org_id_raw)
+                    except (ValueError, TypeError) as exc:
+                        raise RuntimeError(f"Invalid organisation_id in checkpoint_writes: {org_id_raw!r}") from exc
+                else:
+                    org_uuid = None
                 cur.execute(
                     "INSERT INTO checkpoint_writes "
                     "(organisation_id, thread_id, checkpoint_ns, checkpoint_id, "
@@ -456,31 +472,38 @@ def backup(db_url: str | None, output_dir: Path | None) -> None:
             backup_dir = Path(f"./modulo-backup-{ts}-{suffix}")
         backup_dir.mkdir(parents=True, exist_ok=False)
 
+    file_checksums: dict[str, str] = {}
+
     try:
         click.echo(f"Backup directory: {backup_dir}")
 
         click.echo("Running pg_dump...")
         _run_pg_dump(raw_url, backup_dir / "database.sql")
+        file_checksums["database.sql"] = _file_checksum(backup_dir / "database.sql")
         click.echo("  database.sql written")
 
         click.echo("Exporting checkpoint_blobs...")
         blobs = _export_checkpoint_blobs_sync(raw_url)
         _write_json(backup_dir / "checkpoint_blobs.json", blobs)
+        file_checksums["checkpoint_blobs.json"] = _file_checksum(backup_dir / "checkpoint_blobs.json")
         click.echo(f"  {len(blobs)} checkpoint blob records exported")
 
         click.echo("Exporting checkpoints...")
         checkpoints = _export_checkpoints_sync(raw_url)
         _write_json(backup_dir / "checkpoints.json", checkpoints)
+        file_checksums["checkpoints.json"] = _file_checksum(backup_dir / "checkpoints.json")
         click.echo(f"  {len(checkpoints)} checkpoint records exported")
 
         click.echo("Exporting checkpoint_writes...")
         cwrites = _export_checkpoint_writes_sync(raw_url)
         _write_json(backup_dir / "checkpoint_writes.json", cwrites)
+        file_checksums["checkpoint_writes.json"] = _file_checksum(backup_dir / "checkpoint_writes.json")
         click.echo(f"  {len(cwrites)} checkpoint write records exported")
 
         click.echo("Exporting credentials references...")
         creds = _export_credentials_references_sync(raw_url)
         _write_json(backup_dir / "credentials_references.json", creds)
+        file_checksums["credentials_references.json"] = _file_checksum(backup_dir / "credentials_references.json")
         total_creds = sum(len(v) for v in creds.values())
         click.echo(f"  {total_creds} credential records referenced")
 
@@ -490,6 +513,7 @@ def backup(db_url: str | None, output_dir: Path | None) -> None:
             "db_version": _get_db_version(raw_url),
             "schema_versions": _get_schema_versions(),
             "fernet_key_hash": _fernet_key_hash(settings.fernet_key),
+            "file_checksums": file_checksums,
         }
         _write_json(backup_dir / "backup-info.json", manifest)
         click.echo("  backup-info.json written")
@@ -499,6 +523,9 @@ def backup(db_url: str | None, output_dir: Path | None) -> None:
 
     except Exception as exc:
         _log.exception("Backup failed")
+        if backup_dir.exists():
+            shutil.rmtree(backup_dir, ignore_errors=True)
+            click.echo(f"Cleaned up partial backup directory: {backup_dir}", err=True)
         click.echo(f"Backup failed: {exc}", err=True)
         raise click.ClickException(str(exc)) from exc
 
@@ -541,6 +568,30 @@ def restore(backup_dir: Path, db_url: str | None, yes: bool, previous_fernet_key
         click.confirm("\nThis will OVERWRITE the current database. Continue?", abort=True)
 
     try:
+        checksums = manifest.get("file_checksums")
+        if checksums:
+            click.echo("Verifying backup file integrity...")
+            for filename, expected_hash in checksums.items():
+                file_path = backup_dir / filename
+                if not file_path.exists():
+                    raise click.ClickException(
+                        f"Backup file {filename} listed in manifest but not found on disk"
+                    )
+                actual_hash = _file_checksum(file_path)
+                if actual_hash != expected_hash:
+                    raise click.ClickException(
+                        f"Checksum mismatch for {filename}: expected {expected_hash}, got {actual_hash}"
+                    )
+            click.echo("  All file checksums verified")
+
+        for json_name in ("checkpoint_blobs.json", "checkpoints.json", "checkpoint_writes.json", "credentials_references.json"):
+            json_path = backup_dir / json_name
+            if json_path.exists():
+                try:
+                    json.loads(json_path.read_text(encoding="utf-8"))
+                except json.JSONDecodeError as exc:
+                    raise click.ClickException(f"Corrupt JSON file {json_name}: {exc}") from exc
+
         db_sql = backup_dir / "database.sql"
         if db_sql.exists():
             click.echo("Restoring database schema and data via psql...")

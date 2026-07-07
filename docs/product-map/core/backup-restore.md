@@ -23,7 +23,8 @@ status: partial
 - [x] Backup exports `checkpoints` table via sync psycopg query to JSON
 - [x] Backup exports `checkpoint_writes` table via sync psycopg query to JSON
 - [x] Backup exports credential references (`connector_instances`, `model_backends`) to JSON
-- [x] Backup writes `backup-info.json` manifest with timestamp, type, db_version, schema_versions, fernet_key_hash
+- [x] Backup writes `backup-info.json` manifest with timestamp, type, db_version, schema_versions, fernet_key_hash, file_checksums
+- [x] Backup computes SHA-256 checksum for each output file and stores in manifest
 - [x] Backup accepts `--db-url` override (falls back to `DATABASE_URL` env / settings)
 - [x] Backup accepts `--output-dir` override
 - [x] Backup resolves asyncpg/psycopg URI schemes to postgresql:// for native tools
@@ -68,6 +69,13 @@ status: partial
 - [x] Missing checkpoint_blobs JSON skips blob restore
 - [x] Empty checkpoint_blobs table exports empty array
 - [x] Connection failure raises ClickException
+- [x] Backup failure cleans up partial output directory (removes incomplete backup)
+- [x] Backup manifest includes `file_checksums` dict with SHA-256 of every output file
+- [x] Restore verifies all file checksums before making any DB changes
+- [x] Restore pre-validates all JSON files (JSONDecodeError) before starting restore
+- [x] Restore skips checksum verification for old backups (manifest without `file_checksums`)
+- [x] Restore with missing manifest file raises clear error (listed but not on disk)
+- [x] Restore with checksum mismatch raises clear error before any DB change
 
 ### Error paths
 
@@ -83,6 +91,11 @@ status: partial
 - [x] Restore with changed FERNET_KEY but no --previous-fernet-key → ClickException
 - [x] Invalid FERNET_KEY during re-encryption (InvalidToken) → ClickException
 - [x] Empty --previous-fernet-key passed (empty string) → Fernet error → ClickException
+- [x] Invalid UUID in checkpoints JSON on restore → RuntimeError with context
+- [x] Invalid UUID in checkpoint_writes JSON on restore → RuntimeError with context
+- [x] Corrupt JSON file on restore (JSONDecodeError) → ClickException before any DB change
+- [x] Backup file checksum mismatch on restore → ClickException before any DB change
+- [x] Backup file listed in manifest but missing on disk → ClickException
 
 ## Known Gaps
 
@@ -91,6 +104,8 @@ status: partial
 - No encryption verification step after credential restoration
 - No dry-run mode for restore preview
 - Restore sequence is non-transactional across steps (psql → checkpoints → credentials) — a failure mid-sequence leaves DB in partially-restored state
+- All checkpoint data is loaded into memory (list[dict]) — large orgs with millions of checkpoints may OOM; no streaming/batched export
+- Restore uses individual INSERT statements per row, not COPY — slow for large datasets
 
 ## QA History
 
@@ -107,4 +122,16 @@ status: partial
 - Updated all 11 existing CLI backup/restore tests with new mock parameters and fixture files
 - Product map: added 5 new behaviour checkboxes ([x]), 2 new error path checkboxes ([x]), 1 new Known Gap
 
-**Status:** partial (5 known gaps remain)
+**Status:** partial (7 known gaps remain)
+
+### 2026-07-07 — Cross-cutting QA (index 317)
+
+**CRITICAL fixes applied:**
+- Backup files now have SHA-256 checksums stored in manifest (`file_checksums`). Restore verifies all checksums before making any DB change, catching silent corruption early.
+- Restore pre-validates all JSON files (try `json.loads`) before any DB operation — corrupt JSON triggers clean ClickException before any data is changed.
+- Unhandled `ValueError` in `_restore_checkpoints_sync` and `_restore_checkpoint_writes_sync` UUID parsing fixed — now raises `RuntimeError` with row context (matching `_restore_checkpoint_blobs_sync` pattern).
+- Backup failure now cleans up partial output directory via `shutil.rmtree` instead of leaving incomplete files.
+- Added 13 new unit tests: `_file_checksum` helper (2), restore integrity verification with checksums (3), restore skips checksums for old backups (1), restore fails on corrupt JSON (1), UUID error paths for checkpoints and checkpoint_writes (2).
+- Product map: added 9 new behaviour checkboxes ([x]), 7 new error path checkboxes ([x]), 2 new Known Gaps.
+
+**Status:** partial (7 known gaps remain)
