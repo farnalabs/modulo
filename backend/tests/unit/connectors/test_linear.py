@@ -59,6 +59,7 @@ async def test_query_issue(connector):
                 "state": {"id": "state-1", "name": "In Progress"},
                 "assignee": None,
                 "team": {"id": "team-1", "name": "Engineering", "key": "PROJ"},
+                "labels": {"nodes": [{"id": "l1", "name": "bug", "color": "#ff0000"}]},
                 "createdAt": "2024-01-01T00:00:00Z",
                 "updatedAt": "2024-01-02T00:00:00Z",
                 "url": "https://linear.app/team/issue/PROJ-123",
@@ -70,6 +71,7 @@ async def test_query_issue(connector):
     assert len(result.records) == 1
     assert result.records[0]["identifier"] == "PROJ-123"
     assert result.records[0]["title"] == "Fix login bug"
+    assert result.records[0]["labels"]["nodes"][0]["name"] == "bug"
 
 
 @respx.mock
@@ -94,6 +96,7 @@ async def test_query_search(connector):
                         "state": {"id": "state-2", "name": "Todo"},
                         "assignee": None,
                         "team": {"id": "team-1", "name": "Engineering", "key": "PROJ"},
+                        "labels": {"nodes": []},
                         "createdAt": "2024-01-03T00:00:00Z",
                         "updatedAt": "2024-01-03T00:00:00Z",
                         "url": "https://linear.app/team/issue/PROJ-456",
@@ -114,19 +117,20 @@ async def test_write_create_issue(connector):
         "data": {
             "issueCreate": {
                 "success": True,
-                "issue": {
-                    "id": "issue-3",
-                    "identifier": "PROJ-789",
-                    "title": "New feature",
-                    "description": "Implement feature",
-                    "priority": 0,
-                    "state": {"id": "state-2", "name": "Todo"},
-                    "assignee": None,
-                    "team": {"id": "team-1", "name": "Engineering", "key": "PROJ"},
-                    "createdAt": "2024-01-04T00:00:00Z",
-                    "updatedAt": "2024-01-04T00:00:00Z",
-                    "url": "https://linear.app/team/issue/PROJ-789",
-                },
+                    "issue": {
+                        "id": "issue-3",
+                        "identifier": "PROJ-789",
+                        "title": "New feature",
+                        "description": "Implement feature",
+                        "priority": 0,
+                        "state": {"id": "state-2", "name": "Todo"},
+                        "assignee": None,
+                        "team": {"id": "team-1", "name": "Engineering", "key": "PROJ"},
+                        "labels": {"nodes": [{"id": "l1", "name": "bug", "color": "#ff0000"}]},
+                        "createdAt": "2024-01-04T00:00:00Z",
+                        "updatedAt": "2024-01-04T00:00:00Z",
+                        "url": "https://linear.app/team/issue/PROJ-789",
+                    },
             }
         }
     }
@@ -147,19 +151,20 @@ async def test_write_update_issue(connector):
         "data": {
             "issueUpdate": {
                 "success": True,
-                "issue": {
-                    "id": "issue-1",
-                    "identifier": "PROJ-123",
-                    "title": "Updated title",
-                    "description": "Users cannot log in",
-                    "priority": 2,
-                    "state": {"id": "state-1", "name": "In Progress"},
-                    "assignee": None,
-                    "team": {"id": "team-1", "name": "Engineering", "key": "PROJ"},
-                    "createdAt": "2024-01-01T00:00:00Z",
-                    "updatedAt": "2024-01-05T00:00:00Z",
-                    "url": "https://linear.app/team/issue/PROJ-123",
-                },
+                    "issue": {
+                        "id": "issue-1",
+                        "identifier": "PROJ-123",
+                        "title": "Updated title",
+                        "description": "Users cannot log in",
+                        "priority": 2,
+                        "state": {"id": "state-1", "name": "In Progress"},
+                        "assignee": None,
+                        "team": {"id": "team-1", "name": "Engineering", "key": "PROJ"},
+                        "labels": {"nodes": [{"id": "l1", "name": "bug", "color": "#ff0000"}]},
+                        "createdAt": "2024-01-01T00:00:00Z",
+                        "updatedAt": "2024-01-05T00:00:00Z",
+                        "url": "https://linear.app/team/issue/PROJ-123",
+                    },
             }
         }
     }
@@ -308,6 +313,7 @@ async def test_query_search_with_pagination(connector):
                         "state": {"id": "s1", "name": "Todo"},
                         "assignee": None,
                         "team": {"id": "t1", "name": "Eng", "key": "PROJ"},
+                        "labels": {"nodes": []},
                         "createdAt": "2024-01-01T00:00:00Z",
                         "updatedAt": "2024-01-01T00:00:00Z",
                         "url": "https://linear.app/team/issue/PROJ-1",
@@ -330,6 +336,7 @@ async def test_query_search_with_pagination(connector):
                         "state": {"id": "s2", "name": "In Progress"},
                         "assignee": None,
                         "team": {"id": "t1", "name": "Eng", "key": "PROJ"},
+                        "labels": {"nodes": []},
                         "createdAt": "2024-01-02T00:00:00Z",
                         "updatedAt": "2024-01-02T00:00:00Z",
                         "url": "https://linear.app/team/issue/PROJ-2",

@@ -48,3 +48,22 @@ async def test_empty_response_returns_empty_dict(connector):
     respx.post(_GRAPHQL).mock(return_value=httpx.Response(200, json={"data": None}))
     result = await connector._graphql("query { viewer { id } }")
     assert result == {}
+
+
+@respx.mock
+async def test_protocol_error_raises_valueerror(connector):
+    respx.post(_GRAPHQL).mock(side_effect=httpx.RemoteProtocolError("Server disconnected"))
+    with pytest.raises(ValueError, match="protocol error"):
+        await connector._graphql("query { viewer { id } }")
+
+
+@respx.mock
+async def test_protocol_error_retry_then_success(connector):
+    route = respx.post(_GRAPHQL)
+    route.side_effect = [
+        httpx.RemoteProtocolError("Server disconnected"),
+        httpx.RemoteProtocolError("Server disconnected"),
+        httpx.Response(200, json={"data": {"viewer": {"id": "u1", "name": "Alice", "email": "a@a.com"}}}),
+    ]
+    result = await connector._graphql("query { viewer { id } }")
+    assert result == {"viewer": {"id": "u1", "name": "Alice", "email": "a@a.com"}}

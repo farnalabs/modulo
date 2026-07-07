@@ -45,7 +45,7 @@ Async Linear GraphQL API connector implementing `ConnectorBase`. BDD coverage: 8
 ### Issue Operations — read, update, and search
 
 - [x] Get single issue by ID via `query("issue")` with `issue_id` filter
-- [x] Return issue fields: id, title, description, state, priority, assignee, labels, createdAt, updatedAt
+- [x] Return issue fields: id, title, description, state, priority, assignee, labels (`{id, name, color}`), createdAt, updatedAt
 - [x] Search issues via `query("search")` with text `query` and optional `limit`
 - [x] Default search limit to 100
 - [x] Support cursor-based pagination via `cursor` parameter in `ConnectorQuery`
@@ -92,6 +92,7 @@ Async Linear GraphQL API connector implementing `ConnectorBase`. BDD coverage: 8
 - [x] `_graphql` respects `Retry-After` header for retry timing
 - [x] `_graphql` retries `TimeoutException` with exponential backoff, raises `ValueError("Linear API timeout")` after exhaustion
 - [x] `_graphql` retries `ConnectError` with exponential backoff, raises `ValueError("Linear API connection error")` after exhaustion
+- [x] `_graphql` retries `ProtocolError` (e.g. server disconnect) with exponential backoff, raises `ValueError("Linear API protocol error")` after exhaustion
 - [x] `_graphql` handles 304 Not Modified — raises `ValueError` with descriptive message
 - [x] `_graphql` catches `httpx.HTTPStatusError` for non-retryable statuses — raises `ValueError` with status code and response text
 - [x] `_graphql` catches `json.JSONDecodeError` — raises `ValueError` with parsing error detail
@@ -116,6 +117,7 @@ Async Linear GraphQL API connector implementing `ConnectorBase`. BDD coverage: 8
 - [ ] **No cycle/sprint assignment**: can read cycles but cannot assign an issue to a cycle
 
 ## QA History
+- 2026-07-07: Cross-cutting QA (index 318). Added `labels` field to `_ISSUE_FIELDS` GraphQL fragment. Added `httpx.ProtocolError` retry/backoff handling to `_graphql` (previously unhandled — raised raw exception). Added 2 new resilience tests (protocol error failure + protocol error retry-then-success). Updated test mocks to verify label data in issue responses. Fixed stale checkbox in connector-hub.md (BDD scenarios exist since July 1). Status: partial.
 - 2026-07-05: Cross-cutting QA (improve-architecture): Added retry/backoff to `_graphql` (429/502/503/504 + TimeoutException + ConnectError) matching GitHub/Jira/Slack patterns. Simplified `health_check` (removed dead `httpx.HTTPStatusError` catch). Added cursor-based pagination for `query("search")`. Added comment operations (`issue_comments` read, `issue_comment` write). Added team/project discovery (teams, projects, states, labels, cycles). Added 15 new unit tests covering all new code paths (37 total). Updated product map with new sections. Status: partial (cycle assignment, label management, state helper still gaps).
 - 2026-07-03: Cross-cutting QA (index 110): Fixed HTTP/JSON error handling in `_graphql` (wraps HTTPStatusError, TimeoutException, ConnectError, JSONDecodeError as ValueError). Added 5 resilience unit tests (test_linear_resilience.py). Fixed stale checkbox: timeout confirmed configured (30s). Fixed search default limit (50→100). Added Error Handling section (12 behaviour checkboxes). Status: partial (known gaps unchanged).
 - 2026-07-01: Cross-cutting QA: fixed frontmatter (added unit-tests), removed outdated known gaps #7 (BDD placeholder → 5 real scenarios) and #8 (unit tests exist), added 3 BDD error-path scenarios + step definitions, added 4 unit tests (missing id, update failure, GraphQL error), fixed search to respect `q.limit` via `first:$limit`, consolidated gaps from 9→7
