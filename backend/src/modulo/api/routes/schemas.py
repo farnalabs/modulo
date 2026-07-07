@@ -899,6 +899,8 @@ async def generate_schema_endpoint(
                     "model_backend_id": str(first_backend_id),
                 },
             )
+    except HTTPException:
+        raise
     except Exception:
         logger.exception("schemas.generate.audit_failed")
 

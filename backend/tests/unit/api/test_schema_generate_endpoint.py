@@ -43,6 +43,7 @@ def _make_mock_session() -> AsyncMock:
     begin_cm.__aenter__ = AsyncMock(return_value=None)
     begin_cm.__aexit__ = AsyncMock(return_value=False)
     session.begin = MagicMock(return_value=begin_cm)
+    session.begin_nested = MagicMock(return_value=begin_cm)
     return session
 
 
@@ -184,6 +185,7 @@ def test_generate_schema_generation_failure_returns_502(client: TestClient) -> N
             side_effect=SchemaGenerationError("LLM returned garbage"),
         ),
         patch("modulo.api.routes.schemas.create_secrets_backend"),
+        patch("modulo.core.audit_logger.append_audit_event", return_value=None),
     ):
         resp = client.post(
             "/api/v1/schemas/generate",

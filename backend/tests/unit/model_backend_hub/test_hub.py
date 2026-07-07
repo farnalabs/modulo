@@ -170,7 +170,7 @@ async def test_get_with_rotation_returns_primary_when_healthy():
     fallback = uuid.uuid4()
     hub.register(primary, _FakeBackend())
     hub.register(fallback, _FakeBackend())
-    result = hub.get_with_rotation(primary)
+    result = await hub.get_with_rotation(primary)
     assert result.backend is hub._backends[primary]
     assert result.rotated is False
     assert result.original_id == primary
@@ -183,7 +183,7 @@ async def test_get_with_rotation_falls_back_when_primary_unhealthy():
     hub.register(primary, _FakeBackend())
     hub.register(fallback, _FakeBackend())
     hub.mark_unhealthy(primary)
-    result = hub.get_with_rotation(primary)
+    result = await hub.get_with_rotation(primary)
     assert result.backend is hub._backends[fallback]
     assert result.rotated is True
     assert result.original_id == primary
@@ -195,7 +195,7 @@ async def test_get_with_rotation_raises_when_all_unhealthy():
     hub.register(bid, _FakeBackend())
     hub.mark_unhealthy(bid)
     with pytest.raises(BackendUnavailableError):
-        hub.get_with_rotation(bid)
+        await hub.get_with_rotation(bid)
 
 
 # ---------------------------------------------------------------------------
@@ -371,14 +371,14 @@ async def test_get_with_rotation_raises_for_unregistered_id():
     for unregistered IDs, consistent with the product map spec."""
     hub = ModelBackendHub()
     with pytest.raises(BackendUnavailableError):
-        hub.get_with_rotation(uuid.uuid4())
+        await hub.get_with_rotation(uuid.uuid4())
 
 
 async def test_get_with_rotation_empty_hub_raises():
     """get_with_rotation on empty hub raises BackendUnavailableError."""
     hub = ModelBackendHub()
     with pytest.raises(BackendUnavailableError):
-        hub.get_with_rotation(uuid.uuid4())
+        await hub.get_with_rotation(uuid.uuid4())
 
 
 async def test_initialise_self_referencing_fallback_does_not_crash():

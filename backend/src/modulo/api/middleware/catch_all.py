@@ -2,7 +2,7 @@ import logging
 import os
 from typing import Any
 
-from fastapi import Request
+from fastapi import HTTPException, Request
 from fastapi.responses import JSONResponse
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.responses import Response
@@ -18,6 +18,8 @@ class CatchAllMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next: Any) -> Response:
         try:
             return await call_next(request)
+        except HTTPException:
+            raise
         except Exception:
             rid = getattr(request.state, "request_id", None)
             logger.exception(

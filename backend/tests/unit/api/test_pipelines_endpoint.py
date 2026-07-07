@@ -57,6 +57,7 @@ def _make_mock_session() -> AsyncMock:
     begin_cm.__aenter__ = AsyncMock(return_value=None)
     begin_cm.__aexit__ = AsyncMock(return_value=False)
     session.begin = MagicMock(return_value=begin_cm)
+    session.begin_nested = MagicMock(return_value=begin_cm)
     return session
 
 
@@ -653,6 +654,7 @@ def test_clone_pipeline_returns_201(client: TestClient) -> None:
         patch("modulo.api.routes.pipelines.clone_pipeline", return_value=cloned) as mock_clone,
         patch("modulo.api.routes.pipelines.set_rls_org"),
         patch("modulo.api.routes.pipelines.set_rls_user_context"),
+        patch("modulo.api.routes.pipelines.append_audit_event", return_value=None),
     ):
         resp = client.post(f"/api/v1/pipelines/{_PIPELINE_ID}/clone", json={})
 
@@ -664,7 +666,7 @@ def test_clone_pipeline_returns_201(client: TestClient) -> None:
         ANY,
         org_id=_ORG_ID,
         pipeline_id=_PIPELINE_ID,
-        created_by=_USER_ID,
+        account_id=_USER_ID,
         new_name=None,
     )
 
@@ -684,6 +686,7 @@ def test_clone_pipeline_with_custom_name(client: TestClient) -> None:
         patch("modulo.api.routes.pipelines.clone_pipeline", return_value=cloned) as mock_clone,
         patch("modulo.api.routes.pipelines.set_rls_org"),
         patch("modulo.api.routes.pipelines.set_rls_user_context"),
+        patch("modulo.api.routes.pipelines.append_audit_event", return_value=None),
     ):
         resp = client.post(
             f"/api/v1/pipelines/{_PIPELINE_ID}/clone",
@@ -696,7 +699,7 @@ def test_clone_pipeline_with_custom_name(client: TestClient) -> None:
         ANY,
         org_id=_ORG_ID,
         pipeline_id=_PIPELINE_ID,
-        created_by=_USER_ID,
+        account_id=_USER_ID,
         new_name="My Custom Clone",
     )
 
