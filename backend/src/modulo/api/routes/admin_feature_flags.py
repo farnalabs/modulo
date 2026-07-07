@@ -79,7 +79,7 @@ async def _resolve_tier(
             return org_plan_id
 
     # 5. Community fallback
-    return "team"
+    return "community"
 
 
 async def _build_registry(
