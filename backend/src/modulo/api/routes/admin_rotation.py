@@ -103,6 +103,8 @@ async def rotate_key(
                     "old_key_provided": bool(req.old_fernet_key),
                 },
             )
+        except HTTPException:
+            raise
         except Exception:
             _log.exception("Failed to record fernet_key_rotation_started audit event")
             raise
@@ -217,6 +219,8 @@ async def _run_rotation_background(
                 "total_rows": result.total_rows_reencrypted,
             },
         )
+    except HTTPException:
+        raise
     except Exception as exc:
         _log.exception("rotation.failed")
         _last_rotation_result = {

@@ -97,6 +97,8 @@ async def list_endpoints(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database operation failed. Please try again later.",
         ) from None
+    except HTTPException:
+        raise
     except Exception as e:
         logger.exception("notifications.list_endpoints.unexpected_error")
         raise HTTPException(
@@ -158,6 +160,8 @@ async def create_endpoint(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database operation failed. Please try again later.",
         ) from None
+    except HTTPException:
+        raise
     except Exception as e:
         logger.exception("notifications.create_endpoint.unexpected_error")
         raise HTTPException(
@@ -188,11 +192,13 @@ async def get_endpoint(
             detail="Notifications are not available. Run database migrations to enable this feature.",
         ) from None
     except SQLAlchemyError:
-        logger.exception("notifications.get_endpoint.sqlalchemy_error")
+        logger.exception("notifications")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database operation failed. Please try again later.",
         ) from None
+    except HTTPException:
+        raise
     except Exception as e:
         logger.exception("notifications.get_endpoint.unexpected_error")
         raise HTTPException(
@@ -251,6 +257,8 @@ async def update_endpoint(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database operation failed. Please try again later.",
         ) from None
+    except HTTPException:
+        raise
     except Exception as e:
         logger.exception("notifications.update_endpoint.unexpected_error")
         raise HTTPException(
@@ -287,6 +295,8 @@ async def delete_endpoint(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database operation failed. Please try again later.",
         ) from None
+    except HTTPException:
+        raise
     except Exception as e:
         logger.exception("notifications.delete_endpoint.unexpected_error")
         raise HTTPException(

@@ -307,6 +307,8 @@ async def download_registry_primitive_endpoint(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database operation failed. Please try again.",
         )
+    except HTTPException:
+        raise
     except Exception as e:
         _log.exception("registry.download_primitive.unexpected_error", extra={"slug": slug})
         raise HTTPException(
@@ -572,6 +574,8 @@ async def verify_registry_primitive_v2(
                 status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
                 detail="Database operation failed. Please try again.",
             )
+        except HTTPException:
+            raise
         except Exception as e:
             _log.exception(
                 "registry.verify_primitive.unexpected_error", extra={"slug": slug, "fp": entry.signing_key_fingerprint},

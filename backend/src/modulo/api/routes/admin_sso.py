@@ -140,6 +140,8 @@ async def get_providers(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database error. Please try again.",
         ) from exc
+    except HTTPException:
+        raise
     except Exception:
         _log.exception("Unexpected error in get_providers")
         raise HTTPException(
@@ -192,6 +194,8 @@ async def create_provider_endpoint(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database error. Please try again.",
         ) from exc
+    except HTTPException:
+        raise
     except Exception:
         _log.exception("Unexpected error in create_provider_endpoint")
         raise HTTPException(
@@ -236,6 +240,8 @@ async def update_provider_endpoint(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database error. Please try again.",
         ) from exc
+    except HTTPException:
+        raise
     except Exception:
         _log.exception("Unexpected error in update_provider_endpoint")
         raise HTTPException(
@@ -272,6 +278,8 @@ async def delete_provider_endpoint(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database error. Please try again.",
         ) from exc
+    except HTTPException:
+        raise
     except Exception:
         _log.exception("Unexpected error in delete_provider_endpoint")
         raise HTTPException(
@@ -308,6 +316,8 @@ async def test_provider_connection(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database error. Please try again.",
         ) from exc
+    except HTTPException:
+        raise
     except Exception:
         _log.exception("Unexpected error in test_provider_connection")
         raise HTTPException(
@@ -324,6 +334,8 @@ async def test_provider_connection(
         if provider.provider_type == "oidc":
             return await _test_oidc_connection(provider)
         return await _test_saml_connection(provider)
+    except HTTPException:
+        raise
     except Exception as exc:
         _log.warning("SSO test connection failed: %s", exc)
         return SsoProviderTestResult(
@@ -344,6 +356,8 @@ async def _test_oidc_connection(provider: Any) -> SsoProviderTestResult:
             resp = await client.get(provider.discovery_url, timeout=httpx.Timeout(10.0, connect=5.0))
             resp.raise_for_status()
             disc = resp.json()
+    except HTTPException:
+        raise
     except Exception as exc:
         return SsoProviderTestResult(
             success=False,
@@ -392,6 +406,8 @@ async def _test_saml_connection(provider: Any) -> SsoProviderTestResult:
                 resp = await client.get(provider.metadata_url, timeout=httpx.Timeout(10.0, connect=5.0))
                 resp.raise_for_status()
                 metadata_xml = resp.text
+        except HTTPException:
+            raise
         except Exception as exc:
             return SsoProviderTestResult(
                 success=False,
@@ -406,6 +422,8 @@ async def _test_saml_connection(provider: Any) -> SsoProviderTestResult:
 
     try:
         root = ET.fromstring(metadata_xml)
+    except HTTPException:
+        raise
     except Exception as exc:
         return SsoProviderTestResult(
             success=False,
@@ -481,6 +499,8 @@ async def toggle_provider_endpoint(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database error. Please try again.",
         ) from exc
+    except HTTPException:
+        raise
     except Exception:
         _log.exception("Unexpected error in toggle_provider_endpoint")
         raise HTTPException(
@@ -533,6 +553,8 @@ async def set_group_mappings_endpoint(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database error. Please try again.",
         ) from exc
+    except HTTPException:
+        raise
     except Exception:
         _log.exception("Unexpected error in set_group_mappings_endpoint")
         raise HTTPException(
@@ -569,6 +591,8 @@ async def get_group_mappings_endpoint(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database error. Please try again.",
         ) from exc
+    except HTTPException:
+        raise
     except Exception:
         _log.exception("Unexpected error in get_group_mappings_endpoint")
         raise HTTPException(

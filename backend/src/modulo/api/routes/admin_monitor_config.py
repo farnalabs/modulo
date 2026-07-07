@@ -72,6 +72,8 @@ async def get_monitor_config(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database error while fetching monitor config.",
         )
+    except HTTPException:
+        raise
     except Exception:
         logger.exception("Unexpected error in get_monitor_config")
         raise HTTPException(
@@ -105,6 +107,8 @@ async def set_monitor_config(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database error while setting monitor config.",
         )
+    except HTTPException:
+        raise
     except Exception:
         logger.exception("Unexpected error in set_monitor_config")
         raise HTTPException(

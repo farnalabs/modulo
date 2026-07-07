@@ -132,6 +132,8 @@ async def oidc_callback(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database error. Please try again.",
         ) from exc
+    except HTTPException:
+        raise
     except Exception as e:
         _log.exception("sso.oidc_callback.unexpected_error")
         raise HTTPException(
@@ -176,6 +178,8 @@ async def saml_login(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database error. Please try again.",
         ) from exc
+    except HTTPException:
+        raise
     except Exception as e:
         _log.exception("sso.saml_login.unexpected_error")
         raise HTTPException(
@@ -227,6 +231,8 @@ async def saml_acs(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database error. Please try again.",
         ) from exc
+    except HTTPException:
+        raise
     except Exception as e:
         _log.exception("sso.saml_acs.unexpected_error")
         raise HTTPException(

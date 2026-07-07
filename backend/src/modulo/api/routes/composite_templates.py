@@ -113,6 +113,8 @@ async def list_composite_templates_endpoint(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
         ) from None
+    except HTTPException:
+        raise
     except Exception:
         logger.exception("Unexpected error in list_composite_templates_endpoint")
         raise HTTPException(
@@ -154,6 +156,8 @@ async def create_composite_template_endpoint(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
         ) from None
+    except HTTPException:
+        raise
     except Exception:
         logger.exception("Unexpected error in create_composite_template_endpoint")
         raise HTTPException(
@@ -177,6 +181,8 @@ async def get_composite_template_endpoint(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
         ) from None
+    except HTTPException:
+        raise
     except Exception:
         logger.exception("Unexpected error in get_composite_template_endpoint")
         raise HTTPException(
@@ -210,6 +216,8 @@ async def update_composite_template_endpoint(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
         ) from None
+    except HTTPException:
+        raise
     except Exception:
         logger.exception("Unexpected error in update_composite_template_endpoint")
         raise HTTPException(
@@ -236,6 +244,8 @@ async def delete_composite_template_endpoint(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
         ) from None
+    except HTTPException:
+        raise
     except Exception:
         logger.exception("Unexpected error in delete_composite_template_endpoint")
         raise HTTPException(
@@ -278,6 +288,8 @@ async def get_composite_editor_endpoint(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
         ) from None
+    except HTTPException:
+        raise
     except Exception:
         logger.exception("Unexpected error in get_composite_editor_endpoint")
         raise HTTPException(
@@ -317,6 +329,8 @@ async def save_composite_editor_endpoint(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
         ) from None
+    except HTTPException:
+        raise
     except Exception:
         logger.exception("Unexpected error in save_composite_editor_endpoint")
         raise HTTPException(
@@ -361,6 +375,8 @@ async def detect_params_endpoint(
     """
     try:
         return DetectParamsResponse(ports=[])
+    except HTTPException:
+        raise
     except Exception:
         logger.exception("Unexpected error in detect_params_endpoint")
         raise HTTPException(
@@ -401,6 +417,8 @@ async def publish_composite_endpoint(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
         ) from None
+    except HTTPException:
+        raise
     except Exception:
         logger.exception("Unexpected error in publish_composite_endpoint")
         raise HTTPException(

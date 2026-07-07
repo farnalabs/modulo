@@ -97,6 +97,8 @@ async def list_audit_events_endpoint(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database connection failed. Please try again.",
         )
+    except HTTPException:
+        raise
     except Exception:
         _log.exception("Unexpected error in list_audit_events_endpoint")
         raise HTTPException(
@@ -133,6 +135,8 @@ async def batch_detail_endpoint(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database connection failed. Please try again.",
         )
+    except HTTPException:
+        raise
     except Exception:
         _log.exception("Unexpected error in batch_detail_endpoint")
         raise HTTPException(
@@ -164,6 +168,8 @@ async def verify_chain_endpoint(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database connection failed. Please try again.",
         )
+    except HTTPException:
+        raise
     except Exception:
         _log.exception("Unexpected error in verify_chain_endpoint")
         raise HTTPException(
@@ -223,6 +229,8 @@ async def export_chain_endpoint(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database connection failed. Please try again.",
         )
+    except HTTPException:
+        raise
     except Exception:
         _log.exception("Unexpected error in export_chain_endpoint")
         raise HTTPException(

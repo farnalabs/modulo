@@ -115,6 +115,8 @@ async def create_api_key_endpoint(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="API keys are not available. Run database migrations to enable this feature.",
         ) from None
+    except HTTPException:
+        raise
     except Exception:
         logger.exception("Unexpected error in create_api_key_endpoint")
         raise HTTPException(
@@ -147,6 +149,8 @@ async def list_api_keys_endpoint(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="API keys are not available. Run database migrations to enable this feature.",
         ) from None
+    except HTTPException:
+        raise
     except Exception:
         logger.exception("Unexpected error in list_api_keys_endpoint")
         raise HTTPException(
@@ -194,6 +198,8 @@ async def update_api_key_endpoint(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="API keys are not available. Run database migrations to enable this feature.",
         ) from None
+    except HTTPException:
+        raise
     except Exception:
         logger.exception("Unexpected error in update_api_key_endpoint")
         raise HTTPException(
@@ -227,6 +233,8 @@ async def revoke_api_key_endpoint(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="API keys are not available. Run database migrations to enable this feature.",
         ) from None
+    except HTTPException:
+        raise
     except Exception:
         logger.exception("Unexpected error in revoke_api_key_endpoint")
         raise HTTPException(
