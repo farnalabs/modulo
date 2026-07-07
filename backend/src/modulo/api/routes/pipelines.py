@@ -13,7 +13,7 @@ from datetime import datetime
 from typing import Any, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, Field, ValidationError, model_validator
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError, ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -260,11 +260,18 @@ def _graph_response(
     *,
     validation_issues: list[GraphValidationIssue] | None = None,
 ) -> PipelineGraphResponse:
-    return PipelineGraphResponse(
-        nodes=[PipelineGraphNode.model_validate(node) for node in nodes],
-        edges=[PipelineGraphEdge.model_validate(edge) for edge in edges],
-        validation_issues=validation_issues or [],
-    )
+    try:
+        return PipelineGraphResponse(
+            nodes=[PipelineGraphNode.model_validate(node) for node in nodes],
+            edges=[PipelineGraphEdge.model_validate(edge) for edge in edges],
+            validation_issues=validation_issues or [],
+        )
+    except ValidationError:
+        _log.exception("Pipeline graph data validation failed")
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Pipeline graph contains invalid data. This may be caused by a schema migration or manual DB edit. Please check the pipeline nodes and edges.",
+        )
 
 
 async def _resolve_graph_references(
