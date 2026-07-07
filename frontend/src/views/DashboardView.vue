@@ -66,7 +66,7 @@
               {{ $t('views.DashboardView.create_pipeline') }}
             </a>
             <a
-              href="/templates"
+              href="/library?type=pipeline_template"
               class="rounded-lg border border-input bg-background px-4 py-2 text-sm font-medium hover:bg-accent transition-all"
             >
               {{ $t('views.DashboardView.browse_templates') }}

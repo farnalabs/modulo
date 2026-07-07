@@ -80,19 +80,6 @@ routes:
     <<: *community
     deprecated: false
 
-  /templates:
-    name: pipeline-templates
-    testid: page-templates
-    breadcrumb: Templates
-    parent: /library
-    product_map: null
-    i18n_key: nav.templates
-    sidebar_group: core
-    sidebar_order: 5
-    type: list_page
-    <<: *community
-    deprecated: false
-
   /pipelines/copy:
     name: pipeline-copy
     testid: page-pipeline-copy
@@ -899,12 +886,6 @@ elements:
     - testid: library-filter
       type: input
       label: Filter Library
-      dynamic_testid: false
-
-  /templates:
-    - testid: templates-grid
-      type: section
-      label: Templates Grid
       dynamic_testid: false
 
   /stages:

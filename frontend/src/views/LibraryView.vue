@@ -5,7 +5,7 @@
         <h1 class="text-xl font-semibold text-foreground">{{ $t('views.LibraryView.title') }}</h1>
         <div class="flex items-center gap-3">
           <router-link
-            to="/templates"
+            to="/library?type=pipeline_template"
             class="rounded-lg bg-primary px-4 py-1.5 text-sm font-semibold text-primary-foreground hover:brightness-110 transition-all"
             data-testid="library-create-pipeline-header"
           >
@@ -300,7 +300,7 @@
 
 <script setup lang="ts">
 import { ref, computed, onMounted, onBeforeUnmount } from 'vue'
-import { useRouter } from 'vue-router'
+import { useRouter, useRoute } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import { useApi } from '../composables/useApi'
 import { formatApiError } from '../lib/api/formatError'
@@ -335,6 +335,7 @@ interface ListResponse {
 
 const { t } = useI18n()
 const router = useRouter()
+const route = useRoute()
 const { get, patch } = useApi()
 
 const primitives = ref<LibraryPrimitive[]>([])
@@ -458,5 +459,11 @@ async function toggleAutoUpdate(prim: LibraryPrimitive) {
 onBeforeUnmount(() => {
   if (searchTimer) clearTimeout(searchTimer)
 })
-onMounted(loadPrimitives)
+onMounted(() => {
+  const typeParam = route.query.type
+  if (typeof typeParam === 'string' && typeParam) {
+    typeFilter.value = typeParam
+  }
+  loadPrimitives()
+})
 </script>
