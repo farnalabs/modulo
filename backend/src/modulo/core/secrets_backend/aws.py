@@ -17,9 +17,13 @@ import asyncio
 import os
 from typing import Any
 
-from modulo.core.secrets_backend import SecretsBackend, validate_key
+from modulo.core.secrets_backend import SecretsBackend, logger, run_sync, validate_key
 
 _TIMEOUT: float = 30.0
+_DEFAULT_REGION: str = "us-east-1"
+_RECOVERY_WINDOW_DAYS: int = 7
+_FORCE_DELETE_WITHOUT_RECOVERY: bool = False
+_SECRET_DESCRIPTION: str = "Modulo secret"
 
 _MODULE_AVAILABLE: bool = True
 _boto3: Any = None
@@ -48,10 +52,10 @@ class AWSSecretsManagerBackend(SecretsBackend):
                 "The 'boto3' package is required for AWSSecretsManagerBackend. Install it with: pip install boto3"
             )
 
-        self._region: str = os.environ.get("AWS_REGION", "us-east-1")
-        self._profile: str | None = os.environ.get("AWS_PROFILE") or None
-        self._access_key: str | None = os.environ.get("AWS_ACCESS_KEY_ID") or None
-        self._secret_key: str | None = os.environ.get("AWS_SECRET_ACCESS_KEY") or None
+        self._region: str = (os.environ.get("AWS_REGION") or _DEFAULT_REGION).strip()
+        self._profile: str | None = (os.environ.get("AWS_PROFILE") or "").strip() or None
+        self._access_key: str | None = (os.environ.get("AWS_ACCESS_KEY_ID") or "").strip() or None
+        self._secret_key: str | None = (os.environ.get("AWS_SECRET_ACCESS_KEY") or "").strip() or None
 
         self._client: Any = None
         self._client_lock: asyncio.Lock = asyncio.Lock()
@@ -68,16 +72,20 @@ class AWSSecretsManagerBackend(SecretsBackend):
             if self._client is not None:
                 return self._client
 
-            session_kwargs: dict[str, Any] = {"region_name": self._region}
+            try:
+                session_kwargs: dict[str, Any] = {"region_name": self._region}
 
-            if self._profile:
-                session_kwargs["profile_name"] = self._profile
-            elif self._access_key and self._secret_key:
-                session_kwargs["aws_access_key_id"] = self._access_key
-                session_kwargs["aws_secret_access_key"] = self._secret_key
+                if self._profile:
+                    session_kwargs["profile_name"] = self._profile
+                elif self._access_key and self._secret_key:
+                    session_kwargs["aws_access_key_id"] = self._access_key
+                    session_kwargs["aws_secret_access_key"] = self._secret_key
 
-            session = _boto3.Session(**session_kwargs)
-            self._client = session.client("secretsmanager")
+                session = _boto3.Session(**session_kwargs)
+                self._client = session.client("secretsmanager")
+            except Exception:
+                logger.exception("AWSSecretsManagerBackend: failed to create client")
+                raise
             return self._client
 
     async def get_secret(self, key: str) -> str:
@@ -85,17 +93,21 @@ class AWSSecretsManagerBackend(SecretsBackend):
         client = await self._ensure_client()
 
         try:
-            response = await asyncio.wait_for(
-                asyncio.to_thread(client.get_secret_value, SecretId=key),
+            response = await run_sync(
+                client.get_secret_value,
+                SecretId=key,
                 timeout=_TIMEOUT,
             )
         except client.exceptions.ResourceNotFoundException:
             raise KeyError(key) from None
         except client.exceptions.AccessDeniedException as exc:
+            logger.warning("AWSSecretsManagerBackend: access denied reading secret %s", key)
             raise PermissionError("AWSSecretsManagerBackend: access denied reading secret") from exc
         except TimeoutError:
+            logger.error("AWSSecretsManagerBackend: timeout reading secret %s", key)
             raise RuntimeError("AWSSecretsManagerBackend: timeout reading secret") from None
         except Exception as exc:
+            logger.error("AWSSecretsManagerBackend: unexpected error reading secret %s: %s", key, exc)
             raise RuntimeError(f"AWSSecretsManagerBackend: unexpected error reading secret: {exc}") from exc
 
         secret_string = response.get("SecretString")
@@ -113,27 +125,32 @@ class AWSSecretsManagerBackend(SecretsBackend):
         client = await self._ensure_client()
 
         try:
-            await asyncio.wait_for(
-                asyncio.to_thread(
-                    client.create_secret,
-                    Name=key,
-                    SecretString=value,
-                    Description="Modulo secret",
-                ),
+            await run_sync(
+                client.create_secret,
+                Name=key,
+                SecretString=value,
+                Description=_SECRET_DESCRIPTION,
                 timeout=_TIMEOUT,
             )
         except client.exceptions.ResourceExistsException:
-            await asyncio.wait_for(
-                asyncio.to_thread(
+            try:
+                await run_sync(
                     client.update_secret,
                     SecretId=key,
                     SecretString=value,
-                ),
-                timeout=_TIMEOUT,
-            )
+                    timeout=_TIMEOUT,
+                )
+            except TimeoutError:
+                logger.error("AWSSecretsManagerBackend: timeout writing secret %s", key)
+                raise RuntimeError("AWSSecretsManagerBackend: timeout writing secret") from None
+            except Exception as exc:
+                logger.error("AWSSecretsManagerBackend: unexpected error writing secret %s: %s", key, exc)
+                raise RuntimeError(f"AWSSecretsManagerBackend: unexpected error writing secret: {exc}") from exc
         except TimeoutError:
+            logger.error("AWSSecretsManagerBackend: timeout writing secret %s", key)
             raise RuntimeError("AWSSecretsManagerBackend: timeout writing secret") from None
         except Exception as exc:
+            logger.error("AWSSecretsManagerBackend: unexpected error writing secret %s: %s", key, exc)
             raise RuntimeError(f"AWSSecretsManagerBackend: unexpected error writing secret: {exc}") from exc
 
     async def delete_secret(self, key: str) -> None:
@@ -141,18 +158,18 @@ class AWSSecretsManagerBackend(SecretsBackend):
         client = await self._ensure_client()
 
         try:
-            await asyncio.wait_for(
-                asyncio.to_thread(
-                    client.delete_secret,
-                    SecretId=key,
-                    RecoveryWindowInDays=7,
-                    ForceDeleteWithoutRecovery=False,
-                ),
+            await run_sync(
+                client.delete_secret,
+                SecretId=key,
+                RecoveryWindowInDays=_RECOVERY_WINDOW_DAYS,
+                ForceDeleteWithoutRecovery=_FORCE_DELETE_WITHOUT_RECOVERY,
                 timeout=_TIMEOUT,
             )
         except client.exceptions.ResourceNotFoundException:
             pass
         except TimeoutError:
+            logger.error("AWSSecretsManagerBackend: timeout deleting secret %s", key)
             raise RuntimeError("AWSSecretsManagerBackend: timeout deleting secret") from None
         except Exception as exc:
+            logger.error("AWSSecretsManagerBackend: unexpected error deleting secret %s: %s", key, exc)
             raise RuntimeError(f"AWSSecretsManagerBackend: unexpected error deleting secret: {exc}") from exc

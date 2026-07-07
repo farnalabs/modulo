@@ -9,12 +9,26 @@ Usage:
 
 from __future__ import annotations
 
+import asyncio
+import logging
 import os
 from abc import ABC, abstractmethod
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any, Callable
 
 if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession
+
+logger = logging.getLogger(__name__)
+
+DEFAULT_TIMEOUT: float = 30.0
+
+
+async def run_sync(callable: Callable[..., Any], *args: Any, timeout: float = DEFAULT_TIMEOUT, **kwargs: Any) -> Any:
+    """Run a synchronous callable in a thread pool with a timeout."""
+    return await asyncio.wait_for(
+        asyncio.to_thread(callable, *args, **kwargs),
+        timeout=timeout,
+    )
 
 
 class SecretsBackend(ABC):

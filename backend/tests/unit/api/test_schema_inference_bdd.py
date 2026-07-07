@@ -304,6 +304,7 @@ def test_publish_inferred_schema(client: TestClient) -> None:
 
     mock_schema = MagicMock()
     mock_schema.id = uuid.uuid4()
+    mock_schema.account_id = uuid.UUID("00000000-0000-0000-0000-000000000002")
     mock_schema.organisation_id = _ORG_ID
     mock_schema.name = "inferred-schema"
     mock_schema.description = "Inferred from github-issues"
@@ -325,6 +326,7 @@ def test_publish_inferred_schema(client: TestClient) -> None:
 
     mock_sv = MagicMock()
     mock_sv.id = uuid.uuid4()
+    mock_sv.account_id = uuid.UUID("00000000-0000-0000-0000-000000000002")
     mock_sv.organisation_id = _ORG_ID
     mock_sv.schema_id = uuid.UUID(schema_id)
     mock_sv.version = "1.0"
