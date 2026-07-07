@@ -2,7 +2,7 @@
   <div class="min-h-screen bg-background">
     <header class="bg-card border-b border-border px-6 py-4">
       <div class="max-w-6xl mx-auto flex items-center justify-between gap-3">
-        <h1 class="text-xl font-semibold text-foreground">Pipelines</h1>
+        <h1 class="text-xl font-semibold text-foreground">{{ $t('views.PipelineListView.title') }}</h1>
         <div class="relative">
           <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground pointer-events-none"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
           <input
@@ -20,7 +20,7 @@
             class="px-4 py-2 bg-primary text-primary-foreground text-sm font-medium rounded-lg hover:brightness-110 transition-all"
             data-testid="pipeline-list-new-pipeline"
           >
-            New Pipeline
+            {{ $t('views.PipelineListView.new_pipeline') }}
           </router-link>
       </div>
     </header>
@@ -103,14 +103,14 @@
               class="flex-1 px-3 py-2 bg-primary text-primary-foreground text-sm font-medium rounded-lg border border-primary/30 hover:border-primary/60 hover:brightness-110 transition-all"
               data-testid="pipeline-list-open-editor"
             >
-              Open in Editor
+              {{ $t('views.PipelineListView.open_in_editor') }}
             </button>
             <button
               class="flex-1 px-3 py-2 bg-primary text-primary-foreground text-sm font-medium rounded-lg border border-primary/30 hover:border-primary/60 hover:brightness-110 transition-all"
               @click.stop="openRunDialog(p)"
               data-testid="pipeline-list-run"
             >
-              Run
+              {{ $t('views.PipelineListView.run') }}
             </button>
           </div>
         </div>
@@ -123,10 +123,10 @@
           @click="prevPage"
           data-testid="pipeline-list-prev-page"
         >
-          Previous
+          {{ $t('views.PipelineListView.previous') }}
         </button>
         <span class="px-4 py-2 text-sm text-muted-foreground">
-          Page {{ page }} of {{ totalPages }}
+          {{ $t('views.PipelineListView.page_x_of_y', { page, total: totalPages }) }}
         </span>
         <button
           :disabled="page >= totalPages"
@@ -134,7 +134,7 @@
           @click="nextPage"
           data-testid="pipeline-list-next-page"
         >
-          Next
+          {{ $t('views.PipelineListView.next') }}
         </button>
       </div>
     </main>
@@ -146,7 +146,7 @@
       >
         <div class="bg-card border border-border rounded-xl shadow-xl w-full max-w-lg mx-4 p-6 space-y-4">
           <div class="flex items-center justify-between">
-            <h2 class="text-lg font-semibold text-foreground">Run Pipeline</h2>
+            <h2 class="text-lg font-semibold text-foreground">{{ $t('views.PipelineListView.run_pipeline') }}</h2>
             <button
               class="text-muted-foreground hover:text-foreground transition-colors"
               @click="closeRunDialog"
@@ -161,7 +161,7 @@
           </p>
 
           <div class="space-y-2">
-            <label class="block text-sm font-medium text-foreground">Prompt</label>
+            <label class="block text-sm font-medium text-foreground">{{ $t('views.PipelineListView.prompt') }}</label>
             <textarea
               v-model="prompt"
               placeholder="Enter a prompt (optional)"
@@ -188,7 +188,7 @@
                 :class="{ 'rotate-180': showAdvanced }"
                 class="transition-transform"
               ><polyline points="6 9 12 15 18 9"/></svg>
-              Advanced
+              {{ $t('views.PipelineListView.advanced') }}
             </button>
           </div>
 
@@ -213,7 +213,7 @@
               @click="closeRunDialog"
               data-testid="pipeline-list-run-cancel"
             >
-              Cancel
+              {{ $t('common.cancel') }}
             </button>
             <button
               :disabled="running"
@@ -231,7 +231,7 @@
                 <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4" />
                 <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
               </svg>
-              {{ running ? 'Running...' : 'Run Pipeline' }}
+              {{ running ? $t('views.PipelineListView.running') : $t('views.PipelineListView.run_pipeline') }}
             </button>
           </div>
         </div>

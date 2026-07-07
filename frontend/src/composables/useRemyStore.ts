@@ -270,6 +270,10 @@ export const useRemyStore = defineStore('remy', () => {
   }
 
   async function approvePermission(requestId: string, action: 'approve' | 'reject' | 'approve_for_session') {
+    if (!activeSessionId.value) {
+      console.warn("Cannot approve permission: no active session");
+      return;
+    }
     const headers = getAuthHeaders()
     try {
       const resp = await fetch(`/api/v1/remy/sessions/${activeSessionId.value}/permission-response`, {
