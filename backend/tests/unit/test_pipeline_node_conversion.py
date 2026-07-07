@@ -171,7 +171,7 @@ class TestConvertToAgent:
             resp = await convert_node_to_agent_endpoint(
                 pipeline_id=PIPELINE_ID,
                 node_id=NODE_ID,
-                body=body,
+                req=body,
                 session=session,
                 principal=principal,
             )
@@ -188,7 +188,7 @@ class TestConvertToAgent:
             await convert_node_to_agent_endpoint(
                 pipeline_id=PIPELINE_ID,
                 node_id=NODE_ID,
-                body=body,
+                req=body,
                 session=session,
                 principal=principal,
             )
@@ -207,7 +207,7 @@ class TestConvertToAgent:
             await convert_node_to_agent_endpoint(
                 pipeline_id=PIPELINE_ID,
                 node_id=NODE_ID,
-                body=body,
+                req=body,
                 session=session,
                 principal=principal,
             )
@@ -225,7 +225,7 @@ class TestConvertToAgent:
             await convert_node_to_agent_endpoint(
                 pipeline_id=PIPELINE_ID,
                 node_id=NODE_ID,
-                body=body,
+                req=body,
                 session=session,
                 principal=principal,
             )
@@ -248,7 +248,7 @@ class TestConvertToAgent:
             await convert_node_to_agent_endpoint(
                 pipeline_id=PIPELINE_ID,
                 node_id=NODE_ID,
-                body=body,
+                req=body,
                 session=session,
                 principal=principal,
             )
@@ -273,7 +273,7 @@ class TestConvertToAgent:
             await convert_node_to_agent_endpoint(
                 pipeline_id=PIPELINE_ID,
                 node_id=NODE_ID,
-                body=body,
+                req=body,
                 session=session,
                 principal=principal,
             )
@@ -298,7 +298,7 @@ class TestConvertToAgent:
             await convert_node_to_agent_endpoint(
                 pipeline_id=PIPELINE_ID,
                 node_id=NODE_ID,
-                body=body,
+                req=body,
                 session=session,
                 principal=principal,
             )
@@ -323,7 +323,7 @@ class TestConvertToAgent:
             await convert_node_to_agent_endpoint(
                 pipeline_id=PIPELINE_ID,
                 node_id=NODE_ID,
-                body=body,
+                req=body,
                 session=session,
                 principal=principal,
             )
@@ -355,7 +355,7 @@ class TestConvertToAgent:
             await convert_node_to_agent_endpoint(
                 pipeline_id=PIPELINE_ID,
                 node_id=NODE_ID,
-                body=body,
+                req=body,
                 session=session,
                 principal=principal,
             )

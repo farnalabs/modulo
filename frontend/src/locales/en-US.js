@@ -467,14 +467,26 @@ export default {
     },
     "PipelineEditorView": {
       "pipeline_editor": "Pipeline Editor",
+      "node_properties": "Node Properties",
+      "type_label": "Type",
+      "manual": "Manual",
+      "agent": "Agent",
+      "label_field": "Label",
+      "output_schema": "Output Schema",
+      "connector": "Connector",
       "review_gate": "Review Gate",
+      "convert_to_agent": "Convert to Agent",
       "revert_to_manual": "Revert to Manual",
       "revert_dialog_title": "Revert to Manual",
       "select_snapshot_description": "Select a snapshot that contains the manual configuration for this node.",
       "snapshot_label": "Snapshot",
       "select_snapshot_placeholder": "Select a snapshot...",
       "cancel": "Cancel",
-      "revert": "Revert"
+      "revert": "Revert",
+      "select_agent_placeholder": "Select an agent...",
+      "select_connector_placeholder": "Select a connector...",
+      "model_backend_label": "Model Backend",
+      "loading": "Loading..."
     },
     "AdminPluginsView": {
       "manage_installed_modulo_plugins_and_extensions": "Manage installed Modulo plugins and extensions",
