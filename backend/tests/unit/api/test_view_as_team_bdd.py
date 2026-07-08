@@ -79,7 +79,7 @@ def _make_mock_session() -> AsyncMock:
     user_mock.preferences = {}
     hitl_result = AsyncMock()
     hitl_result.scalar_one_or_none = AsyncMock(return_value=team_mock)
-    hitl_result.scalar_one = AsyncMock(return_value=0)
+    hitl_result.scalar_one = MagicMock(return_value=0)
     hitl_result.scalars = MagicMock(return_value=scalar_mock)
     session.execute.return_value = hitl_result
     return session
