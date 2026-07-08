@@ -11,6 +11,7 @@ from datetime import UTC, datetime, timedelta
 import pytest
 import pytest_asyncio
 from sqlalchemy import text
+from sqlalchemy.exc import DBAPIError
 from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker
 
 from modulo.db.crud.environment_profile import (
@@ -343,7 +344,7 @@ class TestDeleteProfileWithLeases:
         async with factory() as session, session.begin():
             await set_rls_org(session, org_a)
             # Deletion should fail because workspace_leases has RESTRICT FK
-            with pytest.raises(Exception):
+            with pytest.raises(DBAPIError):
                 await delete_environment_profile(session, profile_with_lease)
 
 
