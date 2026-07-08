@@ -276,7 +276,7 @@ async function loadAll() {
     allFlags.value = flagsData.flags
     flagsWouldActivate.value = flagsData.would_activate ?? []
   } catch (e: unknown) {
-    loadError.value = `Failed to load data: ${e instanceof Error ? e.message : String(e)}`
+    loadError.value = `Failed to load data: ${formatApiError(e)}`
   } finally {
     loading.value = false
   }
@@ -299,7 +299,7 @@ async function verifyKey() {
       }
     }
   } catch (e: unknown) {
-    verifyResult.value = { valid: false, message: e instanceof Error ? e.message : String(e) }
+    verifyResult.value = { valid: false, message: formatApiError(e) }
   } finally {
     verifying.value = false
   }
@@ -327,7 +327,7 @@ async function applyKey() {
       await loadAll()
     }
   } catch (e: unknown) {
-    verifyResult.value = { valid: false, message: `Failed to apply: ${e instanceof Error ? e.message : String(e)}` }
+    verifyResult.value = { valid: false, message: `Failed to apply: ${formatApiError(e)}` }
   } finally {
     applying.value = false
   }
@@ -349,7 +349,7 @@ async function removeLicense() {
       await loadAll()
     }
   } catch (e: unknown) {
-    verifyResult.value = { valid: false, message: `Failed to remove: ${e instanceof Error ? e.message : String(e)}` }
+    verifyResult.value = { valid: false, message: `Failed to remove: ${formatApiError(e)}` }
   } finally {
     removing.value = false
   }
@@ -360,3 +360,4 @@ onMounted(() => {
   loadAll()
 })
 </script>
+

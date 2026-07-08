@@ -144,7 +144,7 @@ async function loadSchemas() {
       schemas.value = data.items
     }
   } catch (e: unknown) {
-    error.value = `${t('views.SchemaListView.failed_to_load_schemas')} ${e instanceof Error ? e.message : String(e)}`
+    error.value = `${t('views.SchemaListView.failed_to_load_schemas')} ${formatApiError(e)}`
   } finally {
     loading.value = false
   }
@@ -174,7 +174,7 @@ async function deprecateSchema() {
       deprecateConfirmId.value = null
     }
   } catch (e: unknown) {
-    deprecateError.value = e instanceof Error ? e.message : String(e)
+    deprecateError.value = formatApiError(e)
   } finally {
     deprecating.value = false
   }
@@ -182,3 +182,4 @@ async function deprecateSchema() {
 
 onMounted(loadSchemas)
 </script>
+

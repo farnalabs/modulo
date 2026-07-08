@@ -228,7 +228,7 @@ async function loadEvents(cursor?: string | null) {
       if (!cursor) cursorStack.value = []
     }
   } catch (e: unknown) {
-    error.value = `Failed to load trigger events: ${e instanceof Error ? e.message : String(e)}`
+    error.value = `Failed to load trigger events: ${formatApiError(e)}`
   } finally {
     loading.value = false
   }
@@ -258,3 +258,4 @@ function resetFilters() {
 
 onMounted(() => loadEvents(null))
 </script>
+

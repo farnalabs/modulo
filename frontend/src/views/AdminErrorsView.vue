@@ -193,7 +193,9 @@ import {
   Tooltip,
   TooltipTrigger,
   TooltipContent,
-} from "../components/ui/tooltip"
+import { formatApiError } from "../lib/api/formatError"
+
+const router = useRouter()
 
 const router = useRouter()
 
@@ -231,7 +233,7 @@ async function loadGroups(offs?: number) {
     groups.value = data.items
     total.value = data.total
   } catch (e: unknown) {
-    error.value = `Failed to load error groups: ${e instanceof Error ? e.message : String(e)}`
+    error.value = `Failed to load error groups: ${formatApiError(e)}`
   } finally {
     loading.value = false
   }
@@ -301,3 +303,5 @@ function formatDate(dateStr: string): string {
 
 onMounted(() => loadGroups(0))
 </script>
+
+

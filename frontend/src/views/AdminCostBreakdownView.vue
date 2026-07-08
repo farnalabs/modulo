@@ -182,7 +182,7 @@ async function loadData() {
       items.value = (data as CostReportResponse).items ?? []
     }
   } catch (e: unknown) {
-    loadError.value = `Failed to load cost report: ${e instanceof Error ? e.message : String(e)}`
+    loadError.value = `Failed to load cost report: ${formatApiError(e)}`
   } finally {
     loading.value = false
   }
@@ -199,7 +199,7 @@ async function loadAnomalies() {
       anomalies.value = (data as AnomalyResponse[]) ?? []
     }
   } catch (e: unknown) {
-    anomaliesError.value = `Failed to load anomalies: ${e instanceof Error ? e.message : String(e)}`
+    anomaliesError.value = `Failed to load anomalies: ${formatApiError(e)}`
   } finally {
     anomaliesLoading.value = false
   }
@@ -225,3 +225,4 @@ onMounted(() => {
   loadAnomalies()
 })
 </script>
+

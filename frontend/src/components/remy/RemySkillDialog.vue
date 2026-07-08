@@ -256,7 +256,7 @@ async function save() {
     closeForm();
     emit("saved");
   } catch (e: unknown) {
-    saveError.value = `Failed to save skill: ${e instanceof Error ? e.message : String(e)}`;
+    saveError.value = `Failed to save skill: ${formatApiError(e)}`;
   } finally {
     saving.value = false;
   }
@@ -277,7 +277,7 @@ async function confirmDelete() {
     deletingId.value = null;
     emit("saved");
   } catch (e: unknown) {
-    saveError.value = `Failed to delete skill: ${e instanceof Error ? e.message : String(e)}`;
+    saveError.value = `Failed to delete skill: ${formatApiError(e)}`;
   } finally {
     deleting.value = false;
   }

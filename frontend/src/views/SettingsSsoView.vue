@@ -185,6 +185,7 @@ import LoadingSpinner from '../components/shared/LoadingSpinner.vue'
 import ErrorAlert from '../components/shared/ErrorAlert.vue'
 import FeatureGate from '../components/FeatureGate.vue'
 import { formatError } from '../lib/utils'
+import { formatApiError } from '../lib/api/formatError'
 
 type SsoProviderResponse = components['schemas']['SsoProviderResponse']
 type SsoProviderCreate = components['schemas']['SsoProviderCreate']
@@ -262,7 +263,7 @@ async function loadProviders() {
       providers.value = (Array.isArray(resp.data) ? resp.data : (resp.data as any)?.items ?? [])
     }
   } catch (e: unknown) {
-    error.value = `Failed to load providers: ${e instanceof Error ? e.message : String(e)}`
+    error.value = `Failed to load providers: ${formatApiError(e)}`
   } finally {
     loading.value = false
   }
@@ -425,7 +426,7 @@ async function toggleProvider(provider: SsoProviderResponse) {
       if (idx >= 0) providers.value[idx] = data
     }
   } catch (e: unknown) {
-    error.value = `Toggle failed: ${e instanceof Error ? e.message : String(e)}`
+    error.value = `Toggle failed: ${formatApiError(e)}`
   } finally {
     togglingId.value = null
   }
@@ -484,3 +485,4 @@ onBeforeUnmount(() => {
 })
 onMounted(loadProviders)
 </script>
+

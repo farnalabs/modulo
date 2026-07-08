@@ -606,7 +606,7 @@ async function saveTrigger() {
     dialogOpen.value = false
     await loadTriggers()
   } catch (e: unknown) {
-    formError.value = `Error: ${e instanceof Error ? e.message : String(e)}`
+    formError.value = `Error: ${formatApiError(e)}`
   } finally {
     saving.value = false
   }
@@ -627,7 +627,7 @@ async function deleteTrigger() {
     deleteTarget.value = null
     await loadTriggers()
   } catch (e: unknown) {
-    error.value = `Error deleting trigger: ${e instanceof Error ? e.message : String(e)}`
+    error.value = `Error deleting trigger: ${formatApiError(e)}`
   } finally {
     deleting.value = false
   }
@@ -647,7 +647,7 @@ async function toggleActive(trigger: TriggerItem) {
     }
     await loadTriggers()
   } catch (e: unknown) {
-    error.value = `Error toggling trigger: ${e instanceof Error ? e.message : String(e)}`
+    error.value = `Error toggling trigger: ${formatApiError(e)}`
   } finally {
     triggerToggling.value[trigger.id] = false
   }
@@ -664,7 +664,7 @@ async function loadTriggers() {
       items.value = data.items
     }
   } catch (e: unknown) {
-    error.value = `Failed to load triggers: ${e instanceof Error ? e.message : String(e)}`
+    error.value = `Failed to load triggers: ${formatApiError(e)}`
   }
 }
 
@@ -688,3 +688,4 @@ async function loadAll() {
 
 onMounted(() => { planStore.fetchPlan(); loadAll() })
 </script>
+

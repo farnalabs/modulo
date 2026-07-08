@@ -1,3 +1,4 @@
+import asyncio
 from __future__ import annotations
 
 import logging
@@ -139,6 +140,8 @@ class RemyConfigService:
     ) -> bool:
         try:
             config = await self.get_config(org_id)
+        except asyncio.CancelledError:
+            raise
         except Exception:
             logger.exception("Failed to fetch config for access check, denying org %s", org_id)
             return False

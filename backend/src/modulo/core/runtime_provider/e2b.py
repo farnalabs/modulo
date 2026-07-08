@@ -72,6 +72,8 @@ class E2BRuntimeProvider(RuntimeProvider):
                 AsyncSandbox.create(template=template_id),
                 timeout=timeout,
             )
+        except asyncio.CancelledError:
+            raise
         except Exception:
             _log.exception("Failed to create E2B sandbox with template %s", template_id)
             raise
@@ -80,6 +82,8 @@ class E2BRuntimeProvider(RuntimeProvider):
         if repo_url:
             try:
                 await self._clone_repo(sandbox, repo_url, spec.labels or {})
+            except asyncio.CancelledError:
+                raise
             except Exception:
                 await sandbox.kill()
                 raise
@@ -113,6 +117,8 @@ class E2BRuntimeProvider(RuntimeProvider):
                 stderr=getattr(proc, "stderr", "") or "",
                 duration_ms=duration,
             )
+        except asyncio.CancelledError:
+            raise
         except Exception as exc:
             duration = int((time.monotonic() - start) * 1000)
             _log.exception("exec_command failed in sandbox %s", provider_ref)
@@ -133,6 +139,8 @@ class E2BRuntimeProvider(RuntimeProvider):
         if sandbox is not None:
             try:
                 await sandbox.kill()
+            except asyncio.CancelledError:
+                raise
             except Exception:
                 _log.exception("Failed to kill E2B sandbox %s", provider_ref)
 
@@ -144,6 +152,8 @@ class E2BRuntimeProvider(RuntimeProvider):
         try:
             running = await sandbox.is_running()
             return "running" if running else "stopped"
+        except asyncio.CancelledError:
+            raise
         except Exception:
             _log.exception("Failed to get status for sandbox %s", provider_ref)
             return "unknown"

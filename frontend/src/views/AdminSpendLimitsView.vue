@@ -199,7 +199,7 @@ async function loadData() {
       }))
     }
   } catch (e: unknown) {
-    loadError.value = `Failed to load spend limits: ${e instanceof Error ? e.message : String(e)}`
+    loadError.value = `Failed to load spend limits: ${formatApiError(e)}`
   } finally {
     loading.value = false
   }
@@ -218,7 +218,7 @@ async function loadCosts() {
       teamCosts.value = resp.teams ?? []
     }
   } catch (e: unknown) {
-    costsError.value = `Failed to load costs: ${e instanceof Error ? e.message : String(e)}`
+    costsError.value = `Failed to load costs: ${formatApiError(e)}`
   } finally {
     costsLoading.value = false
   }
@@ -238,7 +238,7 @@ async function saveOrgLimit() {
       orgSaveSuccess.value = true
     }
   } catch (e: unknown) {
-    orgSaveError.value = `Failed to save: ${e instanceof Error ? e.message : String(e)}`
+    orgSaveError.value = `Failed to save: ${formatApiError(e)}`
   } finally {
     savingOrg.value = false
   }
@@ -257,7 +257,7 @@ async function saveTeamLimit(team: TeamRow) {
       team.daily_limit_usd = team.editingLimit
     }
   } catch (e: unknown) {
-    team.saveError = `Failed to save: ${e instanceof Error ? e.message : String(e)}`
+    team.saveError = `Failed to save: ${formatApiError(e)}`
   } finally {
     team.saving = false
   }
@@ -269,3 +269,4 @@ onMounted(() => {
   loadCosts()
 })
 </script>
+

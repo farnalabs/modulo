@@ -332,7 +332,9 @@ import ErrorAlert from '../components/shared/ErrorAlert.vue'
 import { formatError } from '../lib/utils'
 import { usePlanStore } from '../stores/planStore'
 import FeatureGate from '../components/FeatureGate.vue'
-import { shortId } from '../utils/format'
+import { formatApiError } from '../lib/api/formatError'
+
+const { t } = useI18n()
 
 const { t } = useI18n()
 import {
@@ -452,7 +454,7 @@ async function loadEvents(cursor?: string | null) {
       expandedEvent.value = null
     }
   } catch (e: unknown) {
-    error.value = `${t('views.AdminAuditView.failed_to_load_audit_events')} ${e instanceof Error ? e.message : String(e)}`
+    error.value = `${t('views.AdminAuditView.failed_to_load_audit_events')} ${formatApiError(e)}`
   } finally {
     loading.value = false
   }
@@ -537,7 +539,7 @@ async function exportCsv() {
     a.click()
     URL.revokeObjectURL(url)
   } catch (e: unknown) {
-    error.value = `${t('views.AdminAuditView.export_failed')} ${e instanceof Error ? e.message : String(e)}`
+    error.value = `${t('views.AdminAuditView.export_failed')} ${formatApiError(e)}`
   } finally {
     exporting.value = false
   }
@@ -561,7 +563,7 @@ async function verifyChain() {
       }
     }
   } catch (e: unknown) {
-    chainResult.value = { valid: false, error: e instanceof Error ? e.message : String(e) }
+    chainResult.value = { valid: false, error: formatApiError(e) }
   } finally {
     verifying.value = false
   }
@@ -608,7 +610,7 @@ async function exportJsonl() {
     a.click()
     URL.revokeObjectURL(url)
   } catch (e: unknown) {
-    error.value = `${t('views.AdminAuditView.export_failed')} ${e instanceof Error ? e.message : String(e)}`
+    error.value = `${t('views.AdminAuditView.export_failed')} ${formatApiError(e)}`
   } finally {
     exportingJsonl.value = false
   }
@@ -616,3 +618,5 @@ async function exportJsonl() {
 
 onMounted(() => { planStore.fetchPlan(); loadEvents(null) })
 </script>
+
+

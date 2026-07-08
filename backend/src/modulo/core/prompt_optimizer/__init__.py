@@ -233,6 +233,8 @@ class PromptOptimizer:
                 last_exc = exc
             except OptimizationFailedError:
                 raise
+            except asyncio.CancelledError:
+                raise
             except Exception as exc:
                 _log.error(
                     "LLM call failed (attempt %d/%d): %s",

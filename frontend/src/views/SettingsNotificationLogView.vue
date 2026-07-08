@@ -200,7 +200,7 @@ async function loadDeliveries(cursor?: string | null) {
       if (!cursor) cursorStack.value = []
     }
   } catch (e: unknown) {
-    error.value = `Failed to load delivery logs: ${e instanceof Error ? e.message : String(e)}`
+    error.value = `Failed to load delivery logs: ${formatApiError(e)}`
   } finally {
     loading.value = false
   }
@@ -231,3 +231,4 @@ function resetFilters() {
 
 onMounted(() => loadDeliveries(null))
 </script>
+

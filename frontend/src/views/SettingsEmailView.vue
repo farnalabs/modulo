@@ -1,4 +1,4 @@
-<template>
+﻿<template>
   <div data-theme="agent" class="mx-auto max-w-4xl space-y-8 p-6">
     <header>
       <h1 class="text-3xl font-bold tracking-tight">{{ $t('views.SettingsEmailView.email_settings') }}</h1>
@@ -161,7 +161,7 @@ async function loadSettings() {
       form.email_from = data.email_from || ''
     }
   } catch (e: unknown) {
-    loadError.value = `Failed to load email settings: ${e instanceof Error ? e.message : String(e)}`
+    loadError.value = `Failed to load email settings: ${formatApiError(e)}`
   } finally {
     loading.value = false
   }
@@ -194,7 +194,7 @@ async function saveSettings() {
       clearTimeoutId = setTimeout(() => { successMessage.value = null }, 3000)
     }
   } catch (e: unknown) {
-    errorMessage.value = `Save failed: ${e instanceof Error ? e.message : String(e)}`
+    errorMessage.value = `Save failed: ${formatApiError(e)}`
   } finally {
     saving.value = false
   }
@@ -225,7 +225,7 @@ async function testSettings() {
       }
     }
   } catch (e: unknown) {
-    errorMessage.value = `Test failed: ${e instanceof Error ? e.message : String(e)}`
+    errorMessage.value = `Test failed: ${formatApiError(e)}`
   } finally {
     testing.value = false
   }
@@ -240,3 +240,4 @@ onMounted(() => {
   loadSettings()
 })
 </script>
+
