@@ -177,6 +177,7 @@
               </button>
               <div v-if="deleteError" class="mt-2 text-sm text-destructive">{{ deleteError }}</div>
             </div>
+            </div>
 
             <h3 class="mb-3 text-sm font-semibold text-muted-foreground uppercase tracking-wider">Members</h3>
 

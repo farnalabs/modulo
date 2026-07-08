@@ -1,4 +1,4 @@
-import { test, expect } from '@playwright/test'
+import { test, expect } from './setup/fixtures'
 
 test.describe('Schemas Page', () => {
   test('Browse tab is active by default', async ({ page }) => {

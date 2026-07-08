@@ -1,4 +1,4 @@
-import { test, expect } from '@playwright/test'
+import { test, expect } from './setup/fixtures'
 
 test.describe('Sidebar Navigation', () => {
   test('displays Core, Settings, and Remy groups in simple mode', async ({ page }) => {
