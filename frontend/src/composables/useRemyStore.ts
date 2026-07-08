@@ -140,7 +140,7 @@ export const useRemyStore = defineStore('remy', () => {
     error.value = null
     try {
       const resp = await api.POST('/api/v1/remy/sessions', {
-        body: { name: null, provider: null, model: null, context_window_tokens: DEFAULT_CONTEXT_WINDOW_TOKENS } as any,
+        body: { name: null, provider: null, model: null, context_window_tokens: DEFAULT_CONTEXT_WINDOW_TOKENS } as unknown as Record<string, unknown>,
       })
       if (resp.error) {
         error.value = extractErrorMessage(resp.error)
@@ -272,35 +272,37 @@ export const useRemyStore = defineStore('remy', () => {
 
   async function approvePermission(requestId: string, action: 'approve' | 'reject' | 'approve_for_session') {
     if (!activeSessionId.value) {
-      console.warn("Cannot approve permission: no active session");
+      error.value = "Cannot approve permission: no active session"
       return;
     }
+    error.value = null
     try {
       const resp = await api.POST('/api/v1/remy/sessions/{session_id}/permission-response', {
         params: { path: { session_id: activeSessionId.value } },
         body: { request_id: requestId, action },
       })
       if (resp.error) {
-        console.warn('[RemyStore] Permission response failed', resp.error)
+        error.value = extractErrorMessage(resp.error)
       }
       pendingPermission.value = null
     } catch (e) {
-      console.warn('[RemyStore] Permission response error', e)
+      error.value = extractErrorMessage(e)
       pendingPermission.value = null
     }
   }
 
   async function resetSessionPermissions() {
     if (!activeSessionId.value) return
+    error.value = null
     try {
       const resp = await api.POST('/api/v1/remy/sessions/{session_id}/reset-permissions', {
         params: { path: { session_id: activeSessionId.value } },
       })
       if (resp.error) {
-        console.warn('[RemyStore] Reset permissions failed', resp.error)
+        error.value = extractErrorMessage(resp.error)
       }
     } catch (e) {
-      console.warn('[RemyStore] Reset permissions error', e)
+      error.value = extractErrorMessage(e)
     }
   }
 
