@@ -395,6 +395,7 @@ class FeedbackManager:
         )
         return new_run.id
 
+    @_rls
     async def _escalate_record(
         self,
         record_id: UUID,

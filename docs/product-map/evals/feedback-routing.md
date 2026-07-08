@@ -75,7 +75,7 @@ human-in-the-loop resolution.
 - [x] Valid states: `pending`, `routing`, `correcting`, `resolved`, `escalated`, `dismissed`
 - [x] DB-level CHECK constraint enforces valid status values
 - [x] Valid transitions:
-  - `pending` → `routing`, `correcting`, `dismissed`
+  - `pending` → `routing`, `correcting`, `resolved`, `dismissed`
   - `routing` → `escalated`, `correcting`, `resolved`
   - `correcting` → `correcting`, `resolved`, `escalated`
   - `escalated` → `resolved`, `dismissed`
