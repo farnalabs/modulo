@@ -127,12 +127,7 @@ async def get_providers(
 ) -> list[SsoProviderResponse]:
     _require_admin(current_user)
     try:
-        providers = await list_providers(session)
-    except IntegrityError:
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail="A resource with this value already exists",
-        )
+        provider = await get_provider(session, provider_id)
     except ProgrammingError as exc:
         _log.warning("SSO providers table not available: %s", exc)
         raise HTTPException(
@@ -609,11 +604,6 @@ async def get_group_mappings_endpoint(
     _require_admin(current_user)
     try:
         provider = await get_provider(session, provider_id)
-    except IntegrityError:
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail="A resource with this value already exists",
-        )
     except ProgrammingError as exc:
         _log.warning("SSO providers table not available on get_group_mappings: %s", exc)
         raise HTTPException(
