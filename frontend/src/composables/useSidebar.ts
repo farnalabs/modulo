@@ -26,7 +26,7 @@ function init() {
         groupPrefs.value = obj
       }
     } catch {
-      // ignore
+      console.warn('[Sidebar] Failed to parse JSON string from localStorage')
     }
   } else {
     const old = localStorage.getItem(OLD_COLLAPSED_KEY)
@@ -42,7 +42,7 @@ function init() {
           save()
         }
       } catch {
-        // ignore
+        console.warn('[Sidebar] Failed to parse old collapsed groups')
       }
       localStorage.removeItem(OLD_COLLAPSED_KEY)
     }

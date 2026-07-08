@@ -13,7 +13,7 @@ interface ApiOptions {
 
 const REQUEST_TIMEOUT_MS = 30000
 
-async function requestWorker<T>(method: string, path: string, body?: unknown, options?: ApiOptions): Promise<Response> {
+async function requestWorker(method: string, path: string, body?: unknown, options?: ApiOptions): Promise<Response> {
   const controller = new AbortController()
   const timer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS)
   try {
@@ -36,12 +36,12 @@ async function requestWorker<T>(method: string, path: string, body?: unknown, op
 }
 
 async function request<T>(method: string, path: string, body?: unknown, options?: ApiOptions): Promise<T> {
-  let res = await requestWorker<T>(method, path, body, options)
+  let res = await requestWorker(method, path, body, options)
 
   if (res.status === 401) {
     const refreshed = await attemptTokenRefresh()
     if (refreshed) {
-      res = await requestWorker<T>(method, path, body, options)
+      res = await requestWorker(method, path, body, options)
     }
     if (!refreshed || res.status === 401) {
       clearAccessToken()
