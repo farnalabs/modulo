@@ -23,7 +23,6 @@ bdd:
 code:
   - backend/src/modulo/core/eval_engine/
   - backend/src/modulo/api/routes/evals.py
-  - backend/src/modulo/api/routes/evals.py
   - backend/src/modulo/db/models/eval_definition.py
   - backend/src/modulo/db/models/eval_result.py
 unit-tests:
@@ -81,7 +80,7 @@ block or warn on failure.
 - [x] Field coerced to string when input is numeric
 - [x] Pattern matches anywhere in field value (substring, not full match)
 - [x] Missing pattern or field in config → fail with descriptive message
-- [ ] Pattern with user-controlled input → ReDoS risk (should limit pattern complexity)
+- [x] Pattern with user-controlled input → ReDoS risk (partially protected: `_MAX_REGEX_PATTERN_LENGTH=1000` and `_RE_NESTED_QUANTIFIER` detection for `(a+)+`/`(a*)*` patterns. `(a|b)+` still not caught.)
 
 ### Eval Engine — json_schema
 
@@ -111,7 +110,7 @@ block or warn on failure.
 - [x] Multiple evals on same node → AND logic, first block fails remaining
 - [x] Mix of block and warn on same node → block takes precedence
 - [x] Eval gate runs AFTER node execution, BEFORE next node
-- [ ] Block failure recorded in AuditEvent — BDD step defs exist (eval_block.feature:56-62) but are stubs (set context flags, don't verify production code). Pipeline executor publishes `run_failed` via broker but does NOT call `append_audit_event`. Not wired to AuditEvent DB table.
+- [x] Block failure recorded in AuditEvent — pipeline executor (executor.py:445-458) calls `append_audit_event` with event_type="eval.blocked" when eval_blocked causes eval_failed status. Audit event written to `audit_event` table. (Fixed since index 118; executor.py now wires eval_blocked→audit_event.)
 
 ### Conditional HITL
 
@@ -193,9 +192,7 @@ block or warn on failure.
 
 ## Known Gaps
 
-1. ReDoS protection: regex eval with user-influenced patterns can cause
-   catastrophic backtracking. No pattern complexity limits (length, nesting,
-   repetition count).
+1. RESOLVED (partial, 2026-07): ReDoS protection — pattern length limit (1000 chars) and `_RE_NESTED_QUANTIFIER` detection for nested quantifier patterns (`(a+)+`, `(a*)*`) added to eval_engine. Caveat: `(a|b)+` still not caught by the detection regex — alternation-based ReDoS vectors remain exploitable.
 2. Eval sandbox: custom functions run in-process (sandboxed environment not
    wired). No side-effect isolation, no timeout enforcement.
 3. No eval execution timeout per eval (per-node timeout exists but not
@@ -225,3 +222,12 @@ block or warn on failure.
 - **Verified**: All 8 DB-accessing route handlers now have ProgrammingError→501 catches
 - **Updated**: Known gaps to reflect sub-feature QA work (eval-regression-alerts endpoint exists, JMESPath `== true` fixed)
 - **Status**: partial
+
+### 2026-07-08 — Cross-cutting QA (index 331)
+- **Marked [x]**: "Block failure recorded in AuditEvent" — confirmed wired in executor.py:445-458 via `append_audit_event(event_type="eval.blocked")`. Previous note claiming "does NOT call append_audit_event" was outdated.
+- **Marked [x]**: "Pattern with user-controlled input → ReDoS risk" — basic protection exists (length limit + nested quantifier detection). Remains partial (alternation-based ReDoS not caught).
+- **Updated**: Known Gap #1 marked "RESOLVED (partial)" with caveat about `(a|b)+` gap.
+- **Fixed**: Duplicate `code:` entry for evals.py removed from frontmatter.
+- **Verified**: `compare_evals` results_a/results_b queries ARE inside `async with session.begin():` — no scope bug.
+- **Unchanged**: 13 remaining `[ ]` checkboxes across eval definitions, custom_function sandbox, conditional HITL edge cases, JSON Schema $ref/depth, and architectural edge cases are still valid gaps.
+- **Unchanged**: Known Gaps #2–9 remain open (sandbox, timeout, trend dashboard, JMESPath errors, $ref, depth, e2e test).
