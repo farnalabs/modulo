@@ -325,10 +325,10 @@
 
 <script setup lang="ts">
 import { ref, computed, onMounted, watch } from 'vue'
-import { useRoute, useRouter } from 'vue-router'
+import { useRoute } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import { api, getAccessToken } from '../lib/api/client'
-import { formatApiError, type ProblemDetail } from '../lib/api/formatError'
+import { formatApiError } from '../lib/api/formatError'
 import type { components } from '../lib/api/client'
 import LoadingSpinner from '../components/shared/LoadingSpinner.vue'
 import FeatureGate from '../components/FeatureGate.vue'
@@ -360,7 +360,6 @@ interface SchemaVersion {
 let fieldKeyCounter = 0
 
 const route = useRoute()
-const router = useRouter()
 
 const schemas = ref<SchemaItem[]>([])
 const loadingSchemas = ref(true)
@@ -555,8 +554,8 @@ async function loadLatestVersion(schemaId: string) {
         fields.value = loadedFields
       }
     }
-  } catch (err) {
-    console.warn('Failed to load schema fields:', err)
+  } catch (e) {
+    console.warn('Failed to load schema', e)
   }
 }
 
@@ -618,8 +617,8 @@ async function validateSchema(): Promise<boolean> {
         errors.push(`${e.path}: ${e.message}`)
       }
     }
-  } catch (err) {
-    console.warn('Server-side validation unavailable:', err)
+  } catch (e) {
+    console.warn('Failed to validate schema', e)
   }
 
   if (errors.length > 0) {
@@ -754,8 +753,8 @@ function formatDate(dateStr: string): string {
 async function copyJsonPreview() {
   try {
     await navigator.clipboard.writeText(jsonPreview.value)
-  } catch (err) {
-    console.warn('Clipboard write failed:', err)
+  } catch (e) {
+    console.warn('Failed to copy JSON preview', e)
   }
 }
 

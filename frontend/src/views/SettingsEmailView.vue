@@ -173,8 +173,11 @@ async function saveSettings() {
   successMessage.value = null
   try {
     const orgId = getOrgId()
-    if (!orgId) return
-    const { data, error: err } = await (api as any).PUT('/api/v1/admin/org/{org_id}/email-settings', {
+    if (!orgId) {
+      errorMessage.value = 'Could not determine organisation'
+      return
+    }
+    const { error: err } = await (api as any).PUT('/api/v1/admin/org/{org_id}/email-settings', {
       params: { path: { org_id: orgId } },
       body: {
         smtp_host: form.smtp_host,

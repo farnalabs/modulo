@@ -259,7 +259,7 @@ interface NodeEntry {
 }
 
 const route = useRoute()
-const { t } = useI18n()
+const { t, locale } = useI18n()
 const loading = ref(true)
 const error = ref<string | null>(null)
 const run = ref<RunResponse | null>(null)
@@ -299,8 +299,8 @@ async function copyShareSummary() {
     await navigator.clipboard.writeText(text)
     shareCopied.value = true
     setTimeout(() => { shareCopied.value = false }, 2000)
-  } catch (err) {
-    console.warn('Clipboard write failed:', err)
+  } catch (e) {
+    console.warn('Failed to copy share summary', e)
   }
 }
 
@@ -325,8 +325,8 @@ async function copyText(text: string) {
     await navigator.clipboard.writeText(text)
     copied.value = true
     setTimeout(() => { copied.value = false }, 2000)
-  } catch (err) {
-    console.warn('Clipboard write failed:', err)
+  } catch (e) {
+    console.warn('Failed to copy text', e)
   }
 }
 
@@ -345,7 +345,6 @@ async function revealPrompt(nodeName: string) {
     )
     if (err || !data) {
       revealedPrompts.value = { ...revealedPrompts.value, [nodeName]: null }
-      console.warn('Prompt reveal API error:', err)
       const detail = (err as Record<string, unknown>)?.detail
       error.value = `${t('views.RunDetailView.prompt_reveal_error')} ${detail ? String(detail) : ''}`
       return
@@ -388,8 +387,8 @@ async function copyPromptText() {
     await navigator.clipboard.writeText(selectedPrompt.value.prompt)
     promptCopied.value = true
     setTimeout(() => { promptCopied.value = false }, 2000)
-  } catch (err) {
-    console.warn('Clipboard write failed:', err)
+  } catch (e) {
+    console.warn('Failed to copy prompt text', e)
   }
 }
 
@@ -477,8 +476,8 @@ async function copyOutput() {
     await navigator.clipboard.writeText(text)
     outputCopied.value = true
     setTimeout(() => { outputCopied.value = false }, 2000)
-  } catch (err) {
-    console.warn('Clipboard write failed:', err)
+  } catch (e) {
+    console.warn('Failed to copy output', e)
   }
 }
 
@@ -524,8 +523,8 @@ async function fetchRunData(runId: string) {
       params: { path: { run_id: runId } },
     })
     if (ioData) runIO.value = ioData as unknown as RunIOResponse
-  } catch (e: unknown) {
-    console.warn('fetchRunData failed:', e)
+  } catch (e) {
+    console.warn('Failed to fetch run data', e)
   }
 }
 

@@ -263,13 +263,13 @@ async function loadAll() {
     ])
 
     if (licResp.error) {
-      loadError.value = `Failed to load license: ${licResp.error}`
+      loadError.value = `Failed to load license: ${formatApiError(licResp.error)}`
       return
     }
     licenseInfo.value = licResp.data as LicenseStatus
 
     if (flagsResp.error) {
-      loadError.value = `Failed to load feature flags: ${flagsResp.error}`
+      loadError.value = `Failed to load feature flags: ${formatApiError(flagsResp.error)}`
       return
     }
     const flagsData = flagsResp.data as FlagsResponse

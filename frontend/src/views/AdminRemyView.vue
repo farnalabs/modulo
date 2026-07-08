@@ -920,7 +920,7 @@ async function saveToolPerms() {
     permission_mode: toolPermMode.value,
     tool_permissions: toolPerms.value,
   })
-  if (err) toolPermError.value = `Failed to save: ${err}`
+  if (err) toolPermError.value = `Failed to save: ${formatApiError(err)}`
   toolPermSaving.value = false
 }
 
@@ -1087,13 +1087,13 @@ async function loadUsers() {
       params: { query: { page_size: 1000 } },
     })
     if (err) {
-      console.warn('Failed to load users:', err)
+      console.warn('Failed to load users', err)
     } else if (data) {
       users.value = (data as { items: Array<{ id: string; display_name: string; email: string }> }).items || []
       users.value.sort((a, b) => a.display_name.localeCompare(b.display_name))
     }
-  } catch (e: unknown) {
-    console.warn('Failed to load users:', formatApiError(e))
+  } catch (e) {
+    console.warn('Failed to load users', e)
   }
 }
 
@@ -1103,7 +1103,7 @@ async function loadTeams() {
       params: { query: { page_size: 1000 } },
     })
     if (err) {
-      console.warn('Failed to load teams:', err)
+      console.warn('Failed to load teams', err)
     } else if (data) {
       const items = (data as { items: Array<{ id: string; name: string; member_count: number }> }).items || []
       teams.value = items.map(t => ({
@@ -1112,8 +1112,8 @@ async function loadTeams() {
       }))
       teams.value.sort((a, b) => a.name.localeCompare(b.name))
     }
-  } catch (e: unknown) {
-    console.warn('Failed to load teams:', formatApiError(e))
+  } catch (e) {
+    console.warn('Failed to load teams', e)
   }
 }
 
@@ -1205,8 +1205,8 @@ async function loadAvailableProviders() {
     if (!err && data) {
       availableProviders.value = data as { native: ProviderInfo[]; customTypes: ProviderInfo[] }
     }
-  } catch (e: unknown) {
-    console.warn('Failed to load available providers:', formatApiError(e))
+  } catch (e) {
+    console.warn('Failed to load available providers', e)
   }
 }
 
@@ -1217,7 +1217,6 @@ async function loadProviders() {
       params: { query: { page_size: 100 } },
     })
     if (err) {
-      console.warn('Failed to load model backends:', err)
       return
     }
     const backends = (data?.items ?? []) as { provider: string; has_credentials: boolean }[]
@@ -1230,8 +1229,8 @@ async function loadProviders() {
       ...p,
       configured: configuredProviders.has(p.id),
     }))
-  } catch (e: unknown) {
-    console.warn('Failed to load provider status:', formatApiError(e))
+  } catch (e) {
+    console.warn('Failed to load providers', e)
   } finally {
     providersLoading.value = false
   }

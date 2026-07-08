@@ -243,11 +243,11 @@ async function loadData() {
     ])
 
     if (overviewResp.error) {
-      loadError.value = `Failed to load org info: ${overviewResp.error}`
+      loadError.value = `Failed to load org info: ${formatApiError(overviewResp.error)}`
       return
     }
     if (exportResp.error) {
-      loadError.value = `Failed to load org info: ${exportResp.error}`
+      loadError.value = `Failed to load org info: ${formatApiError(exportResp.error)}`
       return
     }
 
@@ -319,7 +319,7 @@ async function confirmDelete() {
   try {
     const resp = await (api as any).DELETE('/api/v1/admin/org')
     if (resp.error) {
-      deleteError.value = `Failed to delete org: ${resp.error}`
+      deleteError.value = `Failed to delete org: ${formatApiError(resp.error)}`
       deleting.value = false
       return
     }
