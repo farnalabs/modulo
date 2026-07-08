@@ -226,6 +226,7 @@ async def export_pipeline_bundle(
                 "graph_nodes_json": pipeline.graph_nodes_json or [],
                 "run_context_defaults": dict(pipeline.run_context_defaults or {}),
                 "node_timeout_seconds": pipeline.node_timeout_seconds,
+                "visibility": "org",  # Always strip team scoping
             },
             "agents": agents_list,
             "schemas": schemas_list,
