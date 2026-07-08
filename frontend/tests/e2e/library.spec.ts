@@ -1,7 +1,10 @@
-import { test, expect } from './setup/fixtures'
+import { test, expect, loginAsAdmin } from './setup/fixtures'
+import { getTestEnv } from './setup/env'
 
 test.describe('Library Page', () => {
   test('displays page title', async ({ page }) => {
+    await loginAsAdmin(page, getTestEnv())
+
     await page.goto('/library')
     await page.waitForLoadState('networkidle')
 
@@ -9,6 +12,8 @@ test.describe('Library Page', () => {
   })
 
   test('shows type filter dropdown', async ({ page }) => {
+    await loginAsAdmin(page, getTestEnv())
+
     await page.goto('/library')
     await page.waitForLoadState('networkidle')
 
@@ -20,6 +25,8 @@ test.describe('Library Page', () => {
   })
 
   test('shows Create Pipeline button in header', async ({ page }) => {
+    await loginAsAdmin(page, getTestEnv())
+
     await page.goto('/library')
     await page.waitForLoadState('networkidle')
 

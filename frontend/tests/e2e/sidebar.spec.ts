@@ -1,7 +1,10 @@
-import { test, expect } from './setup/fixtures'
+import { test, expect, loginAsAdmin } from './setup/fixtures'
+import { getTestEnv } from './setup/env'
 
 test.describe('Sidebar Navigation', () => {
   test('displays Core, Settings, and Remy groups in simple mode', async ({ page }) => {
+    await loginAsAdmin(page, getTestEnv())
+
     await page.goto('/')
     await page.waitForLoadState('networkidle')
 
@@ -14,6 +17,8 @@ test.describe('Sidebar Navigation', () => {
   })
 
   test('sidebar link navigates to the correct page', async ({ page }) => {
+    await loginAsAdmin(page, getTestEnv())
+
     await page.goto('/')
     await page.waitForLoadState('networkidle')
 
@@ -26,6 +31,8 @@ test.describe('Sidebar Navigation', () => {
   })
 
   test('all sidebar links have visible labels', async ({ page }) => {
+    await loginAsAdmin(page, getTestEnv())
+
     await page.goto('/')
     await page.waitForLoadState('networkidle')
 
