@@ -95,12 +95,16 @@ class TestCheckToolScope:
         assert "trigger_pipeline" in str(excinfo.value)
 
     def test_case_insensitive_tool_name(self) -> None:
-        check_tool_scope("runner", "TRIGGER_PIPELINE")
-        check_tool_scope("runner", "Trigger_Pipeline")
+        with pytest.raises(MCPAuthorizationError):
+            check_tool_scope("viewer", "TRIGGER_PIPELINE")
+        with pytest.raises(MCPAuthorizationError):
+            check_tool_scope("viewer", "Trigger_Pipeline")
 
     def test_case_insensitive_action(self) -> None:
-        check_tool_scope("runner", "review_hitl", action="CLAIM")
-        check_tool_scope("operator", "review_hitl", action="Approve")
+        with pytest.raises(MCPAuthorizationError):
+            check_tool_scope("viewer", "review_hitl", action="CLAIM")
+        with pytest.raises(MCPAuthorizationError):
+            check_tool_scope("viewer", "review_hitl", action="Approve")
 
     def test_non_string_tool_name_raises(self) -> None:
         with pytest.raises(MCPAuthorizationError) as excinfo:

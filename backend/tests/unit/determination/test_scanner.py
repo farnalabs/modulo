@@ -49,7 +49,7 @@ def _hub(ci: object) -> ConnectorHub:
     if payload:
         try:
             ci_creds_json = Fernet(_KEY.encode()).decrypt(payload).decode()
-        except Exception:
+        except (ValueError, TypeError):
             pass
     patcher = patch.object(backend, "get_secret", return_value=ci_creds_json)
     patcher.start()

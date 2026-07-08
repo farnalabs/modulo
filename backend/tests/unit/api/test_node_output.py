@@ -364,5 +364,5 @@ class TestMaskOutputValue:
         deep_ref = result
         for _ in range(20):
             deep_ref = deep_ref.get("a", {}) if isinstance(deep_ref, dict) else {}
-        # Check we stopped recursing; the innermost value is still a dict
-        assert isinstance(deep_ref, dict)
+        # Check we stopped recursing; the innermost value was NOT masked
+        assert deep_ref.get("api_key") == "deep"

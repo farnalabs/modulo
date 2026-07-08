@@ -148,7 +148,7 @@ def test_filter_modulo_no_match():
 # ---------------------------------------------------------------------------
 
 
-def test_community_primitives_have_correct_visibiliy():
+def test_community_primitives_have_correct_visibility():
     for p in _MODULO_PRIMITIVES:
         assert p.visibility == "community"
         assert p.organisation_id == MODULO_ORG_ID

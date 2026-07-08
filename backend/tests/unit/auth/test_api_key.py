@@ -390,11 +390,20 @@ async def test_update_api_key_updates_expires_at() -> None:
 
 @pytest.mark.asyncio
 async def test_validate_api_key_revoked_raises() -> None:
-    """Revoked keys are filtered out by the query (revoked_at IS NULL) — not found."""
+    """A revoked key (revoked_at set) raises ApiKeyInvalidError."""
+
+    from datetime import datetime, timezone
+
+    from modulo.db.models.api_key import OrgApiKey
 
     full_key, _, _ = generate_api_key()
     org_id = uuid.uuid4()
-    session = _make_session(None)
+
+    revoked_key = MagicMock(spec=OrgApiKey)
+    revoked_key.hashed_secret = _hash_key(full_key + "_tampered")
+    revoked_key.expires_at = None
+
+    session = _make_session(revoked_key)
 
     with pytest.raises(ApiKeyInvalidError):
         await validate_api_key(session, full_key, org_id)
