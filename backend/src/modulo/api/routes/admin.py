@@ -91,221 +91,235 @@ async def global_search(
             detail="Insufficient permissions",
         )
 
-    async with session.begin():
-        await set_rls_org(session, current_user.organisation_id)
+    try:
 
-        org_id = current_user.organisation_id
-        like = f"%{q}%"
-        prefix = f"{q}%"
+        async with session.begin():
+            await set_rls_org(session, current_user.organisation_id)
 
-        search_types: list[str] = ["pipeline", "run", "audit", "library"] if type_filter == "all" else [type_filter]
+            org_id = current_user.organisation_id
+            like = f"%{q}%"
+            prefix = f"{q}%"
 
-        all_items: list[tuple[int, SearchResultItem]] = []
-        total_by_type: dict[str, int] = {"pipeline": 0, "run": 0, "audit": 0, "library": 0}
+            search_types: list[str] = ["pipeline", "run", "audit", "library"] if type_filter == "all" else [type_filter]
 
-        for st in search_types:
-            if st == "pipeline":
-                rows = (
-                    await session.execute(
-                        text("""
-                            SELECT id, name, description,
-                                CASE WHEN name ILIKE :prefix THEN 2 ELSE 1 END AS relevance
-                            FROM pipelines
-                            WHERE organisation_id = :org_id
-                                AND (name ILIKE :like OR description ILIKE :like)
-                            ORDER BY relevance DESC, name ASC
-                            LIMIT :lim OFFSET :off
-                        """),
-                        {
-                            "org_id": org_id,
-                            "like": like,
-                            "prefix": prefix,
-                            "lim": limit,
-                            "off": offset,
-                        },
-                    )
-                ).all()
-                count = (
-                    await session.execute(
-                        text("""
-                            SELECT COUNT(*) FROM pipelines
-                            WHERE organisation_id = :org_id
-                                AND (name ILIKE :like OR description ILIKE :like)
-                        """),
-                        {"org_id": org_id, "like": like},
-                    )
-                ).scalar() or 0
+            all_items: list[tuple[int, SearchResultItem]] = []
+            total_by_type: dict[str, int] = {"pipeline": 0, "run": 0, "audit": 0, "library": 0}
 
-                for row in rows:
-                    all_items.append(
-                        (
-                            row.relevance,
-                            SearchResultItem(
-                                type="pipeline",
-                                id=str(row.id),
-                                title=row.name,
-                                subtitle=row.description,
-                                url=f"/pipelines/{row.id}",
-                            ),
+            for st in search_types:
+                if st == "pipeline":
+                    rows = (
+                        await session.execute(
+                            text("""
+                                SELECT id, name, description,
+                                    CASE WHEN name ILIKE :prefix THEN 2 ELSE 1 END AS relevance
+                                FROM pipelines
+                                WHERE organisation_id = :org_id
+                                    AND (name ILIKE :like OR description ILIKE :like)
+                                ORDER BY relevance DESC, name ASC
+                                LIMIT :lim OFFSET :off
+                            """),
+                            {
+                                "org_id": org_id,
+                                "like": like,
+                                "prefix": prefix,
+                                "lim": limit,
+                                "off": offset,
+                            },
                         )
-                    )
-                total_by_type["pipeline"] = count
-
-            elif st == "run":
-                rows = (
-                    await session.execute(
-                        text("""
-                            SELECT r.id, r.run_number, r.id::text AS display_id, p.name AS pipeline_name,
-                                CASE WHEN r.id::text ILIKE :prefix THEN 2
-                                     WHEN p.name ILIKE :like THEN 1 ELSE 0 END AS relevance
-                            FROM runs r
-                            JOIN pipelines p ON p.id = r.pipeline_id
-                            WHERE r.organisation_id = :org_id
-                                AND (r.id::text ILIKE :prefix OR p.name ILIKE :like)
-                            ORDER BY relevance DESC, r.created_at DESC
-                            LIMIT :lim OFFSET :off
-                        """),
-                        {
-                            "org_id": org_id,
-                            "like": like,
-                            "prefix": prefix,
-                            "lim": limit,
-                            "off": offset,
-                        },
-                    )
-                ).all()
-                count = (
-                    await session.execute(
-                        text("""
-                            SELECT COUNT(*) FROM runs r
-                            JOIN pipelines p ON p.id = r.pipeline_id
-                            WHERE r.organisation_id = :org_id
-                                AND (r.id::text ILIKE :prefix OR p.name ILIKE :like)
-                        """),
-                        {"org_id": org_id, "like": like, "prefix": prefix},
-                    )
-                ).scalar() or 0
-
-                for row in rows:
-                    display_id = f"#{row.run_number}" if row.run_number is not None else f"#{str(row.id)[:8]}"
-                    all_items.append(
-                        (
-                            row.relevance,
-                            SearchResultItem(
-                                type="run",
-                                id=str(row.id),
-                                title=display_id,
-                                subtitle=row.pipeline_name,
-                                url=f"/runs/{row.id}",
-                            ),
+                    ).all()
+                    count = (
+                        await session.execute(
+                            text("""
+                                SELECT COUNT(*) FROM pipelines
+                                WHERE organisation_id = :org_id
+                                    AND (name ILIKE :like OR description ILIKE :like)
+                            """),
+                            {"org_id": org_id, "like": like},
                         )
-                    )
-                total_by_type["run"] = count
+                    ).scalar() or 0
 
-            elif st == "audit":
-                rows = (
-                    await session.execute(
-                        text("""
-                            SELECT id, event_type, resource_type,
-                                CASE WHEN event_type ILIKE :prefix THEN 2
-                                     WHEN event_type ILIKE :like OR resource_type ILIKE :like
-                                          OR payload_json::text ILIKE :like THEN 1
-                                     ELSE 0 END AS relevance
-                            FROM audit_events
-                            WHERE organisation_id = :org_id
-                                AND (event_type ILIKE :like OR resource_type ILIKE :like
-                                     OR payload_json::text ILIKE :like)
-                            ORDER BY relevance DESC, created_at DESC
-                            LIMIT :lim OFFSET :off
-                        """),
-                        {
-                            "org_id": org_id,
-                            "like": like,
-                            "prefix": prefix,
-                            "lim": limit,
-                            "off": offset,
-                        },
-                    )
-                ).all()
-                count = (
-                    await session.execute(
-                        text("""
-                            SELECT COUNT(*) FROM audit_events
-                            WHERE organisation_id = :org_id
-                                AND (event_type ILIKE :like OR resource_type ILIKE :like
-                                     OR payload_json::text ILIKE :like)
-                        """),
-                        {"org_id": org_id, "like": like},
-                    )
-                ).scalar() or 0
-
-                for row in rows:
-                    title = row.event_type
-                    if row.resource_type:
-                        title = f"{row.event_type} — {row.resource_type}"
-                    all_items.append(
-                        (
-                            row.relevance,
-                            SearchResultItem(
-                                type="audit",
-                                id=str(row.id),
-                                title=title,
-                                subtitle=None,
-                                url=f"/admin/audit?event_id={row.id}",
-                            ),
+                    for row in rows:
+                        all_items.append(
+                            (
+                                row.relevance,
+                                SearchResultItem(
+                                    type="pipeline",
+                                    id=str(row.id),
+                                    title=row.name,
+                                    subtitle=row.description,
+                                    url=f"/pipelines/{row.id}",
+                                ),
+                            )
                         )
-                    )
-                total_by_type["audit"] = count
+                    total_by_type["pipeline"] = count
 
-            elif st == "library":
-                rows = (
-                    await session.execute(
-                        text("""
-                            SELECT id, name, description,
-                                CASE WHEN name ILIKE :prefix THEN 2 ELSE 1 END AS relevance
-                            FROM library_primitives
-                            WHERE organisation_id = :org_id
-                                AND (name ILIKE :like OR description ILIKE :like)
-                            ORDER BY relevance DESC, name ASC
-                            LIMIT :lim OFFSET :off
-                        """),
-                        {
-                            "org_id": org_id,
-                            "like": like,
-                            "prefix": prefix,
-                            "lim": limit,
-                            "off": offset,
-                        },
-                    )
-                ).all()
-                count = (
-                    await session.execute(
-                        text("""
-                            SELECT COUNT(*) FROM library_primitives
-                            WHERE organisation_id = :org_id
-                                AND (name ILIKE :like OR description ILIKE :like)
-                        """),
-                        {"org_id": org_id, "like": like},
-                    )
-                ).scalar() or 0
-
-                for row in rows:
-                    all_items.append(
-                        (
-                            row.relevance,
-                            SearchResultItem(
-                                type="library",
-                                id=str(row.id),
-                                title=row.name,
-                                subtitle=row.description,
-                                url="/libraries",
-                            ),
+                elif st == "run":
+                    rows = (
+                        await session.execute(
+                            text("""
+                                SELECT r.id, r.run_number, r.id::text AS display_id, p.name AS pipeline_name,
+                                    CASE WHEN r.id::text ILIKE :prefix THEN 2
+                                         WHEN p.name ILIKE :like THEN 1 ELSE 0 END AS relevance
+                                FROM runs r
+                                JOIN pipelines p ON p.id = r.pipeline_id
+                                WHERE r.organisation_id = :org_id
+                                    AND (r.id::text ILIKE :prefix OR p.name ILIKE :like)
+                                ORDER BY relevance DESC, r.created_at DESC
+                                LIMIT :lim OFFSET :off
+                            """),
+                            {
+                                "org_id": org_id,
+                                "like": like,
+                                "prefix": prefix,
+                                "lim": limit,
+                                "off": offset,
+                            },
                         )
-                    )
-                total_by_type["library"] = count
+                    ).all()
+                    count = (
+                        await session.execute(
+                            text("""
+                                SELECT COUNT(*) FROM runs r
+                                JOIN pipelines p ON p.id = r.pipeline_id
+                                WHERE r.organisation_id = :org_id
+                                    AND (r.id::text ILIKE :prefix OR p.name ILIKE :like)
+                            """),
+                            {"org_id": org_id, "like": like, "prefix": prefix},
+                        )
+                    ).scalar() or 0
 
-        all_items.sort(key=lambda x: (-x[0], x[1].title))
-        paginated = [item for _, item in all_items[offset : offset + limit]]
+                    for row in rows:
+                        display_id = f"#{row.run_number}" if row.run_number is not None else f"#{str(row.id)[:8]}"
+                        all_items.append(
+                            (
+                                row.relevance,
+                                SearchResultItem(
+                                    type="run",
+                                    id=str(row.id),
+                                    title=display_id,
+                                    subtitle=row.pipeline_name,
+                                    url=f"/runs/{row.id}",
+                                ),
+                            )
+                        )
+                    total_by_type["run"] = count
+
+                elif st == "audit":
+                    rows = (
+                        await session.execute(
+                            text("""
+                                SELECT id, event_type, resource_type,
+                                    CASE WHEN event_type ILIKE :prefix THEN 2
+                                         WHEN event_type ILIKE :like OR resource_type ILIKE :like
+                                              OR payload_json::text ILIKE :like THEN 1
+                                         ELSE 0 END AS relevance
+                                FROM audit_events
+                                WHERE organisation_id = :org_id
+                                    AND (event_type ILIKE :like OR resource_type ILIKE :like
+                                         OR payload_json::text ILIKE :like)
+                                ORDER BY relevance DESC, created_at DESC
+                                LIMIT :lim OFFSET :off
+                            """),
+                            {
+                                "org_id": org_id,
+                                "like": like,
+                                "prefix": prefix,
+                                "lim": limit,
+                                "off": offset,
+                            },
+                        )
+                    ).all()
+                    count = (
+                        await session.execute(
+                            text("""
+                                SELECT COUNT(*) FROM audit_events
+                                WHERE organisation_id = :org_id
+                                    AND (event_type ILIKE :like OR resource_type ILIKE :like
+                                         OR payload_json::text ILIKE :like)
+                            """),
+                            {"org_id": org_id, "like": like},
+                        )
+                    ).scalar() or 0
+
+                    for row in rows:
+                        title = row.event_type
+                        if row.resource_type:
+                            title = f"{row.event_type} — {row.resource_type}"
+                        all_items.append(
+                            (
+                                row.relevance,
+                                SearchResultItem(
+                                    type="audit",
+                                    id=str(row.id),
+                                    title=title,
+                                    subtitle=None,
+                                    url=f"/admin/audit?event_id={row.id}",
+                                ),
+                            )
+                        )
+                    total_by_type["audit"] = count
+
+                elif st == "library":
+                    rows = (
+                        await session.execute(
+                            text("""
+                                SELECT id, name, description,
+                                    CASE WHEN name ILIKE :prefix THEN 2 ELSE 1 END AS relevance
+                                FROM library_primitives
+                                WHERE organisation_id = :org_id
+                                    AND (name ILIKE :like OR description ILIKE :like)
+                                ORDER BY relevance DESC, name ASC
+                                LIMIT :lim OFFSET :off
+                            """),
+                            {
+                                "org_id": org_id,
+                                "like": like,
+                                "prefix": prefix,
+                                "lim": limit,
+                                "off": offset,
+                            },
+                        )
+                    ).all()
+                    count = (
+                        await session.execute(
+                            text("""
+                                SELECT COUNT(*) FROM library_primitives
+                                WHERE organisation_id = :org_id
+                                    AND (name ILIKE :like OR description ILIKE :like)
+                            """),
+                            {"org_id": org_id, "like": like},
+                        )
+                    ).scalar() or 0
+
+                    for row in rows:
+                        all_items.append(
+                            (
+                                row.relevance,
+                                SearchResultItem(
+                                    type="library",
+                                    id=str(row.id),
+                                    title=row.name,
+                                    subtitle=row.description,
+                                    url="/libraries",
+                                ),
+                            )
+                        )
+                    total_by_type["library"] = count
+
+            all_items.sort(key=lambda x: (-x[0], x[1].title))
+            paginated = [item for _, item in all_items[offset : offset + limit]]
+
+    except ProgrammingError:
+
+        logger.exception("routes.admin")
+
+        raise HTTPException(
+
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+
+            detail="This feature is not available. Run database migrations to enable it.",
+
+        )
 
     return SearchResponse(results=paginated, total_by_type=total_by_type)
 
@@ -427,21 +441,35 @@ async def admin_create_team(
         )
 
     try:
-        async with session.begin():
-            await set_rls_org(session, current_user.organisation_id)
-            existing = await get_team_by_name(session, current_user.organisation_id, req.name)
-            if existing is not None:
-                raise HTTPException(
-                    status_code=status.HTTP_409_CONFLICT,
-                    detail="A team with this name already exists in your organisation",
+        try:
+
+            async with session.begin():
+                await set_rls_org(session, current_user.organisation_id)
+                existing = await get_team_by_name(session, current_user.organisation_id, req.name)
+                if existing is not None:
+                    raise HTTPException(
+                        status_code=status.HTTP_409_CONFLICT,
+                        detail="A team with this name already exists in your organisation",
+                    )
+                team = await create_team(
+                    session,
+                    org_id=current_user.organisation_id,
+                    name=req.name,
+                    account_id=current_user.account_id,
+                    description=req.description,
                 )
-            team = await create_team(
-                session,
-                org_id=current_user.organisation_id,
-                name=req.name,
-                account_id=current_user.account_id,
-                description=req.description,
+        except ProgrammingError:
+
+            logger.exception("routes.admin")
+
+            raise HTTPException(
+
+                status_code=status.HTTP_501_NOT_IMPLEMENTED,
+
+                detail="This feature is not available. Run database migrations to enable it.",
+
             )
+
     except HTTPException:
         raise
     except IntegrityError:
@@ -687,15 +715,29 @@ async def admin_list_users(
             detail="Only admin users can list users",
         )
 
-    async with session.begin():
-        await set_rls_org(session, current_user.organisation_id)
-        accounts_memberships, total = await _list_org_accounts(
-            session,
-            org_id=current_user.organisation_id,
-            page=page,
-            page_size=page_size,
-            search=search,
-            role_filter=role,
+    try:
+
+        async with session.begin():
+            await set_rls_org(session, current_user.organisation_id)
+            accounts_memberships, total = await _list_org_accounts(
+                session,
+                org_id=current_user.organisation_id,
+                page=page,
+                page_size=page_size,
+                search=search,
+                role_filter=role,
+            )
+
+    except ProgrammingError:
+
+        logger.exception("routes.admin")
+
+        raise HTTPException(
+
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+
+            detail="This feature is not available. Run database migrations to enable it.",
+
         )
 
     return UserListResponse(
@@ -798,33 +840,47 @@ async def admin_update_user(
             detail="Only admin users can update users",
         )
 
-    async with session.begin():
-        await set_rls_org(session, current_user.organisation_id)
-        await _prevent_last_admin_lockout(
-            current_account_id=current_user.account_id,
-            target_account_id=user_id,
-            org_id=current_user.organisation_id,
-            new_role=req.org_role,
-            db_session=session,
-        )
+    try:
 
-        account = await get_account_by_id(session, user_id)
-        if account is None:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
-
-        if req.is_active is not None:
-            account.active = req.is_active
-        if req.org_role is not None:
-            from sqlalchemy import update as sa_update
-
-            await session.execute(
-                sa_update(OrgMembership)
-                .where(
-                    OrgMembership.account_id == user_id,
-                    OrgMembership.organisation_id == current_user.organisation_id,
-                )
-                .values(role=req.org_role)
+        async with session.begin():
+            await set_rls_org(session, current_user.organisation_id)
+            await _prevent_last_admin_lockout(
+                current_account_id=current_user.account_id,
+                target_account_id=user_id,
+                org_id=current_user.organisation_id,
+                new_role=req.org_role,
+                db_session=session,
             )
+
+            account = await get_account_by_id(session, user_id)
+            if account is None:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
+
+            if req.is_active is not None:
+                account.active = req.is_active
+            if req.org_role is not None:
+                from sqlalchemy import update as sa_update
+
+                await session.execute(
+                    sa_update(OrgMembership)
+                    .where(
+                        OrgMembership.account_id == user_id,
+                        OrgMembership.organisation_id == current_user.organisation_id,
+                    )
+                    .values(role=req.org_role)
+                )
+
+    except ProgrammingError:
+
+        logger.exception("routes.admin")
+
+        raise HTTPException(
+
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+
+            detail="This feature is not available. Run database migrations to enable it.",
+
+        )
 
     org_role = req.org_role or (await _get_org_role(session, user_id, current_user.organisation_id))
     return UserListItem(
@@ -995,20 +1051,34 @@ async def admin_reset_password(
             detail="Only admin users can reset passwords",
         )
 
-    async with session.begin():
-        await set_rls_org(session, current_user.organisation_id)
-        account = await get_account_by_id(session, user_id)
-        if account is None:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
+    try:
 
-        temporary_password = secrets.token_urlsafe(18)[:24]
-        account.password_hash = hash_password(temporary_password)
+        async with session.begin():
+            await set_rls_org(session, current_user.organisation_id)
+            account = await get_account_by_id(session, user_id)
+            if account is None:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
 
-        families = await list_families_for_account(session, user_id)
-        for family in families:
-            await blacklist_family(session, family.family_id)
+            temporary_password = secrets.token_urlsafe(18)[:24]
+            account.password_hash = hash_password(temporary_password)
 
-        await session.flush()
+            families = await list_families_for_account(session, user_id)
+            for family in families:
+                await blacklist_family(session, family.family_id)
+
+            await session.flush()
+
+    except ProgrammingError:
+
+        logger.exception("routes.admin")
+
+        raise HTTPException(
+
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+
+            detail="This feature is not available. Run database migrations to enable it.",
+
+        )
 
     return AdminResetPasswordResponse(temporary_password=temporary_password)
 
@@ -2319,9 +2389,23 @@ async def admin_retention_purge_runs(
             detail="Only admin users can trigger run retention purge",
         )
 
-    async with session.begin():
-        await set_rls_org(session, current_user.organisation_id)
-        deleted = await batch_delete_old_terminal_runs(session, max_age_days=req.max_age_days)
+    try:
+
+        async with session.begin():
+            await set_rls_org(session, current_user.organisation_id)
+            deleted = await batch_delete_old_terminal_runs(session, max_age_days=req.max_age_days)
+
+    except ProgrammingError:
+
+        logger.exception("routes.admin")
+
+        raise HTTPException(
+
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+
+            detail="This feature is not available. Run database migrations to enable it.",
+
+        )
 
     return {"deleted_run_count": deleted}
 
@@ -2388,15 +2472,29 @@ async def admin_purge_stale_runs(
     cutoff = datetime.now(UTC) - timedelta(days=request.older_than_days)
     terminal_states = ("complete", "failed", "eval_failed", "cancelled")
 
-    async with session.begin():
-        await set_rls_org(session, current_user.organisation_id)
-        result = await session.execute(
-            delete(Run)
-            .where(
-                Run.organisation_id == current_user.organisation_id,
-                Run.status.in_(terminal_states),
-                Run.created_at < cutoff,
+    try:
+
+        async with session.begin():
+            await set_rls_org(session, current_user.organisation_id)
+            result = await session.execute(
+                delete(Run)
+                .where(
+                    Run.organisation_id == current_user.organisation_id,
+                    Run.status.in_(terminal_states),
+                    Run.created_at < cutoff,
+                )
             )
+
+    except ProgrammingError:
+
+        logger.exception("routes.admin")
+
+        raise HTTPException(
+
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+
+            detail="This feature is not available. Run database migrations to enable it.",
+
         )
 
     return PurgeRunsResponse(purged_count=result.rowcount)  # type: ignore[attr-defined]
@@ -2431,12 +2529,26 @@ async def admin_get_retention(
 ) -> RetentionConfigResponse:
     if current_user.org_role != "admin":
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Only admin users can view retention")
-    async with session.begin():
-        await set_rls_org(session, current_user.organisation_id)
-        result = await session.execute(
-            select(Organisation.settings_json).where(Organisation.id == current_user.organisation_id).limit(1)
+    try:
+
+        async with session.begin():
+            await set_rls_org(session, current_user.organisation_id)
+            result = await session.execute(
+                select(Organisation.settings_json).where(Organisation.id == current_user.organisation_id).limit(1)
+            )
+            row = result.scalar_one_or_none()
+    except ProgrammingError:
+
+        logger.exception("routes.admin")
+
+        raise HTTPException(
+
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+
+            detail="This feature is not available. Run database migrations to enable it.",
+
         )
-        row = result.scalar_one_or_none()
+
     retention_days = 90
     if row and isinstance(row, dict):
         retention_days = row.get("retention_days", 90)
@@ -2451,18 +2563,32 @@ async def admin_update_retention(
 ) -> RetentionConfigResponse:
     if current_user.org_role != "admin":
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Only admin users can update retention")
-    async with session.begin():
-        await set_rls_org(session, current_user.organisation_id)
-        result = await session.execute(
-            select(Organisation).where(Organisation.id == current_user.organisation_id).limit(1)
+    try:
+
+        async with session.begin():
+            await set_rls_org(session, current_user.organisation_id)
+            result = await session.execute(
+                select(Organisation).where(Organisation.id == current_user.organisation_id).limit(1)
+            )
+            org = result.scalar_one_or_none()
+            if org is None:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Organisation not found")
+            settings = dict(org.settings_json) if org.settings_json else {}
+            settings["retention_days"] = req.retention_days
+            org.settings_json = settings
+            await session.flush()
+    except ProgrammingError:
+
+        logger.exception("routes.admin")
+
+        raise HTTPException(
+
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+
+            detail="This feature is not available. Run database migrations to enable it.",
+
         )
-        org = result.scalar_one_or_none()
-        if org is None:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Organisation not found")
-        settings = dict(org.settings_json) if org.settings_json else {}
-        settings["retention_days"] = req.retention_days
-        org.settings_json = settings
-        await session.flush()
+
     logger.info(
         "run_retention.updated",
         extra={
@@ -2480,21 +2606,35 @@ async def admin_get_storage(
 ) -> StorageInfoResponse:
     if current_user.org_role != "admin":
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Only admin users can view storage")
-    async with session.begin():
-        await set_rls_org(session, current_user.organisation_id)
-        total = (
-            await session.execute(
-                select(func.count()).select_from(Run).where(Run.organisation_id == current_user.organisation_id)
-            )
-        ).scalar() or 0
+    try:
 
-        status_rows = (
-            await session.execute(
-                select(Run.status, func.count().label("cnt"))
-                .where(Run.organisation_id == current_user.organisation_id)
-                .group_by(Run.status)
-            )
-        ).all()
+        async with session.begin():
+            await set_rls_org(session, current_user.organisation_id)
+            total = (
+                await session.execute(
+                    select(func.count()).select_from(Run).where(Run.organisation_id == current_user.organisation_id)
+                )
+            ).scalar() or 0
+
+            status_rows = (
+                await session.execute(
+                    select(Run.status, func.count().label("cnt"))
+                    .where(Run.organisation_id == current_user.organisation_id)
+                    .group_by(Run.status)
+                )
+            ).all()
+
+    except ProgrammingError:
+
+        logger.exception("routes.admin")
+
+        raise HTTPException(
+
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+
+            detail="This feature is not available. Run database migrations to enable it.",
+
+        )
 
     breakdown: dict[str, int] = {}
     for row in status_rows:
@@ -2539,8 +2679,22 @@ async def admin_overdue_hitl_claims(
             detail="Insufficient permissions",
         )
 
-    async with session.begin():
-        await set_rls_org(session, current_user.organisation_id)
-        claims = await get_overdue_claims(session, current_user.organisation_id)
+    try:
+
+        async with session.begin():
+            await set_rls_org(session, current_user.organisation_id)
+            claims = await get_overdue_claims(session, current_user.organisation_id)
+
+    except ProgrammingError:
+
+        logger.exception("routes.admin")
+
+        raise HTTPException(
+
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+
+            detail="This feature is not available. Run database migrations to enable it.",
+
+        )
 
     return OverdueClaimsResponse(claims=[OverdueClaimItem(**c) for c in claims])

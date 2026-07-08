@@ -12,6 +12,7 @@ import time
 from typing import Any
 
 from sqlalchemy import select
+from sqlalchemy.exc import ProgrammingError
 
 from modulo.core.error_tracking.alerting import AlertEngine
 from modulo.core.error_tracking.forwarders import get_forwarder
@@ -23,6 +24,7 @@ from modulo.db.crud.error_tracking import (
 )
 from modulo.db.models.error_forwarder_config import ErrorForwarderConfig
 
+logger = logging.getLogger(__name__)
 _log = logging.getLogger(__name__)
 
 _STACKTRACE_FILE_RE = re.compile(r'File "[^"]+", line \d+,')
@@ -257,16 +259,24 @@ async def _dispatch_forwarders(
     """
     per_org_configs: dict[str, dict[str, Any]] = {}
     if session is not None:
-        async with session.begin():
-            result = await session.execute(
-                select(ErrorForwarderConfig).where(
-                    ErrorForwarderConfig.organisation_id == org_id,
-                    ErrorForwarderConfig.enabled.is_(True),
-                ),
-            )
-            for row in result.scalars().all():
-                if row.config_json:
-                    per_org_configs[row.forwarder_type] = row.config_json
+        try:
+
+            async with session.begin():
+                result = await session.execute(
+                    select(ErrorForwarderConfig).where(
+                        ErrorForwarderConfig.organisation_id == org_id,
+                        ErrorForwarderConfig.enabled.is_(True),
+                    ),
+                )
+                for row in result.scalars().all():
+                    if row.config_json:
+                        per_org_configs[row.forwarder_type] = row.config_json
+
+        except ProgrammingError:
+
+            logger.exception("core.error_tracking")
+
+            raise
 
     configs = per_org_configs or _DEFAULT_FORWARDER_CONFIGS
     if not configs:

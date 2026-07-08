@@ -193,78 +193,92 @@ async def _list_deliveries(
 ) -> DeliveryLogResponse:
     from sqlalchemy import func as sa_func
 
-    async with session.begin():
-        await set_rls_org(session, principal.organisation_id)
+    try:
 
-        query = (
-            select(
-                NotificationDeliveryLog,
-                NotificationEndpoint.url,
+        async with session.begin():
+            await set_rls_org(session, principal.organisation_id)
+
+            query = (
+                select(
+                    NotificationDeliveryLog,
+                    NotificationEndpoint.url,
+                )
+                .outerjoin(
+                    NotificationEndpoint,
+                    NotificationDeliveryLog.endpoint_id == NotificationEndpoint.id,
+                )
+                .where(
+                    NotificationDeliveryLog.organisation_id == principal.organisation_id,
+                )
             )
-            .outerjoin(
-                NotificationEndpoint,
-                NotificationDeliveryLog.endpoint_id == NotificationEndpoint.id,
-            )
-            .where(
+
+            if status_filter:
+                query = query.where(NotificationDeliveryLog.status == status_filter)
+
+            if event_type_filter:
+                query = query.where(NotificationDeliveryLog.event_type == event_type_filter)
+
+            if endpoint_id_filter:
+                query = query.where(NotificationDeliveryLog.endpoint_id == endpoint_id_filter)
+
+            if date_from:
+                try:
+                    dt_from = datetime.fromisoformat(date_from)
+                except ValueError as exc:
+                    raise HTTPException(
+                        status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                        detail="Invalid from date format",
+                    ) from exc
+                query = query.where(NotificationDeliveryLog.created_at >= dt_from)
+
+            if date_to:
+                try:
+                    dt_to = datetime.fromisoformat(date_to)
+                except ValueError as exc:
+                    raise HTTPException(
+                        status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                        detail="Invalid to date format",
+                    ) from exc
+                query = query.where(NotificationDeliveryLog.created_at <= dt_to)
+
+            if cursor:
+                try:
+                    cursor_dt = datetime.fromisoformat(cursor)
+                except ValueError as exc:
+                    raise HTTPException(
+                        status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                        detail="Invalid cursor format",
+                    ) from exc
+                query = query.where(NotificationDeliveryLog.created_at < cursor_dt)
+
+            query = query.order_by(NotificationDeliveryLog.created_at.desc()).limit(limit + 1)
+
+            rows = list((await session.execute(query)).all())
+
+            total = 0
+            count_query = select(sa_func.count(NotificationDeliveryLog.id)).where(
                 NotificationDeliveryLog.organisation_id == principal.organisation_id,
             )
+            if status_filter:
+                count_query = count_query.where(NotificationDeliveryLog.status == status_filter)
+            if event_type_filter:
+                count_query = count_query.where(NotificationDeliveryLog.event_type == event_type_filter)
+            if endpoint_id_filter:
+                count_query = count_query.where(NotificationDeliveryLog.endpoint_id == endpoint_id_filter)
+            count_result = await session.execute(count_query)
+            total = count_result.scalar() or 0
+
+    except ProgrammingError:
+
+        logger.exception("routes.admin_notifications")
+
+        raise HTTPException(
+
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+
+            detail="This feature is not available. Run database migrations to enable it.",
+
         )
-
-        if status_filter:
-            query = query.where(NotificationDeliveryLog.status == status_filter)
-
-        if event_type_filter:
-            query = query.where(NotificationDeliveryLog.event_type == event_type_filter)
-
-        if endpoint_id_filter:
-            query = query.where(NotificationDeliveryLog.endpoint_id == endpoint_id_filter)
-
-        if date_from:
-            try:
-                dt_from = datetime.fromisoformat(date_from)
-            except ValueError as exc:
-                raise HTTPException(
-                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-                    detail="Invalid from date format",
-                ) from exc
-            query = query.where(NotificationDeliveryLog.created_at >= dt_from)
-
-        if date_to:
-            try:
-                dt_to = datetime.fromisoformat(date_to)
-            except ValueError as exc:
-                raise HTTPException(
-                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-                    detail="Invalid to date format",
-                ) from exc
-            query = query.where(NotificationDeliveryLog.created_at <= dt_to)
-
-        if cursor:
-            try:
-                cursor_dt = datetime.fromisoformat(cursor)
-            except ValueError as exc:
-                raise HTTPException(
-                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-                    detail="Invalid cursor format",
-                ) from exc
-            query = query.where(NotificationDeliveryLog.created_at < cursor_dt)
-
-        query = query.order_by(NotificationDeliveryLog.created_at.desc()).limit(limit + 1)
-
-        rows = list((await session.execute(query)).all())
-
-        total = 0
-        count_query = select(sa_func.count(NotificationDeliveryLog.id)).where(
-            NotificationDeliveryLog.organisation_id == principal.organisation_id,
-        )
-        if status_filter:
-            count_query = count_query.where(NotificationDeliveryLog.status == status_filter)
-        if event_type_filter:
-            count_query = count_query.where(NotificationDeliveryLog.event_type == event_type_filter)
-        if endpoint_id_filter:
-            count_query = count_query.where(NotificationDeliveryLog.endpoint_id == endpoint_id_filter)
-        count_result = await session.execute(count_query)
-        total = count_result.scalar() or 0
 
     has_more = len(rows) > limit
     if has_more:
