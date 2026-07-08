@@ -172,7 +172,7 @@ Union type validation (oneOf/anyOf) and array schema validation for the Schema R
 
 ## Known Gaps
 - PRD 8.3 states "No union/collection types in alpha" but validation code exists — spec needs updating to reflect implementation
-- BDD feature files referenced by `test_alpha_schemas.py` do not exist (`features/schemas/create.feature`, `version.feature`, `deletion_protection.feature`)
+- BDD feature files referenced by `test_alpha_schemas.py` do not exist (`backend/tests/bdd/features/schemas/create.feature`, `backend/tests/bdd/features/schemas/version.feature`, `backend/tests/bdd/features/schemas/deletion_protection.feature`)
 - `schema_inference.feature` is a placeholder with no real scenarios
 - No BDD coverage for union/array validation
 - No concurrency tests for schema version creation race conditions
