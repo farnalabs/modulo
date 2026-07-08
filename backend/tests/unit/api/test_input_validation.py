@@ -112,6 +112,7 @@ def test_pipeline_create_valid_minimal(client: TestClient) -> None:
     pipeline.name = "Test"
     pipeline.description = None
     pipeline.visibility = "org"
+    pipeline.owner_team_id = None
     pipeline.max_concurrent_runs = 5
     pipeline.lock_wait_timeout_seconds = 300
     pipeline.node_timeout_seconds = 300

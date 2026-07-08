@@ -76,6 +76,7 @@ def _make_mock_connector() -> MagicMock:
     ci.allowed_operations = []
     ci.status = "active"
     ci.visibility = "org"
+    ci.owner_team_id = None
     ci.tier = "native"
     return ci
 

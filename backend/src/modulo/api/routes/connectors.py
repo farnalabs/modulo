@@ -12,7 +12,7 @@ from typing import Any, Literal
 from cryptography.fernet import Fernet
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from httpx import HTTPStatusError, RequestError
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 from sqlalchemy.exc import IntegrityError, ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -48,7 +48,14 @@ class ConnectorCreate(BaseModel):
     config_json: dict[str, Any] = {}
     allowed_operations: list[str] = []
     visibility: str = Field(default="org")
+    owner_team_id: uuid.UUID | None = None
     tier: Literal["native", "preview", "in_dev"] = Field(default="native")
+
+    @model_validator(mode="after")
+    def _validate_team_visibility(self) -> "ConnectorCreate":
+        if self.visibility == "team" and self.owner_team_id is None:
+            raise ValueError("owner_team_id is required when visibility is 'team'")
+        return self
 
 
 class ConnectorUpdate(BaseModel):
@@ -57,7 +64,14 @@ class ConnectorUpdate(BaseModel):
     config_json: dict[str, Any] | None = None
     allowed_operations: list[str] | None = None
     visibility: str | None = None
+    owner_team_id: uuid.UUID | None = None
     tier: Literal["native", "preview", "in_dev"] | None = None
+
+    @model_validator(mode="after")
+    def _validate_team_visibility(self) -> "ConnectorUpdate":
+        if self.visibility == "team" and self.owner_team_id is None:
+            raise ValueError("owner_team_id is required when visibility is 'team'")
+        return self
 
 
 class ConnectorResponse(BaseModel):
@@ -70,11 +84,12 @@ class ConnectorResponse(BaseModel):
     allowed_operations: list[str]
     status: str
     visibility: str
+    owner_team_id: uuid.UUID | None = None
     tier: str
     created_at: datetime
     updated_at: datetime
 
-    model_config = {"from_attributes": False}
+    model_config = {"from_attributes": True, "populate_by_name": True}
 
 
 class ConnectorListResponse(BaseModel):
@@ -97,6 +112,7 @@ def _to_response(ci: Any) -> ConnectorResponse:
         allowed_operations=ci.allowed_operations,
         status=ci.status,
         visibility=ci.visibility,
+        owner_team_id=ci.owner_team_id,
         tier=ci.tier,
         created_at=ci.created_at,
         updated_at=ci.updated_at,
@@ -190,6 +206,7 @@ async def create_connector_endpoint(
                 config_json=req.config_json,
                 allowed_operations=req.allowed_operations,
                 visibility=req.visibility,
+                owner_team_id=req.owner_team_id,
                 tier=req.tier,
             )
     except IntegrityError:
