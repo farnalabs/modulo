@@ -41,7 +41,7 @@ def _create_registry(settings: Settings) -> RateLimiterRegistry:
         try:
             from redis.asyncio import Redis
 
-            client: Any = Redis.from_url(settings.redis_url, decode_responses=False)
+            client: Any = Redis.from_url(settings.redis_url, decode_responses=False, socket_connect_timeout=5, socket_timeout=10)
             _redis_clients.add(client)
             registry = RateLimiterRegistry(redis_client=client)
             redis_available = True
@@ -197,7 +197,7 @@ def get_auth_rate_limiter(settings: Settings | None = None) -> AuthRateLimiterCl
         try:
             from redis.asyncio import Redis
 
-            client: Any = Redis.from_url(resolved.redis_url, decode_responses=False)
+            client: Any = Redis.from_url(resolved.redis_url, decode_responses=False, socket_connect_timeout=5, socket_timeout=10)
             _redis_clients.add(client)
             _auth_rate_limiter = AuthRateLimiterCls(
                 redis_client=client,

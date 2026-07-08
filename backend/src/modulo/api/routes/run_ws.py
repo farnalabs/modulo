@@ -24,6 +24,7 @@ import uuid
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 from jose import JWTError
+from sqlalchemy.exc import ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from modulo.api.dependencies import _get_engine
@@ -96,6 +97,7 @@ async def run_websocket(
         await ws.close(code=4001)
         return
     if since_event_seq > 10_000:
+        _log.warning("run_ws.replay_clamped", extra={"requested_seq": since_event_seq, "clamped_to": 0})
         since_event_seq = 0
 
     await ws.accept()
@@ -104,9 +106,23 @@ async def run_websocket(
     # shares the same process-global pool used by the REST API via get_or_create_engine).
     engine = _get_engine(settings)
     session_factory = async_sessionmaker(engine, expire_on_commit=False)
-    async with session_factory() as session, session.begin():
-        await set_rls_org(session, principal.organisation_id)
-        run = await get_run(session, run_id)
+    try:
+        async with session_factory() as session, session.begin():
+            await set_rls_org(session, principal.organisation_id)
+            run = await get_run(session, run_id)
+    except ProgrammingError:
+        await ws.send_json({"error": "migration_required", "detail": "Run database migrations to enable this feature."})
+        await ws.close(code=4004)
+        return
+    except SQLAlchemyError:
+        await ws.send_json({"error": "db_unavailable", "detail": "Database temporarily unavailable."})
+        await ws.close(code=4004)
+        return
+    except Exception:
+        _log.exception("run_ws.db_check_failed")
+        await ws.send_json({"error": "internal_error", "detail": "An unexpected error occurred."})
+        await ws.close(code=4004)
+        return
 
     if run is None:
         await ws.send_json({"error": "run_not_found", "detail": f"Run {run_id} not found"})

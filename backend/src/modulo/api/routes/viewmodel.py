@@ -253,7 +253,7 @@ async def viewmodel_current(
                         Team.organisation_id == current_user.organisation_id,
                     )
                 )
-                team = await team_result.scalar_one_or_none()
+                team = team_result.scalar_one_or_none()
                 if team is None:
                     raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Team not found")
 

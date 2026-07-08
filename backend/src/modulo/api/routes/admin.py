@@ -2451,6 +2451,18 @@ async def admin_update_retention(
 ) -> RetentionConfigResponse:
     if current_user.org_role != "admin":
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Only admin users can update retention")
+    async with session.begin():
+        await set_rls_org(session, current_user.organisation_id)
+        result = await session.execute(
+            select(Organisation).where(Organisation.id == current_user.organisation_id).limit(1)
+        )
+        org = result.scalar_one_or_none()
+        if org is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Organisation not found")
+        settings = dict(org.settings_json) if org.settings_json else {}
+        settings["retention_days"] = req.retention_days
+        org.settings_json = settings
+        await session.flush()
     logger.info(
         "run_retention.updated",
         extra={
