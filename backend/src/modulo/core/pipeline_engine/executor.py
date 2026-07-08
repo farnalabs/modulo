@@ -432,6 +432,13 @@ class PipelineExecutor:
                     guard=guard,
                     node_token_budgets=node_token_budgets,
                 )
+        except RuntimeError as exc:
+            if "checkpointer" in str(exc):
+                _log.warning("pipeline.resume_no_checkpointer", extra={"run_id": str(run_id)})
+                final_status = "failed"
+                error_code = "configuration_error"
+            else:
+                raise
         except Exception as exc:
             _log.exception("pipeline.resume_error", extra={"run_id": str(run_id)})
             final_status = "failed"
