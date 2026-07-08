@@ -3,7 +3,6 @@
 import router from '@/router'
 
 const TAB_ID = typeof crypto !== 'undefined' && crypto.randomUUID ? crypto.randomUUID() : Date.now().toString(36)
-const lockChannel = typeof BroadcastChannel !== 'undefined' ? new BroadcastChannel('remy-element-locks') : null
 
 interface LockState {
   selector: string
@@ -12,9 +11,52 @@ interface LockState {
 }
 
 const heldLocks = new Map<string, LockState>()
+let _lockChannel: BroadcastChannel | null = null
+let _lockChannelInitialized = false
+let _beforeUnloadRegistered = false
+
+function getLockChannel(): BroadcastChannel | null {
+  if (_lockChannelInitialized) return _lockChannel
+  _lockChannelInitialized = true
+  if (typeof BroadcastChannel === 'undefined') return null
+  _lockChannel = new BroadcastChannel('remy-element-locks')
+  _lockChannel.addEventListener('message', (e: MessageEvent) => {
+    const data = e.data || {}
+    if (data.type === 'lock-request' && data.tabId !== TAB_ID) {
+      const existing = heldLocks.get(data.selector)
+      const granted = !existing || existing.tabId === data.tabId
+      _lockChannel!.postMessage({
+        type: 'lock-response',
+        msgId: data.msgId,
+        granted,
+        holder: existing?.tabId || null,
+      })
+    }
+  })
+  return _lockChannel
+}
+
+function registerBeforeUnload() {
+  if (_beforeUnloadRegistered || typeof window === 'undefined') return
+  _beforeUnloadRegistered = true
+  window.addEventListener('beforeunload', () => {
+    const channel = getLockChannel()
+    if (!channel) return
+    for (const [selector] of heldLocks) {
+      channel.postMessage({
+        type: 'lock-release',
+        selector,
+        tabId: TAB_ID,
+      })
+    }
+    heldLocks.clear()
+  })
+}
 
 async function acquireElementLock(selector: string, timeout = 5000): Promise<boolean> {
-  if (!lockChannel) return true
+  const channel = getLockChannel()
+  if (!channel) return true
+  registerBeforeUnload()
 
   return new Promise<boolean>(resolve => {
     const msgId = `${TAB_ID}:${Date.now()}:${Math.random().toString(36).slice(2)}`
@@ -38,9 +80,9 @@ async function acquireElementLock(selector: string, timeout = 5000): Promise<boo
       }
     }
 
-    lockChannel!.addEventListener('message', handleMessage)
+    channel.addEventListener('message', handleMessage)
 
-    lockChannel!.postMessage({
+    channel.postMessage({
       type: 'lock-request',
       msgId,
       selector,
@@ -48,7 +90,7 @@ async function acquireElementLock(selector: string, timeout = 5000): Promise<boo
     })
 
     timer = setTimeout(() => {
-      lockChannel!.removeEventListener('message', handleMessage)
+      channel.removeEventListener('message', handleMessage)
       if (!resolved) {
         resolved = true
         resolve(false)
@@ -58,9 +100,10 @@ async function acquireElementLock(selector: string, timeout = 5000): Promise<boo
 }
 
 function releaseElementLock(selector: string) {
-  if (!lockChannel) return
+  const channel = getLockChannel()
+  if (!channel) return
   heldLocks.delete(selector)
-  lockChannel.postMessage({
+  channel.postMessage({
     type: 'lock-release',
     selector,
     tabId: TAB_ID,
@@ -68,35 +111,16 @@ function releaseElementLock(selector: string) {
 }
 
 function releaseAllLocks() {
-  if (!lockChannel) return
+  const channel = getLockChannel()
+  if (!channel) return
   for (const [selector] of heldLocks) {
-    lockChannel.postMessage({
+    channel.postMessage({
       type: 'lock-release',
       selector,
       tabId: TAB_ID,
     })
   }
   heldLocks.clear()
-}
-
-if (lockChannel) {
-  lockChannel.addEventListener('message', (e: MessageEvent) => {
-    const data = e.data || {}
-    if (data.type === 'lock-request' && data.tabId !== TAB_ID) {
-      const existing = heldLocks.get(data.selector)
-      const granted = !existing || existing.tabId === data.tabId
-      lockChannel!.postMessage({
-        type: 'lock-response',
-        msgId: data.msgId,
-        granted,
-        holder: existing?.tabId || null,
-      })
-    }
-  })
-}
-
-if (typeof window !== 'undefined') {
-  window.addEventListener('beforeunload', releaseAllLocks)
 }
 
 export interface UiCommand {

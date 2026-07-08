@@ -1,4 +1,4 @@
-﻿import { ref, computed } from 'vue'
+﻿import { ref, computed, readonly } from 'vue'
 import { api } from '../lib/api/client'
 import { formatApiError } from '../lib/api/formatError'
 
@@ -30,7 +30,7 @@ export function useViews(viewType: string) {
     error.value = null
     try {
       const resp = await api.GET('/api/v1/views', {
-        params: { query: { view_type: viewType } as any },
+        params: { query: { view_type: viewType } as unknown as Record<string, unknown> },
       })
       if (resp.error) {
         error.value = formatApiError(resp.error)
@@ -49,11 +49,11 @@ export function useViews(viewType: string) {
   }
 
   return {
-    views,
-    currentViewId,
+    views: readonly(views),
+    currentViewId: readonly(currentViewId),
     currentView,
-    loading,
-    error,
+    loading: readonly(loading),
+    error: readonly(error),
     fetchViews,
     setCurrentView,
   }

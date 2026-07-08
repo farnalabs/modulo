@@ -1,4 +1,4 @@
-import { ref, watch } from 'vue'
+import { ref, readonly, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import type { PageContext } from '@/types/remy'
 
@@ -34,5 +34,5 @@ export function useRemyContext() {
     { immediate: true },
   )
 
-  return { pageContext }
+  return { pageContext: readonly(pageContext) }
 }
