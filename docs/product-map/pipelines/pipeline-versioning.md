@@ -11,7 +11,12 @@ code:
   - backend/src/modulo/db/crud/pipeline_snapshot.py
   - backend/src/modulo/db/crud/pipeline_snapshot_versioning.py
   - backend/src/modulo/db/models/pipeline_snapshot.py
-depends-on: []
+depends-on:
+  - feat-pipelines-core
+  - feat-agents
+  - feat-schemas-core
+  - feat-connectors-hub
+  - feat-model-backends
 status: partial
 ---
 
@@ -103,6 +108,8 @@ status: partial
 
 ## QA History
 
+- 2026-07-08: Cross-cutting QA (index 335): Updated depends-on with actual feature dependencies (pipelines-core, agents, schemas-core, connectors-hub, model-backends). Verified all 5 known gaps remain valid and unchanged since July 2. Verified all error path behaviour checkboxes still match code (ProgrammingError→501, SQLAlchemyError→503, Exception→500 with logging — all covered by @handle_db_errors decorator plus explicit handler-level catches). Confirmed PRD field mapping `created_by`→`account_id` via `validation_alias`. Fixed ABTestModelsView.vue to wire snapshot tag display and show version number. All unchecked [ ] items still accurate. Status: partial (5 known gaps, 2 UI behaviours untracked).
+
 - 2026-07-02: Cross-cutting QA (index 57): Marked 3 run isolation behaviours [ ]→[x] (architecturally guaranteed — snapshot created at run-start via FOR UPDATE, run engine uses snapshot.graph_json, live edits do not affect in-flight runs). Added 6 error-path behaviour checkboxes (501 Not Implemented for missing DB table). Added ProgrammingError catches to 6 snapshot API routes. Added BDD scenario for empty-graph snapshot creation. Updated Known Gaps (improved descriptions for isolation lifecycle, concurrency testing gap, and version display limitation). Status: partial (5 known gaps remain, 2 UI behaviours untracked).
 
 ## Known Gaps
@@ -112,3 +119,4 @@ status: partial
 - Missing UI behaviour specs for snapshot version display in pipeline history view
 - Missing deletion protection lifecycle: what happens to snapshots when a referenced schema version is deprecated?
 - No dedicated admin UI page for browsing snapshot history — version numbers only shown in revert-to-manual dialog
+- ABTestModelsView does not display snapshot version number — only shows truncated snapshot ID (shortId) with no version. Snapshot tag is fetched from API but not wired (availableSnapshotTag hardcoded to null).
