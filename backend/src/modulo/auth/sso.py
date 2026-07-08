@@ -129,13 +129,16 @@ async def apply_group_mappings(
 ) -> None:
     """Apply SSO group-to-team mappings for a JIT-provisioned account."""
     for mapping in group_mappings:
+        if not isinstance(mapping, dict):
+            _log.warning("sso.non_dict_mapping", extra={"mapping_type": type(mapping).__name__})
+            continue
         idp_group = mapping.get("idp_group", "")
         if idp_group not in idp_groups:
             continue
         try:
             team_id = uuid.UUID(mapping["team_id"])
         except (ValueError, KeyError) as exc:
-            _log.warning("sso.invalid_team_mapping", extra={"error": str(exc), "mapping": str(mapping)})
+            _log.warning("sso.invalid_team_mapping", extra={"error": str(exc)})
             continue
         team_role = mapping.get("team_role", "viewer")
 
@@ -248,6 +251,7 @@ async def oidc_process_callback(
     """Exchange auth code for tokens, JIT provision account, return JWT pair."""
     state_data = verify_state(state, settings.secret_key)
     if not state_data:
+        _log.warning("sso.csrf_state_mismatch", extra={"state_prefix": state[:20] + "..." if len(state) > 20 else state})
         raise ValueError("Invalid state parameter — possible CSRF")
 
     provider_id = state_data.split(":", 1)[0] if ":" in state_data else state_data
@@ -330,7 +334,8 @@ def _parse_oidc_providers(settings: Settings) -> list[dict[str, str]]:
         if all(k in entry for k in ("provider_id", "client_id", "client_secret", "discovery_url")):
             valid.append(entry)
         else:
-            _log.warning("sso.oidc_entry_missing_fields", extra={"entry": str(entry)})
+            safe_entry = {k: v for k, v in entry.items() if k != "client_secret"}
+            _log.warning("sso.oidc_entry_missing_fields", extra={"entry": str(safe_entry)})
     return valid
 
 

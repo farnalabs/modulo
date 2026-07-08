@@ -8,16 +8,24 @@ organisation (first org in the DB, or the org specified by MODULO_SCIM_DEFAULT_O
 import hmac
 import uuid
 
+from typing import AsyncGenerator
+
 from fastapi import Depends, HTTPException, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from modulo.api.dependencies import get_db_session
 from modulo.db.models.organisation import Organisation
 from modulo.settings import Settings, get_settings
 
 _scim_bearer = HTTPBearer(auto_error=False)
+
+
+async def _get_db_session() -> AsyncGenerator[AsyncSession, None]:
+    """Lazily import get_db_session to avoid circular imports."""
+    from modulo.api.dependencies import get_db_session
+    async for session in get_db_session():
+        yield session
 
 
 class ScimPrincipal:
@@ -30,7 +38,7 @@ class ScimPrincipal:
 async def get_scim_principal(
     credentials: HTTPAuthorizationCredentials | None = Depends(_scim_bearer),
     settings: Settings = Depends(get_settings),
-    session: AsyncSession = Depends(get_db_session),
+    session: AsyncSession = Depends(_get_db_session),
 ) -> ScimPrincipal:
     """Validate Bearer token against MODULO_SCIM_TOKEN and resolve the target org."""
     if credentials is None:
