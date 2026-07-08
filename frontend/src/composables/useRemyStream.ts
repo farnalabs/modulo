@@ -123,9 +123,8 @@ export function useRemyStream() {
                 await new Promise(r => setTimeout(r, 200))
               }
               const body = JSON.stringify({ results })
-              let retries = 0
               const maxRetries = 3
-              while (true) {
+              for (let retries = 0; retries < maxRetries; retries++) {
                 const resp = await fetch(`/api/v1/remy/sessions/${sessionId}/ui-command-results`, {
                   method: 'POST',
                   headers: {
@@ -134,13 +133,12 @@ export function useRemyStream() {
                   },
                   body,
                 })
-                if (resp.ok) break
-                retries++
-                if (retries >= maxRetries) {
+                if (resp.ok) { retries = 0; break }
+                if (retries >= maxRetries - 1) {
                   store.error = `Failed to submit UI command results (${resp.status})`
-                  break
+                } else {
+                  await new Promise(r => setTimeout(r, 500 * (retries + 1)))
                 }
-                await new Promise(r => setTimeout(r, 500 * retries))
               }
             } catch (e) {
               store.error = e instanceof Error ? e.message : 'UI command execution failed'

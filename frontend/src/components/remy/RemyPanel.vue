@@ -284,7 +284,6 @@ import { useRemyStore } from "@/composables/useRemyStore";
 import { useRemyContext } from "@/composables/useRemyContext";
 import { setActionSpeed, resumeUiCommands } from "@/composables/useUiCommandExecutor";
 import { usePlanStore } from "@/stores/planStore";
-import { Button } from "@/components/ui/button";
 import RemyChat from "./RemyChat.vue";
 import RemySessionDrawer from "./RemySessionDrawer.vue";
 import RemySkillManager from "./RemySkillManager.vue";
@@ -312,7 +311,7 @@ const speedDescriptions: Record<string, string> = {
   lightning: 'Navigates as fast as possible',
 }
 let savedSpeed: string | null = null
-try { savedSpeed = localStorage.getItem('remy-action-speed') } catch {}
+try { savedSpeed = localStorage.getItem('remy-action-speed') } catch { /* localStorage may throw in private mode */ }
 const currentSpeed = ref(savedSpeed ?? 'normal')
 const currentSpeedLabel = computed(() => {
   const idx = speedLabels.indexOf(currentSpeed.value)
