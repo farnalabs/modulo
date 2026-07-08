@@ -4,14 +4,14 @@ import uuid
 from datetime import datetime
 from typing import Any
 
-from sqlalchemy import JSON, Boolean, CheckConstraint, DateTime, String, Uuid, func
+from sqlalchemy import JSON, Boolean, CheckConstraint, DateTime, String, Uuid
 from sqlalchemy import text as sa_text
 from sqlalchemy.orm import Mapped, mapped_column
 
-from modulo.db.models.base import Base
+from modulo.db.models.base import Base, TimestampMixin
 
 
-class Account(Base):
+class Account(Base, TimestampMixin):
     __tablename__ = "accounts"
     __table_args__ = (
         CheckConstraint("auth_provider IN ('local', 'oidc', 'saml', 'scim')", name="ck_accounts_auth_provider"),
@@ -27,12 +27,3 @@ class Account(Base):
     last_login: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     preferences: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False, server_default=sa_text("'{}'"))
     is_system_admin: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="false")
-    created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default=func.current_timestamp(), nullable=False
-    )
-    updated_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True),
-        server_default=func.current_timestamp(),
-        onupdate=func.current_timestamp(),
-        nullable=False,
-    )

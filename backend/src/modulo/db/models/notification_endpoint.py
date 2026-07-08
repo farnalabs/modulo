@@ -1,7 +1,7 @@
 import uuid
 from datetime import datetime
 
-from sqlalchemy import JSON, Boolean, DateTime, ForeignKey, Integer, String, Uuid
+from sqlalchemy import JSON, Boolean, DateTime, ForeignKey, Integer, LargeBinary, String, Uuid
 from sqlalchemy import text as sa_text
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -12,7 +12,7 @@ class NotificationEndpoint(OrgScoped):
     __tablename__ = "notification_endpoints"
 
     url: Mapped[str] = mapped_column(String(2048), nullable=False)
-    secret_ciphertext: Mapped[bytes | None] = mapped_column(nullable=True)
+    secret_ciphertext: Mapped[bytes | None] = mapped_column(LargeBinary, nullable=True)
     events: Mapped[list[str]] = mapped_column(JSON, nullable=False, server_default=sa_text("'[]'"))
 
     description: Mapped[str | None] = mapped_column(String(500))

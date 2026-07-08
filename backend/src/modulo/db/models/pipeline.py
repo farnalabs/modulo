@@ -28,7 +28,7 @@ class Pipeline(OrgScoped):
         ),
         CheckConstraint("node_timeout_seconds > 0", name="ck_pipelines_node_timeout"),
         CheckConstraint(
-            "default_autonomy_level IN (  'manual_approval', 'notify_on_complete', 'fully_autonomous')",
+            "default_autonomy_level IN ('manual_approval', 'notify_on_complete', 'fully_autonomous')",
             name="ck_pipelines_autonomy_level",
         ),
     )
