@@ -96,13 +96,15 @@ async def login(
         async with session.begin():
             account = await get_account_by_email(session, req.email)
             if not account or not authenticate_db_user(req.password, account):
-                await limiter.record_failure(ip)
+                if limiter is not None:
+                    await limiter.record_failure(ip)
                 raise HTTPException(
                     status_code=status.HTTP_401_UNAUTHORIZED,
                     detail="Incorrect email or password",
                 )
 
-            await limiter.record_success(ip)
+            if limiter is not None:
+                await limiter.record_success(ip)
             await update_last_login(session, account.id)
 
             memberships = await list_memberships_for_account(session, account.id)
@@ -242,7 +244,9 @@ async def refresh(
     org_id_val = claims.get("org_id")
     account_id_val = claims.get("account_id") or claims.get("user_id")
     org_role_val = claims.get("org_role")
-    if not all(isinstance(v, str) for v in [sub_val, org_id_val, account_id_val, org_role_val]):
+    if not all(isinstance(v, str) for v in [sub_val, org_id_val, account_id_val]) or (
+        org_id_val is not None and not isinstance(org_id_val, str)
+    ):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid refresh token payload",

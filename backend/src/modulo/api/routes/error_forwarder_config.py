@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import uuid
 from datetime import UTC, datetime
@@ -257,7 +258,10 @@ async def test_forwarder(
     )
 
     try:
-        ok = await forwarder.forward(org_id, test_group, test_event, config)
+        ok = await asyncio.wait_for(forwarder.forward(org_id, test_group, test_event, config), timeout=15.0)
+    except asyncio.TimeoutError:
+        _log.warning("forwarder.test_connection_timeout", extra={"type": forwarder_type})
+        ok = False
     except Exception:
         _log.exception("forwarder.test_connection_failed", extra={"type": forwarder_type})
         ok = False

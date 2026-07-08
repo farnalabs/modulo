@@ -57,6 +57,8 @@ class RequestTimeoutMiddleware(BaseHTTPMiddleware):
                     "detail": f"Request exceeded {timeout}s timeout",
                 },
             )
+        except asyncio.CancelledError:
+            raise
 
     def _timeout_for(self, path: str) -> int:
         for prefix, to in self._overrides.items():

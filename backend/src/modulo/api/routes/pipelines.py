@@ -604,7 +604,7 @@ async def clone_pipeline_endpoint(
 ) -> PipelineResponse:
     _log.info("Copy request: pipeline=%s org=%s user=%s", pipeline_id, principal.organisation_id, principal.account_id)
 
-    if principal.org_role not in ("admin", "owner", "member"):
+    if principal.org_role == "viewer":
         _log.warning(
             "Copy denied: user %s has role '%s' (requires admin/owner/member)",
             principal.account_id,

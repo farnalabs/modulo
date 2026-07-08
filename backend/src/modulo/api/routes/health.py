@@ -58,12 +58,12 @@ async def _check_redis() -> CheckResult:
     if not settings.redis_url:
         return CheckResult(status="degraded", detail="redis not configured")
     start = time.monotonic()
+    r = None
     try:
         import redis.asyncio as aioredis
 
         r = aioredis.Redis.from_url(settings.redis_url, socket_connect_timeout=2)
         await r.ping()
-        await r.aclose()
         latency_ms = (time.monotonic() - start) * 1000
         return CheckResult(
             status="ok",
@@ -77,6 +77,12 @@ async def _check_redis() -> CheckResult:
             latency_ms=round(latency_ms, 1),
             detail=str(exc),
         )
+    finally:
+        if r is not None:
+            try:
+                await r.aclose()
+            except Exception:
+                pass
 
 
 async def _check_checkpointer() -> CheckResult:

@@ -1412,6 +1412,11 @@ async def stream_chat(
                             finally:
                                 _pending_ui_results.pop(session_id_str, None)
 
+                            if len(approved_calls) != len(results):
+                                logger.warning(
+                                    "remy.ui_result_length_mismatch",
+                                    extra={"approved": len(approved_calls), "results": len(results)},
+                                )
                             for ac, r in zip(approved_calls, results, strict=False):
                                 tool_results.append({
                                     "tool_call_id": ac["id"],

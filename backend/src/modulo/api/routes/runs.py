@@ -527,7 +527,7 @@ async def get_run_io_endpoint(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="An unexpected error occurred.",
         ) from None
-    if run is None:
+    if result is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Run not found")
 
     if result.get("outputs_json"):
