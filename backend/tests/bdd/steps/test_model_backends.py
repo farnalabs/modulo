@@ -17,10 +17,6 @@ try:
 except (FileNotFoundError, OSError):
     pass
 try:
-    scenarios("../../bdd/features/model_backends/rate_limiting.feature")
-except (FileNotFoundError, OSError):
-    pass
-try:
     scenarios("../../bdd/features/model_backends/backend_health_check.feature")
 except (FileNotFoundError, OSError):
     pass

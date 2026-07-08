@@ -56,7 +56,6 @@ def create_team(name: str, description: str, request, ctx) -> None:
 
     client = TestClient(app)
     app.dependency_overrides[get_settings] = make_settings
-    app.dependency_overrides = {}
 
     org_role = ctx.get("org_role", "admin")
 

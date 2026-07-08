@@ -6,7 +6,7 @@ test_hitl.py to avoid StepDefinitionAlreadyRegistered errors.
 """
 
 import uuid
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import MagicMock
 
 from pytest_bdd import given, parsers, scenarios, then, when
 

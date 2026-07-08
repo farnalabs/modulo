@@ -83,11 +83,6 @@ def auth_in_org(org: str) -> None:
     pass
 
 
-@given(parsers.parse('I am authenticated as an admin in org "{org}"'))
-def auth_admin(org: str) -> None:
-    pass
-
-
 @when(parsers.parse("I view pipelines"))
 def i_view_pipelines(request, ctx) -> None:
     current_team_id = ctx["memberships"].get("__current__", {}).get("team_id")
@@ -187,7 +182,7 @@ def error_connector_mismatch(request) -> None:
 
 
 @then("the response total count does not include team-private pipelines")
-def total_excludes_private(request) -> None:
+def total_excludes_private(request, ctx) -> None:
     data = request.node._resp.json()
     total = data.get("total", 0)
     visible_pipelines = [p for p in ctx.get("pipelines", {}).values() if p.get("visibility") != "team"]

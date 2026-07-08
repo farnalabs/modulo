@@ -23,7 +23,7 @@ _ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
 _USER_ID = uuid.UUID("00000000-0000-0000-0000-000000000002")
 
 
-def make_settings() -> "Settings":
+def make_settings():
     from modulo.settings import Settings
     return Settings(
         database_url="postgresql+asyncpg://localhost/test",

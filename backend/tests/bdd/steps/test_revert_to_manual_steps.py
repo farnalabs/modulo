@@ -11,10 +11,7 @@ from pytest_bdd import given, parsers, scenarios, then, when
 
 from tests.bdd.conftest import make_mock_pipeline, make_mock_snapshot
 
-try:
-    scenarios("../features/personas/alice-devx-sme.feature")
-except (FileNotFoundError, OSError):
-    pass
+
 
 
 @pytest.fixture

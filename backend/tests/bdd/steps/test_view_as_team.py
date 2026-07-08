@@ -8,8 +8,6 @@ import pytest
 from fastapi.testclient import TestClient
 from pytest_bdd import given, parsers, scenarios, then, when
 
-from modulo.api.dependencies import _get_engine, get_db_session
-from modulo.api.main import app
 from modulo.auth.dependencies import get_current_user
 from modulo.auth.jwt import AuthenticatedPrincipal
 from modulo.db.crud.base import PageResult
@@ -88,16 +86,6 @@ def pipeline_owned_by_team(name: str, team_name: str, ctx) -> None:
     ctx["owned_pipelines"][name] = team_id
 
 
-@given(parsers.parse('I am authenticated as an admin in org "{org}"'))
-def auth_admin_in_org(org: str) -> None:
-    pass
-
-
-@given(parsers.parse('I am authenticated as a viewer in org "{org}"'))
-def auth_viewer_in_org(org: str, ctx) -> None:
-    ctx["org_role"] = "viewer"
-
-
 @when(parsers.parse('I GET /api/viewmodel/current with view_as_team "{team_name}"'))
 def get_viewmodel_with_view_as_team(
     team_name: str,
@@ -120,6 +108,12 @@ def get_viewmodel_with_view_as_team(
         resp.json.return_value = {"detail": "Team not found"}
         _store_response(request, resp)
         return
+
+    from modulo.api.dependencies import _get_engine, get_db_session
+    from modulo.api.main import app
+
+    from modulo.api.dependencies import _get_engine, get_db_session
+    from modulo.api.main import app
 
     mock_session = make_mock_session()
 
@@ -166,6 +160,9 @@ def get_viewmodel_without_view_as_team(
     request: pytest.FixtureRequest,
     ctx,
 ) -> None:
+    from modulo.api.dependencies import _get_engine, get_db_session
+    from modulo.api.main import app
+
     mock_session = make_mock_session()
 
     async def override_session():
