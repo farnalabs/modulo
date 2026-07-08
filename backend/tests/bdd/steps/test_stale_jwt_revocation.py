@@ -25,11 +25,6 @@ def ctx():
     }
 
 
-@given(parsers.parse('I am authenticated as an admin in org "{org}"'))
-def auth_admin(org: str) -> None:
-    pass
-
-
 @given(parsers.parse('a user "{username}" exists'))
 def user_exists(username: str, ctx) -> None:
     if username not in ctx["users"]:

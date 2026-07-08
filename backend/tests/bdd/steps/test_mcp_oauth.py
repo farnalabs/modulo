@@ -7,7 +7,6 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from pytest_bdd import given, parsers, scenarios, then, when
 
-from modulo.api.main import app
 from modulo.auth.dependencies import get_current_user
 from modulo.auth.jwt import AuthenticatedPrincipal
 from modulo.core.rate_limiter import RateLimiterRegistry
@@ -194,6 +193,8 @@ def register_oauth_client(name: str, uris: str, scopes: str, client, request):
             account_id=USER_ID,
             org_role="admin",
         )
+    from modulo.api.main import app
+
     app.dependency_overrides[get_current_user] = lambda: auth_principal
 
     with (

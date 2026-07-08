@@ -274,7 +274,6 @@ def create_remy_session(provider: str, model: str, request, ctx) -> None:
         mock_cls.return_value = inst
 
         client = _make_client()
-        app.dependency_overrides = {}
         resp = client.post(
             "/api/v1/remy/sessions",
             json={"provider": provider, "model": model, "context_window_tokens": 200000},

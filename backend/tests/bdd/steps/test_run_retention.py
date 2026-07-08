@@ -55,6 +55,10 @@ def _map_url(url: str) -> str:
 def terminal_run_exists(days: int, ctx: dict[str, Any]) -> None:
     """Record a terminal run with a specific age for the retention job to find."""
     ctx["run_age_days"] = days
+    if "runs" not in ctx:
+        ctx["runs"] = {}
+    ctx["runs"][days] = {"age_days": days}
+    ctx["last_run_age"] = days
 
 
 @given(parsers.parse("the retention TTL is {days:d} days"))
@@ -162,7 +166,8 @@ def manual_purge(client: Any, date: str, request: Any, ctx: dict[str, Any]) -> N
         patch("modulo.api.routes.admin.set_rls_org", new_callable=AsyncMock),
         patch("modulo.core.audit_logger.append_audit_event", new_callable=AsyncMock) as mock_audit,
     ):
-        mock_purge.return_value = {"deleted_run_count": 3}
+        deleted_count = ctx.get("expected_purge_count", 3)
+        mock_purge.return_value = {"deleted_run_count": deleted_count}
         ctx["mock_audit"] = mock_audit
         ctx["mock_purge"] = mock_purge
         resp = client.post(
@@ -240,15 +245,6 @@ def org_retention_ttl(org: str, days: int, ctx: dict[str, Any]) -> None:
     ctx["current_org"] = org
 
 
-@given(parsers.parse("a terminal run exists that completed {days:d} days ago"))
-def terminal_run_age(days: int, ctx: dict[str, Any]) -> None:
-    """Register a terminal run with a given age."""
-    if "runs" not in ctx:
-        ctx["runs"] = {}
-    ctx["runs"][days] = {"age_days": days}
-    ctx["last_run_age"] = days
-
-
 @then(parsers.parse("the run completed {days:d} days ago is deleted"))
 def old_run_deleted(days: int, ctx: dict[str, Any]) -> None:
     mock_delete = ctx.get("mock_batch_delete")
@@ -277,26 +273,6 @@ def org_runs_before_date(org: str, date: str, ctx: dict[str, Any]) -> None:
     ctx["org_runs"][org] = {"cutoff": date, "count": 3}
 
 
-@when(parsers.parse('I POST /api/admin/purge with {"older_than": "{date}"}'))
-def manual_purge_org(client: Any, alt_org_client: Any, date: str, request: Any, ctx: dict[str, Any]) -> None:
-    """POST /api/v1/admin/purge — uses client scoped to the authenticated org."""
-    from unittest.mock import patch as _patch
-
-    with (
-        _patch("modulo.api.routes.admin.purge_runs", new_callable=AsyncMock) as mock_purge,
-        _patch("modulo.api.routes.admin.set_rls_org", new_callable=AsyncMock),
-        _patch("modulo.core.audit_logger.append_audit_event", new_callable=AsyncMock) as mock_audit,
-    ):
-        mock_purge.return_value = {"deleted_run_count": 2}
-        ctx["mock_purge"] = mock_purge
-        ctx["mock_audit"] = mock_audit
-        resp = client.post(
-            _map_url("/api/admin/purge"),
-            json={"older_than": date},
-        )
-        _store_response(request, ctx, resp)
-
-
 @then(parsers.parse('only runs belonging to org "{org}" are deleted'))
 def only_org_runs_deleted(org: str, ctx: dict[str, Any]) -> None:
     mock_purge = ctx.get("mock_purge")
@@ -306,14 +282,6 @@ def only_org_runs_deleted(org: str, ctx: dict[str, Any]) -> None:
     assert resp is not None
     body = resp.json()
     assert body.get("deleted_run_count") == 2
-
-
-@given(parsers.parse('terminal runs exist in org "{org}" completed before "{date}"'))
-def globex_runs_before_date(org: str, date: str, ctx: dict[str, Any]) -> None:
-    """Register runs for a second org — these must not be affected by the purge."""
-    if "org_runs" not in ctx:
-        ctx["org_runs"] = {}
-    ctx["org_runs"][org] = {"cutoff": date, "count": 5}
 
 
 @then(parsers.parse('runs belonging to org "{org}" are preserved'))

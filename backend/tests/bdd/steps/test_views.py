@@ -3,7 +3,7 @@
 import uuid
 from datetime import UTC, datetime
 from typing import Any
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from pytest_bdd import given, parsers, scenarios, then, when
@@ -74,7 +74,7 @@ def _view_exists(ctx: dict[str, Any]) -> None:
 def _create_view(name: str, view_type: str, ctx: dict[str, Any], client: Any) -> None:
     view = _make_view(name=name, view_type=view_type)
     with (
-        patch("modulo.api.routes.views.create_view", return_value=view),
+        patch("modulo.api.routes.views.create_view", new_callable=AsyncMock, return_value=view),
         patch("modulo.api.routes.views.set_rls_org"),
         patch("modulo.api.routes.views.set_rls_user_context"),
     ):

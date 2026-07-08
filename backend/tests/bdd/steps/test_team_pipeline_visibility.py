@@ -7,7 +7,6 @@ import pytest
 from fastapi.testclient import TestClient
 from pytest_bdd import given, parsers, scenarios, then, when
 
-from modulo.api.main import app
 from modulo.settings import get_settings
 from tests.bdd.conftest import make_settings
 
@@ -38,11 +37,6 @@ def patches():
             p.stop()
         except RuntimeError:
             pass
-
-
-@given(parsers.parse('I am authenticated as an admin in org "{org}"'))
-def auth_admin(org: str) -> None:
-    pass
 
 
 @given(
@@ -110,6 +104,8 @@ def create_team_pipeline(name: str, visibility: str, team_name: str, request, ct
 
 @when(parsers.parse('user "{username}" requests the pipeline list'))
 def user_requests_pipeline_list(username: str, request, ctx) -> None:
+    from modulo.api.main import app
+
     client = TestClient(app)
     app.dependency_overrides[get_settings] = make_settings
 
@@ -134,6 +130,8 @@ def user_requests_pipeline_list(username: str, request, ctx) -> None:
     parsers.parse('user "{username}" requests GET /api/pipelines/{pipeline_name}')
 )
 def user_requests_specific_pipeline(username: str, pipeline_name: str, request, ctx) -> None:
+    from modulo.api.main import app
+
     client = TestClient(app)
     app.dependency_overrides[get_settings] = make_settings
 
@@ -156,6 +154,8 @@ def user_requests_specific_pipeline(username: str, pipeline_name: str, request, 
 
 @when(parsers.parse('I update pipeline "{name}" with new name "{new_name}"'))
 def update_pipeline_name(name: str, new_name: str, request, ctx) -> None:
+    from modulo.api.main import app
+
     pipeline = ctx["pipelines"].get(name)
     if pipeline:
         pipeline["name"] = new_name

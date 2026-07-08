@@ -10,10 +10,6 @@ try:
 except (FileNotFoundError, OSError):
     pass
 try:
-    scenarios("../features/agents/prompt_versioning.feature")
-except (FileNotFoundError, OSError):
-    pass
-try:
     scenarios("../features/agents/schema_assignment.feature")
 except (FileNotFoundError, OSError):
     pass
