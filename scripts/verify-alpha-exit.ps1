@@ -100,6 +100,7 @@ function CheckFileExists($path, $label) {
 #  HEADER
 # ==============================================================
 $bddSkipped = $SkipBDD
+$dateStr = Get-Date -Format 'yyyy-MM-dd HH:mm:ss'
 Log ""
 Log "+--------------------------------------------------------------------+"
 Log "|          Alpha Exit Verification Report                           |"
