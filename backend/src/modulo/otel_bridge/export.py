@@ -10,6 +10,7 @@ Sensitive data (credentials, API keys, user content) is never written to span at
 
 import logging
 import os
+from urllib.parse import urlparse, urlunparse
 
 from opentelemetry import trace
 from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
@@ -70,7 +71,6 @@ def setup_otel(
 
 def _sanitise_url(url: str) -> str:
     """Strip credentials from a URL for safe logging."""
-    from urllib.parse import urlparse, urlunparse
     parsed = urlparse(url)
     if not parsed.password and not parsed.username:
         return url
