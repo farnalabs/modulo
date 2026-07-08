@@ -17,7 +17,7 @@ export function gatherContext(): Record<string, unknown> {
     if (pinia) {
       const plan = usePlanStore()
       if (plan.currentTier) ctx.tier = plan.currentTier
-      if (plan.orgName) ctx.orgName = plan.orgName
+      if (plan.orgId) ctx.orgName = plan.orgId
     }
   } catch {
     // Pinia not yet initialized
