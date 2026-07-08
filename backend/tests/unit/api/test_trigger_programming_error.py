@@ -35,12 +35,19 @@ def _make_mock_session(exc_side_effect: type[Exception] | None = ProgrammingErro
     begin_cm.__aenter__ = AsyncMock(return_value=None)
     begin_cm.__aexit__ = AsyncMock(return_value=False)
     session.begin = MagicMock(return_value=begin_cm)
+    begin_nested_cm = AsyncMock()
+    begin_nested_cm.__aenter__ = AsyncMock(return_value=None)
+    begin_nested_cm.__aexit__ = AsyncMock(return_value=False)
+    session.begin_nested = MagicMock(return_value=begin_nested_cm)
     if exc_side_effect is not None:
         session.execute = AsyncMock(side_effect=exc_side_effect)
     else:
         session.execute = AsyncMock()
     session.flush = AsyncMock()
     session.delete = AsyncMock()
+    bind_mock = MagicMock()
+    bind_mock.dialect.name = "postgresql"
+    session.get_bind = MagicMock(return_value=bind_mock)
     return session
 
 
