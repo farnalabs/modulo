@@ -37,6 +37,7 @@ def _make_mock_user() -> MagicMock:
     user.active = True
     user.organisation_id = _ORG_ID
     user.password_hash = hash_password("testpass")
+    user.is_system_admin = False
     return user
 
 
