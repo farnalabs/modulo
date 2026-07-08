@@ -1,0 +1,23 @@
+rules:
+  - id: vue-hardcoded-english-template
+    patterns:
+      - pattern-regex: '>[A-Z][a-z][A-Za-z\s(),.:;!?-]+<'
+      - pattern-not-regex: '\{\{\s*\$t\('
+      - pattern-not-regex: '\{\{.*\}\}'
+      - pattern-not-regex: ':placeholder='
+      - pattern-not-regex: ':label='
+      - pattern-not-regex: ':title='
+      - pattern-not-regex: ':aria-label='
+      - pattern-not-regex: 'slot='
+      - pattern-not-regex: 'class='
+      - pattern-not-regex: 'style='
+      - pattern-not-regex: 'type='
+      - pattern-not-regex: 'value='
+      - pattern-not-regex: 'data-testid='
+    message: "Hardcoded English string in Vue template — use $t() for i18n"
+    languages:
+      - generic
+    severity: WARNING
+    paths:
+      include:
+        - "frontend/src/**/*.vue"
