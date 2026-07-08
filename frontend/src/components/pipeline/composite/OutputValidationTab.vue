@@ -58,6 +58,16 @@ function updateConfig(id: string, configPatch: Record<string, unknown>) {
   );
 }
 
+function handleSchemaChange(e: Event, evalDefId: string) {
+  try {
+    updateConfig(evalDefId, {
+      schema: JSON.parse((e.target as HTMLTextAreaElement).value),
+    });
+  } catch {
+    console.warn("Invalid JSON schema, keeping current value");
+  }
+}
+
 function updateRetries(e: Event) {
   const target = e.target as HTMLInputElement;
   const val = parseInt(target.value, 10);
@@ -204,17 +214,7 @@ const evalCount = computed(() => props.evalDefinitions.length);
             :value="JSON.stringify(evalDef.config.schema ?? {}, null, 2)"
             class="bg-background border-input focus-visible:border-ring h-28 w-full rounded-lg border px-2.5 py-1.5 text-sm font-mono resize-none outline-none"
             placeholder='{ "type": "object", "properties": { ... } }'
-            @change="
-              (e: Event) => {
-                try {
-                  updateConfig(evalDef.id, {
-                    schema: JSON.parse((e.target as HTMLTextAreaElement).value),
-                  });
-                } catch {
-                  console.warn("Invalid JSON schema, keeping current value");
-                }
-              }
-            "
+            @change="(e: Event) => handleSchemaChange(e, evalDef.id)"
           />
         </div>
       </template>

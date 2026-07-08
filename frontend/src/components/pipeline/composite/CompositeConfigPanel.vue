@@ -5,7 +5,7 @@ import { Tabs, TabsList, TabsTrigger, TabsContent } from "../../ui/tabs";
 import ParameterPortForm from "./ParameterPortForm.vue";
 import SchemaMappingPanel from "./SchemaMappingPanel.vue";
 import OutputValidationTab from "./OutputValidationTab.vue";
-import type { ParameterPort, ParameterPortType } from "../../../types/pipeline";
+import type { ParameterPort } from "../../../types/pipeline";
 
 interface EvalConfig {
   id: string;
