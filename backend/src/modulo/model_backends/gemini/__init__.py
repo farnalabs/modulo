@@ -55,7 +55,7 @@ class GeminiBackend(ModelBackendBase):
             logger.warning("Health check timed out for GeminiBackend")
             return HealthResult(ok=False, detail="Health check timed out")
         except httpx.HTTPError as exc:
-            logger.warning("Health check failed for GeminiBackend: %s", exc)
+            logger.warning("Health check failed for GeminiBackend")
             return HealthResult(ok=False, detail=str(exc)[:HEALTH_DETAIL_MAX_LENGTH])
 
     async def invoke(self, messages: list[BaseMessage], **kwargs: Any) -> BaseMessage:

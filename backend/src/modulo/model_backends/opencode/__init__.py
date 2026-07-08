@@ -8,6 +8,7 @@ from langchain_openai import ChatOpenAI
 
 from modulo.model_backends.base import HealthResult, ModelBackendBase, openai_compatible_health_check
 
+OPENCODE_BASE_URL = "https://opencode.ai/zen/go/v1"
 
 class OpenCodeBackend(ModelBackendBase):
     """Thin adapter over ChatOpenAI targeting OpenCode's OpenAI-compatible API."""
@@ -18,7 +19,7 @@ class OpenCodeBackend(ModelBackendBase):
         self._model = ChatOpenAI(
             model=model_id,
             api_key=api_key,
-            base_url="https://opencode.ai/zen/go/v1",
+            base_url=OPENCODE_BASE_URL,
             **default_params,
         )
         self._backend_id = f"opencode/{model_id}"
@@ -33,7 +34,7 @@ class OpenCodeBackend(ModelBackendBase):
 
     async def health_check(self) -> HealthResult:
         return await openai_compatible_health_check(
-            base_url="https://opencode.ai/zen/go/v1",
+            base_url=OPENCODE_BASE_URL,
             api_key=self._api_key,
         )
 
