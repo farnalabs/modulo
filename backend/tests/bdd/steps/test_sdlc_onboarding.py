@@ -7,7 +7,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 from pytest_bdd import given, parsers, scenarios, then, when
 
 try:
-    scenarios("../../features/onboarding/sdlc_onboarding.feature")
+    scenarios("../features/onboarding/sdlc_onboarding.feature")
 except (FileNotFoundError, OSError):
     pass
 

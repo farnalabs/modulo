@@ -14,7 +14,7 @@ from pytest_bdd import given, parsers, scenarios, then, when
 from modulo.core.plugin_registry import PluginHealth
 
 try:
-    scenarios("../../features/plugins/plugin_registry.feature")
+    scenarios("../features/plugins/plugin_registry.feature")
 except (FileNotFoundError, OSError):
     pass
 

@@ -7,7 +7,7 @@ import pytest
 from pytest_bdd import given, parsers, scenarios, then, when
 
 try:
-    scenarios("../../features/library/community_registry.feature")
+    scenarios("../features/library/community_registry.feature")
 except (FileNotFoundError, OSError):
     pass
 

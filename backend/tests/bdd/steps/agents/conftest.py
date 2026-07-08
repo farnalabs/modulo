@@ -1,4 +1,9 @@
-"""Fixture setup for prompt versioning BDD tests."""
+"""Fixture setup for prompt versioning BDD tests.
+
+# MOCKED: This conftest uses MagicMock-based DB fixtures instead of the
+# real async SQLAlchemy stack (testcontainers Postgres + Alembic migrations).
+# Scheduled for replacement with real-stack fixtures.
+"""
 
 import os
 import uuid

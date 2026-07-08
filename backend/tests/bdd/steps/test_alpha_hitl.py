@@ -1,6 +1,6 @@
 """BDD step definitions: HITL reject, human-only, overdue (legacy features).
 
-These cover the older feature files in tests/features/hitl/ that are NOT
+These cover the older feature files (now consolidated at tests/bdd/features/hitl/) that are NOT
 duplicated in test_hitl.py. Claim and approve scenarios are handled by
 test_hitl.py to avoid StepDefinitionAlreadyRegistered errors.
 """
@@ -11,7 +11,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 from pytest_bdd import given, parsers, scenarios, then, when
 
 try:
-    scenarios("../../features/hitl/reject.feature")
+    scenarios("../features/hitl/reject.feature")
 except (FileNotFoundError, OSError):
     pass
 

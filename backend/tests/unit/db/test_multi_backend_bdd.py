@@ -2,7 +2,7 @@
 
 Verifies tenant isolation, migrations, locks, and time functions across Postgres,
 MariaDB, and SQLite backends.  Mirrors the BDD scenarios in:
-    backend/tests/features/organisation/multi_backend.feature
+    backend/tests/bdd/features/organisation/multi_backend.feature
 """
 
 import logging

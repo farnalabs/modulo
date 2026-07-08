@@ -223,6 +223,16 @@ exclude_lines = [
     "@abstractmethod",
 ]
 
+[tool.mutmut]
+paths_to_mutate = [
+    "src/modulo/db/rls.py",
+    "src/modulo/auth/",
+    "src/modulo/core/license.py",
+]
+runner = "pytest tests/unit/ tests/architecture/ -x -q --timeout=60 -m 'not integration and not e2e'"
+backup = false
+tests_dir = "tests/"
+
 [tool.importlinter]
 root_package = "modulo"
 
