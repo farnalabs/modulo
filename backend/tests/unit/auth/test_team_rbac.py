@@ -1,7 +1,6 @@
 """Unit tests for team-level RBAC: role hierarchy and effective access model."""
 
 from modulo.auth.team_rbac import (
-    EFFECTIVE_ACCESS_MODEL,
     ORG_ROLE_HIERARCHY,
     TEAM_ROLE_HIERARCHY,
     VALID_ORG_ROLES,
@@ -36,31 +35,24 @@ class TestConstants:
 
 
 class TestEffectiveAccessModel:
-    def test_effective_access_model_has_all_org_roles(self) -> None:
-        assert set(EFFECTIVE_ACCESS_MODEL) == {"viewer", "runner", "operator", "admin"}
-
     def test_viewer_org_all_team_roles_capped_to_viewer(self) -> None:
-        caps = EFFECTIVE_ACCESS_MODEL["viewer"]
         for team_role in VALID_TEAM_ROLES:
-            assert caps[team_role] == "viewer"
+            assert get_effective_team_role("viewer", team_role) == "viewer"
 
     def test_runner_org_caps_team_roles_above_runner(self) -> None:
-        caps = EFFECTIVE_ACCESS_MODEL["runner"]
-        assert caps["viewer"] == "viewer"
-        assert caps["runner"] == "runner"
-        assert caps["operator"] == "runner"
+        assert get_effective_team_role("runner", "viewer") == "viewer"
+        assert get_effective_team_role("runner", "runner") == "runner"
+        assert get_effective_team_role("runner", "operator") == "runner"
 
     def test_operator_org_caps_team_roles_above_operator(self) -> None:
-        caps = EFFECTIVE_ACCESS_MODEL["operator"]
-        assert caps["viewer"] == "viewer"
-        assert caps["runner"] == "runner"
-        assert caps["operator"] == "operator"
+        assert get_effective_team_role("operator", "viewer") == "viewer"
+        assert get_effective_team_role("operator", "runner") == "runner"
+        assert get_effective_team_role("operator", "operator") == "operator"
 
     def test_admin_org_allows_all_team_roles(self) -> None:
-        caps = EFFECTIVE_ACCESS_MODEL["admin"]
-        assert caps["viewer"] == "viewer"
-        assert caps["runner"] == "runner"
-        assert caps["operator"] == "operator"
+        assert get_effective_team_role("admin", "viewer") == "viewer"
+        assert get_effective_team_role("admin", "runner") == "runner"
+        assert get_effective_team_role("admin", "operator") == "operator"
 
 
 class TestGetEffectiveTeamRole:

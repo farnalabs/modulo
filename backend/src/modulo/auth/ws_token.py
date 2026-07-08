@@ -6,11 +6,21 @@ import secrets
 from typing import Any
 
 from redis.asyncio import Redis
-from redis.exceptions import RedisError
+from redis.exceptions import RedisError, TimeoutError as RedisTimeoutError
 
 _log = logging.getLogger(__name__)
 
 _KEY_PREFIX = "ws_token:"
+
+_WS_TOKEN_REDIS_TIMEOUT = 2.0
+
+
+class WsTokenConsumeError(Exception):
+    """Raised when a Redis error prevents WS token consumption."""
+
+
+class WsTokenExpired(Exception):
+    """Raised when a WS token has expired or was already consumed."""
 
 
 async def create_ws_token(
@@ -37,19 +47,28 @@ async def create_ws_token(
 async def consume_ws_token(
     redis: Redis,
     token: str,
-) -> dict[str, Any] | None:
+) -> dict[str, Any]:
     """Atomic single-use consumption of a WS token.
 
-    Returns the stored principal dict if valid, None if expired or already used.
+    Returns the stored principal dict if valid.
+    Raises WsTokenExpired if the token is expired or already used.
+    Raises WsTokenConsumeError if Redis is unreachable or returns an error.
     """
     key = _KEY_PREFIX + token
     try:
         data = await redis.getdel(key)
+    except RedisTimeoutError:
+        _log.error("ws_token.consume_timeout")
+        raise WsTokenConsumeError("Redis timeout while consuming WS token")
     except RedisError as exc:
         _log.error("ws_token.consume_failed", extra={"error": str(exc)})
-        return None
+        raise WsTokenConsumeError(f"Redis error: {exc}") from exc
     if data is None:
-        return None
-    if isinstance(data, bytes):
-        return json.loads(data.decode())
-    return json.loads(data)
+        raise WsTokenExpired("WS token expired or already used")
+    try:
+        if isinstance(data, bytes):
+            return json.loads(data.decode())
+        return json.loads(data)
+    except (json.JSONDecodeError, ValueError, TypeError) as exc:
+        _log.error("ws_token.corrupt_data", extra={"error": str(exc)})
+        raise WsTokenConsumeError(f"Corrupt WS token data: {exc}") from exc

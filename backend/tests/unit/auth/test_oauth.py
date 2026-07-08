@@ -38,6 +38,27 @@ _ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
 _OTHER_ORG = uuid.UUID("11111111-1111-1111-1111-111111111111")
 
 
+def _make_session_mock() -> AsyncMock:
+    """Create an AsyncMock session with begin() returning an async context manager."""
+
+    class _AsyncSessionContextManager:
+        async def __aenter__(self) -> "_AsyncSessionContextManager":
+            return self
+
+        async def __aexit__(
+            self,
+            exc_type: object = None,
+            exc_val: object = None,
+            exc_tb: object = None,
+        ) -> bool:
+            return False
+
+    cm = _AsyncSessionContextManager()
+    session = AsyncMock()
+    session.begin = MagicMock(return_value=cm)
+    return session
+
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -272,7 +293,7 @@ class TestAuthorizationCode:
             call_count += 1
             return result
 
-        session = AsyncMock()
+        session = _make_session_mock()
         session.execute = AsyncMock(side_effect=_execute)
         session.flush = AsyncMock()
 
@@ -309,7 +330,7 @@ class TestAuthorizationCode:
             call_count += 1
             return result
 
-        session = AsyncMock()
+        session = _make_session_mock()
         session.execute = AsyncMock(side_effect=_execute)
 
         with pytest.raises(InvalidGrantError, match="expired"):
@@ -344,7 +365,7 @@ class TestAuthorizationCode:
             call_count += 1
             return result
 
-        session = AsyncMock()
+        session = _make_session_mock()
         session.execute = AsyncMock(side_effect=_execute)
 
         with pytest.raises(InvalidGrantError, match="already been used"):
@@ -379,7 +400,7 @@ class TestAuthorizationCode:
             call_count += 1
             return result
 
-        session = AsyncMock()
+        session = _make_session_mock()
         session.execute = AsyncMock(side_effect=_execute)
 
         with pytest.raises(InvalidGrantError, match="different client"):

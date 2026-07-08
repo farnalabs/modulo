@@ -67,14 +67,17 @@ async def run_websocket(
             from redis.asyncio import Redis
 
             redis = Redis.from_url(settings.redis_url, decode_responses=False)
-            payload = await consume_ws_token(redis, token)
-            if payload is not None:
+            from modulo.auth.ws_token import WsTokenExpired as _WsTokenExpired
+            try:
+                payload = await consume_ws_token(redis, token)
                 principal = AuthenticatedPrincipal(
                     username=payload["sub"],
                     organisation_id=uuid.UUID(payload["org_id"]),
                     user_id=uuid.UUID(payload["user_id"]),
                     org_role=payload["org_role"],
                 )
+            except _WsTokenExpired:
+                pass
         except Exception as exc:
             _log.warning("ws_token.consume_failed", extra={"error": str(exc)})
         finally:
