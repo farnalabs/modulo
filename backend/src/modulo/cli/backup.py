@@ -1,3 +1,4 @@
+from __future__ import annotations
 """modulo backup/restore: CLI for self-hosted backup and disaster recovery.
 
 Usage:
@@ -5,7 +6,6 @@ Usage:
   modulo restore <backup-dir> [--db-url <url>] [--yes] [--previous-fernet-key <key>]
 """
 
-from __future__ import annotations
 
 import hashlib
 import json

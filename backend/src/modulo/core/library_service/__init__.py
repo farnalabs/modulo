@@ -1,6 +1,6 @@
+from __future__ import annotations
 """Library service — CRUD and community primitives for library_primitives."""
 
-from __future__ import annotations
 
 import asyncio
 import logging

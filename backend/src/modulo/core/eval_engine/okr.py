@@ -1,10 +1,10 @@
+from __future__ import annotations
 """OKR-aligned eval suite progress tracking.
 
 Tracks pass rate trends for eval suites against configurable thresholds,
 providing breach detection and trend analysis for OKR alignment.
 """
 
-from __future__ import annotations
 
 import logging
 from datetime import UTC, datetime, timedelta

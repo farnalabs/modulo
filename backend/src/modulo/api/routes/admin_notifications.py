@@ -1,6 +1,6 @@
+from __future__ import annotations
 """Admin notification webhook management — CRUD, test, re-enable, delivery log, retry."""
 
-from __future__ import annotations
 
 import contextlib
 import json

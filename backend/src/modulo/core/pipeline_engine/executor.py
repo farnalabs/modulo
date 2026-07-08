@@ -1,3 +1,4 @@
+from __future__ import annotations
 """PipelineExecutor — orchestrates a single run end-to-end.
 
 Responsibilities:
@@ -13,7 +14,6 @@ Handles NodeInterrupt by transitioning the run to awaiting_human.
 Does NOT handle WebSocket fan-out, HITL claim/approve/reject, or webhook triggers (phases 3+).
 """
 
-from __future__ import annotations
 
 import asyncio
 import logging

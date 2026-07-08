@@ -1,10 +1,10 @@
+from __future__ import annotations
 """In-app notification CRUD routes.
 
 Endpoints for the in-app notification system — dashboard panel, full notification
 page, dismiss flow, and user preferences.
 """
 
-from __future__ import annotations
 
 import logging
 import uuid

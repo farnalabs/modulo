@@ -1,6 +1,6 @@
+from __future__ import annotations
 """Error tracking API — session-key generation, event ingestion, and dashboard."""
 
-from __future__ import annotations
 
 import json
 import logging

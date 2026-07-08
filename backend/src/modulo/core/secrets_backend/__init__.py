@@ -1,3 +1,4 @@
+from __future__ import annotations
 """SecretsBackend ABC and factory — pluggable secret storage.
 
 Usage:
@@ -7,7 +8,6 @@ Usage:
     await backend.delete_secret("my-key")
 """
 
-from __future__ import annotations
 
 import asyncio
 import logging

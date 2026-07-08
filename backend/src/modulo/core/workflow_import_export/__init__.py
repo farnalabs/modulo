@@ -1,3 +1,4 @@
+from __future__ import annotations
 """Workflow bundle export and import service.
 
 Produces portable .zip bundles that carry pipeline + agent + schema definitions
@@ -5,7 +6,6 @@ but strip org-private details (owner_team_id, connector credentials, api keys).
 Import resolves local equivalents via a binding wizard.
 """
 
-from __future__ import annotations
 
 import copy
 import io

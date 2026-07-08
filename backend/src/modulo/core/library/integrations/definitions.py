@@ -1,3 +1,4 @@
+from __future__ import annotations
 """24 canonical library integration primitives.
 
 Each dict provides the metadata, default configuration, credential
@@ -6,7 +7,6 @@ a :class:`~modulo.db.models.library_primitive.LibraryPrimitive` with
 ``primitive_type='integration'``.
 """
 
-from __future__ import annotations
 
 from typing import Any
 

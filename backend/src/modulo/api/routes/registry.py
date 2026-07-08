@@ -1,6 +1,6 @@
+from __future__ import annotations
 """Registry API — browse, publish, pull, and trust-verify registry primitives."""
 
-from __future__ import annotations
 
 import base64
 import hashlib

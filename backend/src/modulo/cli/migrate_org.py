@@ -1,3 +1,4 @@
+from __future__ import annotations
 """modulo export-org / import-org: Self-hosted to SaaS migration CLI.
 
 Usage:
@@ -5,7 +6,6 @@ Usage:
   modulo import-org --input <file.json> --org-id <uuid> --conflict <skip|overwrite|rename>
 """
 
-from __future__ import annotations
 
 import argparse
 import asyncio

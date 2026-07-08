@@ -1,6 +1,6 @@
+from __future__ import annotations
 """CRUD for error notification rules."""
 
-from __future__ import annotations
 
 import logging
 import uuid

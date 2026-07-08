@@ -100,7 +100,6 @@ import LoadingSpinner from "../components/shared/LoadingSpinner.vue";
 import ErrorAlert from "../components/shared/ErrorAlert.vue";
 import { formatApiError } from "../lib/api/formatError";
 import EmptyState from "../components/shared/EmptyState.vue";
-import { formatApiError } from "../lib/api/formatError";
 
 const notifications = ref<NotificationResponse[]>([]);
 const loading = ref(false);

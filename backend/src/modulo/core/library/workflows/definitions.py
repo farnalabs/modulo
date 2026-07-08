@@ -1,3 +1,4 @@
+from __future__ import annotations
 """14 canonical library workflow primitives.
 
 Each dict defines a pre-built pipeline template that combines agents,
@@ -7,7 +8,6 @@ Workflows are registered as :class:`~modulo.db.models.library_primitive.LibraryP
 with ``primitive_type='workflow'``.
 """
 
-from __future__ import annotations
 
 from typing import Any
 
