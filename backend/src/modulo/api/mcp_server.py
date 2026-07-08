@@ -1644,7 +1644,7 @@ async def _oauth_authorize(request: Request) -> JSONResponse:
     """POST /mcp/oauth/authorize — issue authorization code."""
     try:
         body = await request.json()
-    except Exception:
+    except json.JSONDecodeError:
         return JSONResponse(
             {"error": "invalid_request", "detail": "Request body must be JSON"},
             status_code=400,
@@ -1722,7 +1722,7 @@ async def _oauth_token(request: Request) -> JSONResponse:
     """POST /mcp/oauth/token — exchange code for access token."""
     try:
         body = await request.json()
-    except Exception:
+    except json.JSONDecodeError:
         return JSONResponse(
             {"error": "invalid_request", "detail": "Request body must be JSON"},
             status_code=400,

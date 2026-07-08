@@ -98,7 +98,9 @@ import { fetchNotifications, reviewLater } from "../lib/api/notifications";
 import NotificationCard from "../components/NotificationCard.vue";
 import LoadingSpinner from "../components/shared/LoadingSpinner.vue";
 import ErrorAlert from "../components/shared/ErrorAlert.vue";
+import { formatApiError } from "../lib/api/formatError";
 import EmptyState from "../components/shared/EmptyState.vue";
+import { formatApiError } from "../lib/api/formatError";
 
 const notifications = ref<NotificationResponse[]>([]);
 const loading = ref(false);
@@ -129,7 +131,7 @@ async function loadNotifications(p?: number) {
     total.value = result.total;
     page.value = result.page;
   } catch (e: unknown) {
-    error.value = e instanceof Error ? e.message : String(e);
+    error.value = formatApiError(e);
   } finally {
     loading.value = false;
   }
@@ -173,3 +175,4 @@ async function onReviewLater(id: string) {
 
 onMounted(() => void loadNotifications());
 </script>
+

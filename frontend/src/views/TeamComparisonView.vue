@@ -176,7 +176,9 @@ import {
   Tooltip,
   TooltipTrigger,
   TooltipContent,
-} from '../components/ui/tooltip'
+import { formatApiError } from '../lib/api/formatError'
+
+interface TeamRunStatus
 
 interface TeamRunStatus {
   running: number
@@ -319,7 +321,7 @@ async function loadData() {
     // Cache per-pipeline eval data for drill-down
     pipelineEvalCache.value = s.eval_pass_rate?.per_team_pipeline ?? {}
   } catch (e: unknown) {
-    error.value = t('views.TeamComparisonView.failed_to_load_data') + ' ' + (e instanceof Error ? e.message : String(e))
+    error.value = t('views.TeamComparisonView.failed_to_load_data') + ' ' + (formatApiError(e))
   } finally {
     loading.value = false
   }
@@ -365,3 +367,5 @@ async function toggleExpand(teamId: string) {
 
 onMounted(() => loadData())
 </script>
+
+

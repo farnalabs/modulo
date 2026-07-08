@@ -264,7 +264,7 @@ async function loadConfig() {
       applyResponse(data as unknown as ConfigResponse)
     }
   } catch (e: unknown) {
-    error.value = `${t('views.SettingsRuntimeConfigView.failed_to_load_runtime_config')} ${e instanceof Error ? e.message : String(e)}`
+    error.value = `${t('views.SettingsRuntimeConfigView.failed_to_load_runtime_config')} ${formatApiError(e)}`
   } finally {
     loading.value = false
   }
@@ -283,7 +283,7 @@ async function reloadConfig() {
       applyResponse(data as unknown as ConfigResponse)
     }
   } catch (e: unknown) {
-    error.value = `${t('views.SettingsRuntimeConfigView.failed_to_reload_config')} ${e instanceof Error ? e.message : String(e)}`
+    error.value = `${t('views.SettingsRuntimeConfigView.failed_to_reload_config')} ${formatApiError(e)}`
   } finally {
     loading.value = false
   }
@@ -308,7 +308,7 @@ async function applyOverride(key: string) {
       runtimeConfigTimeout = setTimeout(() => { formSuccess.value = null }, 3000)
     }
   } catch (e: unknown) {
-    formError.value = `${t('views.SettingsRuntimeConfigView.failed_to_apply_override')} ${e instanceof Error ? e.message : String(e)}`
+    formError.value = `${t('views.SettingsRuntimeConfigView.failed_to_apply_override')} ${formatApiError(e)}`
   } finally {
     saving.value = false
   }
@@ -333,7 +333,7 @@ async function clearOverride(key: string) {
       runtimeConfigTimeout = setTimeout(() => { formSuccess.value = null }, 3000)
     }
   } catch (e: unknown) {
-    formError.value = `${t('views.SettingsRuntimeConfigView.failed_to_clear_override')} ${e instanceof Error ? e.message : String(e)}`
+    formError.value = `${t('views.SettingsRuntimeConfigView.failed_to_clear_override')} ${formatApiError(e)}`
   } finally {
     saving.value = false
   }
@@ -344,3 +344,4 @@ onBeforeUnmount(() => {
 })
 onMounted(loadConfig)
 </script>
+

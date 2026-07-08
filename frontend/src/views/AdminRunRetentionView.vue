@@ -174,7 +174,7 @@ async function loadData() {
       retentionDays.value = resp.retention_days
     }
   } catch (e: unknown) {
-    loadError.value = `Failed to load retention config: ${e instanceof Error ? e.message : String(e)}`
+    loadError.value = `Failed to load retention config: ${formatApiError(e)}`
   } finally {
     loading.value = false
   }
@@ -191,7 +191,7 @@ async function loadStorageInfo() {
       storageInfo.value = data as StorageInfo
     }
   } catch (e: unknown) {
-    storageError.value = `Failed to load storage info: ${e instanceof Error ? e.message : String(e)}`
+    storageError.value = `Failed to load storage info: ${formatApiError(e)}`
   } finally {
     storageLoading.value = false
   }
@@ -211,7 +211,7 @@ async function saveRetention() {
       retentionSaveSuccess.value = true
     }
   } catch (e: unknown) {
-    retentionSaveError.value = `Failed to save: ${e instanceof Error ? e.message : String(e)}`
+    retentionSaveError.value = `Failed to save: ${formatApiError(e)}`
   } finally {
     savingRetention.value = false
   }
@@ -240,7 +240,7 @@ async function executePurge() {
       loadStorageInfo()
     }
   } catch (e: unknown) {
-    purgeError.value = `Purge failed: ${e instanceof Error ? e.message : String(e)}`
+    purgeError.value = `Purge failed: ${formatApiError(e)}`
   } finally {
     purging.value = false
   }
@@ -252,3 +252,4 @@ onMounted(() => {
   loadStorageInfo()
 })
 </script>
+

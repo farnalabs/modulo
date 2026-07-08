@@ -3,6 +3,7 @@ import { ref, computed } from "vue";
 import { useRouter } from "vue-router";
 import { useApi } from "../../../composables/useApi";
 import type { ParameterPort } from "../../../types/pipeline";
+import { formatApiError } from "../../../lib/api/formatError";
 
 const props = defineProps<{
   compositeId: string;
@@ -65,37 +66,7 @@ async function nextStep() {
         description: description.value.trim() || null,
       });
       step.value = 2;
-    } catch (e: unknown) {
-      error.value = e instanceof Error ? e.message : String(e);
-    } finally {
-      loading.value = false;
-    }
-  } else if (step.value < 4) {
-    step.value++;
-  } else {
-    await publish();
-  }
-}
-
-function portRef(port: { name: string }) {
-  return "{{parameter." + port.name + "}}";
-}
-
-function prevStep() {
-  if (step.value > 1) step.value--;
-}
-
-async function publish() {
-  loading.value = true;
-  error.value = null;
-  try {
-    await post(`/api/v1/composite-templates/${props.compositeId}/publish`, {
-      version: version.value.trim(),
-    });
-    success.value = true;
-    emit("published");
-  } catch (e: unknown) {
-    error.value = e instanceof Error ? e.message : String(e);
+      error.value = formatApiError(e);
   } finally {
     loading.value = false;
   }

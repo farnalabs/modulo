@@ -151,6 +151,7 @@ import { api } from '../lib/api/client'
 import type { components } from '../lib/api/client'
 import LoadingSpinner from '../components/shared/LoadingSpinner.vue'
 import ErrorAlert from '../components/shared/ErrorAlert.vue'
+import { formatApiError } from '../lib/api/formatError'
 
 type NodeOutputDiffResponse = components['schemas']['NodeOutputDiffResponse']
 type NodeOutputDiffLine = components['schemas']['NodeOutputDiffLine']
@@ -261,9 +262,10 @@ async function compare() {
     }
     result.value = data as unknown as NodeOutputDiffResponse
   } catch (e: unknown) {
-    error.value = `Failed to compare outputs: ${e instanceof Error ? e.message : String(e)}`
+    error.value = `Failed to compare outputs: ${formatApiError(e)}`
   } finally {
     loading.value = false
   }
 }
 </script>
+

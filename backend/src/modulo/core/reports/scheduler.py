@@ -234,6 +234,8 @@ async def _fire_scheduled_report(
                 delivery_results = await deliverer(payload, recipient_config)
             else:
                 delivery_results = await _deliver_via_config(payload, recipient_config)
+        except asyncio.CancelledError:
+            raise
         except Exception:
             _log.exception("Report %s (%s) generation or delivery failed", report_id, report.report_type)
             return {"status": "failed", "reason": "generation_or_delivery_failed"}
@@ -527,6 +529,8 @@ class DatabaseReportScheduler(Scheduler):
                         }
                     )
                 return reports
+        except asyncio.CancelledError:
+            raise
         except Exception:
             _log.exception("Failed to fetch scheduled reports from database")
             return []

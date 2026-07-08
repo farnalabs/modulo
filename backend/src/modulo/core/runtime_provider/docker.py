@@ -108,6 +108,8 @@ class DockerRuntimeProvider(RuntimeProvider):
                 timeout=self._create_timeout,
             )
             await asyncio.wait_for(container.start(), timeout=self._start_timeout)
+        except asyncio.CancelledError:
+            raise
         except Exception:
             _log.exception("Failed to create container for workspace %s", ref)
             raise
@@ -163,6 +165,8 @@ class DockerRuntimeProvider(RuntimeProvider):
                 stderr="Command timed out",
                 duration_ms=duration,
             )
+        except asyncio.CancelledError:
+            raise
         except Exception:
             _log.exception("exec_command failed for container %s", container_id)
             raise
@@ -189,6 +193,8 @@ class DockerRuntimeProvider(RuntimeProvider):
             await container.stop()
         except aiodocker.exceptions.DockerError:
             _log.warning("Container %s already removed", container_id)
+        except asyncio.CancelledError:
+            raise
         except Exception:
             _log.exception("Failed to destroy container %s", container_id)
 
@@ -205,6 +211,8 @@ class DockerRuntimeProvider(RuntimeProvider):
             return status
         except aiodocker.exceptions.DockerError:
             return "terminated"
+        except asyncio.CancelledError:
+            raise
         except Exception:
             _log.exception("Failed to get status for container %s", container_id)
             return "unknown"

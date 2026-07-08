@@ -214,6 +214,11 @@ async def list_eval_definitions(
             rows = (await session.execute(q)).scalars().all()
     except HTTPException:
         raise
+    except IntegrityError:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="A resource with this value already exists",
+        )
     except ProgrammingError:
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
@@ -285,6 +290,11 @@ async def eval_coverage(
             )
     except HTTPException:
         raise
+    except IntegrityError:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="A resource with this value already exists",
+        )
     except ProgrammingError:
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
@@ -360,6 +370,11 @@ async def get_eval_definition(
             eval_def = result.scalar_one_or_none()
     except HTTPException:
         raise
+    except IntegrityError:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="A resource with this value already exists",
+        )
     except ProgrammingError:
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
@@ -465,6 +480,11 @@ async def delete_eval_definition(
             await session.delete(eval_def)
     except HTTPException:
         raise
+    except IntegrityError:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="A resource with this value already exists",
+        )
     except ProgrammingError:
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
@@ -535,6 +555,11 @@ async def list_run_evals(
             rows = (await session.execute(q)).scalars().all()
     except HTTPException:
         raise
+    except IntegrityError:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="A resource with this value already exists",
+        )
     except ProgrammingError:
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
@@ -642,6 +667,11 @@ async def compare_evals(
             )
     except HTTPException:
         raise
+    except IntegrityError:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="A resource with this value already exists",
+        )
     except ProgrammingError:
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
@@ -674,6 +704,11 @@ async def compare_evals(
                     eval_defs[d.id] = d
         except HTTPException:
             raise
+        except IntegrityError:
+                raise HTTPException(
+                        status_code=status.HTTP_409_CONFLICT,
+                        detail="A resource with this value already exists",
+                )
         except ProgrammingError:
             raise HTTPException(
                 status_code=status.HTTP_501_NOT_IMPLEMENTED,
@@ -793,6 +828,11 @@ async def create_eval_from_run(
             sample_output = node_output if isinstance(node_output, dict) else {"output": str(node_output)}
     except HTTPException:
         raise
+    except IntegrityError:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="A resource with this value already exists",
+        )
     except ProgrammingError:
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,

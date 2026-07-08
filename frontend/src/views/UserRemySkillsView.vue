@@ -157,7 +157,7 @@ async function loadSkills() {
       skills.value = (data as { items: SkillItem[] }).items || (data as SkillItem[])
     }
   } catch (e: unknown) {
-    loadError.value = `Failed to load skills: ${e instanceof Error ? e.message : String(e)}`
+    loadError.value = `Failed to load skills: ${formatApiError(e)}`
   } finally {
     loading.value = false
   }
@@ -182,7 +182,7 @@ async function toggleSkillActive(skill: SkillItem) {
       if (idx !== -1) skills.value[idx] = data as SkillItem
     }
   } catch (e: unknown) {
-    skillToggleError.value = `Failed to toggle skill: ${e instanceof Error ? e.message : String(e)}`
+    skillToggleError.value = `Failed to toggle skill: ${formatApiError(e)}`
   } finally {
     const { [skill.id]: _, ...rest } = skillToggling.value
     skillToggling.value = rest
@@ -191,3 +191,4 @@ async function toggleSkillActive(skill: SkillItem) {
 
 onMounted(() => { loadSkills() })
 </script>
+

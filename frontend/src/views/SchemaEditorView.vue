@@ -465,7 +465,7 @@ async function loadSchemas() {
       schemas.value = data.items
     }
   } catch (e: unknown) {
-    saveError.value = `${t('views.SchemaEditorView.failed_to_load_schemas')} ${e instanceof Error ? e.message : String(e)}`
+    saveError.value = `${t('views.SchemaEditorView.failed_to_load_schemas')} ${formatApiError(e)}`
   } finally {
     loadingSchemas.value = false
   }
@@ -716,7 +716,7 @@ async function saveSchema() {
       await loadVersions(selectedSchemaId.value)
     }
   } catch (e: unknown) {
-    saveError.value = `${t('views.SchemaEditorView.save_failed')} ${e instanceof Error ? e.message : String(e)}`
+    saveError.value = `${t('views.SchemaEditorView.save_failed')} ${formatApiError(e)}`
   } finally {
     saving.value = false
   }
@@ -773,3 +773,4 @@ onMounted(() => {
   }
 })
 </script>
+

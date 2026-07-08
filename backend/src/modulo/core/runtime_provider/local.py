@@ -76,6 +76,8 @@ class LocalRuntimeProvider(RuntimeProvider):
                     cwd=workspace_dir,
                     timeout=spec.timeout_seconds,
                 )
+        except asyncio.CancelledError:
+            raise
         except Exception:
             self._workspaces.pop(ref, None)
             await asyncio.to_thread(shutil.rmtree, workspace_dir, ignore_errors=True)
@@ -102,6 +104,8 @@ class LocalRuntimeProvider(RuntimeProvider):
             return
         try:
             await asyncio.to_thread(shutil.rmtree, workspace_dir, ignore_errors=True)
+        except asyncio.CancelledError:
+            raise
         except Exception:
             _log.exception("Failed to remove workspace %s", provider_ref)
 
@@ -153,6 +157,8 @@ class LocalRuntimeProvider(RuntimeProvider):
                     stderr="Command timed out",
                     duration_ms=duration,
                 )
+            except asyncio.CancelledError:
+                raise
             except Exception:
                 proc.kill()
                 try:

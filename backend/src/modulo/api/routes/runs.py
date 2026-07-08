@@ -169,6 +169,11 @@ async def trigger_run(
         async with session.begin():
             await set_rls_org(session, principal.organisation_id)
             pipeline = await get_pipeline(session, req.pipeline_id)
+    except IntegrityError:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="A resource with this value already exists",
+        )
     except ProgrammingError:
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
@@ -225,6 +230,11 @@ async def trigger_run(
                 input_payload=req.input_payload,
             )
             run_id = run.id
+    except IntegrityError:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="A resource with this value already exists",
+        )
     except ProgrammingError:
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
@@ -276,6 +286,11 @@ async def get_run_stats_endpoint(
         async with session.begin():
             await set_rls_org(session, principal.organisation_id)
             return await get_run_stats(session, period)
+    except IntegrityError:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="A resource with this value already exists",
+        )
     except ProgrammingError:
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
@@ -308,6 +323,11 @@ async def get_run_heatmap_endpoint(
         async with session.begin():
             await set_rls_org(session, principal.organisation_id)
             return await get_run_heatmap(session, year)
+    except IntegrityError:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="A resource with this value already exists",
+        )
     except ProgrammingError:
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
@@ -339,6 +359,11 @@ async def get_run_status(
         async with session.begin():
             await set_rls_org(session, principal.organisation_id)
             run = await get_run(session, run_id)
+    except IntegrityError:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="A resource with this value already exists",
+        )
     except ProgrammingError:
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
@@ -391,6 +416,11 @@ async def cancel_run(
                 )
 
             await request_cancellation(session, run_id)
+    except IntegrityError:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="A resource with this value already exists",
+        )
     except ProgrammingError:
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
@@ -506,6 +536,11 @@ async def get_run_io_endpoint(
         async with session.begin():
             await set_rls_org(session, principal.organisation_id)
             result = await get_run_io(session, run_id)
+    except IntegrityError:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="A resource with this value already exists",
+        )
     except ProgrammingError:
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
@@ -562,6 +597,11 @@ async def export_run_fixture(
                 select(SnapModel).where(SnapModel.id == run.snapshot_id)
             )
             snapshot = snap_result.scalar_one_or_none()
+    except IntegrityError:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="A resource with this value already exists",
+        )
     except ProgrammingError:
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
@@ -621,6 +661,11 @@ async def get_run_workspace_lease(
 
             result = await session.execute(select(WorkspaceLease).where(WorkspaceLease.run_id == run_id))
             lease = result.scalar_one_or_none()
+    except IntegrityError:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="A resource with this value already exists",
+        )
     except ProgrammingError:
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
@@ -678,6 +723,11 @@ async def get_run_workspace_events(
                 .order_by(AuditEvent.created_at)
             )
             events = result.scalars().all()
+    except IntegrityError:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="A resource with this value already exists",
+        )
     except ProgrammingError:
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
@@ -760,6 +810,11 @@ async def get_run_node_output(
         async with session.begin():
             await set_rls_org(session, principal.organisation_id)
             run = await get_run(session, run_id)
+    except IntegrityError:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="A resource with this value already exists",
+        )
     except ProgrammingError:
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
@@ -830,6 +885,11 @@ async def observe_run_node(
         async with session.begin():
             await set_rls_org(session, principal.organisation_id)
             run = await get_run(session, run_id)
+    except IntegrityError:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="A resource with this value already exists",
+        )
     except ProgrammingError:
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
@@ -864,6 +924,11 @@ async def observe_run_node(
                 node_id=node_id,
                 observed_by=principal.account_id,
             )
+    except IntegrityError:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="A resource with this value already exists",
+        )
     except ProgrammingError:
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
@@ -962,6 +1027,11 @@ async def recover_run_node(
                 raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
             except ConcurrentRecoveryError as exc:
                 raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+    except IntegrityError:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="A resource with this value already exists",
+        )
     except ProgrammingError:
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
@@ -1256,6 +1326,11 @@ async def reveal_node_prompt(
             token_count=token_count,
             prompt_always_visible=prompt_always_visible,
         )
+    except IntegrityError:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="A resource with this value already exists",
+        )
     except ProgrammingError:
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
@@ -1322,6 +1397,11 @@ async def diff_node_output(
             await set_rls_org(session, principal.organisation_id)
             run_a = await get_run(session, req.run_id_a)
             run_b = await get_run(session, req.run_id_b)
+    except IntegrityError:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="A resource with this value already exists",
+        )
     except ProgrammingError:
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,

@@ -1,3 +1,5 @@
+﻿import { formatApiError } from '../lib/api/formatError'
+
 import router from '@/router'
 
 const TAB_ID = typeof crypto !== 'undefined' && crypto.randomUUID ? crypto.randomUUID() : Date.now().toString(36)
@@ -268,7 +270,7 @@ async function executeSingle(cmd: UiCommand): Promise<UiCommandResult> {
         return { id: cmd.id, name: cmd.name, success: false, error: `Unknown command: ${cmd.name}` }
     }
   } catch (e) {
-    return { id: cmd.id, name: cmd.name, success: false, error: e instanceof Error ? e.message : String(e) }
+    return { id: cmd.id, name: cmd.name, success: false, error: formatApiError(e) }
   }
 }
 
@@ -280,7 +282,7 @@ async function navigate(path: string): Promise<UiCommandResult> {
     _navHistory.push(prevUrl)
     return { id: `nav-${Date.now()}`, name: 'navigate', success: true, result: { url: location.href } }
   } catch (e) {
-    return { id: `nav-${Date.now()}`, name: 'navigate', success: false, error: e instanceof Error ? e.message : String(e) }
+    return { id: `nav-${Date.now()}`, name: 'navigate', success: false, error: formatApiError(e) }
   }
 }
 
@@ -584,3 +586,4 @@ export function waitForDomStable(timeout = 10000): Promise<void> {
     }, timeout)
   })
 }
+

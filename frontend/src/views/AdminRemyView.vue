@@ -993,7 +993,7 @@ async function saveGuidance() {
       guidanceError.value = `Failed to save guidance: ${formatApiError(err)}`
     }
   } catch (e: unknown) {
-    guidanceError.value = `Failed to save guidance: ${e instanceof Error ? e.message : String(e)}`
+    guidanceError.value = `Failed to save guidance: ${formatApiError(e)}`
   } finally {
     guidanceSaving.value = false
     configSaving.value = false
@@ -1017,7 +1017,7 @@ async function loadContextSources() {
       }
     }
   } catch (e: unknown) {
-    contextError.value = `Failed to load context sources: ${e instanceof Error ? e.message : String(e)}`
+    contextError.value = `Failed to load context sources: ${formatApiError(e)}`
   } finally {
     contextLoading.value = false
   }
@@ -1037,7 +1037,7 @@ async function saveContextSource(sourceKey: string) {
       await loadContextSources()
     }
   } catch (e: unknown) {
-    contextError.value = `Failed to save source: ${e instanceof Error ? e.message : String(e)}`
+    contextError.value = `Failed to save source: ${formatApiError(e)}`
     await loadContextSources()
   } finally {
     contextSaving.value = false
@@ -1056,7 +1056,7 @@ async function saveSkillSourceMode(skill: SkillItem) {
       contextError.value = `Failed to save skill source mode: ${formatApiError(err)}`
     }
   } catch (e: unknown) {
-    contextError.value = `Failed to save skill source mode: ${e instanceof Error ? e.message : String(e)}`
+    contextError.value = `Failed to save skill source mode: ${formatApiError(e)}`
   } finally {
     skillModeSaving.value[skill.id] = false
   }
@@ -1073,7 +1073,7 @@ async function regeneratePrimer() {
       primerMessage.value = 'Primer regenerated.'
     }
   } catch (e: unknown) {
-    primerMessage.value = `Failed: ${e instanceof Error ? e.message : String(e)}`
+    primerMessage.value = `Failed: ${formatApiError(e)}`
   } finally {
     primerSaving.value = false
     if (primerTimer) clearTimeout(primerTimer)
@@ -1093,7 +1093,7 @@ async function loadUsers() {
       users.value.sort((a, b) => a.display_name.localeCompare(b.display_name))
     }
   } catch (e: unknown) {
-    console.warn('Failed to load users:', e instanceof Error ? e.message : String(e))
+    console.warn('Failed to load users:', formatApiError(e))
   }
 }
 
@@ -1113,7 +1113,7 @@ async function loadTeams() {
       teams.value.sort((a, b) => a.name.localeCompare(b.name))
     }
   } catch (e: unknown) {
-    console.warn('Failed to load teams:', e instanceof Error ? e.message : String(e))
+    console.warn('Failed to load teams:', formatApiError(e))
   }
 }
 
@@ -1137,7 +1137,7 @@ async function toggleSkillActive(skill: SkillItem) {
     }
     await loadSkills()
   } catch (e: unknown) {
-    skillError.value = `Failed to toggle skill: ${e instanceof Error ? e.message : String(e)}`
+    skillError.value = `Failed to toggle skill: ${formatApiError(e)}`
   } finally {
     skillToggling.value[skill.id] = false
   }
@@ -1153,7 +1153,7 @@ async function loadSkills() {
       skills.value = Array.isArray(items) ? items : []
     }
   } catch (e: unknown) {
-    skillError.value = `Failed to load skills: ${e instanceof Error ? e.message : String(e)}`
+    skillError.value = `Failed to load skills: ${formatApiError(e)}`
   }
   initSkillModes()
 }
@@ -1195,7 +1195,7 @@ async function loadConfig() {
       loadSafetyFromConfig(cfg)
     }
   } catch (e: unknown) {
-    loadError.value = `Failed to load Remy config: ${e instanceof Error ? e.message : String(e)}`
+    loadError.value = `Failed to load Remy config: ${formatApiError(e)}`
   }
 }
 
@@ -1206,7 +1206,7 @@ async function loadAvailableProviders() {
       availableProviders.value = data as { native: ProviderInfo[]; customTypes: ProviderInfo[] }
     }
   } catch (e: unknown) {
-    console.warn('Failed to load available providers:', e instanceof Error ? e.message : String(e))
+    console.warn('Failed to load available providers:', formatApiError(e))
   }
 }
 
@@ -1231,7 +1231,7 @@ async function loadProviders() {
       configured: configuredProviders.has(p.id),
     }))
   } catch (e: unknown) {
-    console.warn('Failed to load provider status:', e instanceof Error ? e.message : String(e))
+    console.warn('Failed to load provider status:', formatApiError(e))
   } finally {
     providersLoading.value = false
   }
@@ -1266,3 +1266,4 @@ onUnmounted(() => {
   if (primerTimer) clearTimeout(primerTimer)
 })
 </script>
+

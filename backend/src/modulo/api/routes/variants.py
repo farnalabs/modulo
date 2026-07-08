@@ -158,6 +158,11 @@ async def list_groups(
         async with session.begin():
             await set_rls_org(session, principal.organisation_id)
             items, _total = await list_variant_groups(session, pipeline_id=pipeline_id, page=page, page_size=page_size)
+    except IntegrityError:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="A resource with this value already exists",
+        )
     except ProgrammingError:
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
@@ -189,6 +194,11 @@ async def get_group(
         async with session.begin():
             await set_rls_org(session, principal.organisation_id)
             group = await get_variant_group(session, group_id)
+    except IntegrityError:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="A resource with this value already exists",
+        )
     except ProgrammingError:
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
@@ -387,6 +397,11 @@ async def coverage_gaps(
                     detail="Variant group not found",
                 )
             gaps = await get_coverage_gaps(session, group)
+    except IntegrityError:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="A resource with this value already exists",
+        )
     except ProgrammingError:
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
@@ -424,6 +439,11 @@ async def prompt_diffs(
                     detail="Variant group not found",
                 )
             diffs = await get_prompt_diffs(session, group)
+    except IntegrityError:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="A resource with this value already exists",
+        )
     except ProgrammingError:
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
