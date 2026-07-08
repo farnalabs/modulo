@@ -69,7 +69,8 @@ async function nextStep() {
     } catch (e) {
       error.value = formatApiError(e);
     } finally {
-    loading.value = false;
+      loading.value = false;
+    }
   }
 }
 
