@@ -465,8 +465,8 @@ async function loadStages() {
   try {
     const result = await get<any>('/api/v1/stages')
     stages.value = (result.items || []).sort((a: any, b: any) => a.position - b.position)
-  } catch (err) {
-    console.warn('Failed to load stages:', err)
+  } catch (e) {
+    console.warn('Failed to load stages', e)
   }
 }
 
@@ -474,8 +474,8 @@ async function loadPipelines() {
   try {
     const result = await get<any>('/api/v1/pipelines')
     allPipelines.value = result.items || []
-  } catch (err) {
-    console.warn('Failed to load pipelines:', err)
+  } catch (e) {
+    console.warn('Failed to load pipelines', e)
   }
 }
 
@@ -483,8 +483,8 @@ async function loadTeams() {
   try {
     const result = await get<any>('/api/v1/teams')
     teams.value = result.items || []
-  } catch (err) {
-    console.warn('Failed to load teams:', err)
+  } catch (e) {
+    console.warn('Failed to load teams', e)
   }
 }
 
@@ -503,7 +503,8 @@ async function movePipeline(pipeline: any, direction: number) {
   try {
     await patch(`/api/v1/pipelines/${pipeline.id}`, { stage_id: targetStage.id })
     pipeline.stage_id = targetStage.id
-  } catch {
+  } catch (e) {
+    console.warn('Failed to move pipeline', e)
     pipeline.stage_id = prevStageId
   } finally {
     movingPipelines.value[pipeline.id] = false

@@ -525,8 +525,8 @@ async function pollRunStatus(runId: string, variantName: string) {
           break
         }
       }
-    } catch (err) {
-      console.warn('pollRunStatus error:', err)
+    } catch (e) {
+      console.warn('Failed to run variant', e)
     }
   }
 
@@ -555,8 +555,8 @@ async function fetchRunIO(runId: string, variantName: string) {
         }
       }
     }
-  } catch (err) {
-    console.warn('fetchRunIO error:', err)
+  } catch (e) {
+    console.warn('Failed to fetch run IO', e)
   }
 }
 
@@ -575,8 +575,8 @@ async function fetchRunEvals(runId: string, variantName: string) {
         })
       }
     }
-  } catch (err) {
-    console.warn('fetchRunEvals error:', err)
+  } catch (e) {
+    console.warn('Failed to fetch run evals', e)
   }
 }
 

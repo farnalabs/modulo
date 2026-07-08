@@ -472,14 +472,6 @@ async function fetchPipelines() {
   }
 }
 
-function onBack() {
-  if (step.value === 1) {
-    router.push({ name: 'library' })
-  } else {
-    step.value--
-  }
-}
-
 async function executeCopy() {
   if (!selectedPipeline.value) return
   executing.value = true

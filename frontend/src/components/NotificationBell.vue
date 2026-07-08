@@ -29,15 +29,13 @@ let unsubHandler: (() => void) | null = null;
 onMounted(async () => {
   try {
     unreadCount.value = await fetchUnreadCount();
-  } catch (e) {
-    console.warn("Failed to fetch unread count:", e);
+  } catch {
     unreadCount.value = 0;
   }
   unsubHandler = registerHandler("notification", async () => {
     try {
       unreadCount.value = await fetchUnreadCount();
-    } catch (e) {
-      console.warn("Failed to fetch unread count:", e);
+    } catch {
       unreadCount.value = 0;
     }
   });

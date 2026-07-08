@@ -334,7 +334,10 @@ async function loadForwarders() {
 }
 
 function toggleForwarder(fwd: ForwarderItem) {
-  expanded.value[fwd.forwarder_type] = !expanded.value[fwd.forwarder_type]
+  fwd.enabled = !fwd.enabled
+  if (fwd.enabled) {
+    expanded.value[fwd.forwarder_type] = true
+  }
 }
 
 function buildConfigJson(forwarderType: string): Record<string, string> {
@@ -353,7 +356,7 @@ async function saveConfig(fwd: ForwarderItem) {
   formSuccess.value[ftype] = null
   try {
     const configJson = buildConfigJson(ftype)
-    const { data, error: err } = await (api as any).PUT('/api/v1/errors/forwarders/{forwarder_type}', {
+    const { error: err } = await (api as any).PUT('/api/v1/errors/forwarders/{forwarder_type}', {
       params: { path: { forwarder_type: ftype } },
       body: {
         enabled: fwd.enabled,

@@ -258,6 +258,7 @@ async function inferSchema() {
           resource: resourceType.value.trim(),
           filters: {},
           limit: 10,
+          query: sampleQuery.value.trim() || undefined,
         },
       },
     })

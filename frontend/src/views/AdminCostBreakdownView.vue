@@ -210,7 +210,7 @@ const dismissLoading = ref<Record<string, boolean>>({})
 async function dismissAnomaly(id: string) {
   dismissLoading.value[id] = true
   try {
-    await (api as any).GET(`/api/v1/admin/costs/anomalies/dismiss/${id}`)
+    await (api as any).POST(`/api/v1/admin/costs/anomalies/dismiss/${id}`)
     await loadAnomalies()
   } catch {
     anomaliesError.value = 'Failed to dismiss anomaly'

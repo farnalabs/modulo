@@ -389,8 +389,8 @@ async function loadLimits() {
         saveError: null,
       }))
     }
-  } catch (err) {
-    console.warn('Failed to load team limits:', err)
+  } catch (e) {
+    console.warn('Failed to load team budgets', e)
   }
 }
 
@@ -403,8 +403,8 @@ async function loadSettings() {
     } else if (data) {
       settings.value = { ...settings.value, ...data }
     }
-  } catch (err) {
-    console.warn('Failed to load settings, using defaults:', err)
+  } catch (e) {
+    console.warn('Failed to load cost control settings', e)
   }
 }
 

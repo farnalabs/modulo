@@ -603,8 +603,8 @@ async function pollRunStatus(runId: string, variantName: string) {
           break
         }
       }
-    } catch (err) {
-      console.warn('pollRunStatus error:', err)
+    } catch (e) {
+      console.warn('Failed to fetch run data for variant', e)
     }
   }
 }
@@ -624,8 +624,8 @@ async function fetchRunIO(runId: string, variantName: string) {
         })
       }
     }
-  } catch (err) {
-    console.warn('fetchRunIO error:', err)
+  } catch (e) {
+    console.warn('Failed to fetch run IO', e)
   }
 }
 
@@ -644,8 +644,8 @@ async function fetchRunEvals(runId: string, variantName: string) {
         })
       }
     }
-  } catch (err) {
-    console.warn('fetchRunEvals error:', err)
+  } catch (e) {
+    console.warn('Failed to fetch run evals', e)
   }
 }
 
@@ -752,8 +752,8 @@ async function fetchPipelines() {
     if (listResp.items.length > 0 && !selectedPipelineId.value) {
       selectedPipelineId.value = listResp.items[0].id
     }
-  } catch (err) {
-    console.warn('Failed to fetch pipelines:', err)
+  } catch (e) {
+    console.warn('Failed to fetch pipelines', e)
   }
 }
 
@@ -762,8 +762,8 @@ async function fetchVariantGroups() {
     const { data, error: err } = await api.GET('/api/v1/variant-groups')
     if (err) return
     variantGroups.value = (Array.isArray(data) ? data : (data as any)?.items ?? []) as unknown as VariantGroup[]
-  } catch (err) {
-    console.warn('Failed to fetch variant groups:', err)
+  } catch (e) {
+    console.warn('Failed to fetch variant groups', e)
   }
 }
 
@@ -773,8 +773,8 @@ async function fetchModelBackends() {
     if (err) return
     const resp = data as unknown as { items: ModelBackend[]; total: number; page: number; page_size: number }
     modelBackends.value = resp.items ?? []
-  } catch (err) {
-    console.warn('Failed to fetch model backends:', err)
+  } catch (e) {
+    console.warn('Failed to fetch model backends', e)
   }
 }
 
@@ -791,8 +791,8 @@ async function fetchSnapshotForPipeline(pipelineId: string) {
         snapshotVersion.value = resp.items[0].snapshot_version
       }
     }
-  } catch (err) {
-    console.warn('Failed to fetch snapshot for pipeline:', err)
+  } catch (e) {
+    console.warn('Failed to fetch snapshot', e)
   }
 }
 

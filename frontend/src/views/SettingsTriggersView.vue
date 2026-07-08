@@ -674,8 +674,8 @@ async function loadPipelines() {
     if (!err && data) {
       pipelines.value = data.items
     }
-  } catch (err) {
-    console.warn('Failed to load pipelines:', err)
+  } catch (e) {
+    console.warn('Failed to load pipelines', e)
   }
 }
 

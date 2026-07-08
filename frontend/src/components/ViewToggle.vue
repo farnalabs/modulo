@@ -100,8 +100,7 @@ async function fetchViews() {
     if (data && Array.isArray(data.views)) {
       views.value = data.views;
     }
-  } catch (e) {
-    console.warn("Failed to fetch views:", e);
+  } catch {
   }
 }
 
