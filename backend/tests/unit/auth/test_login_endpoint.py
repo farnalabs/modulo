@@ -94,7 +94,7 @@ def test_login_success(client: TestClient) -> None:
     mock_family = MagicMock()
     mock_family.family_id = uuid.uuid4()
     with (
-        patch("modulo.api.routes.auth.get_user_by_email", new=AsyncMock(return_value=mock_user)),
+        patch("modulo.api.routes.auth.get_account_by_email", new=AsyncMock(return_value=mock_user)),
         patch("modulo.api.routes.auth.authenticate_db_user", return_value=True),
         patch("modulo.api.routes.auth.update_last_login", new=AsyncMock()),
         patch("modulo.api.routes.auth.create_family", new=AsyncMock(return_value=mock_family)),
@@ -114,7 +114,7 @@ def test_login_success(client: TestClient) -> None:
 def test_login_wrong_password(client: TestClient) -> None:
     mock_user = _make_mock_user()
     with (
-        patch("modulo.api.routes.auth.get_user_by_email", new=AsyncMock(return_value=mock_user)),
+        patch("modulo.api.routes.auth.get_account_by_email", new=AsyncMock(return_value=mock_user)),
         patch("modulo.api.routes.auth.authenticate_db_user", return_value=False),
     ):
         resp = client.post(
@@ -125,7 +125,7 @@ def test_login_wrong_password(client: TestClient) -> None:
 
 
 def test_login_unknown_user(client: TestClient) -> None:
-    with patch("modulo.api.routes.auth.get_user_by_email", new=AsyncMock(return_value=None)):
+    with patch("modulo.api.routes.auth.get_account_by_email", new=AsyncMock(return_value=None)):
         resp = client.post(
             "/api/v1/auth/login",
             json={"email": "nobody@example.com", "password": "testpass"},
@@ -146,7 +146,7 @@ def test_me_returns_username(client: TestClient) -> None:
     mock_family = MagicMock()
     mock_family.family_id = uuid.uuid4()
     with (
-        patch("modulo.api.routes.auth.get_user_by_email", new=AsyncMock(return_value=mock_user)),
+        patch("modulo.api.routes.auth.get_account_by_email", new=AsyncMock(return_value=mock_user)),
         patch("modulo.api.routes.auth.authenticate_db_user", return_value=True),
         patch("modulo.api.routes.auth.update_last_login", new=AsyncMock()),
         patch("modulo.api.routes.auth.create_family", new=AsyncMock(return_value=mock_family)),
@@ -157,7 +157,7 @@ def test_me_returns_username(client: TestClient) -> None:
         )
     token = login_resp.json()["access_token"]
 
-    with patch("modulo.api.routes.auth.get_user_by_id", new=AsyncMock(return_value=mock_user)):
+    with patch("modulo.api.routes.auth.get_account_by_id", new=AsyncMock(return_value=mock_user)):
         resp = client.get("/api/v1/auth/me", headers={"Authorization": f"Bearer {token}"})
     assert resp.status_code == 200
     assert resp.json()["email"] == "admin@example.com"
