@@ -358,6 +358,7 @@ def test_connector_response_masks_config_json(client: TestClient) -> None:
     mock_connector.allowed_operations = []
     mock_connector.status = "active"
     mock_connector.visibility = "org"
+    mock_connector.owner_team_id = None
     mock_connector.created_at = datetime(2025, 1, 1, tzinfo=UTC)
     mock_connector.updated_at = datetime(2025, 1, 1, tzinfo=UTC)
 

@@ -104,9 +104,7 @@ async def list_templates_endpoint(
             detail="A resource with this value already exists",
         )
     except ProgrammingError:
-        raise HTTPException(status_code=503, detail="Database not available. Run migrations.")
-    except IntegrityError:
-        raise HTTPException(status_code=409, detail="Resource already exists or constraint violation.")
+        raise HTTPException(status_code=status.HTTP_501_NOT_IMPLEMENTED, detail="This feature is not available. Run database migrations to enable it.")
     except Exception as e:
         logger.error("Unexpected error in list_templates_endpoint: %s", str(e))
         raise HTTPException(status_code=500, detail="Internal server error")
@@ -233,9 +231,7 @@ async def create_pipeline_from_template_endpoint(
             detail="A resource with this value already exists",
         )
     except ProgrammingError:
-        raise HTTPException(status_code=503, detail="Database not available. Run migrations.")
-    except IntegrityError:
-        raise HTTPException(status_code=409, detail="Resource already exists or constraint violation.")
+        raise HTTPException(status_code=status.HTTP_501_NOT_IMPLEMENTED, detail="This feature is not available. Run database migrations to enable it.")
     except Exception as e:
         logger.error("Unexpected error in create_pipeline_from_template_endpoint: %s", str(e))
         raise HTTPException(status_code=500, detail="Internal server error")

@@ -12,7 +12,7 @@ import logging
 
 from cryptography.fernet import Fernet
 from fastapi import APIRouter, Depends, HTTPException, Query, status
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError, ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -49,8 +49,15 @@ class ModelBackendCreate(BaseModel):
     api_key: str = Field(..., min_length=1)
     default_params: dict[str, Any] = {}
     visibility: str = Field(default="org")
+    owner_team_id: uuid.UUID | None = None
     fallback_backend_ids: list[uuid.UUID] | None = None
     tier: Literal["native", "preview", "in_dev"] = Field(default="native")
+
+    @model_validator(mode="after")
+    def _validate_team_visibility(self) -> "ModelBackendCreate":
+        if self.visibility == "team" and self.owner_team_id is None:
+            raise ValueError("owner_team_id is required when visibility is 'team'")
+        return self
 
 
 class ModelBackendUpdate(BaseModel):
@@ -60,8 +67,15 @@ class ModelBackendUpdate(BaseModel):
     api_key: str | None = Field(None, min_length=1)
     default_params: dict[str, Any] | None = None
     visibility: str | None = None
+    owner_team_id: uuid.UUID | None = None
     fallback_backend_ids: list[uuid.UUID] | None = None
     tier: Literal["native", "preview", "in_dev"] | None = None
+
+    @model_validator(mode="after")
+    def _validate_team_visibility(self) -> "ModelBackendUpdate":
+        if self.visibility == "team" and self.owner_team_id is None:
+            raise ValueError("owner_team_id is required when visibility is 'team'")
+        return self
 
 
 class ModelBackendResponse(BaseModel):
@@ -74,6 +88,7 @@ class ModelBackendResponse(BaseModel):
     has_credentials: bool
     default_params: dict[str, Any]
     visibility: str
+    owner_team_id: uuid.UUID | None = None
     tier: str
     fallback_backend_ids: list[uuid.UUID] | None = None
     created_by: uuid.UUID = Field(validation_alias="account_id")
@@ -105,6 +120,7 @@ def _to_response(mb: Any) -> ModelBackendResponse:
         has_credentials=bool(mb.credentials_ciphertext),
         default_params=mb.default_params,
         visibility=mb.visibility,
+        owner_team_id=mb.owner_team_id,
         tier=mb.tier,
         fallback_backend_ids=fallback_ids,
         account_id=mb.account_id,
@@ -228,6 +244,7 @@ async def create_model_backend_endpoint(
                 account_id=principal.account_id,
                 default_params=req.default_params,
                 visibility=req.visibility,
+                owner_team_id=req.owner_team_id,
                 fallback_backend_ids=fallback_ids,
                 tier=req.tier,
             )
@@ -240,11 +257,6 @@ async def create_model_backend_endpoint(
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Model backends are not available. Run database migrations to enable this feature.",
-        ) from None
-    except IntegrityError:
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail="A model backend with this configuration already exists.",
         ) from None
     except SQLAlchemyError:
         raise HTTPException(

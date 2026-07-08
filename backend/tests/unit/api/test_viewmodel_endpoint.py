@@ -34,6 +34,7 @@ def _make_pipeline() -> MagicMock:
     p.id = uuid.uuid4()
     p.name = "Test Pipeline"
     p.visibility = "org"
+    p.owner_team_id = None
     p.created_at = _NOW
     return p
 

@@ -154,6 +154,7 @@ class TestPipelinesEndpointCursor:
         pipeline.name = "Test Pipeline"
         pipeline.description = None
         pipeline.visibility = "org"
+        pipeline.owner_team_id = None
         pipeline.max_concurrent_runs = 5
         pipeline.lock_wait_timeout_seconds = 300
         pipeline.node_timeout_seconds = 300
@@ -198,6 +199,7 @@ class TestPipelinesEndpointCursor:
         pipeline.name = "Pipeline A"
         pipeline.description = None
         pipeline.visibility = "org"
+        pipeline.owner_team_id = None
         pipeline.max_concurrent_runs = 5
         pipeline.lock_wait_timeout_seconds = 300
         pipeline.node_timeout_seconds = 300

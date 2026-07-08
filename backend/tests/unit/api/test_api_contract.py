@@ -61,6 +61,7 @@ def _make_mock_pipeline(**kwargs: Any) -> MagicMock:
     p.name = kwargs.get("name", "Contract Test Pipeline")
     p.description = kwargs.get("description")
     p.visibility = kwargs.get("visibility", "org")
+    p.owner_team_id = kwargs.get("owner_team_id")
     p.max_concurrent_runs = kwargs.get("max_concurrent_runs", 5)
     p.lock_wait_timeout_seconds = kwargs.get("lock_wait_timeout_seconds", 300)
     p.node_timeout_seconds = kwargs.get("node_timeout_seconds", 300)
@@ -471,6 +472,7 @@ class TestConnectorEndpointSchemas:
         connector.allowed_operations = []
         connector.status = "connected"
         connector.visibility = "org"
+        connector.owner_team_id = None
         connector.tier = "native"
         connector.created_at = _NOW
         connector.updated_at = _NOW
