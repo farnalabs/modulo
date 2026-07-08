@@ -189,7 +189,7 @@
               <button class="ml-2 underline" data-testid="settings-teams-members-retry" @click="loadMembers(team.id)">Retry</button>
             </div>
 
-    <div v-if="!loading && !error" class="contents">
+            <div v-else>
               <div v-if="membersByTeam[team.id]?.length === 0" class="py-4 text-center text-sm text-muted-foreground">
                 No members yet.
               </div>
@@ -236,7 +236,7 @@
                   </tr>
                 </tbody>
               </table>
-            </template>
+            </div>
 
             <div v-if="addMemberTeamId === team.id" class="mt-4 flex items-center gap-2 rounded-lg border bg-muted/30 p-3">
               <select
