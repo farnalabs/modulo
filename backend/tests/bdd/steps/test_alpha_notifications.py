@@ -5,15 +5,15 @@ import uuid
 from pytest_bdd import given, parsers, scenarios, then, when
 
 try:
-    scenarios("../../features/notifications/hitl_webhook.feature")
+    scenarios("../features/notifications/hitl_webhook.feature")
 except (FileNotFoundError, OSError):
     pass
 try:
-    scenarios("../../features/notifications/failure_webhook.feature")
+    scenarios("../features/notifications/failure_webhook.feature")
 except (FileNotFoundError, OSError):
     pass
 try:
-    scenarios("../../features/notifications/signing.feature")
+    scenarios("../features/notifications/signing.feature")
 except (FileNotFoundError, OSError):
     pass
 

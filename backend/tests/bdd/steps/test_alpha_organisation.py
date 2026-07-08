@@ -6,11 +6,11 @@ from unittest.mock import MagicMock, patch
 from pytest_bdd import given, parsers, scenarios, then, when
 
 try:
-    scenarios("../../features/organisation/org_scoping.feature")
+    scenarios("../features/organisation/org_scoping.feature")
 except (FileNotFoundError, OSError):
     pass
 try:
-    scenarios("../../features/organisation/rls_isolation.feature")
+    scenarios("../features/organisation/rls_isolation.feature")
 except (FileNotFoundError, OSError):
     pass
 

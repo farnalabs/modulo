@@ -1,6 +1,6 @@
 """BDD-mirror unit tests: MCP OAuth 2.0 authorization code flow.
 
-Each test maps to a Gherkin scenario in tests/features/mcp/mcp_oauth.feature.
+Each test maps to a Gherkin scenario in tests/bdd/features/mcp/mcp_oauth.feature.
 These cover the authorize and token protocol endpoints (in mcp_server.py)
 in addition to the client CRUD endpoints already tested in test_mcp_oauth.py.
 """

@@ -1,4 +1,10 @@
-"""BDD step definitions: Prompt Versioning — /api/v1/agents/{id}/prompts endpoints."""
+"""BDD step definitions: Prompt Versioning — /api/v1/agents/{id}/prompts endpoints.
+
+# MOCKED: This entire file uses MagicMock-based DB fixtures instead of the
+# real async SQLAlchemy stack (testcontainers Postgres + Alembic migrations).
+# This duplicates unit-test surface while claiming E2E confidence.
+# Scheduled for replacement with real-stack fixtures.
+"""
 
 import uuid
 from typing import Any
@@ -7,7 +13,8 @@ from unittest.mock import MagicMock, patch
 import pytest
 from pytest_bdd import given, parsers, scenarios, then, when
 
-scenarios("prompt_versioning.feature")
+# MOCKED: scenarios() path relative to this file
+scenarios("../../features/agents/prompt_versioning.feature")
 
 
 @pytest.fixture
@@ -15,6 +22,7 @@ def ctx() -> dict[str, Any]:
     return {}
 
 
+# MOCKED: _make_agent returns MagicMock instead of real DB model
 def _make_agent(name: str = "reviewer", prompt: str = "Version 1") -> MagicMock:
     a = MagicMock()
     a.id = uuid.uuid4()
@@ -82,6 +90,7 @@ def _pipeline_published_with_snapshot(ctx) -> None:
         ctx["snapshot_prompt"] = agent.prompt_template
 
 
+# MOCKED: uses patched DB layer instead of real session
 @when(parsers.parse("I update the agent prompt to {prompt}"))
 def _update_prompt(client, request, ctx, prompt: str) -> None:
     prompt_val = prompt.strip('"')
@@ -114,6 +123,7 @@ def _trigger_new_run(ctx) -> None:
     ctx["run_type"] = "latest"
 
 
+# MOCKED: uses patched DB layer instead of real session
 @when(parsers.parse("I GET the prompt versions for the agent"))
 def _get_prompt_versions(client, request, ctx) -> None:
     agent = ctx.get("agent")
