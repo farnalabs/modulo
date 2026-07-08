@@ -1,3 +1,4 @@
+from __future__ import annotations
 """Notifier — dispatch webhook notifications with HMAC signing, retry, and dead-letter tracking.
 
 Event types dispatched:
@@ -17,7 +18,6 @@ For each event, the notifier:
   8. Auto-disables endpoint after ``MAX_DEAD_LETTERS`` consecutive failures.
 """
 
-from __future__ import annotations
 
 import asyncio
 import hashlib

@@ -1,3 +1,4 @@
+from __future__ import annotations
 """Plugin Registry — discovery, registration, and health-checking for third-party plugins.
 
 Plugins extend Modulo with additional connector types and model backend providers
@@ -15,7 +16,6 @@ Usage:
     backend = registry.build_model_backend("my_provider", api_key, model_id)
 """
 
-from __future__ import annotations
 
 import importlib.metadata
 import logging

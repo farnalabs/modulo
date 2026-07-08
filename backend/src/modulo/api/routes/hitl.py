@@ -1,3 +1,4 @@
+from __future__ import annotations
 """HITL (Human-In-The-Loop) API routes.
 
 All HITL operations are scoped to the authenticated user's organisation.
@@ -8,7 +9,6 @@ claim.  ``human_only`` gates additionally reject MCP-initiated approve requests
 (checked by the ViewModel layer — this route does not distinguish clients).
 """
 
-from __future__ import annotations
 
 import logging
 import uuid

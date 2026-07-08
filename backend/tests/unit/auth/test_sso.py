@@ -213,10 +213,11 @@ class TestSsoProvidersEndpoint:
         assert resp.json()["saml"] is True
 
     def test_saml_disabled_without_license(self, client: TestClient) -> None:
-        """SSO endpoint returns 402 when license is absent."""
+        """SSO providers list returns saml=False when license is absent."""
         _override_settings(modulo_license_key="", modulo_saml_enabled=True)
         resp = client.get("/api/v1/auth/sso/providers")
-        assert resp.status_code == 402
+        assert resp.status_code == 200
+        assert resp.json()["saml"] is False
 
 
 # ---------------------------------------------------------------------------

@@ -1,6 +1,6 @@
+from __future__ import annotations
 """Docker RuntimeProvider — ephemeral containers via aiodocker."""
 
-from __future__ import annotations
 
 import asyncio
 import logging

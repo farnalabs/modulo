@@ -1,3 +1,4 @@
+from __future__ import annotations
 """LocalRuntimeProvider — in-process agent execution with a concurrency cap.
 
 This provider runs commands as subprocesses on the host machine. It is **not
@@ -15,7 +16,6 @@ and your pipelines continue to work unchanged — the RuntimeProvider ABC
 hides the backend.
 """
 
-from __future__ import annotations
 
 import asyncio
 import logging

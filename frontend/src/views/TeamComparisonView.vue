@@ -176,6 +176,7 @@ import {
   Tooltip,
   TooltipTrigger,
   TooltipContent,
+} from '../components/ui/tooltip'
 import { formatApiError } from '../lib/api/formatError'
 
 interface TeamRunStatus

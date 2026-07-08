@@ -1,6 +1,6 @@
+from __future__ import annotations
 """RFC 9457 Problem Details for HTTP APIs."""
 
-from __future__ import annotations
 
 import enum
 from typing import Any

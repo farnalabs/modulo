@@ -1,3 +1,4 @@
+from __future__ import annotations
 """Celery task for notification dispatch with retry and dead-letter tracking.
 
 This module defines the ``DispatchNotificationTask`` and a convenience
@@ -11,7 +12,6 @@ Usage
     await enqueue_dispatch(org_id, event_type, payload, run_id=run_id)
 """
 
-from __future__ import annotations
 
 import asyncio
 import json

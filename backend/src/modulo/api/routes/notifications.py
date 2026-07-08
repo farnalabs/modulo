@@ -1,10 +1,10 @@
+from __future__ import annotations
 """Notification endpoint CRUD routes.
 
 Endpoints are org-scoped and managed via standard REST operations.
 Secrets are Fernet-encrypted at rest and never exposed in responses.
 """
 
-from __future__ import annotations
 
 import contextlib
 import json

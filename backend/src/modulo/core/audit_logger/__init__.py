@@ -1,10 +1,10 @@
+from __future__ import annotations
 """Cryptographic audit chaining — SHA-256 linked events per organisation.
 
 Each AuditEvent records the SHA-256 hash of the canonical JSON of the
 prior event in the same org, forming a tamper-evident chain.
 """
 
-from __future__ import annotations
 
 import asyncio
 import hashlib

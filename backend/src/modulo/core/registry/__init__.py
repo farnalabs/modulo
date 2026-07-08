@@ -1,3 +1,4 @@
+from __future__ import annotations
 """Registry service — Ed25519 signing, SHA-256 integrity, publish/pull protocol.
 
 Primitives are identified by ``author/name`` namespaced slugs.
@@ -11,7 +12,6 @@ State of the art:
   - Abstract schema namespacing (author/name)
 """
 
-from __future__ import annotations
 
 import hashlib
 import logging

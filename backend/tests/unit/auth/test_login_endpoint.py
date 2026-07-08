@@ -37,6 +37,7 @@ def _make_mock_user() -> MagicMock:
     user.active = True
     user.organisation_id = _ORG_ID
     user.password_hash = hash_password("testpass")
+    user.is_system_admin = False
     return user
 
 
@@ -67,6 +68,12 @@ def mock_session() -> AsyncMock:
     begin_cm.__aenter__ = AsyncMock(return_value=None)
     begin_cm.__aexit__ = AsyncMock(return_value=False)
     session.begin = MagicMock(return_value=begin_cm)
+    # Make session.execute().scalars().all() return an empty list by default
+    result_mock = MagicMock()
+    scalars_mock = MagicMock()
+    scalars_mock.all.return_value = []
+    result_mock.scalars.return_value = scalars_mock
+    session.execute.return_value = result_mock
     return session
 
 
@@ -93,11 +100,15 @@ def test_login_success(client: TestClient) -> None:
     mock_user = _make_mock_user()
     mock_family = MagicMock()
     mock_family.family_id = uuid.uuid4()
+    mock_membership = MagicMock()
+    mock_membership.organisation_id = _ORG_ID
+    mock_membership.role = "admin"
     with (
         patch("modulo.api.routes.auth.get_account_by_email", new=AsyncMock(return_value=mock_user)),
         patch("modulo.api.routes.auth.authenticate_db_user", return_value=True),
         patch("modulo.api.routes.auth.update_last_login", new=AsyncMock()),
         patch("modulo.api.routes.auth.create_family", new=AsyncMock(return_value=mock_family)),
+        patch("modulo.api.routes.auth.list_memberships_for_account", new=AsyncMock(return_value=[mock_membership])),
     ):
         resp = client.post(
             "/api/v1/auth/login",
@@ -145,11 +156,15 @@ def test_me_returns_username(client: TestClient) -> None:
     mock_user.created_at = datetime.now(UTC)
     mock_family = MagicMock()
     mock_family.family_id = uuid.uuid4()
+    mock_membership = MagicMock()
+    mock_membership.organisation_id = _ORG_ID
+    mock_membership.role = "admin"
     with (
         patch("modulo.api.routes.auth.get_account_by_email", new=AsyncMock(return_value=mock_user)),
         patch("modulo.api.routes.auth.authenticate_db_user", return_value=True),
         patch("modulo.api.routes.auth.update_last_login", new=AsyncMock()),
         patch("modulo.api.routes.auth.create_family", new=AsyncMock(return_value=mock_family)),
+        patch("modulo.api.routes.auth.list_memberships_for_account", new=AsyncMock(return_value=[mock_membership])),
     ):
         login_resp = client.post(
             "/api/v1/auth/login",

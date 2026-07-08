@@ -1,3 +1,4 @@
+from __future__ import annotations
 """In-memory LRU cache for compiled LangGraph StateGraphs.
 
 Cache key is (pipeline_id, snapshot_id) — not snapshot_id alone, because two
@@ -9,7 +10,6 @@ the event loop — no thundering-herd risk in asyncio. A threading lock is
 kept for correctness if compilation becomes async in the future.
 """
 
-from __future__ import annotations
 
 import threading
 import uuid

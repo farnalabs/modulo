@@ -335,8 +335,6 @@ import FeatureGate from '../components/FeatureGate.vue'
 import { formatApiError } from '../lib/api/formatError'
 
 const { t } = useI18n()
-
-const { t } = useI18n()
 import {
   Tooltip,
   TooltipTrigger,

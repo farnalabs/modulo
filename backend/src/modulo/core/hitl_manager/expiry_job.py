@@ -1,3 +1,4 @@
+from __future__ import annotations
 """Background job that polls for expired HITL claims and resets them.
 
 Runs as an asyncio task alongside the FastAPI server.  Polls every ``POLL_INTERVAL``
@@ -11,7 +12,6 @@ Runs as an asyncio task alongside the FastAPI server.  Polls every ``POLL_INTERV
 The job is started during the application lifespan and cancelled on shutdown.
 """
 
-from __future__ import annotations
 
 import asyncio
 import contextlib
