@@ -208,6 +208,7 @@ markers = [
     "e2e: marks tests as end-to-end (require browser + running app)",
     "slow: marks tests as slow",
     "awaiting-implementation: marks scenarios that define desired behaviour not yet delivered",
+    "connector_conformance: connector contract conformance suite — every ConnectorType must pass",
 ]
 
 [tool.coverage.run]
