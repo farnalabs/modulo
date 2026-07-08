@@ -125,7 +125,8 @@ async def add_prompt_version(
 
     Returns None if the agent is not found.
     """
-    agent = await get_agent(session, agent_id)
+    result = await session.execute(select(Agent).where(Agent.id == agent_id).with_for_update())
+    agent = result.scalar_one_or_none()
     if agent is None:
         return None
 
@@ -191,7 +192,8 @@ async def rollback_prompt_version(
     the target version's template as the active prompt_template.
     Returns None if agent or target version not found.
     """
-    agent = await get_agent(session, agent_id)
+    result = await session.execute(select(Agent).where(Agent.id == agent_id).with_for_update())
+    agent = result.scalar_one_or_none()
     if agent is None:
         return None
 
