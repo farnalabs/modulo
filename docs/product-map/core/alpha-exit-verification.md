@@ -59,7 +59,7 @@ status: partial
 
 - [x] ruff check passes
 - [x] Backend unit tests pass
-- [ ] Alpha documentation exists (dev-setup.md was missing — now created; architecture.md, CONTRIBUTING.md exist)
+- [x] Alpha documentation exists (dev-setup.md was missing — now created; architecture.md, CONTRIBUTING.md exist)
 - [x] FilesystemConnector implementation exists
 - [x] GitHubConnector implementation exists
 - [x] Seed data script exists
@@ -118,3 +118,9 @@ status: partial
 - **Port conflict risk**: If port 5432 or 6379 is already in use on the self-hosted runner, Docker containers will fail to start. No port-fallback or pre-check logic.
 - **CI secrets hardcoded in workflow YAML**: SECRET_KEY and FERNET_KEY are plaintext in alpha-exit-report.yml. Acceptable for test-only CI where the runner is isolated, but would be a security concern if the repo were public.
 - **SkipBDD cannot distinguish "skipped because CI passed" from "skipped because CI didn't run"**: The verification script logs "assumed passing" but has no mechanism to verify the CI step outcome. A future improvement could parse CI step annotations or accept an explicit pass/fail status parameter.
+
+### Index 332 (2026-07-08)
+- **BUG fix**: Added `$dateStr = Get-Date -Format 'yyyy-MM-dd HH:mm:ss'` initialization before the report header renders the timestamp (was undefined variable → empty string in report header)
+- **STALE**: Marked "Alpha documentation exists" checkbox as `[x]` — docs/dev-setup.md now confirmed on disk
+- **VERIFIED**: docs/architecture.md and CONTRIBUTING.md exist on disk — checklist accurate
+- **VERIFIED**: Website docs at Website/modulo-website/src/docs/alpha-exit.md already cover PRD §10.3b — no stub needed
