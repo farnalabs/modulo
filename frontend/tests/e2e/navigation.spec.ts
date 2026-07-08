@@ -1,7 +1,10 @@
-import { test, expect } from './setup/fixtures'
+import { test, expect, loginAsAdmin } from './setup/fixtures'
+import { getTestEnv } from './setup/env'
 
 test.describe('Navigation Flow', () => {
   test('navigates from Dashboard to Pipelines', async ({ page }) => {
+    await loginAsAdmin(page, getTestEnv())
+
     await page.goto('/')
     await page.waitForLoadState('networkidle')
 
@@ -15,6 +18,8 @@ test.describe('Navigation Flow', () => {
   })
 
   test('current page indicator is shown on active sidebar link', async ({ page }) => {
+    await loginAsAdmin(page, getTestEnv())
+
     await page.goto('/')
     await page.waitForLoadState('networkidle')
 
@@ -24,6 +29,8 @@ test.describe('Navigation Flow', () => {
   })
 
   test('browser back navigation works between pages', async ({ page }) => {
+    await loginAsAdmin(page, getTestEnv())
+
     await page.goto('/')
     await page.waitForLoadState('networkidle')
 
