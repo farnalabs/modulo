@@ -1,4 +1,5 @@
 from __future__ import annotations
+
 """In-memory LRU cache for compiled LangGraph StateGraphs.
 
 Cache key is (pipeline_id, snapshot_id) — not snapshot_id alone, because two
@@ -159,6 +160,8 @@ def build_graph_from_json(
     graph_json: dict[str, Any],
     *,
     eval_definitions_by_node: dict[str, list[EvalDefinition]] | None = None,
+    session_factory: Callable[..., Any] | None = None,
+    org_id: uuid.UUID | None = None,
 ) -> Any:
     """Compile a StateGraph from the serialised graph_json stored in a snapshot.
 
@@ -273,7 +276,12 @@ def build_graph_from_json(
                     node_evals = eval_definitions_by_node.get(source) if eval_definitions_by_node is not None else None
                     graph.add_node(
                         gate_id,
-                        make_hitl_gate_fn(hitl_config, eval_definitions=node_evals),
+                        make_hitl_gate_fn(
+                            hitl_config,
+                            eval_definitions=node_evals,
+                            session_factory=session_factory,
+                            org_id=org_id,
+                        ),
                     )
                     graph.add_edge(source, gate_id)
 
