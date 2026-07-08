@@ -200,7 +200,7 @@
                     <th class="pb-2 font-medium">Name</th>
                     <th class="pb-2 font-medium">Email</th>
                     <th class="pb-2 font-medium">Role</th>
-                    <th class="pb-2 font-medium" />
+                    <th class="pb-2 font-medium">Actions</th>
                   </tr>
                 </thead>
                 <tbody>
