@@ -1,6 +1,6 @@
+from __future__ import annotations
 """Admin Remy configuration and skills management."""
 
-from __future__ import annotations
 
 import logging
 import uuid

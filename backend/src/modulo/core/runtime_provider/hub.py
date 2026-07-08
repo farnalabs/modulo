@@ -1,6 +1,6 @@
+from __future__ import annotations
 """RuntimeProviderHub — registry and resolution of RuntimeProvider implementations."""
 
-from __future__ import annotations
 
 import logging
 from typing import Any

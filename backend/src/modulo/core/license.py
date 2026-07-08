@@ -1,3 +1,4 @@
+from __future__ import annotations
 """License key parsing, verification, and storage.
 
 License keys are base64-encoded, Ed25519-signed JSON payloads in the
@@ -13,7 +14,6 @@ The payload is a JSON object with keys:
     org_id      — organisation identifier
 """
 
-from __future__ import annotations
 
 import base64
 import json

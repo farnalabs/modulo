@@ -1,6 +1,6 @@
+from __future__ import annotations
 """Alert evaluation engine — sliding-window rule matching with cooldown."""
 
-from __future__ import annotations
 
 import json
 import logging

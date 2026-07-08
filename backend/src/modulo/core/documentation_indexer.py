@@ -1,3 +1,4 @@
+from __future__ import annotations
 """Documentation indexer — builds a searchable index from docs/prd.md.
 
 At module load or on first call, indexes the PRD by ``##`` and ``###`` headings.
@@ -6,7 +7,6 @@ Each index entry stores ``(heading_path, heading, first_paragraph)``.
 Search is case-insensitive keyword matching against heading + first paragraph.
 """
 
-from __future__ import annotations
 
 import logging
 import re

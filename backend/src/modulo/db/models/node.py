@@ -1,8 +1,8 @@
+from __future__ import annotations
 """Node model — a pipeline node that can be composed into a hierarchy
 with parent-child relationships and temporal execution constraints.
 """
 
-from __future__ import annotations
 
 import uuid
 from typing import TYPE_CHECKING

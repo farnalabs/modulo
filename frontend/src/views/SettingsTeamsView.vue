@@ -302,7 +302,6 @@
           </div>
         </div>
       </div>
-    </template>
   </div>
   </FeatureGate>
 </template>
