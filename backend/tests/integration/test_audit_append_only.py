@@ -20,8 +20,8 @@ class TestAuditAppendOnlyDbTrigger:
     """Tests that the Postgres trigger prevents UPDATE/DELETE at the DB level."""
 
     @pytest_asyncio.fixture(autouse=True)
-    async def seed_event(self, db_session: AsyncSession) -> AuditEvent:
-        """Insert a test audit event directly via SQL to bypass ORM listeners."""
+    async def _seed_event(self, db_session: AsyncSession) -> None:
+        """Insert a test audit event for use by test methods via db_session.info."""
         org_id = uuid.uuid4()
         event_id = uuid.uuid4()
 
@@ -38,42 +38,48 @@ class TestAuditAppendOnlyDbTrigger:
             },
         )
         await db_session.commit()
-        # Store for test methods
-        self._event_id = event_id
-        self._org_id = org_id
-        return event_id
 
     async def test_update_trigger_blocks_update(self, db_session: AsyncSession) -> None:
         """UPDATE on audit_events should be rejected by the Postgres trigger."""
+        event_id = await db_session.execute(
+            text("SELECT id FROM audit_events WHERE event_type = 'test.event' LIMIT 1"),
+        )
+        event_id = event_id.scalar_one()
         with pytest.raises(DBAPIError) as exc_info:
             await db_session.execute(
                 text("UPDATE audit_events SET event_type = 'modified' WHERE id = :id"),
-                {"id": self._event_id},
+                {"id": event_id},
             )
-            await db_session.commit()
         error_msg = str(exc_info.value).lower()
         assert "append-only" in error_msg or "not permitted" in error_msg
 
     async def test_delete_trigger_blocks_delete(self, db_session: AsyncSession) -> None:
         """DELETE on audit_events should be rejected by the Postgres trigger."""
+        event_id = await db_session.execute(
+            text("SELECT id FROM audit_events WHERE event_type = 'test.event' LIMIT 1"),
+        )
+        event_id = event_id.scalar_one()
         with pytest.raises(DBAPIError) as exc_info:
             await db_session.execute(
                 text("DELETE FROM audit_events WHERE id = :id"),
-                {"id": self._event_id},
+                {"id": event_id},
             )
-            await db_session.commit()
         error_msg = str(exc_info.value).lower()
         assert "append-only" in error_msg or "not permitted" in error_msg
 
     async def test_event_still_exists_after_attempted_delete(self, db_session: AsyncSession) -> None:
         """After a failed DELETE attempt, the event should still exist."""
+        event_id = await db_session.execute(
+            text("SELECT id FROM audit_events WHERE event_type = 'test.event' LIMIT 1"),
+        )
+        event_id = event_id.scalar_one()
+
         # Try to delete
         with pytest.raises(DBAPIError):
             await db_session.execute(
                 text("DELETE FROM audit_events WHERE id = :id"),
-                {"id": self._event_id},
+                {"id": event_id},
             )
-            await db_session.commit()
 
         # Roll back the aborted transaction before continuing
         await db_session.rollback()
@@ -81,7 +87,7 @@ class TestAuditAppendOnlyDbTrigger:
         # Verify event still exists
         result = await db_session.execute(
             text("SELECT id FROM audit_events WHERE id = :id"),
-            {"id": self._event_id},
+            {"id": event_id},
         )
         assert result.scalar_one_or_none() is not None
 

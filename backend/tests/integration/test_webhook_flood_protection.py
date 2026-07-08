@@ -8,6 +8,7 @@ Tests the full webhook pipeline in TriggerEngine:
 
 import hashlib
 import hmac
+import json
 import time
 import uuid
 
@@ -134,7 +135,7 @@ async def test_trigger(
                 "id": str(trigger_id),
                 "oid": str(test_org),
                 "pid": str(test_pipeline),
-                "config": f'{{"hmac_secret": "{hmac_secret}"}}',
+                "config": json.dumps({"hmac_secret": hmac_secret}),
                 "uid": str(test_user),
             },
         )
@@ -195,6 +196,8 @@ class TestWebhookDeduplication:
                         modulo_timestamp=ts,
                         snapshot_id=test_snapshot,
                     )
+            async with factory() as session, session.begin():
+                await set_rls_org(session, test_org)
                 result = await session.execute(
                     text(
                         "SELECT validation_result FROM trigger_events "
@@ -513,7 +516,7 @@ class TestWebhookFullPipeline:
                     "id": str(trigger_id),
                     "oid": str(test_org),
                     "pid": str(pipeline_id),
-                    "config": f'{{"hmac_secret": "{hmac_secret}"}}',
+                    "config": json.dumps({"hmac_secret": hmac_secret}),
                     "uid": str(test_user),
                 },
             )
