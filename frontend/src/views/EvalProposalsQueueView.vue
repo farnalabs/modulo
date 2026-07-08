@@ -178,7 +178,7 @@ async function loadProposals() {
       proposals.value = (data as unknown as ProposalsResponse).items
     }
   } catch (e: unknown) {
-    pageError.value = `Failed to load proposals: ${e instanceof Error ? e.message : String(e)}`
+    pageError.value = `Failed to load proposals: ${formatApiError(e)}`
   } finally {
     loading.value = false
   }
@@ -193,7 +193,7 @@ async function publishProposal(p: EvalProposalItem) {
     p.feedback_status = 'resolved'
     setTimeout(() => { delete actionMessages.value[p.id] }, 3000)
   } catch (e: unknown) {
-    actionMessages.value[p.id] = { type: 'error', text: `Publish failed: ${e instanceof Error ? e.message : String(e)}` }
+    actionMessages.value[p.id] = { type: 'error', text: `Publish failed: ${formatApiError(e)}` }
   } finally {
     actioningId.value = null
   }
@@ -209,7 +209,7 @@ async function dismissProposal(id: string) {
     if (prop) prop.feedback_status = 'dismissed'
     setTimeout(() => { delete actionMessages.value[id] }, 3000)
   } catch (e: unknown) {
-    actionMessages.value[id] = { type: 'error', text: `Dismiss failed: ${e instanceof Error ? e.message : String(e)}` }
+    actionMessages.value[id] = { type: 'error', text: `Dismiss failed: ${formatApiError(e)}` }
   } finally {
     actioningId.value = null
   }
@@ -217,3 +217,4 @@ async function dismissProposal(id: string) {
 
 onMounted(() => { planStore.fetchPlan(); loadProposals() })
 </script>
+

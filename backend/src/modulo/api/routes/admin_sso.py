@@ -128,6 +128,11 @@ async def get_providers(
     _require_admin(current_user)
     try:
         providers = await list_providers(session)
+    except IntegrityError:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="A resource with this value already exists",
+        )
     except ProgrammingError as exc:
         _log.warning("SSO providers table not available: %s", exc)
         raise HTTPException(
@@ -222,6 +227,11 @@ async def update_provider_endpoint(
         provider = await update_provider(session, provider_id, actor_user_id=current_user.account_id, **updates)
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+    except IntegrityError:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="A resource with this value already exists",
+        )
     except ProgrammingError as exc:
         _log.warning("SSO providers table not available on update: %s", exc)
         raise HTTPException(
@@ -266,6 +276,11 @@ async def delete_provider_endpoint(
     _require_admin(current_user)
     try:
         deleted = await delete_provider(session, provider_id, actor_user_id=current_user.account_id)
+    except IntegrityError:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="A resource with this value already exists",
+        )
     except ProgrammingError as exc:
         _log.warning("SSO providers table not available on delete: %s", exc)
         raise HTTPException(
@@ -304,6 +319,11 @@ async def test_provider_connection(
     _require_admin(current_user)
     try:
         provider = await get_provider(session, provider_id)
+    except IntegrityError:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="A resource with this value already exists",
+        )
     except ProgrammingError as exc:
         _log.warning("SSO providers table not available on test connection: %s", exc)
         raise HTTPException(
@@ -487,6 +507,11 @@ async def toggle_provider_endpoint(
     _require_admin(current_user)
     try:
         provider = await toggle_provider(session, provider_id, actor_user_id=current_user.account_id)
+    except IntegrityError:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="A resource with this value already exists",
+        )
     except ProgrammingError as exc:
         _log.warning("SSO providers table not available on toggle: %s", exc)
         raise HTTPException(
@@ -541,6 +566,11 @@ async def set_group_mappings_endpoint(
     mappings_dict = [m.model_dump() for m in req.mappings]
     try:
         provider = await set_group_mappings(session, provider_id, mappings_dict)
+    except IntegrityError:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="A resource with this value already exists",
+        )
     except ProgrammingError as exc:
         _log.warning("SSO providers table not available on set_group_mappings: %s", exc)
         raise HTTPException(
@@ -579,6 +609,11 @@ async def get_group_mappings_endpoint(
     _require_admin(current_user)
     try:
         provider = await get_provider(session, provider_id)
+    except IntegrityError:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="A resource with this value already exists",
+        )
     except ProgrammingError as exc:
         _log.warning("SSO providers table not available on get_group_mappings: %s", exc)
         raise HTTPException(

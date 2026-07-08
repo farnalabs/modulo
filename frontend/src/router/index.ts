@@ -1,3 +1,5 @@
+﻿import { formatApiError } from '../lib/api/formatError'
+
 import { createRouter, createWebHistory } from 'vue-router'
 import { getAccessToken } from '../lib/api/client'
 import manifest from '@/manifest.yaml'
@@ -452,10 +454,11 @@ router.beforeEach((to) => {
 
 router.onError((err) => {
   console.error('[router] navigation error:', err)
-  const msg = err instanceof Error ? err.message : String(err)
+  const msg = formatApiError(err)
   if (/Failed to fetch|error loading dynamically|ChunkLoadError/i.test(msg)) {
     window.location.reload()
   }
 })
 
 export default router
+

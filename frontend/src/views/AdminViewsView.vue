@@ -250,7 +250,9 @@ import {
   Tooltip,
   TooltipTrigger,
   TooltipContent,
-} from '../components/ui/tooltip'
+import { formatApiError } from '../lib/api/formatError'
+
+interface SavedView
 
 interface SavedView {
   id: string
@@ -305,7 +307,7 @@ async function loadViews() {
     const data = await res.json()
     views.value = data.items ?? data
   } catch (e: unknown) {
-    error.value = e instanceof Error ? e.message : String(e)
+    error.value = formatApiError(e)
   } finally {
     loading.value = false
   }
@@ -398,7 +400,7 @@ async function handleSave() {
     closeForm()
     await loadViews()
   } catch (e: unknown) {
-    saveError.value = e instanceof Error ? e.message : String(e)
+    saveError.value = formatApiError(e)
   } finally {
     saving.value = false
   }
@@ -427,7 +429,7 @@ async function deleteView() {
     views.value = views.value.filter(v => v.id !== deleteConfirmId.value)
     deleteConfirmId.value = null
   } catch (e: unknown) {
-    deleteError.value = e instanceof Error ? e.message : String(e)
+    deleteError.value = formatApiError(e)
   } finally {
     deleting.value = false
   }
@@ -454,9 +456,11 @@ async function duplicateView(v: SavedView) {
     }
     await loadViews()
   } catch (e: unknown) {
-    error.value = e instanceof Error ? e.message : String(e)
+    error.value = formatApiError(e)
   }
 }
 
 onMounted(loadViews)
 </script>
+
+

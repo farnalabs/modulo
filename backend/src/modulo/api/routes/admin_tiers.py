@@ -10,6 +10,7 @@ from modulo.api.dependencies import get_db_session
 from modulo.auth.dependencies import get_current_user
 from modulo.auth.jwt import AuthenticatedPrincipal
 from modulo.db.crud.tier_catalog import list_tiers
+from fastapi import status
 
 logger = logging.getLogger(__name__)
 
@@ -27,6 +28,11 @@ async def list_tiers_endpoint(
         return {"tiers": tiers}
     except HTTPException:
         raise
+    except IntegrityError:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="A resource with this value already exists",
+        )
     except ProgrammingError:
         raise HTTPException(status_code=503, detail="Database not available. Run migrations.")
     except IntegrityError:

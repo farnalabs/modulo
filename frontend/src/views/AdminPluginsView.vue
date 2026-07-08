@@ -235,7 +235,7 @@ async function loadPlugins() {
       }
     }
   } catch (e: unknown) {
-    error.value = `Failed to load plugins: ${e instanceof Error ? e.message : String(e)}`
+    error.value = `Failed to load plugins: ${formatApiError(e)}`
   } finally {
     loading.value = false
   }
@@ -243,3 +243,4 @@ async function loadPlugins() {
 
 onMounted(loadPlugins)
 </script>
+

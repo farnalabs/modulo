@@ -61,6 +61,7 @@ import type { NotificationResponse } from "../lib/api/notifications";
 import { fetchDashboardNotifications, reviewLater, fetchUnreadCount } from "../lib/api/notifications";
 import { registerHandler } from "../stores/syncRegistry";
 import NotificationCard from "./NotificationCard.vue";
+import { formatApiError } from "../lib/api/formatError";
 import LoadingSpinner from "./shared/LoadingSpinner.vue";
 
 const DASHBOARD_LIMIT = 5;
@@ -128,9 +129,10 @@ async function loadDashboard() {
     unreadCount.value = result.total_unread;
     hasMore.value = result.notifications.length >= DASHBOARD_LIMIT;
   } catch (e: unknown) {
-    error.value = e instanceof Error ? e.message : String(e);
+    error.value = formatApiError(e);
   } finally {
     loading.value = false;
   }
 }
 </script>
+

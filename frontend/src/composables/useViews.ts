@@ -1,4 +1,4 @@
-import { ref, computed } from 'vue'
+﻿import { ref, computed } from 'vue'
 import { api } from '../lib/api/client'
 import { formatApiError } from '../lib/api/formatError'
 
@@ -38,7 +38,7 @@ export function useViews(viewType: string) {
         views.value = resp.data?.items ?? []
       }
     } catch (e: unknown) {
-      error.value = e instanceof Error ? e.message : String(e)
+      error.value = formatApiError(e)
     } finally {
       loading.value = false
     }
@@ -58,3 +58,4 @@ export function useViews(viewType: string) {
     setCurrentView,
   }
 }
+

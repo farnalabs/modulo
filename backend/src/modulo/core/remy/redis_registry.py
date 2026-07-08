@@ -1,3 +1,4 @@
+import asyncio
 """Redis-backed registry for Remy distributed state, replacing in-memory dicts."""
 
 from __future__ import annotations
@@ -26,6 +27,8 @@ class RemyRedisRegistry:
         if self._redis is None:
             try:
                 self._redis = aioredis.Redis.from_url(self._redis_url, decode_responses=True)
+            except asyncio.CancelledError:
+                raise
             except Exception:
                 logger.warning("Redis unavailable for Remy state - falling back to in-memory only")
                 return None

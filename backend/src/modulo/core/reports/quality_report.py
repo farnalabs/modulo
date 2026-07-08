@@ -1,3 +1,4 @@
+import asyncio
 """Weekly quality report for Slack — run volume, eval pass rate, cost summary, week-over-week deltas.
 
 All functions assume an active transaction with RLS org context set by the caller.
@@ -99,6 +100,8 @@ async def generate_quality_report(
         previous_avg_rate = previous_eval["pass_rate"]
     except SQLAlchemyError:
         _log.exception("Failed to query report data for org %s", org_id)
+        raise
+    except asyncio.CancelledError:
         raise
     except Exception:
         _log.exception("Unexpected error generating quality report for org %s", org_id)

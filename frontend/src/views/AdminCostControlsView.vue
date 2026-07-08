@@ -368,7 +368,7 @@ async function loadCosts() {
       teamCostMap.value = map
     }
   } catch (e: unknown) {
-    costsError.value = `Failed to load costs: ${e instanceof Error ? e.message : String(e)}`
+    costsError.value = `Failed to load costs: ${formatApiError(e)}`
   } finally {
     costsLoading.value = false
   }
@@ -422,7 +422,7 @@ async function saveTeamBudget(team: TeamBudgetRow) {
       setTimeout(() => { budgetSaveSuccess.value = false }, 3000)
     }
   } catch (e: unknown) {
-    team.saveError = `Failed to save: ${e instanceof Error ? e.message : String(e)}`
+    team.saveError = `Failed to save: ${formatApiError(e)}`
   } finally {
     team.saving = false
   }
@@ -442,7 +442,7 @@ async function saveBudget() {
       budgetSaveSuccess.value = true
     }
   } catch (e: unknown) {
-    budgetSaveError.value = `Failed to save: ${e instanceof Error ? e.message : String(e)}`
+    budgetSaveError.value = `Failed to save: ${formatApiError(e)}`
   } finally {
     savingBudget.value = false
   }
@@ -509,3 +509,4 @@ onMounted(() => {
   loadAll()
 })
 </script>
+

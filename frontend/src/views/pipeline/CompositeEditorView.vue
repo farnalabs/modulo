@@ -152,6 +152,7 @@ import { shortId } from '../../utils/format'
 import PortDefinitionPanel from '../../components/pipeline/composite/PortDefinitionPanel.vue'
 import PublishCompositeFlow from '../../components/pipeline/composite/PublishCompositeFlow.vue'
 import type { ParameterPort } from '../../types/pipeline'
+import { formatApiError } from '../../lib/api/formatError'
 
 const { get, put, post } = useApi()
 const route = useRoute()
@@ -219,7 +220,7 @@ async function loadEditor() {
     flowNodes.value = rawNodes.value.map(convertBackendNode)
     flowEdges.value = rawEdges.value.map(convertBackendEdge)
   } catch (e: unknown) {
-    pageError.value = `Failed to load composite: ${e instanceof Error ? e.message : String(e)}`
+    pageError.value = `Failed to load composite: ${formatApiError(e)}`
   }
 }
 
@@ -269,7 +270,7 @@ async function handleSaveAs() {
     showSaveAsComposite.value = false
     router.push({ name: 'library' })
   } catch (e: unknown) {
-    saveAsError.value = e instanceof Error ? e.message : String(e)
+    saveAsError.value = formatApiError(e)
   } finally {
     saving.value = false
   }

@@ -425,7 +425,7 @@ async function loadGates() {
       }))
     }
   } catch (e: unknown) {
-    error.value = `Failed to load gates: ${e instanceof Error ? e.message : String(e)}`
+    error.value = `Failed to load gates: ${formatApiError(e)}`
   } finally {
     loading.value = false
   }
@@ -458,7 +458,7 @@ async function claimGate(gate: GateItem) {
       setTimeout(() => { actionMessage.value[key] = null }, 5000)
     }
   } catch (e: unknown) {
-    actionMessage.value[key] = { type: 'error', text: `Claim failed: ${e instanceof Error ? e.message : String(e)}` }
+    actionMessage.value[key] = { type: 'error', text: `Claim failed: ${formatApiError(e)}` }
   } finally {
     claiming.value[key] = false
   }
@@ -495,7 +495,7 @@ async function approveGate(gate: GateItem) {
       setTimeout(() => { actionMessage.value[key] = null }, 5000)
     }
   } catch (e: unknown) {
-    actionMessage.value[key] = { type: 'error', text: `Approve failed: ${e instanceof Error ? e.message : String(e)}` }
+    actionMessage.value[key] = { type: 'error', text: `Approve failed: ${formatApiError(e)}` }
   } finally {
     actioning.value[key] = null
     actionLoading.value[key] = false
@@ -534,7 +534,7 @@ async function rejectGate(gate: GateItem) {
       setTimeout(() => { actionMessage.value[key] = null }, 5000)
     }
   } catch (e: unknown) {
-    actionMessage.value[key] = { type: 'error', text: `Reject failed: ${e instanceof Error ? e.message : String(e)}` }
+    actionMessage.value[key] = { type: 'error', text: `Reject failed: ${formatApiError(e)}` }
   } finally {
     actioning.value[key] = null
     actionLoading.value[key] = false
@@ -575,3 +575,4 @@ onUnmounted(() => {
   stopAutoRefresh()
 })
 </script>
+

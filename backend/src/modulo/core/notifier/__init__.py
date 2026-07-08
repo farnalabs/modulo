@@ -201,6 +201,8 @@ class Notifier:
                             )
                         )
             return parsed
+        except asyncio.CancelledError:
+            raise
         except Exception as exc:
             _log.warning(
                 "notifier.celery_fallback",
@@ -356,6 +358,8 @@ class Notifier:
         if retain_payload:
             try:
                 payload_ciphertext = self._fernet.encrypt(body)
+            except asyncio.CancelledError:
+                raise
             except Exception:
                 _log.exception("notifier.encrypt_failed", extra={"endpoint_id": str(endpoint.id)})
 
@@ -427,6 +431,8 @@ class Notifier:
                     payload_ciphertext=payload_ciphertext,
                 )
                 session.add(log_entry)
+        except asyncio.CancelledError:
+            raise
         except Exception:
             _log.exception(
                 "notifier.record_delivery_failed",
@@ -472,6 +478,8 @@ class Notifier:
                         "notifier.auto_disabled",
                         extra={"endpoint_id": str(endpoint.id), "dead_letter_count": new_count},
                     )
+        except asyncio.CancelledError:
+            raise
         except Exception:
             _log.exception(
                 "notifier.increment_dead_letter_failed",
@@ -492,6 +500,8 @@ class Notifier:
                     )
                     .values(consecutive_dead_letter_count=0)
                 )
+        except asyncio.CancelledError:
+            raise
         except Exception:
             _log.exception(
                 "notifier.reset_dead_letter_failed",

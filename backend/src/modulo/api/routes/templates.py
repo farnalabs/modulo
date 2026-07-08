@@ -98,6 +98,11 @@ async def list_templates_endpoint(
         )
     except HTTPException:
         raise
+    except IntegrityError:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="A resource with this value already exists",
+        )
     except ProgrammingError:
         raise HTTPException(status_code=503, detail="Database not available. Run migrations.")
     except IntegrityError:
@@ -222,6 +227,11 @@ async def create_pipeline_from_template_endpoint(
         )
     except HTTPException:
         raise
+    except IntegrityError:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="A resource with this value already exists",
+        )
     except ProgrammingError:
         raise HTTPException(status_code=503, detail="Database not available. Run migrations.")
     except IntegrityError:

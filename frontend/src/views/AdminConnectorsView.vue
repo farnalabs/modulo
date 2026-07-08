@@ -378,7 +378,7 @@ async function loadConnectors() {
       connectors.value = data.items
     }
   } catch (e: unknown) {
-    error.value = `Failed to load connectors: ${e instanceof Error ? e.message : String(e)}`
+    error.value = `Failed to load connectors: ${formatApiError(e)}`
   } finally {
     loading.value = false
   }
@@ -520,3 +520,4 @@ async function deleteConnector() {
 
 onMounted(() => { planStore.fetchPlan(); loadConnectors() })
 </script>
+

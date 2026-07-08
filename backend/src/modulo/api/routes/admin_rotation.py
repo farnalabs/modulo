@@ -136,6 +136,11 @@ async def rotate_key(
         )
     except HTTPException:
         raise
+    except IntegrityError:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="A resource with this value already exists",
+        )
     except ProgrammingError:
         raise HTTPException(status_code=503, detail="Database not available. Run migrations.")
     except IntegrityError:
@@ -163,6 +168,11 @@ async def rotation_status(
         )
     except HTTPException:
         raise
+    except IntegrityError:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="A resource with this value already exists",
+        )
     except ProgrammingError:
         raise HTTPException(status_code=503, detail="Database not available. Run migrations.")
     except IntegrityError:
