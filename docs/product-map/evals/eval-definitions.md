@@ -5,10 +5,10 @@ delivery-tasks: [task-nv2-eval-definition]
 bdd:
   - backend/tests/bdd/features/eval/eval_run.feature
   - backend/tests/bdd/features/eval/eval_suite_crud.feature
-  - backend/tests/features/evals/eval_regex.feature
-  - backend/tests/features/evals/eval_llm_judge.feature
-  - backend/tests/features/evals/eval_block.feature
-  - backend/tests/features/evals/conditional_hitl.feature
+  - backend/tests/bdd/features/evals/eval_regex.feature
+  - backend/tests/bdd/features/evals/eval_llm_judge.feature
+  - backend/tests/bdd/features/evals/eval_block.feature
+  - backend/tests/bdd/features/evals/conditional_hitl.feature
   - backend/tests/bdd/features/eval/eval_scorer.feature
   - backend/tests/bdd/features/eval/feedback_system.feature
 code:

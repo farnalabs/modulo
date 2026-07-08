@@ -136,7 +136,7 @@ Cryptographic signing, verification, and fork tracking for community library pri
 ## Known Gaps
 
 ### Registry & signing
-- BDD feature files exist on disk (`tests/features/library/community_registry.feature`, `tests/features/plugins/plugin_registry.feature`), step definitions exist and reference correct paths — BUT `plugin_registry.feature` has `@awaiting-implementation` tags on most scenarios (discovery, detail, startup). `signing.feature` covers webhook HMAC signing only — there is no dedicated Ed25519 registry signing BDD feature.
+- BDD feature files exist on disk (`tests/bdd/features/library/community_registry.feature`, `tests/bdd/features/plugins/plugin_registry.feature`), step definitions exist and reference correct paths — BUT `plugin_registry.feature` has `@awaiting-implementation` tags on most scenarios (discovery, detail, startup). `signing.feature` covers webhook HMAC signing only — there is no dedicated Ed25519 registry signing BDD feature.
 - No frontend trust tier display (green/amber badges) or community warning flow — confirmed missing; only `communityPrimitives` computed exists in `LibraryView.vue` without UI for it
 - No frontend ownership picker for copy-to-adapt
 - No unit tests for `forked_from` constraints at the service layer (only integration test in `test_initial_migration.py` covers DB-level trigger; BDD steps exist for forked_from assertions)

@@ -5,10 +5,10 @@ delivery-tasks: [task-nv1-team-isolation]
 bdd:
   - backend/tests/bdd/features/auth/tenant_isolation.feature
   - backend/tests/bdd/features/security/rls_enforcement.feature
-  - backend/tests/features/organisation/rls_isolation.feature
-  - backend/tests/features/teams/cross_team_isolation.feature
-  - backend/tests/features/teams/view_as_team.feature
-  - backend/tests/features/teams/view_as_team_non_admin_rejected.feature
+  - backend/tests/bdd/features/organisation/rls_isolation.feature
+  - backend/tests/bdd/features/teams/cross_team_isolation.feature
+  - backend/tests/bdd/features/teams/view_as_team.feature
+  - backend/tests/bdd/features/teams/view_as_team_non_admin_rejected.feature
 code:
   - backend/src/modulo/db/rls.py
   - backend/src/modulo/db/crud/base.py
@@ -112,7 +112,7 @@ equivalent filtering via an ORM `do_orm_execute` listener. Team-visibility RLS
 
 ## Known Gaps
 
-- **connector_team_mismatch not implemented in backend code** — BDD scenario exists at `tests/features/teams/cross_team_isolation.feature` but is mocked (MagicMock). Real enforcement at pipeline-save time (checking connector.owner_team_id vs pipeline.owner_team_id) does not exist yet.
+- **connector_team_mismatch not implemented in backend code** — BDD scenario exists at `tests/bdd/features/teams/cross_team_isolation.feature` but is mocked (MagicMock). Real enforcement at pipeline-save time (checking connector.owner_team_id vs pipeline.owner_team_id) does not exist yet.
 
 ## QA History
 

@@ -4,7 +4,7 @@ prd: 8.20
 delivery-tasks: [task-nv4-feedback-loop-auto]
 bdd:
   - backend/tests/bdd/features/eval/feedback_system.feature
-  - backend/tests/features/personas/priya-platform-engineer.feature
+  - backend/tests/bdd/features/personas/priya-platform-engineer.feature
 code:
   - backend/src/modulo/core/feedback_manager/
   - backend/src/modulo/core/eval_engine/

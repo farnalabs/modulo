@@ -6,7 +6,7 @@ bdd:
   - backend/tests/bdd/features/pipelines/node_types.feature
   - backend/tests/bdd/features/hitl/manual_node.feature
   - backend/tests/bdd/features/ui/pipeline_builder.feature
-  - backend/tests/features/personas/alice-devx-sme.feature
+  - backend/tests/bdd/features/personas/alice-devx-sme.feature
 code:
   - backend/src/modulo/api/routes/pipelines.py
   - backend/src/modulo/core/pipeline_engine/node_runner.py

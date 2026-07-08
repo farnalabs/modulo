@@ -5,7 +5,7 @@ delivery-tasks: [task-nv11-rollback-agent-replacement]
 bdd:
   - backend/tests/bdd/features/pipelines/node_types.feature
   - backend/tests/bdd/features/hitl/manual_node.feature
-  - backend/tests/features/personas/alice-devx-sme.feature
+  - backend/tests/bdd/features/personas/alice-devx-sme.feature
 code:
   - backend/src/modulo/api/routes/pipelines.py
   - backend/src/modulo/db/crud/pipeline.py

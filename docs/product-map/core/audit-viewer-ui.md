@@ -3,7 +3,7 @@ id: feat-core-audit-viewer-ui
 prd: 8.12
 delivery-tasks: [task-nv11-audit-viewer-ui]
 bdd:
-  - backend/tests/features/audit/audit_viewer.feature
+  - backend/tests/bdd/features/audit/audit_viewer.feature
   - backend/tests/bdd/features/admin/audit_export.feature
 code:
   - frontend/src/views/AdminAuditView.vue
