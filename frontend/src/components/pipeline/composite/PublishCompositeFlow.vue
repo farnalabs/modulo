@@ -15,7 +15,7 @@ const emit = defineEmits<{
   (e: "published"): void;
 }>();
 
-const { patch, post } = useApi();
+const { patch } = useApi();
 const router = useRouter();
 
 const step = ref(1);
