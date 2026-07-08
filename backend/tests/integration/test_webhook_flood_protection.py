@@ -44,75 +44,9 @@ def _valid_timestamp() -> str:
 
 
 # ---------------------------------------------------------------------------
-# Fixtures
+# Fixtures — inherited from top-level integration/conftest.py:
+#   test_org, test_user, test_pipeline, test_snapshot
 # ---------------------------------------------------------------------------
-
-
-@pytest_asyncio.fixture(scope="module")
-async def test_org(db_engine: AsyncEngine) -> uuid.UUID:
-    org_id = uuid.uuid4()
-    async with db_engine.connect() as conn, conn.begin():
-        await conn.execute(
-            text(
-                "INSERT INTO organisations (id, name, slug, settings_json) VALUES (:id, :name, :slug, '{}'::json)",
-            ),
-            {"id": str(org_id), "name": "Webhook Flood Org", "slug": f"flood-{org_id.hex[:8]}"},
-        )
-    return org_id
-
-
-@pytest_asyncio.fixture(scope="module")
-async def test_user(db_engine: AsyncEngine, test_org: uuid.UUID) -> uuid.UUID:
-    user_id = uuid.uuid4()
-    async with db_engine.connect() as conn, conn.begin():
-        await conn.execute(
-            text(
-                "INSERT INTO users (id, organisation_id, email, display_name, "
-                "org_role, auth_provider, active, password_hash) "
-                "VALUES (:id, :oid, :email, :name, 'admin', 'local', true, 'hash')",
-            ),
-            {
-                "id": str(user_id),
-                "oid": str(test_org),
-                "email": "flood-test@example.com",
-                "name": "Flood Test User",
-            },
-        )
-    return user_id
-
-
-@pytest_asyncio.fixture(scope="module")
-async def test_pipeline(db_engine: AsyncEngine, test_org: uuid.UUID, test_user: uuid.UUID) -> uuid.UUID:
-    pipeline_id = uuid.uuid4()
-    async with db_engine.connect() as conn, conn.begin():
-        await conn.execute(
-            text(
-                "INSERT INTO pipelines (id, organisation_id, name, created_by, "
-                "max_concurrent_runs, lock_wait_timeout_seconds, node_timeout_seconds, "
-                "run_context_defaults, graph_nodes_json) "
-                "VALUES (:id, :oid, :name, :uid, 10, 30, 300, '{}'::json, '[]'::json)",
-            ),
-            {"id": str(pipeline_id), "oid": str(test_org), "name": "Webhook Pipeline", "uid": str(test_user)},
-        )
-    return pipeline_id
-
-
-@pytest_asyncio.fixture(scope="module")
-async def test_snapshot(db_engine: AsyncEngine, test_org: uuid.UUID, test_pipeline: uuid.UUID) -> uuid.UUID:
-    snapshot_id = uuid.uuid4()
-    async with db_engine.connect() as conn, conn.begin():
-        await conn.execute(
-            text(
-                "INSERT INTO pipeline_snapshots (id, pipeline_id, organisation_id, "
-                "snapshot_version, graph_json, connector_bindings_json, "
-                "schema_pins_json, prompt_pins_json, model_backend_pins_json, "
-                "run_context_defaults) "
-                "VALUES (:id, :pid, :oid, 1, '{}'::json, '[]'::json, "
-                "'[]'::json, '[]'::json, '[]'::json, '{}'::json)",
-            ),
-            {"id": str(snapshot_id), "pid": str(test_pipeline), "oid": str(test_org)},
-        )
-    return snapshot_id
 
 
 @pytest_asyncio.fixture(scope="module")
@@ -128,7 +62,7 @@ async def test_trigger(
         await conn.execute(
             text(
                 "INSERT INTO triggers (id, organisation_id, pipeline_id, "
-                "trigger_type, active, max_concurrent_runs, config_json, created_by) "
+                "trigger_type, active, max_concurrent_runs, config_json, account_id) "
                 "VALUES (:id, :oid, :pid, 'webhook', true, 20, (:config)::json, :uid)",
             ),
             {
@@ -237,7 +171,7 @@ class TestWebhookDeduplication:
 
         run_ids = []
         for i in range(5):
-            body = f'{{"event": "push", "seq": {i}}}'.encode()
+            body = json.dumps({"event": "push", "seq": i}).encode()
             ts = _valid_timestamp()
             sig = _hmac_sign(body, hmac_secret, int(ts))
             async with factory() as session, session.begin():
@@ -488,7 +422,7 @@ class TestWebhookFullPipeline:
             await set_rls_org(session, test_org)
             await session.execute(
                 text(
-                    "INSERT INTO pipelines (id, organisation_id, name, created_by, "
+                    "INSERT INTO pipelines (id, organisation_id, name, account_id, "
                     "max_concurrent_runs, lock_wait_timeout_seconds, "
                     "node_timeout_seconds, run_context_defaults, graph_nodes_json) "
                     "VALUES (:id, :oid, :name, :uid, 10, 30, 300, '{}'::json, '[]'::json)",
@@ -500,16 +434,16 @@ class TestWebhookFullPipeline:
                     "INSERT INTO pipeline_snapshots (id, pipeline_id, organisation_id, "
                     "snapshot_version, graph_json, connector_bindings_json, "
                     "schema_pins_json, prompt_pins_json, model_backend_pins_json, "
-                    "run_context_defaults) "
+                    "run_context_defaults, config_json) "
                     "VALUES (:id, :pid, :oid, 1, '{}'::json, '[]'::json, "
-                    "'[]'::json, '[]'::json, '[]'::json, '{}'::json)",
+                    "'[]'::json, '[]'::json, '[]'::json, '{}'::json, '{}'::json)",
                 ),
                 {"id": str(snapshot_id), "pid": str(pipeline_id), "oid": str(test_org)},
             )
             await session.execute(
                 text(
                     "INSERT INTO triggers (id, organisation_id, pipeline_id, "
-                    "trigger_type, active, max_concurrent_runs, config_json, created_by) "
+                    "trigger_type, active, max_concurrent_runs, config_json, account_id) "
                     "VALUES (:id, :oid, :pid, 'webhook', true, 20, (:config)::json, :uid)",
                 ),
                 {

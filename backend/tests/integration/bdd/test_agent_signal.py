@@ -18,46 +18,21 @@ from modulo.db.rls import set_rls_org
 pytestmark = pytest.mark.integration
 
 # ---------------------------------------------------------------------------
-# Module-scoped fixtures — seed the database once
+# Fixtures — inherited top-level: test_org, test_user
+# Override org name by using test_org ID but separate org_id alias for clarity.
 # ---------------------------------------------------------------------------
 
 
 @pytest_asyncio.fixture(scope="module")
-async def org_id(db_engine: AsyncEngine) -> uuid.UUID:
-    oid = uuid.uuid4()
-    async with db_engine.connect() as conn, conn.begin():
-        await conn.execute(
-            text(
-                "INSERT INTO organisations (id, name, slug, settings_json) "
-                "VALUES (:id, :name, :slug, '{}'::json)",
-            ),
-            {
-                "id": str(oid),
-                "name": "agent-signal-int-org",
-                "slug": f"as-int-{oid.hex[:8]}",
-            },
-        )
-    return oid
+async def org_id(test_org: uuid.UUID) -> uuid.UUID:
+    """Alias for the shared test_org fixture — keeps test code readable."""
+    return test_org
 
 
 @pytest_asyncio.fixture(scope="module")
-async def user_id(db_engine: AsyncEngine, org_id: uuid.UUID) -> uuid.UUID:
-    uid = uuid.uuid4()
-    async with db_engine.connect() as conn, conn.begin():
-        await conn.execute(
-            text(
-                "INSERT INTO users (id, organisation_id, email, display_name, "
-                "org_role, auth_provider, active, password_hash) "
-                "VALUES (:id, :oid, :email, :name, 'admin', 'local', true, 'hash')",
-            ),
-            {
-                "id": str(uid),
-                "oid": str(org_id),
-                "email": "as-admin@test.local",
-                "name": "AS Admin",
-            },
-        )
-    return uid
+async def user_id(test_user: uuid.UUID) -> uuid.UUID:
+    """Alias for the shared test_user fixture."""
+    return test_user
 
 
 @pytest_asyncio.fixture(scope="module")
@@ -72,7 +47,7 @@ async def target_pipeline_id(
             text(
                 "INSERT INTO pipelines (id, organisation_id, name, visibility, "
                 "max_concurrent_runs, lock_wait_timeout_seconds, "
-                "node_timeout_seconds, created_by, run_context_defaults, "
+                "node_timeout_seconds, account_id, run_context_defaults, "
                 "graph_nodes_json) "
                 "VALUES (:id, :oid, :name, 'org', 5, 300, 300, :uid, "
                 "'{}'::json, '[]'::json)",
@@ -169,7 +144,7 @@ async def trigger_id(
             text(
                 "INSERT INTO triggers (id, organisation_id, pipeline_id, "
                 "trigger_type, active, max_concurrent_runs, config_json, "
-                "created_by) "
+                "account_id) "
                 "VALUES (:id, :oid, :pid, 'agent_signal', true, 5, "
                 ":config::json, :uid)",
             ),
@@ -288,7 +263,7 @@ class TestFireAgentSignalIntegration:
                     text(
                         "INSERT INTO triggers (id, organisation_id, pipeline_id, "
                         "trigger_type, active, max_concurrent_runs, config_json, "
-                        "created_by) "
+                        "account_id) "
                         "VALUES (:id, :oid, :pid, 'agent_signal', true, 1, "
                         ":config::json, :uid)",
                     ),
@@ -408,7 +383,7 @@ class TestFireAgentSignalIntegration:
                             "INSERT INTO pipelines (id, organisation_id, name, "
                             "visibility, max_concurrent_runs, "
                             "lock_wait_timeout_seconds, node_timeout_seconds, "
-                            "created_by, run_context_defaults, graph_nodes_json) "
+                            "account_id, run_context_defaults, graph_nodes_json) "
                             "VALUES (:id, :oid, :name, 'org', 5, 300, 300, :uid, "
                             "'{}'::json, '[]'::json)",
                         ),
@@ -445,11 +420,11 @@ class TestFireAgentSignalIntegration:
                 for pid in (pid_b, pid_c):
                     await session.execute(
                         text(
-                            "INSERT INTO triggers (id, organisation_id, "
-                            "pipeline_id, trigger_type, active, "
-                            "max_concurrent_runs, config_json, created_by) "
-                            "VALUES (:id, :oid, :pid, 'agent_signal', true, "
-                            "5, :config::json, :uid)",
+                        "INSERT INTO triggers (id, organisation_id, "
+                        "pipeline_id, trigger_type, active, "
+                        "max_concurrent_runs, config_json, account_id) "
+                        "VALUES (:id, :oid, :pid, 'agent_signal', true, "
+                        "5, :config::json, :uid)",
                         ),
                         {
                             "id": uuid.uuid4(),

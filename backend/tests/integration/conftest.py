@@ -2,7 +2,8 @@
 
 import asyncio
 import os
-from collections.abc import Generator
+import uuid
+from collections.abc import AsyncGenerator, Generator
 from pathlib import Path
 from typing import Any
 
@@ -64,7 +65,8 @@ def migrated_db_url(db_url: str) -> str:
     async def _existing_cols(conn: Any, table: str) -> set[str]:
         result = await conn.execute(
             text(
-                "SELECT column_name FROM information_schema.columns WHERE table_name = :tbl AND table_schema = 'public'",
+                "SELECT column_name FROM information_schema.columns "
+                "WHERE table_name = :tbl AND table_schema = 'public'",
             ),
             {"tbl": table},
         )
@@ -97,7 +99,7 @@ def migrated_db_url(db_url: str) -> str:
             # which breaks cross-tenant isolation tests that rely on SET LOCAL ROLE.
             for _tbl in (
                 "org_daily_run_counts",
-                "users",
+                "org_memberships",
                 "audit_events",
                 "schemas",
                 "teams",
@@ -141,3 +143,148 @@ async def db_session(db_engine: AsyncEngine) -> AsyncSession:
     async with factory() as session:
         yield session
         await session.rollback()
+
+
+# ---------------------------------------------------------------------------
+# Shared entity fixtures — session-scoped to avoid recreating for every test
+# These are inherited by all subdirectories (crud/, bdd/, feedback_manager/,
+# trigger_engine/) via pytest conftest discovery.
+# ---------------------------------------------------------------------------
+
+
+@pytest_asyncio.fixture(scope="session")
+async def test_org(db_engine: AsyncEngine) -> uuid.UUID:
+    """Committed organisation row available for the whole test session."""
+    org_id = uuid.uuid4()
+    async with db_engine.connect() as conn, conn.begin():
+        await conn.execute(
+            text(
+                "INSERT INTO organisations (id, name, slug, settings_json) "
+                "VALUES (:id, :name, :slug, '{}'::json)",
+            ),
+            {
+                "id": str(org_id),
+                "name": "Integration Test Org",
+                "slug": f"int-{org_id.hex[:8]}",
+            },
+        )
+    return org_id
+
+
+@pytest_asyncio.fixture(scope="session")
+async def test_user(db_engine: AsyncEngine, test_org: uuid.UUID) -> uuid.UUID:
+    """Committed account + org_membership row in test_org."""
+    account_id = uuid.uuid4()
+    async with db_engine.connect() as conn, conn.begin():
+        await conn.execute(
+            text(
+                "INSERT INTO accounts (id, email, display_name, password_hash, "
+                "auth_provider, active) "
+                "VALUES (:id, :email, :name, 'hash', 'local', true)",
+            ),
+            {
+                "id": str(account_id),
+                "email": "integration-test@example.com",
+                "name": "Integration Test User",
+            },
+        )
+        await conn.execute(
+            text(
+                "INSERT INTO org_memberships (id, account_id, organisation_id, role) "
+                "VALUES (:mid, :aid, :oid, 'admin')",
+            ),
+            {
+                "mid": str(uuid.uuid4()),
+                "aid": str(account_id),
+                "oid": str(test_org),
+            },
+        )
+    return account_id
+
+
+@pytest_asyncio.fixture
+async def rls_session(db_engine: AsyncEngine, test_org: uuid.UUID) -> AsyncGenerator[AsyncSession, None]:
+    """AsyncSession with RLS set to test_org; all ORM changes are rolled back."""
+    factory = async_sessionmaker(db_engine, expire_on_commit=False)
+    async with factory() as session:
+        await session.execute(text("SELECT 1"))
+        from modulo.db.rls import set_rls_org
+
+        await set_rls_org(session, test_org)
+        yield session
+        await session.rollback()
+
+
+@pytest_asyncio.fixture(scope="session")
+async def test_pipeline(
+    db_engine: AsyncEngine,
+    test_org: uuid.UUID,
+    test_user: uuid.UUID,
+) -> uuid.UUID:
+    """Committed pipeline row in test_org."""
+    pipeline_id = uuid.uuid4()
+    async with db_engine.connect() as conn, conn.begin():
+        await conn.execute(
+            text(
+                "INSERT INTO pipelines (id, organisation_id, name, account_id, "
+                "max_concurrent_runs, lock_wait_timeout_seconds, node_timeout_seconds, "
+                "run_context_defaults, graph_nodes_json) "
+                "VALUES (:id, :oid, :name, :uid, 10, 30, 300, '{}'::json, '[]'::json)",
+            ),
+            {
+                "id": str(pipeline_id),
+                "oid": str(test_org),
+                "name": "Integration Test Pipeline",
+                "uid": str(test_user),
+            },
+        )
+    return pipeline_id
+
+
+@pytest_asyncio.fixture(scope="session")
+async def test_snapshot(
+    db_engine: AsyncEngine,
+    test_org: uuid.UUID,
+    test_pipeline: uuid.UUID,
+) -> uuid.UUID:
+    """Committed pipeline_snapshot row in test_org."""
+    snapshot_id = uuid.uuid4()
+    async with db_engine.connect() as conn, conn.begin():
+        await conn.execute(
+            text(
+                "INSERT INTO pipeline_snapshots (id, pipeline_id, organisation_id, "
+                "snapshot_version, graph_json, connector_bindings_json, "
+                "schema_pins_json, prompt_pins_json, model_backend_pins_json, "
+                "run_context_defaults, config_json) "
+                "VALUES (:id, :pid, :oid, 1, '{}'::json, '[]'::json, "
+                "'[]'::json, '[]'::json, '[]'::json, '{}'::json, '{}'::json)",
+            ),
+            {"id": str(snapshot_id), "pid": str(test_pipeline), "oid": str(test_org)},
+        )
+    return snapshot_id
+
+
+@pytest_asyncio.fixture(scope="session")
+async def test_trigger(
+    db_engine: AsyncEngine,
+    test_org: uuid.UUID,
+    test_pipeline: uuid.UUID,
+    test_user: uuid.UUID,
+) -> uuid.UUID:
+    """Committed trigger row (webhook type) in test_org."""
+    trigger_id = uuid.uuid4()
+    async with db_engine.connect() as conn, conn.begin():
+        await conn.execute(
+            text(
+                "INSERT INTO triggers (id, organisation_id, pipeline_id, "
+                "trigger_type, active, max_concurrent_runs, config_json, account_id) "
+                "VALUES (:id, :oid, :pid, 'webhook', true, 5, '{}'::json, :uid)",
+            ),
+            {
+                "id": str(trigger_id),
+                "oid": str(test_org),
+                "pid": str(test_pipeline),
+                "uid": str(test_user),
+            },
+        )
+    return trigger_id

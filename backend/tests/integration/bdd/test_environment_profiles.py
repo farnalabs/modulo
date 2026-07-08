@@ -28,7 +28,9 @@ pytestmark = pytest.mark.integration
 
 
 # ---------------------------------------------------------------------------
-# Fixtures - seed orgs, users, test role
+# Fixtures — seed orgs, users, test role
+# These use separate org IDs (not the shared test_org) to test cross-tenant
+# isolation. Users are created via accounts + org_memberships.
 # ---------------------------------------------------------------------------
 
 
@@ -40,7 +42,7 @@ async def rls_role(db_engine: AsyncEngine) -> str:
         await conn.execute(text(f'GRANT ALL ON ALL TABLES IN SCHEMA public TO "{role}"'))
         await conn.execute(text(f'GRANT ALL ON ALL SEQUENCES IN SCHEMA public TO "{role}"'))
         await conn.execute(text(f'GRANT USAGE ON SCHEMA public TO "{role}"'))
-        for tbl in ("environment_profiles", "workspace_leases", "organisations", "users", "runs", "agents"):
+        for tbl in ("environment_profiles", "workspace_leases", "organisations", "org_memberships", "runs", "agents"):
             await conn.execute(text(f"ALTER TABLE {tbl} FORCE ROW LEVEL SECURITY"))
         await conn.execute(text("COMMIT"))
     yield role
@@ -80,17 +82,24 @@ async def org_b(db_engine: AsyncEngine) -> uuid.UUID:
 
 @pytest_asyncio.fixture(scope="module")
 async def user_a(db_engine: AsyncEngine, org_a: uuid.UUID) -> uuid.UUID:
-    user_id = uuid.uuid4()
+    account_id = uuid.uuid4()
     async with db_engine.connect() as conn, conn.begin():
         await conn.execute(
             text(
-                "INSERT INTO users (id, organisation_id, email, display_name, "
-                "org_role, auth_provider, active, password_hash) "
-                "VALUES (:id, :oid, :email, :name, 'admin', 'local', true, 'hash')",
+                "INSERT INTO accounts (id, email, display_name, password_hash, "
+                "auth_provider, active) "
+                "VALUES (:id, :email, :name, 'hash', 'local', true)",
             ),
-            {"id": str(user_id), "oid": str(org_a), "email": "admin-a@test.local", "name": "Admin A"},
+            {"id": str(account_id), "email": "admin-a@test.local", "name": "Admin A"},
         )
-    return user_id
+        await conn.execute(
+            text(
+                "INSERT INTO org_memberships (id, account_id, organisation_id, role) "
+                "VALUES (:mid, :aid, :oid, 'admin')",
+            ),
+            {"mid": str(uuid.uuid4()), "aid": str(account_id), "oid": str(org_a)},
+        )
+    return account_id
 
 
 @pytest_asyncio.fixture(scope="module")
@@ -161,7 +170,7 @@ class TestCreateProfileRoundTrip:
         assert fetched.egress_policy == "deny_all"
         assert fetched.timeout_seconds == 7200
         assert fetched.is_active is True
-        assert fetched.created_by == user_a
+        assert fetched.account_id == user_a
 
     async def test_list_profiles_returns_seeded(
         self,
