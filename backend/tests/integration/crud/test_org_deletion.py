@@ -14,7 +14,6 @@ from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker
 
 pytestmark = [
     pytest.mark.integration,
-    pytest.mark.skip(reason="awaiting-implementation — org deletion test fixtures need schema alignment"),
 ]
 
 
@@ -35,22 +34,28 @@ async def _create_org(db_engine: AsyncEngine, suffix: str = "") -> uuid.UUID:
 
 
 async def _create_user(db_engine: AsyncEngine, org_id: uuid.UUID, email: str) -> uuid.UUID:
-    user_id = uuid.uuid4()
+    account_id = uuid.uuid4()
     async with db_engine.connect() as conn, conn.begin():
         await conn.execute(
             text(
-                "INSERT INTO users (id, organisation_id, email, display_name, "
-                "org_role, auth_provider, active) "
-                "VALUES (:id, :org_id, :email, :name, 'admin', 'local', true)",
+                "INSERT INTO accounts (id, email, display_name, password_hash, "
+                "auth_provider, active) "
+                "VALUES (:id, :email, :name, 'hash', 'local', true)",
             ),
             {
-                "id": str(user_id),
-                "org_id": str(org_id),
+                "id": str(account_id),
                 "email": email,
                 "name": email.split("@", maxsplit=1)[0],
             },
         )
-    return user_id
+        await conn.execute(
+            text(
+                "INSERT INTO org_memberships (id, account_id, organisation_id, role) "
+                "VALUES (:mid, :aid, :oid, 'admin')",
+            ),
+            {"mid": str(uuid.uuid4()), "aid": str(account_id), "oid": str(org_id)},
+        )
+    return account_id
 
 
 async def _create_pipeline(db_engine: AsyncEngine, org_id: uuid.UUID, name: str) -> uuid.UUID:
@@ -60,8 +65,8 @@ async def _create_pipeline(db_engine: AsyncEngine, org_id: uuid.UUID, name: str)
             text(
                 "INSERT INTO pipelines (id, organisation_id, name, slug, "
                 "visibility, max_concurrent_runs, lock_wait_timeout_seconds, "
-                "state_graph_json) "
-                "VALUES (:id, :org_id, :name, :slug, 'org', 1, 30, '{}'::json)",
+                "run_context_defaults, graph_nodes_json) "
+                "VALUES (:id, :org_id, :name, :slug, 'org', 1, 30, '{}'::json, '[]'::json)",
             ),
             {
                 "id": str(pid),

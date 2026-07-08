@@ -236,22 +236,22 @@ async def _create_seed_run(
     snapshot_id = uuid.uuid4()
     await session.execute(
         text(
-            "INSERT INTO pipelines (id, organisation_id, name, created_by, run_context_defaults) "
-            "VALUES (:id, :org_id, :name, :user_id, '{}'::json)",
+            "INSERT INTO pipelines (id, organisation_id, name, account_id, run_context_defaults, graph_nodes_json) "
+            "VALUES (:id, :org_id, :name, :uid, '{}'::json, '[]'::json)",
         ),
         {
             "id": str(pipeline_id),
             "org_id": str(org_id),
             "name": "Feedback Test Pipeline",
-            "user_id": str(user_id),
+            "uid": str(user_id),
         },
     )
     await session.execute(
         text(
             "INSERT INTO pipeline_snapshots (id, pipeline_id, organisation_id, snapshot_version, graph_json, "
-            "  config_json, created_by, connector_bindings_json, schema_pins_json, "
+            "  config_json, account_id, connector_bindings_json, schema_pins_json, "
             "  prompt_pins_json, model_backend_pins_json, run_context_defaults) "
-            "VALUES (:id, :pipeline_id, :org_id, 1, :graph, :config, :user_id, "
+            "VALUES (:id, :pipeline_id, :org_id, 1, :graph, :config, :uid, "
             "'[]'::json, '[]'::json, '[]'::json, '[]'::json, '{}'::json)",
         ),
         {
@@ -260,26 +260,28 @@ async def _create_seed_run(
             "org_id": str(org_id),
             "graph": '{"nodes": [], "edges": []}',
             "config": "{}",
-            "user_id": str(user_id),
+            "uid": str(user_id),
         },
     )
     await session.execute(
         text(
             "INSERT INTO runs (id, organisation_id, pipeline_id, snapshot_id, "
-            "  trigger_type, status, input_hash, langgraph_thread_id, created_by) "
+            "  trigger_type, status, input_hash, langgraph_thread_id, account_id, run_number) "
             "VALUES (:id, :org_id, :pipeline_id, :snapshot_id, "
-            "  :trigger_type, :status, :input_hash, :thread_id, :created_by)",
+            "  :trigger_type, :status, :input_hash, :thread_id, :uid, "
+            "  (SELECT COALESCE(MAX(run_number), 0) + 1 FROM runs WHERE organisation_id = :org_id2))",
         ),
         {
             "id": str(run_id),
             "org_id": str(org_id),
+            "org_id2": str(org_id),
             "pipeline_id": str(pipeline_id),
             "snapshot_id": str(snapshot_id),
             "trigger_type": "manual",
             "status": "failed",
             "input_hash": "abc123",
             "thread_id": thread_id,
-            "created_by": str(user_id),
+            "uid": str(user_id),
         },
     )
     return run_id

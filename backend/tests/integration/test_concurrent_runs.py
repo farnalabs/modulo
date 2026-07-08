@@ -14,7 +14,6 @@ import time
 import uuid
 
 import pytest
-import pytest_asyncio
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker
 
@@ -25,97 +24,8 @@ pytestmark = pytest.mark.integration
 
 
 # ---------------------------------------------------------------------------
-# Fixtures
-# ---------------------------------------------------------------------------
-
-
-@pytest_asyncio.fixture(scope="module")
-async def test_org(db_engine: AsyncEngine) -> uuid.UUID:
-    org_id = uuid.uuid4()
-    async with db_engine.connect() as conn, conn.begin():
-        await conn.execute(
-            text(
-                "INSERT INTO organisations (id, name, slug, settings_json) VALUES (:id, :name, :slug, '{}'::json)",
-            ),
-            {"id": str(org_id), "name": "Concurrent Runs Org", "slug": f"conc-{org_id.hex[:8]}"},
-        )
-    return org_id
-
-
-@pytest_asyncio.fixture(scope="module")
-async def test_user(db_engine: AsyncEngine, test_org: uuid.UUID) -> uuid.UUID:
-    user_id = uuid.uuid4()
-    async with db_engine.connect() as conn, conn.begin():
-        await conn.execute(
-            text(
-                "INSERT INTO users (id, organisation_id, email, display_name, "
-                "org_role, auth_provider, active, password_hash) "
-                "VALUES (:id, :oid, :email, :name, 'admin', 'local', true, 'hash')",
-            ),
-            {
-                "id": str(user_id),
-                "oid": str(test_org),
-                "email": "concurrent-test@example.com",
-                "name": "Concurrent Test User",
-            },
-        )
-    return user_id
-
-
-@pytest_asyncio.fixture(scope="module")
-async def test_pipeline(db_engine: AsyncEngine, test_org: uuid.UUID, test_user: uuid.UUID) -> uuid.UUID:
-    pipeline_id = uuid.uuid4()
-    async with db_engine.connect() as conn, conn.begin():
-        await conn.execute(
-            text(
-                "INSERT INTO pipelines (id, organisation_id, name, created_by, "
-                "max_concurrent_runs, lock_wait_timeout_seconds, node_timeout_seconds, "
-                "run_context_defaults, graph_nodes_json) "
-                "VALUES (:id, :oid, :name, :uid, 10, 30, 300, '{}'::json, '[]'::json)",
-            ),
-            {"id": str(pipeline_id), "oid": str(test_org), "name": "Concurrent Pipeline", "uid": str(test_user)},
-        )
-    return pipeline_id
-
-
-@pytest_asyncio.fixture(scope="module")
-async def test_snapshot(db_engine: AsyncEngine, test_org: uuid.UUID, test_pipeline: uuid.UUID) -> uuid.UUID:
-    snapshot_id = uuid.uuid4()
-    async with db_engine.connect() as conn, conn.begin():
-        await conn.execute(
-            text(
-                "INSERT INTO pipeline_snapshots (id, pipeline_id, organisation_id, "
-                "snapshot_version, graph_json, connector_bindings_json, "
-                "schema_pins_json, prompt_pins_json, model_backend_pins_json, "
-                "run_context_defaults) "
-                "VALUES (:id, :pid, :oid, 1, '{}'::json, '[]'::json, "
-                "'[]'::json, '[]'::json, '[]'::json, '{}'::json)",
-            ),
-            {"id": str(snapshot_id), "pid": str(test_pipeline), "oid": str(test_org)},
-        )
-    return snapshot_id
-
-
-@pytest_asyncio.fixture(scope="module")
-async def test_trigger(
-    db_engine: AsyncEngine,
-    test_org: uuid.UUID,
-    test_pipeline: uuid.UUID,
-    test_user: uuid.UUID,
-) -> uuid.UUID:
-    trigger_id = uuid.uuid4()
-    async with db_engine.connect() as conn, conn.begin():
-        await conn.execute(
-            text(
-                "INSERT INTO triggers (id, organisation_id, pipeline_id, "
-                "trigger_type, active, max_concurrent_runs, config_json, created_by) "
-                "VALUES (:id, :oid, :pid, 'webhook', true, 5, '{}'::json, :uid)",
-            ),
-            {"id": str(trigger_id), "oid": str(test_org), "pid": str(test_pipeline), "uid": str(test_user)},
-        )
-    return trigger_id
-
-
+# Fixtures — inherited from top-level integration/conftest.py:
+#   test_org, test_user, test_pipeline, test_snapshot, test_trigger
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -369,7 +279,7 @@ class TestConcurrentActiveRunCounting:
             await set_rls_org(session, test_org)
             await session.execute(
                 text(
-                    "INSERT INTO pipelines (id, organisation_id, name, created_by, "
+                    "INSERT INTO pipelines (id, organisation_id, name, account_id, "
                     "max_concurrent_runs, lock_wait_timeout_seconds, "
                     "node_timeout_seconds, run_context_defaults, graph_nodes_json) "
                     "VALUES (:id, :oid, :name, :uid, 10, 30, 300, '{}'::json, '[]'::json)",
@@ -386,9 +296,9 @@ class TestConcurrentActiveRunCounting:
                     "INSERT INTO pipeline_snapshots (id, pipeline_id, organisation_id, "
                     "snapshot_version, graph_json, connector_bindings_json, "
                     "schema_pins_json, prompt_pins_json, model_backend_pins_json, "
-                    "run_context_defaults) "
+                    "run_context_defaults, config_json) "
                     "VALUES (:id, :pid, :oid, 1, '{}'::json, '[]'::json, "
-                    "'[]'::json, '[]'::json, '[]'::json, '{}'::json)",
+                    "'[]'::json, '[]'::json, '[]'::json, '{}'::json, '{}'::json)",
                 ),
                 {"id": str(snapshot_id), "pid": str(pipeline_id), "oid": str(test_org)},
             )
@@ -474,7 +384,7 @@ class TestMaxConcurrentRunsEnforcement:
             await set_rls_org(session, test_org)
             await session.execute(
                 text(
-                    "INSERT INTO pipelines (id, organisation_id, name, created_by, "
+                    "INSERT INTO pipelines (id, organisation_id, name, account_id, "
                     "max_concurrent_runs, lock_wait_timeout_seconds, "
                     "node_timeout_seconds, run_context_defaults, graph_nodes_json) "
                     "VALUES (:id, :oid, :name, :uid, 10, 30, 300, '{}'::json, '[]'::json)",
@@ -491,16 +401,16 @@ class TestMaxConcurrentRunsEnforcement:
                     "INSERT INTO pipeline_snapshots (id, pipeline_id, organisation_id, "
                     "snapshot_version, graph_json, connector_bindings_json, "
                     "schema_pins_json, prompt_pins_json, model_backend_pins_json, "
-                    "run_context_defaults) "
+                    "run_context_defaults, config_json) "
                     "VALUES (:id, :pid, :oid, 1, '{}'::json, '[]'::json, "
-                    "'[]'::json, '[]'::json, '[]'::json, '{}'::json)",
+                    "'[]'::json, '[]'::json, '[]'::json, '{}'::json, '{}'::json)",
                 ),
                 {"id": str(snapshot_id), "pid": str(pipeline_id), "oid": str(test_org)},
             )
             await session.execute(
                 text(
                     "INSERT INTO triggers (id, organisation_id, pipeline_id, "
-                    "trigger_type, active, max_concurrent_runs, config_json, created_by) "
+                    "trigger_type, active, max_concurrent_runs, config_json, account_id) "
                     "VALUES (:id, :oid, :pid, 'webhook', true, :mcr, '{}'::json, :uid)",
                 ),
                 {

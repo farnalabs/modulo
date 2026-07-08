@@ -82,7 +82,7 @@ async def _seed_pipeline(
     async with db_engine.connect() as conn, conn.begin():
         await conn.execute(
             text(
-                "INSERT INTO pipelines (id, organisation_id, name, description, created_by, "
+                "INSERT INTO pipelines (id, organisation_id, name, description, account_id, "
                 "max_concurrent_runs, lock_wait_timeout_seconds, node_timeout_seconds, "
                 "run_context_defaults, graph_nodes_json, default_autonomy_level, visibility) "
                 "VALUES (:id, :oid, :name, :desc, :uid, 5, 30, 300, "
