@@ -2,7 +2,8 @@
 id: feat-teams-sso-team-mapping
 prd: 9.4, 6.2, 9.2
 delivery-tasks: [task-nv6-sso-team-mapping]
-bdd: []
+bdd:
+  - backend/tests/bdd/features/auth/sso_team_mapping.feature
 code:
   - backend/src/modulo/auth/sso.py
   - backend/src/modulo/api/routes/admin_sso.py
@@ -11,6 +12,7 @@ code:
 unit-tests:
   - backend/tests/unit/api/test_admin_sso.py
   - backend/tests/unit/auth/test_sso.py
+  - backend/tests/unit/auth/test_sso_team_mapping_bdd.py
 depends-on: [feat-teams-team-crud, feat-auth-sso-provider-ui]
 status: covered
 ---
@@ -71,9 +73,9 @@ Group-to-team mapping from OIDC/SAML identity provider group claims to Modulo te
 - [x] XML parse failures (SAML response, IdP metadata) caught and wrapped as ValueError
 - [x] DB unavailable → ProgrammingError caught at route level → 501 Not Implemented
 - [x] SQLAlchemy errors → caught at route level → 503 Service Unavailable
-- [ ] Audit event logging failures are non-fatal (caught with log warning) — does not block SSO flow
-- [ ] Invalid group mapping entries (bad team_id UUID, missing keys) logged and skipped, not fatal
-- [ ] SAML clock skew detected and logged (5-minute tolerance) — does not block authentication
+- [x] Audit event logging failures are non-fatal (caught with log warning) — does not block SSO flow
+- [x] Invalid group mapping entries (bad team_id UUID, missing keys) logged and skipped, not fatal
+- [x] SAML clock skew detected and logged (5-minute tolerance) — does not block authentication
 
 ### Edge Cases
 - [x] OIDC token with no `email` claim falls back to `sub` claim
@@ -84,12 +86,11 @@ Group-to-team mapping from OIDC/SAML identity provider group claims to Modulo te
 - [x] SAML response with malformed base64/base64 padding → caught
 - [x] SAML response with invalid XML → caught (defusedxml)
 - [x] Duplicate SSO provider names per org → caught via `with_for_update()` + ValueError
-- [ ] OIDC `groups` claim is not a list → coerced to `[]` (groups mapping silently skipped)
-- [ ] SAML groups attribute with leading/trailing whitespace → stripped via `.strip()`
+- [x] OIDC `groups` claim is not a list → coerced to `[]` (groups mapping silently skipped)
+- [x] SAML groups attribute with leading/trailing whitespace → stripped via `.strip()`
 
 ## Known Gaps
 
-- No BDD `.feature` files exist for SSO group-to-team mapping
 - SSO provider lookup during OIDC callback uses `client_id` — no fallback if provider has empty/null `client_id`
 - `MODULO_OIDC_PROVIDERS` env var approach deprecated in favour of DB-backed admin UI — migration layer may lose group mapping config
 - No integration tests exist for the full OIDC/SAML group mapping flow (only unit tests with mocked sessions)
