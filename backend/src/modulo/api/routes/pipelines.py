@@ -74,22 +74,36 @@ class PipelineCreate(BaseModel):
     name: str = Field(min_length=1, max_length=255)
     description: str | None = Field(None, max_length=2000)
     visibility: str = Field(default="org", pattern=r"^(org|team)$")
+    owner_team_id: uuid.UUID | None = None
     max_concurrent_runs: int = Field(default=5, ge=1)
     lock_wait_timeout_seconds: int = Field(default=300, ge=1)
     node_timeout_seconds: int = Field(default=300, ge=1)
     run_context_defaults: dict[str, Any] = Field(default_factory=dict)
     default_autonomy_level: str = "manual_approval"
 
+    @model_validator(mode="after")
+    def _validate_team_visibility(self) -> "PipelineCreate":
+        if self.visibility == "team" and self.owner_team_id is None:
+            raise ValueError("owner_team_id is required when visibility is 'team'")
+        return self
+
 
 class PipelineUpdate(BaseModel):
     name: str | None = Field(None, min_length=1, max_length=255)
     description: str | None = Field(None, max_length=2000)
     visibility: str | None = Field(None, pattern=r"^(org|team)$")
+    owner_team_id: uuid.UUID | None = None
     max_concurrent_runs: int | None = Field(None, ge=1)
     lock_wait_timeout_seconds: int | None = Field(None, ge=1)
     node_timeout_seconds: int | None = Field(None, ge=1)
     run_context_defaults: dict[str, Any] | None = None
     default_autonomy_level: str | None = None
+
+    @model_validator(mode="after")
+    def _validate_team_visibility(self) -> "PipelineUpdate":
+        if self.visibility == "team" and self.owner_team_id is None:
+            raise ValueError("owner_team_id is required when visibility is 'team'")
+        return self
 
 
 class PipelineResponse(BaseModel):
@@ -104,6 +118,7 @@ class PipelineResponse(BaseModel):
     run_context_defaults: dict[str, Any]
     default_autonomy_level: str | None = None
     snapshot_count: int = 0
+    owner_team_id: uuid.UUID | None = None
     created_by: uuid.UUID = Field(validation_alias="account_id")
     created_at: datetime
     updated_at: datetime
@@ -421,6 +436,7 @@ async def create_pipeline_endpoint(
                 account_id=principal.account_id,
                 description=req.description,
                 visibility=req.visibility,
+                owner_team_id=req.owner_team_id,
                 max_concurrent_runs=req.max_concurrent_runs,
                 lock_wait_timeout_seconds=req.lock_wait_timeout_seconds,
                 node_timeout_seconds=req.node_timeout_seconds,
