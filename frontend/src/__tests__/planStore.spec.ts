@@ -141,7 +141,7 @@ describe('usePlanStore', () => {
     await store.fetchPlan()
 
     expect(store.expiresAt).toBe('2026-12-31T23:59:59Z')
-    expect(store.orgName).toBe('Acme Corp')
+    expect(store.orgId).toBe('Acme Corp')
     expect(store.currentTier).toBe('team')
   })
 })

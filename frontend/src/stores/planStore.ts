@@ -21,15 +21,10 @@ export const usePlanStore = defineStore("plan", () => {
   });
   const syncingIds = ref(new Set<string>());
   const unsubHandlers: (() => void)[] = [];
-  let hasLoadedOnce = false;
 
   const isTeam = computed(() => isAtMinimumTier("team"));
 
   function featureEnabled(name: string): boolean {
-    if (Object.keys(features.value).length === 0) {
-      if (!hasLoadedOnce) return false;
-      return features.value[name] ?? false;
-    }
     return features.value[name] ?? false;
   }
 
@@ -122,7 +117,6 @@ export const usePlanStore = defineStore("plan", () => {
 
       const combinedError = apiErrors.length > 0 ? apiErrors.join("; ") : null;
       error.value = combinedError;
-      if (!combinedError) hasLoadedOnce = true;
     } catch (e: unknown) {
       error.value = formatApiError(e);
     } finally {
@@ -165,7 +159,7 @@ export const usePlanStore = defineStore("plan", () => {
 
   async function fetchOrgFlagOverride(flagName: string): Promise<boolean | null> {
     try {
-      const { data, error: err } = await (api as any).GET(
+      const { data, error: err } = await (api.GET as any)(
         '/api/v1/admin/feature-flags/{flag_name}/org-override',
         { params: { path: { flag_name: flagName } } },
       );
@@ -179,13 +173,13 @@ export const usePlanStore = defineStore("plan", () => {
   async function setOrgFlagOverride(flagName: string, enabled: boolean | null): Promise<boolean> {
     try {
       if (enabled === null) {
-        const { error: err } = await (api as any).DELETE(
+        const { error: err } = await (api.DELETE as any)(
           '/api/v1/admin/feature-flags/{flag_name}/org-override',
           { params: { path: { flag_name: flagName } } },
         );
         if (err) return false;
       } else {
-        const { error: err } = await (api as any).PUT(
+        const { error: err } = await (api.PUT as any)(
           '/api/v1/admin/feature-flags/{flag_name}/org-override',
           {
             params: { path: { flag_name: flagName } },
@@ -209,7 +203,6 @@ export const usePlanStore = defineStore("plan", () => {
     isTeam,
     expiresAt,
     orgId,
-    orgName: orgId,
     tierLabels,
     tierRanks,
     orgOverrides,
