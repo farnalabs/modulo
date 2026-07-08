@@ -253,8 +253,6 @@ import {
 } from '../components/ui/tooltip'
 import { formatApiError } from '../lib/api/formatError'
 
-interface SavedView
-
 interface SavedView {
   id: string
   name: string

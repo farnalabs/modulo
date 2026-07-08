@@ -179,8 +179,6 @@ import {
 } from '../components/ui/tooltip'
 import { formatApiError } from '../lib/api/formatError'
 
-interface TeamRunStatus
-
 interface TeamRunStatus {
   running: number
   awaiting_human: number
