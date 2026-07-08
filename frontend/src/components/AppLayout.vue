@@ -119,6 +119,21 @@
       :class="mobileOpen ? 'translate-x-0' : '-translate-x-full'"
       @keydown.escape="mobileOpen = false"
     >
+      <router-link
+        to="/admin/my-profile"
+        class="flex items-center gap-2 mb-4 px-1 py-1.5 rounded-md hover:bg-muted transition-colors"
+      >
+        <div
+          class="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-gradient-to-br from-primary to-teal-600 text-xs font-bold text-primary-foreground"
+          :title="userEmail"
+        >
+          {{ userInitial }}
+        </div>
+        <span class="text-sm text-muted-foreground truncate hover:text-foreground transition-colors flex-1 min-w-0">
+          {{ userEmail }}
+        </span>
+      </router-link>
+
       <ViewModeToggle
         :model-value="viewMode"
         :options="viewModeOptions"
@@ -132,8 +147,6 @@
       />
 
       <SidebarFooter
-        :user-email="userEmail"
-        :user-initial="userInitial"
         :is-light="isLight"
         @toggle-theme="toggleTheme"
         @logout="logout"
