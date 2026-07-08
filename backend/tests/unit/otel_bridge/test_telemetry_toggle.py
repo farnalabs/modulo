@@ -5,6 +5,7 @@ exporters are registered, enabling data residency compliance.
 """
 
 import os
+from collections.abc import Generator
 from unittest.mock import patch
 
 import pytest
@@ -15,7 +16,7 @@ from modulo.otel_bridge.export import setup_otel, shutdown_otel
 
 
 @pytest.fixture(autouse=True)
-def reset_otel():
+def reset_otel() -> Generator[None, None, None]:
     """Clean up between tests to avoid cross-test pollution."""
     yield
     shutdown_otel()
