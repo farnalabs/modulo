@@ -39,11 +39,6 @@ def user_is_member(username: str, team_name: str, ctx) -> None:
     ctx.setdefault("members", []).append({"username": username})
 
 
-@given(parsers.parse('I am authenticated as a viewer in org "{org}"'))
-def team_viewer_auth(org: str, ctx) -> None:
-    ctx["org_role"] = "viewer"
-
-
 @when(parsers.parse('I delete the team "{team_identifier}"'))
 def delete_team_endpoint(team_identifier: str, request, client, ctx) -> None:
     from fastapi import HTTPException

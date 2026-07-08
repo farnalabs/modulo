@@ -54,16 +54,6 @@ def connector_owned_by_team(name: str, team_name: str, visibility: str, ctx) -> 
     }
 
 
-@given(parsers.parse('I am authenticated as an admin in org "{org}"'))
-def auth_admin(org: str) -> None:
-    pass
-
-
-@given(parsers.parse('I am authenticated as a viewer in org "{org}"'))
-def auth_viewer(org: str, ctx) -> None:
-    ctx["org_role"] = "viewer"
-
-
 @when(parsers.parse("I request the pipeline list"))
 def request_pipeline_list(request, ctx) -> None:
     pipelines = list(ctx["pipelines"].values())

@@ -25,16 +25,6 @@ def ctx():
     }
 
 
-@given(parsers.parse('I am authenticated as an admin in org "{org}"'))
-def auth_admin(org: str) -> None:
-    pass
-
-
-@given(parsers.parse('I am authenticated as a viewer in org "{org}"'))
-def auth_viewer(org: str, ctx) -> None:
-    ctx["org_role"] = "viewer"
-
-
 @given(parsers.parse('a team "{team_name}" exists'))
 def team_exists(team_name: str, ctx) -> None:
     ctx["teams"][team_name] = {"id": str(uuid.uuid4()), "name": team_name}

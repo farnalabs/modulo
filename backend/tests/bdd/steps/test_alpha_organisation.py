@@ -47,7 +47,7 @@ def get_pipelines(client, request):
     request.node._resp = resp
 
 
-@when(parsers.parse('I GET /api/pipelines/{"name"}'))
+@when(parsers.parse('I GET /api/pipelines/{name}'))
 def get_pipeline_by_name(name: str, client, request):
     with (
         patch("modulo.core.pipeline_engine.run_crud.set_rls_org"),

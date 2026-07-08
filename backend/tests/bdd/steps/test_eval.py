@@ -221,23 +221,6 @@ try:
 except (FileNotFoundError, OSError):
     pass
 
-# ============================================================================
-# eval/eval_suite_crud.feature  —  5 scenarios
-# ============================================================================
-try:
-    scenarios("../features/eval/eval_suite_crud.feature")
-except (FileNotFoundError, OSError):
-    pass
-
-# ============================================================================
-# eval/feedback_system.feature  —  5 scenarios
-# ============================================================================
-try:
-    scenarios("../features/eval/feedback_system.feature")
-except (FileNotFoundError, OSError):
-    pass
-
-
 @given("an eval suite with multiple scorer types")
 def step_eval_suite_multiple_scorers(ctx):
     ctx["eval_scorer_type"] = None

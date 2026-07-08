@@ -35,11 +35,6 @@ def patches():
             pass
 
 
-@given(parsers.parse('I am authenticated as an admin in org "{org}"'))
-def auth_admin(org: str) -> None:
-    pass
-
-
 @given(parsers.parse('I am authenticated as a team operator of team "{team_name}"'))
 def auth_team_operator(team_name: str, ctx) -> None:
     ctx["auth_role"] = "team_operator"
