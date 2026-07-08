@@ -1,6 +1,6 @@
+from __future__ import annotations
 """Redis-backed event broker for pub/sub across multiple workers."""
 
-from __future__ import annotations
 
 import asyncio
 import json

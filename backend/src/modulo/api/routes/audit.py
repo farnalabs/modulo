@@ -1,6 +1,6 @@
+from __future__ import annotations
 """Audit chain verification, browsing, and export API."""
 
-from __future__ import annotations
 
 import logging
 from uuid import UUID as _UUID

@@ -221,8 +221,6 @@ import BackLink from '../components/BackLink.vue'
 import { formatApiError } from '../lib/api/formatError'
 
 const route = useRoute()
-
-const route = useRoute()
 const router = useRouter()
 const errorId = route.params.id as string
 

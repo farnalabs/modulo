@@ -1,6 +1,6 @@
+from __future__ import annotations
 """API routes for error forwarder configuration — list, configure, test."""
 
-from __future__ import annotations
 
 import asyncio
 import logging

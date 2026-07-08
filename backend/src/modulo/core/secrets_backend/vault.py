@@ -1,3 +1,4 @@
+from __future__ import annotations
 """VaultSecretsBackend — HashiCorp Vault KV v2 backend.
 
 Requires the *hvac* package (optional dependency). If *hvac* is not installed
@@ -12,7 +13,6 @@ Configured via environment variables:
 - ``VAULT_PATH_PREFIX`` — path prefix (default ``"modulo/secrets"``).
 """
 
-from __future__ import annotations
 
 import asyncio
 import logging

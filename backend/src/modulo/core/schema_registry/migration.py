@@ -1,6 +1,6 @@
+from __future__ import annotations
 """Schema migration — detect changes between schema versions and transform data."""
 
-from __future__ import annotations
 
 import logging
 import threading

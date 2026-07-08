@@ -1,6 +1,6 @@
+from __future__ import annotations
 """Admin API endpoints for Fernet key rotation."""
 
-from __future__ import annotations
 
 import logging
 import uuid

@@ -1,10 +1,10 @@
+from __future__ import annotations
 """Eval quality regression detection.
 
 Compares pass rates between a recent window and a baseline window
 for each eval definition, flagging significant drops.
 """
 
-from __future__ import annotations
 
 import logging
 from dataclasses import dataclass, field

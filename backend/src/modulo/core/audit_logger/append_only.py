@@ -1,3 +1,4 @@
+from __future__ import annotations
 """Application-layer append-only guard for AuditEvent and ErrorEvent records.
 
 Provides defense-in-depth via SQLAlchemy ORM event listeners that prevent
@@ -9,7 +10,6 @@ Usage:
     register_append_only_guard()
 """
 
-from __future__ import annotations
 
 import logging
 import threading
