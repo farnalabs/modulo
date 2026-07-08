@@ -1,8 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime
-
-from sqlalchemy import Boolean, CheckConstraint, DateTime, Integer, String, Text, func
+from sqlalchemy import Boolean, CheckConstraint, Integer, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from modulo.db.models.base import OrgScoped
@@ -24,12 +22,3 @@ class ErrorNotificationRule(OrgScoped):
     action_type: Mapped[str] = mapped_column(String(20), nullable=False, server_default="in_app")
     webhook_url: Mapped[str | None] = mapped_column(Text)
     cooldown_seconds: Mapped[int] = mapped_column(Integer, nullable=False, server_default="300")
-    created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default=func.current_timestamp(), nullable=False
-    )
-    updated_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True),
-        server_default=func.current_timestamp(),
-        onupdate=func.current_timestamp(),
-        nullable=False,
-    )

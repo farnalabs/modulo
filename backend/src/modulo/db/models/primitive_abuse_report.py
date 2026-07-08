@@ -3,7 +3,7 @@
 import uuid
 from datetime import datetime
 
-from sqlalchemy import CheckConstraint, DateTime, ForeignKey, String, Uuid, func
+from sqlalchemy import CheckConstraint, DateTime, ForeignKey, String, Uuid
 from sqlalchemy.orm import Mapped, mapped_column
 
 from modulo.db.models.base import OrgScoped
@@ -38,9 +38,6 @@ class PrimitiveAbuseReport(OrgScoped):
     )
     reason: Mapped[str] = mapped_column(String(500), nullable=False)
     status: Mapped[str] = mapped_column(String(20), nullable=False, server_default="pending")
-    created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), nullable=False, server_default=func.current_timestamp()
-    )
     reviewed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     reviewer_account_id: Mapped[uuid.UUID | None] = mapped_column(
         Uuid(),

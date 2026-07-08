@@ -54,9 +54,8 @@ class Node(OrgScoped):
     children: Mapped[list[Node]] = relationship(
         "Node",
         back_populates="parent",
-        cascade="all, delete-orphan",
-        passive_deletes=True,
         lazy="selectin",
+        order_by="Node.name",
     )
     parent: Mapped[Node | None] = relationship(
         "Node",

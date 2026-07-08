@@ -1,7 +1,7 @@
 import uuid
 from datetime import datetime
 
-from sqlalchemy import DateTime, ForeignKey, Integer, String, Uuid
+from sqlalchemy import DateTime, ForeignKey, Integer, LargeBinary, String, Uuid
 from sqlalchemy.orm import Mapped, mapped_column
 
 from modulo.db.models.base import OrgScoped
@@ -23,4 +23,4 @@ class NotificationDeliveryLog(OrgScoped):
     last_error: Mapped[str | None] = mapped_column(String(2000))
     failed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     response_body: Mapped[str | None] = mapped_column(String(2000), nullable=True)
-    payload_ciphertext: Mapped[bytes | None] = mapped_column(nullable=True)
+    payload_ciphertext: Mapped[bytes | None] = mapped_column(LargeBinary, nullable=True)

@@ -1,6 +1,6 @@
 import uuid
 
-from sqlalchemy import CheckConstraint, ForeignKey, Text, Uuid
+from sqlalchemy import ForeignKey, Text, Uuid
 from sqlalchemy.orm import Mapped, mapped_column
 
 from modulo.db.models.base import OrgScoped
@@ -8,7 +8,7 @@ from modulo.db.models.base import OrgScoped
 
 class PrimitiveRating(OrgScoped):
     __tablename__ = "primitive_ratings"
-    __table_args__ = (CheckConstraint("thumbs_up IS NOT NULL", name="ck_primitive_ratings_thumbs"),)
+    __table_args__ = ()
 
     primitive_id: Mapped[uuid.UUID] = mapped_column(
         Uuid(),
