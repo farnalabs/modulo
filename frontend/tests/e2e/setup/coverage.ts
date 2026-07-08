@@ -2,54 +2,53 @@ import { existsSync, mkdirSync, writeFileSync } from 'node:fs'
 import { join, resolve } from 'node:path'
 import type { Page } from '@playwright/test'
 
+const FRONTEND_DIR = resolve(__dirname, '../../..')
 const COVERAGE_DIR = resolve(__dirname, '../../../.coverage/e2e')
-const REPORT_DIR = join(COVERAGE_DIR, 'report')
 
-interface CoverageEntry {
-  url: string
-  coveredBytes: number
-  totalBytes: number
+function viteUrlToPath(url: string): string {
+  try {
+    const pathname = new URL(url).pathname.replace(/^\//, '')
+    return join(FRONTEND_DIR, pathname)
+  } catch {
+    return url
+  }
 }
-
-const allEntries: CoverageEntry[] = []
 
 export async function startCoverage(page: Page): Promise<void> {
-  await page.coverage.startJSCoverage({ resetOnNavigation: true })
-}
-
-export async function stopCoverage(page: Page): Promise<void> {
   try {
-    const entries = await page.coverage.stopJSCoverage()
-    for (const entry of entries) {
-      if (!entry.url.includes('/src/') || entry.url.includes('node_modules')) continue
-      let coveredBytes = 0
-      for (const range of entry.ranges) {
-        coveredBytes += range.end - range.start
-      }
-      allEntries.push({
-        url: entry.url,
-        coveredBytes,
-        totalBytes: entry.source.length,
-      })
-    }
+    const cdp = await page.context().newCDPSession(page)
+    await cdp.send('Profiler.enable')
+    await cdp.send('Profiler.startPreciseCoverage', { callCount: true, detailed: true })
+    ;(page as any).__cdpSession = cdp
   } catch {
   }
 }
 
-export async function generateCoverageReport(): Promise<string> {
-  if (allEntries.length === 0) return '0.0'
+export async function stopCoverage(page: Page): Promise<void> {
+  try {
+    const cdp = (page as any).__cdpSession
+    if (!cdp) return
+    const result: { result: { scriptId: string; url: string; functions: any[] }[] } =
+      await cdp.send('Profiler.takePreciseCoverage')
+    await cdp.send('Profiler.stopPreciseCoverage')
+    await cdp.detach()
 
-  if (!existsSync(REPORT_DIR)) mkdirSync(REPORT_DIR, { recursive: true })
+    const coverageData: any[] = []
+    for (const entry of result.result) {
+      if (!entry.url.includes('/src/') || entry.url.includes('node_modules')) continue
+      coverageData.push({
+        path: viteUrlToPath(entry.url),
+        functions: entry.functions.map((f: any) => ({
+          functionName: f.functionName,
+          ranges: (f.ranges || []).map((r: any) => ({ start: r.startOffset, end: r.endOffset, count: r.count ?? 0 })),
+          isBlockCoverage: f.isBlockCoverage,
+        })),
+      })
+    }
 
-  const totalBytes = allEntries.reduce((s, e) => s + e.totalBytes, 0)
-  const coveredBytes = allEntries.reduce((s, e) => s + e.coveredBytes, 0)
-  const pct = totalBytes > 0 ? ((coveredBytes / totalBytes) * 100).toFixed(1) : '0.0'
-
-  const report = {
-    summary: { coveredBytes, totalBytes, coveragePct: parseFloat(pct) },
-    files: allEntries.sort((a, b) => a.coveredBytes / a.totalBytes - b.coveredBytes / b.totalBytes),
+    const coverageFile = join(COVERAGE_DIR, `coverage-${Date.now()}-${Math.random().toString(36).slice(2)}.json`)
+    if (!existsSync(COVERAGE_DIR)) mkdirSync(COVERAGE_DIR, { recursive: true })
+    writeFileSync(coverageFile, JSON.stringify(coverageData))
+  } catch {
   }
-  writeFileSync(join(REPORT_DIR, 'coverage-report.json'), JSON.stringify(report, null, 2))
-
-  return pct
 }
