@@ -2,7 +2,7 @@ import { existsSync, mkdirSync, writeFileSync } from 'node:fs'
 import { join, resolve } from 'node:path'
 import type { Page } from '@playwright/test'
 
-const COVERAGE_DIR = resolve(import.meta.dirname!, '../../../.coverage/e2e')
+const COVERAGE_DIR = resolve(__dirname, '../../../.coverage/e2e')
 const REPORT_DIR = join(COVERAGE_DIR, 'report')
 
 let masterCoverage: Record<string, unknown> = {}
