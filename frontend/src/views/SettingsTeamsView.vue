@@ -1,6 +1,5 @@
 <template>
   <FeatureGate feature-name="team_rbac" required-tier="team" show-disabled>
-
     <div class="mx-auto max-w-4xl space-y-8 p-6">
     <header class="flex items-center justify-between">
       <div>
@@ -17,7 +16,6 @@
     </header>
 
     <LoadingSpinner v-if="loading" />
-
     <ErrorAlert v-else-if="error" :message="error" />
 
     <div v-if="!loading && !error">
@@ -42,22 +40,13 @@
               data-testid="settings-teams-create-description"
               class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
               placeholder="Optional description"
-            />
+            ></textarea>
           </div>
           <div class="flex items-center gap-2">
-            <button
-              :disabled="!createName.trim() || creatingTeam"
-              data-testid="settings-teams-create-submit"
-              class="rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
-              @click="createTeam"
-            >
+            <button :disabled="!createName.trim() || creatingTeam" data-testid="settings-teams-create-submit" class="rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90 disabled:opacity-50" @click="createTeam">
               {{ creatingTeam ? 'Creating...' : 'Create' }}
             </button>
-            <button
-              class="rounded-lg border border-input bg-background px-4 py-2 text-sm font-medium hover:bg-accent"
-              data-testid="settings-teams-create-cancel"
-              @click="cancelCreate"
-            >
+            <button class="rounded-lg border border-input bg-background px-4 py-2 text-sm font-medium hover:bg-accent" data-testid="settings-teams-create-cancel" @click="cancelCreate">
               Cancel
             </button>
           </div>
@@ -72,30 +61,10 @@
       </div>
 
       <div class="space-y-3">
-        <div
-          v-for="team in teams"
-          :key="team.id"
-          class="card"
-        >
-          <div
-            class="flex cursor-pointer items-center justify-between p-4"
-            :class="{ 'border-b': expandedTeamId === team.id }"
-            role="button"
-            tabindex="0"
-            @click="toggleExpand(team.id)"
-            @keydown.enter="toggleExpand(team.id)"
-            @keydown.space.prevent="toggleExpand(team.id)"
-          >
+        <div v-for="team in teams" :key="team.id" class="card">
+          <div class="flex cursor-pointer items-center justify-between p-4" :class="{ 'border-b': expandedTeamId === team.id }" role="button" tabindex="0" @click="toggleExpand(team.id)" @keydown.enter="toggleExpand(team.id)" @keydown.space.prevent="toggleExpand(team.id)">
             <div class="flex items-center gap-3">
-              <svg
-                class="h-4 w-4 text-muted-foreground transition-transform"
-                :class="{ 'rotate-90': expandedTeamId === team.id }"
-                xmlns="http://www.w3.org/2000/svg"
-                viewBox="0 0 24 24"
-                fill="none"
-                stroke="currentColor"
-                stroke-width="2"
-              >
+              <svg class="h-4 w-4 text-muted-foreground transition-transform" :class="{ 'rotate-90': expandedTeamId === team.id }" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                 <path d="m9 18 6-6-6-6" />
               </svg>
               <div>
@@ -105,24 +74,12 @@
             </div>
             <div class="flex items-center gap-3">
               <span class="text-sm text-muted-foreground">{{ team.member_count }} member{{ team.member_count !== 1 ? 's' : '' }}</span>
-              <button
-                class="rounded p-1 text-muted-foreground hover:bg-accent"
-                data-testid="settings-teams-rename"
-                :aria-label="'Rename team'"
-                title="Rename team"
-                @click.stop="startRename(team)"
-              >
+              <button class="rounded p-1 text-muted-foreground hover:bg-accent" data-testid="settings-teams-rename" :aria-label="'Rename team'" title="Rename team" @click.stop="startRename(team)">
                 <svg class="h-4 w-4" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                   <path d="M17 3a2.85 2.85 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z" />
                 </svg>
               </button>
-              <button
-                class="rounded p-1 text-destructive hover:bg-destructive/10"
-                data-testid="settings-teams-delete"
-                :aria-label="'Delete team'"
-                title="Delete team"
-                @click.stop="confirmDelete(team)"
-              >
+              <button class="rounded p-1 text-destructive hover:bg-destructive/10" data-testid="settings-teams-delete" :aria-label="'Delete team'" title="Delete team" @click.stop="confirmDelete(team)">
                 <svg class="h-4 w-4" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                   <path d="M3 6h18" /><path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6" /><path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2" />
                 </svg>
@@ -132,26 +89,11 @@
 
           <div v-if="expandedTeamId === team.id" class="p-4">
             <div v-if="renameTeamId === team.id" class="mb-4 flex items-center gap-2">
-              <input
-                v-model="renameName"
-                type="text"
-                data-testid="settings-teams-rename-name"
-                class="flex-1 rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-                @keyup.enter="saveRename"
-              />
-              <button
-                :disabled="!renameName.trim() || renamingTeam"
-                data-testid="settings-teams-rename-save"
-                class="rounded-lg bg-primary px-3 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
-                @click="saveRename"
-              >
+              <input v-model="renameName" type="text" data-testid="settings-teams-rename-name" class="flex-1 rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring" @keyup.enter="saveRename" />
+              <button :disabled="!renameName.trim() || renamingTeam" data-testid="settings-teams-rename-save" class="rounded-lg bg-primary px-3 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90 disabled:opacity-50" @click="saveRename">
                 {{ renamingTeam ? 'Saving...' : 'Save' }}
               </button>
-              <button
-                class="rounded-lg border border-input bg-background px-3 py-2 text-sm font-medium hover:bg-accent"
-                data-testid="settings-teams-rename-cancel"
-                @click="cancelRename"
-              >
+              <button class="rounded-lg border border-input bg-background px-3 py-2 text-sm font-medium hover:bg-accent" data-testid="settings-teams-rename-cancel" @click="cancelRename">
                 Cancel
               </button>
             </div>
@@ -160,40 +102,29 @@
               <p class="text-sm font-medium text-destructive">Delete "{{ team.name }}"?</p>
               <p class="mt-1 text-sm text-destructive/80">This action cannot be undone.</p>
               <div class="mt-3 flex items-center gap-2">
-                <button
-                  :disabled="deletingTeam"
-                  data-testid="settings-teams-delete-confirm"
-                  class="rounded-lg bg-destructive px-4 py-2 text-sm font-medium text-destructive-foreground hover:bg-destructive/90 disabled:opacity-50"
-                  @click="deleteTeam(team.id)"
-                >
+                <button :disabled="deletingTeam" data-testid="settings-teams-delete-confirm" class="rounded-lg bg-destructive px-4 py-2 text-sm font-medium text-destructive-foreground hover:bg-destructive/90 disabled:opacity-50" @click="deleteTeam(team.id)">
                   {{ deletingTeam ? 'Deleting...' : 'Delete' }}
                 </button>
-                <button
-                  class="rounded-lg border border-input bg-background px-4 py-2 text-sm font-medium hover:bg-accent"
-                  data-testid="settings-teams-delete-cancel"
-                @click="deleteConfirmTeamId = null; deleteError = null"
-              >
-                Cancel
-              </button>
-              <div v-if="deleteError" class="mt-2 text-sm text-destructive">{{ deleteError }}</div>
+                <button class="rounded-lg border border-input bg-background px-4 py-2 text-sm font-medium hover:bg-accent" data-testid="settings-teams-delete-cancel" @click="deleteConfirmTeamId = null; deleteError = null">
+                  Cancel
+                </button>
+                <div v-if="deleteError" class="mt-2 text-sm text-destructive">{{ deleteError }}</div>
+              </div>
             </div>
 
             <h3 class="mb-3 text-sm font-semibold text-muted-foreground uppercase tracking-wider">Members</h3>
 
             <div v-if="membersLoading[team.id]" class="flex items-center justify-center py-4">
-              <div class="h-5 w-5 animate-spin rounded-full border-2 border-primary border-t-transparent" />
+              <div class="h-5 w-5 animate-spin rounded-full border-2 border-primary border-t-transparent"></div>
             </div>
-
             <div v-else-if="membersError[team.id]" class="mb-3 text-sm text-destructive">
               {{ membersError[team.id] }}
               <button class="ml-2 underline" data-testid="settings-teams-members-retry" @click="loadMembers(team.id)">Retry</button>
             </div>
-
             <div v-else>
               <div v-if="membersByTeam[team.id]?.length === 0" class="py-4 text-center text-sm text-muted-foreground">
                 No members yet.
               </div>
-
               <table v-else class="w-full text-sm">
                 <thead>
                   <tr class="border-b text-left text-muted-foreground">
@@ -208,26 +139,14 @@
                     <td class="py-2">{{ userDisplayName(member.user_id) }}</td>
                     <td class="py-2 text-muted-foreground">{{ userEmail(member.user_id) }}</td>
                     <td class="py-2">
-                      <select
-                        v-model="member.role"
-                        data-testid="settings-teams-member-role"
-                        aria-label="Member role"
-                        class="rounded border border-input bg-background px-2 py-1 text-xs ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-                        @change="changeMemberRole(team.id, member)"
-                      >
+                      <select v-model="member.role" data-testid="settings-teams-member-role" aria-label="Member role" class="rounded border border-input bg-background px-2 py-1 text-xs ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring" @change="changeMemberRole(team.id, member)">
                         <option value="viewer">Viewer</option>
                         <option value="runner">Runner</option>
                         <option value="operator">Operator</option>
                       </select>
                     </td>
                     <td class="py-2 text-right">
-                      <button
-                        class="rounded p-1 text-muted-foreground hover:text-destructive"
-                        data-testid="settings-teams-member-remove"
-                        :aria-label="'Remove member'"
-                        title="Remove member"
-                        @click="removeMember(team.id, member)"
-                      >
+                      <button class="rounded p-1 text-muted-foreground hover:text-destructive" data-testid="settings-teams-member-remove" :aria-label="'Remove member'" title="Remove member" @click="removeMember(team.id, member)">
                         <svg class="h-4 w-4" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                           <path d="M18 6 6 18" /><path d="m6 6 12 12" />
                         </svg>
@@ -239,54 +158,26 @@
             </div>
 
             <div v-if="addMemberTeamId === team.id" class="mt-4 flex items-center gap-2 rounded-lg border bg-muted/30 p-3">
-              <select
-                v-model="addMemberUserId"
-                data-testid="settings-teams-add-member-user"
-                aria-label="Select user"
-                class="flex-1 rounded border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-              >
+              <select v-model="addMemberUserId" data-testid="settings-teams-add-member-user" aria-label="Select user" class="flex-1 rounded border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
                 <option value="" disabled>Select a user...</option>
-                <option
-                  v-for="user in availableUsers(team.id)"
-                  :key="user.id"
-                  :value="user.id"
-                >
+                <option v-for="user in availableUsers(team.id)" :key="user.id" :value="user.id">
                   {{ user.display_name }} ({{ user.email }})
                 </option>
               </select>
-              <select
-                v-model="addMemberRole"
-                data-testid="settings-teams-add-member-role"
-                aria-label="Select role"
-                class="rounded border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-              >
+              <select v-model="addMemberRole" data-testid="settings-teams-add-member-role" aria-label="Select role" class="rounded border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
                 <option value="viewer">Viewer</option>
                 <option value="runner">Runner</option>
                 <option value="operator">Operator</option>
               </select>
-              <button
-                :disabled="!addMemberUserId || addingMember"
-                data-testid="settings-teams-add-member-submit"
-                class="rounded-lg bg-primary px-3 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
-                @click="addMember(team.id)"
-              >
+              <button :disabled="!addMemberUserId || addingMember" data-testid="settings-teams-add-member-submit" class="rounded-lg bg-primary px-3 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90 disabled:opacity-50" @click="addMember(team.id)">
                 {{ addingMember ? 'Adding...' : 'Add' }}
               </button>
-              <button
-                class="rounded-lg border border-input bg-background px-3 py-2 text-sm font-medium hover:bg-accent"
-                data-testid="settings-teams-add-member-cancel"
-                @click="addMemberTeamId = null"
-              >
+              <button class="rounded-lg border border-input bg-background px-3 py-2 text-sm font-medium hover:bg-accent" data-testid="settings-teams-add-member-cancel" @click="addMemberTeamId = null">
                 Cancel
               </button>
             </div>
 
-            <button
-              v-else
-              class="mt-3 flex items-center gap-1 text-sm text-primary hover:underline"
-              data-testid="settings-teams-add-member"
-              @click="addMemberTeamId = team.id"
-            >
+            <button v-else class="mt-3 flex items-center gap-1 text-sm text-primary hover:underline" data-testid="settings-teams-add-member" @click="addMemberTeamId = team.id">
               <svg class="h-4 w-4" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                 <path d="M5 12h14" /><path d="M12 5v14" />
               </svg>
@@ -303,7 +194,7 @@
         </div>
       </div>
     </div>
-  </div>
+    </div>
   </FeatureGate>
 </template>
 
@@ -314,8 +205,8 @@ import type { components } from '../lib/api/client'
 import LoadingSpinner from '../components/shared/LoadingSpinner.vue'
 import ErrorAlert from '../components/shared/ErrorAlert.vue'
 import TeamNotificationEndpoints from '../components/TeamNotificationEndpoints.vue'
-import { usePlanStore } from '../stores/planStore'
 import FeatureGate from '../components/FeatureGate.vue'
+import { usePlanStore } from '../stores/planStore'
 import { formatApiError } from '../lib/api/formatError'
 import { shortId } from '../utils/format'
 
