@@ -253,17 +253,17 @@ class TestSamlRoutes:
     def test_saml_login_requires_license(self, client: TestClient) -> None:
         _override_settings(modulo_license_key="")
         resp = client.get("/api/v1/auth/saml/login", follow_redirects=False)
-        assert resp.status_code == 402
+        assert resp.status_code == 400
 
     def test_saml_acs_requires_license(self, client: TestClient) -> None:
         _override_settings(modulo_license_key="")
         resp = client.post("/api/v1/auth/saml/acs", data={})
-        assert resp.status_code == 402
+        assert resp.status_code == 400
 
     def test_saml_metadata_requires_license(self, client: TestClient) -> None:
         _override_settings(modulo_license_key="")
         resp = client.get("/api/v1/auth/saml/metadata")
-        assert resp.status_code == 402
+        assert resp.status_code == 400
 
     def test_saml_login_with_license_and_no_metadata(self, client: TestClient) -> None:
         _override_settings(
