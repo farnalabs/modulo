@@ -282,13 +282,13 @@
 </template>
 
 <script setup lang="ts">
-import { ref, watch, nextTick, computed, onMounted, onUnmounted } from "vue";
+import { ref, watch, nextTick, computed, onUnmounted } from "vue";
 import { useRemyStore } from "@/composables/useRemyStore";
 import { usePlanStore } from "@/stores/planStore";
 import { useRemyStream } from "@/composables/useRemyStream";
 import { abortUiCommands } from "@/composables/useUiCommandExecutor";
 import { Button } from "@/components/ui/button";
-import { api, getAccessToken } from "@/lib/api/client";
+import { getAccessToken } from "@/lib/api/client";
 import { ShieldAlertIcon, LoaderIcon } from "@lucide/vue";
 
 const store = useRemyStore();
@@ -583,8 +583,6 @@ async function handleSend() {
   }
 }
 
-const inputRef = ref<HTMLTextAreaElement | null>(null)
-
 function resizeInput() {
   nextTick(() => {
     const el = document.querySelector('.remy-input') as HTMLTextAreaElement | null
@@ -619,9 +617,11 @@ function renderMarkdown(text: string): string {
   let html = escapeHtml(text);
 
   const codeBlocks: string[] = [];
+  const CB = "%%CODE_BLOCK_";
   html = html.replace(/```(\w*)\n([\s\S]*?)```/g, (_, lang, code) => {
     const langAttr = lang ? ` data-lang="${escapeHtml(lang)}"` : "";
-    const placeholder = `\x00CODE_BLOCK_${codeBlocks.length}\x00`;
+    const idx = codeBlocks.length;
+    const placeholder = `${CB}${idx}%%`;
     codeBlocks.push(`<pre${langAttr}><code class="remy-code-block">${code}</code></pre>`);
     return placeholder;
   });
@@ -648,7 +648,7 @@ function renderMarkdown(text: string): string {
     html = '<p class="remy-p">' + html + "</p>";
   }
 
-  html = html.replace(/\x00CODE_BLOCK_(\d+)\x00/g, (_, i) => codeBlocks[Number(i)] ?? "");
+  html = html.replace(/%%CODE_BLOCK_(\d+)%%/g, (_, i) => codeBlocks[Number(i)] ?? "");
 
   return html;
 }

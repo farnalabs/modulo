@@ -298,10 +298,10 @@ async function click(selector: string): Promise<UiCommandResult> {
     highlightElement(el)
     const isCombobox = el.getAttribute('role') === 'combobox'
     if (isCombobox) {
-      ;(el as HTMLElement).click()
+      (el as HTMLElement).click()
       await new Promise(r => setTimeout(r, 300))
     } else {
-      ;(el as HTMLElement).click()
+      (el as HTMLElement).click()
     }
     return { id: `click-${Date.now()}`, name: 'click', success: true }
   } finally {
@@ -324,7 +324,7 @@ async function fill(selector: string, value: string): Promise<UiCommandResult> {
     const tag = el.tagName.toLowerCase()
 
     if (role === 'combobox' || el.closest('[data-shadcn-select]') || el.closest('[role="listbox"]')) {
-      ;(el as HTMLElement).click()
+      (el as HTMLElement).click()
       await new Promise(r => setTimeout(r, 300))
       const commandInput = el.querySelector<HTMLInputElement>('[role="combobox"] input, [data-shadcn-command-input]')
       if (commandInput) {
@@ -343,7 +343,7 @@ async function fill(selector: string, value: string): Promise<UiCommandResult> {
     }
 
     if (role === 'switch') {
-      ;(el as HTMLElement).click()
+      (el as HTMLElement).click()
       return { id: `fill-${Date.now()}`, name: 'fill', success: true }
     }
 

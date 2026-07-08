@@ -58,7 +58,7 @@
 <script setup lang="ts">
 import { ref, onMounted, onUnmounted } from "vue";
 import type { NotificationResponse } from "../lib/api/notifications";
-import { fetchDashboardNotifications, reviewLater, fetchUnreadCount } from "../lib/api/notifications";
+import { fetchDashboardNotifications, reviewLater } from "../lib/api/notifications";
 import { registerHandler } from "../stores/syncRegistry";
 import NotificationCard from "./NotificationCard.vue";
 import { formatApiError } from "../lib/api/formatError";
