@@ -6,6 +6,7 @@ from datetime import UTC, datetime
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from cryptography.exceptions import InvalidSignature
 from fastapi.testclient import TestClient
 
 from modulo.api.dependencies import _get_engine, get_db_session, get_plan_context
@@ -501,7 +502,7 @@ class TestSigningRoundTrip:
         try:
             public.verify(sig, payload)
             verified = True
-        except Exception:
+        except InvalidSignature:
             verified = False
         assert verified is True
 
@@ -518,7 +519,7 @@ class TestSigningRoundTrip:
         try:
             public.verify(sig, tampered)
             verified = True
-        except Exception:
+        except InvalidSignature:
             verified = False
         assert verified is False
 
@@ -535,7 +536,7 @@ class TestSigningRoundTrip:
         try:
             public_b.verify(sig, payload)
             verified = True
-        except Exception:
+        except InvalidSignature:
             verified = False
         assert verified is False
 
@@ -549,7 +550,7 @@ class TestSigningRoundTrip:
         try:
             public.verify(sig, b"")
             verified = True
-        except Exception:
+        except InvalidSignature:
             verified = False
         assert verified is True
 

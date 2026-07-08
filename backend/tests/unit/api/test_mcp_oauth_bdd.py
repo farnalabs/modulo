@@ -20,7 +20,9 @@ from modulo.api.main import app
 from modulo.auth.dependencies import get_current_user
 from modulo.auth.jwt import AuthenticatedPrincipal
 from modulo.auth.oauth import (
+    InvalidGrantError,
     OAuthAccessTokenClaims,
+    UnauthorizedClientError,
     validate_client_scopes,
 )
 from modulo.core.rate_limiter import RateLimiterRegistry
@@ -316,7 +318,7 @@ class TestTokenExchangeEndpoint:
 class TestScopeEnforcement:
     def test_scope_outside_allowed_set_is_rejected(self) -> None:
         client = _make_mock_client(client_id="limited_client", scopes="trigger:run")
-        with pytest.raises(Exception) as exc:
+        with pytest.raises(UnauthorizedClientError) as exc:
             validate_client_scopes(client, ["hitl:review"])
         assert "unauthorized_client" in str(exc.value).lower() or "None of the requested scopes" in str(exc.value)
 
@@ -575,7 +577,7 @@ class TestConsumeAuthorizationCode:
         mock_session.execute = AsyncMock(return_value=execute_result)
 
         with patch("modulo.auth.oauth.validate_client_secret"):
-            with pytest.raises(Exception) as exc:
+            with pytest.raises(InvalidGrantError) as exc:
                 await consume_authorization_code(
                     mock_session,
                     code="expired_code",
@@ -600,7 +602,7 @@ class TestConsumeAuthorizationCode:
         mock_session.execute = AsyncMock(return_value=execute_result)
 
         with patch("modulo.auth.oauth.validate_client_secret"):
-            with pytest.raises(Exception) as exc:
+            with pytest.raises(InvalidGrantError) as exc:
                 await consume_authorization_code(
                     mock_session,
                     code="used_code",
@@ -625,7 +627,7 @@ class TestConsumeAuthorizationCode:
         mock_session.execute = AsyncMock(return_value=execute_result)
 
         with patch("modulo.auth.oauth.validate_client_secret"):
-            with pytest.raises(Exception) as exc:
+            with pytest.raises(InvalidGrantError) as exc:
                 await consume_authorization_code(
                     mock_session,
                     code="code_for_other",
@@ -651,7 +653,7 @@ class TestConsumeAuthorizationCode:
         mock_session.execute = AsyncMock(return_value=execute_result)
 
         with patch("modulo.auth.oauth.validate_client_secret"):
-            with pytest.raises(Exception) as exc:
+            with pytest.raises(InvalidGrantError) as exc:
                 await consume_authorization_code(
                     mock_session,
                     code="mismatch_code",

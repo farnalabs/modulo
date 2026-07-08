@@ -55,7 +55,8 @@ class TestValidatePublicKeyHex:
         with pytest.raises(ValueError, match="not valid hex"):
             _validate_public_key_hex("z" + "a" * 63)
 
-    def test_rejects_uppercase_hex(self) -> None:
+    def test_accepts_uppercase_hex(self) -> None:
+        # bytes.fromhex accepts uppercase hex chars (A-F)
         _validate_public_key_hex("A" * 64)
 
 

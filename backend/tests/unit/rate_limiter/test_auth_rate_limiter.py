@@ -8,12 +8,11 @@ Covers:
 """
 
 from collections.abc import Generator
-from unittest.mock import AsyncMock, MagicMock, patch, PropertyMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
-from starlette.requests import ClientDisconnect
 
 from modulo.api.middleware.rate_limiter import (
     AuthRateLimitMiddleware,
