@@ -61,9 +61,10 @@ PRD §6.1 (Layered Architecture), §6.2 (SaaS-First Multi-Tenant).
 - [x] `_build_engine()` in `session.py` creates a single `AsyncEngine` at module load with pooling config
 - [x] `get_or_create_engine()` in `dependencies.py` duplicates the pool config via `create_async_engine()` — singleton per process, same values
 - [x] Pooling config (both paths): `pool_pre_ping=True`, `pool_size=20`, `max_overflow=10`, `pool_recycle=3600`, `pool_timeout=30` for non-SQLite backends
-- [x] `dependencies.py` also passes `connect_args={"timeout": 10}` to `create_async_engine` — `session.py` does not
+- [x] `dependencies.py` passes `connect_args={"timeout": 10}` to `create_async_engine`
+- [x] `session.py` passes `connect_args={"timeout": 10, "command_timeout": 60}` — has ADDITIONAL `command_timeout=60` that `dependencies.py` lacks
 - [x] Pooling config skipped for SQLite (pysqlite doesn't support pooling)
-- [x] `AsyncSessionLocal` factory uses `expire_on_commit=False`, `autocommit=False`, `autoflush=False`
+- [x] `AsyncSessionLocal` factory uses `expire_on_commit=False`, `autocommit=False`, `autoflush=False`, `autobegin=False`
 - [x] `get_session()` context manager commits on success, rolls back on `Exception` — does NOT catch `ProgrammingError` → 501
 - [x] FastAPI dependency injection: `get_db_session()` in `api/dependencies.py` with `get_or_create_engine()` singleton — DOES catch `ProgrammingError` → 501
 - [x] MCP sub-app uses `get_or_create_engine()` directly (non-Depends path) to share the same pool
@@ -141,7 +142,7 @@ PRD §6.1 (Layered Architecture), §6.2 (SaaS-First Multi-Tenant).
 ### ProgrammingError → 501 Not Implemented Pattern
 - [x] `get_db_session()` in `api/dependencies.py` catches `ProgrammingError` and raises `HTTPException(501)` — this is the FastAPI DI path used by route handlers
 - [x] No global middleware or base class enforces this for ALL DB-backed routes — each route must use `Depends(get_db_session)` to benefit
-- [ ] `get_session()` in `session.py` rolls back on any `Exception` and re-raises — no specific handling for `ProgrammingError`. Routes using `get_session()` directly (not via FastAPI DI) lack the 501 conversion
+- [x] `get_session()` was dead code — never imported by any production or test code. Removed in QA pass 339 to eliminate maintenance burden
 - [ ] **GAP**: No `SQLAlchemyError` → 503 catch in `get_db_session()` or `get_session()` — connection/deadlock failures propagate as 500
 
 ### Connection Pool Exhaustion
@@ -184,7 +185,7 @@ PRD §6.1 (Layered Architecture), §6.2 (SaaS-First Multi-Tenant).
 - **ModuloPostgresSaver is PG-only** — no SQLite checkpoint saver for dev mode (noted in db-abstraction-remaining).
 - **Rate limiter disables on SQLite** — no functional in-memory fallback (noted in db-abstraction-remaining).
 - **Duplicate engine creation path** — `session.py:_build_engine()` and `dependencies.py:get_or_create_engine()` both define pool settings independently. A change to pool config must be made in two places. There is no single source of truth for engine configuration.
-- **`connect_args` inconsistency** — `dependencies.py` passes `connect_args={"timeout": 10}` to `create_async_engine` but `session.py` does not. This means the module-load engine (used by background tasks) lacks connect-level timeout protection.
+- **`connect_args` inconsistency (reversed)** — `session.py` passes `connect_args={"timeout": 10, "command_timeout": 60}` but `dependencies.py` only passes `connect_args={"timeout": 10}`. The module-load engine has MORE connect-level protection (command_timeout) than the DI path.
 - **`get_session()` lacks ProgrammingError/SQLAlchemyError handling** — only `get_db_session()` (FastAPI DI) catches `ProgrammingError` → 501. Code paths using `get_session()` directly leak raw 500s on migration gaps and DB failures.
 
 ## QA History
@@ -207,3 +208,11 @@ PRD §6.1 (Layered Architecture), §6.2 (SaaS-First Multi-Tenant).
 - Identified new gaps: no global ProgrammingError middleware, no DB health check, hardcoded pool config, no multi-backend CI matrix, no unified migration rollback test suite
 - Verified 57 model files, 41 CRUD modules, 69 migrations, 4 repository implementations
 - Status changed from `gap` to `partial`
+
+### 2026-07-09 — Cross-cutting QA (improve-architecture index 339)
+- Fixed CRITICAL — removed dead code `get_session()` from `session.py` (never imported by any code)
+- Fixed MAJOR — removed duplicate dead `except IntegrityError` handlers in `determination.py` (both routes)
+- Fixed MAJOR — corrected outer `except ProgrammingError` → 503 to 501 in `determination.py` (wrong status code)
+- Fixed MAJOR — added missing `except SQLAlchemyError → 503` to `determination.py` (connection/deadlock failures fell through to 500)
+- Fixed MAJOR — created `test_dependencies.py` with 9 unit tests covering engine creation, session management, and pg_connection_string
+- Fixed MINOR — corrected stale `connect_args` claim in product map (session.py has MORE connect_args than dependencies.py, not fewer)
