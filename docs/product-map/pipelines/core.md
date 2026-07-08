@@ -16,7 +16,7 @@ code:
   - frontend/src/views/PipelineEditorView.vue
   - frontend/src/views/StageBoardView.vue
   - frontend/src/views/PipelineListView.vue
-  - frontend/src/views/PipelineTemplateGallery.vue
+  # frontend/src/views/PipelineTemplateGallery.vue — removed, merged into PipelineListView
   - frontend/src/views/pipeline/CompositeEditorView.vue
   - frontend/src/components/pipeline/composite/CompositeConfigPanel.vue
   - frontend/src/components/pipeline/composite/CompositeLibraryPicker.vue
@@ -32,7 +32,12 @@ unit-tests:
   - backend/tests/unit/api/test_pipelines_endpoint.py
   - backend/tests/unit/api/test_stage_programming_error.py
   - backend/tests/unit/test_pipeline_node_conversion.py
-depends-on: []
+  - backend/tests/unit/graph_validator/test_graph_validator.py
+  - backend/tests/unit/graph_validator/test_category_validator.py
+depends-on:
+  - feat-core-pipeline-execution
+  - feat-pipelines-cicd-pipeline
+  - feat-core-agent-model
 status: partial
 ---
 
@@ -180,7 +185,9 @@ copy-to-adapt (save-as-composite), node conversion, and ownership/visibility.
 - [x] Validation returns issues as list — warnings (TOPOLOGY_UNREACHABLE) and errors (blocks save)
 - [x] Validation issues returned in PipelineGraphResponse.validation_issues
 - [x] Deep schema compatibility (field-level) — only used in validate_for_run, not on-save
-- [ ] GraphValidator unit tests are thin — test_graph_validator.py exists but covers only HITL gate config validation; topology, connector, model backend, and composite validation have no unit coverage
+- [x] GraphValidator unit tests expanded since index 254 — test_graph_validator.py now covers topology (nodes, cycles, reachability), schema compatibility, connector bindings, model backend health, nesting depth, kickback edges, deep schema compatibility, input payload validation, and conditional edges (52 test functions)
+- [x] Category validator unit tests added — test_category_validator.py covers node category validation (12 test functions)
+- [ ] Composite validation still has no dedicated unit tests — only covered by BDD scenarios
 - [ ] Pre-run validation (validate_for_run) also checks input payload — covered in feat-pipelines-cicd-pipeline run lifecycle
 
 ### Real-Time Run Progress (WebSocket Events)
@@ -237,11 +244,11 @@ frontend-side integration:
 - [x] Stage CRUD routes catch SQLAlchemyError → 503
 - [x] Pipeline CRUD routes catch ProgrammingError → 501
 - [x] Pipeline CRUD routes catch SQLAlchemyError → 503
-- [x] Pipeline clone route catches ProgrammingError → 501 and SQLAlchemyError → 503
+- [x] Pipeline clone route catches ProgrammingError → 501 and SQLAlchemyError → 503 (via @handle_db_errors decorator)
 - [x] Node conversion routes catch ProgrammingError → 501
 - [x] Node conversion routes catch SQLAlchemyError → 503
 - [x] Node conversion routes catch IntegrityError → 409 (separate from ProgrammingError)
-- [x] Pipeline graph routes catch ProgrammingError where applicable
+- [x] Pipeline graph routes catch ProgrammingError where applicable (via @handle_db_errors decorator — also covers SQLAlchemyError, IntegrityError, ValidationError, and generic Exception)
 - [x] Save-as-composite route moved all DB queries inside session.begin() — RLS leak fixed
 - [x] GraphValidator errors propagate with specific error codes (TOPOLOGY_*, SCHEMA_*, CONNECTOR_*, MODEL_BACKEND_*, ENV_*, COMPOSITE_*)
 - [x] Graph validation errors surfaced in PipelineGraphResponse.validation_issues — returned to frontend, not lost
@@ -251,8 +258,8 @@ frontend-side integration:
 
 ## Known Gaps
 
-### GraphValidator unit tests exist but are thin
-`backend/tests/unit/graph_validator/test_graph_validator.py` exists with coverage for HITL gate config validation but no unit tests for topology, connector, model backend, or composite validation logic. The GraphValidator (~876 lines) relies on BDD `pipeline_config_validation.feature` (4 scenarios) and endpoint-level tests.
+### GraphValidator unit tests expanded (index 338)
+`backend/tests/unit/graph_validator/test_graph_validator.py` now has 52 test functions covering topology (nodes, cycles, reachability, nesting depth, kickback), schema compatibility (shallow + deep field-level), connector bindings (active, inactive, NotFound, missing operations), model backend health (active, inactive, unhealthy, empty pins), conditional edge expressions, input payload validation, and early short-circuit on topology errors. `test_category_validator.py` adds 12 tests for node category validation. The GraphValidator (~817 lines) also relies on BDD `pipeline_config_validation.feature` (4 scenarios) and endpoint-level tests. Composite validation remains the largest gap — no dedicated unit tests.
 
 ### Canvas features missing
 - Undo/redo support for node/edge operations
@@ -273,6 +280,15 @@ frontend-side integration:
 - No pipeline-builder page at `Website/modulo-website/src/docs/` — needs separate website worktree
 - No docs stubs for Pipeline Builder, Stage Board, or Graph Validation features
 
+### Frontend pipeline views not fully i18n'd
+- PipelineEditorView.vue (~825 lines) has 23 `$t()` calls but ~30 hardcoded English strings in templates (MANUAL, AGENT, HITL labels, edge properties, HITL gate config, Save as Composite dialog, schema info)
+- StageBoardView.vue has 0 `$t()` calls and ~30 hardcoded English strings (filter labels, stage/pipeline detail panels, create dialog)
+- CompositeEditorView.vue and all 9 composite component files have 0 `$t()` calls — fully hardcoded English
+- PipelineListView.vue and PipelineEditorView.vue correctly use `formatApiError(e)` for error handlers
+
+### Stale product map code reference
+- `PipelineTemplateGallery.vue` referenced in frontmatter `code:` but the file no longer exists — was merged into PipelineListView
+
 ### Stage Board limitations
 - No drag-and-drop stage reordering
 - No search/filter input for stage names (only team filter on stages)
@@ -292,4 +308,5 @@ frontend-side integration:
 
 - 2026-07-08: Cross-cutting QA (index 254): Fixed CRITICAL — RLS leak in save_as_composite_endpoint (3 DB queries outside session.begin() — Agent lookup, PipelineEdge fetch, create_composite_template — missing RLS context on Postgres; all moved inside transaction). Fixed CRITICAL — added SQLAlchemyError→503 catches to all 5 stage routes (previously only ProgrammingError→501). Fixed CRITICAL — added SQLAlchemyError→503 catches to 8 pipeline CRUD + clone routes. Fixed CRITICAL — combined `except (IntegrityError, ProgrammingError, SQLAlchemyError)` in convert-to-agent/revert-to-manual split into separate handlers with correct status codes (409/501/503). Fixed MAJOR — added `populate_by_name=True` to StageResponse. Fixed MAJOR — replaced 10 `e instanceof Error ? e.message : String(e)` handlers with `formatApiError(e)` in 4 frontend views (PipelineEditorView, StageBoardView, PipelineListView, PipelineTemplateGallery). Created backend/tests/unit/api/test_stage_programming_error.py with 10 tests covering all 5 stage routes × 2 error types. Fixed 2 pre-existing test failures (license tier assertion, AsyncMock for publish_primitive). Merged to main at v0.3.227. Status: partial.
 - 2026-07-05: Prodmap pipelines QA: Fixed depends-on direction (core → cicd was inverted). Fixed false Known Gap about missing `test_graph_validator.py`. Fixed website docs path prefix. Updated delivery-tasks note.
+- 2026-07-09: Cross-cutting QA (index 338): Updated frontmatter — added graph_validator unit tests to unit-tests, populated depends-on with feat-core-pipeline-execution, feat-pipelines-cicd-pipeline, feat-core-agent-model. Corrected stale claims: graph_validator/__init__.py is 817 lines (not 876), test_graph_validator.py now covers topology/schema/connector/backend/conditional edges (52 tests), test_category_validator.py covers node categories (12 tests). Removed dead `PipelineTemplateGallery.vue` code reference. Added Known Gaps for frontend i18n coverage (PipelineEditorView, StageBoardView, CompositeEditorView all have 30+ hardcoded strings). Added `@handle_db_errors` decorator clarification to Error Handling section. Status: partial.
 
