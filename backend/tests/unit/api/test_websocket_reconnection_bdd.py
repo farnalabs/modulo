@@ -174,8 +174,8 @@ class TestRunEventBroker:
 
     def test_subscribe_on_closed_broker(self) -> None:
         self.broker.close()
-        q = self.broker.subscribe()
-        assert q is not None
+        with pytest.raises(RuntimeError, match="Broker for run"):
+            self.broker.subscribe()
 
     # -- RunEvent.to_json ---------------------------------------------------
 
