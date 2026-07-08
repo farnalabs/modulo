@@ -2,7 +2,7 @@ import { defineConfig } from '@playwright/test'
 
 const coverageEnabled = process.env.VITE_COVERAGE === 'true' || process.env.npm_lifecycle_event === 'test:e2e:coverage'
 const target = (process.env.E2E_TARGET || 'local').toLowerCase()
-const noServer = process.env.E2E_NO_WEBSERVER === 'true'
+const noServer = (process.env.E2E_NO_WEBSERVER || '').toLowerCase() === 'true'
 
 const BASE_URLS: Record<string, string> = {
   local: 'http://127.0.0.1:5173',
