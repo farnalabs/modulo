@@ -1,4 +1,4 @@
-import { test, expect } from '@playwright/test'
+import { test, expect } from './setup/fixtures'
 
 test.describe('Navigation Flow', () => {
   test('navigates from Dashboard to Pipelines', async ({ page }) => {

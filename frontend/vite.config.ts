@@ -23,9 +23,12 @@ function yamlPlugin() {
   }
 }
 
+import coveragePlugin from './vite-coverage-plugin'
+
 export default defineConfig({
   plugins: [
     vue(),
+    coveragePlugin(),
     VueI18nPlugin({
       include: [resolve(dirname(fileURLToPath(import.meta.url)), './src/locales/*.js')],
     }),

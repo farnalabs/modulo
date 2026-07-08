@@ -1,4 +1,4 @@
-import { test, expect } from '@playwright/test'
+import { test, expect } from './setup/fixtures'
 
 test.describe('App Bootstrap', () => {
   test('page loads without console errors', async ({ page }) => {
