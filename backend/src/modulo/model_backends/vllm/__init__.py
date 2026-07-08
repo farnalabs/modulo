@@ -19,6 +19,8 @@ class VllmBackend(ModelBackendBase):
     as a placeholder.
     """
 
+    supports_tools: bool = True
+
     def __init__(
         self,
         api_key: str | None,
@@ -33,7 +35,7 @@ class VllmBackend(ModelBackendBase):
             **default_params,
         )
         self._backend_id = f"vllm/{model_id}"
-        self._base_url = base_url
+        self._base_url = base_url.rstrip("/")
         self._api_key = api_key or ""
 
     @property

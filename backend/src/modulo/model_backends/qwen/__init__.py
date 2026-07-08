@@ -8,6 +8,7 @@ from langchain_openai import ChatOpenAI
 
 from modulo.model_backends.base import HealthResult, ModelBackendBase, openai_compatible_health_check
 
+QWEN_BASE_URL = "https://dashscope.aliyuncs.com/compatible-mode/v1"
 
 class QwenBackend(ModelBackendBase):
     """Thin adapter over ChatOpenAI targeting Alibaba Cloud's DashScope API."""
@@ -18,7 +19,7 @@ class QwenBackend(ModelBackendBase):
         self._model = ChatOpenAI(
             model=model_id,
             api_key=api_key,
-            base_url="https://dashscope.aliyuncs.com/compatible-mode/v1",
+            base_url=QWEN_BASE_URL,
             **default_params,
         )
         self._backend_id = f"qwen/{model_id}"
@@ -33,7 +34,7 @@ class QwenBackend(ModelBackendBase):
 
     async def health_check(self) -> HealthResult:
         return await openai_compatible_health_check(
-            base_url="https://dashscope.aliyuncs.com/compatible-mode/v1",
+            base_url=QWEN_BASE_URL,
             api_key=self._api_key,
         )
 
