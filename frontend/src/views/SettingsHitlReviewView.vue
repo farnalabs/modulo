@@ -402,8 +402,8 @@ async function loadPipelines() {
     if (!err && data) {
       pipelines.value = (data as any).items || []
     }
-  } catch (err) {
-    console.warn('Failed to load pipelines:', err)
+  } catch (e) {
+    console.warn('Failed to load pipelines', e)
   }
 }
 
@@ -475,7 +475,7 @@ async function approveGate(gate: GateItem) {
   actionLoading.value[key] = true
   actionMessage.value[key] = null
   try {
-    const { data, error: err } = await api.POST('/api/v1/runs/{run_id}/hitl/{gate_id}/approve', {
+    const { error: err } = await api.POST('/api/v1/runs/{run_id}/hitl/{gate_id}/approve', {
       params: { path: { run_id: gate.run_id, gate_id: gate.gate_id } },
       body: { claim_token: token, notes: reviewNotes.value[key] || null },
     })
@@ -514,7 +514,7 @@ async function rejectGate(gate: GateItem) {
   actionLoading.value[key] = true
   actionMessage.value[key] = null
   try {
-    const { data, error: err } = await api.POST('/api/v1/runs/{run_id}/hitl/{gate_id}/reject', {
+    const { error: err } = await api.POST('/api/v1/runs/{run_id}/hitl/{gate_id}/reject', {
       params: { path: { run_id: gate.run_id, gate_id: gate.gate_id } },
       body: { claim_token: token, reason },
     })

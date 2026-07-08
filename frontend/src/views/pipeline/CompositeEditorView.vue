@@ -154,7 +154,7 @@ import PublishCompositeFlow from '../../components/pipeline/composite/PublishCom
 import type { ParameterPort } from '../../types/pipeline'
 import { formatApiError } from '../../lib/api/formatError'
 
-const { get, put, post } = useApi()
+const { get, post } = useApi()
 const route = useRoute()
 const router = useRouter()
 const compositeId = route.params.id as string
@@ -224,11 +224,11 @@ async function loadEditor() {
   }
 }
 
-function onNodeClick(event: any) {
+function onNodeClick() {
   // Node selection handled by parent if needed
 }
 
-function onEdgeClick(event: any) {
+function onEdgeClick() {
   // Edge selection handled by parent if needed
 }
 
@@ -245,7 +245,7 @@ async function handleSaveAs() {
   saving.value = true
   saveAsError.value = null
   try {
-    const result = await post<{ id: string }>(`/api/v1/composite-templates`, {
+    await post<{ id: string }>(`/api/v1/composite-templates`, {
       name: saveAsName.value,
       description: saveAsDescription.value || null,
       sub_pipeline_graph_json: {

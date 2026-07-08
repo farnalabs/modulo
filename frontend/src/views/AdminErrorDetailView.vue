@@ -322,8 +322,8 @@ async function loadUsers() {
     if (data) {
       users.value = data.items
     }
-  } catch (err) {
-    console.warn('Failed to load users:', err)
+  } catch (e) {
+    console.warn('Failed to load users', e)
   }
 }
 

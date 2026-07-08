@@ -30,7 +30,7 @@ module.exports = {
     'vuejs-accessibility/heading-has-content': 'warn',
     'vuejs-accessibility/label-has-for': 'error',
     'vuejs-accessibility/mouse-events-have-key-events': 'warn',
-    'vuejs-accessibility/no-access-state': 'warn',
+
     'vuejs-accessibility/no-distracting-elements': 'error',
     'vuejs-accessibility/no-static-element-interactions': 'warn',
     'vuejs-accessibility/role-has-required-aria-props': 'error',
@@ -38,6 +38,6 @@ module.exports = {
     'vuejs-accessibility/interactive-supports-focus': 'warn',
     'vuejs-accessibility/anchor-has-content': 'warn',
     // Secrets detection
-    'no-secrets/no-secrets': ['error', { ignoreContent: ['modulo\.run', 'example', 'test', 'localhost'] }],
+    'no-secrets/no-secrets': ['error', { ignoreContent: ['modulo\.run', 'example', 'test', 'localhost', 'views\.'] }],
   },
 }

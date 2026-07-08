@@ -42,8 +42,7 @@ async function loadSchemaFields(schemaId: string): Promise<SchemaField[]> {
   try {
     const data = await get<{ fields: SchemaField[] }>(`/api/v1/schemas/${schemaId}/fields`)
     return data.fields ?? []
-  } catch (e) {
-    console.warn(`Failed to load schema fields for ${schemaId}:`, e)
+  } catch {
     return []
   }
 }

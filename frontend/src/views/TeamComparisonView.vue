@@ -359,7 +359,7 @@ async function toggleExpand(teamId: string) {
         pipelineEvals.value = buildPipelineEvals(teamPipelineData, map)
       }
     } catch (e) {
-      console.warn('Failed to fetch pipeline names, falling back to IDs:', e)
+      console.warn('Failed to fetch pipeline names', e)
     }
   }
 }

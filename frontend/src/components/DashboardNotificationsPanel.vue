@@ -86,7 +86,6 @@ function toggleCollapsed() {
   try {
     localStorage.setItem("notif-panel-collapsed", String(collapsed.value));
   } catch (e) {
-    console.warn("Failed to persist collapsed state:", e);
   }
 }
 
@@ -103,7 +102,6 @@ async function onReviewLater(id: string) {
     if (unreadCount.value > 0) unreadCount.value--;
   } catch (e: unknown) {
     reviewLaterError.value = e instanceof Error ? e.message : "Failed to dismiss notification";
-    console.warn("reviewLater failed:", e);
   }
 }
 

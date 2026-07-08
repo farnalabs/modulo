@@ -486,7 +486,7 @@ function openEditForm(backend: ModelBackendItem) {
   editBackendId.value = backend.id
   deleteConfirmBackendId.value = null
   formError.value = null
-  const params = backend.default_params as Record<string, unknown>
+  const params = (backend.default_params ?? {}) as Record<string, unknown>
   const baseUrl = typeof params.base_url === 'string' ? params.base_url : ''
   Object.assign(formData, {
     name: backend.name,
@@ -520,8 +520,8 @@ function buildDefaultParams(): Record<string, unknown> {
       if (typeof parsed === 'object' && parsed !== null) {
         Object.assign(params, parsed)
       }
-    } catch (err) {
-      console.warn('Failed to parse default params JSON:', err)
+    } catch (e) {
+      console.warn('Failed to parse JSON default params', e)
     }
   }
   if (formData.base_url.trim()) {

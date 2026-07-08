@@ -79,6 +79,7 @@
 import { ref, reactive, onMounted, onBeforeUnmount } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { api } from '../lib/api/client'
+import { formatApiError } from '../lib/api/formatError'
 import { getErrorTracker } from '../lib/error-tracking'
 import { loadBackends } from '../monitor'
 import type { MonitorConfig } from '../monitor/types'
@@ -241,7 +242,7 @@ async function load() {
       fromApiPayload(res.data as Record<string, any>)
     }
   } catch (e) {
-    showFlash(`${t('common.failed_to_load')}: ${e}`, 'error')
+    showFlash(`${t('common.failed_to_load')}: ${formatApiError(e)}`, 'error')
   } finally {
     loading.value = false
   }
@@ -267,7 +268,7 @@ async function save() {
     fromApiPayload(res.data as Record<string, any>)
     showFlash(t('common.configuration_saved'), 'success')
   } catch (e) {
-    showFlash(`${t('common.failed_to_save')}: ${e}`, 'error')
+    showFlash(`${t('common.failed_to_save')}: ${formatApiError(e)}`, 'error')
   } finally {
     saving.value = false
   }
