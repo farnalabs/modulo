@@ -238,27 +238,28 @@ async def consume_authorization_code(
     """
     await validate_client_secret(session, client_id, client_secret)
 
-    result = await session.execute(
-        select(OAuthAuthorizationCode).where(OAuthAuthorizationCode.code == code).with_for_update()
-    )
-    auth_code = result.scalar_one_or_none()
-    if auth_code is None:
-        raise InvalidGrantError("Authorization code not found")
+    async with session.begin():
+        result = await session.execute(
+            select(OAuthAuthorizationCode).where(OAuthAuthorizationCode.code == code).with_for_update()
+        )
+        auth_code = result.scalar_one_or_none()
+        if auth_code is None:
+            raise InvalidGrantError("Authorization code not found")
 
-    if auth_code.client_id != client_id:
-        raise InvalidGrantError("Authorization code was issued to a different client")
+        if auth_code.client_id != client_id:
+            raise InvalidGrantError("Authorization code was issued to a different client")
 
-    if auth_code.redirect_uri != redirect_uri:
-        raise InvalidGrantError("redirect_uri mismatch")
+        if auth_code.redirect_uri != redirect_uri:
+            raise InvalidGrantError("redirect_uri mismatch")
 
-    if auth_code.used:
-        raise InvalidGrantError("Authorization code has already been used")
+        if auth_code.used:
+            raise InvalidGrantError("Authorization code has already been used")
 
-    if auth_code.expires_at < datetime.now(UTC):
-        raise InvalidGrantError("Authorization code has expired")
+        if auth_code.expires_at < datetime.now(UTC):
+            raise InvalidGrantError("Authorization code has expired")
 
-    auth_code.used = True
-    await session.flush()
+        auth_code.used = True
+        await session.flush()
     return auth_code
 
 
