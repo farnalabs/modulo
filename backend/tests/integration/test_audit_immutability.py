@@ -179,10 +179,13 @@ class TestEveryMutatingRouteEmitsAuditEvent:
         for node in ast.walk(tree):
             if isinstance(node, ast.FunctionDef):
                 for deco in node.decorator_list:
-                    if isinstance(deco, ast.Call) and isinstance(deco.func, ast.Attribute):
-                        if deco.func.attr in _MUTATING_METHODS:
-                            has_mutating = True
-                            break
+                    if (
+                        isinstance(deco, ast.Call)
+                        and isinstance(deco.func, ast.Attribute)
+                        and deco.func.attr in _MUTATING_METHODS
+                    ):
+                        has_mutating = True
+                        break
 
         if not has_mutating:
             pytest.skip(f"{route_file.name} has no mutating routes")

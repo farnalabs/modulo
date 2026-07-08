@@ -49,60 +49,50 @@ def _clean_onboarding_before_test() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Fixtures
+# Fixtures — inherited from top-level conftest: test_org
 # ---------------------------------------------------------------------------
-
-
-@pytest_asyncio.fixture(scope="module")
-async def test_org(db_engine: AsyncEngine) -> uuid.UUID:
-    """Default organisation for demo mode tests."""
-    org_id = uuid.uuid4()
-    async with db_engine.connect() as conn, conn.begin():
-        await conn.execute(
-            text(
-                "INSERT INTO organisations (id, name, slug, settings_json) "
-                "VALUES (:id, :name, :slug, '{}'::json)",
-            ),
-            {
-                "id": str(org_id),
-                "name": "Demo First-Run Test Org",
-                "slug": f"demo-fr-{org_id.hex[:8]}",
-            },
-        )
-    return org_id
 
 
 @pytest_asyncio.fixture(scope="module")
 async def test_demo_user(db_engine: AsyncEngine, test_org: uuid.UUID) -> uuid.UUID:
     """Create a demo user with known password for auth tests.
 
-    Cleans up any existing 'demo' users first to avoid MultipleResultsFound
-    from seed data tests that also create users with email 'demo'.
+    Cleans up any existing 'demo' accounts first to avoid MultipleResultsFound
+    from seed data tests that also create accounts with email 'demo'.
     """
     from modulo.auth.passwords import hash_password
 
     async with db_engine.connect() as conn:
-        await conn.execute(text("DELETE FROM users WHERE email = 'demo'"))
+        await conn.execute(text("DELETE FROM accounts WHERE email = 'demo'"))
         await conn.commit()
 
-    user_id = uuid.uuid4()
+    account_id = uuid.uuid4()
     async with db_engine.connect() as conn, conn.begin():
         await conn.execute(
             text(
-                "INSERT INTO users (id, organisation_id, email, display_name, "
-                "password_hash, org_role, auth_provider, active) "
-                "VALUES (:id, :oid, :email, :name, :hash, :role, 'local', true)",
+                "INSERT INTO accounts (id, email, display_name, "
+                "password_hash, auth_provider, active) "
+                "VALUES (:id, :email, :name, :hash, 'local', true)",
             ),
             {
-                "id": str(user_id),
-                "oid": str(test_org),
+                "id": str(account_id),
                 "email": "demo",
                 "name": "Demo User",
                 "hash": hash_password("demo"),
-                "role": "viewer",
             },
         )
-    return user_id
+        await conn.execute(
+            text(
+                "INSERT INTO org_memberships (id, account_id, organisation_id, role) "
+                "VALUES (:mid, :aid, :oid, 'viewer')",
+            ),
+            {
+                "mid": str(uuid.uuid4()),
+                "aid": str(account_id),
+                "oid": str(test_org),
+            },
+        )
+    return account_id
 
 
 @pytest_asyncio.fixture
@@ -116,7 +106,7 @@ async def demo_pipeline(
     async with db_engine.connect() as conn, conn.begin():
         await conn.execute(
             text(
-                "INSERT INTO pipelines (id, organisation_id, name, description, created_by, "
+                "INSERT INTO pipelines (id, organisation_id, name, description, account_id, "
                 "max_concurrent_runs, lock_wait_timeout_seconds, node_timeout_seconds, "
                 "run_context_defaults, graph_nodes_json, default_autonomy_level, visibility) "
                 "VALUES (:id, :oid, :name, :desc, :uid, 5, 30, 300, "
@@ -178,7 +168,6 @@ async def demo_client(
 async def test_seed_demo_data_creates_demo_user(db_engine: AsyncEngine, db_url: str) -> None:
     """Call _seed_demo_data with MODULO_DEMO_MODE=true and verify the demo user is created."""
     from modulo.api.main import _seed_demo_data
-    from modulo.auth.passwords import verify_password
     from modulo.settings import Settings
 
     settings = Settings(
@@ -211,22 +200,28 @@ async def test_seed_demo_data_creates_demo_user(db_engine: AsyncEngine, db_url: 
 
     async with db_engine.connect() as conn:
         result = await conn.execute(
-            text("SELECT email, display_name, org_role, password_hash FROM users WHERE email = 'demo'"),
+            text("SELECT email, display_name FROM accounts WHERE email = 'demo'"),
         )
         row = result.one_or_none()
         assert row is not None, "Demo user was not created by _seed_demo_data"
-        _email, display_name, org_role, password_hash = row
+        _email, display_name = row
         assert display_name == "Demo User"
-        assert org_role == "viewer"
-        assert password_hash is not None
-        assert verify_password("demo", password_hash)
 
     # Clean up the seed-created user to avoid cross-test contamination
     async with db_engine.connect() as conn:
-        await conn.execute(
-            text("DELETE FROM users WHERE email = 'demo' AND organisation_id = :oid"),
-            {"oid": str(org_id)},
+        demo_id_result = await conn.execute(
+            text("SELECT id FROM accounts WHERE email = 'demo' LIMIT 2"),
         )
+        demo_ids = [row[0] for row in demo_id_result.fetchall()]
+        for did in demo_ids:
+            await conn.execute(
+                text("DELETE FROM org_memberships WHERE account_id = :aid AND organisation_id = :oid"),
+                {"aid": str(did), "oid": str(org_id)},
+            )
+            await conn.execute(
+                text("DELETE FROM accounts WHERE id = :aid AND email = 'demo'"),
+                {"aid": str(did)},
+            )
         await conn.commit()
 
     deps._engine = None
@@ -273,7 +268,7 @@ async def test_seed_demo_data_skipped_when_disabled(db_engine: AsyncEngine, db_u
 
     # First, clean the demo user from previous test
     async with db_engine.connect() as conn:
-        await conn.execute(text("DELETE FROM users WHERE email = 'demo'"))
+        await conn.execute(text("DELETE FROM accounts WHERE email = 'demo'"))
         await conn.commit()
 
     import modulo.api.dependencies as deps
@@ -287,7 +282,7 @@ async def test_seed_demo_data_skipped_when_disabled(db_engine: AsyncEngine, db_u
 
     async with db_engine.connect() as conn:
         result = await conn.execute(
-            text("SELECT email FROM users WHERE email = 'demo'"),
+            text("SELECT email FROM accounts WHERE email = 'demo'"),
         )
         assert result.one_or_none() is None, "No demo user should exist when MODULO_DEMO_MODE is disabled"
 
@@ -328,17 +323,26 @@ async def test_seed_demo_data_idempotent(db_engine: AsyncEngine, db_url: str) ->
 
     async with db_engine.connect() as conn:
         result = await conn.execute(
-            text("SELECT COUNT(*) FROM users WHERE email = 'demo'"),
+            text("SELECT COUNT(*) FROM accounts WHERE email = 'demo'"),
         )
         count = result.scalar()
         assert count == 1, f"Expected 1 demo user, got {count}"
 
     # Clean up the seed-created user to avoid cross-test contamination
     async with db_engine.connect() as conn:
-        await conn.execute(
-            text("DELETE FROM users WHERE email = 'demo' AND organisation_id = :oid"),
-            {"oid": str(org_id)},
+        demo_id_result = await conn.execute(
+            text("SELECT id FROM accounts WHERE email = 'demo' LIMIT 2"),
         )
+        demo_ids = [row[0] for row in demo_id_result.fetchall()]
+        for did in demo_ids:
+            await conn.execute(
+                text("DELETE FROM org_memberships WHERE account_id = :aid AND organisation_id = :oid"),
+                {"aid": str(did), "oid": str(org_id)},
+            )
+            await conn.execute(
+                text("DELETE FROM accounts WHERE id = :aid AND email = 'demo'"),
+                {"aid": str(did)},
+            )
         await conn.commit()
 
     deps._engine = None

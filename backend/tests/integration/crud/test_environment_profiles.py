@@ -109,9 +109,12 @@ async def test_create_with_minimal_fields(rls_session: AsyncSession, test_org: u
     assert loaded.is_active is True
 
 
-@pytest.mark.skip(reason="awaiting-implementation — RLS isolation needs investigation")
 async def test_rls_isolation(db_engine: AsyncEngine) -> None:
     """EnvironmentProfiles from org A are invisible from org B."""
+    from sqlalchemy.ext.asyncio import async_sessionmaker
+
+    from modulo.db.rls import set_rls_org
+
     org_a = uuid.uuid4()
     org_b = uuid.uuid4()
 
@@ -164,14 +167,9 @@ async def test_rls_isolation(db_engine: AsyncEngine) -> None:
         )
 
     # Query from org_a's context should not see org_b's profile
-    from sqlalchemy.ext.asyncio import async_sessionmaker
-
     factory = async_sessionmaker(db_engine, expire_on_commit=False)
     async with factory() as session:
-        await session.execute(
-            text("SELECT set_config('app.organisation_id', :oid, true)"),
-            {"oid": str(org_a)},
-        )
+        await set_rls_org(session, org_a)
         profiles = (await session.execute(select(EnvironmentProfile))).scalars().all()
         names = {p.name for p in profiles}
         assert "org-a-profile" in names
