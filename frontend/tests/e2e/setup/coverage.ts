@@ -40,7 +40,7 @@ export async function stopCoverage(page: Page): Promise<void> {
         path: viteUrlToPath(entry.url),
         functions: entry.functions.map((f: any) => ({
           functionName: f.functionName,
-          ranges: (f.ranges || []).map((r: any) => ({ start: r.startOffset, end: r.endOffset, count: r.count ?? 0 })),
+          ranges: (f.ranges || []).map((r: any) => ({ startOffset: r.startOffset, endOffset: r.endOffset, count: r.count ?? 0 })),
           isBlockCoverage: f.isBlockCoverage,
         })),
       })

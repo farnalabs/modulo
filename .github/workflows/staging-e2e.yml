@@ -6,6 +6,8 @@ on:
     types: [completed]
   schedule:
     - cron: '0 6 * * *'
+  push:
+    branches: [main]
   workflow_dispatch:
 
 concurrency:
@@ -111,11 +113,65 @@ jobs:
         run: npx playwright install chromium
       - name: Run WCAG audit on staging
         run: npx playwright test staging-wcag
+        env:
+          E2E_TARGET: staging
+          E2E_NO_WEBSERVER: "true"
       - name: Upload test results
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: staging-wcag-results
+          path: frontend/test-results/
+      - name: Final cleanup
+        if: always()
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Continue'
+          Remove-Item -Path "$env:TEMP\ms-playwright" -Recurse -Force -ErrorAction SilentlyContinue
+
+  playwright-regression:
+    needs: [cleanup-stale]
+    runs-on: [self-hosted, windows, docker]
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - name: Wait for staging health
+        shell: powershell
+        timeout-minutes: 5
+        run: |
+          Write-Host "Waiting for staging.modulo.run ..."
+          for ($i=0; $i -lt 60; $i++) {
+            try {
+              $r = curl.exe -s -f "https://staging.modulo.run/healthz" 2>$null
+              if ($LASTEXITCODE -eq 0) { Write-Host "Staging ready after ${i}s"; exit 0 }
+            } catch {}
+            Start-Sleep -Seconds 5
+          }
+          exit 1
+      - name: Install frontend deps
+        run: npm ci
+      - name: Install Playwright browsers
+        run: npx playwright install chromium
+      - name: Run Playwright E2E regression suite against staging
+        continue-on-error: true
+        run: npm run test:e2e:staging -- --reporter=line --reporter=junit
+        timeout-minutes: 30
+        env:
+          E2E_TARGET: staging
+          E2E_NO_WEBSERVER: "true"
+          PLAYWRITE_JUNIT_OUTPUT_NAME: test-results/junit.xml
+      - name: Upload Playwright test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-regression-results
           path: frontend/test-results/
       - name: Final cleanup
         if: always()

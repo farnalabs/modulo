@@ -1,25 +1,16 @@
-import { test, expect } from './setup/fixtures'
-
-async function login(page: import('@playwright/test').Page) {
-  await page.goto('/login')
-  await page.waitForLoadState('networkidle')
-  await page.fill('input[type="text"]', 'admin@example.com')
-  await page.fill('input[type="password"]', 'password123')
-  await page.click('button[type="submit"]')
-  await page.waitForURL(/^(?!.*\/login).*$/, { timeout: 5000 }).catch(() => {})
-}
+import { test, expect, loginAsAdmin } from './setup/fixtures'
 
 test.describe('Notifications', () => {
-  test('notifications page loads', async ({ page }) => {
-    await login(page)
+  test('notifications page loads', async ({ page, env }) => {
+    await loginAsAdmin(page, env)
     await page.goto('/notifications')
     await page.waitForLoadState('networkidle')
 
     await expect(page.locator('h1')).toContainText(/Notification/i)
   })
 
-  test('notification list renders elements', async ({ page }) => {
-    await login(page)
+  test('notification list renders elements', async ({ page, env }) => {
+    await loginAsAdmin(page, env)
     await page.route('**/api/v1/notifications*', (route) => {
       route.fulfill({
         status: 200,

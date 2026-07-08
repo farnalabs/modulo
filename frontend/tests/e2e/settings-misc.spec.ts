@@ -1,17 +1,8 @@
-import { test, expect } from './setup/fixtures'
-
-async function login(page: import('@playwright/test').Page) {
-  await page.goto('/login')
-  await page.waitForLoadState('networkidle')
-  await page.fill('input[type="text"]', 'admin@example.com')
-  await page.fill('input[type="password"]', 'password123')
-  await page.click('button[type="submit"]')
-  await page.waitForURL(/^(?!.*\/login).*$/, { timeout: 5000 }).catch(() => {})
-}
+import { test, expect, loginAsAdmin } from './setup/fixtures'
 
 test.describe('Settings HITL Review', () => {
-  test('page loads with correct heading', async ({ page }) => {
-    await login(page)
+  test('page loads with correct heading', async ({ page, env }) => {
+    await loginAsAdmin(page, env)
     await page.goto('/settings/hitl-review')
     await page.waitForLoadState('networkidle')
     await expect(page.locator('h1')).toContainText('HITL Review')
@@ -20,8 +11,8 @@ test.describe('Settings HITL Review', () => {
 })
 
 test.describe('Settings Browser Monitoring', () => {
-  test('page loads with correct heading', async ({ page }) => {
-    await login(page)
+  test('page loads with correct heading', async ({ page, env }) => {
+    await loginAsAdmin(page, env)
     await page.goto('/settings/monitoring')
     await page.waitForLoadState('networkidle')
     await expect(page.locator('h1')).toContainText('Browser Monitoring')
@@ -30,8 +21,8 @@ test.describe('Settings Browser Monitoring', () => {
 })
 
 test.describe('Settings Rate Limits', () => {
-  test('page loads with correct heading', async ({ page }) => {
-    await login(page)
+  test('page loads with correct heading', async ({ page, env }) => {
+    await loginAsAdmin(page, env)
     await page.goto('/settings/rate-limits')
     await page.waitForLoadState('networkidle')
     await expect(page.locator('h1')).toContainText('Rate Limits')
@@ -40,8 +31,8 @@ test.describe('Settings Rate Limits', () => {
 })
 
 test.describe('Settings Remy Skills', () => {
-  test('page loads with correct heading', async ({ page }) => {
-    await login(page)
+  test('page loads with correct heading', async ({ page, env }) => {
+    await loginAsAdmin(page, env)
     await page.goto('/settings/remy')
     await page.waitForLoadState('networkidle')
     await expect(page.locator('h1')).toContainText('Remy Skills')
@@ -50,8 +41,8 @@ test.describe('Settings Remy Skills', () => {
 })
 
 test.describe('Settings Runtime Config', () => {
-  test('page loads with correct heading', async ({ page }) => {
-    await login(page)
+  test('page loads with correct heading', async ({ page, env }) => {
+    await loginAsAdmin(page, env)
     await page.goto('/settings/runtime-config')
     await page.waitForLoadState('networkidle')
     await expect(page.locator('h1')).toContainText('Runtime Config')
