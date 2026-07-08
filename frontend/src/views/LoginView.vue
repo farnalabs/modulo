@@ -68,6 +68,7 @@
 import { ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { setAccessToken, setRefreshToken } from '../lib/api/client'
+import { formatApiError } from '../lib/api/formatError'
 
 const router = useRouter()
 const email = ref('')
@@ -94,9 +95,10 @@ async function login() {
     if (data.refresh_token) setRefreshToken(data.refresh_token)
     router.push('/')
   } catch (e: unknown) {
-    error.value = `Login failed: ${e instanceof Error ? e.message : String(e)}`
+    error.value = `Login failed: ${formatApiError(e)}`
   } finally {
     loading.value = false
   }
 }
 </script>
+

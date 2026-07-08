@@ -1,3 +1,4 @@
+import asyncio
 from __future__ import annotations
 
 import logging
@@ -198,6 +199,8 @@ class SkillLoader:
         config_service = self._config_service or RemyConfigService(self._session)
         try:
             config = await config_service.get_config(org_id)
+        except asyncio.CancelledError:
+            raise
         except Exception:
             logger.exception("Failed to load Remy config for org %s", org_id)
             config = None
@@ -205,6 +208,8 @@ class SkillLoader:
         ctx_service = self._ctx_service or RemyContextSourceService(self._session)
         try:
             effective = await ctx_service.get_effective_config(org_id, user_id)
+        except asyncio.CancelledError:
+            raise
         except Exception:
             logger.exception("Failed to load context source config for org %s", org_id)
             effective = None
@@ -257,6 +262,8 @@ class SkillLoader:
         if include_ui_tools_text and self._ui_tools_text_fn:
             try:
                 tools_text = self._ui_tools_text_fn()
+            except asyncio.CancelledError:
+                raise
             except Exception:
                 logger.exception("Failed to build UI tools text")
                 tools_text = None

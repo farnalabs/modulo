@@ -98,7 +98,7 @@ async function loadConfig() {
       items.value = data as unknown as ConfigEntry[]
     }
   } catch (e: unknown) {
-    error.value = `Failed to load system config: ${e instanceof Error ? e.message : String(e)}`
+    error.value = `Failed to load system config: ${formatApiError(e)}`
   } finally {
     loading.value = false
   }
@@ -106,3 +106,4 @@ async function loadConfig() {
 
 onMounted(loadConfig)
 </script>
+

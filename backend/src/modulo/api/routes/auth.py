@@ -214,6 +214,11 @@ async def refresh(
     try:
         async with session.begin():
             new_sequence, theft_detected = await advance_sequence(session, family_uuid, sequence)
+    except IntegrityError:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="A resource with this value already exists",
+        )
     except ProgrammingError:
         _log.warning("refresh.programming_error")
         raise HTTPException(
@@ -297,6 +302,11 @@ async def logout(
                     blacklisted = await blacklist_family(session, family_uuid)
                     if not blacklisted:
                         _log.warning("logout.family_not_found", extra={"family_id": family_id_val})
+            except IntegrityError:
+                        raise HTTPException(
+                                    status_code=status.HTTP_409_CONFLICT,
+                                    detail="A resource with this value already exists",
+                        )
             except ProgrammingError:
                 _log.warning("logout.programming_error")
                 raise HTTPException(
@@ -396,6 +406,11 @@ async def me(
     try:
         async with session.begin():
             account = await get_account_by_id(session, current_user.account_id)
+    except IntegrityError:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="A resource with this value already exists",
+        )
     except ProgrammingError:
         _log.warning("me.programming_error")
         raise HTTPException(

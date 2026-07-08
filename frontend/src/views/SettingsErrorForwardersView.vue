@@ -327,7 +327,7 @@ async function loadForwarders() {
       }
     }
   } catch (e: unknown) {
-    loadError.value = `Failed to load forwarders: ${e instanceof Error ? e.message : String(e)}`
+    loadError.value = `Failed to load forwarders: ${formatApiError(e)}`
   } finally {
     loading.value = false
   }
@@ -370,7 +370,7 @@ async function saveConfig(fwd: ForwarderItem) {
       errorFwdTimeouts.value[ftype] = setTimeout(() => { formSuccess.value[ftype] = null }, 3000)
     }
   } catch (e: unknown) {
-    formErrors.value[ftype] = `Save failed: ${e instanceof Error ? e.message : String(e)}`
+    formErrors.value[ftype] = `Save failed: ${formatApiError(e)}`
   } finally {
     saving.value[ftype] = false
   }
@@ -394,7 +394,7 @@ async function testConnection(fwd: ForwarderItem) {
       errorFwdTimeouts.value[ftype] = setTimeout(() => { testResults.value[ftype] = null }, 10000)
     }
   } catch (e: unknown) {
-    testResults.value[ftype] = { ok: false, message: e instanceof Error ? e.message : String(e) }
+    testResults.value[ftype] = { ok: false, message: formatApiError(e) }
   } finally {
     testing.value[ftype] = false
   }
@@ -411,3 +411,4 @@ onMounted(() => {
   loadForwarders()
 })
 </script>
+

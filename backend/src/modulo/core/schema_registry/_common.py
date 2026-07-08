@@ -56,6 +56,8 @@ async def invoke_and_parse(
             if attempt == _max_retries:
                 raise error_cls(f"LLM call timed out after {timeout}s") from None
             continue
+        except asyncio.CancelledError:
+            raise
         except Exception as exc:
             _log.exception("LLM call failed during schema %s (attempt %d/%d)", context, attempt, _max_retries)
             if attempt == _max_retries:

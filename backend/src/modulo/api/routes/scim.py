@@ -239,6 +239,11 @@ async def list_users(
     except HTTPException:
         _log.warning("SCIM list_users: re-raising HTTPException")
         raise
+    except IntegrityError:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="A resource with this value already exists",
+        )
     except ProgrammingError:
         _log.warning("SCIM endpoint failed: database migration required")
         raise HTTPException(
@@ -351,6 +356,11 @@ async def get_user(
     except HTTPException:
         _log.warning("SCIM get_user: re-raising HTTPException")
         raise
+    except IntegrityError:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="A resource with this value already exists",
+        )
     except ProgrammingError:
         _log.warning("SCIM endpoint failed: database migration required")
         raise HTTPException(
@@ -399,6 +409,11 @@ async def replace_user(
                 display_name=display_name,
                 active=req.active,
             )
+    except IntegrityError:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="A resource with this value already exists",
+        )
     except ProgrammingError:
         _log.warning("SCIM endpoint failed: database migration required")
         raise HTTPException(
@@ -470,6 +485,11 @@ async def patch_user(
     except HTTPException:
         _log.warning("SCIM patch_user: re-raising HTTPException")
         raise
+    except IntegrityError:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="A resource with this value already exists",
+        )
     except ProgrammingError:
         _log.warning("SCIM endpoint failed: database migration required")
         raise HTTPException(
@@ -506,6 +526,11 @@ async def delete_user(
     except HTTPException:
         _log.warning("SCIM delete_user: re-raising HTTPException")
         raise
+    except IntegrityError:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="A resource with this value already exists",
+        )
     except ProgrammingError:
         _log.warning("SCIM endpoint failed: database migration required")
         raise HTTPException(
@@ -567,6 +592,11 @@ async def list_groups(
     except HTTPException:
         _log.warning("SCIM list_groups: re-raising HTTPException")
         raise
+    except IntegrityError:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="A resource with this value already exists",
+        )
     except ProgrammingError:
         _log.warning("SCIM endpoint failed: database migration required")
         raise HTTPException(
@@ -714,6 +744,11 @@ async def get_group(
     except HTTPException:
         _log.warning("SCIM get_group: re-raising HTTPException")
         raise
+    except IntegrityError:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="A resource with this value already exists",
+        )
     except ProgrammingError:
         _log.warning("SCIM endpoint failed: database migration required")
         raise HTTPException(
@@ -774,6 +809,11 @@ async def replace_group(
     except HTTPException:
         _log.warning("SCIM replace_group: re-raising HTTPException")
         raise
+    except IntegrityError:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="A resource with this value already exists",
+        )
     except ProgrammingError:
         _log.warning("SCIM endpoint failed: database migration required")
         raise HTTPException(
@@ -905,6 +945,11 @@ async def patch_group(
     except HTTPException:
         _log.warning("SCIM patch_group: re-raising HTTPException")
         raise
+    except IntegrityError:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="A resource with this value already exists",
+        )
     except ProgrammingError:
         _log.warning("SCIM endpoint failed: database migration required")
         raise HTTPException(
@@ -941,6 +986,11 @@ async def delete_group(
     except HTTPException:
         _log.warning("SCIM delete_group: re-raising HTTPException")
         raise
+    except IntegrityError:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="A resource with this value already exists",
+        )
     except ProgrammingError:
         _log.warning("SCIM endpoint failed: database migration required")
         raise HTTPException(

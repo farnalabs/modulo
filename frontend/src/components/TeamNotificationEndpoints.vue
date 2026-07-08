@@ -1,4 +1,4 @@
-<template>
+﻿<template>
   <div>
     <div v-if="loading" class="flex items-center justify-center py-4">
       <div
@@ -428,7 +428,7 @@ async function loadEndpoints() {
       endpoints.value = data;
     }
   } catch (e: unknown) {
-    error.value = `Failed to load endpoints: ${e instanceof Error ? e.message : String(e)}`;
+    error.value = `Failed to load endpoints: ${formatApiError(e)}`;
   } finally {
     loading.value = false;
   }
@@ -482,7 +482,7 @@ async function saveEdit() {
       await loadEndpoints();
     }
   } catch (e: unknown) {
-    editError.value = `Save failed: ${e instanceof Error ? e.message : String(e)}`;
+    editError.value = `Save failed: ${formatApiError(e)}`;
   } finally {
     saving.value = false;
   }
@@ -517,7 +517,7 @@ async function addEndpoint() {
       await loadEndpoints();
     }
   } catch (e: unknown) {
-    addError.value = `Create failed: ${e instanceof Error ? e.message : String(e)}`;
+    addError.value = `Create failed: ${formatApiError(e)}`;
   } finally {
     adding.value = false;
   }
@@ -545,7 +545,7 @@ async function deleteEndpoint(id: string) {
       await loadEndpoints();
     }
   } catch (e: unknown) {
-    error.value = `Delete failed: ${e instanceof Error ? e.message : String(e)}`;
+    error.value = `Delete failed: ${formatApiError(e)}`;
   } finally {
     deleting.value = false;
   }
@@ -577,7 +577,7 @@ async function test(ep: NotificationEndpointResponse) {
       success: false,
       status_code: null,
       response_body: null,
-      error: e instanceof Error ? e.message : String(e),
+      error: formatApiError(e),
     };
   } finally {
     testingId.value = null;
@@ -586,3 +586,4 @@ async function test(ep: NotificationEndpointResponse) {
 
 onMounted(() => loadEndpoints());
 </script>
+

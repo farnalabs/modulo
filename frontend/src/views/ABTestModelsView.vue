@@ -296,6 +296,7 @@ import LoadingSpinner from '../components/shared/LoadingSpinner.vue'
 import ErrorAlert from '../components/shared/ErrorAlert.vue'
 import PageTabs from "../components/PageTabs.vue"
 import { shortId } from '../utils/format'
+import { formatApiError } from '../lib/api/formatError'
 
 type PipelineItem = components['schemas']['PipelineItem']
 type VariantGroup = components['schemas']['VariantGroupResponse']
@@ -507,7 +508,7 @@ async function saveGroup() {
       }
     }
   } catch (e: unknown) {
-    error.value = `Failed to save group: ${e instanceof Error ? e.message : String(e)}`
+    error.value = `Failed to save group: ${formatApiError(e)}`
   }
 }
 
@@ -557,7 +558,7 @@ async function runTest(groupId: string) {
 
     await pollRunStatus(run_id, variant_name)
   } catch (e: unknown) {
-    error.value = `Failed to run A/B test: ${e instanceof Error ? e.message : String(e)}`
+    error.value = `Failed to run A/B test: ${formatApiError(e)}`
   } finally {
     running.value = false
   }
@@ -683,7 +684,7 @@ async function promoteWinner(variantName: string) {
       error.value = `Failed to promote variant: ${JSON.stringify(err)}`
     }
   } catch (e: unknown) {
-    error.value = `Failed to promote variant: ${e instanceof Error ? e.message : String(e)}`
+    error.value = `Failed to promote variant: ${formatApiError(e)}`
   } finally {
     promotingName.value = null
   }
@@ -795,3 +796,4 @@ function delay(ms: number): Promise<void> {
   return new Promise(resolve => setTimeout(resolve, ms))
 }
 </script>
+

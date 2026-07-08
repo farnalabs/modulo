@@ -1,4 +1,4 @@
-<template>
+﻿<template>
   <div class="mx-auto max-w-5xl space-y-8 p-6">
     <FeatureGate feature-name="environment_profiles" required-tier="team" show-disabled>
 
@@ -396,7 +396,7 @@ async function loadProfiles() {
       profiles.value = data.items
     }
   } catch (e: unknown) {
-    error.value = `Failed to load profiles: ${e instanceof Error ? e.message : String(e)}`
+    error.value = `Failed to load profiles: ${formatApiError(e)}`
   } finally {
     loading.value = false
   }
@@ -548,7 +548,7 @@ async function createProfile() {
       closeForm()
     }
   } catch (e: unknown) {
-    formError.value = e instanceof Error ? e.message : String(e)
+    formError.value = formatApiError(e)
   } finally {
     saving.value = false
   }
@@ -573,7 +573,7 @@ async function updateProfile() {
       closeForm()
     }
   } catch (e: unknown) {
-    formError.value = e instanceof Error ? e.message : String(e)
+    formError.value = formatApiError(e)
   } finally {
     saving.value = false
   }
@@ -601,7 +601,7 @@ async function deleteProfile() {
       deleteConfirmProfileId.value = null
     }
   } catch (e: unknown) {
-    deleteError.value = e instanceof Error ? e.message : String(e)
+    deleteError.value = formatApiError(e)
   } finally {
     deleting.value = false
   }
@@ -650,7 +650,7 @@ async function testConnection(profile: ProfileItem) {
       }
     }
   } catch (e: unknown) {
-    testResult.events.push({ event: 'failed', detail: e instanceof Error ? e.message : String(e), timestamp: new Date().toISOString() })
+    testResult.events.push({ event: 'failed', detail: formatApiError(e), timestamp: new Date().toISOString() })
   }
 }
 
@@ -662,3 +662,4 @@ function closeTestResult() {
 
 onMounted(loadProfiles)
 </script>
+

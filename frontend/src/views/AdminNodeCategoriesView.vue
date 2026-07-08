@@ -186,7 +186,7 @@ async function loadCategories() {
       categories.value = data.items ?? data as unknown as NodeCategory[]
     }
   } catch (e: unknown) {
-    error.value = e instanceof Error ? e.message : String(e)
+    error.value = formatApiError(e)
   } finally {
     loading.value = false
   }
@@ -244,7 +244,7 @@ async function deleteCategory() {
       deleteConfirmCategoryId.value = null
     }
   } catch (e: unknown) {
-    deleteError.value = e instanceof Error ? e.message : String(e)
+    deleteError.value = formatApiError(e)
   } finally {
     deleting.value = false
   }
@@ -271,3 +271,4 @@ function iconSvg(name: string): string {
 
 onMounted(() => { planStore.fetchPlan(); loadCategories() })
 </script>
+

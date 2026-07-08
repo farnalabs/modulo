@@ -518,7 +518,7 @@ async function loadConnectors() {
       connectors.value = data.items
     }
   } catch (e: unknown) {
-    connectorsError.value = `Failed to load connectors: ${e instanceof Error ? e.message : String(e)}`
+    connectorsError.value = `Failed to load connectors: ${formatApiError(e)}`
   } finally {
     loadingConnectors.value = false
   }
@@ -568,7 +568,7 @@ async function inferSchema() {
       editableSchemaDescription.value = data.suggestion_description ?? ''
     }
   } catch (e: unknown) {
-    inferError.value = `Schema inference failed: ${e instanceof Error ? e.message : String(e)}`
+    inferError.value = `Schema inference failed: ${formatApiError(e)}`
   } finally {
     inferring.value = false
   }
@@ -610,7 +610,7 @@ async function saveSchema() {
 
     wizardState.publishedSchemaId = schemaData.id
   } catch (e: unknown) {
-    schemaSaveError.value = `Save failed: ${e instanceof Error ? e.message : String(e)}`
+    schemaSaveError.value = `Save failed: ${formatApiError(e)}`
   } finally {
     savingSchema.value = false
   }
@@ -696,3 +696,4 @@ onMounted(() => {
   loadConnectors()
 })
 </script>
+

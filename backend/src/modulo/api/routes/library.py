@@ -296,6 +296,11 @@ async def list_library_primitives_endpoint(
                     source=source,
                     cursor=cursor,
                 )
+        except IntegrityError:
+                raise HTTPException(
+                        status_code=status.HTTP_409_CONFLICT,
+                        detail="A resource with this value already exists",
+                )
         except ProgrammingError:
             _log.warning("list_library_primitives_endpoint: ProgrammingError — missing DB table or migration")
             raise HTTPException(
@@ -363,6 +368,11 @@ async def get_library_primitive_endpoint(
             await set_rls_org(session, principal.organisation_id)
             await set_rls_user_context(session, principal.account_id, principal.org_role)
             primitive = await get_primitive(session, principal.organisation_id, primitive_id)
+    except IntegrityError:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="A resource with this value already exists",
+        )
     except ProgrammingError:
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
@@ -430,6 +440,11 @@ async def create_library_primitive_endpoint(
                 account_id=principal.account_id,
                 tier=req.tier,
             )
+    except IntegrityError:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="A resource with this value already exists",
+        )
     except ProgrammingError:
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
@@ -467,6 +482,11 @@ async def update_library_primitive_endpoint(
             await set_rls_org(session, principal.organisation_id)
             await set_rls_user_context(session, principal.account_id, principal.org_role)
             prim = await update_library_primitive(session, primitive_id, updates)
+    except IntegrityError:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="A resource with this value already exists",
+        )
     except ProgrammingError:
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
@@ -497,6 +517,11 @@ async def delete_library_primitive_endpoint(
             await set_rls_org(session, principal.organisation_id)
             await set_rls_user_context(session, principal.account_id, principal.org_role)
             deleted = await delete_library_primitive(session, primitive_id)
+    except IntegrityError:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="A resource with this value already exists",
+        )
     except ProgrammingError:
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
@@ -547,6 +572,11 @@ async def copy_to_adapt_endpoint(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Primitive {primitive_id} not found",
         ) from None
+    except IntegrityError:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="A resource with this value already exists",
+        )
     except ProgrammingError:
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
@@ -583,6 +613,11 @@ async def export_pipeline_endpoint(
                     detail=f"Pipeline {pipeline_id} not found",
                 )
             bundle_bytes = await export_pipeline_bundle(session, pipeline_id)
+    except IntegrityError:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="A resource with this value already exists",
+        )
     except ProgrammingError:
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
@@ -715,6 +750,11 @@ async def _analyse_bundle(
 
             teams_result = await session.execute(select(Team).where(Team.organisation_id == principal.organisation_id))
             teams = list(teams_result.scalars())
+    except IntegrityError:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="A resource with this value already exists",
+        )
     except ProgrammingError:
         _log.warning("_analyse_bundle: ProgrammingError — missing DB table or migration")
         raise HTTPException(
@@ -835,6 +875,11 @@ async def confirm_import_endpoint(
                 schema_version_overrides=req.schema_version_overrides,
                 connector_instance_overrides=req.connector_overrides,
             )
+    except IntegrityError:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="A resource with this value already exists",
+        )
     except ProgrammingError:
         _log.warning("confirm_import_endpoint: ProgrammingError — missing DB table or migration")
         raise HTTPException(
@@ -878,6 +923,11 @@ async def list_ratings_endpoint(
             await set_rls_org(session, principal.organisation_id)
             await set_rls_user_context(session, principal.account_id, principal.org_role)
             result = await list_ratings_for_primitive(session, primitive_id, page=page, page_size=page_size)
+    except IntegrityError:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="A resource with this value already exists",
+        )
     except ProgrammingError:
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
@@ -906,6 +956,11 @@ async def get_rating_aggregate_endpoint(
             await set_rls_org(session, principal.organisation_id)
             await set_rls_user_context(session, principal.account_id, principal.org_role)
             avg, count = await get_rating_aggregate(session, primitive_id)
+    except IntegrityError:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="A resource with this value already exists",
+        )
     except ProgrammingError:
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
@@ -947,6 +1002,11 @@ async def submit_rating_endpoint(
                 account_id=principal.account_id,
             )
             await update_primitive_ratings_aggregate(session, primitive_id)
+    except IntegrityError:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="A resource with this value already exists",
+        )
     except ProgrammingError:
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
@@ -984,6 +1044,11 @@ async def submit_abuse_report_endpoint(
                 reporter_account_id=principal.account_id,
                 reason=req.reason,
             )
+    except IntegrityError:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="A resource with this value already exists",
+        )
     except ProgrammingError:
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
@@ -1086,6 +1151,11 @@ async def create_pipeline_from_template_endpoint(
 ) -> PipelineFromTemplateResponse:
     try:
         primitive = await get_primitive(session, principal.organisation_id, primitive_id)
+    except IntegrityError:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="A resource with this value already exists",
+        )
     except ProgrammingError:
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
@@ -1125,6 +1195,11 @@ async def create_pipeline_from_template_endpoint(
                     edge_type=edge_data["edge_type"], hitl_gate_config=edge_data.get("hitl_gate_config"),
                 ))
             await session.flush()
+    except IntegrityError:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="A resource with this value already exists",
+        )
     except ProgrammingError:
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
@@ -1182,6 +1257,11 @@ async def community_contribute_endpoint(
             content_json=req.content_json,
             source_url=req.source_url,
         )
+    except IntegrityError:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="A resource with this value already exists",
+        )
     except ProgrammingError:
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
@@ -1215,6 +1295,11 @@ async def list_community_contributions_endpoint(
                 page=page,
                 page_size=page_size,
             )
+        except IntegrityError:
+                raise HTTPException(
+                        status_code=status.HTTP_409_CONFLICT,
+                        detail="A resource with this value already exists",
+                )
         except ProgrammingError:
             _log.warning("list_community_contributions_endpoint: ProgrammingError — missing DB table or migration")
             raise HTTPException(
@@ -1268,6 +1353,11 @@ async def admin_publish_contribution_endpoint(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=str(e),
         ) from None
+    except IntegrityError:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="A resource with this value already exists",
+        )
     except ProgrammingError:
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,

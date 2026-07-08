@@ -141,6 +141,11 @@ async def list_schemas_endpoint(
         async with session.begin():
             await set_rls_org(session, principal.organisation_id)
             result = await list_schemas(session, page=page, page_size=page_size)
+    except IntegrityError:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="A resource with this value already exists",
+        )
     except ProgrammingError:
         logger.exception("schemas.table_missing")
         raise HTTPException(
@@ -225,6 +230,11 @@ async def get_schema_endpoint(
         async with session.begin():
             await set_rls_org(session, principal.organisation_id)
             schema = await get_schema(session, schema_id)
+    except IntegrityError:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="A resource with this value already exists",
+        )
     except ProgrammingError:
         logger.exception("schemas.get")
         raise HTTPException(
@@ -262,6 +272,11 @@ async def update_schema_endpoint(
         async with session.begin():
             await set_rls_org(session, principal.organisation_id)
             schema = await update_schema(session, schema_id, updates)
+    except IntegrityError:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="A resource with this value already exists",
+        )
     except ProgrammingError:
         logger.exception("schemas.update")
         raise HTTPException(
@@ -304,6 +319,11 @@ async def deprecate_schema_endpoint(
         async with session.begin():
             await set_rls_org(session, principal.organisation_id)
             schema = await deprecate_schema(session, schema_id)
+    except IntegrityError:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="A resource with this value already exists",
+        )
     except ProgrammingError:
         logger.exception("schemas.deprecate")
         raise HTTPException(
@@ -346,6 +366,11 @@ async def delete_schema_endpoint(
                 status_code=status.HTTP_409_CONFLICT,
                 detail=str(exc),
             ) from exc
+    except IntegrityError:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="A resource with this value already exists",
+        )
     except ProgrammingError:
         logger.exception("schemas.delete")
         raise HTTPException(
@@ -390,6 +415,11 @@ async def list_schema_versions_endpoint(
             if schema is None:
                 raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Schema not found")
             result = await list_schema_versions(session, schema_id, page=page, page_size=page_size)
+    except IntegrityError:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="A resource with this value already exists",
+        )
     except ProgrammingError:
         logger.exception("schemas.list_versions")
         raise HTTPException(
@@ -485,6 +515,11 @@ async def get_schema_version_endpoint(
         async with session.begin():
             await set_rls_org(session, principal.organisation_id)
             sv = await get_schema_version(session, schema_id, version)
+    except IntegrityError:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="A resource with this value already exists",
+        )
     except ProgrammingError:
         logger.exception("schemas.get_version")
         raise HTTPException(
@@ -549,6 +584,11 @@ async def list_schema_fields_endpoint(
             sv = await _get_latest_version(session, schema_id)
             if sv is None:
                 raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Schema has no versions")
+    except IntegrityError:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="A resource with this value already exists",
+        )
     except ProgrammingError:
         logger.exception("schemas.list_fields")
         raise HTTPException(
@@ -657,6 +697,11 @@ async def infer_schema_endpoint(
                     status_code=status.HTTP_400_BAD_REQUEST,
                     detail="No model backends configured; cannot perform inference",
                 )
+    except IntegrityError:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="A resource with this value already exists",
+        )
     except ProgrammingError:
         logger.exception("schemas.infer.table_missing")
         raise HTTPException(
@@ -817,6 +862,11 @@ async def generate_schema_endpoint(
                     status_code=status.HTTP_400_BAD_REQUEST,
                     detail="No model backends configured; cannot generate schema",
                 )
+    except IntegrityError:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="A resource with this value already exists",
+        )
     except ProgrammingError:
         logger.exception("schemas.generate")
         raise HTTPException(
@@ -960,6 +1010,11 @@ async def migrate_data_endpoint(
             to_sv = await _get_latest_version(session, req.to_schema_id)
             if to_sv is None:
                 raise HTTPException(status_code=404, detail="Target schema has no versions")
+    except IntegrityError:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="A resource with this value already exists",
+        )
     except ProgrammingError:
         logger.exception("schemas.migrate")
         raise HTTPException(

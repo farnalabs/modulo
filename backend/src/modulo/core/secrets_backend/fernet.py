@@ -200,6 +200,8 @@ class FernetSecretsBackend(SecretsBackend):
         try:
             await asyncio.wait_for(self._session.execute(stmt), timeout=_DB_TIMEOUT)
             await asyncio.wait_for(self._session.flush(), timeout=_DB_TIMEOUT)
+        except asyncio.CancelledError:
+            raise
         except Exception:
             logger.exception("FernetSecretsBackend: error deleting secret %s", key)
             raise

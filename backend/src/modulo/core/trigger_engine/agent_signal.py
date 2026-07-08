@@ -1,3 +1,4 @@
+import asyncio
 """Agent signal trigger — cross-pipeline signal on node completion.
 
 When a source pipeline's designated node completes execution, fires a child
@@ -143,6 +144,8 @@ async def fire_agent_signal(
                 input_payload=input_payload,
                 parent_run_id=source_run_id,
             )
+        except asyncio.CancelledError:
+            raise
         except Exception as exc:
             _log.exception("Failed to create child run for agent signal trigger %s", trigger.id)
             await _log_signal_event(

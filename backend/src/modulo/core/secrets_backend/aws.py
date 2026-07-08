@@ -83,6 +83,8 @@ class AWSSecretsManagerBackend(SecretsBackend):
 
                 session = _boto3.Session(**session_kwargs)
                 self._client = session.client("secretsmanager")
+            except asyncio.CancelledError:
+                raise
             except Exception:
                 logger.exception("AWSSecretsManagerBackend: failed to create client")
                 raise
@@ -106,6 +108,8 @@ class AWSSecretsManagerBackend(SecretsBackend):
         except TimeoutError:
             logger.error("AWSSecretsManagerBackend: timeout reading secret %s", key)
             raise RuntimeError("AWSSecretsManagerBackend: timeout reading secret") from None
+        except asyncio.CancelledError:
+            raise
         except Exception as exc:
             logger.error("AWSSecretsManagerBackend: unexpected error reading secret %s: %s", key, exc)
             raise RuntimeError(f"AWSSecretsManagerBackend: unexpected error reading secret: {exc}") from exc
@@ -143,12 +147,16 @@ class AWSSecretsManagerBackend(SecretsBackend):
             except TimeoutError:
                 logger.error("AWSSecretsManagerBackend: timeout writing secret %s", key)
                 raise RuntimeError("AWSSecretsManagerBackend: timeout writing secret") from None
+            except asyncio.CancelledError:
+                raise
             except Exception as exc:
                 logger.error("AWSSecretsManagerBackend: unexpected error writing secret %s: %s", key, exc)
                 raise RuntimeError(f"AWSSecretsManagerBackend: unexpected error writing secret: {exc}") from exc
         except TimeoutError:
             logger.error("AWSSecretsManagerBackend: timeout writing secret %s", key)
             raise RuntimeError("AWSSecretsManagerBackend: timeout writing secret") from None
+        except asyncio.CancelledError:
+            raise
         except Exception as exc:
             logger.error("AWSSecretsManagerBackend: unexpected error writing secret %s: %s", key, exc)
             raise RuntimeError(f"AWSSecretsManagerBackend: unexpected error writing secret: {exc}") from exc
@@ -170,6 +178,8 @@ class AWSSecretsManagerBackend(SecretsBackend):
         except TimeoutError:
             logger.error("AWSSecretsManagerBackend: timeout deleting secret %s", key)
             raise RuntimeError("AWSSecretsManagerBackend: timeout deleting secret") from None
+        except asyncio.CancelledError:
+            raise
         except Exception as exc:
             logger.error("AWSSecretsManagerBackend: unexpected error deleting secret %s: %s", key, exc)
             raise RuntimeError(f"AWSSecretsManagerBackend: unexpected error deleting secret: {exc}") from exc

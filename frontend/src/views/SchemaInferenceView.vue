@@ -223,7 +223,7 @@ async function loadConnectors() {
       connectors.value = data.items
     }
   } catch (e: unknown) {
-    connectorsError.value = `Failed to load connectors: ${e instanceof Error ? e.message : String(e)}`
+    connectorsError.value = `Failed to load connectors: ${formatApiError(e)}`
   } finally {
     loadingConnectors.value = false
   }
@@ -272,7 +272,7 @@ async function inferSchema() {
       }
     }
   } catch (e: unknown) {
-    inferError.value = `Schema inference failed: ${e instanceof Error ? e.message : String(e)}`
+    inferError.value = `Schema inference failed: ${formatApiError(e)}`
   } finally {
     inferring.value = false
   }
@@ -318,7 +318,7 @@ async function publishSchema() {
       router.push({ name: 'library' })
     }, 1500)
   } catch (e: unknown) {
-    publishError.value = `Publish failed: ${e instanceof Error ? e.message : String(e)}`
+    publishError.value = `Publish failed: ${formatApiError(e)}`
   } finally {
     publishing.value = false
   }
@@ -337,3 +337,4 @@ onMounted(() => {
   loadConnectors()
 })
 </script>
+

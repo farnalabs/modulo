@@ -93,6 +93,8 @@ class VaultSecretsBackend(SecretsBackend):
                     )
                 else:
                     raise RuntimeError("VaultSecretsBackend: neither VAULT_TOKEN nor VAULT_ROLE_ID+VAULT_SECRET_ID are set")
+            except asyncio.CancelledError:
+                raise
             except Exception:
                 logger.exception("VaultSecretsBackend: failed to authenticate to Vault at %s", self._addr)
                 raise
@@ -131,6 +133,8 @@ class VaultSecretsBackend(SecretsBackend):
                 raise RuntimeError("VaultSecretsBackend: rate-limited reading secret") from exc
             logger.error("VaultSecretsBackend: Vault error reading secret %s: %s", key, exc)
             raise RuntimeError(f"VaultSecretsBackend: unexpected error reading secret: {exc}") from exc
+        except asyncio.CancelledError:
+            raise
         except Exception as exc:
             logger.error("VaultSecretsBackend: unexpected error reading secret %s: %s", key, exc)
             raise RuntimeError(f"VaultSecretsBackend: unexpected error reading secret: {exc}") from exc
@@ -166,6 +170,8 @@ class VaultSecretsBackend(SecretsBackend):
                 raise RuntimeError("VaultSecretsBackend: rate-limited writing secret") from exc
             logger.error("VaultSecretsBackend: Vault error writing secret %s: %s", key, exc)
             raise RuntimeError(f"VaultSecretsBackend: unexpected error writing secret: {exc}") from exc
+        except asyncio.CancelledError:
+            raise
         except Exception as exc:
             logger.error("VaultSecretsBackend: unexpected error writing secret %s: %s", key, exc)
             raise RuntimeError(f"VaultSecretsBackend: unexpected error writing secret: {exc}") from exc
@@ -193,6 +199,8 @@ class VaultSecretsBackend(SecretsBackend):
                 raise RuntimeError("VaultSecretsBackend: rate-limited deleting secret") from exc
             logger.error("VaultSecretsBackend: Vault error deleting secret %s: %s", key, exc)
             raise RuntimeError(f"VaultSecretsBackend: unexpected error deleting secret: {exc}") from exc
+        except asyncio.CancelledError:
+            raise
         except Exception as exc:
             logger.error("VaultSecretsBackend: unexpected error deleting secret %s: %s", key, exc)
             raise RuntimeError(f"VaultSecretsBackend: unexpected error deleting secret: {exc}") from exc

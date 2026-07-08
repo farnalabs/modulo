@@ -76,7 +76,7 @@ async function loadRules() {
       rules.value = data.rules ?? []
     }
   } catch (e: unknown) {
-    loadError.value = `Failed to load rate limits: ${e instanceof Error ? e.message : String(e)}`
+    loadError.value = `Failed to load rate limits: ${formatApiError(e)}`
   } finally {
     loading.value = false
   }
@@ -84,3 +84,4 @@ async function loadRules() {
 
 onMounted(loadRules)
 </script>
+

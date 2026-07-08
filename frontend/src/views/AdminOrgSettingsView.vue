@@ -178,6 +178,7 @@ import {
 import { usePlanStore } from '../stores/planStore'
 import FeatureGate from '../components/FeatureGate.vue'
 import { shortId } from '../utils/format'
+import { formatApiError } from '../lib/api/formatError'
 
 const planStore = usePlanStore()
 const router = useRouter()
@@ -260,7 +261,7 @@ async function loadData() {
     orgInfo.planTier = overview.plan_tier ?? 'community'
     orgInfo.memberCount = overview.total_users ?? 0
   } catch (e: unknown) {
-    loadError.value = `Failed to load org info: ${e instanceof Error ? e.message : String(e)}`
+    loadError.value = `Failed to load org info: ${formatApiError(e)}`
   } finally {
     loading.value = false
   }
@@ -282,7 +283,7 @@ async function startExport() {
     exportStatus.value = 'complete'
   } catch (e: unknown) {
     exportStatus.value = 'error'
-    exportError.value = e instanceof Error ? e.message : String(e)
+    exportError.value = formatApiError(e)
   }
 }
 
@@ -325,10 +326,11 @@ async function confirmDelete() {
     deleteDialogOpen.value = false
     router.push('/login')
   } catch (e: unknown) {
-    deleteError.value = `Failed to delete org: ${e instanceof Error ? e.message : String(e)}`
+    deleteError.value = `Failed to delete org: ${formatApiError(e)}`
     deleting.value = false
   }
 }
 
 onMounted(() => { planStore.fetchPlan(); loadData() })
 </script>
+

@@ -218,7 +218,9 @@ import { api } from '../lib/api/client'
 import LoadingSpinner from '../components/shared/LoadingSpinner.vue'
 import ErrorAlert from '../components/shared/ErrorAlert.vue'
 import BackLink from '../components/BackLink.vue'
-import { shortId } from '../utils/format'
+import { formatApiError } from '../lib/api/formatError'
+
+const route = useRoute()
 
 const route = useRoute()
 const router = useRouter()
@@ -279,7 +281,7 @@ async function loadDetail() {
     sampleEvent.value = data.sample_event
     assigneeId.value = data.assigned_to || ''
   } catch (e: unknown) {
-    error.value = `Failed to load error group: ${e instanceof Error ? e.message : String(e)}`
+    error.value = `Failed to load error group: ${formatApiError(e)}`
   } finally {
     loading.value = false
   }
@@ -290,7 +292,7 @@ async function updateStatus(status: string) {
     await updateErrorGroup(errorId, { status })
     await loadDetail()
   } catch (e: unknown) {
-    error.value = `Failed to update status: ${e instanceof Error ? e.message : String(e)}`
+    error.value = `Failed to update status: ${formatApiError(e)}`
   }
 }
 
@@ -298,7 +300,7 @@ async function updateAssignee() {
   try {
     await updateErrorGroup(errorId, { assigned_to: assigneeId.value || undefined })
   } catch (e: unknown) {
-    error.value = `Failed to update assignee: ${e instanceof Error ? e.message : String(e)}`
+    error.value = `Failed to update assignee: ${formatApiError(e)}`
   }
 }
 
@@ -310,7 +312,7 @@ async function loadEvents(offset?: number) {
     events.value = data.items
     eventsTotal.value = data.total
   } catch (e: unknown) {
-    error.value = `Failed to load events: ${e instanceof Error ? e.message : String(e)}`
+    error.value = `Failed to load events: ${formatApiError(e)}`
   } finally {
     eventsLoading.value = false
   }
@@ -333,3 +335,5 @@ onMounted(() => {
   loadUsers()
 })
 </script>
+
+

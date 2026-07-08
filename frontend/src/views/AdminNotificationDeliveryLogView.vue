@@ -334,7 +334,7 @@ async function loadDeliveries(cursor?: string | null) {
       expandedId.value = null
     }
   } catch (e: unknown) {
-    error.value = `Failed to load delivery logs: ${e instanceof Error ? e.message : String(e)}`
+    error.value = `Failed to load delivery logs: ${formatApiError(e)}`
   } finally {
     loading.value = false
   }
@@ -397,7 +397,7 @@ async function retryDelivery(entry: DeliveryLogEntry) {
       }
     }
   } catch (e: unknown) {
-    retryMessages.value[entry.id] = { type: 'error', text: `Retry request failed: ${e instanceof Error ? e.message : String(e)}` }
+    retryMessages.value[entry.id] = { type: 'error', text: `Retry request failed: ${formatApiError(e)}` }
   } finally {
     retryingId.value = null
   }
@@ -418,7 +418,7 @@ async function retryAllFailed() {
       retrySuccessMessage.value = data.success ? msg : `${msg} with ${data.errors?.length || 0} error(s)`
     }
   } catch (e: unknown) {
-    error.value = `Retry all request failed: ${e instanceof Error ? e.message : String(e)}`
+    error.value = `Retry all request failed: ${formatApiError(e)}`
   } finally {
     retryingAll.value = false
   }
@@ -426,3 +426,4 @@ async function retryAllFailed() {
 
 onMounted(() => loadDeliveries(null))
 </script>
+

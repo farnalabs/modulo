@@ -1,3 +1,5 @@
+﻿import { formatApiError } from './api/formatError'
+
 export async function withTimeout<T>(
   promise: Promise<T>,
   ms: number,
@@ -13,5 +15,6 @@ export async function withTimeout<T>(
 }
 
 export function asErrorMessage(e: unknown): string {
-  return e instanceof Error ? e.message : String(e);
+  return formatApiError(e);
 }
+
