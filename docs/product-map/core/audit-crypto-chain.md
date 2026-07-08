@@ -3,8 +3,8 @@ id: feat-core-audit-crypto-chain
 prd: 8.12
 delivery-tasks: [task-nv10-audit-crypto-chain]
 bdd:
-  - backend/tests/features/audit/event_recording.feature
-  - backend/tests/features/personas/marcus-ciso.feature
+  - backend/tests/bdd/features/audit/event_recording.feature
+  - backend/tests/bdd/features/personas/marcus-ciso.feature
 code:
   - backend/src/modulo/core/audit_logger/__init__.py
   - backend/src/modulo/core/audit_logger/append_only.py

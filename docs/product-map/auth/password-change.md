@@ -2,7 +2,8 @@
 id: feat-auth-password-change
 prd: 9.4
 delivery-tasks: []
-bdd: backend/tests/bdd/features/auth/change_password.feature
+bdd:
+  - backend/tests/bdd/features/auth/change_password.feature
 unit-tests:
   - backend/tests/unit/api/test_me_password.py
 code:

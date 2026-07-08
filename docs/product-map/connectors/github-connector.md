@@ -4,8 +4,8 @@ prd: 8.6
 delivery-tasks: []
 bdd:
   - backend/tests/bdd/features/connectors/github_connector.feature
-  - backend/tests/features/connectors/github.feature
-  - backend/tests/features/connectors/github_issues.feature
+  - backend/tests/bdd/features/connectors/github.feature
+  - backend/tests/bdd/features/connectors/github_issues.feature
 unit-tests:
   - backend/tests/unit/connectors/test_github.py
   - backend/tests/unit/connectors/test_github_scopes.py

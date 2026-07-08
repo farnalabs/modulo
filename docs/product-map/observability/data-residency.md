@@ -3,7 +3,7 @@ id: feat-observability-data-residency
 prd: 10.5, 6.6, 6.2
 delivery-tasks: [task-nv0-data-residency]
 bdd:
-  - backend/tests/features/personas/marcus-ciso.feature
+  - backend/tests/bdd/features/personas/marcus-ciso.feature
   - backend/tests/bdd/features/observability/otel_traces.feature
   - backend/tests/bdd/features/observability/metrics.feature
   - backend/tests/bdd/steps/test_observability.py
@@ -86,7 +86,7 @@ configuration at every layer.
 
 ### BDD & Test Coverage
 
-- [x] `backend/tests/features/personas/marcus-ciso.feature` — `@goal-marcus-data-residency`
+- [x] `backend/tests/bdd/features/personas/marcus-ciso.feature` — `@goal-marcus-data-residency`
   delivered (no data leaves infrastructure)
 - [x] `backend/tests/bdd/features/observability/otel_traces.feature` — 4 scenarios with step definitions in test_observability.py
 - [x] `backend/tests/bdd/features/observability/metrics.feature` — 4 scenarios with step definitions in test_observability.py

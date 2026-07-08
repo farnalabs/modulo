@@ -3,7 +3,7 @@ id: feat-auth-mcp-oauth
 prd: 6.4
 delivery-tasks: [task-nv9-mcp-oauth]
 bdd:
-  - backend/tests/features/mcp/mcp_oauth.feature
+  - backend/tests/bdd/features/mcp/mcp_oauth.feature
 code:
   - backend/src/modulo/api/routes/mcp_oauth.py
   - backend/src/modulo/api/mcp_server.py
@@ -110,7 +110,7 @@ OAuth 2.0 authorization code grant for MCP client authentication, with client re
 - [x] TestConsumeAuthorizationCode.test_redirect_uri_mismatch
 
 ### BDD Coverage
-- [x] BDD feature file at backend/tests/features/mcp/mcp_oauth.feature exists with scenarios
+- [x] BDD feature file at backend/tests/bdd/features/mcp/mcp_oauth.feature exists with scenarios
 - [x] Authorize flow: valid client receives code
 - [x] Authorize flow: unknown client_id returns error
 - [x] Token exchange: valid code returns access token
