@@ -21,10 +21,13 @@ from jose import JWTError, jwt
 from sqlalchemy import delete as sa_delete
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.exc import ProgrammingError
 
 from modulo.db.models.oauth_client import OAuthClient
 from modulo.db.models.oauth_token import OAuthAuthorizationCode, OAuthTokenFamily
+from fastapi import HTTPException, status
 
+logger = logging.getLogger(__name__)
 _log = logging.getLogger(__name__)
 
 _ALGORITHM = "HS256"
@@ -238,28 +241,42 @@ async def consume_authorization_code(
     """
     await validate_client_secret(session, client_id, client_secret)
 
-    async with session.begin():
-        result = await session.execute(
-            select(OAuthAuthorizationCode).where(OAuthAuthorizationCode.code == code).with_for_update()
+    try:
+
+        async with session.begin():
+            result = await session.execute(
+                select(OAuthAuthorizationCode).where(OAuthAuthorizationCode.code == code).with_for_update()
+            )
+            auth_code = result.scalar_one_or_none()
+            if auth_code is None:
+                raise InvalidGrantError("Authorization code not found")
+
+            if auth_code.client_id != client_id:
+                raise InvalidGrantError("Authorization code was issued to a different client")
+
+            if auth_code.redirect_uri != redirect_uri:
+                raise InvalidGrantError("redirect_uri mismatch")
+
+            if auth_code.used:
+                raise InvalidGrantError("Authorization code has already been used")
+
+            if auth_code.expires_at < datetime.now(UTC):
+                raise InvalidGrantError("Authorization code has expired")
+
+            auth_code.used = True
+            await session.flush()
+    except ProgrammingError:
+
+        logger.exception("auth.oauth")
+
+        raise HTTPException(
+
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+
+            detail="This feature is not available. Run database migrations to enable it.",
+
         )
-        auth_code = result.scalar_one_or_none()
-        if auth_code is None:
-            raise InvalidGrantError("Authorization code not found")
 
-        if auth_code.client_id != client_id:
-            raise InvalidGrantError("Authorization code was issued to a different client")
-
-        if auth_code.redirect_uri != redirect_uri:
-            raise InvalidGrantError("redirect_uri mismatch")
-
-        if auth_code.used:
-            raise InvalidGrantError("Authorization code has already been used")
-
-        if auth_code.expires_at < datetime.now(UTC):
-            raise InvalidGrantError("Authorization code has expired")
-
-        auth_code.used = True
-        await session.flush()
     return auth_code
 
 
