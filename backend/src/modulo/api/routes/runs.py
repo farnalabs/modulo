@@ -181,7 +181,7 @@ async def trigger_run(
         )
 
     except SQLAlchemyError:
-        _log.warning("route.db_error")
+        _log.warning("route.db_error", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database temporarily unavailable.",
@@ -241,13 +241,8 @@ async def trigger_run(
             detail="Feature is not available. Run database migrations to enable it.",
         )
 
-    except IntegrityError:
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail="A run with the given parameters already exists.",
-        )
     except SQLAlchemyError:
-        _log.warning("route.db_error")
+        _log.warning("route.db_error", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database temporarily unavailable.",
@@ -298,7 +293,7 @@ async def get_run_stats_endpoint(
         )
 
     except SQLAlchemyError:
-        _log.warning("route.db_error")
+        _log.warning("route.db_error", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database temporarily unavailable.",
@@ -335,7 +330,7 @@ async def get_run_heatmap_endpoint(
         )
 
     except SQLAlchemyError:
-        _log.warning("route.db_error")
+        _log.warning("route.db_error", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database temporarily unavailable.",
@@ -371,7 +366,7 @@ async def get_run_status(
         )
 
     except SQLAlchemyError:
-        _log.warning("route.db_error")
+        _log.warning("route.db_error", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database temporarily unavailable.",
@@ -428,7 +423,7 @@ async def cancel_run(
         )
 
     except SQLAlchemyError:
-        _log.warning("route.db_error")
+        _log.warning("route.db_error", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database temporarily unavailable.",
@@ -548,7 +543,7 @@ async def get_run_io_endpoint(
         )
 
     except SQLAlchemyError:
-        _log.warning("route.db_error")
+        _log.warning("route.db_error", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database temporarily unavailable.",
@@ -609,7 +604,7 @@ async def export_run_fixture(
         )
 
     except SQLAlchemyError:
-        _log.warning("route.db_error")
+        _log.warning("route.db_error", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database temporarily unavailable.",
@@ -673,7 +668,7 @@ async def get_run_workspace_lease(
         )
 
     except SQLAlchemyError:
-        _log.warning("route.db_error")
+        _log.warning("route.db_error", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database temporarily unavailable.",
@@ -735,7 +730,7 @@ async def get_run_workspace_events(
         )
 
     except SQLAlchemyError:
-        _log.warning("route.db_error")
+        _log.warning("route.db_error", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database temporarily unavailable.",
@@ -822,7 +817,7 @@ async def get_run_node_output(
         )
 
     except SQLAlchemyError:
-        _log.warning("route.db_error")
+        _log.warning("route.db_error", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database temporarily unavailable.",
@@ -897,7 +892,7 @@ async def observe_run_node(
         )
 
     except SQLAlchemyError:
-        _log.warning("route.db_error")
+        _log.warning("route.db_error", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database temporarily unavailable.",
@@ -935,13 +930,8 @@ async def observe_run_node(
             detail="Feature is not available. Run database migrations to enable it.",
         )
 
-    except IntegrityError:
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail="A node observation with the given parameters already exists.",
-        )
     except SQLAlchemyError:
-        _log.warning("route.db_error")
+        _log.warning("route.db_error", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database temporarily unavailable.",
@@ -1039,7 +1029,7 @@ async def recover_run_node(
         )
 
     except SQLAlchemyError:
-        _log.warning("route.db_error")
+        _log.warning("route.db_error", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database temporarily unavailable.",
@@ -1409,7 +1399,7 @@ async def diff_node_output(
         )
 
     except SQLAlchemyError:
-        _log.warning("route.db_error")
+        _log.warning("route.db_error", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database temporarily unavailable.",
