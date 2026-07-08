@@ -198,7 +198,7 @@ async def verify_id_token(
         else:
             raise
 
-    return await _decode_and_verify(id_token, jwk_dict, alg, client_id, issuer, jwks_uri)
+    return await _decode_and_verify(id_token, jwk_dict, alg, client_id, issuer, jwks_uri, header_kid=kid)
 
 
 async def verify_id_token_with_discovery(
@@ -241,6 +241,7 @@ async def _decode_and_verify(
     client_id: str,
     issuer: str,
     jwks_uri: str,
+    header_kid: str | None = None,
 ) -> dict[str, Any]:
     """Construct the key from JWK and verify the JWT."""
     try:
@@ -261,7 +262,7 @@ async def _decode_and_verify(
         _jwks_cache.pop(jwks_uri, None)
         try:
             jwks = await _fetch_jwks_force(jwks_uri)
-            jwk_dict = _find_jwk(jwks, jwk_dict.get("kid"))
+            jwk_dict = _find_jwk(jwks, header_kid)
             key = jwk.construct(jwk_dict)
             claims = jose_jwt.decode(
                 id_token,

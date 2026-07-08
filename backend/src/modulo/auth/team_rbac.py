@@ -25,15 +25,6 @@ ORG_ROLE_HIERARCHY: dict[str, int] = {
 VALID_TEAM_ROLES = frozenset(TEAM_ROLE_HIERARCHY)
 VALID_ORG_ROLES = frozenset(ORG_ROLE_HIERARCHY)
 
-# Pre-computed effective role for every (org_role, team_role) pair.
-# effective = min(org_role_level, team_role_level)
-EFFECTIVE_ACCESS_MODEL: dict[str, dict[str, str]] = {
-    "viewer": {"viewer": "viewer", "runner": "viewer", "operator": "viewer"},
-    "runner": {"viewer": "viewer", "runner": "runner", "operator": "runner"},
-    "operator": {"viewer": "viewer", "runner": "runner", "operator": "operator"},
-    "admin": {"viewer": "viewer", "runner": "runner", "operator": "operator"},
-}
-
 
 def get_effective_team_role(org_role: str, team_role: str) -> str:
     """Return the effective team role after applying the privilege cap.
@@ -41,16 +32,19 @@ def get_effective_team_role(org_role: str, team_role: str) -> str:
     The effective role is the lower of the org role and team role in the
     hierarchy.  If either input is unrecognised the fallback is ``viewer``.
     """
-    result = EFFECTIVE_ACCESS_MODEL.get(org_role, {}).get(team_role, "viewer")
-    if result == "viewer" and (
-        org_role not in EFFECTIVE_ACCESS_MODEL
-        or team_role not in EFFECTIVE_ACCESS_MODEL.get(org_role, {})
-    ):
+    org = ORG_ROLE_HIERARCHY.get(org_role, -1)
+    team = TEAM_ROLE_HIERARCHY.get(team_role, -1)
+    if org == -1 or team == -1:
         _log.warning(
             "rbac.unknown_role_fallback",
             extra={"org_role": org_role, "team_role": team_role, "fallback": "viewer"},
         )
-    return result
+        return "viewer"
+    effective_lvl = min(org, team)
+    for role, lvl in sorted(TEAM_ROLE_HIERARCHY.items(), key=lambda x: -x[1]):
+        if lvl <= effective_lvl:
+            return role
+    return "viewer"
 
 
 def team_role_level(role: str) -> int:

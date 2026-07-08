@@ -13,7 +13,8 @@ import re
 
 import bcrypt as _bcrypt_lib
 
-from modulo.db.models.account import Account
+if True:  # TYPE_CHECKING workaround for import cycle avoidance
+    from modulo.db.models.account import Account
 
 _log = logging.getLogger(__name__)
 

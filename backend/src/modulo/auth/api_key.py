@@ -141,6 +141,7 @@ async def validate_api_key(
             continue
         if hmac.compare_digest(key.hashed_secret, actual_hash):
             key.last_used_at = datetime.now(UTC)
+            await session.flush()
             return key
 
     raise ApiKeyInvalidError()
@@ -223,11 +224,14 @@ async def update_api_key(
         return None
     if name is not None:
         key.name = name
+    effective_role = role if role is not None else key.role
+    effective_team_id = team_id if team_id is not None else key.team_id
+    if effective_team_id is not None and effective_role == "admin":
+        raise ApiKeyInvalidError("team-scoped API keys cannot have admin role")
     if role is not None:
         key.role = role
     if team_id is not None:
         key.team_id = team_id
-        _validate_team_key_role(key)
     if expires_at is not None:
         key.expires_at = expires_at
     await session.flush()
