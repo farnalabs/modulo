@@ -385,7 +385,9 @@ class TestBDDInvalidTeam:
         nonexistent_id = uuid.uuid4()
         mock_session = _make_mock_session()
         # Team query returns None → 404
-        mock_session.execute.return_value.scalar_one_or_none = AsyncMock(return_value=None)
+        # NOTE: scalar_one_or_none is called synchronously in the viewmodel code,
+        # so must use MagicMock — AsyncMock returns a coroutine when called sans await.
+        mock_session.execute.return_value.scalar_one_or_none = MagicMock(return_value=None)
         # But org and user queries need to succeed for the viewmodel handler
         mock_session.execute.return_value.scalars = MagicMock(return_value=MagicMock(all=MagicMock(return_value=[])))
 
