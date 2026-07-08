@@ -22,7 +22,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 logger = logging.getLogger(__name__)
 from pydantic import BaseModel
 from sqlalchemy import select, update as sa_update
-from sqlalchemy.exc import ProgrammingError, SQLAlchemyError
+from sqlalchemy.exc import IntegrityError, ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.api.dependencies import get_db_session
@@ -113,6 +113,11 @@ async def create_feedback(
                 producing_agent_id=req.producing_agent_id,
                 feedback_handler_type=req.feedback_handler_type,
             )
+    except IntegrityError:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="A resource conflict occurred. Please try again.",
+        )
     except ProgrammingError:
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
@@ -164,6 +169,11 @@ async def list_feedback(
                 page=page,
                 page_size=page_size,
             )
+    except IntegrityError:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="A resource conflict occurred. Please try again.",
+        )
     except ProgrammingError:
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
@@ -235,6 +245,11 @@ async def list_feedback_inbox(
                 page=page,
                 page_size=page_size,
             )
+    except IntegrityError:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="A resource conflict occurred. Please try again.",
+        )
     except ProgrammingError:
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
@@ -295,6 +310,11 @@ async def list_eval_proposals(
                         if graph_json:
                             for node in graph_json.get("nodes", []):
                                 node_name_map[str(node.get("id"))] = node.get("name") or node.get("label", "")
+    except IntegrityError:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="A resource conflict occurred. Please try again.",
+        )
     except ProgrammingError:
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
@@ -333,6 +353,11 @@ async def get_feedback(
             await set_rls_org(session, principal.organisation_id)
             mgr = FeedbackManager(session, principal.organisation_id)
             record = await mgr.get_feedback_record(record_id)
+    except IntegrityError:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="A resource conflict occurred. Please try again.",
+        )
     except ProgrammingError:
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
@@ -365,7 +390,7 @@ async def update_feedback_status(
     session: AsyncSession = Depends(get_db_session),
     principal: AuthenticatedPrincipal = Depends(get_current_user),
 ) -> dict[str, Any]:
-    valid_statuses = {"pending", "routing", "correcting", "resolved", "escalated"}
+    valid_statuses = {"pending", "routing", "correcting", "resolved", "escalated", "dismissed"}
     if req.status not in valid_statuses:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
@@ -377,6 +402,11 @@ async def update_feedback_status(
             await set_rls_org(session, principal.organisation_id)
             mgr = FeedbackManager(session, principal.organisation_id)
             record = await mgr.update_status(record_id, req.status)
+    except IntegrityError:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="A resource conflict occurred. Please try again.",
+        )
     except ProgrammingError:
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
@@ -436,6 +466,11 @@ async def detect_eval_gap(
                     eval_suite = list(eval_defs)
 
             is_gap = await mgr.detect_eval_gap(record, eval_suite=eval_suite)
+    except IntegrityError:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="A resource conflict occurred. Please try again.",
+        )
     except ProgrammingError:
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
@@ -482,6 +517,11 @@ async def get_inbox_item(
                     pipeline = await session.get(Pipeline, run_row.pipeline_id)
                     if pipeline:
                         pipeline_name = pipeline.name
+    except IntegrityError:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="A resource conflict occurred. Please try again.",
+        )
     except ProgrammingError:
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
@@ -565,6 +605,11 @@ async def review_feedback(
                     .values(annotation=req.annotation)
                 )
 
+    except IntegrityError:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="A resource conflict occurred. Please try again.",
+        )
     except ProgrammingError:
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
