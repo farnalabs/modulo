@@ -19,6 +19,8 @@ class OllamaBackend(ModelBackendBase):
     as a placeholder.
     """
 
+    supports_tools: bool = True
+
     def __init__(
         self,
         api_key: str | None,
