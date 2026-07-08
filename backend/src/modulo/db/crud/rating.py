@@ -5,6 +5,7 @@ from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 
 from sqlalchemy import func, select
+from sqlalchemy.exc import ProgrammingError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.db.crud.base import PageResult
@@ -129,21 +130,24 @@ async def get_rating_aggregate(
 
     Average is computed as thumbs_up_ratio * 5, yielding a 1-5 weighted score.
     """
-    count_stmt = select(func.count()).select_from(PrimitiveRating).where(PrimitiveRating.primitive_id == primitive_id)
-    total_count = (await session.execute(count_stmt)).scalar_one()
+    try:
+        count_stmt = select(func.count()).select_from(PrimitiveRating).where(PrimitiveRating.primitive_id == primitive_id)
+        total_count = (await session.execute(count_stmt)).scalar_one()
 
-    if total_count == 0:
-        return None, 0
+        if total_count == 0:
+            return None, 0
 
-    thumbs_up_stmt = (
-        select(func.count())
-        .select_from(PrimitiveRating)
-        .where(
-            PrimitiveRating.primitive_id == primitive_id,
-            PrimitiveRating.thumbs_up.is_(True),
+        thumbs_up_stmt = (
+            select(func.count())
+            .select_from(PrimitiveRating)
+            .where(
+                PrimitiveRating.primitive_id == primitive_id,
+                PrimitiveRating.thumbs_up.is_(True),
+            )
         )
-    )
-    thumbs_up_count = (await session.execute(thumbs_up_stmt)).scalar_one()
+        thumbs_up_count = (await session.execute(thumbs_up_stmt)).scalar_one()
+    except ProgrammingError:
+        return None, 0
     ratio = Decimal(thumbs_up_count) / Decimal(total_count)
     avg = ratio * Decimal(5)
     return avg, total_count
@@ -173,17 +177,20 @@ async def list_ratings_for_primitive(
 ) -> PageResult[PrimitiveRating]:
     """List ratings for a primitive, newest first."""
     offset = (page - 1) * page_size
-    count_stmt = select(func.count()).select_from(PrimitiveRating).where(PrimitiveRating.primitive_id == primitive_id)
-    total = (await session.execute(count_stmt)).scalar_one()
-    stmt = (
-        select(PrimitiveRating)
-        .where(PrimitiveRating.primitive_id == primitive_id)
-        .order_by(PrimitiveRating.created_at.desc())
-        .offset(offset)
-        .limit(page_size)
-    )
-    result = await session.execute(stmt)
-    items = list(result.scalars())
+    try:
+        count_stmt = select(func.count()).select_from(PrimitiveRating).where(PrimitiveRating.primitive_id == primitive_id)
+        total = (await session.execute(count_stmt)).scalar_one()
+        stmt = (
+            select(PrimitiveRating)
+            .where(PrimitiveRating.primitive_id == primitive_id)
+            .order_by(PrimitiveRating.created_at.desc())
+            .offset(offset)
+            .limit(page_size)
+        )
+        result = await session.execute(stmt)
+        items = list(result.scalars())
+    except ProgrammingError:
+        return PageResult(items=[], total=0, page=page, page_size=page_size)
     return PageResult(items=items, total=total, page=page, page_size=page_size)
 
 
@@ -229,18 +236,21 @@ async def list_abuse_reports(
     if status_filter:
         conditions.append(PrimitiveAbuseReport.status == status_filter)
 
-    count_stmt = select(func.count()).select_from(PrimitiveAbuseReport).where(*conditions)
-    total = (await session.execute(count_stmt)).scalar_one()
+    try:
+        count_stmt = select(func.count()).select_from(PrimitiveAbuseReport).where(*conditions)
+        total = (await session.execute(count_stmt)).scalar_one()
 
-    stmt = (
-        select(PrimitiveAbuseReport)
-        .where(*conditions)
-        .order_by(PrimitiveAbuseReport.created_at.desc())
-        .offset(offset)
-        .limit(page_size)
-    )
-    result = await session.execute(stmt)
-    items = list(result.scalars())
+        stmt = (
+            select(PrimitiveAbuseReport)
+            .where(*conditions)
+            .order_by(PrimitiveAbuseReport.created_at.desc())
+            .offset(offset)
+            .limit(page_size)
+        )
+        result = await session.execute(stmt)
+        items = list(result.scalars())
+    except ProgrammingError:
+        return PageResult(items=[], total=0, page=page, page_size=page_size)
     return PageResult(items=items, total=total, page=page, page_size=page_size)
 
 

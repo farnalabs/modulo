@@ -3,6 +3,7 @@
 import uuid
 
 from sqlalchemy import select
+from sqlalchemy.exc import ProgrammingError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.db.crud.base import apply_updates
@@ -51,10 +52,13 @@ async def list_organisations(
     limit: int = 100,
     offset: int = 0,
 ) -> list[Organisation]:
-    result = await session.execute(
-        select(Organisation).order_by(Organisation.created_at.desc()).offset(offset).limit(limit)
-    )
-    return list(result.scalars().all())
+    try:
+        result = await session.execute(
+            select(Organisation).order_by(Organisation.created_at.desc()).offset(offset).limit(limit)
+        )
+        return list(result.scalars().all())
+    except ProgrammingError:
+        return []
 
 
 async def delete_organisation(

@@ -113,8 +113,11 @@ async def get_dashboard_notifications(
         .order_by(Notification.created_at.desc())
         .limit(limit)
     )
-    result = await session.execute(q)
-    return list(result.scalars().all())
+    try:
+        result = await session.execute(q)
+        return list(result.scalars().all())
+    except ProgrammingError:
+        return []
 
 
 async def get_notifications_for_user(
@@ -170,8 +173,11 @@ async def get_notifications_for_user(
         )
 
     q = q.order_by(Notification.created_at.desc()).offset(offset).limit(limit)
-    result = await session.execute(q)
-    return list(result.scalars().all())
+    try:
+        result = await session.execute(q)
+        return list(result.scalars().all())
+    except ProgrammingError:
+        return []
 
 
 async def count_notifications_for_user(
@@ -315,5 +321,8 @@ async def get_unread_count(
         Notification.id.notin_(select(dismissed_subq.c.notification_id)),
         _visible_to_user_clause(user_id),
     )
-    result = await session.execute(q)
-    return result.scalar_one()
+    try:
+        result = await session.execute(q)
+        return result.scalar_one()
+    except ProgrammingError:
+        return 0

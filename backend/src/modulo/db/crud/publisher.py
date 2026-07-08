@@ -8,6 +8,7 @@ from datetime import UTC, datetime
 from typing import Any
 
 from sqlalchemy import func, select
+from sqlalchemy.exc import ProgrammingError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.db.crud.base import PageResult, apply_updates
@@ -60,17 +61,20 @@ async def list_publishers(
         term = f"%{search.strip()}%"
         conditions.append(Publisher.name.ilike(term))
 
-    count_q = select(func.count()).select_from(Publisher).where(*conditions)
-    total = (await session.execute(count_q)).scalar() or 0
+    try:
+        count_q = select(func.count()).select_from(Publisher).where(*conditions)
+        total = (await session.execute(count_q)).scalar() or 0
 
-    items_stmt = (
-        select(Publisher)
-        .where(*conditions)
-        .order_by(Publisher.trust_tier, Publisher.name)
-        .offset((page - 1) * page_size)
-        .limit(page_size)
-    )
-    items = list((await session.execute(items_stmt)).scalars())
+        items_stmt = (
+            select(Publisher)
+            .where(*conditions)
+            .order_by(Publisher.trust_tier, Publisher.name)
+            .offset((page - 1) * page_size)
+            .limit(page_size)
+        )
+        items = list((await session.execute(items_stmt)).scalars())
+    except ProgrammingError:
+        return PageResult(items=[], total=0, page=page, page_size=page_size)
 
     return PageResult(items=items, total=total, page=page, page_size=page_size)
 

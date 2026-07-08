@@ -43,6 +43,7 @@ def _make_trigger_result(triggers: list[MagicMock]) -> MagicMock:
     r = MagicMock()
     r.scalars = MagicMock(return_value=MagicMock(all=MagicMock(return_value=triggers)))
     r.scalar_one_or_none = MagicMock(return_value=triggers[0] if triggers else None)
+    r.scalar_one = MagicMock(return_value=len(triggers))
     return r
 
 
