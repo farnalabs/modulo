@@ -77,7 +77,7 @@
           </div>
 
           <div v-if="!selectedGroupId && availableSnapshotId" class="text-xs text-muted-foreground">
-            {{ $t('views.ABTestModelsView.using_snapshot') }} <code class="rounded bg-muted px-1.5 py-0.5 font-mono">{{ shortId(availableSnapshotId) }}…</code>
+            {{ $t('views.ABTestModelsView.using_snapshot') }} <code class="rounded bg-muted px-1.5 py-0.5 font-mono">v{{ snapshotVersion || shortId(availableSnapshotId) }}</code>
             <span v-if="availableSnapshotTag" class="ml-1">({{ availableSnapshotTag }})</span>
           </div>
 
@@ -350,11 +350,13 @@ const availableSnapshotId = computed(() => {
   return snapshotId.value || undefined
 })
 
-const availableSnapshotTag = computed(() => {
-  return null
-})
-
 const snapshotId = ref<string | null>(null)
+const snapshotTag = ref<string | null>(null)
+const snapshotVersion = ref<number | null>(null)
+
+const availableSnapshotTag = computed(() => {
+  return snapshotTag.value
+})
 
 const modelBackendMap = computed(() => {
   const map = new Map<string, ModelBackend>()
@@ -782,9 +784,11 @@ async function fetchSnapshotForPipeline(pipelineId: string) {
       params: { path: { pipeline_id: pipelineId } },
     })
     if (data) {
-      const resp = data as unknown as { items: Array<{ id: string; tag: string | null }>; total: number }
+      const resp = data as unknown as { items: Array<{ id: string; tag: string | null; snapshot_version: number }>; total: number }
       if (resp.items.length > 0) {
         snapshotId.value = resp.items[0].id
+        snapshotTag.value = resp.items[0].tag
+        snapshotVersion.value = resp.items[0].snapshot_version
       }
     }
   } catch (err) {
