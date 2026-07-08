@@ -8,6 +8,7 @@ from datetime import UTC, datetime
 from typing import Any
 
 from sqlalchemy import func, select, update
+from sqlalchemy.exc import ProgrammingError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.db.crud.base import PageResult, apply_updates
@@ -83,14 +84,17 @@ async def list_accounts(
     if search:
         conditions.append(Account.email.ilike(f"%{search}%"))
 
-    count_q = select(func.count()).select_from(Account).where(*conditions)
-    total = (await session.execute(count_q)).scalar() or 0
+    try:
+        count_q = select(func.count()).select_from(Account).where(*conditions)
+        total = (await session.execute(count_q)).scalar() or 0
 
-    query = (
-        select(Account).where(*conditions).order_by(Account.created_at)
-        .offset((page - 1) * page_size).limit(page_size)
-    )
-    result = await session.execute(query)
-    items = list(result.scalars().all())
+        query = (
+            select(Account).where(*conditions).order_by(Account.created_at)
+            .offset((page - 1) * page_size).limit(page_size)
+        )
+        result = await session.execute(query)
+        items = list(result.scalars().all())
+    except ProgrammingError:
+        return PageResult(items=[], total=0, page=page, page_size=page_size)
 
     return PageResult(items=items, total=total, page=page, page_size=page_size)
