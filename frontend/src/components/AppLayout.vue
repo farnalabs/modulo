@@ -18,12 +18,6 @@
       </div>
 
       <div class="flex flex-col flex-1 min-h-0">
-        <ViewModeToggle
-          :model-value="viewMode"
-          :options="viewModeOptions"
-          @update:model-value="setViewMode"
-        />
-
         <div class="flex items-center gap-2 pt-2 pb-2 border-b mb-2">
           <div class="avatar-ring">
             <div
@@ -89,6 +83,12 @@
             />
           </label>
         </div>
+
+        <ViewModeToggle
+          :model-value="viewMode"
+          :options="viewModeOptions"
+          @update:model-value="setViewMode"
+        />
 
         <SidebarNav class="flex-1" :is-system-admin="isSystemAdmin" :user-role="userRole" />
       </div>
@@ -166,12 +166,6 @@
       :class="mobileOpen ? 'translate-x-0' : '-translate-x-full'"
       @keydown.escape="mobileOpen = false"
     >
-      <ViewModeToggle
-        :model-value="viewMode"
-        :options="viewModeOptions"
-        @update:model-value="setViewMode"
-      />
-
       <div class="flex items-center gap-2 pt-2 pb-2 border-b mb-2">
         <div class="avatar-ring">
           <div
@@ -237,6 +231,12 @@
           />
         </label>
       </div>
+
+      <ViewModeToggle
+        :model-value="viewMode"
+        :options="viewModeOptions"
+        @update:model-value="setViewMode"
+      />
 
       <SidebarNav class="flex-1"
         :is-system-admin="isSystemAdmin"
