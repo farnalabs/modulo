@@ -141,10 +141,9 @@ async def dashboard_summary(
             for tracked_status in _TRACKED_STATUSES:
                 status_counts.setdefault(tracked_status, 0)
 
-            total_tracked = sum(status_counts.get(s, 0) for s in _TRACKED_STATUSES)
-            active_in_tracked = sum(status_counts.get(s, 0) for s in ("running", "awaiting_human"))
-            failed_count = status_counts.get("failed", 0)
-            status_counts["idle"] = total_tracked - active_in_tracked - failed_count
+            _IDLE_STATUSES = ("pending", "claimed", "waiting_for_lock")
+            idle_count = sum(status_counts.get(s, 0) for s in _IDLE_STATUSES)
+            status_counts["idle"] = idle_count
 
             teams_result = await session.execute(select(Team).where(Team.organisation_id == org_id).order_by(Team.name))
             teams = list(teams_result.scalars().all())
@@ -195,7 +194,8 @@ async def dashboard_summary(
                     team_statuses[tracked_status] = run_data.get(tracked_status, 0)
                 team_active_in_tracked = sum(run_data.get(s, 0) for s in ("running", "awaiting_human"))
                 team_failed = run_data.get("failed", 0)
-                team_statuses["idle"] = team_total - team_active_in_tracked - team_failed
+                team_idle_from_db = sum(run_data.get(s, 0) for s in ("pending", "claimed", "waiting_for_lock"))
+                team_statuses["idle"] = team_idle_from_db
 
                 team_metrics.append(
                     {

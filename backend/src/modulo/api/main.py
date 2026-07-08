@@ -97,7 +97,7 @@ from modulo.core.events.event_bus import configure_event_bus
 from modulo.core.events.listeners import register_listeners
 from modulo.core.graceful_shutdown import ShutdownManager, ShutdownMiddleware
 from modulo.core.hitl_manager.expiry_job import ClaimExpiryJob
-from modulo.core.in_process_scheduler import dispose_scheduler_engine, start_schedulers
+from modulo.core.in_process_scheduler import dispose_scheduler_engine
 from modulo.core.logging_config import configure_logging
 from modulo.db.session import engine as db_engine
 from modulo.otel_bridge import setup_otel, shutdown_otel
@@ -133,6 +133,7 @@ async def _verify_db_connectivity(settings: Settings) -> None:
             if attempt < 3:
                 await asyncio.sleep(attempt * 2)
     logger.error("startup.db_unreachable")
+    raise RuntimeError("Database is unreachable after 3 retry attempts — cannot start.")
 
 
 async def _run_migrations(settings: Settings) -> None:

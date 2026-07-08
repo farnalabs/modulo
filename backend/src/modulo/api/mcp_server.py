@@ -1764,9 +1764,10 @@ async def _oauth_token(request: Request) -> JSONResponse:
                 redirect_uri=redirect_uri,
                 client_secret=client_secret,
             )
-        except Exception as exc:
+        except Exception:
+            _log.exception("oauth.token_exchange_failed")
             return JSONResponse(
-                {"error": "invalid_grant", "detail": str(exc)},
+                {"error": "invalid_grant", "detail": "Authorization code exchange failed"},
                 status_code=400,
             )
 
