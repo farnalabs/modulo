@@ -6,7 +6,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from modulo.db.rls import _inject_tenant_filter, set_rls_org
+from modulo.db.rls import _inject_tenant_filter, set_rls_org, set_rls_user_context
 
 _TENANT_KEY = "org_id"
 _TENANT_COLUMN = "organisation_id"
@@ -197,3 +197,70 @@ class TestInjectTenantFilter:
         _inject_tenant_filter(state)
 
         state.statement.where.assert_not_called()
+
+
+class TestSetRlsUserContextMultiBackend:
+    """Verify set_rls_user_context dispatches correctly for postgres vs generic backends."""
+
+    async def test_postgres_calls_set_config_for_user_and_role(self) -> None:
+        session = _make_session(dialect="postgresql")
+        _USER_ID = uuid.UUID("00000000-0000-0000-0000-000000000002")
+        _ORG_ROLE = "admin"
+
+        await set_rls_user_context(session, _USER_ID, _ORG_ROLE)
+
+        assert session.execute.await_count == 2
+        first_call = session.execute.await_args_list[0]
+        compiled_1 = first_call[0][0].compile()
+        assert "set_config" in str(compiled_1)
+        assert "app.user_id" in str(compiled_1)
+        assert first_call[0][1]["uid"] == str(_USER_ID)
+
+        second_call = session.execute.await_args_list[1]
+        compiled_2 = second_call[0][0].compile()
+        assert "set_config" in str(compiled_2)
+        assert "app.org_role" in str(compiled_2)
+        assert second_call[0][1]["role"] == _ORG_ROLE
+
+    async def test_generic_stores_in_session_info(self) -> None:
+        session = _make_session(dialect="sqlite")
+        _USER_ID = uuid.UUID("00000000-0000-0000-0000-000000000002")
+        _ORG_ROLE = "admin"
+
+        await set_rls_user_context(session, _USER_ID, _ORG_ROLE)
+
+        session.execute.assert_not_called()
+        assert session.info["user_id"] == _USER_ID
+        assert session.info["org_role"] == _ORG_ROLE
+
+    async def test_mariadb_stores_in_session_info(self) -> None:
+        session = _make_session(dialect="mysql")
+        _USER_ID = uuid.UUID("00000000-0000-0000-0000-000000000003")
+        _ORG_ROLE = "viewer"
+
+        await set_rls_user_context(session, _USER_ID, _ORG_ROLE)
+
+        session.execute.assert_not_called()
+        assert session.info["user_id"] == _USER_ID
+        assert session.info["org_role"] == _ORG_ROLE
+
+    async def test_raises_without_active_transaction(self) -> None:
+        session = _make_session(in_tx=False)
+        _USER_ID = uuid.UUID("00000000-0000-0000-0000-000000000004")
+        _ORG_ROLE = "admin"
+
+        with pytest.raises(RuntimeError, match="requires an active transaction"):
+            await set_rls_user_context(session, _USER_ID, _ORG_ROLE)
+
+    async def test_generic_resets_on_new_session(self) -> None:
+        """Verify session.info is scoped to a single session — no cross-session leak."""
+        session1 = _make_session(dialect="sqlite")
+        session2 = _make_session(dialect="sqlite")
+        _USER_ID = uuid.UUID("00000000-0000-0000-0000-000000000005")
+        _ORG_ROLE = "admin"
+
+        await set_rls_user_context(session1, _USER_ID, _ORG_ROLE)
+
+        assert session1.info["user_id"] == _USER_ID
+        assert session2.info.get("user_id") is None
+        assert session2.info.get("org_role") is None
