@@ -5,7 +5,7 @@ import uuid
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel
-from sqlalchemy.exc import IntegrityError, ProgrammingError
+from sqlalchemy.exc import IntegrityError, ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.api.dependencies import get_db_session
@@ -205,15 +205,18 @@ async def run_determination(
         )
     except HTTPException:
         raise
+    except SQLAlchemyError:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Database service unavailable. Please try again later.",
+        )
     except IntegrityError:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="A resource with this value already exists",
         )
     except ProgrammingError:
-        raise HTTPException(status_code=503, detail="Database not available. Run migrations.")
-    except IntegrityError:
-        raise HTTPException(status_code=409, detail="Resource already exists or constraint violation.")
+        raise HTTPException(status_code=501, detail="Feature is not available. Run database migrations to enable it.")
     except Exception as e:
         logger.error("Unexpected error in run_determination: %s", str(e))
         raise HTTPException(status_code=500, detail="Internal server error")
@@ -304,15 +307,18 @@ async def create_determination_draft(
         )
     except HTTPException:
         raise
+    except SQLAlchemyError:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Database service unavailable. Please try again later.",
+        )
     except IntegrityError:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="A resource with this value already exists",
         )
     except ProgrammingError:
-        raise HTTPException(status_code=503, detail="Database not available. Run migrations.")
-    except IntegrityError:
-        raise HTTPException(status_code=409, detail="Resource already exists or constraint violation.")
+        raise HTTPException(status_code=501, detail="Feature is not available. Run database migrations to enable it.")
     except Exception as e:
         logger.error("Unexpected error in create_determination_draft: %s", str(e))
         raise HTTPException(status_code=500, detail="Internal server error")

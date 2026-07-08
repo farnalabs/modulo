@@ -1,7 +1,4 @@
-import asyncio
 import logging
-from collections.abc import AsyncGenerator
-from contextlib import asynccontextmanager
 from typing import Any
 
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker, create_async_engine
@@ -13,7 +10,6 @@ from modulo.settings import get_settings
 __all__ = [
     "AsyncSessionLocal",
     "engine",
-    "get_session",
 ]
 
 _log = logging.getLogger(__name__)
@@ -65,19 +61,3 @@ AsyncSessionLocal = async_sessionmaker(
     autobegin=False,
 )
 
-
-@asynccontextmanager
-async def get_session() -> AsyncGenerator[AsyncSession, None]:
-    async with AsyncSessionLocal() as session:
-        try:
-            yield session
-            await session.commit()
-        except asyncio.CancelledError:
-            await session.rollback()
-            session.info.clear()
-            raise
-        except Exception:
-            await session.rollback()
-            session.info.clear()
-            _log.exception("get_session: unhandled exception, rolling back")
-            raise
