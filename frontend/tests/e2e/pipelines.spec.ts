@@ -1,7 +1,9 @@
-import { test, expect } from './setup/fixtures'
+import { test, expect, loginAsAdmin } from './setup/fixtures'
+import { getTestEnv } from './setup/env'
 
 test.describe('Pipelines Page', () => {
   test('displays page title and search input', async ({ page }) => {
+    await loginAsAdmin(page, getTestEnv())
     await page.goto('/pipelines')
     await page.waitForLoadState('networkidle')
 
@@ -10,6 +12,7 @@ test.describe('Pipelines Page', () => {
   })
 
   test('shows New Pipeline CTA button', async ({ page }) => {
+    await loginAsAdmin(page, getTestEnv())
     await page.goto('/pipelines')
     await page.waitForLoadState('networkidle')
 
@@ -19,6 +22,7 @@ test.describe('Pipelines Page', () => {
   })
 
   test('search input filters pipelines', async ({ page }) => {
+    await loginAsAdmin(page, getTestEnv())
     await page.goto('/pipelines')
     await page.waitForLoadState('networkidle')
 
