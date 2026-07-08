@@ -195,7 +195,7 @@ export const useDashboardStore = defineStore("dashboard", () => {
       const { data: result, error: err } = await withTimeout(
         api.GET("/api/v1/dashboard/trends", {
           params: { query: { days } },
-        } as any),
+        }),
         15000,
         "Dashboard trends request",
       );
