@@ -77,7 +77,7 @@ def free_client() -> Generator[TestClient, None, None]:
         org_role="admin",
     )
     mock_plan = MagicMock()
-    mock_plan.feature_enabled.return_value = True
+    mock_plan.feature_enabled.return_value = False
     app.dependency_overrides[get_plan_context] = lambda: mock_plan
     yield TestClient(app)
     app.dependency_overrides.clear()
