@@ -8,6 +8,7 @@ import uuid
 
 from sqlalchemy import func, or_, select
 from sqlalchemy import update as sa_update
+from sqlalchemy.exc import ProgrammingError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.db.crud.account import get_account_by_email, get_account_by_id
@@ -134,24 +135,27 @@ async def scim_list_users(
         like = f"%{filter_str}%"
         conditions.append(or_(Account.email.ilike(like), Account.display_name.ilike(like)))
 
-    count_q = (
-        select(func.count())
-        .select_from(OrgMembership)
-        .join(Account, Account.id == OrgMembership.account_id)
-        .where(*conditions)
-    )
-    total = (await session.execute(count_q)).scalar() or 0
+    try:
+        count_q = (
+            select(func.count())
+            .select_from(OrgMembership)
+            .join(Account, Account.id == OrgMembership.account_id)
+            .where(*conditions)
+        )
+        total = (await session.execute(count_q)).scalar() or 0
 
-    query = (
-        select(Account)
-        .join(OrgMembership, Account.id == OrgMembership.account_id)
-        .where(*conditions)
-        .order_by(Account.created_at)
-        .offset(max(0, start_index - 1))
-        .limit(count)
-    )
-    result = await session.execute(query)
-    items = list(result.scalars().all())
+        query = (
+            select(Account)
+            .join(OrgMembership, Account.id == OrgMembership.account_id)
+            .where(*conditions)
+            .order_by(Account.created_at)
+            .offset(max(0, start_index - 1))
+            .limit(count)
+        )
+        result = await session.execute(query)
+        items = list(result.scalars().all())
+    except ProgrammingError:
+        return [], 0
     return items, total
 
 
@@ -215,12 +219,15 @@ async def scim_list_groups(
         like = f"%{filter_str}%"
         conditions.append(Team.name.ilike(like))
 
-    count_q = select(func.count()).select_from(Team).where(*conditions)
-    total = (await session.execute(count_q)).scalar() or 0
+    try:
+        count_q = select(func.count()).select_from(Team).where(*conditions)
+        total = (await session.execute(count_q)).scalar() or 0
 
-    query = select(Team).where(*conditions).order_by(Team.created_at).offset(max(0, start_index - 1)).limit(count)
-    result = await session.execute(query)
-    items = list(result.scalars().all())
+        query = select(Team).where(*conditions).order_by(Team.created_at).offset(max(0, start_index - 1)).limit(count)
+        result = await session.execute(query)
+        items = list(result.scalars().all())
+    except ProgrammingError:
+        return [], 0
     return items, total
 
 

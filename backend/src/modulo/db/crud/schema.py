@@ -236,20 +236,23 @@ async def list_schema_versions(
     page_size: int = 20,
 ) -> PageResult[SchemaVersion]:
     offset = (page - 1) * page_size
-    total = (
-        await session.execute(
-            select(func.count()).select_from(SchemaVersion).where(SchemaVersion.schema_id == schema_id)
-        )
-    ).scalar_one()
-    items = list(
-        (
+    try:
+        total = (
             await session.execute(
-                select(SchemaVersion)
-                .where(SchemaVersion.schema_id == schema_id)
-                .order_by(SchemaVersion.version_number.desc())
-                .offset(offset)
-                .limit(page_size)
+                select(func.count()).select_from(SchemaVersion).where(SchemaVersion.schema_id == schema_id)
             )
-        ).scalars()
-    )
+        ).scalar_one()
+        items = list(
+            (
+                await session.execute(
+                    select(SchemaVersion)
+                    .where(SchemaVersion.schema_id == schema_id)
+                    .order_by(SchemaVersion.version_number.desc())
+                    .offset(offset)
+                    .limit(page_size)
+                )
+            ).scalars()
+        )
+    except ProgrammingError:
+        return PageResult(items=[], total=0, page=page, page_size=page_size)
     return PageResult(items=items, total=total, page=page, page_size=page_size)
