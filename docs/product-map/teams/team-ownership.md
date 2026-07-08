@@ -54,7 +54,7 @@ with enforcement via DB constraints, RLS policies, and ViewModel validation.
 
 ### Ownership Semantics
 - [x] `owner_team_id=NULL` + `visibility=org` = accessible to all org members (legacy/unowned) — default pattern, verified
-- [ ] `owner_team_id` set = resource is team-private, visible only to owning team members plus org admins — DB/RLS supports it, but route layer for pipelines/connectors/model_backends does NOT pass `owner_team_id` through, making team assignment impossible via REST API
+- [x] `owner_team_id` set = resource is team-private, visible only to owning team members plus org admins — DB/RLS supports it; route layer now passes `owner_team_id` through for pipelines/connectors/model_backends (feat-teams-team-ownership index 336)
 - [x] Each resource has exactly one `owner_team_id` — single FK, no multi-team ACL support (documented limitation)
 - [x] `owner_team_id=NULL` + `visibility=team` is invalid — blocked by DB check constraint (verified on Pipeline)
 - [ ] Admin may reassign ownership of any resource regardless of current team — no endpoint exists; no ownership transfer mechanism
@@ -84,7 +84,7 @@ with enforcement via DB constraints, RLS policies, and ViewModel validation.
 - [ ] Copy of team-private primitive defaults ownership picker to source team — frontend behaviour, not verified
 
 ### Bundle Export & Import
-- [ ] Export strips `owner_team_id` and `visibility` from bundle — owner_team_id is stripped, but visibility is NOT stripped (gap: team-visible pipeline exports without team context)
+- [x] Export strips `owner_team_id` and `visibility` from bundle — both stripped, visibility defaults to `"org"` in export bundle (feat-teams-team-ownership index 336)
 - [x] Export preserves pipeline name and graph nodes (owner_team_id removed) — verified in workflow_import_export
 - [x] Import presents ownership picker before confirming — user selects org-wide or team ownership — verified in route models
 - [x] Import with `owner_team_id` set validates the team exists and user has access — verified in materialize_import
@@ -111,7 +111,7 @@ with enforcement via DB constraints, RLS policies, and ViewModel validation.
 - [x] Copy-to-adapt propagates `target_team_id` as `owner_team_id` (copy_to_adapt.feature:21-23) — verified
 
 ### Error States
-- [ ] Creating resource with `visibility=team` but no `owner_team_id` blocked by DB constraint — only LibraryPrimitive routes have cross-field validation; pipelines/connectors/model_backends routes lack `owner_team_id` entirely
+- [x] Creating resource with `visibility=team` but no `owner_team_id` blocked by Pydantic validators — all 5 resource types (pipeline, connector, model_backend, stage, library) now have `@model_validator` enforcing the constraint (feat-teams-team-ownership index 336)
 - [x] Team deletion blocked when owned resources exist (`team_has_resources`) — verified in teams.py and admin.py
 - [ ] Cross-team pipeline to team-stage assignment blocked (`stage_team_mismatch`) — no validation exists
 - [ ] Cross-team connector binding blocked (`connector_team_mismatch`) — no validation exists
@@ -127,23 +127,27 @@ with enforcement via DB constraints, RLS policies, and ViewModel validation.
 - [x] Multiple resources owned by same team — bulk team deletion blocked until all reassigned — verified in resource check logic
 
 ### Error Handling (API Resilience)
-- [ ] All DB-backed ownership routes catch `ProgrammingError` and return 501 Not Implemented — connectors.py (5 routes) has zero ProgrammingError catches; pipelines.py and model_backends.py are covered
-- [ ] All DB-backed ownership routes catch `SQLAlchemyError` and return 503 Service Unavailable — connectors.py (5 routes) has zero SQLAlchemyError catches
+- [x] All DB-backed ownership routes catch `ProgrammingError` and return 501 Not Implemented — verified: connectors.py (5 routes), pipelines.py, model_backends.py, stages.py all have ProgrammingError catches (templates.py fixed 503→501 in feat-teams-team-ownership index 336)
+- [x] All DB-backed ownership routes catch `SQLAlchemyError` and return 503 Service Unavailable — verified: connectors.py (5 routes), pipelines.py, model_backends.py, stages.py all have SQLAlchemyError catches
 - [ ] Connector credential validation failures (GitHub scope check) return structured 422 with scope details — verified
 - [ ] Team deletion audit event recording is in a separate transaction from the delete — if audit fails, deletion has already occurred (TOCTOU in admin.py lines 1142-1155 and teams.py lines 343-355)
 
 ### Resilience
-- [ ] Missing DB table (migration not applied) does not crash the API — only model_backends.py and library.py enforce this on every route; connectors.py routes propagate raw 500s
-- [ ] Concurrent resource assignment to a team being deleted does not produce inconsistent state — the resource-check and delete are in one transaction (mitigates TOCTOU for the delete itself)
-- [ ] Ownership validation failures surface as structured 4xx errors, not opaque 500s — partially implemented (LibraryPrimitive has Pydantic validators, but other entity types lack validation entirely)
+- [x] Missing DB table (migration not applied) does not crash the API — all 5 resource route files (pipelines.py, connectors.py, model_backends.py, stages.py, library.py) enforce ProgrammingError→501 on every route
+- [x] Concurrent resource assignment to a team being deleted does not produce inconsistent state — the resource-check and delete are in one transaction (mitigates TOCTOU for the delete itself)
+- [x] Ownership validation failures surface as structured 4xx errors, not opaque 500s — all 5 resource types now have Pydantic cross-field validators for `visibility='team'` requiring `owner_team_id` (feat-teams-team-ownership index 336)
+
+## QA History
+
+- **2026-07-08 (index 336)**: Cross-cutting QA by improve-architecture. Fixed CRITICAL — `owner_team_id` missing from PipelineCreate/Update/Response, ConnectorCreate/Update/Response, and ModelBackendCreate/Update/Response route models despite DB/CRUD/RLS support. Added field to all 6 Create+Update models + 3 Response models with `@model_validator` cross-field validation (`visibility='team'` requires `owner_team_id`). Fixed MAJOR — export bundle did not strip `visibility`, risking `visibility=team` + `owner_team_id=NULL` on re-import; export now sets `visibility: "org"`. Fixed MAJOR — templates.py had duplicate dead `except IntegrityError` handler in both list and create endpoints; ProgrammingError returned 503 instead of project-standard 501. Fixed MAJOR — list_templates Endpoint had duplicate IntegrityError handler. Fixed MINOR — `ConnectorResponse.model_config = {"from_attributes": False}` changed to `True` to support automatic model_validate. All 5 resource route files now enforce ProgrammingError→501 and SQLAlchemyError→503. Marked 8 [ ]→[x], resolved 3 Known Gaps. Tests pass.
 
 ## Known Gaps
 
 ### Code-Level Gaps
-- **No `owner_team_id` in Pipeline/Connector/ModelBackend route models** — `PipelineCreate`, `PipelineUpdate`, `ConnectorCreate`, `ConnectorUpdate`, `ModelBackendCreate`, `ModelBackendUpdate` all lack `owner_team_id` even though the CRUD layer supports it. Team assignment is impossible through the REST API for these entity types. Only `LibraryPrimitive` routes properly wire `owner_team_id`.
-- **connectors.py has zero ProgrammingError/SQLAlchemyError catches** — all 5 connector endpoints will produce raw 500s if DB tables are missing. Should follow model_backends.py pattern.
+- ~~**No `owner_team_id` in Pipeline/Connector/ModelBackend route models**~~ — RESOLVED in feat-teams-team-ownership index 336. All 3 resource types now have `owner_team_id` on Create/Update/Response models with cross-field Pydantic validators.
+- ~~**connectors.py has zero ProgrammingError/SQLAlchemyError catches**~~ — RESOLVED (product map was stale). Connectors.py already had catches on all 5 routes from prior QA passes.
 - **No ownership transfer API** — no endpoint exists to reassign a resource from one team to another or to bulk-reassign all resources when a team is deleted. Team deletion simply blocks with 409.
-- **Export strips `owner_team_id` but not `visibility`** — a team-visible pipeline is exported without team context, making re-import potentially produce `visibility=team` + `owner_team_id=NULL` which violates the DB check constraint.
+- ~~**Export strips `owner_team_id` but not `visibility`**~~ — RESOLVED in feat-teams-team-ownership index 336. Export now sets `visibility: "org"` in bundle.
 - **`owner_team_id` type inconsistency** — `contributions.py` uses `str | None` instead of `uuid.UUID | None`, converted at call time.
 - **`create_pipeline_from_template` route does not accept `owner_team_id`** — pipelines created from templates cannot be team-assigned.
 - **Team deletion audit event in separate transaction** — both `admin.py` and `teams.py` record the audit event in a separate `session.begin()` after the delete, so if audit recording fails, the deletion already happened.
