@@ -20,7 +20,7 @@
 
     <ErrorAlert v-else-if="error" :message="error" />
 
-    <template v-else>
+    <div v-if="!loading && !error">
       <div v-if="showCreateForm" class="card p-6">
         <h2 class="mb-4 text-lg font-semibold">New Team</h2>
         <div class="space-y-4">
@@ -189,7 +189,7 @@
               <button class="ml-2 underline" data-testid="settings-teams-members-retry" @click="loadMembers(team.id)">Retry</button>
             </div>
 
-            <template v-else>
+    <div v-if="!loading && !error" class="contents">
               <div v-if="membersByTeam[team.id]?.length === 0" class="py-4 text-center text-sm text-muted-foreground">
                 No members yet.
               </div>
@@ -302,7 +302,7 @@
           </div>
         </div>
       </div>
-    </template>
+    </div>
   </div>
   </FeatureGate>
 </template>
