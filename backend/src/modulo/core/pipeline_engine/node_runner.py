@@ -41,7 +41,8 @@ Eval-before-interrupt (§8.17):
 """
 
 import logging
-from collections.abc import Sequence
+import uuid
+from collections.abc import Callable, Sequence
 from typing import Any
 
 import jmespath
@@ -55,6 +56,8 @@ from modulo.core.run_context.autonomy import (
     should_notify_on_complete,
     should_skip_hitl_gate,
 )
+from modulo.db.models.eval_result import EvalResult as EvalResultModel
+from modulo.db.rls import set_rls_org
 
 _log = logging.getLogger(__name__)
 
@@ -127,6 +130,8 @@ def make_hitl_gate_fn(
     *,
     timeout: float | None = None,
     eval_definitions: Sequence[EvalDefinition] | None = None,
+    session_factory: Callable[..., Any] | None = None,
+    org_id: uuid.UUID | None = None,
 ) -> Any:
     """Return a node function that raises a HITL interrupt.
 
@@ -144,6 +149,10 @@ def make_hitl_gate_fn(
       against the current state *after* the condition check but *before*
       the interrupt.  Any eval with ``failure_behaviour='block'`` that
       fails raises ``EvalBlockedError``, preventing the interrupt.
+
+      If ``session_factory`` is provided, eval results are persisted to
+      the ``eval_results`` table so that post-run suite-level threshold
+      checks (``_check_eval_suites``) can read them.
 
     On resume (via ``aupdate_state`` + ``astream_events(None, config)``),
     the node is re-invoked with ``state["_hitl_decision"]`` populated.
@@ -233,6 +242,32 @@ def make_hitl_gate_fn(
                     },
                 )
             # If any block eval failed, EvalBlockedError was raised above.
+
+            # Persist eval results to the eval_results table so post-run
+            # suite-level threshold checks can read them.
+            if session_factory is not None and org_id is not None:
+                try:
+                    _run_id: uuid.UUID | None = state.get("_run_id")
+                    if _run_id is not None:
+                        async with session_factory() as session, session.begin():
+                            await set_rls_org(session, org_id)
+                            for eval_def in eval_definitions:
+                                eval_result = eval_results_by_name[eval_def.name]
+                                node_uuid: uuid.UUID | None = (
+                                    uuid.UUID(eval_def.node_id) if eval_def.node_id else None
+                                )
+                                db_result = EvalResultModel(
+                                    organisation_id=org_id,
+                                    run_id=_run_id,
+                                    node_id=node_uuid,
+                                    eval_id=eval_def.id,
+                                    passed=eval_result.passed,
+                                    score=eval_result.score,
+                                    detail=eval_result.detail,
+                                )
+                                session.add(db_result)
+                except Exception:
+                    _log.exception("hitl_gate.persist_eval_failed")
 
         # --- Eval-reference condition check (§8.17 v1) — evaluate condition
         # against captured eval results. ---
