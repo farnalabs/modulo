@@ -31,7 +31,7 @@ interface ManifestEntry {
 const manifestRoutes = (manifest as { routes?: Record<string, ManifestEntry> })?.routes ?? {}
 const manifestByName = new Map<string, ManifestEntry & { path: string }>()
 for (const [path, entry] of Object.entries(manifestRoutes)) {
-  if (entry.name) {
+  if (entry?.name) {
     manifestByName.set(entry.name, { ...entry, path })
   }
 }
@@ -39,8 +39,8 @@ for (const [path, entry] of Object.entries(manifestRoutes)) {
 function decodeJwtPayload(token: string): Record<string, unknown> | null {
   try {
     return JSON.parse(atob(token.split('.')[1].replace(/-/g, '+').replace(/_/g, '/')))
-  } catch {
-    console.warn('[router] failed to decode JWT payload')
+  } catch (e) {
+    console.warn('[router] failed to decode JWT payload:', e)
     return null
   }
 }
@@ -420,42 +420,53 @@ const router = createRouter({
 })
 
 router.beforeEach((to) => {
-  const routeName = to.name
-  if (typeof routeName === 'string') {
-    const entry = manifestByName.get(routeName)
-    if (entry) {
-      to.meta.breadcrumb = entry.breadcrumb
-      to.meta.testid = entry.testid
-      to.meta.requiredRoles = entry.required_roles ?? undefined
-      to.meta.requiredTier = entry.required_tier
-      to.meta.requiredPermissions = entry.required_permissions ?? undefined
-      to.meta.featureFlag = entry.feature_flag ?? undefined
-      to.meta.parent = entry.parent
-        ? (manifestByName.get(entry.parent)?.name ?? entry.parent)
-        : undefined
+  try {
+    const routeName = to.name
+    if (typeof routeName === 'string') {
+      const entry = manifestByName.get(routeName)
+      if (entry) {
+        to.meta.breadcrumb = entry.breadcrumb
+        to.meta.testid = entry.testid
+        to.meta.requiredRoles = entry.required_roles ?? undefined
+        to.meta.requiredTier = entry.required_tier
+        to.meta.requiredPermissions = entry.required_permissions ?? undefined
+        to.meta.featureFlag = entry.feature_flag ?? undefined
+        to.meta.parent = entry.parent
+          ? (manifestByName.get(entry.parent)?.name ?? entry.parent)
+          : undefined
+      }
     }
-  }
 
-  const token = getAccessToken()
-  if (to.name === 'login' && token) {
-    return { name: 'dashboard' }
-  }
-  if (to.name !== 'login' && !token) {
-    return { name: 'login' }
-  }
-  if (to.meta?.requiresSystemAdmin) {
-    if (!token) return { name: 'login' }
-    const payload = decodeJwtPayload(token)
-    if (!payload || payload.is_system_admin !== true) {
+    const token = getAccessToken()
+    if (to.name === 'login' && token) {
       return { name: 'dashboard' }
     }
+    if (to.name !== 'login' && !token) {
+      return { name: 'login' }
+    }
+    if (to.meta?.requiresSystemAdmin) {
+      const payload = decodeJwtPayload(token)
+      if (!payload?.is_system_admin) {
+        return { name: 'dashboard' }
+      }
+    }
+  } catch (err) {
+    console.error('[router] navigation guard error:', err)
+    return { name: 'dashboard' }
   }
 })
 
+let _chunkRetryCount = 0
 router.onError((err) => {
   console.error('[router] navigation error:', err)
   const msg = formatApiError(err)
   if (/Failed to fetch|error loading dynamically|ChunkLoadError/i.test(msg)) {
+    if (_chunkRetryCount < 2) {
+      _chunkRetryCount++
+      const route = router.currentRoute.value
+      router.replace(route.fullPath).catch(() => {})
+      return
+    }
     window.location.reload()
   }
 })
