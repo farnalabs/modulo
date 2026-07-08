@@ -144,8 +144,7 @@ async function detectPlaceholders() {
       const newPorts = result.ports.filter((p) => !existing.has(p.name));
       emit("update:ports", [...props.ports, ...newPorts]);
     }
-  } catch (e) {
-    console.warn("Placeholder detection failed:", e);
+  } catch {
   } finally {
     detectLoading.value = false
   }

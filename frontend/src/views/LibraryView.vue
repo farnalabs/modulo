@@ -302,7 +302,6 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, onBeforeUnmount } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
-import { useI18n } from 'vue-i18n'
 import { useApi } from '../composables/useApi'
 import { formatApiError } from '../lib/api/formatError'
 
@@ -334,7 +333,6 @@ interface ListResponse {
   page_size: number
 }
 
-const { t } = useI18n()
 const router = useRouter()
 const route = useRoute()
 const { get, patch } = useApi()

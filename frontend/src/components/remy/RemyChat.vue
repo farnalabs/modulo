@@ -605,9 +605,7 @@ function syncHighlightScroll() {
 }
 
 function copyMessage(text: string) {
-  navigator.clipboard.writeText(text).catch((e) => {
-    console.warn("Clipboard write failed:", e);
-  });
+  navigator.clipboard.writeText(text).catch(() => {});
 }
 
 function escapeHtml(text: string): string {

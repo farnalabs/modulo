@@ -91,7 +91,7 @@
             <div v-else class="space-y-4">
               <div class="flex items-center justify-between rounded-lg border bg-muted p-4">
                 <span class="text-sm font-medium">Org Total</span>
-                <span class="text-lg font-semibold" :class="overageClass(orgTotalCost, orgLimitValue)">
+                <span class="text-lg font-semibold" :class="overageClass(orgTotalCost, orgLimit)">
                   ${{ orgTotalCost.toFixed(2) }}
                 </span>
               </div>
@@ -117,7 +117,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted, computed } from 'vue'
+import { ref, onMounted } from 'vue'
 import { api } from '../lib/api/client'
 import { formatApiError } from '../lib/api/formatError'
 import { usePlanStore } from '../stores/planStore'

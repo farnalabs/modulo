@@ -511,8 +511,8 @@ async function copyToClipboard(text: string, field: string) {
         copiedField.value = null
       }
     }, 2000)
-  } catch (err) {
-    console.warn('Clipboard write failed:', err)
+  } catch (e) {
+    console.warn('Failed to copy MCP config', e)
   }
 }
 

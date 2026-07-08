@@ -289,8 +289,8 @@ async function loadUsers() {
         userMap.value[user.id] = user
       }
     }
-  } catch (err) {
-    console.warn('Failed to load users:', err)
+  } catch (e) {
+    console.warn('Failed to load users', e)
   }
 }
 

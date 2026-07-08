@@ -180,8 +180,8 @@ async function fetchRecentRuns() {
     if (!err && data) {
       recentRuns.value = (data as any).recent_runs ?? []
     }
-  } catch {
-    console.warn('Failed to fetch recent runs for diff selectors')
+  } catch (e) {
+    console.warn('Failed to fetch recent runs', e)
   } finally {
     loadingRuns.value = false
   }

@@ -184,8 +184,7 @@ async function toggleSkillActive(skill: SkillItem) {
   } catch (e: unknown) {
     skillToggleError.value = `Failed to toggle skill: ${formatApiError(e)}`
   } finally {
-    const { [skill.id]: _, ...rest } = skillToggling.value
-    skillToggling.value = rest
+    delete skillToggling.value[skill.id]
   }
 }
 
