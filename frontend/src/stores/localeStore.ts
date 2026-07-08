@@ -46,7 +46,7 @@ export const useLocaleStore = defineStore('locale', () => {
     if (!getAccessToken()) return
     try {
       await withTimeout(
-        api.PUT('/api/v1/me/settings', { locale: code } as any),
+        api.PUT('/api/v1/me/settings', { locale: code }),
         10000,
         'Locale sync request',
       )
