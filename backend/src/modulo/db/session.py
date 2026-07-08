@@ -1,3 +1,4 @@
+import asyncio
 import logging
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
@@ -35,6 +36,12 @@ def _build_engine() -> AsyncEngine:
         kw["pool_recycle"] = 3600
         kw["pool_timeout"] = 30
 
+    if db_type == "postgres":
+        kw["connect_args"] = {
+            "timeout": 10,
+            "command_timeout": 60,
+        }
+
     engine = create_async_engine(**kw)
 
     if db_type == "postgres":
@@ -65,7 +72,12 @@ async def get_session() -> AsyncGenerator[AsyncSession, None]:
         try:
             yield session
             await session.commit()
+        except asyncio.CancelledError:
+            await session.rollback()
+            session.info.clear()
+            raise
         except Exception:
             await session.rollback()
             session.info.clear()
+            _log.exception("get_session: unhandled exception, rolling back")
             raise

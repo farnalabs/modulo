@@ -133,6 +133,8 @@ def register_rls_reset_hook(engine: AsyncEngine) -> None:
         _log.info("Skipping pool-level RLS reset hook — %s backend", dialect)
         return
 
+    _rls_config_names = ["app.organisation_id", "app.user_id", "app.org_role"]
+
     @event.listens_for(engine.sync_engine, "checkout")
     def _reset_org_on_checkout(
         dbapi_connection: object,
@@ -141,10 +143,16 @@ def register_rls_reset_hook(engine: AsyncEngine) -> None:
     ) -> None:
         try:
             cursor = dbapi_connection.cursor()  # type: ignore[attr-defined]
-            cursor.execute("SELECT set_config('app.organisation_id', '', false)")
-            cursor.execute("SELECT set_config('app.user_id', '', false)")
-            cursor.execute("SELECT set_config('app.org_role', '', false)")
-            cursor.close()
+            try:
+                for config_name in _rls_config_names:
+                    cursor.execute(f"SELECT set_config('{config_name}', '', false)")
+            finally:
+                cursor.close()
+        except AttributeError:
+            _log.warning(
+                "rls_reset_hook: sync cursor API not available on this driver",
+                exc_info=True,
+            )
         except Exception:
             _log.warning(
                 "rls_reset_hook: failed to clear RLS session context on checkout",
@@ -161,6 +169,16 @@ def _inject_tenant_filter(execute_state: ORMExecuteState) -> None:
     """
     org_id = execute_state.session.info.get(_TENANT_KEY)
     if org_id is None:
+        if execute_state.is_select or execute_state.is_update or execute_state.is_delete:
+            _log.debug(
+                "_inject_tenant_filter: no org_id in session.info for %s on %s",
+                "select/update/delete"
+                if execute_state.is_select
+                else "update/delete"
+                if execute_state.is_update
+                else "delete",
+                execute_state.statement,
+            )
         return
 
     if not (execute_state.is_select or execute_state.is_update or execute_state.is_delete):
