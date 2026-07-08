@@ -5,13 +5,13 @@ delivery-tasks:
   - task-nv0-complexity-reviewer
   - task-nv0-run-context-tests
 bdd:
-  - backend/tests/features/triggers/manual.feature
-  - backend/tests/features/pipelines/run_sequential.feature
-  - backend/tests/features/evals/conditional_hitl.feature
-  - backend/tests/features/triggers/webhook_payload_mapping.feature
-  - backend/tests/features/errors/retry.feature
-  - backend/tests/features/errors/recovery.feature
-  - backend/tests/features/mcp/trigger.feature
+  - backend/tests/bdd/features/triggers/manual.feature
+  - backend/tests/bdd/features/pipelines/run_sequential.feature
+  - backend/tests/bdd/features/evals/conditional_hitl.feature
+  - backend/tests/bdd/features/triggers/webhook_payload_mapping.feature
+  - backend/tests/bdd/features/errors/retry.feature
+  - backend/tests/bdd/features/errors/recovery.feature
+  - backend/tests/bdd/features/mcp/trigger.feature
   - backend/tests/bdd/features/eval/conditional_hitl.feature
   - backend/tests/bdd/features/pipelines/run_context.feature
   - backend/tests/bdd/features/pipelines/run_lifecycle.feature

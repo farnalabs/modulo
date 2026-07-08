@@ -3,10 +3,10 @@ id: feat-core-notifications
 prd: 8.11
 delivery-tasks: [task-nv1-team-notifications]
 bdd:
-  - backend/tests/features/notifications/hitl_webhook.feature
-  - backend/tests/features/notifications/failure_webhook.feature
-  - backend/tests/features/notifications/signing.feature
-  - backend/tests/features/hitl/overdue_warning.feature
+  - backend/tests/bdd/features/notifications/hitl_webhook.feature
+  - backend/tests/bdd/features/notifications/failure_webhook.feature
+  - backend/tests/bdd/features/notifications/signing.feature
+  - backend/tests/bdd/features/hitl/overdue_warning.feature
 unit-tests:
   - backend/tests/unit/notifier/test_notifier.py
   - backend/tests/unit/api/test_notifications_endpoint.py
