@@ -1,4 +1,5 @@
 from __future__ import annotations
+
 """PipelineExecutor — orchestrates a single run end-to-end.
 
 Responsibilities:
@@ -388,6 +389,8 @@ class PipelineExecutor:
             lambda: build_graph_from_json(
                 graph_json,
                 eval_definitions_by_node=resume_eval_defs_by_node,
+                session_factory=self._session_factory,
+                org_id=org_id,
             ),
         )
 
@@ -549,10 +552,14 @@ class PipelineExecutor:
                 lambda: build_graph_from_json(
                     graph_json,
                     eval_definitions_by_node=eval_defs_by_node,
+                    session_factory=self._session_factory,
+                    org_id=org_id,
                 ),
             )
 
             initial_state = _seed_state(snapshot, input_payload)
+            initial_state["_run_id"] = run_id
+            initial_state["_org_id"] = org_id
             config = {"configurable": {"thread_id": thread_id}}
             node_ids = {str(n["id"]) for n in graph_json.get("nodes", [])}
             node_token_budgets: dict[str, int] = {

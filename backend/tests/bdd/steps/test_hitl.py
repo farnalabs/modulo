@@ -30,11 +30,6 @@ try:
     scenarios("../../bdd/features/hitl/deliver_manual.feature")
 except (FileNotFoundError, OSError):
     pass
-try:
-    scenarios("../../bdd/features/hitl/approval_gate.feature")
-except (FileNotFoundError, OSError):
-    pass
-
 # ---------------------------------------------------------------------------
 # Fixtures
 # ---------------------------------------------------------------------------
