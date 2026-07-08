@@ -67,6 +67,12 @@ def mock_session() -> AsyncMock:
     begin_cm.__aenter__ = AsyncMock(return_value=None)
     begin_cm.__aexit__ = AsyncMock(return_value=False)
     session.begin = MagicMock(return_value=begin_cm)
+    # Make session.execute().scalars().all() return an empty list by default
+    result_mock = MagicMock()
+    scalars_mock = MagicMock()
+    scalars_mock.all.return_value = []
+    result_mock.scalars.return_value = scalars_mock
+    session.execute.return_value = result_mock
     return session
 
 
