@@ -4,6 +4,7 @@ Uses testcontainers Postgres + Alembic migrations. Mocks connector and
 secrets backend to avoid external dependencies.
 """
 
+import json
 import uuid
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -148,16 +149,13 @@ async def polling_trigger(seeded_db: AsyncSession) -> dict[str, Any]:
 
 
 def _make_polling_config_json() -> str:
-    return (
-        '{"connector_instance_id": "'
-        + str(_CI_ID)
-        + '", "poll_query": "select * from issues", '
-        + '"condition_expression": "[?status==`open`]", '
-        + '"poll_interval_seconds": 60, '
-        + '"snapshot_id": "'
-        + str(_SNAPSHOT_ID)
-        + '"}'
-    )
+    return json.dumps({
+        "connector_instance_id": str(_CI_ID),
+        "poll_query": "select * from issues",
+        "condition_expression": "[?status==`open`]",
+        "poll_interval_seconds": 60,
+        "snapshot_id": str(_SNAPSHOT_ID),
+    })
 
 
 # ---------------------------------------------------------------------------
@@ -363,19 +361,22 @@ async def test_polling_trigger_concurrency_limit(
     assert result["reason"] == "concurrency_limit"
     assert result["active_runs"] == 2
 
-    # Verify a concurrency_limit_reached event was logged
-    async with factory() as session, session.begin():
-        await set_rls_org(session, _ORG_ID)
-        event_result = await session.execute(
-            select(TriggerEvent).where(
-                TriggerEvent.trigger_id == _TRIGGER_ID,
-                TriggerEvent.validation_result == "concurrency_limit_reached",
-            ),
-        )
-        event = event_result.scalar_one_or_none()
-        assert event is not None, "Expected concurrency_limit_reached TriggerEvent"
-
-    await engine.dispose()
+    # Verify a concurrency_limit_reached event was logged (separate engine/session)
+    engine2 = create_async_engine(db_url)
+    try:
+        factory2 = async_sessionmaker(engine2, expire_on_commit=False)
+        async with factory2() as session, session.begin():
+            await set_rls_org(session, _ORG_ID)
+            event_result = await session.execute(
+                select(TriggerEvent).where(
+                    TriggerEvent.trigger_id == _TRIGGER_ID,
+                    TriggerEvent.validation_result == "concurrency_limit_reached",
+                ),
+            )
+            event = event_result.scalar_one_or_none()
+            assert event is not None, "Expected concurrency_limit_reached TriggerEvent"
+    finally:
+        await engine2.dispose()
 
 
 @pytest.mark.integration

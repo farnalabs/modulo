@@ -4,6 +4,7 @@ Creates a real Trigger row with trigger_type='agent_signal', calls
 fire_agent_signal(), and verifies TriggerEvent recording.
 """
 
+import json
 import uuid
 
 import pytest
@@ -159,10 +160,10 @@ async def trigger_id(
     source_pipeline_id: uuid.UUID,
 ) -> uuid.UUID:
     tid = uuid.uuid4()
-    config_json = (
-        '{"source_pipeline_id": "' + str(source_pipeline_id) + '", '
-        '"source_node_id": "extract"}'
-    )
+    config_json = json.dumps({
+        "source_pipeline_id": str(source_pipeline_id),
+        "source_node_id": "extract",
+    })
     async with db_engine.connect() as conn, conn.begin():
         await conn.execute(
             text(
@@ -275,10 +276,10 @@ class TestFireAgentSignalIntegration:
 
         # Create a trigger with concurrency limit 1.
         tight_tid = uuid.uuid4()
-        config_json = (
-            '{"source_pipeline_id": "' + str(source_pipeline_id) + '", '
-            '"source_node_id": "extract"}'
-        )
+        config_json = json.dumps({
+            "source_pipeline_id": str(source_pipeline_id),
+            "source_node_id": "extract",
+        })
 
         async with factory() as session:
             async with session.begin():
@@ -354,33 +355,16 @@ class TestFireAgentSignalIntegration:
             f"Expected 'concurrency_limit_reached' event, got: {rows}"
         )
 
-    async def test_org_isolation(
+    async def test_no_matching_trigger_in_org_returns_empty(
         self,
         db_engine: AsyncEngine,
         org_id: uuid.UUID,
         source_pipeline_id: uuid.UUID,
         source_run_id: uuid.UUID,
     ) -> None:
-        """Trigger in org_b does NOT fire when fire_agent_signal is called for org_a."""
-        # Create second org.
-        other_org_id = uuid.uuid4()
-        async with db_engine.connect() as conn, conn.begin():
-            await conn.execute(
-                text(
-                    "INSERT INTO organisations (id, name, slug, settings_json) "
-                    "VALUES (:id, :name, :slug, '{}'::json)",
-                ),
-                {
-                    "id": str(other_org_id),
-                    "name": "other-int-org",
-                    "slug": f"other-int-{other_org_id.hex[:8]}",
-                },
-            )
-
+        """When no trigger matches in the current org, returns empty list."""
         factory = async_sessionmaker(db_engine, expire_on_commit=False)
 
-        # Call fire_agent_signal for the original org — should not fire the
-        # trigger belonging to other_org_id.
         async with factory() as session, session.begin():
             await set_rls_org(session, org_id)
             results = await fire_agent_signal(
@@ -391,7 +375,7 @@ class TestFireAgentSignalIntegration:
                 completed_node_id="extract",
             )
 
-        # No triggers exist in org_a — result is empty.
+        # No matching triggers exist — result is empty.
         assert results == []
 
     async def test_multiple_triggers_both_fire(
@@ -408,10 +392,10 @@ class TestFireAgentSignalIntegration:
 
         pid_b = uuid.uuid4()
         pid_c = uuid.uuid4()
-        config_json = (
-            '{"source_pipeline_id": "' + str(source_pipeline_id) + '", '
-            '"source_node_id": "extract"}'
-        )
+        config_json = json.dumps({
+            "source_pipeline_id": str(source_pipeline_id),
+            "source_node_id": "extract",
+        })
 
         async with factory() as session:
             async with session.begin():
