@@ -9,9 +9,9 @@ code:
   - backend/src/modulo/api/routes/agents.py
 depends-on: [feat-core-schema-system, feat-core-db-abstraction-core]
 bdd:
-  - backend/tests/features/agents/configure.feature
-  - backend/tests/features/agents/prompt_versioning.feature
-  - backend/tests/features/agents/schema_assignment.feature
+  - backend/tests/bdd/features/agents/configure.feature
+  - backend/tests/bdd/features/agents/prompt_versioning.feature
+  - backend/tests/bdd/features/agents/schema_assignment.feature
 unit-tests:
   - backend/tests/unit/api/test_agents_endpoint.py
   - backend/tests/unit/api/test_agent_prompt_versioning.py

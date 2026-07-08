@@ -112,8 +112,8 @@ modulo/
       db/rls.py               # SET LOCAL helper, connection event hook
     tests/unit/               # No DB, StubModelBackend, fast
     tests/integration/        # Testcontainers Postgres, real migrations
-    tests/bdd/                # pytest-bdd step definitions
-    tests/features/           # Gherkin .feature files (source of truth)
+    tests/bdd/steps/           # pytest-bdd step definitions
+    tests/bdd/features/        # Gherkin .feature files (source of truth)
     pyproject.toml
     .importlinter
   frontend/
@@ -214,7 +214,7 @@ Architecture decision record: `docs/adr/002-database-abstraction-strategy.md`.
 
 **Unit** (`tests/unit/`): no DB, no Docker, `StubModelBackend` for all LLM calls, run in < 30s.
 **Integration** (`tests/integration/`): real Postgres via testcontainers, Alembic migrations applied first, Factory Boy for entities. Cross-tenant isolation test is mandatory.
-**BDD/E2E** (`tests/bdd/`, `tests/features/`): pytest-bdd + Playwright. All Playwright against `?theme=agent`. Use `waitForSelector('[data-loading="false"]')` — never `waitForTimeout()`. Every interactive element needs `data-testid`.
+**BDD/E2E** (`tests/bdd/features/`, `tests/bdd/steps/`): pytest-bdd + Playwright. All Playwright against `?theme=agent`. Use `waitForSelector('[data-loading="false"]')` — never `waitForTimeout()`. Every interactive element needs `data-testid`.
 
 Coverage minimums: `modulo.auth` 90%, `pipeline_engine` 85%, `db.rls` 95%, overall 80%.
 
@@ -276,7 +276,7 @@ All six criteria from PRD §10.3b must be met explicitly.
 ## Feature Files
 
 ```
-tests/features/
+tests/bdd/features/
   organisation/   org_scoping.feature, rls_isolation.feature
   pipelines/      create.feature, run_sequential.feature, validation.feature, concurrency.feature
   connectors/     filesystem.feature, github.feature, swappable_binding.feature, health_check.feature
@@ -671,7 +671,7 @@ If a UI element needs multi-line text (like a textarea placeholder with multiple
 
 ### Backend / BDD Feature Tests
 
-- **Feature file API paths are step-text matching keys, not just documentation.** Changing a path in a `.feature` file (e.g. `/api/pipelines` → `/api/v1/pipelines`) breaks the pytest-bdd step matching unless the corresponding step definition `parsers.parse` pattern is updated in the same change. Fixes must be coordinated between `tests/features/` and `tests/bdd/steps/` — never change one without the other.
+- **Feature file API paths are step-text matching keys, not just documentation.** Changing a path in a `.feature` file (e.g. `/api/pipelines` → `/api/v1/pipelines`) breaks the pytest-bdd step matching unless the corresponding step definition `parsers.parse` pattern is updated in the same change. Fixes must be coordinated between `tests/bdd/features/` and `tests/bdd/steps/` — never change one without the other.
 - **Background blocks reduce duplication without changing behavior.** When 6+ scenarios in a feature file start with the same `Given I am authenticated as an admin in org "acme"`, promote it to a `Background:` section. Scenarios needing different auth (e.g. viewer role) override the Background by repeating the same step text inline — pytest-bdd uses the scenario-level step, not the Background's.
 - **Avoid module-level imports of `modulo.api.main` in conftest files.** Importing `modulo.api.main` at module level triggers MCP server startup and database connection pooling, which can hang the test suite. Use lazy imports inside the `client` fixture instead.
 - **No two test modules should call `scenarios()` for the same .feature file.** This causes duplicate test registration and `StepDefinitionAlreadyRegistered` errors. Each `.feature` file should have exactly one `scenarios()` caller. If steps need to be shared, define them in a helper module that the single scenarios()-owning module imports.

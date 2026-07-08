@@ -1,7 +1,7 @@
 ---
 id: feat-core-multi-backend-tests
 prd: 12
-bdd: backend/tests/features/organisation/multi_backend.feature
+bdd: backend/tests/bdd/features/organisation/multi_backend.feature
 code:
   - backend/tests/unit/test_multi_backend_config.py
   - backend/tests/unit/test_multi_backend_sqlite.py

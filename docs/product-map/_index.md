@@ -11,7 +11,7 @@ This is the graph: entries are nodes, frontmatter fields are typed edges.
 id: feat-<domain>-<feature>        # unique node ID
 prd: 8.N                           # PRD section
 delivery-tasks: [task-...]         # delivery plan task IDs
-bdd: path/to/feature.feature       # BDD feature file (optional: missing = gap)
+bdd: [path/to/feature.feature]     # BDD feature file(s) (optional: missing = gap)
 unit-tests: [path/to/test.py]      # unit test files (optional)
 code: [path/to/src/]               # code paths implementing this feature
 depends-on: [feat-...]             # prerequisite features

@@ -15,7 +15,7 @@ Six user personas covering the Modulo ICP spectrum — solo developer to regulat
 
 ## How to use
 
-Persona-indexed Gherkin feature files live in `backend/tests/features/personas/`. Each `.feature` file asserts that the product needs for that persona are achievable. Run:
+Persona-indexed Gherkin feature files live in `backend/tests/bdd/features/personas/`. Each `.feature` file asserts that the product needs for that persona are achievable. Run:
 
 ```bash
 pytest -k "persona-duncan"   # everything Duncan needs
