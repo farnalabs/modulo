@@ -10,6 +10,7 @@ Configures python-json-logger with:
 
 import asyncio
 import logging
+from sqlalchemy.exc import ProgrammingError
 import os
 import sys
 import traceback as tb_module
@@ -167,8 +168,16 @@ class ErrorTrackingLogHandler(logging.Handler):
             service = ErrorIngestionService()
             async with factory() as session:
                 await set_rls_org(session, org_id)
-                async with session.begin():
-                    await service.ingest(session, org_id, event_data)
+                try:
+
+                    async with session.begin():
+                        await service.ingest(session, org_id, event_data)
+                except ProgrammingError:
+
+                    logger.exception("core.logging_config")
+
+                    raise
+
         except Exception:
             _log = logging.getLogger(__name__)
             _log.exception("ErrorTrackingLogHandler.ingest_failed")

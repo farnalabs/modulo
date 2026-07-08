@@ -60,6 +60,7 @@ from modulo.db.models.pipeline_edge import PipelineEdge
 from modulo.db.models.schema import Schema
 from modulo.db.rls import set_rls_org, set_rls_user_context
 
+logger = logging.getLogger(__name__)
 _log = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/v1/pipelines", tags=["pipelines"])
@@ -373,10 +374,24 @@ async def list_pipelines_endpoint(
     session: AsyncSession = Depends(get_db_session),
     principal: AuthenticatedPrincipal = Depends(get_current_user),
 ) -> PipelineListResponse:
-    async with session.begin():
-        await set_rls_org(session, principal.organisation_id)
-        await set_rls_user_context(session, principal.account_id, principal.org_role)
-        result = await list_pipelines(session, page=page, page_size=page_size, cursor=cursor)
+    try:
+
+        async with session.begin():
+            await set_rls_org(session, principal.organisation_id)
+            await set_rls_user_context(session, principal.account_id, principal.org_role)
+            result = await list_pipelines(session, page=page, page_size=page_size, cursor=cursor)
+    except ProgrammingError:
+
+        logger.exception("routes.pipelines")
+
+        raise HTTPException(
+
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+
+            detail="This feature is not available. Run database migrations to enable it.",
+
+        )
+
     return PipelineListResponse(
         items=[PipelineResponse.model_validate(p) for p in result.items],
         total=result.total,
@@ -394,22 +409,36 @@ async def create_pipeline_endpoint(
     session: AsyncSession = Depends(get_db_session),
     principal: AuthenticatedPrincipal = Depends(get_current_user),
 ) -> PipelineResponse:
-    async with session.begin():
-        await set_rls_org(session, principal.organisation_id)
-        await set_rls_user_context(session, principal.account_id, principal.org_role)
-        pipeline = await create_pipeline(
-            session,
-            org_id=principal.organisation_id,
-            name=req.name,
-            account_id=principal.account_id,
-            description=req.description,
-            visibility=req.visibility,
-            max_concurrent_runs=req.max_concurrent_runs,
-            lock_wait_timeout_seconds=req.lock_wait_timeout_seconds,
-            node_timeout_seconds=req.node_timeout_seconds,
-            run_context_defaults=req.run_context_defaults,
-            default_autonomy_level=req.default_autonomy_level,
+    try:
+
+        async with session.begin():
+            await set_rls_org(session, principal.organisation_id)
+            await set_rls_user_context(session, principal.account_id, principal.org_role)
+            pipeline = await create_pipeline(
+                session,
+                org_id=principal.organisation_id,
+                name=req.name,
+                account_id=principal.account_id,
+                description=req.description,
+                visibility=req.visibility,
+                max_concurrent_runs=req.max_concurrent_runs,
+                lock_wait_timeout_seconds=req.lock_wait_timeout_seconds,
+                node_timeout_seconds=req.node_timeout_seconds,
+                run_context_defaults=req.run_context_defaults,
+                default_autonomy_level=req.default_autonomy_level,
+            )
+    except ProgrammingError:
+
+        logger.exception("routes.pipelines")
+
+        raise HTTPException(
+
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+
+            detail="This feature is not available. Run database migrations to enable it.",
+
         )
+
     return PipelineResponse.model_validate(pipeline)
 
 
@@ -420,10 +449,24 @@ async def get_pipeline_endpoint(
     session: AsyncSession = Depends(get_db_session),
     principal: AuthenticatedPrincipal = Depends(get_current_user),
 ) -> PipelineResponse:
-    async with session.begin():
-        await set_rls_org(session, principal.organisation_id)
-        await set_rls_user_context(session, principal.account_id, principal.org_role)
-        pipeline = await get_pipeline(session, pipeline_id)
+    try:
+
+        async with session.begin():
+            await set_rls_org(session, principal.organisation_id)
+            await set_rls_user_context(session, principal.account_id, principal.org_role)
+            pipeline = await get_pipeline(session, pipeline_id)
+    except ProgrammingError:
+
+        logger.exception("routes.pipelines")
+
+        raise HTTPException(
+
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+
+            detail="This feature is not available. Run database migrations to enable it.",
+
+        )
+
     if pipeline is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Pipeline not found")
     return PipelineResponse.model_validate(pipeline)
@@ -436,10 +479,24 @@ async def get_pipeline_graph_endpoint(
     session: AsyncSession = Depends(get_db_session),
     principal: AuthenticatedPrincipal = Depends(get_current_user),
 ) -> PipelineGraphResponse:
-    async with session.begin():
-        await set_rls_org(session, principal.organisation_id)
-        await set_rls_user_context(session, principal.account_id, principal.org_role)
-        graph = await get_pipeline_graph(session, pipeline_id)
+    try:
+
+        async with session.begin():
+            await set_rls_org(session, principal.organisation_id)
+            await set_rls_user_context(session, principal.account_id, principal.org_role)
+            graph = await get_pipeline_graph(session, pipeline_id)
+    except ProgrammingError:
+
+        logger.exception("routes.pipelines")
+
+        raise HTTPException(
+
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+
+            detail="This feature is not available. Run database migrations to enable it.",
+
+        )
+
     if graph is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Pipeline not found")
     nodes, edges = graph
@@ -492,29 +549,43 @@ async def replace_pipeline_graph_endpoint(
         if node.connector_binding is not None
     ]
 
-    async with session.begin():
-        await set_rls_org(session, principal.organisation_id)
-        await set_rls_user_context(session, principal.account_id, principal.org_role)
-        schema_pins, model_backend_pins = await _resolve_graph_references(
-            session,
-            req.nodes,
-            principal.organisation_id,
-        )
-        graph = await replace_pipeline_graph(
-            session,
-            pipeline_id=pipeline_id,
-            org_id=principal.organisation_id,
-            nodes=node_data,
-            edges=edge_data,
-        )
-        if graph is not None:
-            validation = await GraphValidator().validate_definition(
-                validator_graph,
+    try:
+
+        async with session.begin():
+            await set_rls_org(session, principal.organisation_id)
+            await set_rls_user_context(session, principal.account_id, principal.org_role)
+            schema_pins, model_backend_pins = await _resolve_graph_references(
                 session,
-                connector_bindings=connector_bindings,
-                schema_pins=schema_pins,
-                model_backend_pins=model_backend_pins,
+                req.nodes,
+                principal.organisation_id,
             )
+            graph = await replace_pipeline_graph(
+                session,
+                pipeline_id=pipeline_id,
+                org_id=principal.organisation_id,
+                nodes=node_data,
+                edges=edge_data,
+            )
+            if graph is not None:
+                validation = await GraphValidator().validate_definition(
+                    validator_graph,
+                    session,
+                    connector_bindings=connector_bindings,
+                    schema_pins=schema_pins,
+                    model_backend_pins=model_backend_pins,
+                )
+    except ProgrammingError:
+
+        logger.exception("routes.pipelines")
+
+        raise HTTPException(
+
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+
+            detail="This feature is not available. Run database migrations to enable it.",
+
+        )
+
     if graph is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Pipeline not found")
     nodes, edges = graph
@@ -539,27 +610,41 @@ async def update_pipeline_endpoint(
     principal: AuthenticatedPrincipal = Depends(get_current_user),
 ) -> PipelineResponse:
     updates = req.model_dump(exclude_unset=True)
-    async with session.begin():
-        await set_rls_org(session, principal.organisation_id)
-        await set_rls_user_context(session, principal.account_id, principal.org_role)
-        if "default_autonomy_level" in updates:
-            previous = await get_pipeline(session, pipeline_id)
-            prev_level = previous.default_autonomy_level if previous else None
-            if prev_level != updates["default_autonomy_level"]:
-                await append_audit_event(
-                    session,
-                    org_id=principal.organisation_id,
-                    event_type="pipeline.autonomy_level_changed",
-                    actor_user_id=principal.account_id,
-                    resource_type="pipeline",
-                    resource_id=pipeline_id,
-                    payload_json=autonomy_change_payload(
-                        previous=prev_level,
-                        current=updates["default_autonomy_level"],
-                    ),
-                    request_id=getattr(principal, "request_id", None),
-                )
-        pipeline = await update_pipeline(session, pipeline_id, updates)
+    try:
+
+        async with session.begin():
+            await set_rls_org(session, principal.organisation_id)
+            await set_rls_user_context(session, principal.account_id, principal.org_role)
+            if "default_autonomy_level" in updates:
+                previous = await get_pipeline(session, pipeline_id)
+                prev_level = previous.default_autonomy_level if previous else None
+                if prev_level != updates["default_autonomy_level"]:
+                    await append_audit_event(
+                        session,
+                        org_id=principal.organisation_id,
+                        event_type="pipeline.autonomy_level_changed",
+                        actor_user_id=principal.account_id,
+                        resource_type="pipeline",
+                        resource_id=pipeline_id,
+                        payload_json=autonomy_change_payload(
+                            previous=prev_level,
+                            current=updates["default_autonomy_level"],
+                        ),
+                        request_id=getattr(principal, "request_id", None),
+                    )
+            pipeline = await update_pipeline(session, pipeline_id, updates)
+    except ProgrammingError:
+
+        logger.exception("routes.pipelines")
+
+        raise HTTPException(
+
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+
+            detail="This feature is not available. Run database migrations to enable it.",
+
+        )
+
     if pipeline is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Pipeline not found")
     return PipelineResponse.model_validate(pipeline)
@@ -572,10 +657,24 @@ async def delete_pipeline_endpoint(
     session: AsyncSession = Depends(get_db_session),
     principal: AuthenticatedPrincipal = Depends(get_current_user),
 ) -> None:
-    async with session.begin():
-        await set_rls_org(session, principal.organisation_id)
-        await set_rls_user_context(session, principal.account_id, principal.org_role)
-        deleted = await delete_pipeline(session, pipeline_id)
+    try:
+
+        async with session.begin():
+            await set_rls_org(session, principal.organisation_id)
+            await set_rls_user_context(session, principal.account_id, principal.org_role)
+            deleted = await delete_pipeline(session, pipeline_id)
+    except ProgrammingError:
+
+        logger.exception("routes.pipelines")
+
+        raise HTTPException(
+
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+
+            detail="This feature is not available. Run database migrations to enable it.",
+
+        )
+
     if not deleted:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Pipeline not found")
 
@@ -615,60 +714,74 @@ async def clone_pipeline_endpoint(
             detail="Only organisation members and admins can clone pipelines",
         )
 
-    async with session.begin():
-        await set_rls_org(session, principal.organisation_id)
-        await set_rls_user_context(session, principal.account_id, principal.org_role)
+    try:
 
-        # Step 1 — validate source exists
-        _log.info("Step 1/4: verifying source pipeline %s exists", pipeline_id)
-        source = await get_pipeline(session, pipeline_id)
-        if source is None:
-            _log.warning("Copy aborted: source pipeline %s not found", pipeline_id)
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail=f"pipeline_copy_failed: Source pipeline not found [pipeline_id: {pipeline_id}]",
+        async with session.begin():
+            await set_rls_org(session, principal.organisation_id)
+            await set_rls_user_context(session, principal.account_id, principal.org_role)
+
+            # Step 1 — validate source exists
+            _log.info("Step 1/4: verifying source pipeline %s exists", pipeline_id)
+            source = await get_pipeline(session, pipeline_id)
+            if source is None:
+                _log.warning("Copy aborted: source pipeline %s not found", pipeline_id)
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail=f"pipeline_copy_failed: Source pipeline not found [pipeline_id: {pipeline_id}]",
+                )
+
+            # Step 2 — validate name availability
+            target_name = req.name or f"Copy of {source.name}"
+            _log.info("Step 2/4: checking name '%s' is available", target_name)
+            if not await check_pipeline_name_available(session, principal.organisation_id, target_name):
+                _log.warning("Copy aborted: name '%s' already exists in org %s", target_name, principal.organisation_id)
+                raise HTTPException(
+                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                    detail=f"pipeline_copy_failed: A pipeline named '{target_name}' already exists in this organisation",
+                )
+
+            # Step 3 — execute copy
+            _log.info("Step 3/4: cloning pipeline %s -> '%s'", pipeline_id, target_name)
+            cloned = await clone_pipeline(
+                session,
+                org_id=principal.organisation_id,
+                pipeline_id=pipeline_id,
+                account_id=principal.account_id,
+                new_name=req.name,
             )
+            if cloned is None:
+                _log.warning("Step 3/4 failed: source pipeline %s disappeared during copy", pipeline_id)
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail=f"pipeline_copy_failed: Source pipeline disappeared during copy [pipeline_id: {pipeline_id}]",
+                )
 
-        # Step 2 — validate name availability
-        target_name = req.name or f"Copy of {source.name}"
-        _log.info("Step 2/4: checking name '%s' is available", target_name)
-        if not await check_pipeline_name_available(session, principal.organisation_id, target_name):
-            _log.warning("Copy aborted: name '%s' already exists in org %s", target_name, principal.organisation_id)
-            raise HTTPException(
-                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-                detail=f"pipeline_copy_failed: A pipeline named '{target_name}' already exists in this organisation",
+            # Step 4 — audit event
+            _log.info("Step 4/4: recording audit event for clone %s -> %s", pipeline_id, cloned.id)
+            await append_audit_event(
+                session,
+                org_id=principal.organisation_id,
+                event_type="pipeline.cloned",
+                actor_user_id=principal.account_id,
+                resource_type="pipeline",
+                resource_id=pipeline_id,
+                payload_json={
+                    "cloned_pipeline_id": str(cloned.id),
+                    "target_name": target_name,
+                },
             )
+    except ProgrammingError:
 
-        # Step 3 — execute copy
-        _log.info("Step 3/4: cloning pipeline %s -> '%s'", pipeline_id, target_name)
-        cloned = await clone_pipeline(
-            session,
-            org_id=principal.organisation_id,
-            pipeline_id=pipeline_id,
-            account_id=principal.account_id,
-            new_name=req.name,
+        logger.exception("routes.pipelines")
+
+        raise HTTPException(
+
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+
+            detail="This feature is not available. Run database migrations to enable it.",
+
         )
-        if cloned is None:
-            _log.warning("Step 3/4 failed: source pipeline %s disappeared during copy", pipeline_id)
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail=f"pipeline_copy_failed: Source pipeline disappeared during copy [pipeline_id: {pipeline_id}]",
-            )
 
-        # Step 4 — audit event
-        _log.info("Step 4/4: recording audit event for clone %s -> %s", pipeline_id, cloned.id)
-        await append_audit_event(
-            session,
-            org_id=principal.organisation_id,
-            event_type="pipeline.cloned",
-            actor_user_id=principal.account_id,
-            resource_type="pipeline",
-            resource_id=pipeline_id,
-            payload_json={
-                "cloned_pipeline_id": str(cloned.id),
-                "target_name": target_name,
-            },
-        )
     _log.info("Copy complete: %s -> %s (%s)", pipeline_id, cloned.id, target_name)
     return PipelineResponse.model_validate(cloned)
 
@@ -695,79 +808,93 @@ async def save_as_composite_endpoint(
     session: AsyncSession = Depends(get_db_session),
     principal: AuthenticatedPrincipal = Depends(get_current_user),
 ) -> dict[str, Any]:
-    async with session.begin():
-        await set_rls_org(session, principal.organisation_id)
-        await set_rls_user_context(session, principal.account_id, principal.org_role)
+    try:
 
-        pipeline = await get_pipeline(session, pipeline_id)
-        if pipeline is None:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Pipeline not found")
+        async with session.begin():
+            await set_rls_org(session, principal.organisation_id)
+            await set_rls_user_context(session, principal.account_id, principal.org_role)
 
-        all_nodes = pipeline.graph_nodes_json
-        selected_ids_str = {str(nid) for nid in req.selected_node_ids}
-        sub_nodes = [n for n in all_nodes if str(n.get("id")) in selected_ids_str]
-        if not sub_nodes:
-            raise HTTPException(
-                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-                detail="No valid nodes selected",
+            pipeline = await get_pipeline(session, pipeline_id)
+            if pipeline is None:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Pipeline not found")
+
+            all_nodes = pipeline.graph_nodes_json
+            selected_ids_str = {str(nid) for nid in req.selected_node_ids}
+            sub_nodes = [n for n in all_nodes if str(n.get("id")) in selected_ids_str]
+            if not sub_nodes:
+                raise HTTPException(
+                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                    detail="No valid nodes selected",
+                )
+
+            sub_node_ids_str = {str(n.get("id")) for n in sub_nodes}
+
+            # Auto-detect parameter placeholders: scan all agent prompts referenced by selected nodes
+            agent_ids = {n.get("agent_id") for n in sub_nodes if n.get("agent_id") is not None}
+            detected_ports: list[dict[str, Any]] = []
+            if agent_ids:
+                agents_result = await session.execute(
+                    select(Agent).where(Agent.id.in_(agent_ids), Agent.organisation_id == principal.organisation_id)
+                )
+                for agent in agents_result.scalars().all():
+                    matches = _PARAM_PATTERN.findall(agent.prompt_template or "")
+                    for param_name in matches:
+                        # Avoid duplicates
+                        if not any(p.get("name") == param_name for p in detected_ports):
+                            detected_ports.append({
+                                "id": str(uuid.uuid4()),
+                                "name": param_name,
+                                "label": param_name.replace("_", " ").title(),
+                                "description": None,
+                                "type": "string",
+                                "required": False,
+                                "default_value": None,
+                                "options": None,
+                                "target_injection": {
+                                    "mode": "prompt_replace",
+                                    "node_id": str(agent.id),
+                                    "injection_point": "prompt_template",
+                                },
+                            })
+
+            # Extract edges that connect selected nodes
+            all_edges_raw = await session.execute(
+                select(PipelineEdge).where(PipelineEdge.pipeline_id == pipeline_id)
+            )
+            sub_edges = []
+            for edge in all_edges_raw.scalars().all():
+                if str(edge.source_node_id) in sub_node_ids_str and str(edge.target_node_id) in sub_node_ids_str:
+                    sub_edges.append({
+                        "id": str(edge.id),
+                        "source_node_id": str(edge.source_node_id),
+                        "target_node_id": str(edge.target_node_id),
+                        "edge_type": edge.edge_type,
+                        "condition_expression": edge.condition_expression,
+                        "hitl_gate_config": edge.hitl_gate_config,
+                    })
+
+            # Create the composite template
+            template = await create_composite_template(
+                session,
+                org_id=principal.organisation_id,
+                account_id=principal.account_id,
+                name=req.name,
+                description=req.description,
+                sub_pipeline_graph_json={"nodes": [dict(n) for n in sub_nodes], "edges": sub_edges},
+                parameter_ports_json=detected_ports,
+                version="0.1.0",
             )
 
-        sub_node_ids_str = {str(n.get("id")) for n in sub_nodes}
+    except ProgrammingError:
 
-        # Auto-detect parameter placeholders: scan all agent prompts referenced by selected nodes
-        agent_ids = {n.get("agent_id") for n in sub_nodes if n.get("agent_id") is not None}
-        detected_ports: list[dict[str, Any]] = []
-        if agent_ids:
-            agents_result = await session.execute(
-                select(Agent).where(Agent.id.in_(agent_ids), Agent.organisation_id == principal.organisation_id)
-            )
-            for agent in agents_result.scalars().all():
-                matches = _PARAM_PATTERN.findall(agent.prompt_template or "")
-                for param_name in matches:
-                    # Avoid duplicates
-                    if not any(p.get("name") == param_name for p in detected_ports):
-                        detected_ports.append({
-                            "id": str(uuid.uuid4()),
-                            "name": param_name,
-                            "label": param_name.replace("_", " ").title(),
-                            "description": None,
-                            "type": "string",
-                            "required": False,
-                            "default_value": None,
-                            "options": None,
-                            "target_injection": {
-                                "mode": "prompt_replace",
-                                "node_id": str(agent.id),
-                                "injection_point": "prompt_template",
-                            },
-                        })
+        logger.exception("routes.pipelines")
 
-        # Extract edges that connect selected nodes
-        all_edges_raw = await session.execute(
-            select(PipelineEdge).where(PipelineEdge.pipeline_id == pipeline_id)
-        )
-        sub_edges = []
-        for edge in all_edges_raw.scalars().all():
-            if str(edge.source_node_id) in sub_node_ids_str and str(edge.target_node_id) in sub_node_ids_str:
-                sub_edges.append({
-                    "id": str(edge.id),
-                    "source_node_id": str(edge.source_node_id),
-                    "target_node_id": str(edge.target_node_id),
-                    "edge_type": edge.edge_type,
-                    "condition_expression": edge.condition_expression,
-                    "hitl_gate_config": edge.hitl_gate_config,
-                })
+        raise HTTPException(
 
-        # Create the composite template
-        template = await create_composite_template(
-            session,
-            org_id=principal.organisation_id,
-            account_id=principal.account_id,
-            name=req.name,
-            description=req.description,
-            sub_pipeline_graph_json={"nodes": [dict(n) for n in sub_nodes], "edges": sub_edges},
-            parameter_ports_json=detected_ports,
-            version="0.1.0",
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+
+            detail="This feature is not available. Run database migrations to enable it.",
+
         )
 
     return {
@@ -802,36 +929,50 @@ async def trigger_quality_report(
     session: AsyncSession = Depends(get_db_session),
     principal: AuthenticatedPrincipal = Depends(get_current_user),
 ) -> QualityReportResponse:
-    async with session.begin():
-        await set_rls_org(session, principal.organisation_id)
-        await set_rls_user_context(session, principal.account_id, principal.org_role)
+    try:
 
-        pipeline = await get_pipeline(session, pipeline_id)
-        if pipeline is None:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Pipeline not found")
+        async with session.begin():
+            await set_rls_org(session, principal.organisation_id)
+            await set_rls_user_context(session, principal.account_id, principal.org_role)
 
-        report = await generate_quality_report(session, principal.organisation_id)
+            pipeline = await get_pipeline(session, pipeline_id)
+            if pipeline is None:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Pipeline not found")
 
-        endpoints = (
-            await session.execute(
-                select(NotificationEndpoint).where(
-                    NotificationEndpoint.organisation_id == principal.organisation_id,
+            report = await generate_quality_report(session, principal.organisation_id)
+
+            endpoints = (
+                await session.execute(
+                    select(NotificationEndpoint).where(
+                        NotificationEndpoint.organisation_id == principal.organisation_id,
+                    )
                 )
-            )
-        ).scalars()
+            ).scalars()
 
-        recipient_urls: list[str] = []
-        for ep in endpoints:
-            try:
-                events = json.loads(ep.events) if ep.events else []
-            except (json.JSONDecodeError, TypeError):
-                events = []
-            if "quality_report" in events:
-                recipient_urls.append(ep.url)
+            recipient_urls: list[str] = []
+            for ep in endpoints:
+                try:
+                    events = json.loads(ep.events) if ep.events else []
+                except (json.JSONDecodeError, TypeError):
+                    events = []
+                if "quality_report" in events:
+                    recipient_urls.append(ep.url)
 
-        deliveries: list[dict[str, Any]] = []
-        if recipient_urls:
-            deliveries = await deliver_quality_report(report, {"webhook_urls": recipient_urls})
+            deliveries: list[dict[str, Any]] = []
+            if recipient_urls:
+                deliveries = await deliver_quality_report(report, {"webhook_urls": recipient_urls})
+    except ProgrammingError:
+
+        logger.exception("routes.pipelines")
+
+        raise HTTPException(
+
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+
+            detail="This feature is not available. Run database migrations to enable it.",
+
+        )
+
     return QualityReportResponse(
         period=report["period"],
         summary=report["summary"],
@@ -935,10 +1076,24 @@ async def list_snapshot_endpoint(
     session: AsyncSession = Depends(get_db_session),
     principal: AuthenticatedPrincipal = Depends(get_current_user),
 ) -> SnapshotListResponse:
-    async with session.begin():
-        await set_rls_org(session, principal.organisation_id)
-        await set_rls_user_context(session, principal.account_id, principal.org_role)
-        snapshots, total = await list_snapshots(session, pipeline_id, page=page, page_size=page_size)
+    try:
+
+        async with session.begin():
+            await set_rls_org(session, principal.organisation_id)
+            await set_rls_user_context(session, principal.account_id, principal.org_role)
+            snapshots, total = await list_snapshots(session, pipeline_id, page=page, page_size=page_size)
+    except ProgrammingError:
+
+        logger.exception("routes.pipelines")
+
+        raise HTTPException(
+
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+
+            detail="This feature is not available. Run database migrations to enable it.",
+
+        )
+
     return SnapshotListResponse(
         items=[_snapshot_to_response(s) for s in snapshots],
         total=total,
@@ -953,10 +1108,24 @@ async def get_snapshot_detail_endpoint(
     session: AsyncSession = Depends(get_db_session),
     principal: AuthenticatedPrincipal = Depends(get_current_user),
 ) -> SnapshotDetailResponse:
-    async with session.begin():
-        await set_rls_org(session, principal.organisation_id)
-        await set_rls_user_context(session, principal.account_id, principal.org_role)
-        snapshot = await get_snapshot_detail(session, snapshot_id)
+    try:
+
+        async with session.begin():
+            await set_rls_org(session, principal.organisation_id)
+            await set_rls_user_context(session, principal.account_id, principal.org_role)
+            snapshot = await get_snapshot_detail(session, snapshot_id)
+    except ProgrammingError:
+
+        logger.exception("routes.pipelines")
+
+        raise HTTPException(
+
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+
+            detail="This feature is not available. Run database migrations to enable it.",
+
+        )
+
     if snapshot is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Snapshot not found")
     return _snapshot_to_detail_response(snapshot)
@@ -971,10 +1140,24 @@ async def tag_snapshot_endpoint(
     session: AsyncSession = Depends(get_db_session),
     principal: AuthenticatedPrincipal = Depends(get_current_user),
 ) -> SnapshotResponse:
-    async with session.begin():
-        await set_rls_org(session, principal.organisation_id)
-        await set_rls_user_context(session, principal.account_id, principal.org_role)
-        snapshot = await tag_snapshot(session, snapshot_id, tag=req.tag, notes=req.notes)
+    try:
+
+        async with session.begin():
+            await set_rls_org(session, principal.organisation_id)
+            await set_rls_user_context(session, principal.account_id, principal.org_role)
+            snapshot = await tag_snapshot(session, snapshot_id, tag=req.tag, notes=req.notes)
+    except ProgrammingError:
+
+        logger.exception("routes.pipelines")
+
+        raise HTTPException(
+
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+
+            detail="This feature is not available. Run database migrations to enable it.",
+
+        )
+
     if snapshot is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Snapshot not found")
     return _snapshot_to_response(snapshot)
@@ -988,10 +1171,24 @@ async def rollback_snapshot_endpoint(
     session: AsyncSession = Depends(get_db_session),
     principal: AuthenticatedPrincipal = Depends(get_current_user),
 ) -> SnapshotResponse:
-    async with session.begin():
-        await set_rls_org(session, principal.organisation_id)
-        await set_rls_user_context(session, principal.account_id, principal.org_role)
-        new_snapshot = await rollback_to_snapshot(session, pipeline_id, snapshot_id, account_id=principal.account_id)
+    try:
+
+        async with session.begin():
+            await set_rls_org(session, principal.organisation_id)
+            await set_rls_user_context(session, principal.account_id, principal.org_role)
+            new_snapshot = await rollback_to_snapshot(session, pipeline_id, snapshot_id, account_id=principal.account_id)
+    except ProgrammingError:
+
+        logger.exception("routes.pipelines")
+
+        raise HTTPException(
+
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+
+            detail="This feature is not available. Run database migrations to enable it.",
+
+        )
+
     if new_snapshot is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -1013,10 +1210,24 @@ async def delete_snapshot_endpoint(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Only admins can delete snapshots",
         )
-    async with session.begin():
-        await set_rls_org(session, principal.organisation_id)
-        await set_rls_user_context(session, principal.account_id, principal.org_role)
-        deleted = await delete_snapshot(session, snapshot_id)
+    try:
+
+        async with session.begin():
+            await set_rls_org(session, principal.organisation_id)
+            await set_rls_user_context(session, principal.account_id, principal.org_role)
+            deleted = await delete_snapshot(session, snapshot_id)
+    except ProgrammingError:
+
+        logger.exception("routes.pipelines")
+
+        raise HTTPException(
+
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+
+            detail="This feature is not available. Run database migrations to enable it.",
+
+        )
+
     if not deleted:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -1032,10 +1243,24 @@ async def diff_snapshot_endpoint(
     session: AsyncSession = Depends(get_db_session),
     principal: AuthenticatedPrincipal = Depends(get_current_user),
 ) -> SnapshotDiffResponse:
-    async with session.begin():
-        await set_rls_org(session, principal.organisation_id)
-        await set_rls_user_context(session, principal.account_id, principal.org_role)
-        result = await diff_snapshots(session, req.snapshot_a_id, req.snapshot_b_id)
+    try:
+
+        async with session.begin():
+            await set_rls_org(session, principal.organisation_id)
+            await set_rls_user_context(session, principal.account_id, principal.org_role)
+            result = await diff_snapshots(session, req.snapshot_a_id, req.snapshot_b_id)
+    except ProgrammingError:
+
+        logger.exception("routes.pipelines")
+
+        raise HTTPException(
+
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+
+            detail="This feature is not available. Run database migrations to enable it.",
+
+        )
+
     if result is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -1067,89 +1292,103 @@ async def convert_node_to_agent_endpoint(
     session: AsyncSession = Depends(get_db_session),
     principal: AuthenticatedPrincipal = Depends(get_current_user),
 ) -> PipelineGraphResponse:
-    async with session.begin():
-        await set_rls_org(session, principal.organisation_id)
-        await set_rls_user_context(session, principal.account_id, principal.org_role)
+    try:
 
-        pipeline_row = (
-            await session.execute(
-                select(Pipeline).where(Pipeline.id == pipeline_id).with_for_update()
-            )
-        ).scalar_one_or_none()
-        if pipeline_row is None:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Pipeline not found")
-        nodes = list(pipeline_row.graph_nodes_json) if pipeline_row.graph_nodes_json else []
-        edges = list(pipeline_row.edges) if pipeline_row.edges else []
+        async with session.begin():
+            await set_rls_org(session, principal.organisation_id)
+            await set_rls_user_context(session, principal.account_id, principal.org_role)
 
-        target = _find_node_in_list(nodes, node_id)
-        if target is None:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Node not found")
-        if target.get("node_type") != "manual":
-            raise HTTPException(
-                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-                detail="Only manual nodes can be converted to agent",
-            )
-
-        agent = (
-            await session.execute(
-                select(Agent).where(
-                    Agent.id == req.agent_id,
-                    Agent.organisation_id == principal.organisation_id,
+            pipeline_row = (
+                await session.execute(
+                    select(Pipeline).where(Pipeline.id == pipeline_id).with_for_update()
                 )
-            )
-        ).scalar_one_or_none()
-        if agent is None:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Agent not found")
+            ).scalar_one_or_none()
+            if pipeline_row is None:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Pipeline not found")
+            nodes = list(pipeline_row.graph_nodes_json) if pipeline_row.graph_nodes_json else []
+            edges = list(pipeline_row.edges) if pipeline_row.edges else []
 
-        connector = (
-            await session.execute(
-                select(ConnectorInstance).where(
-                    ConnectorInstance.id == req.connector_binding.instance_id,
-                    ConnectorInstance.organisation_id == principal.organisation_id,
+            target = _find_node_in_list(nodes, node_id)
+            if target is None:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Node not found")
+            if target.get("node_type") != "manual":
+                raise HTTPException(
+                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                    detail="Only manual nodes can be converted to agent",
                 )
-            )
-        ).scalar_one_or_none()
-        if connector is None:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Connector not found")
-        if connector.connector_type_id != req.connector_binding.type:
-            raise HTTPException(
-                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-                detail="Connector type mismatch",
-            )
 
-        model_backend = (
-            await session.execute(
-                select(ModelBackend).where(
-                    ModelBackend.id == req.model_backend_id,
-                    ModelBackend.organisation_id == principal.organisation_id,
+            agent = (
+                await session.execute(
+                    select(Agent).where(
+                        Agent.id == req.agent_id,
+                        Agent.organisation_id == principal.organisation_id,
+                    )
                 )
+            ).scalar_one_or_none()
+            if agent is None:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Agent not found")
+
+            connector = (
+                await session.execute(
+                    select(ConnectorInstance).where(
+                        ConnectorInstance.id == req.connector_binding.instance_id,
+                        ConnectorInstance.organisation_id == principal.organisation_id,
+                    )
+                )
+            ).scalar_one_or_none()
+            if connector is None:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Connector not found")
+            if connector.connector_type_id != req.connector_binding.type:
+                raise HTTPException(
+                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                    detail="Connector type mismatch",
+                )
+
+            model_backend = (
+                await session.execute(
+                    select(ModelBackend).where(
+                        ModelBackend.id == req.model_backend_id,
+                        ModelBackend.organisation_id == principal.organisation_id,
+                    )
+                )
+            ).scalar_one_or_none()
+            if model_backend is None:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Model backend not found")
+
+            target["node_type"] = "agent"
+            target["agent_id"] = str(req.agent_id)
+            target["connector_binding"] = {
+                "type": req.connector_binding.type,
+                "instance_id": str(req.connector_binding.instance_id),
+            }
+            target.pop("output_schema_id", None)
+
+            await append_audit_event(
+                session,
+                org_id=principal.organisation_id,
+                actor_user_id=principal.account_id,
+                event_type="pipeline.node.convert_to_agent",
+                resource_type="pipeline",
+                resource_id=str(pipeline_id),
+                payload_json={
+                    "node_id": str(node_id),
+                    "agent_id": str(req.agent_id),
+                },
             )
-        ).scalar_one_or_none()
-        if model_backend is None:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Model backend not found")
 
-        target["node_type"] = "agent"
-        target["agent_id"] = str(req.agent_id)
-        target["connector_binding"] = {
-            "type": req.connector_binding.type,
-            "instance_id": str(req.connector_binding.instance_id),
-        }
-        target.pop("output_schema_id", None)
+            saved = await _save_graph(session, pipeline_id, principal.organisation_id, nodes, edges)
+    except ProgrammingError:
 
-        await append_audit_event(
-            session,
-            org_id=principal.organisation_id,
-            actor_user_id=principal.account_id,
-            event_type="pipeline.node.convert_to_agent",
-            resource_type="pipeline",
-            resource_id=str(pipeline_id),
-            payload_json={
-                "node_id": str(node_id),
-                "agent_id": str(req.agent_id),
-            },
+        logger.exception("routes.pipelines")
+
+        raise HTTPException(
+
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+
+            detail="This feature is not available. Run database migrations to enable it.",
+
         )
 
-        saved = await _save_graph(session, pipeline_id, principal.organisation_id, nodes, edges)
     if saved is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Pipeline not found")
     saved_nodes, saved_edges = saved
@@ -1168,75 +1407,89 @@ async def revert_node_to_manual_endpoint(
     session: AsyncSession = Depends(get_db_session),
     principal: AuthenticatedPrincipal = Depends(get_current_user),
 ) -> PipelineGraphResponse:
-    async with session.begin():
-        await set_rls_org(session, principal.organisation_id)
-        await set_rls_user_context(session, principal.account_id, principal.org_role)
+    try:
 
-        pipeline_row = (
-            await session.execute(
-                select(Pipeline).where(Pipeline.id == pipeline_id).with_for_update()
+        async with session.begin():
+            await set_rls_org(session, principal.organisation_id)
+            await set_rls_user_context(session, principal.account_id, principal.org_role)
+
+            pipeline_row = (
+                await session.execute(
+                    select(Pipeline).where(Pipeline.id == pipeline_id).with_for_update()
+                )
+            ).scalar_one_or_none()
+            if pipeline_row is None:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Pipeline not found")
+            nodes = list(pipeline_row.graph_nodes_json) if pipeline_row.graph_nodes_json else []
+            edges = list(pipeline_row.edges) if pipeline_row.edges else []
+
+            target = _find_node_in_list(nodes, node_id)
+            if target is None:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Node not found")
+            if target.get("node_type") != "agent":
+                raise HTTPException(
+                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                    detail="Only agent nodes can be reverted to manual",
+                )
+
+            snapshot = await get_snapshot_detail(session, snapshot_id)
+            if snapshot is None:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Snapshot not found")
+
+            snapshot_nodes = snapshot.graph_json.get("nodes", [])
+            snapshot_node = _find_node_in_list(snapshot_nodes, node_id)
+            if snapshot_node is None:
+                raise HTTPException(
+                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                    detail="Snapshot does not contain this node",
+                )
+            if snapshot_node.get("node_type") != "manual":
+                raise HTTPException(
+                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                    detail="Snapshot node was not a manual node",
+                )
+
+            output_schema_id = snapshot_node.get("output_schema_id")
+            if output_schema_id is None:
+                raise HTTPException(
+                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                    detail="Snapshot node has no output schema",
+                )
+
+            target["node_type"] = "manual"
+            sid = str(output_schema_id) if not isinstance(output_schema_id, str) else output_schema_id
+            target["output_schema_id"] = sid
+            target.pop("agent_id", None)
+            target.pop("connector_binding", None)
+            if not target.get("label"):
+                target["label"] = snapshot_node.get("label") or f"Manual {node_id}"
+
+            await append_audit_event(
+                session,
+                org_id=principal.organisation_id,
+                actor_user_id=principal.account_id,
+                event_type="pipeline.node.revert_to_manual",
+                resource_type="pipeline",
+                resource_id=str(pipeline_id),
+                payload_json={
+                    "node_id": str(node_id),
+                    "snapshot_id": str(snapshot_id),
+                },
             )
-        ).scalar_one_or_none()
-        if pipeline_row is None:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Pipeline not found")
-        nodes = list(pipeline_row.graph_nodes_json) if pipeline_row.graph_nodes_json else []
-        edges = list(pipeline_row.edges) if pipeline_row.edges else []
 
-        target = _find_node_in_list(nodes, node_id)
-        if target is None:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Node not found")
-        if target.get("node_type") != "agent":
-            raise HTTPException(
-                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-                detail="Only agent nodes can be reverted to manual",
-            )
+            saved = await _save_graph(session, pipeline_id, principal.organisation_id, nodes, edges)
+    except ProgrammingError:
 
-        snapshot = await get_snapshot_detail(session, snapshot_id)
-        if snapshot is None:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Snapshot not found")
+        logger.exception("routes.pipelines")
 
-        snapshot_nodes = snapshot.graph_json.get("nodes", [])
-        snapshot_node = _find_node_in_list(snapshot_nodes, node_id)
-        if snapshot_node is None:
-            raise HTTPException(
-                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-                detail="Snapshot does not contain this node",
-            )
-        if snapshot_node.get("node_type") != "manual":
-            raise HTTPException(
-                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-                detail="Snapshot node was not a manual node",
-            )
+        raise HTTPException(
 
-        output_schema_id = snapshot_node.get("output_schema_id")
-        if output_schema_id is None:
-            raise HTTPException(
-                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-                detail="Snapshot node has no output schema",
-            )
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
 
-        target["node_type"] = "manual"
-        sid = str(output_schema_id) if not isinstance(output_schema_id, str) else output_schema_id
-        target["output_schema_id"] = sid
-        target.pop("agent_id", None)
-        target.pop("connector_binding", None)
-        if not target.get("label"):
-            target["label"] = snapshot_node.get("label") or f"Manual {node_id}"
+            detail="This feature is not available. Run database migrations to enable it.",
 
-        await append_audit_event(
-            session,
-            org_id=principal.organisation_id,
-            actor_user_id=principal.account_id,
-            event_type="pipeline.node.revert_to_manual",
-            resource_type="pipeline",
-            resource_id=str(pipeline_id),
-            payload_json={
-                "node_id": str(node_id),
-                "snapshot_id": str(snapshot_id),
-            },
         )
 
-        saved = await _save_graph(session, pipeline_id, principal.organisation_id, nodes, edges)
     if saved is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Pipeline not found")
     saved_nodes, saved_edges = saved

@@ -800,21 +800,35 @@ async def infer_schema_endpoint(
     )
 
     try:
-        async with session.begin():
-            await append_audit_event(
-                session,
-                org_id=principal.organisation_id,
-                event_type="schema_inference_completed",
-                actor_user_id=principal.account_id,
-                resource_type="connector_instance",
-                resource_id=req.connector_instance_id,
-                payload_json={
-                    "connector_name": ci.name,
-                    "resource": req.sample_query.resource,
-                    "sample_count": len(records),
-                    "model_backend_id": str(first_backend_id),
-                },
+        try:
+
+            async with session.begin():
+                await append_audit_event(
+                    session,
+                    org_id=principal.organisation_id,
+                    event_type="schema_inference_completed",
+                    actor_user_id=principal.account_id,
+                    resource_type="connector_instance",
+                    resource_id=req.connector_instance_id,
+                    payload_json={
+                        "connector_name": ci.name,
+                        "resource": req.sample_query.resource,
+                        "sample_count": len(records),
+                        "model_backend_id": str(first_backend_id),
+                    },
+                )
+        except ProgrammingError:
+
+            logger.exception("routes.schemas")
+
+            raise HTTPException(
+
+                status_code=status.HTTP_501_NOT_IMPLEMENTED,
+
+                detail="This feature is not available. Run database migrations to enable it.",
+
             )
+
     except Exception:
         logger.exception("schemas.infer.audit_failed")
 
@@ -935,20 +949,34 @@ async def generate_schema_endpoint(
             ) from exc
 
     try:
-        async with session.begin():
-            await append_audit_event(
-                session,
-                org_id=principal.organisation_id,
-                event_type="schema_generation_completed",
-                actor_user_id=principal.account_id,
-                resource_type="schema",
-                resource_id="generate",
-                payload_json={
-                    "description_length": len(req.description),
-                    "example_count": len(req.examples),
-                    "model_backend_id": str(first_backend_id),
-                },
+        try:
+
+            async with session.begin():
+                await append_audit_event(
+                    session,
+                    org_id=principal.organisation_id,
+                    event_type="schema_generation_completed",
+                    actor_user_id=principal.account_id,
+                    resource_type="schema",
+                    resource_id="generate",
+                    payload_json={
+                        "description_length": len(req.description),
+                        "example_count": len(req.examples),
+                        "model_backend_id": str(first_backend_id),
+                    },
+                )
+        except ProgrammingError:
+
+            logger.exception("routes.schemas")
+
+            raise HTTPException(
+
+                status_code=status.HTTP_501_NOT_IMPLEMENTED,
+
+                detail="This feature is not available. Run database migrations to enable it.",
+
             )
+
     except HTTPException:
         raise
     except Exception:
