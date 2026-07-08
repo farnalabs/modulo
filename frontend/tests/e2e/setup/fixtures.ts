@@ -46,8 +46,11 @@ export async function loginAsAdmin(page: Page, env: TestEnv) {
     if (url.includes('/api/v1/me')) {
       return route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ id: '1', email: 'admin@example.com', display_name: 'Admin' }) })
     }
-    if (url.includes('/api/v1/pipelines')) {
-      return route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ items: [], total: 0 }) })
+    if (url.includes('/api/v1/pipelines') && method === 'GET') {
+      return route.fulfill({
+        status: 200, contentType: 'application/json',
+        body: JSON.stringify({ items: [{ id: '1', name: 'Test Pipeline', status: 'idle', created_at: new Date().toISOString() }], total: 1 }),
+      })
     }
     if (url.includes('/api/v1/admin/feature-flags')) {
       return route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ flags: {}, current_tier: 'enterprise' }) })
