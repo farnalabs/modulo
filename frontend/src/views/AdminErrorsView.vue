@@ -198,8 +198,6 @@ import { formatApiError } from "../lib/api/formatError"
 
 const router = useRouter()
 
-const router = useRouter()
-
 const groups = ref<ErrorGroupSummary[]>([])
 const loading = ref(true)
 const error = ref<string | null>(null)

@@ -66,8 +66,9 @@ async function nextStep() {
         description: description.value.trim() || null,
       });
       step.value = 2;
+    } catch (e) {
       error.value = formatApiError(e);
-  } finally {
+    } finally {
     loading.value = false;
   }
 }
