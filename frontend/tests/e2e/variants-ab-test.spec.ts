@@ -5,7 +5,7 @@ test.describe('AB Test Models', () => {
     await loginAsAdmin(page, env)
     await page.goto('/variants/ab-test')
     await page.waitForLoadState('networkidle')
-    await expect(page.locator('h1')).toContainText('AB Test Models')
+    await expect(page.locator('h1')).toContainText('A/B Test Models')
     await expect(page.getByTestId('page-ab-test-models')).toBeVisible()
   })
 })
