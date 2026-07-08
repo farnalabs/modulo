@@ -35,8 +35,8 @@ Feature: Cost Controls
   Scenario: Spend under both limits is approved
     Given org "acme" has a daily spend limit of $500.00
     And team "beta" has a daily spend limit of $100.00
-    And org "acme" has spent $100.00 today
-    And team "beta" has spent $20.00 today
+    And org "acme" has already spent $100.00 today
+    And team "beta" has already spent $20.00 today
     When a new run for team "beta" costs $30.00
     Then the spend is approved
     And the org run count is incremented

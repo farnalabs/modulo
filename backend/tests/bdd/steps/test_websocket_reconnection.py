@@ -15,7 +15,7 @@ from pytest_bdd import given, parsers, scenarios, then, when
 from modulo.core.pipeline_engine.event_broker import RunEventBroker
 
 try:
-    scenarios("../../features/operations/websocket_reconnection.feature")
+    scenarios("../features/operations/websocket_reconnection.feature")
 except (FileNotFoundError, OSError):
     pass
 

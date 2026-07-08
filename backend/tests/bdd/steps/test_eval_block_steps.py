@@ -12,7 +12,7 @@ from modulo.core.eval_engine import EvalBlockedError
 # Active features
 # ---------------------------------------------------------------------------
 try:
-    scenarios("../../features/evals/eval_block.feature")
+    scenarios("../features/evals/eval_block.feature")
 except (FileNotFoundError, OSError):
     pass
 

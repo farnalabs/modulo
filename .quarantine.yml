@@ -1,0 +1,26 @@
+# Flaky-test quarantine registry
+# ==============================
+# Tests listed here are known-flaky and will be marked xfail by the conftest
+# plugin. Each entry must have a reason and an expiry date (ISO 8601).
+# When a test's expiry is reached, the gate will refuse to merge/publish
+# until either:
+#   a) The test is fixed and removed from this list, or
+#   b) The expiry is extended with justification.
+#
+# Format:
+#   test_id: "path::test_name" matching pytest's nodeid convention
+#   reason: "Brief explanation of flakiness"
+#   expiry: "YYYY-MM-DD"
+#   owner: "GitHub username or team" (optional)
+
+quarantine:
+  # Example (illustrative — remove if no currently-quarantined tests):
+  # - test_id: "tests/unit/connectors/test_github.py::test_rate_limit_retry"
+  #   reason: "Flaky due to GitHub API rate limit window — fails ~15% of CI runs"
+  #   expiry: "2026-08-01"
+  #   owner: "platform-team"
+  #
+  # - test_id: "tests/integration/test_websocket_reconnection.py::test_reconnect_during_deploy"
+  #   reason: "Race between server shutdown and client reconnect — needs deterministic fixture"
+  #   expiry: "2026-07-15"
+  #   owner: "duncan"
