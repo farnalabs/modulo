@@ -10,7 +10,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 from pytest_bdd import given, parsers, scenarios, then, when
 
 try:
-    scenarios("../../features/triggers/cron.feature")
+    scenarios("../features/triggers/cron.feature")
 except (FileNotFoundError, OSError):
     pass
 

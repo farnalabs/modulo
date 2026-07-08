@@ -6,11 +6,11 @@ from unittest.mock import MagicMock, patch
 from pytest_bdd import given, parsers, scenarios, then, when
 
 try:
-    scenarios("../../features/pipelines/create.feature")
+    scenarios("../features/pipelines/create.feature")
 except (FileNotFoundError, OSError):
     pass
 try:
-    scenarios("../../features/pipelines/concurrency.feature")
+    scenarios("../features/pipelines/concurrency.feature")
 except (FileNotFoundError, OSError):
     pass
 

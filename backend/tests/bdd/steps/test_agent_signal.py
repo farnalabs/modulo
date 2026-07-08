@@ -14,7 +14,7 @@ from modulo.core.trigger_engine.agent_signal import fire_agent_signal
 from tests.bdd.conftest import ALT_ORG_ID, ORG_ID
 
 try:
-    scenarios("../../features/triggers/agent_signal.feature")
+    scenarios("../features/triggers/agent_signal.feature")
 except (FileNotFoundError, OSError):
     pass
 

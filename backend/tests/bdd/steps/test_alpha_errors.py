@@ -6,15 +6,15 @@ from unittest.mock import MagicMock, patch
 from pytest_bdd import given, parsers, scenarios, then, when
 
 try:
-    scenarios("../../features/errors/retry.feature")
+    scenarios("../features/errors/retry.feature")
 except (FileNotFoundError, OSError):
     pass
 try:
-    scenarios("../../features/errors/failed_state.feature")
+    scenarios("../features/errors/failed_state.feature")
 except (FileNotFoundError, OSError):
     pass
 try:
-    scenarios("../../features/errors/recovery.feature")
+    scenarios("../features/errors/recovery.feature")
 except (FileNotFoundError, OSError):
     pass
 

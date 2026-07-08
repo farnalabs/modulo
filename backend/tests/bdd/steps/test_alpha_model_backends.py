@@ -6,15 +6,15 @@ from unittest.mock import MagicMock, patch
 from pytest_bdd import given, parsers, scenarios, then, when
 
 try:
-    scenarios("../../features/model_backends/configure.feature")
+    scenarios("../features/model_backends/configure.feature")
 except (FileNotFoundError, OSError):
     pass
 try:
-    scenarios("../../features/model_backends/rotation.feature")
+    scenarios("../features/model_backends/rotation.feature")
 except (FileNotFoundError, OSError):
     pass
 try:
-    scenarios("../../features/model_backends/health_check.feature")
+    scenarios("../features/model_backends/health_check.feature")
 except (FileNotFoundError, OSError):
     pass
 

@@ -3,7 +3,7 @@
 Covers the RunEventBroker ring buffer, replay_since, subscribe/unsubscribe,
 BrokerRegistry lifecycle, concurrent subscribers, and the run_ws.py handler
 contract in isolation.
-BDD feature file at tests/features/operations/websocket_reconnection.feature.
+BDD feature file at tests/bdd/features/operations/websocket_reconnection.feature.
 """
 
 import asyncio

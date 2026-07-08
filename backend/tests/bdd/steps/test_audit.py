@@ -7,7 +7,7 @@ from unittest.mock import patch
 
 from pytest_bdd import given, parsers, scenarios, then, when
 
-scenarios("../../features/audit/audit_viewer.feature")
+scenarios("../features/audit/audit_viewer.feature")
 
 _ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
 _USER_ID = uuid.UUID("00000000-0000-0000-0000-000000000002")
