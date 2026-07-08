@@ -59,7 +59,7 @@ def _make_mock_session() -> AsyncMock:
     return session
 
 
-def _build_client(settings_fn) -> Generator[TestClient, None, None]:
+def _build_client(settings_fn, sso_enabled: bool = True) -> Generator[TestClient, None, None]:
     mock_session = _make_mock_session()
 
     async def override_session() -> AsyncGenerator[AsyncMock, None]:
@@ -75,7 +75,7 @@ def _build_client(settings_fn) -> Generator[TestClient, None, None]:
         org_role="admin",
     )
     mock_plan = MagicMock()
-    mock_plan.feature_enabled.return_value = True
+    mock_plan.feature_enabled.return_value = sso_enabled
     app.dependency_overrides[get_plan_context] = lambda: mock_plan
     yield TestClient(app)
     app.dependency_overrides.clear()
@@ -83,12 +83,12 @@ def _build_client(settings_fn) -> Generator[TestClient, None, None]:
 
 @pytest.fixture()
 def client_no_sso() -> Generator[TestClient, None, None]:
-    yield from _build_client(_settings_without_license)
+    yield from _build_client(_settings_without_license, sso_enabled=False)
 
 
 @pytest.fixture()
 def client_with_sso() -> Generator[TestClient, None, None]:
-    yield from _build_client(_settings_with_license)
+    yield from _build_client(_settings_with_license, sso_enabled=True)
 
 
 # ── SSO admin endpoints (should return 402 when feature disabled) ────────
