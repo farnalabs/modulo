@@ -1,4 +1,4 @@
-import { test, expect } from './setup/fixtures'
+import { test, expect, loginAsAdmin } from './setup/fixtures'
 
 test.describe('Dashboard', () => {
   test('redirects to login when unauthenticated', async ({ page }) => {
@@ -8,14 +8,11 @@ test.describe('Dashboard', () => {
     await expect(page).toHaveURL(/\/login/)
   })
 
-  test('displays dashboard heading when authenticated', async ({ page }) => {
+  test('displays dashboard heading when authenticated', async ({ page, env }) => {
     await page.goto('/login')
+    await page.waitForLoadState('networkidle')
 
-    await page.fill('input[type="text"]', 'admin@example.com')
-    await page.fill('input[type="password"]', 'password123')
-    await page.click('button[type="submit"]')
-
-    await page.waitForURL(/^(?!.*\/login).*$/, { timeout: 5000 }).catch(() => {})
+    await loginAsAdmin(page, env)
 
     const isOnDashboard = page.url() !== `${page.context().options.baseURL}/login`
     if (isOnDashboard) {

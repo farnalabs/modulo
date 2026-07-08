@@ -7,6 +7,8 @@
         "dev": "vite",
         "build": "vite build",
         "test:e2e": "playwright test",
+        "test:e2e:staging": "cross-env E2E_TARGET=staging E2E_NO_WEBSERVER=true playwright test",
+        "test:e2e:app": "cross-env E2E_TARGET=app E2E_NO_WEBSERVER=true playwright test",
         "test:e2e:coverage": "cross-env VITE_COVERAGE=true playwright test",
         "test:unit": "vitest run src",
         "preview": "vite preview",

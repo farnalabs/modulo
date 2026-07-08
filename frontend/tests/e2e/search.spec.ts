@@ -1,13 +1,4 @@
-import { test, expect } from './setup/fixtures'
-
-async function login(page: import('@playwright/test').Page) {
-  await page.goto('/login')
-  await page.waitForLoadState('networkidle')
-  await page.fill('input[type="text"]', 'admin@example.com')
-  await page.fill('input[type="password"]', 'password123')
-  await page.click('button[type="submit"]')
-  await page.waitForURL(/^(?!.*\/login).*$/, { timeout: 5000 }).catch(() => {})
-}
+import { test, expect, loginAsAdmin } from './setup/fixtures'
 
 const samplePipelines = {
   items: [
@@ -19,8 +10,8 @@ const samplePipelines = {
 }
 
 test.describe('Search', () => {
-  test('pipelines page has search input', async ({ page }) => {
-    await login(page)
+  test('pipelines page has search input', async ({ page, env }) => {
+    await loginAsAdmin(page, env)
     await page.route('**/api/v1/pipelines*', (route) => {
       route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(samplePipelines) })
     })
@@ -36,8 +27,8 @@ test.describe('Search', () => {
     await expect(page.locator('text=CI Pipeline')).toBeVisible()
   })
 
-  test('library page search filters results', async ({ page }) => {
-    await login(page)
+  test('library page search filters results', async ({ page, env }) => {
+    await loginAsAdmin(page, env)
     await page.route('**/api/v1/library*', (route) => {
       route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({
         items: [

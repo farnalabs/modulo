@@ -1,17 +1,8 @@
-import { test, expect } from './setup/fixtures'
-
-async function login(page: import('@playwright/test').Page) {
-  await page.goto('/login')
-  await page.waitForLoadState('networkidle')
-  await page.fill('input[type="text"]', 'admin@example.com')
-  await page.fill('input[type="password"]', 'password123')
-  await page.click('button[type="submit"]')
-  await page.waitForURL(/^(?!.*\/login).*$/, { timeout: 5000 }).catch(() => {})
-}
+import { test, expect, loginAsAdmin } from './setup/fixtures'
 
 test.describe('Admin API Changelog', () => {
-  test('page loads with correct heading', async ({ page }) => {
-    await login(page)
+  test('page loads with correct heading', async ({ page, env }) => {
+    await loginAsAdmin(page, env)
     await page.goto('/admin/api-changelog')
     await page.waitForLoadState('networkidle')
     await expect(page.locator('h1')).toContainText('API Changelog')
@@ -20,8 +11,8 @@ test.describe('Admin API Changelog', () => {
 })
 
 test.describe('Admin Audit Log', () => {
-  test('page loads with correct heading', async ({ page }) => {
-    await login(page)
+  test('page loads with correct heading', async ({ page, env }) => {
+    await loginAsAdmin(page, env)
     await page.goto('/admin/audit')
     await page.waitForLoadState('networkidle')
     await expect(page.locator('h1')).toContainText('Audit Log')
@@ -30,8 +21,8 @@ test.describe('Admin Audit Log', () => {
 })
 
 test.describe('Admin My Profile', () => {
-  test('page loads with correct heading', async ({ page }) => {
-    await login(page)
+  test('page loads with correct heading', async ({ page, env }) => {
+    await loginAsAdmin(page, env)
     await page.goto('/admin/my-profile')
     await page.waitForLoadState('networkidle')
     await expect(page.locator('h1')).toContainText('My Profile')
@@ -40,8 +31,8 @@ test.describe('Admin My Profile', () => {
 })
 
 test.describe('Admin Notification Delivery', () => {
-  test('page loads with correct heading', async ({ page }) => {
-    await login(page)
+  test('page loads with correct heading', async ({ page, env }) => {
+    await loginAsAdmin(page, env)
     await page.goto('/admin/notification-delivery')
     await page.waitForLoadState('networkidle')
     await expect(page.locator('h1')).toContainText('Notification Log')
@@ -50,8 +41,8 @@ test.describe('Admin Notification Delivery', () => {
 })
 
 test.describe('Admin Org Settings', () => {
-  test('page loads with correct heading', async ({ page }) => {
-    await login(page)
+  test('page loads with correct heading', async ({ page, env }) => {
+    await loginAsAdmin(page, env)
     await page.goto('/admin/org')
     await page.waitForLoadState('networkidle')
     await expect(page.locator('h1')).toContainText('Org Settings')
@@ -60,8 +51,8 @@ test.describe('Admin Org Settings', () => {
 })
 
 test.describe('Admin Pipelines', () => {
-  test('page loads with correct heading', async ({ page }) => {
-    await login(page)
+  test('page loads with correct heading', async ({ page, env }) => {
+    await loginAsAdmin(page, env)
     await page.goto('/admin/pipelines')
     await page.waitForLoadState('networkidle')
     await expect(page.locator('h1')).toContainText('Admin Pipelines')
@@ -70,8 +61,8 @@ test.describe('Admin Pipelines', () => {
 })
 
 test.describe('Admin Plugins', () => {
-  test('page loads with correct heading', async ({ page }) => {
-    await login(page)
+  test('page loads with correct heading', async ({ page, env }) => {
+    await loginAsAdmin(page, env)
     await page.goto('/admin/plugins')
     await page.waitForLoadState('networkidle')
     await expect(page.locator('h1')).toContainText('Plugins')
@@ -80,8 +71,8 @@ test.describe('Admin Plugins', () => {
 })
 
 test.describe('Admin Team Comparison', () => {
-  test('page loads with correct heading', async ({ page }) => {
-    await login(page)
+  test('page loads with correct heading', async ({ page, env }) => {
+    await loginAsAdmin(page, env)
     await page.goto('/admin/teams/comparison')
     await page.waitForLoadState('networkidle')
     await expect(page.locator('h1')).toContainText('Team Comparison')
@@ -90,8 +81,8 @@ test.describe('Admin Team Comparison', () => {
 })
 
 test.describe('Admin Triggers', () => {
-  test('page loads with correct heading', async ({ page }) => {
-    await login(page)
+  test('page loads with correct heading', async ({ page, env }) => {
+    await loginAsAdmin(page, env)
     await page.goto('/admin/triggers')
     await page.waitForLoadState('networkidle')
     await expect(page.locator('h1')).toContainText('Admin Triggers')

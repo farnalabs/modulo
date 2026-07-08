@@ -1,4 +1,4 @@
-import { test, expect } from './setup/fixtures'
+import { test, expect, loginAsAdmin } from './setup/fixtures'
 
 const sampleViews = {
   items: [
@@ -27,21 +27,12 @@ const sampleViews = {
   ],
 }
 
-async function login(page: import('@playwright/test').Page) {
-  await page.goto('/login')
-  await page.waitForLoadState('networkidle')
-  await page.fill('input[type="text"]', 'admin@example.com')
-  await page.fill('input[type="password"]', 'password123')
-  await page.click('button[type="submit"]')
-  await page.waitForURL(/^(?!.*\/login).*$/, { timeout: 5000 }).catch(() => {})
-}
-
 test.describe('View Modes Admin CRUD', () => {
-  test('page loads and shows header + Create View button', async ({ page }) => {
+  test('page loads and shows header + Create View button', async ({ page, env }) => {
     await page.route('**/api/v1/views', (route) => {
       route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(sampleViews) })
     })
-    await login(page)
+    await loginAsAdmin(page, env)
 
     await page.goto('/admin/views')
     await page.waitForLoadState('networkidle')
@@ -51,14 +42,14 @@ test.describe('View Modes Admin CRUD', () => {
     await expect(page.getByTestId('admin-views-add')).toContainText('Create View')
   })
 
-  test('shows loading state while fetching views', async ({ page }) => {
+  test('shows loading state while fetching views', async ({ page, env }) => {
     let resolvePromise: () => void
     const neverResolve = new Promise<void>((resolve) => { resolvePromise = resolve })
     const originalRoute = page.route('**/api/v1/views', async (route) => {
       await neverResolve
       route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ items: [] }) })
     })
-    await login(page)
+    await loginAsAdmin(page, env)
 
     await page.goto('/admin/views')
 
@@ -68,11 +59,11 @@ test.describe('View Modes Admin CRUD', () => {
     await originalRoute
   })
 
-  test('shows error with retry button on API failure', async ({ page }) => {
+  test('shows error with retry button on API failure', async ({ page, env }) => {
     await page.route('**/api/v1/views', (route) => {
       route.fulfill({ status: 500, contentType: 'application/json', body: JSON.stringify({ detail: 'Server error' }) })
     })
-    await login(page)
+    await loginAsAdmin(page, env)
 
     await page.goto('/admin/views')
     await page.waitForLoadState('networkidle')
@@ -81,11 +72,11 @@ test.describe('View Modes Admin CRUD', () => {
     await expect(page.locator('button:has-text("Retry")')).toBeVisible()
   })
 
-  test('shows empty state when no views exist', async ({ page }) => {
+  test('shows empty state when no views exist', async ({ page, env }) => {
     await page.route('**/api/v1/views', (route) => {
       route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ items: [] }) })
     })
-    await login(page)
+    await loginAsAdmin(page, env)
 
     await page.goto('/admin/views')
     await page.waitForLoadState('networkidle')
@@ -94,7 +85,7 @@ test.describe('View Modes Admin CRUD', () => {
     await expect(page.locator('text=Learn about saved views')).toBeVisible()
   })
 
-  test('create a new view with all fields', async ({ page }) => {
+  test('create a new view with all fields', async ({ page, env }) => {
     let createdPayload: unknown = null
     await page.route('**/api/v1/views', async (route, request) => {
       if (request.method() === 'GET') {
@@ -106,7 +97,7 @@ test.describe('View Modes Admin CRUD', () => {
         await route.fulfill({ status: 405, body: '' })
       }
     })
-    await login(page)
+    await loginAsAdmin(page, env)
 
     await page.goto('/admin/views')
     await page.waitForLoadState('networkidle')
@@ -134,11 +125,11 @@ test.describe('View Modes Admin CRUD', () => {
     })
   })
 
-  test('shows validation error when name is empty', async ({ page }) => {
+  test('shows validation error when name is empty', async ({ page, env }) => {
     await page.route('**/api/v1/views', (route) => {
       route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ items: [] }) })
     })
-    await login(page)
+    await loginAsAdmin(page, env)
 
     await page.goto('/admin/views')
     await page.waitForLoadState('networkidle')
@@ -151,11 +142,11 @@ test.describe('View Modes Admin CRUD', () => {
     expect(validationMessage).toBeTruthy()
   })
 
-  test('cancel create form clears fields', async ({ page }) => {
+  test('cancel create form clears fields', async ({ page, env }) => {
     await page.route('**/api/v1/views', (route) => {
       route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ items: [] }) })
     })
-    await login(page)
+    await loginAsAdmin(page, env)
 
     await page.goto('/admin/views')
     await page.waitForLoadState('networkidle')
@@ -170,11 +161,11 @@ test.describe('View Modes Admin CRUD', () => {
     await expect(page.getByTestId('admin-views-add')).toBeVisible()
   })
 
-  test('edit an existing view shows pre-populated fields', async ({ page }) => {
+  test('edit an existing view shows pre-populated fields', async ({ page, env }) => {
     await page.route('**/api/v1/views', (route) => {
       route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(sampleViews) })
     })
-    await login(page)
+    await loginAsAdmin(page, env)
 
     await page.goto('/admin/views')
     await page.waitForLoadState('networkidle')
@@ -192,7 +183,7 @@ test.describe('View Modes Admin CRUD', () => {
     await expect(page.getByTestId('admin-views-sort-order-select')).toHaveValue('desc')
   })
 
-  test('delete a view with confirmation', async ({ page }) => {
+  test('delete a view with confirmation', async ({ page, env }) => {
     await page.route('**/api/v1/views', async (route, request) => {
       if (request.method() === 'GET') {
         await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(sampleViews) })
@@ -202,7 +193,7 @@ test.describe('View Modes Admin CRUD', () => {
         await route.fulfill({ status: 405, body: '' })
       }
     })
-    await login(page)
+    await loginAsAdmin(page, env)
 
     await page.goto('/admin/views')
     await page.waitForLoadState('networkidle')
@@ -225,11 +216,11 @@ test.describe('View Modes Admin CRUD', () => {
     await expect(page.locator('text=Delete "Active Runs"?')).not.toBeVisible({ timeout: 3000 })
   })
 
-  test('displays existing views in table', async ({ page }) => {
+  test('displays existing views in table', async ({ page, env }) => {
     await page.route('**/api/v1/views', (route) => {
       route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(sampleViews) })
     })
-    await login(page)
+    await loginAsAdmin(page, env)
 
     await page.goto('/admin/views')
     await page.waitForLoadState('networkidle')

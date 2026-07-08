@@ -1,11 +1,11 @@
-import { test, expect } from './setup/fixtures'
+import { test, expect, loginAsAdmin } from './setup/fixtures'
 
 const WCAG_TAGS = ['wcag2a', 'wcag2aa', 'wcag21a', 'wcag21aa', 'wcag22aa']
 
 test.describe('WCAG AA audit (staging.modulo.run)', () => {
   test('login page has no WCAG AA violations', async ({ page }) => {
     test.setTimeout(30000)
-    await page.goto('https://staging.modulo.run/login')
+    await page.goto('/login')
     await page.waitForLoadState('networkidle')
 
     const AxeBuilder = (await import('@axe-core/playwright')).default
@@ -20,19 +20,12 @@ test.describe('WCAG AA audit (staging.modulo.run)', () => {
     expect(results.violations).toEqual([])
   })
 
-  test('dashboard has no WCAG AA violations when authenticated', async ({ page }) => {
+  test('dashboard has no WCAG AA violations when authenticated', async ({ page, env }) => {
     test.setTimeout(30000)
-    await page.goto('https://staging.modulo.run/login')
+    await page.goto('/login')
     await page.waitForLoadState('networkidle')
 
-    // Log in with staging credentials
-    const inputs = await page.locator('input').all()
-    if (inputs.length >= 2) {
-      await inputs[0].fill('admin@demo.modulo')
-      await inputs[1].fill('admin123')
-    }
-    await page.locator('button[type="submit"]').click()
-    await page.waitForURL(url => !url.includes('/login'), { timeout: 10000 }).catch(() => {})
+    await loginAsAdmin(page, env)
 
     const AxeBuilder = (await import('@axe-core/playwright')).default
     const results = await new AxeBuilder({ page }).withTags(WCAG_TAGS).analyze()
@@ -55,20 +48,14 @@ test.describe('WCAG AA audit (staging.modulo.run)', () => {
   ]
 
   for (const pagePath of authedPages) {
-    test(`${pagePath} has no WCAG AA violations when authenticated`, async ({ page }) => {
+    test(`${pagePath} has no WCAG AA violations when authenticated`, async ({ page, env }) => {
       test.setTimeout(30000)
-      await page.goto('https://staging.modulo.run/login')
+      await page.goto('/login')
       await page.waitForLoadState('networkidle')
 
-      const inputs = await page.locator('input').all()
-      if (inputs.length >= 2) {
-        await inputs[0].fill('admin@demo.modulo')
-        await inputs[1].fill('admin123')
-      }
-      await page.locator('button[type="submit"]').click()
-      await page.waitForURL(url => !url.includes('/login'), { timeout: 10000 }).catch(() => {})
+      await loginAsAdmin(page, env)
 
-      await page.goto('https://staging.modulo.run' + pagePath)
+      await page.goto(pagePath)
       await page.waitForLoadState('networkidle')
 
       const AxeBuilder = (await import('@axe-core/playwright')).default

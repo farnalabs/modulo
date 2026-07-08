@@ -1,4 +1,4 @@
-import { test, expect } from './setup/fixtures'
+import { test, expect, loginAsAdmin } from './setup/fixtures'
 
 test.describe('Login Flow', () => {
   test('shows login form fields', async ({ page }) => {
@@ -28,19 +28,12 @@ test.describe('Login Flow', () => {
     await expect(page.locator('text=Login failed')).toBeVisible({ timeout: 5000 })
   })
 
-  test('redirects to dashboard on successful login', async ({ page }) => {
+  test('redirects away from login on successful login', async ({ page, env }) => {
     await page.goto('/login')
     await page.waitForLoadState('networkidle')
 
-    await page.fill('input[type="text"]', 'admin@example.com')
-    await page.fill('input[type="password"]', 'password123')
-    await page.click('button[type="submit"]')
+    await loginAsAdmin(page, env)
 
-    await page.waitForURL(/dashboard|\//, { timeout: 5000 }).catch(() => {})
-
-    const currentUrl = page.url()
-    const baseUrl = page.context().options.baseURL || ''
-    const loggedIn = currentUrl !== `${baseUrl}/login` && currentUrl !== baseUrl + '/login'
-    expect(loggedIn || currentUrl.includes('/login') === false).toBeTruthy()
+    await expect(page).not.toHaveURL(/\/login/)
   })
 })

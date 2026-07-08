@@ -1,22 +1,5 @@
 <template>
-  <div :class="['space-y-2', compact ? 'mb-2' : 'border-t pt-4 mt-auto']">
-    <div class="flex items-center gap-2">
-      <div class="avatar-ring">
-        <div
-          class="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-gradient-to-br from-primary to-teal-600 text-xs font-bold text-primary-foreground"
-          :title="userEmail"
-        >
-          {{ userInitial }}
-        </div>
-      </div>
-      <router-link
-        to="/admin/my-profile"
-        class="text-sm text-muted-foreground truncate hover:text-foreground transition-colors flex-1 min-w-0"
-      >
-        {{ userEmail }}
-      </router-link>
-    </div>
-
+  <div class="space-y-2 border-t pt-4">
     <div class="flex items-center justify-between">
       <label class="toggle-switch" :class="isLight ? 'light' : 'dark'">
         <span class="track">
@@ -78,10 +61,7 @@
 
 <script setup lang="ts">
 defineProps<{
-  userEmail: string;
-  userInitial: string;
   isLight: boolean;
-  compact?: boolean;
 }>();
 
 defineEmits<{

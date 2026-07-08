@@ -1,25 +1,16 @@
-import { test, expect } from './setup/fixtures'
-
-async function login(page: import('@playwright/test').Page) {
-  await page.goto('/login')
-  await page.waitForLoadState('networkidle')
-  await page.fill('input[type="text"]', 'admin@example.com')
-  await page.fill('input[type="password"]', 'password123')
-  await page.click('button[type="submit"]')
-  await page.waitForURL(/^(?!.*\/login).*$/, { timeout: 5000 }).catch(() => {})
-}
+import { test, expect, loginAsAdmin } from './setup/fixtures'
 
 test.describe('Stages Board', () => {
-  test('stages board page loads', async ({ page }) => {
-    await login(page)
+  test('stages board page loads', async ({ page, env }) => {
+    await loginAsAdmin(page, env)
     await page.goto('/stages')
     await page.waitForLoadState('networkidle')
 
     await expect(page.locator('h1')).toContainText(/Stage|Board/i)
   })
 
-  test('stages board shows columns and elements', async ({ page }) => {
-    await login(page)
+  test('stages board shows columns and elements', async ({ page, env }) => {
+    await loginAsAdmin(page, env)
     await page.route('**/api/v1/stages*', (route) => {
       route.fulfill({
         status: 200,
