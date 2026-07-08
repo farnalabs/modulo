@@ -11,7 +11,7 @@ code:
   - backend/src/modulo/db/crud/pipeline.py
   - frontend/src/views/PipelineEditorView.vue
 depends-on: [feat-core-replace-step-agent]
-unit-tests: []
+unit-tests: [backend/tests/unit/test_pipeline_node_conversion.py]
 status: partial
 ---
 
