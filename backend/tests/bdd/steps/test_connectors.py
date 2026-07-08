@@ -194,47 +194,6 @@ def _cleanup_patches(ctx):
             pass
 
 
-# ============================================================================
-# connectors/schema_inference.feature â€” 5 scenarios
-# ============================================================================
-try:
-    scenarios("../features/connectors/schema_inference.feature")
-except (FileNotFoundError, OSError):
-    pass
-
-# ============================================================================
-# connectors/github_connector.feature â€” 5 scenarios
-# ============================================================================
-try:
-    scenarios("../features/connectors/github_connector.feature")
-except (FileNotFoundError, OSError):
-    pass
-
-# ============================================================================
-# connectors/jira_connector.feature â€” 5 scenarios
-# ============================================================================
-try:
-    scenarios("../features/connectors/jira_connector.feature")
-except (FileNotFoundError, OSError):
-    pass
-
-# ============================================================================
-# connectors/linear_connector.feature â€” 5 scenarios
-# ============================================================================
-try:
-    scenarios("../features/connectors/linear_connector.feature")
-except (FileNotFoundError, OSError):
-    pass
-
-# ============================================================================
-# connectors/slack_connector.feature â€” 5 scenarios
-# ============================================================================
-try:
-    scenarios("../features/connectors/slack_connector.feature")
-except (FileNotFoundError, OSError):
-    pass
-
-
 @given("a connector instance with sample data")
 def step_inference_connector_samples(ctx):
     from unittest.mock import MagicMock

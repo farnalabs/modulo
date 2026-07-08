@@ -23,10 +23,6 @@ try:
 except (FileNotFoundError, OSError):
     pass
 try:
-    scenarios("../../bdd/features/pipelines/node_types.feature")
-except (FileNotFoundError, OSError):
-    pass
-try:
     scenarios("../../bdd/features/pipelines/run_variants.feature")
 except (FileNotFoundError, OSError):
     pass

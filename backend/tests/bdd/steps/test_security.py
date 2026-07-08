@@ -264,15 +264,6 @@ def step_status_401(pipeline_response) -> None:
 # -- Scenario: Viewer role cannot create pipelines --------------------------
 
 
-@given(
-    parsers.parse('I am authenticated as a viewer in org "{org}"'),
-    target_fixture="viewer_org",
-)
-def step_viewer_auth(org: str) -> str:
-    """Record viewer authentication context."""
-    return org
-
-
 @when(
     parsers.parse('a viewer tries to create a pipeline named {name}'),
     target_fixture="create_response",
@@ -305,11 +296,13 @@ def step_viewer_rejected(create_response) -> None:
 
 
 @when("RLS context is set outside a transaction", target_fixture="rls_error")
-async def step_rls_outside_tx(mock_session):
+def step_rls_outside_tx(mock_session):
     """Call set_rls_org outside an active transaction and catch RuntimeError."""
+    import asyncio
+
     mock_session.in_transaction.return_value = False
     try:
-        await set_rls_org(mock_session, uuid.uuid4())
+        asyncio.run(set_rls_org(mock_session, uuid.uuid4()))
         return None
     except RuntimeError as exc:
         return exc

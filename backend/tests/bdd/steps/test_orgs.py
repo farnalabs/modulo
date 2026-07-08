@@ -54,13 +54,6 @@ def _onboarding_state_path():
 # ===========================================================================
 
 
-@given(parsers.parse('I am authenticated as a viewer in org "{org}"'))
-def _orgs_auth_viewer(org: str, request, ctx):
-    """Set viewer role in ctx for member_management steps."""
-    ctx["org_role"] = "viewer"
-    request.node._viewer_auth = True
-
-
 # ===========================================================================
 # member_management.feature
 # ===========================================================================

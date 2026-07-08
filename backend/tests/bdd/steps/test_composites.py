@@ -361,7 +361,7 @@ def pipeline_graph_bad_composite_ref(template_id: str, request: pytest.FixtureRe
     }
 
 
-@given(parsers.parse('org "{org}" has pipeline "{name}" with agent "{agent_name}" using {{{{parameter.{param}}}}}}}'))
+@given(parsers.parse('org "{org}" has pipeline "{name}" with agent "{agent_name}" using {{{{parameter.{param}}}}}'))
 def org_has_pipeline_with_param_placeholder(
     org: str, name: str, agent_name: str, param: str, request: pytest.FixtureRequest,
 ) -> None:

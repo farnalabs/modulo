@@ -1,7 +1,5 @@
 """Step definitions for admin runtime-config BDD scenarios."""
 
-from typing import Any
-
 from fastapi.testclient import TestClient
 from pytest_bdd import given, parsers, scenarios, then, when
 
@@ -19,11 +17,6 @@ def _bdd_auth_admin() -> None:
 def _bdd_not_authenticated(request) -> None:
     """Flag scenario for unauth client."""
     request.node._unauth = True
-
-
-@given(parsers.parse('I am authenticated as a viewer in org "{org}"'))
-def _bdd_auth_viewer_in_org(org: str, request) -> None:
-    request.node._viewer_auth = True
 
 
 @when("I request GET /api/v1/admin/runtime-config")
