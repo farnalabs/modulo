@@ -148,4 +148,20 @@ Then set `REDIS_URL` in the corresponding `fly.*.toml` to the connection string 
 
 In-memory fallbacks exist at many call sites (rate limiter `core/rate_limiter.py`, dashboard cache `api/routes/dashboard.py`, error tracking keys `core/error_tracking/__init__.py`, alert cooldowns `alerting.py`, EventBus `event_bus.py`, WS tokens `auth.py:315`, Celery scheduler `celery_app.py`) — these are acceptable in debug mode but silently lose state in production on deploy or scale-up. The eventual goal is to remove all fallbacks and hard-require Redis.
 
+### Model backends: `health_check` overrides must re-raise `asyncio.CancelledError`
+
+- Backends that override `health_check()` with a broad `except Exception` must add `except asyncio.CancelledError: raise` before the generic catch, matching the base class pattern in `base.py:84-85`. Without it, cancellation during shutdown is silently suppressed on Python < 3.12 (where CancelledError inherits from Exception).
+
+### Model backends: local/Ollama-compatible backends must set `supports_tools = True`
+
+- Backends that wrap `ChatOpenAI` (Ollama, Jan, llama.cpp, LM Studio, LocalAI, TGI, vLLM) inherit `supports_tools = False` from `ModelBackendBase`. Since `ChatOpenAI` supports tool calling, the subclass must explicitly set `supports_tools: bool = True` — otherwise tool routing is silently disabled.
+
+### Model backends: health checks must not pass API keys in URL query parameters
+
+- Health check requests that pass API keys as URL query parameters (e.g. `params={"key": self._api_key}`) expose the credential in server logs, proxy logs, and error messages via `str(exc)`. Always use header-based auth (`Authorization: Bearer`). If a provider requires query-param auth, sanitize the URL before logging.
+
+### Model backends: use module-level constants for base URLs
+
+- When a backend references its API base URL in both `__init__` and `health_check`, define it as a module-level constant (`COHERE_BASE_URL = "..."`) rather than hardcoding the string twice. This prevents drift between the two usages.
+
 The Remy in-memory event registries (`_pending_ui_results`, `_pending_permissions`, `_session_approvals` in `remy.py:93-97`) have NO fallback at all — they are process-local `asyncio.Event` objects. Any deploy restart destroys in-flight Remy conversations. A Redis pub/sub replacement for these registries is the highest-priority follow-up.

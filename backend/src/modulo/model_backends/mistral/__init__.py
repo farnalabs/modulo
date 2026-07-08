@@ -1,21 +1,12 @@
 """MistralBackend — wraps ChatMistralAI as a Modulo ModelBackendBase."""
 
-import logging
 from collections.abc import AsyncIterator
 from typing import Any
 
-import httpx
 from langchain_core.messages import BaseMessage
 from langchain_mistralai import ChatMistralAI
 
-from modulo.model_backends.base import (
-    HEALTH_CHECK_TIMEOUT,
-    HEALTH_DETAIL_MAX_LENGTH,
-    HealthResult,
-    ModelBackendBase,
-)
-
-logger = logging.getLogger(__name__)
+from modulo.model_backends.base import HealthResult, ModelBackendBase, openai_compatible_health_check
 
 MISTRAL_BASE_URL = "https://api.mistral.ai/v1"
 
@@ -43,26 +34,15 @@ class MistralBackend(ModelBackendBase):
         return f"MistralBackend(model_id={self._backend_id!r})"
 
     async def health_check(self) -> HealthResult:
-        try:
-            async with httpx.AsyncClient(timeout=HEALTH_CHECK_TIMEOUT) as client:
-                response = await client.get(
-                    f"{MISTRAL_BASE_URL}/models",
-                    headers={"Authorization": f"Bearer {self._api_key}"},
-                )
-                if response.is_success:
-                    return HealthResult(ok=True)
-                return HealthResult(ok=False, detail=response.text[:HEALTH_DETAIL_MAX_LENGTH])
-        except httpx.TimeoutException:
-            logger.warning("Health check timed out for MistralBackend")
-            return HealthResult(ok=False, detail="Health check timed out")
-        except httpx.HTTPError as exc:
-            logger.warning("Health check failed for MistralBackend: %s", exc)
-            return HealthResult(ok=False, detail=str(exc)[:HEALTH_DETAIL_MAX_LENGTH])
+        return await openai_compatible_health_check(
+            base_url=MISTRAL_BASE_URL,
+            api_key=self._api_key,
+        )
 
     async def invoke(self, messages: list[BaseMessage], **kwargs: Any) -> BaseMessage:
         return await self._model.ainvoke(messages, **kwargs)
 
     def stream(
     self, messages: list[BaseMessage], tools: list[dict] | None = None, **kwargs: Any,
-) -> AsyncIterator[BaseMessage]:
+    ) -> AsyncIterator[BaseMessage]:
         return self._model.astream(messages, tools=tools, **kwargs)

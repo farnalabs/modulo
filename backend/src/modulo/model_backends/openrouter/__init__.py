@@ -8,6 +8,7 @@ from langchain_openai import ChatOpenAI
 
 from modulo.model_backends.base import HealthResult, ModelBackendBase, openai_compatible_health_check
 
+OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
 
 class OpenRouterBackend(ModelBackendBase):
     """Thin adapter over ChatOpenAI targeting OpenRouter's API."""
@@ -18,7 +19,7 @@ class OpenRouterBackend(ModelBackendBase):
         self._model = ChatOpenAI(
             model=model_id,
             api_key=api_key,
-            base_url="https://openrouter.ai/api/v1",
+            base_url=OPENROUTER_BASE_URL,
             **default_params,
         )
         self._backend_id = f"openrouter/{model_id}"
@@ -33,7 +34,7 @@ class OpenRouterBackend(ModelBackendBase):
 
     async def health_check(self) -> HealthResult:
         return await openai_compatible_health_check(
-            base_url="https://openrouter.ai/api/v1",
+            base_url=OPENROUTER_BASE_URL,
             api_key=self._api_key,
         )
 
