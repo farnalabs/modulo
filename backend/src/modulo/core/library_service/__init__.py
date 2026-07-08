@@ -24,6 +24,7 @@ from modulo.db.crud.library_primitive import (
 from modulo.db.models.library_primitive import LibraryPrimitive
 from modulo.db.rls import set_rls_org, set_rls_user_context
 
+logger = logging.getLogger(__name__)
 _log = logging.getLogger(__name__)
 
 __all__ = [
@@ -1201,56 +1202,64 @@ async def copy_to_adapt(
             "Community primitives may only be adapted via the browser UI, not via MCP."
         )
 
-    async with session.begin():
-        await set_rls_org(session, org_id)
-        if created_by is not None:
-            await set_rls_user_context(session, created_by, org_role)
+    try:
 
-        # Re-read source inside the transaction to avoid TOCTOU;
-        # fall back to the in-memory cache for modulo/community primitives.
-        refreshed = await get_library_primitive(session, primitive_id)
-        if refreshed is None:
-            refreshed = _MODULO_BY_ID.get(primitive_id) or _COMMUNITY_BY_ID.get(primitive_id)
-        if refreshed is None:
-            raise LookupError(f"Primitive {primitive_id} not found for org {org_id} during copy")
-        new_version = _bump_version(refreshed.version)
+        async with session.begin():
+            await set_rls_org(session, org_id)
+            if created_by is not None:
+                await set_rls_user_context(session, created_by, org_role)
 
-        # Increment download count atomically on registry primitives.
-        if refreshed.source == "registry":
-            await session.execute(
-                sa_update(LibraryPrimitive)
-                .where(LibraryPrimitive.id == refreshed.id)
-                .values(download_count=func.coalesce(LibraryPrimitive.download_count, 0) + 1)
+            # Re-read source inside the transaction to avoid TOCTOU;
+            # fall back to the in-memory cache for modulo/community primitives.
+            refreshed = await get_library_primitive(session, primitive_id)
+            if refreshed is None:
+                refreshed = _MODULO_BY_ID.get(primitive_id) or _COMMUNITY_BY_ID.get(primitive_id)
+            if refreshed is None:
+                raise LookupError(f"Primitive {primitive_id} not found for org {org_id} during copy")
+            new_version = _bump_version(refreshed.version)
+
+            # Increment download count atomically on registry primitives.
+            if refreshed.source == "registry":
+                await session.execute(
+                    sa_update(LibraryPrimitive)
+                    .where(LibraryPrimitive.id == refreshed.id)
+                    .values(download_count=func.coalesce(LibraryPrimitive.download_count, 0) + 1)
+                )
+            return await create_library_primitive(
+                session,
+                org_id=org_id,
+                source="local",
+                primitive_type=refreshed.primitive_type,
+                name=refreshed.name,
+                slug=f"{refreshed.slug}-copy",
+                description=refreshed.description,
+                author=refreshed.author,
+                version=new_version,
+                tags=list(refreshed.tags or []),
+                content_json=dict(refreshed.content_json) if refreshed.content_json is not None else {},
+                source_url=None,
+                forked_from=refreshed.id,
+                checksum=None,
+                ed25519_signature=None,
+                verified=None,
+                download_count=None,
+                average_rating=None,
+                review_count=None,
+                owner_team_id=target_team_id,
+                visibility="org",
+                account_id=created_by,
+                auto_update=True,
             )
-        return await create_library_primitive(
-            session,
-            org_id=org_id,
-            source="local",
-            primitive_type=refreshed.primitive_type,
-            name=refreshed.name,
-            slug=f"{refreshed.slug}-copy",
-            description=refreshed.description,
-            author=refreshed.author,
-            version=new_version,
-            tags=list(refreshed.tags or []),
-            content_json=dict(refreshed.content_json) if refreshed.content_json is not None else {},
-            source_url=None,
-            forked_from=refreshed.id,
-            checksum=None,
-            ed25519_signature=None,
-            verified=None,
-            download_count=None,
-            average_rating=None,
-            review_count=None,
-            owner_team_id=target_team_id,
-            visibility="org",
-            account_id=created_by,
-            auto_update=True,
-        )
 
 
-# ---------------------------------------------------------------------------
-# Starter pipeline templates
+    # ---------------------------------------------------------------------------
+    # Starter pipeline templates
+
+    except ProgrammingError:
+
+        logger.exception("core.library_service")
+
+        raise
 
 _PR_TEMPLATE_AGENTS = [
     {
@@ -1830,39 +1839,47 @@ async def contribute_fixture(
         "source_pipeline_id": str(source_pipeline_id) if source_pipeline_id else None,
     }
 
-    async with session.begin():
-        await set_rls_org(session, org_id)
-        prim = await create_library_primitive(
-            session,
-            org_id=org_id,
-            source="local",
-            primitive_type="test_fixture",
-            name=name,
-            slug=slug,
-            description=description,
-            author=created_by.hex,
-            version="1.0",
-            tags=tags,
-            content_json=content,
-            source_url=None,
-            forked_from=None,
-            checksum=None,
-            ed25519_signature=None,
-            verified=None,
-            download_count=None,
-            average_rating=None,
-            review_count=None,
-            owner_team_id=owner_team_id,
-            visibility="org",
-            account_id=created_by,
-        )
-        update = await update_library_primitive(
-            session,
-            prim.id,
-            {"contribution_status": CONTRIBUTION_DRAFT},
-        )
-        if update is None:
-            raise ContributionNotFoundError(f"Contribution {prim.id} not found after creation")
+    try:
+
+        async with session.begin():
+            await set_rls_org(session, org_id)
+            prim = await create_library_primitive(
+                session,
+                org_id=org_id,
+                source="local",
+                primitive_type="test_fixture",
+                name=name,
+                slug=slug,
+                description=description,
+                author=created_by.hex,
+                version="1.0",
+                tags=tags,
+                content_json=content,
+                source_url=None,
+                forked_from=None,
+                checksum=None,
+                ed25519_signature=None,
+                verified=None,
+                download_count=None,
+                average_rating=None,
+                review_count=None,
+                owner_team_id=owner_team_id,
+                visibility="org",
+                account_id=created_by,
+            )
+            update = await update_library_primitive(
+                session,
+                prim.id,
+                {"contribution_status": CONTRIBUTION_DRAFT},
+            )
+            if update is None:
+                raise ContributionNotFoundError(f"Contribution {prim.id} not found after creation")
+    except ProgrammingError:
+
+        logger.exception("core.library_service")
+
+        raise
+
     return update
 
 
@@ -1885,39 +1902,47 @@ async def contribute_primitive(
     Stores the primitive with source='local' and contribution_status='draft'.
     An admin can review and publish it to the community library.
     """
-    async with session.begin():
-        await set_rls_org(session, org_id)
-        prim = await create_library_primitive(
-            session,
-            org_id=org_id,
-            source="local",
-            primitive_type=primitive_type,
-            name=name,
-            slug=slug,
-            description=description,
-            author=created_by.hex,
-            version="1.0",
-            tags=tags,
-            content_json=content_json,
-            source_url=source_url,
-            forked_from=None,
-            checksum=None,
-            ed25519_signature=None,
-            verified=None,
-            download_count=None,
-            average_rating=None,
-            review_count=None,
-            owner_team_id=owner_team_id,
-            visibility="org",
-            account_id=created_by,
-        )
-        update = await update_library_primitive(
-            session,
-            prim.id,
-            {"contribution_status": CONTRIBUTION_DRAFT},
-        )
-        if update is None:
-            raise ContributionNotFoundError(f"Contribution {prim.id} not found after creation")
+    try:
+
+        async with session.begin():
+            await set_rls_org(session, org_id)
+            prim = await create_library_primitive(
+                session,
+                org_id=org_id,
+                source="local",
+                primitive_type=primitive_type,
+                name=name,
+                slug=slug,
+                description=description,
+                author=created_by.hex,
+                version="1.0",
+                tags=tags,
+                content_json=content_json,
+                source_url=source_url,
+                forked_from=None,
+                checksum=None,
+                ed25519_signature=None,
+                verified=None,
+                download_count=None,
+                average_rating=None,
+                review_count=None,
+                owner_team_id=owner_team_id,
+                visibility="org",
+                account_id=created_by,
+            )
+            update = await update_library_primitive(
+                session,
+                prim.id,
+                {"contribution_status": CONTRIBUTION_DRAFT},
+            )
+            if update is None:
+                raise ContributionNotFoundError(f"Contribution {prim.id} not found after creation")
+    except ProgrammingError:
+
+        logger.exception("core.library_service")
+
+        raise
+
     return update
 
 
@@ -1933,26 +1958,34 @@ async def submit_contribution_for_review(
     Raises ContributionNotFoundError if the primitive does not exist.
     Raises ContributionInvalidTransitionError if the primitive is not in draft status.
     """
-    async with session.begin():
-        await set_rls_org(session, org_id)
-        prim = await get_library_primitive(session, primitive_id)
+    try:
 
-        if prim is None:
-            raise ContributionNotFoundError(f"Contribution {primitive_id} not found")
+        async with session.begin():
+            await set_rls_org(session, org_id)
+            prim = await get_library_primitive(session, primitive_id)
 
-        if prim.contribution_status != CONTRIBUTION_DRAFT:
-            raise ContributionInvalidTransitionError(
-                f"Cannot submit contribution {primitive_id} for review: "
-                f"expected status '{CONTRIBUTION_DRAFT}', got '{prim.contribution_status}'"
+            if prim is None:
+                raise ContributionNotFoundError(f"Contribution {primitive_id} not found")
+
+            if prim.contribution_status != CONTRIBUTION_DRAFT:
+                raise ContributionInvalidTransitionError(
+                    f"Cannot submit contribution {primitive_id} for review: "
+                    f"expected status '{CONTRIBUTION_DRAFT}', got '{prim.contribution_status}'"
+                )
+
+            updated = await update_library_primitive(
+                session,
+                primitive_id,
+                {"contribution_status": CONTRIBUTION_REVIEW_QUEUE},
             )
+            if updated is None:
+                raise ContributionNotFoundError(f"Contribution {primitive_id} not found")
+    except ProgrammingError:
 
-        updated = await update_library_primitive(
-            session,
-            primitive_id,
-            {"contribution_status": CONTRIBUTION_REVIEW_QUEUE},
-        )
-        if updated is None:
-            raise ContributionNotFoundError(f"Contribution {primitive_id} not found")
+        logger.exception("core.library_service")
+
+        raise
+
     return updated
 
 
@@ -1969,33 +2002,41 @@ async def publish_contribution(
     The primitive is reassigned to the community sentinel org so it appears
     for all users. Accepts contributions in either 'draft' or 'review_queue' status.
     """
-    async with session.begin():
-        await set_rls_org(session, org_id)
-        prim = await get_library_primitive(session, primitive_id)
+    try:
 
-        if prim is None:
-            raise ContributionNotFoundError(f"Contribution {primitive_id} not found")
+        async with session.begin():
+            await set_rls_org(session, org_id)
+            prim = await get_library_primitive(session, primitive_id)
 
-        if prim.contribution_status not in (CONTRIBUTION_DRAFT, CONTRIBUTION_REVIEW_QUEUE):
-            raise ContributionInvalidTransitionError(
-                f"Cannot publish contribution {primitive_id}: "
-                f"expected status '{CONTRIBUTION_DRAFT}' or '{CONTRIBUTION_REVIEW_QUEUE}', "
-                f"got '{prim.contribution_status}'"
+            if prim is None:
+                raise ContributionNotFoundError(f"Contribution {primitive_id} not found")
+
+            if prim.contribution_status not in (CONTRIBUTION_DRAFT, CONTRIBUTION_REVIEW_QUEUE):
+                raise ContributionInvalidTransitionError(
+                    f"Cannot publish contribution {primitive_id}: "
+                    f"expected status '{CONTRIBUTION_DRAFT}' or '{CONTRIBUTION_REVIEW_QUEUE}', "
+                    f"got '{prim.contribution_status}'"
+                )
+
+            updated = await update_library_primitive(
+                session,
+                primitive_id,
+                {
+                    "contribution_status": CONTRIBUTION_PUBLISHED,
+                    "visibility": "community",
+                    "organisation_id": MODULO_ORG_ID,
+                },
             )
+            if updated is None:
+                raise ContributionNotFoundError(f"Contribution {primitive_id} not found")
 
-        updated = await update_library_primitive(
-            session,
-            primitive_id,
-            {
-                "contribution_status": CONTRIBUTION_PUBLISHED,
-                "visibility": "community",
-                "organisation_id": MODULO_ORG_ID,
-            },
-        )
-        if updated is None:
-            raise ContributionNotFoundError(f"Contribution {primitive_id} not found")
+        # Add to in-memory community cache so it appears in community listings immediately.
+    except ProgrammingError:
 
-    # Add to in-memory community cache so it appears in community listings immediately.
+        logger.exception("core.library_service")
+
+        raise
+
     async with _COMMUNITY_CACHE_LOCK:
         if updated.id not in _COMMUNITY_BY_ID:
             _COMMUNITY_PRIMITIVES.append(updated)
@@ -2017,14 +2058,22 @@ async def list_contributions(
     page_size: int = 20,
 ) -> PageResult[LibraryPrimitive]:
     """List fixture contributions scoped to the org."""
-    async with session.begin():
-        await set_rls_org(session, org_id)
-        result = await list_library_primitives(
-            session,
-            page=page,
-            page_size=page_size,
-            primitive_type="test_fixture",
-        )
+    try:
+
+        async with session.begin():
+            await set_rls_org(session, org_id)
+            result = await list_library_primitives(
+                session,
+                page=page,
+                page_size=page_size,
+                primitive_type="test_fixture",
+            )
+    except ProgrammingError:
+
+        logger.exception("core.library_service")
+
+        raise
+
     if contribution_status is not None:
         result.items = [p for p in result.items if p.contribution_status == contribution_status]
         result.total = len(result.items)
@@ -2040,13 +2089,21 @@ async def list_org_contributions(
     page_size: int = 20,
 ) -> PageResult[LibraryPrimitive]:
     """List contributions submitted by the org, optionally filtered by status."""
-    async with session.begin():
-        await set_rls_org(session, org_id)
-        result = await list_library_primitives(
-            session,
-            page=page,
-            page_size=page_size,
-        )
+    try:
+
+        async with session.begin():
+            await set_rls_org(session, org_id)
+            result = await list_library_primitives(
+                session,
+                page=page,
+                page_size=page_size,
+            )
+    except ProgrammingError:
+
+        logger.exception("core.library_service")
+
+        raise
+
     if contribution_status is not None:
         result.items = [p for p in result.items if p.contribution_status == contribution_status]
         result.total = len(result.items)
@@ -2085,65 +2142,73 @@ async def submit_contribution_version(
         "source_pipeline_id": str(source_pipeline_id) if source_pipeline_id else None,
     }
 
-    async with session.begin():
-        await set_rls_org(session, org_id)
-        existing = await get_library_primitive(session, primitive_id)
+    try:
 
-        if existing is None:
-            raise ContributionNotFoundError(f"Contribution {primitive_id} not found")
+        async with session.begin():
+            await set_rls_org(session, org_id)
+            existing = await get_library_primitive(session, primitive_id)
 
-        if existing.contribution_status != CONTRIBUTION_PUBLISHED:
-            raise ContributionInvalidTransitionError(
-                f"Cannot version contribution {primitive_id}: "
-                f"expected status '{CONTRIBUTION_PUBLISHED}', got '{existing.contribution_status}'"
-            )
+            if existing is None:
+                raise ContributionNotFoundError(f"Contribution {primitive_id} not found")
 
-        new_version = _bump_version(existing.version)
-        group_id = existing.version_group_id or existing.id
+            if existing.contribution_status != CONTRIBUTION_PUBLISHED:
+                raise ContributionInvalidTransitionError(
+                    f"Cannot version contribution {primitive_id}: "
+                    f"expected status '{CONTRIBUTION_PUBLISHED}', got '{existing.contribution_status}'"
+                )
 
-        if existing.version_group_id is None:
-            seed_update = await update_library_primitive(
+            new_version = _bump_version(existing.version)
+            group_id = existing.version_group_id or existing.id
+
+            if existing.version_group_id is None:
+                seed_update = await update_library_primitive(
+                    session,
+                    primitive_id,
+                    {"version_group_id": group_id},
+                )
+                if seed_update is None:
+                    raise ContributionNotFoundError(f"Contribution {primitive_id} not found for version group seeding")
+
+            prim = await create_library_primitive(
                 session,
-                primitive_id,
-                {"version_group_id": group_id},
+                org_id=org_id,
+                source="local",
+                primitive_type="test_fixture",
+                name=name,
+                slug=slug,
+                description=description,
+                author=created_by.hex,
+                version=new_version,
+                tags=tags,
+                content_json=content,
+                source_url=None,
+                forked_from=primitive_id,
+                checksum=None,
+                ed25519_signature=None,
+                verified=None,
+                download_count=None,
+                average_rating=None,
+                review_count=None,
+                owner_team_id=owner_team_id,
+                visibility="org",
+                account_id=created_by,
             )
-            if seed_update is None:
-                raise ContributionNotFoundError(f"Contribution {primitive_id} not found for version group seeding")
+            update = await update_library_primitive(
+                session,
+                prim.id,
+                {
+                    "contribution_status": CONTRIBUTION_DRAFT,
+                    "version_group_id": group_id,
+                },
+            )
+            if update is None:
+                raise ContributionNotFoundError(f"Contribution version {prim.id} not found after creation")
+    except ProgrammingError:
 
-        prim = await create_library_primitive(
-            session,
-            org_id=org_id,
-            source="local",
-            primitive_type="test_fixture",
-            name=name,
-            slug=slug,
-            description=description,
-            author=created_by.hex,
-            version=new_version,
-            tags=tags,
-            content_json=content,
-            source_url=None,
-            forked_from=primitive_id,
-            checksum=None,
-            ed25519_signature=None,
-            verified=None,
-            download_count=None,
-            average_rating=None,
-            review_count=None,
-            owner_team_id=owner_team_id,
-            visibility="org",
-            account_id=created_by,
-        )
-        update = await update_library_primitive(
-            session,
-            prim.id,
-            {
-                "contribution_status": CONTRIBUTION_DRAFT,
-                "version_group_id": group_id,
-            },
-        )
-        if update is None:
-            raise ContributionNotFoundError(f"Contribution version {prim.id} not found after creation")
+        logger.exception("core.library_service")
+
+        raise
+
     return update
 
 
@@ -2153,21 +2218,29 @@ async def list_contribution_versions(
     primitive_id: uuid.UUID,
 ) -> list[LibraryPrimitive]:
     """Return all versions for a contribution primitive, newest first."""
-    async with session.begin():
-        await set_rls_org(session, org_id)
-        prim = await get_library_primitive(session, primitive_id)
+    try:
 
-        if prim is None:
-            raise ContributionNotFoundError(f"Contribution {primitive_id} not found")
+        async with session.begin():
+            await set_rls_org(session, org_id)
+            prim = await get_library_primitive(session, primitive_id)
 
-        if prim.version_group_id is None:
-            return [prim]
+            if prim is None:
+                raise ContributionNotFoundError(f"Contribution {primitive_id} not found")
 
-        results = await list_primitives_by_version_group(session, prim.version_group_id)
+            if prim.version_group_id is None:
+                return [prim]
 
-    # Include the seed primitive (the one whose version_group_id was set to
-    # its own id) — it won't appear in the version-group query because it
-    # may not yet have the version_group_id set if it predates the feature.
+            results = await list_primitives_by_version_group(session, prim.version_group_id)
+
+        # Include the seed primitive (the one whose version_group_id was set to
+        # its own id) — it won't appear in the version-group query because it
+        # may not yet have the version_group_id set if it predates the feature.
+    except ProgrammingError:
+
+        logger.exception("core.library_service")
+
+        raise
+
     if not any(r.id == prim.id for r in results):
         results.append(prim)
 

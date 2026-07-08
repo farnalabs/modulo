@@ -24,8 +24,10 @@ from modulo.auth.dependencies import get_current_user
 from modulo.auth.jwt import AuthenticatedPrincipal
 from modulo.core.feature_flags import PlanContext
 from modulo.settings import Settings, get_settings
+import logging
 
 
+logger = logging.getLogger(__name__)
 def require_feature(feature_name: str):
     """FastAPI dependency factory — blocks access if the named feature is not enabled on the current plan.
 
@@ -142,6 +144,20 @@ async def get_plan_context(
 
     org = None
     if current_user.organisation_id is not None:
-        async with session.begin():
-            org = await get_organisation(session, current_user.organisation_id)
+        try:
+
+            async with session.begin():
+                org = await get_organisation(session, current_user.organisation_id)
+        except ProgrammingError:
+
+            logger.exception("api.dependencies")
+
+            raise HTTPException(
+
+                status_code=status.HTTP_501_NOT_IMPLEMENTED,
+
+                detail="This feature is not available. Run database migrations to enable it.",
+
+            )
+
     return await resolve_plan_context(settings, session, org=org)

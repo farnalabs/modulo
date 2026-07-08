@@ -15,6 +15,7 @@ from pydantic import BaseModel, PlainSerializer
 from redis.asyncio import Redis
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.exc import ProgrammingError
 
 from modulo.api.dependencies import get_db_session
 from modulo.auth.dependencies import get_current_user
@@ -23,6 +24,7 @@ from modulo.db.models.sso_provider import SsoProvider
 from modulo.db.rls import set_rls_org
 from modulo.settings import Settings, get_settings
 
+logger = logging.getLogger(__name__)
 _log = logging.getLogger(__name__)
 
 SENSITIVE_VALUE_MASK = "\u2022\u2022\u2022\u2022\u2022\u2022"
@@ -154,9 +156,23 @@ async def reveal_sensitive_value(
 ) -> RevealResponse:
     _require_admin(principal)
 
-    async with session.begin():
-        await set_rls_org(session, principal.organisation_id)
-        actual_value = await _fetch_value(body, session, principal)
+    try:
+
+        async with session.begin():
+            await set_rls_org(session, principal.organisation_id)
+            actual_value = await _fetch_value(body, session, principal)
+
+    except ProgrammingError:
+
+        logger.exception("middleware.sensitive_mask")
+
+        raise HTTPException(
+
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+
+            detail="This feature is not available. Run database migrations to enable it.",
+
+        )
 
     token = str(uuid.uuid4())
     redis: Redis | None = None
