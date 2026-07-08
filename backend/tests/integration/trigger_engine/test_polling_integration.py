@@ -48,25 +48,36 @@ async def seeded_db(db_session: AsyncSession) -> AsyncSession:
         ),
         {"id": str(_ORG_ID), "name": "Integration Org", "slug": "int-org"},
     )
-    # Insert user
+    # Insert account + org_membership
     await db_session.execute(
         text(
-            "INSERT INTO users (id, organisation_id, email, display_name, "
-            "org_role, auth_provider, active, password_hash) "
-            "VALUES (:id, :oid, :email, :name, 'admin', 'local', true, 'hash') "
+            "INSERT INTO accounts (id, email, display_name, password_hash, "
+            "auth_provider, active) "
+            "VALUES (:id, :email, :name, 'hash', 'local', true) "
             "ON CONFLICT (id) DO NOTHING",
         ),
         {
             "id": str(_USER_ID),
-            "oid": str(_ORG_ID),
             "email": "admin@int.org",
             "name": "Integration Admin",
+        },
+    )
+    await db_session.execute(
+        text(
+            "INSERT INTO org_memberships (id, account_id, organisation_id, role) "
+            "VALUES (:mid, :aid, :oid, 'admin') "
+            "ON CONFLICT (id) DO NOTHING",
+        ),
+        {
+            "mid": str(uuid.uuid4()),
+            "aid": str(_USER_ID),
+            "oid": str(_ORG_ID),
         },
     )
     # Insert pipeline
     await db_session.execute(
         text(
-            "INSERT INTO pipelines (id, organisation_id, name, created_by, "
+            "INSERT INTO pipelines (id, organisation_id, name, account_id, "
             "visibility, run_context_defaults) "
             "VALUES (:id, :oid, :name, :uid, 'org', '{}'::json) "
             "ON CONFLICT (id) DO NOTHING",
@@ -98,7 +109,7 @@ async def seeded_db(db_session: AsyncSession) -> AsyncSession:
     # Insert connector instance
     await db_session.execute(
         text(
-            "INSERT INTO connector_instances (id, organisation_id, owner_id, "
+            "INSERT INTO connector_instances (id, organisation_id, account_id, "
             "connector_type_id, name, config_json, visibility, "
             "allowed_operations, credentials_ciphertext) "
             "VALUES (:id, :oid, :uid, 'stub', 'Stub CI', "
@@ -123,7 +134,7 @@ async def polling_trigger(seeded_db: AsyncSession) -> dict[str, Any]:
         text(
             "INSERT INTO triggers (id, organisation_id, pipeline_id, "
             "trigger_type, active, max_concurrent_runs, config_json, "
-            "created_by, cron_expression, cron_timezone, "
+            "account_id, cron_expression, cron_timezone, "
             "last_fired_at, next_fire_at) "
             "VALUES (:id, :oid, :pid, 'polling', true, 5, "
             "(:config)::json, :uid, NULL, NULL, NULL, "

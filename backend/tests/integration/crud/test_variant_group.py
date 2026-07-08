@@ -24,7 +24,6 @@ from modulo.db.models.variant_group import VariantGroup
 
 pytestmark = [
     pytest.mark.integration,
-    pytest.mark.skip(reason="awaiting-implementation — variant_group test fixtures need pipeline created_by"),
 ]
 
 
@@ -47,21 +46,23 @@ def _make_variants() -> list[dict[str, Any]]:
     ]
 
 
-async def _create_test_pipeline(db_engine: AsyncEngine, org_id: uuid.UUID) -> uuid.UUID:
+async def _create_test_pipeline(db_engine: AsyncEngine, org_id: uuid.UUID, test_user: uuid.UUID) -> uuid.UUID:
     pipeline_id = uuid.uuid4()
     async with db_engine.connect() as conn, conn.begin():
         await conn.execute(
             text(
-                "INSERT INTO pipelines (id, organisation_id, name, run_context_defaults) "
-                "VALUES (:id, :org_id, :name, '{}'::json)",
+                "INSERT INTO pipelines (id, organisation_id, name, account_id, run_context_defaults, graph_nodes_json) "
+                "VALUES (:id, :org_id, :name, :uid, '{}'::json, '[]'::json)",
             ),
-            {"id": str(pipeline_id), "org_id": str(org_id), "name": "variant-test-pipeline"},
+            {"id": str(pipeline_id), "org_id": str(org_id), "name": "variant-test-pipeline", "uid": str(test_user)},
         )
     return pipeline_id
 
 
-async def test_create_variant_group(rls_session: AsyncSession, test_org: uuid.UUID, db_engine: AsyncEngine) -> None:
-    pipeline_id = await _create_test_pipeline(db_engine, test_org)
+async def test_create_variant_group(
+    rls_session: AsyncSession, test_org: uuid.UUID, test_user: uuid.UUID, db_engine: AsyncEngine,
+) -> None:
+    pipeline_id = await _create_test_pipeline(db_engine, test_org, test_user)
     variants = _make_variants()
     group = await create_variant_group(
         rls_session,
@@ -82,9 +83,9 @@ async def test_create_variant_group(rls_session: AsyncSession, test_org: uuid.UU
 
 
 async def test_get_variant_group_returns_existing(
-    rls_session: AsyncSession, test_org: uuid.UUID, db_engine: AsyncEngine,
+    rls_session: AsyncSession, test_org: uuid.UUID, test_user: uuid.UUID, db_engine: AsyncEngine,
 ) -> None:
-    pipeline_id = await _create_test_pipeline(db_engine, test_org)
+    pipeline_id = await _create_test_pipeline(db_engine, test_org, test_user)
     group = await create_variant_group(
         rls_session, org_id=test_org, pipeline_id=pipeline_id, name="Get Test", variants=[],
     )
@@ -101,9 +102,9 @@ async def test_get_variant_group_returns_none_for_unknown(
 
 
 async def test_list_variant_groups_pagination(
-    rls_session: AsyncSession, test_org: uuid.UUID, db_engine: AsyncEngine,
+    rls_session: AsyncSession, test_org: uuid.UUID, test_user: uuid.UUID, db_engine: AsyncEngine,
 ) -> None:
-    pipeline_id = await _create_test_pipeline(db_engine, test_org)
+    pipeline_id = await _create_test_pipeline(db_engine, test_org, test_user)
     for i in range(3):
         await create_variant_group(
             rls_session,
@@ -119,10 +120,10 @@ async def test_list_variant_groups_pagination(
 
 
 async def test_list_variant_groups_filtered_by_pipeline(
-    rls_session: AsyncSession, test_org: uuid.UUID, db_engine: AsyncEngine,
+    rls_session: AsyncSession, test_org: uuid.UUID, test_user: uuid.UUID, db_engine: AsyncEngine,
 ) -> None:
-    pipe_a = await _create_test_pipeline(db_engine, test_org)
-    pipe_b = await _create_test_pipeline(db_engine, test_org)
+    pipe_a = await _create_test_pipeline(db_engine, test_org, test_user)
+    pipe_b = await _create_test_pipeline(db_engine, test_org, test_user)
     await create_variant_group(rls_session, org_id=test_org, pipeline_id=pipe_a, name="A-1", variants=[])
     await create_variant_group(rls_session, org_id=test_org, pipeline_id=pipe_b, name="B-1", variants=[])
 
@@ -131,8 +132,10 @@ async def test_list_variant_groups_filtered_by_pipeline(
     assert items_a[0].name == "A-1"
 
 
-async def test_update_variant_group(rls_session: AsyncSession, test_org: uuid.UUID, db_engine: AsyncEngine) -> None:
-    pipeline_id = await _create_test_pipeline(db_engine, test_org)
+async def test_update_variant_group(
+    rls_session: AsyncSession, test_org: uuid.UUID, test_user: uuid.UUID, db_engine: AsyncEngine,
+) -> None:
+    pipeline_id = await _create_test_pipeline(db_engine, test_org, test_user)
     group = await create_variant_group(
         rls_session,
         org_id=test_org,
@@ -152,8 +155,10 @@ async def test_update_variant_group_unknown_returns_none(
     assert await update_variant_group(rls_session, uuid.uuid4(), name="x") is None
 
 
-async def test_delete_variant_group(rls_session: AsyncSession, test_org: uuid.UUID, db_engine: AsyncEngine) -> None:
-    pipeline_id = await _create_test_pipeline(db_engine, test_org)
+async def test_delete_variant_group(
+    rls_session: AsyncSession, test_org: uuid.UUID, test_user: uuid.UUID, db_engine: AsyncEngine,
+) -> None:
+    pipeline_id = await _create_test_pipeline(db_engine, test_org, test_user)
     group = await create_variant_group(
         rls_session,
         org_id=test_org,
@@ -172,9 +177,9 @@ async def test_delete_variant_group_unknown_returns_false(
 
 
 async def test_check_pipeline_run_quota_allows_within_limit(
-    rls_session: AsyncSession, test_org: uuid.UUID, db_engine: AsyncEngine,
+    rls_session: AsyncSession, test_org: uuid.UUID, test_user: uuid.UUID, db_engine: AsyncEngine,
 ) -> None:
-    pipeline_id = await _create_test_pipeline(db_engine, test_org)
+    pipeline_id = await _create_test_pipeline(db_engine, test_org, test_user)
     group = await create_variant_group(
         rls_session,
         org_id=test_org,
@@ -189,21 +194,21 @@ async def test_check_pipeline_run_quota_allows_within_limit(
 async def test_coverage_gaps_detects_missing_evals(
     rls_session: AsyncSession, test_org: uuid.UUID, test_user: uuid.UUID, db_engine: AsyncEngine,
 ) -> None:
-    pipeline_id = await _create_test_pipeline(db_engine, test_org)
+    pipeline_id = await _create_test_pipeline(db_engine, test_org, test_user)
     eval_id = uuid.uuid4()
     async with db_engine.connect() as conn, conn.begin():
         await conn.execute(
             text(
                 "INSERT INTO eval_definitions "
-                "(id, organisation_id, pipeline_id, name, eval_type, created_by) "
-                "VALUES (:id, :org_id, :pipeline_id, :name, 'llm_judge', :created_by)",
+                "(id, organisation_id, pipeline_id, name, eval_type, account_id) "
+                "VALUES (:id, :org_id, :pipeline_id, :name, 'llm_judge', :uid)",
             ),
             {
                 "id": str(eval_id),
                 "org_id": str(test_org),
                 "pipeline_id": str(pipeline_id),
                 "name": "test-eval",
-                "created_by": str(test_user),
+                "uid": str(test_user),
             },
         )
 
@@ -232,21 +237,21 @@ async def test_coverage_gaps_detects_missing_evals(
 async def test_no_coverage_gaps_when_all_evals_present(
     rls_session: AsyncSession, test_org: uuid.UUID, test_user: uuid.UUID, db_engine: AsyncEngine,
 ) -> None:
-    pipeline_id = await _create_test_pipeline(db_engine, test_org)
+    pipeline_id = await _create_test_pipeline(db_engine, test_org, test_user)
     eval_id = uuid.uuid4()
     async with db_engine.connect() as conn, conn.begin():
         await conn.execute(
             text(
                 "INSERT INTO eval_definitions "
-                "(id, organisation_id, pipeline_id, name, eval_type, created_by) "
-                "VALUES (:id, :org_id, :pipeline_id, :name, 'llm_judge', :created_by)",
+                "(id, organisation_id, pipeline_id, name, eval_type, account_id) "
+                "VALUES (:id, :org_id, :pipeline_id, :name, 'llm_judge', :uid)",
             ),
             {
                 "id": str(eval_id),
                 "org_id": str(test_org),
                 "pipeline_id": str(pipeline_id),
                 "name": "test-eval",
-                "created_by": str(test_user),
+                "uid": str(test_user),
             },
         )
 
