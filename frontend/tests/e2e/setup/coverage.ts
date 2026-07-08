@@ -5,52 +5,51 @@ import type { Page } from '@playwright/test'
 const COVERAGE_DIR = resolve(__dirname, '../../../.coverage/e2e')
 const REPORT_DIR = join(COVERAGE_DIR, 'report')
 
-let masterCoverage: Record<string, unknown> = {}
+interface CoverageEntry {
+  url: string
+  coveredBytes: number
+  totalBytes: number
+}
 
-export async function startCoverage(page: Page): Promise<void> {}
+const allEntries: CoverageEntry[] = []
+
+export async function startCoverage(page: Page): Promise<void> {
+  await page.coverage.startJSCoverage({ resetOnNavigation: true })
+}
 
 export async function stopCoverage(page: Page): Promise<void> {
   try {
-    const cov: Record<string, unknown> | undefined = await page.evaluate(() => (window as any).__coverage__)
-    if (!cov) return
-    mergeCoverage(masterCoverage, cov)
+    const entries = await page.coverage.stopJSCoverage()
+    for (const entry of entries) {
+      if (!entry.url.includes('/src/') || entry.url.includes('node_modules')) continue
+      let coveredBytes = 0
+      for (const range of entry.ranges) {
+        coveredBytes += range.end - range.start
+      }
+      allEntries.push({
+        url: entry.url,
+        coveredBytes,
+        totalBytes: entry.source.length,
+      })
+    }
   } catch {
   }
 }
 
 export async function generateCoverageReport(): Promise<string> {
-  if (Object.keys(masterCoverage).length === 0) return '0.0'
+  if (allEntries.length === 0) return '0.0'
 
   if (!existsSync(REPORT_DIR)) mkdirSync(REPORT_DIR, { recursive: true })
-  writeFileSync(join(COVERAGE_DIR, 'coverage-final.json'), JSON.stringify(masterCoverage, null, 2))
 
-  const libCoverage = require('istanbul-lib-coverage')
-  const libReport = require('istanbul-lib-report')
-  const reports = require('istanbul-reports')
+  const totalBytes = allEntries.reduce((s, e) => s + e.totalBytes, 0)
+  const coveredBytes = allEntries.reduce((s, e) => s + e.coveredBytes, 0)
+  const pct = totalBytes > 0 ? ((coveredBytes / totalBytes) * 100).toFixed(1) : '0.0'
 
-  const coverageMap = libCoverage.createCoverageMap(masterCoverage)
-  const context = libReport.createContext({
-    dir: REPORT_DIR,
-    coverageMap,
-    watermarks: { statements: [80, 90], branches: [70, 85], functions: [80, 90], lines: [80, 90] },
-  })
-
-  reports.create('lcovonly', {}).execute(context)
-  const htmlReporter = reports.create('html', { subdir: 'html' })
-  htmlReporter.execute(context)
-
-  const summaries = coverageMap.getCoverageSummary()
-  const linesPct = summaries.lines.pct
-
-  return linesPct.toFixed(1)
-}
-
-function mergeCoverage(target: Record<string, unknown>, source: Record<string, unknown>): void {
-  for (const [filePath, data] of Object.entries(source)) {
-    if (target[filePath]) {
-      target[filePath] = data
-    } else {
-      target[filePath] = data
-    }
+  const report = {
+    summary: { coveredBytes, totalBytes, coveragePct: parseFloat(pct) },
+    files: allEntries.sort((a, b) => a.coveredBytes / a.totalBytes - b.coveredBytes / b.totalBytes),
   }
+  writeFileSync(join(REPORT_DIR, 'coverage-report.json'), JSON.stringify(report, null, 2))
+
+  return pct
 }
