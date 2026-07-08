@@ -18,35 +18,82 @@
       </div>
 
       <div class="flex flex-col flex-1 min-h-0">
-        <router-link
-          to="/admin/my-profile"
-          class="flex items-center gap-2 mb-4 px-1 py-1.5 rounded-md hover:bg-muted transition-colors"
-        >
-          <div
-            class="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-gradient-to-br from-primary to-teal-600 text-xs font-bold text-primary-foreground"
-            :title="userEmail"
-          >
-            {{ userInitial }}
-          </div>
-          <span class="text-sm text-muted-foreground truncate hover:text-foreground transition-colors flex-1 min-w-0">
-            {{ userEmail }}
-          </span>
-        </router-link>
-
         <ViewModeToggle
           :model-value="viewMode"
           :options="viewModeOptions"
           @update:model-value="setViewMode"
         />
 
+        <div class="flex items-center gap-2 pt-2 pb-2 border-b mb-2">
+          <div class="avatar-ring">
+            <div
+              class="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-gradient-to-br from-primary to-teal-600 text-xs font-bold text-primary-foreground"
+              :title="userEmail"
+            >
+              {{ userInitial }}
+            </div>
+          </div>
+          <router-link
+            to="/admin/my-profile"
+            class="text-sm text-muted-foreground truncate hover:text-foreground transition-colors flex-1 min-w-0"
+          >
+            {{ userEmail }}
+          </router-link>
+        </div>
+
+        <div class="flex items-center justify-between pb-2 mb-1">
+          <label class="toggle-switch" :class="isLight ? 'light' : 'dark'">
+            <span class="track">
+              <span class="thumb" />
+            </span>
+            <span class="flex items-center gap-1">
+              <svg
+                v-if="isLight"
+                xmlns="http://www.w3.org/2000/svg"
+                width="12"
+                height="12"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="2"
+              >
+                <circle cx="12" cy="12" r="5" />
+                <line x1="12" y1="1" x2="12" y2="3" />
+                <line x1="12" y1="21" x2="12" y2="23" />
+                <line x1="4.22" y1="4.22" x2="5.64" y2="5.64" />
+                <line x1="18.36" y1="18.36" x2="19.78" y2="19.78" />
+                <line x1="1" y1="12" x2="3" y2="12" />
+                <line x1="21" y1="12" x2="23" y2="12" />
+                <line x1="4.22" y1="19.78" x2="5.64" y2="18.36" />
+                <line x1="18.36" y1="5.64" x2="19.78" y2="4.22" />
+              </svg>
+              <svg
+                v-else
+                xmlns="http://www.w3.org/2000/svg"
+                width="12"
+                height="12"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="2"
+              >
+                <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z" />
+              </svg>
+              <span>{{ isLight ? $t('common.light') : $t('common.dark') }}</span>
+            </span>
+            <input
+              type="checkbox"
+              class="sr-only"
+              @change="toggleTheme"
+              :checked="isLight"
+            />
+          </label>
+        </div>
+
         <SidebarNav class="flex-1" :is-system-admin="isSystemAdmin" :user-role="userRole" />
       </div>
 
-      <SidebarFooter
-        :is-light="isLight"
-        @toggle-theme="toggleTheme"
-        @logout="logout"
-      />
+      <SidebarFooter @logout="logout" />
     </aside>
 
     <!-- Mobile header -->
@@ -119,26 +166,77 @@
       :class="mobileOpen ? 'translate-x-0' : '-translate-x-full'"
       @keydown.escape="mobileOpen = false"
     >
-      <router-link
-        to="/admin/my-profile"
-        class="flex items-center gap-2 mb-4 px-1 py-1.5 rounded-md hover:bg-muted transition-colors"
-      >
-        <div
-          class="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-gradient-to-br from-primary to-teal-600 text-xs font-bold text-primary-foreground"
-          :title="userEmail"
-        >
-          {{ userInitial }}
-        </div>
-        <span class="text-sm text-muted-foreground truncate hover:text-foreground transition-colors flex-1 min-w-0">
-          {{ userEmail }}
-        </span>
-      </router-link>
-
       <ViewModeToggle
         :model-value="viewMode"
         :options="viewModeOptions"
         @update:model-value="setViewMode"
       />
+
+      <div class="flex items-center gap-2 pt-2 pb-2 border-b mb-2">
+        <div class="avatar-ring">
+          <div
+            class="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-gradient-to-br from-primary to-teal-600 text-xs font-bold text-primary-foreground"
+            :title="userEmail"
+          >
+            {{ userInitial }}
+          </div>
+        </div>
+        <router-link
+          to="/admin/my-profile"
+          class="text-sm text-muted-foreground truncate hover:text-foreground transition-colors flex-1 min-w-0"
+        >
+          {{ userEmail }}
+        </router-link>
+      </div>
+
+      <div class="flex items-center justify-between pb-2 mb-1">
+        <label class="toggle-switch" :class="isLight ? 'light' : 'dark'">
+          <span class="track">
+            <span class="thumb" />
+          </span>
+          <span class="flex items-center gap-1">
+            <svg
+              v-if="isLight"
+              xmlns="http://www.w3.org/2000/svg"
+              width="12"
+              height="12"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="2"
+            >
+              <circle cx="12" cy="12" r="5" />
+              <line x1="12" y1="1" x2="12" y2="3" />
+              <line x1="12" y1="21" x2="12" y2="23" />
+              <line x1="4.22" y1="4.22" x2="5.64" y2="5.64" />
+              <line x1="18.36" y1="18.36" x2="19.78" y2="19.78" />
+              <line x1="1" y1="12" x2="3" y2="12" />
+              <line x1="21" y1="12" x2="23" y2="12" />
+              <line x1="4.22" y1="19.78" x2="5.64" y2="18.36" />
+              <line x1="18.36" y1="5.64" x2="19.78" y2="4.22" />
+            </svg>
+            <svg
+              v-else
+              xmlns="http://www.w3.org/2000/svg"
+              width="12"
+              height="12"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="2"
+            >
+              <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z" />
+            </svg>
+            <span>{{ isLight ? $t('common.light') : $t('common.dark') }}</span>
+          </span>
+          <input
+            type="checkbox"
+            class="sr-only"
+            @change="toggleTheme"
+            :checked="isLight"
+          />
+        </label>
+      </div>
 
       <SidebarNav class="flex-1"
         :is-system-admin="isSystemAdmin"
@@ -147,8 +245,6 @@
       />
 
       <SidebarFooter
-        :is-light="isLight"
-        @toggle-theme="toggleTheme"
         @logout="logout"
       />
     </aside>
