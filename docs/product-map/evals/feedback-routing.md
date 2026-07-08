@@ -132,6 +132,16 @@ human-in-the-loop resolution.
 
 ## QA History
 
+### 2026-07-08 — Cross-cutting QA (index 334)
+
+**Fixed CRITICAL** — `valid_statuses` in `PATCH /feedback/{record_id}/status` route handler was missing `"dismissed"`. The DB CHECK constraint and FeedbackManager both support `dismissed` as a valid status (transitions from `pending` and `escalated`), but direct PATCH to `"dismissed"` returned 422. Added `"dismissed"` to the allowed status set.
+
+**Fixed MAJOR** — Added `except IntegrityError → 409 Conflict` catches to all 9 feedback route handlers (create_feedback, list_feedback, list_feedback_inbox, list_eval_proposals, get_feedback, update_feedback_status, detect_eval_gap, get_inbox_item, review_feedback). Previously, FK constraint violations (TOCTOU on concurrent run delete during feedback creation, etc.) were caught by `except SQLAlchemyError → 503`, returning a misleading "Database error" instead of 409. This completes the project-wide IntegrityError→409 pattern for this file.
+
+**Fixed MAJOR** — Product map `pending`→`resolved` transition was missing from the documented valid transitions list. Code (`_VALID_STATUS_TRANSITIONS`) allows `pending→resolved` but the product map only listed `routing`, `correcting`, `dismissed`. Added `resolved` to the pending transitions row.
+
+**Fixed MINOR** — Added `@_rls` decorator to `_escalate_record()` method for consistency with other FeedbackManager methods (already called from `@_rls`-decorated `run_post_correction_eval` so behaviour unchanged).
+
 ### 2026-07-09 — Cross-cutting QA (index 278)
 
 **Fixed CRITICAL** — `dismiss` review action called `update_status(record_id, "resolved")` instead of `"dismissed"`. The DB CHECK constraint and product map both specify `dismissed` as a valid terminal status with transitions from `pending` and `escalated`, but the code never reached it — dismiss was functionally identical to mark_reviewed. Added `"dismissed"` to `_VALID_STATUS_TRANSITIONS` with `pending→dismissed` and `escalated→dismissed` transitions. `dismiss` action now transitions to `"dismissed"`.
