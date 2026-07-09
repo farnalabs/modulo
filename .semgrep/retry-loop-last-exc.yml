@@ -1,0 +1,21 @@
+rules:
+  - id: retry-loop-last-exc
+    patterns:
+      - pattern-inside: |
+          for $I in range(...):
+            try:
+              ...
+            except $EXC as $E:
+              ...
+      - pattern-not-inside: |
+          for $I in range(...):
+            try:
+              ...
+            except $EXC as $E:
+              ...
+              last_exc = $E
+    message: "Retry loop except block must assign `last_exc = exc` so raise ... from last_exc preserves the chain"
+    languages: [python]
+    severity: ERROR
+    paths:
+      include: ["**/backend/src/**"]
