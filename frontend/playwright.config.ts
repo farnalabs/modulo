@@ -1,16 +1,11 @@
 import { defineConfig } from '@playwright/test'
+import { getTarget, getBaseUrl } from './tests/e2e/setup/env'
 
 const coverageEnabled = process.env.VITE_COVERAGE === 'true' || process.env.npm_lifecycle_event === 'test:e2e:coverage'
-const target = (process.env.E2E_TARGET || 'local').toLowerCase()
+const target = getTarget()
 const noServer = (process.env.E2E_NO_WEBSERVER || '').toLowerCase() === 'true'
 
-const BASE_URLS: Record<string, string> = {
-  local: 'http://127.0.0.1:5173',
-  staging: 'https://staging.modulo.run',
-  app: 'https://app.modulo.run',
-}
-
-const baseURL = process.env.E2E_BASE_URL || BASE_URLS[target] || BASE_URLS.local
+const baseURL = getBaseUrl(target)
 
 export default defineConfig({
   testDir: './tests/e2e',

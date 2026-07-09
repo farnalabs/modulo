@@ -14,9 +14,6 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
-env:
-  PYTHONPATH: src
-
 defaults:
   run:
     working-directory: backend
@@ -64,12 +61,6 @@ jobs:
         with:
           name: playwright-smoke-results
           path: frontend/test-results/
-      - name: Final cleanup
-        if: always()
-        shell: powershell
-        run: |
-          $ErrorActionPreference = 'Continue'
-          Remove-Item -Path "$env:TEMP\ms-playwright" -Recurse -Force -ErrorAction SilentlyContinue
 
   wcag-audit:
     runs-on: [self-hosted, windows, docker]
@@ -111,12 +102,6 @@ jobs:
         with:
           name: staging-wcag-results
           path: frontend/test-results/
-      - name: Final cleanup
-        if: always()
-        shell: powershell
-        run: |
-          $ErrorActionPreference = 'Continue'
-          Remove-Item -Path "$env:TEMP\ms-playwright" -Recurse -Force -ErrorAction SilentlyContinue
 
   playwright-regression:
     runs-on: [self-hosted, windows, docker]
