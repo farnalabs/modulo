@@ -6,7 +6,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from fastapi.testclient import TestClient
-from sqlalchemy.exc import ProgrammingError
+from sqlalchemy.exc import ProgrammingError, SQLAlchemyError
 
 from modulo.api.dependencies import _get_engine, get_db_session
 from modulo.api.main import app
@@ -29,17 +29,20 @@ def _make_settings() -> Settings:
     )
 
 
-def _execute_side_effect(*args: object, **kwargs: object) -> None:
-    raise ProgrammingError("mock", {}, "")
+def _make_execute_side_effect(exc_class: type[Exception]) -> type:
+    def side_effect(*args: object, **kwargs: object) -> None:
+        raise exc_class("mock", {}, "")
+
+    return side_effect
 
 
 @pytest.fixture()
 def broken_session() -> AsyncMock:
     mock_session = AsyncMock()
-    mock_session.execute.side_effect = _execute_side_effect
+    mock_session.execute.side_effect = _make_execute_side_effect(ProgrammingError)
     mock_session.begin = MagicMock(
         return_value=AsyncMock(
-            __aenter__=AsyncMock(side_effect=_execute_side_effect),
+            __aenter__=AsyncMock(side_effect=_make_execute_side_effect(ProgrammingError)),
             __aexit__=AsyncMock(return_value=False),
         )
     )
@@ -47,9 +50,34 @@ def broken_session() -> AsyncMock:
 
 
 @pytest.fixture()
-def client_admin(broken_session: AsyncMock) -> Generator[TestClient, None, None]:
+def sqlalchemy_error_session() -> AsyncMock:
+    mock_session = AsyncMock()
+    mock_session.execute.side_effect = _make_execute_side_effect(SQLAlchemyError)
+    mock_session.begin = MagicMock(
+        return_value=AsyncMock(
+            __aenter__=AsyncMock(side_effect=_make_execute_side_effect(SQLAlchemyError)),
+            __aexit__=AsyncMock(return_value=False),
+        )
+    )
+    return mock_session
+
+
+@pytest.fixture()
+def generic_error_session() -> AsyncMock:
+    mock_session = AsyncMock()
+    mock_session.execute.side_effect = _make_execute_side_effect(RuntimeError)
+    mock_session.begin = MagicMock(
+        return_value=AsyncMock(
+            __aenter__=AsyncMock(side_effect=_make_execute_side_effect(RuntimeError)),
+            __aexit__=AsyncMock(return_value=False),
+        )
+    )
+    return mock_session
+
+
+def _make_client(session_fixture: AsyncMock) -> Generator[TestClient, None, None]:
     async def override_session() -> AsyncGenerator[AsyncMock, None]:
-        yield broken_session
+        yield session_fixture
 
     app.dependency_overrides[get_settings] = _make_settings
     app.dependency_overrides[get_db_session] = override_session
@@ -62,6 +90,21 @@ def client_admin(broken_session: AsyncMock) -> Generator[TestClient, None, None]
     )
     yield TestClient(app)
     app.dependency_overrides.clear()
+
+
+@pytest.fixture()
+def client_admin(broken_session: AsyncMock) -> Generator[TestClient, None, None]:
+    yield from _make_client(broken_session)
+
+
+@pytest.fixture()
+def client_sqlalchemy_error(sqlalchemy_error_session: AsyncMock) -> Generator[TestClient, None, None]:
+    yield from _make_client(sqlalchemy_error_session)
+
+
+@pytest.fixture()
+def client_generic_error(generic_error_session: AsyncMock) -> Generator[TestClient, None, None]:
+    yield from _make_client(generic_error_session)
 
 
 class TestAdminUserDeactivateProgrammingError:
@@ -86,3 +129,27 @@ class TestAdminUserDeactivateProgrammingError:
     def test_reactivate_malformed_uuid_returns_422(self, client_admin: TestClient) -> None:
         resp = client_admin.post(f"{self.URL}/not-a-uuid/reactivate")
         assert resp.status_code == 422
+
+    def test_deactivate_returns_503_on_sqlalchemy_error(self, client_sqlalchemy_error: TestClient) -> None:
+        target_id = str(_OTHER_USER_ID)
+        resp = client_sqlalchemy_error.post(f"{self.URL}/{target_id}/deactivate")
+        assert resp.status_code == 503
+        assert "unavailable" in resp.text.lower()
+
+    def test_reactivate_returns_503_on_sqlalchemy_error(self, client_sqlalchemy_error: TestClient) -> None:
+        target_id = str(_OTHER_USER_ID)
+        resp = client_sqlalchemy_error.post(f"{self.URL}/{target_id}/reactivate")
+        assert resp.status_code == 503
+        assert "unavailable" in resp.text.lower()
+
+    def test_deactivate_returns_500_on_generic_error(self, client_generic_error: TestClient) -> None:
+        target_id = str(_OTHER_USER_ID)
+        resp = client_generic_error.post(f"{self.URL}/{target_id}/deactivate")
+        assert resp.status_code == 500
+        assert "unexpected" in resp.text.lower()
+
+    def test_reactivate_returns_500_on_generic_error(self, client_generic_error: TestClient) -> None:
+        target_id = str(_OTHER_USER_ID)
+        resp = client_generic_error.post(f"{self.URL}/{target_id}/reactivate")
+        assert resp.status_code == 500
+        assert "unexpected" in resp.text.lower()

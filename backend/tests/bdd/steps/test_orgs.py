@@ -153,7 +153,53 @@ def remove_user_from_team(request, username: str, team_name: str, client, ctx):
 
 @when(parsers.parse('I deactivate user "{username}"'))
 def deactivate_user(request, username: str, client, ctx):
-    ctx["user_active"] = False
+    target_user_id = ctx.get("target_user_id", str(uuid.uuid4()))
+    now_iso = datetime.now(UTC).isoformat()
+
+    mock_account = MagicMock()
+    mock_account.id = target_user_id
+    mock_account.email = f"{username}@example.com"
+    mock_account.display_name = username
+    mock_account.active = True
+    mock_account.auth_provider = "email"
+    mock_account.created_at = datetime.now(UTC)
+    mock_account.last_login = datetime.now(UTC)
+
+    mock_org_membership = MagicMock()
+    mock_org_membership.role = "operator"
+
+    with patch(
+        "modulo.api.routes.admin.get_account_by_id",
+        new_callable=AsyncMock,
+        return_value=mock_account,
+    ), patch(
+        "modulo.api.routes.admin.list_families_for_account",
+        new_callable=AsyncMock,
+        return_value=[],
+    ), patch(
+        "modulo.api.routes.admin.blacklist_family",
+        new_callable=AsyncMock,
+    ), patch(
+        "modulo.api.routes.admin.list_team_memberships_for_account",
+        new_callable=AsyncMock,
+        return_value=[],
+    ), patch(
+        "modulo.api.routes.admin.remove_team_member",
+        new_callable=AsyncMock,
+    ), patch(
+        "modulo.api.routes.admin.revoke_api_key",
+        new_callable=AsyncMock,
+    ), patch(
+        "modulo.core.audit_logger.append_audit_event",
+        new_callable=AsyncMock,
+    ), patch(
+        "modulo.api.routes.admin._get_org_role",
+        new_callable=AsyncMock,
+        return_value="operator",
+    ):
+        resp = client.post(f"/api/v1/admin/users/{target_user_id}/deactivate")
+    request.node._resp = resp
+    ctx["user_active"] = resp.status_code == 200
 
 
 @then(parsers.parse('the membership has role "{role}"'))

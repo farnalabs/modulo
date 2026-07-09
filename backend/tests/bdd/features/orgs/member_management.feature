@@ -32,4 +32,4 @@ Feature: Member Management
     Given I am authenticated as an admin in org "acme"
     And user "dave" is active in the org
     When I deactivate user "dave"
-    Then user "dave" is deactivated
+    Then the response status is 200
