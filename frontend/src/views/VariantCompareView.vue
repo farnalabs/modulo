@@ -11,7 +11,7 @@
     <ErrorAlert v-else-if="error" :message="error" />
     <template v-else>
       <header>
-        <h1 class="text-3xl font-bold tracking-tight">{{ $t('views.variantCompare.title') }}</h1>
+        <h1 class="text-2xl font-semibold tracking-tight">{{ $t('views.variantCompare.title') }}</h1>
         <p class="mt-1 text-muted-foreground">
           {{ $t('views.variantCompare.subtitle') }}
         </p>

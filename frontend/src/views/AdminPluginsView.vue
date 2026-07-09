@@ -3,7 +3,7 @@
     <div class="mx-auto max-w-5xl space-y-8 p-6">
       <header class="flex items-center justify-between">
         <div>
-          <h1 class="text-3xl font-bold tracking-tight">Plugins</h1>
+          <h1 class="text-2xl font-semibold tracking-tight">Plugins</h1>
           <p class="mt-1 text-muted-foreground">{{ $t('views.AdminPluginsView.manage_installed_modulo_plugins_and_extensions') }}</p>
         </div>
         <Button

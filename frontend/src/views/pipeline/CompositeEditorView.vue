@@ -86,7 +86,7 @@
       @click.self="showSaveAsComposite = false"
     >
       <div class="w-full max-w-lg rounded-lg border bg-card p-6 shadow-lg">
-        <h3 class="mb-4 text-lg font-semibold">Save as Composite</h3>
+        <h3 class="mb-4 text-base font-semibold">Save as Composite</h3>
         <div class="space-y-4">
           <div>
             <label class="mb-1 block text-sm font-medium">Name</label>

@@ -1,7 +1,7 @@
 ﻿<template>
   <div class="p-6 max-w-2xl mx-auto space-y-6">
     <div>
-      <h1 class="text-2xl font-bold tracking-tight">{{ $t('views.MyProfileView.my_profile') }}</h1>
+      <h1 class="text-2xl font-semibold tracking-tight">{{ $t('views.MyProfileView.my_profile') }}</h1>
       <p class="text-muted-foreground mt-1">{{ $t('views.MyProfileView.manage_your_account_settings_and_password') }}</p>
     </div>
 
@@ -23,7 +23,7 @@
     </div>
 
     <div class="card p-6">
-      <h2 class="text-lg font-semibold mb-4">{{ $t('views.MyProfileView.change_password') }}</h2>
+      <h2 class="text-base font-semibold mb-4">{{ $t('views.MyProfileView.change_password') }}</h2>
       <form @submit.prevent="changePassword" class="space-y-4">
         <div>
           <label class="block text-sm font-medium mb-1">{{ $t('views.MyProfileView.current_password') }}</label>

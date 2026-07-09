@@ -1,7 +1,7 @@
 ﻿<template>
   <div data-theme="agent" class="mx-auto max-w-6xl space-y-6 p-6">
     <header>
-      <h1 class="text-3xl font-bold tracking-tight">{{ $t('views.AdminFeatureFlagsView.feature_flags') }}</h1>
+      <h1 class="text-2xl font-semibold tracking-tight">{{ $t('views.AdminFeatureFlagsView.feature_flags') }}</h1>
       <p class="mt-1 text-muted-foreground">{{ $t('views.AdminFeatureFlagsView.all_known_feature_flags_and_their_current_activation_status') }}</p>
       <div v-if="planStore.isLoading" class="mt-2 flex items-center gap-2 text-sm text-muted-foreground">
         <div class="h-4 w-4 animate-spin rounded-full border-2 border-primary border-t-transparent" />
@@ -22,7 +22,7 @@
     </header>
 
     <div class="card p-4">
-      <h2 class="mb-3 text-lg font-semibold">{{ $t('views.AdminFeatureFlagsView.license_status') }}</h2>
+      <h2 class="mb-3 text-base font-semibold">{{ $t('views.AdminFeatureFlagsView.license_status') }}</h2>
       <div v-if="loading" class="flex items-center justify-center py-8">
         <div class="h-6 w-6 animate-spin rounded-full border-4 border-primary border-t-transparent" />
       </div>

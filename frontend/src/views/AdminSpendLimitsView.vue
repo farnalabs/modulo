@@ -6,7 +6,7 @@
   ]" />
   <div data-theme="agent" class="mx-auto max-w-6xl space-y-6 p-6">
     <header>
-      <h1 class="text-3xl font-bold tracking-tight">{{ $t('views.AdminCostBreakdownView.spend_limits') }}</h1>
+      <h1 class="text-2xl font-semibold tracking-tight">{{ $t('views.AdminCostBreakdownView.spend_limits') }}</h1>
       <p class="mt-1 text-muted-foreground">{{ $t('views.AdminSpendLimitsView.configure_daily_spend_limits_at_the_org_and_team_level') }}</p>
     </header>
 

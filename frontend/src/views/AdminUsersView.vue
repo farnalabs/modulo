@@ -2,7 +2,7 @@
   <div class="p-6 max-w-5xl mx-auto space-y-6">
     <div class="flex items-center justify-between">
       <div>
-        <h1 class="text-2xl font-bold tracking-tight">Users</h1>
+        <h1 class="text-2xl font-semibold tracking-tight">Users</h1>
         <p class="text-muted-foreground mt-1">{{ $t('views.AdminUsersView.manage_user_accounts_and_permissions') }}</p>
       </div>
       <Button
@@ -147,7 +147,7 @@
 
     <div v-if="showCreate" class="fixed inset-0 z-50 flex items-center justify-center bg-black/50" @click.self="showCreate = false">
       <div class="bg-background rounded-xl border shadow-lg p-6 w-full max-w-md mx-4 space-y-4">
-        <h2 class="text-lg font-semibold">{{ $t('views.AdminUsersView.create_user') }}</h2>
+        <h2 class="text-base font-semibold">{{ $t('views.AdminUsersView.create_user') }}</h2>
         <form @submit.prevent="createUser">
           <div>
             <label class="block text-sm font-medium mb-1">Email</label>
@@ -181,7 +181,7 @@
 
     <div v-if="showResetDialog" class="fixed inset-0 z-50 flex items-center justify-center bg-black/50" @click.self="showResetDialog = false">
       <div class="bg-background rounded-xl border shadow-lg p-6 w-full max-w-md mx-4 space-y-4">
-        <h2 class="text-lg font-semibold">{{ $t('views.AdminUsersView.password_reset') }}</h2>
+        <h2 class="text-base font-semibold">{{ $t('views.AdminUsersView.password_reset') }}</h2>
         <p class="text-sm text-muted-foreground">
           A temporary password has been generated for <strong>{{ resetUserEmail }}</strong>.
           Share this password with the user — they will be prompted to change it on next login.

@@ -10,7 +10,7 @@
           &larr; Back
         </button>
         <div>
-          <h1 class="text-2xl font-bold tracking-tight">{{ $t('views.AdminErrorDetailView.error_group_detail') }}</h1>
+          <h1 class="text-2xl font-semibold tracking-tight">{{ $t('views.AdminErrorDetailView.error_group_detail') }}</h1>
           <p v-if="group" class="mt-0.5 text-sm text-muted-foreground font-mono">
             {{ shortId(group.fingerprint) }}
           </p>
@@ -52,7 +52,7 @@
       </div>
 
       <div class="card p-4">
-        <h2 class="mb-3 text-lg font-semibold">Actions</h2>
+        <h2 class="mb-3 text-base font-semibold">Actions</h2>
         <div class="flex flex-wrap items-center gap-3">
           <button
             class="rounded-lg border border-input bg-background px-4 py-2 text-sm font-medium hover:bg-accent disabled:opacity-50"
@@ -93,7 +93,7 @@
       </div>
 
       <div v-if="sampleEvent" class="card p-4">
-        <h2 class="mb-2 text-lg font-semibold">Message</h2>
+        <h2 class="mb-2 text-base font-semibold">Message</h2>
         <p class="rounded-lg bg-muted p-3 text-sm font-mono">{{ sampleEvent.message }}</p>
 
         <div v-if="sampleEvent.stacktrace" class="mt-4">
@@ -159,7 +159,7 @@
       </div>
 
       <div class="card p-4">
-        <h2 class="mb-3 text-lg font-semibold">Raw Events ({{ eventsTotal }})</h2>
+        <h2 class="mb-3 text-base font-semibold">Raw Events ({{ eventsTotal }})</h2>
         <LoadingSpinner v-if="eventsLoading" />
         <div v-else-if="events.length === 0" class="py-4 text-center text-sm text-muted-foreground">
           No raw events loaded.

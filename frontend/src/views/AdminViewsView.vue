@@ -2,7 +2,7 @@
   <div class="mx-auto max-w-5xl space-y-8 p-6">
     <header class="flex items-center justify-between">
       <div>
-        <h1 class="text-3xl font-bold tracking-tight">{{ $t('components.ViewToggle.saved_views') }}</h1>
+        <h1 class="text-2xl font-semibold tracking-tight">{{ $t('components.ViewToggle.saved_views') }}</h1>
         <p class="mt-1 text-muted-foreground">{{ $t('views.AdminViewsView.manage_saved_views_for_organizing_and_filtering_data') }}</p>
       </div>
       <Button
@@ -21,7 +21,7 @@
 
     <template v-else>
       <div v-if="showForm" class="card p-6">
-        <h2 class="mb-4 text-lg font-semibold">{{ editingId ? 'Edit View' : 'New View' }}</h2>
+        <h2 class="mb-4 text-base font-semibold">{{ editingId ? 'Edit View' : 'New View' }}</h2>
         <form class="space-y-4" @submit.prevent="handleSave">
           <div>
             <label class="mb-1 block text-sm font-medium">Name</label>

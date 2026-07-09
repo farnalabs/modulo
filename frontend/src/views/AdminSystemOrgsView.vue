@@ -1,13 +1,13 @@
 ﻿<template>
   <div data-theme="agent" class="mx-auto max-w-6xl space-y-6 p-6">
     <header>
-      <h1 class="text-3xl font-bold tracking-tight">{{ $t('views.AdminSystemOrgsView.system_admin_organisations') }}</h1>
+      <h1 class="text-2xl font-semibold tracking-tight">{{ $t('views.AdminSystemOrgsView.system_admin_organisations') }}</h1>
       <p class="mt-1 text-muted-foreground">{{ $t('views.AdminSystemOrgsView.crosstenant_organisation_management_system_admin_only') }}</p>
     </header>
 
     <div class="grid gap-6 md:grid-cols-2">
       <div class="rounded-lg border p-6">
-        <h2 class="text-lg font-semibold">{{ $t('views.AdminSystemOrgsView.create_organisation') }}</h2>
+        <h2 class="text-base font-semibold">{{ $t('views.AdminSystemOrgsView.create_organisation') }}</h2>
         <p class="mt-1 text-sm text-muted-foreground">
           Create a new tenant organisation with a unique slug. The creator is automatically added as an admin.
         </p>
@@ -20,7 +20,7 @@
       </div>
 
       <div class="rounded-lg border p-6">
-        <h2 class="text-lg font-semibold">{{ $t('views.AdminSystemOrgsView.create_user_in_organisation') }}</h2>
+        <h2 class="text-base font-semibold">{{ $t('views.AdminSystemOrgsView.create_user_in_organisation') }}</h2>
         <p class="mt-1 text-sm text-muted-foreground">
           Provision a new user account within a specific organisation and assign a role.
         </p>
