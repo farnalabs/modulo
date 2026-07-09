@@ -127,6 +127,7 @@
 import { ref, onMounted } from 'vue'
 import { api } from '../lib/api/client'
 import { formatApiError } from '../lib/api/formatError'
+import { useRemyStore } from '../composables/useRemyStore'
 import LoadingSpinner from '../components/shared/LoadingSpinner.vue'
 import ErrorAlert from '../components/shared/ErrorAlert.vue'
 import RemySkillDialog from '../components/remy/RemySkillDialog.vue'
@@ -138,6 +139,7 @@ import {
 } from '../components/ui/tooltip'
 import type { SkillItem } from '../types/remy'
 
+const remyStore = useRemyStore()
 const skills = ref<SkillItem[]>([])
 const loading = ref(true)
 const loadError = ref<string | null>(null)
@@ -156,6 +158,7 @@ async function loadSkills() {
     } else if (data) {
       skills.value = (data as { items: SkillItem[] }).items || (data as SkillItem[])
     }
+    remyStore.signalSkillsChanged()
   } catch (e: unknown) {
     loadError.value = `Failed to load skills: ${formatApiError(e)}`
   } finally {
@@ -181,6 +184,7 @@ async function toggleSkillActive(skill: SkillItem) {
       const idx = skills.value.findIndex((s) => s.id === skill.id)
       if (idx !== -1) skills.value[idx] = data as SkillItem
     }
+    remyStore.signalSkillsChanged()
   } catch (e: unknown) {
     skillToggleError.value = `Failed to toggle skill: ${formatApiError(e)}`
   } finally {
