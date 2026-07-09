@@ -187,7 +187,7 @@
     >
       <span>{{ store.error }}</span>
       <button
-        class="shrink-0 ml-2 hover:brightness-110"
+        class="shrink-0 ml-2 hover:opacity-80"
         :class="isRateLimitError ? 'text-orange-600' : 'text-destructive'"
         @click="store.error = null"
         :aria-label="$t('remy.dismiss_error')"

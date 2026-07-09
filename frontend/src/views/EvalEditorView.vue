@@ -146,14 +146,14 @@
               </div>
 
               <div class="flex items-center gap-2 pt-2">
-                <button
-                  :disabled="!canSave || saving"
-                  data-testid="eval-editor-save"
-                  class="rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
-                  @click="saveEval"
-                >
-                  {{ saving ? $t('common.saving') : editingEvalId ? $t('views.EvalEditorView.update') : $t('common.save') }}
-                </button>
+              <Button
+                :disabled="!canSave || saving"
+                data-testid="eval-editor-save"
+                variant="default"
+                @click="saveEval"
+              >
+                {{ saving ? $t('common.saving') : editingEvalId ? $t('views.EvalEditorView.update') : $t('common.save') }}
+              </Button>
                 <button
                   v-if="editingEvalId"
                   data-testid="eval-editor-cancel"
@@ -274,6 +274,7 @@ import { shortId } from '../utils/format'
 import { formatApiError } from '../lib/api/formatError'
 import { usePlanStore } from '../stores/planStore'
 import FeatureGate from '../components/FeatureGate.vue'
+import { Button } from '@/components/ui/button'
 import PageTabs from "../components/PageTabs.vue"
 
 const { t } = useI18n()

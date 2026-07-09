@@ -7,13 +7,14 @@
         <h1 class="text-3xl font-bold tracking-tight">Triggers</h1>
         <p class="mt-1 text-muted-foreground">Automate pipeline execution with schedules (cron), webhooks, polling, or inter-pipeline signals. Each trigger launches a pipeline run when its conditions are met.</p>
       </div>
-      <button
+      <Button
         data-testid="settings-triggers-create"
-        class="btn-glow rounded-lg bg-primary px-4 py-2 text-sm font-semibold text-primary-foreground border border-primary/30 hover:border-primary/60 hover:brightness-110 transition-all duration-150"
+        variant="default"
+        class="btn-glow border-primary/30 hover:border-primary/60"
         @click="openCreateDialog"
       >
         Create Trigger
-      </button>
+      </Button>
     </header>
 
     <LoadingSpinner v-if="loading" />
@@ -316,14 +317,14 @@
             >
               Cancel
             </button>
-            <button
+            <Button
               :disabled="saving"
               type="submit"
-              class="rounded-lg bg-primary px-4 py-2 text-sm font-semibold text-primary-foreground hover:brightness-110 disabled:opacity-50 transition-all"
+              variant="default"
               data-testid="settings-triggers-form-submit"
             >
               {{ saving ? 'Saving...' : (editingId ? 'Update' : 'Create') }}
-            </button>
+            </Button>
           </DialogFooter>
         </form>
       </DialogContent>
@@ -347,15 +348,15 @@
           >
             Cancel
           </button>
-          <button
-            :disabled="deleting"
-            type="button"
-            class="rounded-lg bg-destructive px-4 py-2 text-sm font-semibold text-destructive-foreground hover:brightness-110 disabled:opacity-50 transition-all"
-            data-testid="settings-triggers-delete-confirm"
-            @click="deleteTrigger"
+            <Button
+              :disabled="deleting"
+              type="button"
+              variant="destructive"
+              data-testid="settings-triggers-delete-confirm"
+              @click="deleteTrigger"
           >
-            {{ deleting ? 'Deleting...' : 'Delete' }}
-          </button>
+              {{ deleting ? 'Deleting...' : 'Delete' }}
+            </Button>
         </DialogFooter>
       </DialogContent>
     </Dialog>
@@ -365,6 +366,7 @@
 
 <script setup lang="ts">
 import { ref, onMounted } from 'vue'
+import { Button } from '@/components/ui/button'
 import { api } from '../lib/api/client'
 import { formatApiError } from '../lib/api/formatError'
 import type { components } from '../lib/api/client'

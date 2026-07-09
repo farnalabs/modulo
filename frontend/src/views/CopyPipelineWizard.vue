@@ -101,14 +101,15 @@
         </div>
 
         <div class="flex justify-end mt-6">
-          <button
-            :disabled="!selectedPipeline"
-            class="px-6 py-2.5 bg-primary text-primary-foreground text-sm font-medium rounded-lg hover:brightness-110 disabled:opacity-50 transition-all"
-            @click="step = 2"
-            data-testid="copy-wizard-next-step1"
+              <Button
+                :disabled="!selectedPipeline"
+                variant="default"
+                class="px-6 py-2.5"
+                @click="step = 2"
+                data-testid="copy-wizard-next-step1"
           >
             Next: Configure Copy
-          </button>
+          </Button>
         </div>
       </template>
 
@@ -206,13 +207,14 @@
           >
             Back
           </button>
-          <button
-            class="px-6 py-2.5 bg-primary text-primary-foreground text-sm font-medium rounded-lg hover:brightness-110 transition-all"
+          <Button
+            variant="default"
+            class="px-6 py-2.5"
             @click="step = 3"
             data-testid="copy-wizard-next-step2"
           >
             Next: Review
-          </button>
+          </Button>
         </div>
       </template>
 
@@ -279,14 +281,15 @@
           >
             Back
           </button>
-          <button
+          <Button
             :disabled="executing"
-            class="px-6 py-2.5 bg-primary text-primary-foreground text-sm font-medium rounded-lg hover:brightness-110 disabled:opacity-50 transition-all"
+            variant="default"
+            class="px-6 py-2.5"
             @click="executeCopy"
             data-testid="copy-wizard-execute"
           >
             {{ executing ? 'Copying...' : 'Copy Pipeline' }}
-          </button>
+          </Button>
         </div>
       </template>
 
@@ -322,13 +325,14 @@
             <p class="text-lg font-medium text-foreground mb-1">Pipeline Copied!</p>
             <p class="text-sm text-muted-foreground mb-6">{{ result?.name }} is ready for adaptation.</p>
             <div class="flex items-center justify-center gap-3">
-              <button
-                class="px-6 py-2.5 bg-primary text-primary-foreground text-sm font-medium rounded-lg hover:brightness-110 transition-all"
+              <Button
+                variant="default"
+                class="px-6 py-2.5"
                 @click="openInEditor"
                 data-testid="copy-wizard-open-editor"
               >
                 Open in Editor
-              </button>
+              </Button>
               <button
                 class="px-6 py-2.5 border border-input bg-background text-foreground text-sm font-medium rounded-lg hover:bg-accent transition-colors"
                 @click="reset"
@@ -346,13 +350,14 @@
             <p class="text-lg font-medium text-destructive mb-1">Copy Failed</p>
             <p class="text-sm text-muted-foreground mb-6">{{ executeError }}</p>
             <div class="flex items-center justify-center gap-3">
-              <button
-                class="px-6 py-2.5 bg-primary text-primary-foreground text-sm font-medium rounded-lg hover:brightness-110 transition-all"
+              <Button
+                variant="default"
+                class="px-6 py-2.5"
                 @click="executeCopy"
                 data-testid="copy-wizard-retry"
               >
                 Retry
-              </button>
+              </Button>
               <button
                 class="px-6 py-2.5 border border-input bg-background text-foreground text-sm font-medium rounded-lg hover:bg-accent transition-colors"
                 @click="step = 3"
@@ -371,6 +376,7 @@
 <script setup lang="ts">
 import { ref, computed, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
+import { Button } from '@/components/ui/button'
 import { useApi } from '../composables/useApi'
 import BackLink from '../components/BackLink.vue'
 import LoadingSpinner from '../components/shared/LoadingSpinner.vue'

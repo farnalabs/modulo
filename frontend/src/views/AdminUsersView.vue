@@ -5,13 +5,14 @@
         <h1 class="text-2xl font-bold tracking-tight">Users</h1>
         <p class="text-muted-foreground mt-1">{{ $t('views.AdminUsersView.manage_user_accounts_and_permissions') }}</p>
       </div>
-      <button
-        @click="showCreate = true"
+      <Button
+        variant="default"
+        class="border-primary/30"
         data-testid="admin-users-add-user"
-        class="px-4 py-2 bg-primary text-primary-foreground text-sm font-medium rounded-lg border border-primary/30 hover:brightness-110 transition-all"
+        @click="showCreate = true"
       >
         + Add User
-      </button>
+      </Button>
     </div>
 
     <LoadingSpinner v-if="loading" />
@@ -172,7 +173,7 @@
           <p v-if="createError" class="text-sm text-destructive">{{ createError }}</p>
           <div class="flex justify-end gap-2 pt-2">
             <button type="button" @click="showCreate = false" data-testid="admin-users-cancel" class="px-4 py-2 border border-input bg-background rounded-lg text-sm">Cancel</button>
-            <button type="submit" data-testid="admin-users-create" class="px-4 py-2 bg-primary text-primary-foreground text-sm font-medium rounded-lg">Create</button>
+            <Button type="submit" variant="default" data-testid="admin-users-create">Create</Button>
           </div>
         </form>
       </div>
@@ -187,22 +188,23 @@
         </p>
         <div class="flex items-center gap-2 bg-muted rounded-lg px-4 py-3">
           <code class="flex-1 text-sm font-mono break-all">{{ tempPassword }}</code>
-          <button
-            @click="copyPassword"
+          <Button
+            variant="default"
+            class="shrink-0"
             data-testid="admin-users-copy-password"
-            class="shrink-0 px-3 py-1.5 text-xs bg-primary text-primary-foreground font-medium rounded-md hover:brightness-110 transition-all"
+            @click="copyPassword"
           >
             {{ copied ? 'Copied!' : 'Copy' }}
-          </button>
+          </Button>
         </div>
         <div class="flex justify-end pt-2">
-          <button
-            @click="showResetDialog = false"
+          <Button
+            variant="default"
             data-testid="admin-users-reset-done"
-            class="px-4 py-2 bg-primary text-primary-foreground text-sm font-medium rounded-lg"
+            @click="showResetDialog = false"
           >
             Done
-          </button>
+          </Button>
         </div>
       </div>
     </div>
@@ -213,6 +215,7 @@
 import { ref, onMounted, onBeforeUnmount } from 'vue'
 import { useApi } from '../composables/useApi'
 import LoadingSpinner from '../components/shared/LoadingSpinner.vue'
+import { Button } from '@/components/ui/button'
 
 interface UserItem {
   id: string

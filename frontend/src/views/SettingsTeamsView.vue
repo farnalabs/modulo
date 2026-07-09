@@ -6,13 +6,14 @@
         <h1 class="text-3xl font-bold tracking-tight">Teams</h1>
         <p class="mt-1 text-muted-foreground">Manage teams and team membership</p>
       </div>
-      <button
-        class="btn-glow rounded-lg bg-primary px-4 py-2 text-sm font-semibold text-primary-foreground border border-primary/30 hover:border-primary/60 hover:brightness-110 transition-all duration-150"
+      <Button
+        variant="default"
+        class="btn-glow border-primary/30 hover:border-primary/60"
         data-testid="settings-teams-create-team"
         @click="showCreateForm = true"
       >
         Create Team
-      </button>
+      </Button>
     </header>
 
     <LoadingSpinner v-if="loading" />
@@ -200,6 +201,7 @@
 
 <script setup lang="ts">
 import { ref, onMounted, onBeforeUnmount } from 'vue'
+import { Button } from '@/components/ui/button'
 import { api } from '../lib/api/client'
 import type { components } from '../lib/api/client'
 import LoadingSpinner from '../components/shared/LoadingSpinner.vue'

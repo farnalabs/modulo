@@ -28,13 +28,13 @@
           <option value="dismissed_scope">{{ $t('views.NotificationsPage.dismissed_scope') }}</option>
         </select>
         <div class="flex items-end gap-2">
-          <button
-            type="button"
-            class="rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90 transition-colors"
-            @click="applyFilters"
-          >
-            Apply Filters
-          </button>
+        <Button
+          type="button"
+          variant="default"
+          @click="applyFilters"
+        >
+          Apply Filters
+        </Button>
           <button
             type="button"
             class="rounded-md border px-4 py-2 text-sm font-medium text-muted-foreground hover:bg-muted transition-colors"
@@ -98,6 +98,7 @@ import { fetchNotifications, reviewLater } from "../lib/api/notifications";
 import NotificationCard from "../components/NotificationCard.vue";
 import LoadingSpinner from "../components/shared/LoadingSpinner.vue";
 import ErrorAlert from "../components/shared/ErrorAlert.vue";
+import { Button } from "@/components/ui/button";
 import { formatApiError } from "../lib/api/formatError";
 import EmptyState from "../components/shared/EmptyState.vue";
 

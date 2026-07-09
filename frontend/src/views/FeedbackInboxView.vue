@@ -185,14 +185,14 @@
                 </div>
 
                 <div v-if="detailMap[record.id].feedback_status === 'pending' || detailMap[record.id].feedback_status === 'routing'">
-                  <button
+                  <Button
                     :disabled="triggering[record.id]"
                     data-testid="feedback-inbox-trigger-correction"
-                    class="rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
+                    variant="default"
                     @click="triggerCorrection(record.id)"
                   >
                     {{ triggering[record.id] ? $t('views.FeedbackInboxView.triggering') : $t('views.FeedbackInboxView.trigger_correction_run') }}
-                  </button>
+                  </Button>
                 </div>
 
                 <div>
@@ -206,14 +206,14 @@
                     :placeholder="$t('views.FeedbackInboxView.add_your_review_annotation')"
                   />
                   <div class="mt-2 flex items-center gap-2">
-                    <button
+                    <Button
                       :disabled="savingAnnotation[record.id]"
                       data-testid="feedback-inbox-save-annotation"
-                      class="rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
+                      variant="default"
                       @click="saveAnnotation(record.id)"
                     >
                       {{ savingAnnotation[record.id] ? $t('views.FeedbackInboxView.saving') : $t('views.FeedbackInboxView.save_annotation') }}
-                    </button>
+                    </Button>
                     <button
                       :disabled="savingAnnotation[record.id]"
                       data-testid="feedback-inbox-mark-resolved"
@@ -251,6 +251,7 @@ import { api } from '../lib/api/client'
 import type { components } from '../lib/api/client'
 import { formatApiError } from '../lib/api/formatError'
 import LoadingSpinner from '../components/shared/LoadingSpinner.vue'
+import { Button } from '@/components/ui/button'
 import ErrorAlert from '../components/shared/ErrorAlert.vue'
 import {
   Tooltip,

@@ -155,13 +155,13 @@
         </div>
       </div>
       <div class="mt-3 flex items-center gap-2">
-        <button
-          class="rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90"
+        <Button
+          variant="default"
           data-testid="admin-audit-apply-filters"
           @click="applyFilters"
         >
           {{ $t('views.AdminAuditView.apply_filters') }}
-        </button>
+        </Button>
         <button
           class="rounded-lg border border-input bg-background px-4 py-2 text-sm font-medium hover:bg-accent"
           data-testid="admin-audit-reset"
@@ -333,6 +333,7 @@ import { formatError } from '../lib/utils'
 import { usePlanStore } from '../stores/planStore'
 import FeatureGate from '../components/FeatureGate.vue'
 import { formatApiError } from '../lib/api/formatError'
+import { Button } from '@/components/ui/button'
 
 const { t } = useI18n()
 import {

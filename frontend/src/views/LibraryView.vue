@@ -4,13 +4,15 @@
       <div class="max-w-6xl mx-auto flex items-center justify-between gap-3">
         <h1 class="text-xl font-semibold text-foreground">{{ $t('views.LibraryView.title') }}</h1>
         <div class="flex items-center gap-3">
-          <router-link
+          <Button
+            variant="default"
+            as="router-link"
             to="/library?type=pipeline_template"
-            class="rounded-lg bg-primary px-4 py-1.5 text-sm font-semibold text-primary-foreground hover:brightness-110 transition-all"
+            class="px-4 py-1.5"
             data-testid="library-create-pipeline-header"
           >
             {{ $t('views.LibraryView.create_pipeline') }}
-          </router-link>
+          </Button>
           <input
             v-model="search"
             type="text"
@@ -152,12 +154,13 @@
           <div class="flex items-center gap-2 mt-auto">
             <button
               v-if="prim.primitive_type === 'pipeline_template' || prim.primitive_type === 'composite'"
-              class="flex-1 px-3 py-2 bg-primary text-primary-foreground text-sm font-medium rounded-lg border border-primary/30 hover:border-primary/60 hover:brightness-110 transition-all"
+              variant="default"
+              class="flex-1 px-3 py-2 border border-primary/30 hover:border-primary/60"
               @click="createPipeline(prim)"
               data-testid="library-create-pipeline"
             >
               {{ $t('views.LibraryView.create_pipeline') }}
-            </button>
+            </Button>
             <button
               class="flex-1 px-3 py-2 border border-border bg-background text-foreground text-sm font-medium rounded-lg hover:bg-accent transition-colors"
               @click="viewPrimitive(prim)"
@@ -197,12 +200,13 @@
             <div class="flex items-center gap-2 mt-auto">
             <button
               v-if="prim.primitive_type === 'pipeline_template' || prim.primitive_type === 'composite'"
-              class="flex-1 px-3 py-2 bg-primary text-primary-foreground text-sm font-medium rounded-lg border border-primary/30 hover:border-primary/60 hover:brightness-110 transition-all"
+              variant="default"
+              class="flex-1 px-3 py-2 border border-primary/30 hover:border-primary/60"
               @click="createPipeline(prim)"
               data-testid="library-create-pipeline"
             >
               {{ $t('views.LibraryView.create_pipeline') }}
-            </button>
+            </Button>
             <button
               class="flex-1 px-3 py-2 border border-border bg-background text-foreground text-sm font-medium rounded-lg hover:bg-accent transition-colors"
               @click="viewPrimitive(prim)"
@@ -257,12 +261,13 @@
           <div class="flex items-center gap-2 mt-auto">
             <button
               v-if="prim.primitive_type === 'pipeline_template' || prim.primitive_type === 'composite'"
-              class="flex-1 px-3 py-2 bg-primary text-primary-foreground text-sm font-medium rounded-lg border border-primary/30 hover:border-primary/60 hover:brightness-110 transition-all"
+              variant="default"
+              class="flex-1 px-3 py-2 border border-primary/30 hover:border-primary/60"
               @click="createPipeline(prim)"
               data-testid="library-create-pipeline"
             >
               {{ $t('views.LibraryView.create_pipeline') }}
-            </button>
+            </Button>
             <button
               class="flex-1 px-3 py-2 border border-border bg-background text-foreground text-sm font-medium rounded-lg hover:bg-accent transition-colors"
               @click="viewPrimitive(prim)"
@@ -302,6 +307,7 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, onBeforeUnmount } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
+import { Button } from '@/components/ui/button'
 import { useApi } from '../composables/useApi'
 import { formatApiError } from '../lib/api/formatError'
 

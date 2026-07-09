@@ -51,14 +51,15 @@
             data-testid="login-password"
           />
         </div>
-        <button
+        <Button
           type="submit"
           :disabled="loading"
-          class="btn-glow w-full rounded-md bg-primary px-4 py-2.5 text-sm font-semibold text-primary-foreground border border-primary/30 hover:border-primary/60 hover:brightness-110 disabled:opacity-50 transition-all duration-150"
+          variant="default"
+          class="btn-glow w-full border-primary/30 hover:border-primary/60 px-4 py-2.5"
           data-testid="login-submit"
         >
           {{ loading ? $t('common.signing_in') : $t('common.sign_in') }}
-        </button>
+        </Button>
       </form>
     </div>
   </div>
@@ -67,6 +68,7 @@
 <script setup lang="ts">
 import { ref } from 'vue'
 import { useRouter } from 'vue-router'
+import { Button } from '@/components/ui/button'
 import { setAccessToken, setRefreshToken } from '../lib/api/client'
 import { formatApiError } from '../lib/api/formatError'
 
