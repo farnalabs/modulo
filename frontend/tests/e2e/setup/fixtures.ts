@@ -54,6 +54,12 @@ export async function setupLocalMockApi(page: Page) {
         }),
       })
     }
+    if (method === 'GET') {
+      return route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ items: [], total: 0 }) })
+    }
+    if (['POST', 'PUT', 'PATCH', 'DELETE'].includes(method)) {
+      return route.fulfill({ status: 200, contentType: 'application/json', body: '{}' })
+    }
     return route.fulfill({ status: 200, contentType: 'application/json', body: '{}' })
   })
 }
