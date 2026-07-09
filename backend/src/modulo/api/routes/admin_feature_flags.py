@@ -1,4 +1,5 @@
 from __future__ import annotations
+
 """Admin feature flag inspection — lists all known flags and their current status."""
 
 

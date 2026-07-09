@@ -1,4 +1,5 @@
 from __future__ import annotations
+
 """24 canonical library integration primitives.
 
 Each dict provides the metadata, default configuration, credential

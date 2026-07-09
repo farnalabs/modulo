@@ -1,4 +1,5 @@
 import asyncio
+
 """Agent signal trigger — cross-pipeline signal on node completion.
 
 When a source pipeline's designated node completes execution, fires a child

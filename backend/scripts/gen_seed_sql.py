@@ -1,5 +1,6 @@
 """Generate SQL INSERT statements for seeding pipeline templates."""
 import json
+
 from modulo.core.library_service import _MODULO_PRIMITIVES
 
 ORG_ID = "6a6d7112-2058-4d65-ac75-465a12a94563"

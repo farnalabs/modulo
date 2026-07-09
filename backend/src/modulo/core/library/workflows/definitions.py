@@ -1,4 +1,5 @@
 from __future__ import annotations
+
 """14 canonical library workflow primitives.
 
 Each dict defines a pre-built pipeline template that combines agents,

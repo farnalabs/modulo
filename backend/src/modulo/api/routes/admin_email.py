@@ -10,8 +10,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from modulo.api.dependencies import get_db_session
 from modulo.auth.dependencies import get_current_user
 from modulo.auth.jwt import AuthenticatedPrincipal
-from modulo.db.crud.organisation import get_organisation, update_organisation
 from modulo.core.email_service import EmailSendingError, send_email
+from modulo.db.crud.organisation import get_organisation, update_organisation
 from modulo.settings import get_settings
 
 logger = logging.getLogger(__name__)

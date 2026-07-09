@@ -1,4 +1,5 @@
 from __future__ import annotations
+
 """FernetSecretsBackend — encrypt/decrypt secrets with Fernet, store in DB.
 
 Default implementation that preserves the current behaviour: secrets are

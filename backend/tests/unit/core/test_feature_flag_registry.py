@@ -2,9 +2,7 @@
 
 from unittest.mock import AsyncMock, MagicMock, patch
 
-import pytest
-
-from modulo.core.feature_flags import FeatureFlag, FeatureFlagRegistry, TIER_RANK
+from modulo.core.feature_flags import FeatureFlagRegistry
 
 
 def _make_session() -> AsyncMock:

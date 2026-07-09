@@ -1,4 +1,5 @@
 from __future__ import annotations
+
 """HITLManager — atomic claim, approve, reject, deliver_manual, and expiry for HITL gates.
 
 Each pipeline run that reaches a HITL gate edge creates one `hitl_claims` row.

@@ -17,15 +17,15 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
+from fastapi import HTTPException, status
 from jose import JWTError, jwt
 from sqlalchemy import delete as sa_delete
 from sqlalchemy import select
-from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.exc import ProgrammingError
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.db.models.oauth_client import OAuthClient
 from modulo.db.models.oauth_token import OAuthAuthorizationCode, OAuthTokenFamily
-from fastapi import HTTPException, status
 
 logger = logging.getLogger(__name__)
 _log = logging.getLogger(__name__)

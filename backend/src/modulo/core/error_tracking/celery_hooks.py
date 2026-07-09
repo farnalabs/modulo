@@ -1,4 +1,5 @@
 from __future__ import annotations
+
 """Celery task failure handler — captures failed tasks to ErrorIngestionService."""
 
 

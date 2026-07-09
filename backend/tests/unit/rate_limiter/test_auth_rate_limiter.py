@@ -8,7 +8,7 @@ Covers:
 """
 
 from collections.abc import Generator
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import MagicMock
 
 import pytest
 from fastapi import FastAPI
@@ -16,7 +16,6 @@ from fastapi.testclient import TestClient
 
 from modulo.api.middleware.rate_limiter import (
     AuthRateLimitMiddleware,
-    _auth_rate_limiter as _module_limiter,
     get_auth_rate_limiter,
 )
 from modulo.core.rate_limiter import AuthRateLimiter as AuthRateLimiterCls

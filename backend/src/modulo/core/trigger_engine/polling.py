@@ -289,7 +289,7 @@ async def fire_polling_trigger(
         try:
             query = ConnectorQuery(resource=poll_query)
             query_result = await asyncio.wait_for(connector.query(query), timeout=60)
-        except asyncio.TimeoutError:
+        except TimeoutError:
             _log.warning("Poll query timed out for trigger %s", trigger_id)
             await _log_poll_event(
                 session,

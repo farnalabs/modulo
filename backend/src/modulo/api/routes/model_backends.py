@@ -4,11 +4,10 @@ Credentials (API keys) are encrypted at rest with Fernet. The ciphertext is
 never exposed in any response — only a boolean `has_credentials` field.
 """
 
+import logging
 import uuid
 from datetime import datetime
 from typing import Any, Literal
-
-import logging
 
 from cryptography.fernet import Fernet
 from fastapi import APIRouter, Depends, HTTPException, Query, status

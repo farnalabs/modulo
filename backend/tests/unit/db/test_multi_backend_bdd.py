@@ -13,6 +13,7 @@ import pytest
 from sqlalchemy import Select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from modulo.db.repositories import RepositoryHub
 from modulo.db.repositories.generic import GenericRepository
 from modulo.db.repositories.locks import (
     GenericLock,
@@ -21,7 +22,6 @@ from modulo.db.repositories.locks import (
     _generic_locks,
 )
 from modulo.db.repositories.postgres import PostgresRepository
-from modulo.db.repositories import RepositoryHub
 
 _TENANT_KEY = "org_id"
 _ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
@@ -525,8 +525,9 @@ class TestRegisterTenantFilter:
         monkeypatch.setenv("SECRET_KEY", "a" * 32)
         monkeypatch.setenv("FERNET_KEY", "a" * 32)
 
-        from modulo.settings import Settings, get_settings
         from unittest.mock import patch
+
+        from modulo.settings import Settings
 
         with patch("modulo.db.rls.get_settings") as mock_get_settings:
             mock_settings = MagicMock(spec=Settings)
@@ -541,8 +542,9 @@ class TestRegisterTenantFilter:
             mock_listen.assert_not_called()
 
     def test_registers_for_sqlite(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        from modulo.settings import Settings
         from unittest.mock import patch
+
+        from modulo.settings import Settings
 
         with patch("modulo.db.rls.get_settings") as mock_get_settings:
             mock_settings = MagicMock(spec=Settings)
@@ -557,8 +559,9 @@ class TestRegisterTenantFilter:
             mock_listen.assert_called_once()
 
     def test_registers_for_mariadb(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        from modulo.settings import Settings
         from unittest.mock import patch
+
+        from modulo.settings import Settings
 
         with patch("modulo.db.rls.get_settings") as mock_get_settings:
             mock_settings = MagicMock(spec=Settings)

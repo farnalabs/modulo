@@ -62,7 +62,8 @@ def test_none_algorithm_rejected() -> None:
     validation) and verifies that decode_principal rejects it since HS256 is the
     only allowed algorithm.
     """
-    import base64, json
+    import base64
+    import json
 
     claims = {
         "sub": "alice",

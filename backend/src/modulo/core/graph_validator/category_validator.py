@@ -1,4 +1,5 @@
 from __future__ import annotations
+
 """Category validator — validates node_category_id references on graph nodes.
 
 Standalone function usable outside GraphValidator.

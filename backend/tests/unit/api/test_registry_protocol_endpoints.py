@@ -153,7 +153,7 @@ class TestV2Publish:
                 "modulo.core.registry.crypto.generate_keypair",
                 return_value={"private_key": "aa" * 32, "public_key": "bb" * 32, "fingerprint": "cc" * 16},
             ),
-            patch("modulo.api.routes.registry.publish_primitive", new_callable=AsyncMock, side_effect=[entry_1, entry_2]) as mock_publish,
+            patch("modulo.api.routes.registry.publish_primitive", side_effect=[entry_1, entry_2]) as mock_publish,
         ):
             resp1 = client.post(PUBLISH_URL, json=self.PUBLISH_BODY)
             assert resp1.status_code == 201

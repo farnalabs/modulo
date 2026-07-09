@@ -13,7 +13,6 @@ import pytest
 from fastapi.testclient import TestClient
 from pytest_bdd import given, parsers, scenarios, then, when
 
-
 from modulo.auth.scim_auth import ScimPrincipal, get_scim_principal
 from modulo.settings import Settings, get_settings
 

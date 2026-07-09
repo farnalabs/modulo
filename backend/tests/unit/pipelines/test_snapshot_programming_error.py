@@ -11,11 +11,11 @@ from sqlalchemy.exc import ProgrammingError, SQLAlchemyError
 
 os.environ.setdefault("MODULO_CSRF_ENABLED", "false")
 
-from modulo.api.dependencies import get_db_session  # noqa: E402
-from modulo.api.main import app  # noqa: E402
-from modulo.auth.dependencies import get_current_user  # noqa: E402
-from modulo.auth.jwt import AuthenticatedPrincipal  # noqa: E402
-from modulo.settings import Settings, get_settings  # noqa: E402
+from modulo.api.dependencies import get_db_session
+from modulo.api.main import app
+from modulo.auth.dependencies import get_current_user
+from modulo.auth.jwt import AuthenticatedPrincipal
+from modulo.settings import Settings, get_settings
 
 _VALID_32 = "a" * 32
 _ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")

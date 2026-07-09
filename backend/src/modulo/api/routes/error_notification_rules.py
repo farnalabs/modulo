@@ -1,4 +1,5 @@
 from __future__ import annotations
+
 """CRUD for error notification rules."""
 
 

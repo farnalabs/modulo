@@ -1,4 +1,5 @@
 from __future__ import annotations
+
 """Application-layer append-only guard for AuditEvent and ErrorEvent records.
 
 Provides defense-in-depth via SQLAlchemy ORM event listeners that prevent

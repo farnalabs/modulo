@@ -1,4 +1,5 @@
 from __future__ import annotations
+
 """Registry service — Ed25519 signing, SHA-256 integrity, publish/pull protocol.
 
 Primitives are identified by ``author/name`` namespaced slugs.

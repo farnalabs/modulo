@@ -31,9 +31,9 @@ from collections.abc import AsyncGenerator
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
+import httpx
 from cryptography.fernet import Fernet
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
-import httpx
 from httpx import AsyncClient
 from langchain_core.messages import AIMessage, AIMessageChunk, BaseMessage, HumanMessage, SystemMessage, ToolMessage
 from pydantic import BaseModel, Field
@@ -1496,7 +1496,7 @@ async def stream_chat(
                 + json.dumps({"detail": "Database error. Please try again later."})
                 + "\n\n"
             )
-        except Exception as exc:
+        except Exception:
             logger.exception("Remy streaming error")
             yield f"event: error\ndata: {json.dumps({'detail': 'An unexpected error occurred. Please try again.'})}\n\n"
 

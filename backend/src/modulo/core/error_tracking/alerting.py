@@ -1,4 +1,5 @@
 from __future__ import annotations
+
 """Alert evaluation engine — sliding-window rule matching with cooldown."""
 
 

@@ -3,12 +3,12 @@
 from __future__ import annotations
 
 import json
+import shutil
 import uuid
 from datetime import UTC, datetime
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
-import shutil
 import pytest
 from click.testing import CliRunner
 

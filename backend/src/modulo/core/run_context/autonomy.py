@@ -1,4 +1,5 @@
 from __future__ import annotations
+
 """Autonomy levels for pipeline execution.
 
 Each pipeline can be configured with a default autonomy level that controls

@@ -1,4 +1,5 @@
 from __future__ import annotations
+
 """AWSSecretsManagerBackend — AWS Secrets Manager backend.
 
 Requires the *boto3* package (optional dependency). If *boto3* is not installed

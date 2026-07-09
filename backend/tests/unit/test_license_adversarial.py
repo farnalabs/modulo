@@ -20,7 +20,8 @@ from datetime import UTC, datetime, timedelta
 from typing import Any
 
 import pytest
-from hypothesis import given, strategies as st
+from hypothesis import given
+from hypothesis import strategies as st
 
 from modulo.core.license import (
     _LICENSE_PUBLIC_KEY_HEX,
@@ -29,7 +30,6 @@ from modulo.core.license import (
     set_public_key,
 )
 from modulo.core.registry.crypto import generate_keypair, sign_primitive
-
 
 # ── Fixtures ──────────────────────────────────────────────────────────────
 

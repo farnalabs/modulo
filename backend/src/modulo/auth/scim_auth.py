@@ -7,8 +7,7 @@ organisation (first org in the DB, or the org specified by MODULO_SCIM_DEFAULT_O
 
 import hmac
 import uuid
-
-from typing import AsyncGenerator
+from collections.abc import AsyncGenerator
 
 from fastapi import Depends, HTTPException, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer

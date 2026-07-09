@@ -6,8 +6,6 @@ unambiguously regardless of pytest's conftest handling.
 
 from typing import Any
 
-from modulo.connectors.base import ConnectorBase, ConnectorPayload, ConnectorQuery
-
 # ── Registry ────────────────────────────────────────────────────────────────
 
 _CONFORMANCE_REGISTRY: dict[str, str] = {}

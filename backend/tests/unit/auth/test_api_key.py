@@ -392,7 +392,6 @@ async def test_update_api_key_updates_expires_at() -> None:
 async def test_validate_api_key_revoked_raises() -> None:
     """A revoked key (revoked_at set) raises ApiKeyInvalidError."""
 
-    from datetime import datetime, timezone
 
     from modulo.db.models.api_key import OrgApiKey
 

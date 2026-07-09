@@ -18,6 +18,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from modulo.api.dependencies import get_db_session
 from modulo.auth.dependencies import get_current_user
 from modulo.auth.jwt import AuthenticatedPrincipal
+from modulo.core.audit_logger import append_audit_event
 from modulo.core.connector_hub import ConnectorHub
 from modulo.core.model_backend_hub import ModelBackendHub
 from modulo.core.schema_registry import (
@@ -28,7 +29,6 @@ from modulo.core.schema_registry import (
     apply_migration,
     create_migration,
 )
-from modulo.core.audit_logger import append_audit_event
 from modulo.core.secrets_backend import create_secrets_backend
 from modulo.db.crud.connector_instance import get_connector_instance
 from modulo.db.crud.model_backend import list_model_backends

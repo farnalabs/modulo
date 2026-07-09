@@ -471,6 +471,8 @@ class TriggerEngine:
         """
         from modulo.core.trigger_engine.polling import (
             _build_polling_connector,
+        )
+        from modulo.core.trigger_engine.polling import (
             evaluate_condition as _evaluate_condition,
         )
         from modulo.settings import get_settings

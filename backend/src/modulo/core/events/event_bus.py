@@ -1,4 +1,5 @@
 from __future__ import annotations
+
 """In-memory event bus for real-time frontend sync via SSE."""
 
 

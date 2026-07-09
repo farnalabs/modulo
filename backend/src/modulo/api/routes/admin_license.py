@@ -1,4 +1,5 @@
 from __future__ import annotations
+
 """Admin license endpoint — view and update the deployment license key."""
 
 

@@ -1,4 +1,5 @@
 from __future__ import annotations
+
 """SecretsBackend ABC and factory — pluggable secret storage.
 
 Usage:
@@ -13,7 +14,8 @@ import asyncio
 import logging
 import os
 from abc import ABC, abstractmethod
-from typing import TYPE_CHECKING, Any, Callable
+from collections.abc import Callable
+from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession

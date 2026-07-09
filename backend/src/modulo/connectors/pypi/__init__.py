@@ -99,7 +99,7 @@ class PyPIConnector(ConnectorBase):
         spec = {"name": text, "summary": text}
         operator = q.filters.get("operator", "and")
         xml_body = defusedxml.xmlrpc.dumps((spec, operator), "search")
-    
+
         async with httpx.AsyncClient(
             base_url=_API_BASE,
             timeout=30,

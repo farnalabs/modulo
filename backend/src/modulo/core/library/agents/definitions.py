@@ -1,4 +1,5 @@
 from __future__ import annotations
+
 """22 canonical library agent primitives.
 
 Each dict follows the pattern established in

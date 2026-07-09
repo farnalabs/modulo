@@ -72,8 +72,8 @@ def _make_mock_session() -> AsyncMock:
 
 @pytest.fixture(autouse=True)
 def _setup_client():
-    from modulo.api.main import app
     from modulo.api.dependencies import _get_engine, get_db_session
+    from modulo.api.main import app
     from modulo.auth.dependencies import get_current_user
     from modulo.auth.jwt import AuthenticatedPrincipal
     from modulo.settings import get_settings

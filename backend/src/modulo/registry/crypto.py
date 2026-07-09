@@ -1,4 +1,5 @@
 from __future__ import annotations
+
 """Ed25519 signing utilities for the community registry — PEM/base64 API.
 
 Provides key generation, signing, verification, and trust anchor support

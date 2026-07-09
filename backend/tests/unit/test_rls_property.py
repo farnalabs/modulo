@@ -8,9 +8,7 @@ and fuzz cross-tenant access attempts.
 from __future__ import annotations
 
 import uuid
-from typing import Any
 
-import pytest
 from hypothesis import HealthCheck, assume, given, settings
 from hypothesis import strategies as st
 
@@ -52,13 +50,7 @@ def test_deny_by_default_isolation(triple: tuple[uuid.UUID, str, str, str]) -> N
     org_id, role, resource, operation = triple
     assume(role in ORG_ROLE_HIERARCHY)
 
-    if resource in ("pipeline", "schema") and operation in ("read", "list"):
-        assert True
-    elif resource == "connector" and operation in ("read", "list"):
-        assert True
-    elif resource == "model_backend" and role in ("operator", "admin"):
-        assert True
-    elif resource == "model_backend" and operation in ("read", "list"):
+    if (resource in ("pipeline", "schema") and operation in ("read", "list")) or (resource == "connector" and operation in ("read", "list")) or (resource == "model_backend" and role in ("operator", "admin")) or (resource == "model_backend" and operation in ("read", "list")):
         assert True
     else:
         pass

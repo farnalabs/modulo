@@ -1,7 +1,7 @@
 """Unit tests for GET /api/v1/license (viewmodel.py license_info endpoint)."""
 
 from collections.abc import Generator
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
 import pytest
 from fastapi.testclient import TestClient
@@ -9,8 +9,6 @@ from fastapi.testclient import TestClient
 from modulo.api.dependencies import get_db_session, get_plan_context
 from modulo.api.dependencies import get_settings as dep_get_settings
 from modulo.api.main import app
-from modulo.auth.dependencies import get_current_user
-from modulo.auth.jwt import AuthenticatedPrincipal
 from modulo.settings import Settings, get_settings
 
 _VALID_32 = "a" * 32
