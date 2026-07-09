@@ -1052,7 +1052,7 @@ def step_health_result_is_ok(ctx):
 
 
 # ============================================================================
-# connectors/slack_connector.feature  â€”  5 scenarios
+# connectors/slack_connector.feature  â€”  14 scenarios
 # ============================================================================
 try:
     scenarios("../features/connectors/slack_connector.feature")
@@ -1098,6 +1098,35 @@ def step_slack_connector(ctx):
                     ],
                     next_cursor=None,
                 )
+            case "channel_info":
+                channel = q.filters.get("channel")
+                if not channel:
+                    raise ValueError("Slack channel_info query requires 'channel' filter")
+                return ConnectorResult(
+                    records=[{"id": channel, "name": "general", "topic": {"value": "General chat"}, "num_members": 42}],
+                )
+            case "channel_members":
+                channel = q.filters.get("channel")
+                if not channel:
+                    raise ValueError("Slack channel_members query requires 'channel' filter")
+                return ConnectorResult(
+                    records=[{"user_id": "U001"}, {"user_id": "U002"}],
+                    next_cursor=None,
+                )
+            case "thread_replies":
+                channel = q.filters.get("channel")
+                if not channel:
+                    raise ValueError("Slack thread_replies query requires 'channel' filter")
+                thread_ts = q.filters.get("thread_ts")
+                if not thread_ts:
+                    raise ValueError("Slack thread_replies query requires 'thread_ts' filter")
+                return ConnectorResult(
+                    records=[
+                        {"ts": thread_ts, "text": "Original", "user": "U001"},
+                        {"ts": "123456.000002", "text": "Reply 1", "user": "U002"},
+                    ],
+                    next_cursor=None,
+                )
             case _:
                 raise ValueError(f"Unsupported Slack resource: {q.resource!r}")
 
@@ -1108,6 +1137,14 @@ def step_slack_connector(ctx):
                 if not channel:
                     raise ValueError("Missing 'channel' in message payload")
                 return {"ok": True, "ts": "999888", "channel": channel}
+            case "thread_reply":
+                channel = payload.data.get("channel")
+                if not channel:
+                    raise ValueError("Missing 'channel' in thread_reply payload")
+                thread_ts = payload.data.get("thread_ts")
+                if not thread_ts:
+                    raise ValueError("Missing 'thread_ts' in thread_reply payload")
+                return {"ok": True, "ts": "888777", "channel": channel, "thread_ts": thread_ts}
             case _:
                 raise ValueError(f"Unsupported Slack write: {payload.resource!r}")
 
@@ -1197,6 +1234,30 @@ def step_slack_post_message(resource, channel, text, ctx):
     payload = ConnectorPayload(
         resource=resource,
         data={"channel": channel, "text": text},
+    )
+    import asyncio
+
+    try:
+        result = asyncio.run(ctx["connector"].write(payload))
+        ctx["write_result"] = result
+        ctx["query_error"] = None
+    except Exception as exc:
+        ctx["write_result"] = None
+        ctx["query_error"] = str(exc)
+
+
+@when(
+    parsers.parse(
+        'I write resource "{resource}" with channel "{channel}"'
+        ' and thread_ts "{thread_ts}" and text "{text}"'
+    )
+)
+def step_slack_post_thread_reply(resource, channel, thread_ts, text, ctx):
+    from modulo.connectors.base import ConnectorPayload
+
+    payload = ConnectorPayload(
+        resource=resource,
+        data={"channel": channel, "thread_ts": thread_ts, "text": text},
     )
     import asyncio
 
