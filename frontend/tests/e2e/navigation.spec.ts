@@ -1,9 +1,8 @@
 import { test, expect, loginAsAdmin } from './setup/fixtures'
-import { getTestEnv } from './setup/env'
 
 test.describe('Navigation Flow', () => {
-  test('navigates from Dashboard to Pipelines', async ({ page }) => {
-    await loginAsAdmin(page, getTestEnv())
+  test('navigates from Dashboard to Pipelines', async ({ page, env }) => {
+    await loginAsAdmin(page, env)
 
     await page.goto('/')
     await page.waitForLoadState('networkidle')
@@ -17,8 +16,8 @@ test.describe('Navigation Flow', () => {
     await expect(page.locator('h1')).toContainText('Pipelines')
   })
 
-  test('current page indicator is shown on active sidebar link', async ({ page }) => {
-    await loginAsAdmin(page, getTestEnv())
+  test('current page indicator is shown on active sidebar link', async ({ page, env }) => {
+    await loginAsAdmin(page, env)
 
     await page.goto('/')
     await page.waitForLoadState('networkidle')
@@ -28,8 +27,8 @@ test.describe('Navigation Flow', () => {
     await expect(dashboardLink).toHaveAttribute('aria-current', 'page')
   })
 
-  test('browser back navigation works between pages', async ({ page }) => {
-    await loginAsAdmin(page, getTestEnv())
+  test('browser back navigation works between pages', async ({ page, env }) => {
+    await loginAsAdmin(page, env)
 
     await page.goto('/')
     await page.waitForLoadState('networkidle')
