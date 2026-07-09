@@ -69,14 +69,15 @@
             />
           </div>
         </div>
-        <button
+        <Button
           :disabled="!canCompare"
           data-testid="diff-compare-btn"
-          class="inline-flex items-center gap-2 rounded-lg bg-primary px-5 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
+          variant="default"
+          class="px-5 py-2"
           @click="compare"
         >
           Compare
-        </button>
+        </Button>
       </div>
 
       <div v-if="result" class="space-y-6">
@@ -151,6 +152,7 @@ import { api } from '../lib/api/client'
 import type { components } from '../lib/api/client'
 import LoadingSpinner from '../components/shared/LoadingSpinner.vue'
 import ErrorAlert from '../components/shared/ErrorAlert.vue'
+import { Button } from '@/components/ui/button'
 import { formatApiError } from '../lib/api/formatError'
 
 type NodeOutputDiffResponse = components['schemas']['NodeOutputDiffResponse']

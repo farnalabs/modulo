@@ -84,14 +84,16 @@
           <div class="space-y-3">
             <div class="flex items-center justify-between">
               <h3 class="text-sm font-medium text-muted-foreground">{{ $t('views.ABTestModelsView.variants_title') }}</h3>
-              <button
+              <Button
                 :disabled="modelBackends.length === 0"
                 data-testid="ab-test-models-add-variant"
-                class="inline-flex items-center gap-1 rounded-lg bg-primary px-3 py-1.5 text-xs font-medium text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
+                variant="default"
+                size="sm"
+                class="px-3 py-1.5"
                 @click="addVariant"
               >
                 + Add Variant
-              </button>
+              </Button>
             </div>
 
             <p v-if="variants.length === 0" class="py-4 text-center text-sm text-muted-foreground">
@@ -162,15 +164,16 @@
           </div>
 
           <div class="flex flex-wrap gap-3 pt-2">
-            <button
+            <Button
               :disabled="!canRun"
               data-testid="ab-test-models-run-ab-test"
-              class="inline-flex items-center gap-2 rounded-lg bg-primary px-5 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
+              variant="default"
+              class="px-5 py-2"
               @click="saveAndRun"
             >
               <span v-if="running" class="inline-block h-4 w-4 animate-spin rounded-full border-2 border-current border-t-transparent" />
               {{ running ? $t('views.ABTestModelsView.running') : $t('views.ABTestModelsView.run_ab_test') }}
-            </button>
+            </Button>
             <button
               data-testid="ab-test-models-save-group"
               class="inline-flex items-center gap-2 rounded-lg border border-input bg-background px-5 py-2 text-sm font-medium hover:bg-muted/50"
@@ -295,6 +298,7 @@ import type { components } from '../lib/api/client'
 import LoadingSpinner from '../components/shared/LoadingSpinner.vue'
 import ErrorAlert from '../components/shared/ErrorAlert.vue'
 import PageTabs from "../components/PageTabs.vue"
+import { Button } from '@/components/ui/button'
 import { shortId } from '../utils/format'
 import { formatApiError } from '../lib/api/formatError'
 

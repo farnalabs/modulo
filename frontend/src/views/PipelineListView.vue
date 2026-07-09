@@ -14,14 +14,15 @@
             data-testid="pipeline-list-search"
           />
         </div>
-          <router-link
+          <Button
             v-if="allPipelines.length > 0 && !loading"
+            variant="default"
+            as="router-link"
             to="/library"
-            class="px-4 py-2 bg-primary text-primary-foreground text-sm font-medium rounded-lg hover:brightness-110 transition-all"
             data-testid="pipeline-list-new-pipeline"
           >
             {{ $t('views.PipelineListView.new_pipeline') }}
-          </router-link>
+          </Button>
       </div>
     </header>
 
@@ -50,20 +51,22 @@
           Browse the Library to find a template to adapt, or copy an existing pipeline.
         </p>
         <div class="flex items-center justify-center gap-3">
-          <router-link
+          <Button
+            variant="default"
+            as="router-link"
             to="/library"
-            class="px-4 py-2 bg-primary text-primary-foreground text-sm font-medium rounded-lg hover:brightness-110 transition-all"
             data-testid="pipeline-list-browse-library"
           >
             Browse Library
-          </router-link>
-          <router-link
+          </Button>
+          <Button
+            variant="outline"
+            as="router-link"
             to="/pipelines/copy"
-            class="px-4 py-2 border border-input bg-background text-foreground text-sm font-medium rounded-lg hover:bg-accent transition-colors"
             data-testid="pipeline-list-copy-pipeline"
           >
             Copy Pipeline
-          </router-link>
+          </Button>
         </div>
       </div>
 
@@ -124,19 +127,21 @@
           </div>
 
           <div class="mt-4 pt-3 border-t border-border flex gap-2">
-            <button
-              class="flex-1 px-3 py-2 bg-primary text-primary-foreground text-sm font-medium rounded-lg border border-primary/30 hover:border-primary/60 hover:brightness-110 transition-all"
+            <Button
+              variant="default"
+              class="flex-1"
               data-testid="pipeline-list-open-editor"
             >
               {{ $t('views.PipelineListView.open_in_editor') }}
-            </button>
-            <button
-              class="flex-1 px-3 py-2 border border-border bg-background text-foreground text-sm font-medium rounded-lg hover:bg-accent transition-colors"
+            </Button>
+            <Button
+              variant="outline"
+              class="flex-1"
               @click.stop="openRunDialog(p)"
               data-testid="pipeline-list-run"
             >
               {{ $t('views.PipelineListView.run') }}
-            </button>
+            </Button>
           </div>
         </div>
       </div>
@@ -241,9 +246,10 @@
             >
               {{ $t('common.cancel') }}
             </button>
-            <button
+            <Button
+              variant="default"
               :disabled="running"
-              class="px-4 py-2 bg-primary text-primary-foreground text-sm font-medium rounded-lg border border-primary/30 hover:brightness-110 transition-all disabled:opacity-50 flex items-center gap-2"
+              class="border-primary/30"
               @click="triggerRun"
               data-testid="pipeline-list-run-submit"
             >
@@ -258,7 +264,7 @@
                 <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
               </svg>
               {{ running ? $t('views.PipelineListView.running') : $t('views.PipelineListView.run_pipeline') }}
-            </button>
+            </Button>
           </div>
         </div>
       </div>
@@ -343,6 +349,7 @@ import { useApi } from '../composables/useApi'
 import { usePlanStore } from '../stores/planStore'
 import ErrorAlert from '../components/shared/ErrorAlert.vue'
 import { formatApiError } from '../lib/api/formatError'
+import { Button } from '@/components/ui/button'
 
 interface PipelineItem {
   id: string

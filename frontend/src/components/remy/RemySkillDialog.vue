@@ -78,14 +78,14 @@
           >
             Cancel
           </button>
-          <button
+          <Button
             :disabled="saving || !form.name.trim()"
             type="submit"
-            class="rounded-lg bg-primary px-4 py-2 text-sm font-semibold text-primary-foreground hover:brightness-110 disabled:opacity-50 transition-all"
+            variant="default"
             data-testid="remy-skills-form-submit"
           >
             {{ saving ? "Saving..." : editingId ? "Update" : "Create" }}
-          </button>
+          </Button>
         </DialogFooter>
       </form>
     </DialogContent>
@@ -109,15 +109,15 @@
         >
           Cancel
         </button>
-        <button
+        <Button
           :disabled="deleting"
           type="button"
-          class="rounded-lg bg-destructive px-4 py-2 text-sm font-semibold text-destructive-foreground hover:brightness-110 disabled:opacity-50 transition-all"
+          variant="destructive"
           data-testid="remy-skills-delete-confirm"
           @click="confirmDelete"
         >
           {{ deleting ? "Deleting..." : "Delete" }}
-        </button>
+        </Button>
       </DialogFooter>
     </DialogContent>
   </Dialog>
@@ -125,6 +125,7 @@
 
 <script setup lang="ts">
 import { ref, reactive } from "vue";
+import { Button } from "@/components/ui/button";
 import { api } from "@/lib/api/client";
 import { formatApiError } from "@/lib/api/formatError";
 import {

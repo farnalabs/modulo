@@ -24,19 +24,20 @@
       >
         Cancel
       </button>
-      <button
+      <Button
         type="button"
-        class="rounded-md bg-primary px-3 py-1.5 text-sm font-medium text-primary-foreground hover:bg-primary/90 transition-colors"
+        variant="default"
         @click="$emit('confirm', selectedScope)"
       >
         Dismiss
-      </button>
+      </Button>
     </div>
   </div>
 </template>
 
 <script setup lang="ts">
 import { ref, computed } from "vue";
+import { Button } from '@/components/ui/button'
 
 const props = defineProps<{
   notification: { scope: string; dismiss_strategy: string; dismissible_at_scope: boolean };

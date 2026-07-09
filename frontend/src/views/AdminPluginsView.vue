@@ -6,13 +6,14 @@
           <h1 class="text-3xl font-bold tracking-tight">Plugins</h1>
           <p class="mt-1 text-muted-foreground">{{ $t('views.AdminPluginsView.manage_installed_modulo_plugins_and_extensions') }}</p>
         </div>
-        <button
-          class="btn-glow rounded-lg bg-primary px-4 py-2 text-sm font-semibold text-primary-foreground border border-primary/30 hover:border-primary/60 hover:brightness-110 transition-all duration-150"
+        <Button
+          variant="default"
+          class="btn-glow border-primary/30 hover:border-primary/60"
           data-testid="admin-plugins-refresh"
           @click="loadPlugins"
         >
           Refresh
-        </button>
+        </Button>
       </header>
 
       <LoadingSpinner v-if="loading" />
@@ -173,6 +174,7 @@ import { formatApiError } from '../lib/api/formatError'
 import LoadingSpinner from '../components/shared/LoadingSpinner.vue'
 import ErrorAlert from '../components/shared/ErrorAlert.vue'
 import FeatureGate from '../components/FeatureGate.vue'
+import { Button } from '@/components/ui/button'
 
 interface PluginItem {
   PLUGIN_ID: string

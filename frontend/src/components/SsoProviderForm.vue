@@ -238,13 +238,13 @@
     <div v-if="error" class="text-sm text-destructive">{{ error }}</div>
 
     <div class="flex items-center gap-2">
-      <button
+      <Button
         :disabled="!data.name.trim() || saving"
-        class="rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
+        variant="default"
         @click="$emit('submit')"
       >
         {{ saving ? savingLabel : submitLabel }}
-      </button>
+      </Button>
       <button
         class="rounded-lg border border-input bg-background px-4 py-2 text-sm font-medium hover:bg-accent"
         @click="$emit('cancel')"
@@ -256,6 +256,8 @@
 </template>
 
 <script setup lang="ts">
+import { Button } from '@/components/ui/button'
+
 interface SsoFormState {
   provider_type: string;
   name: string;
