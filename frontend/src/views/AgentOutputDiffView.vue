@@ -110,11 +110,11 @@
           </summary>
           <div class="grid grid-cols-1 gap-4 border-t p-4 md:grid-cols-2">
             <div>
-              <h4 class="mb-2 text-xs font-semibold text-muted-foreground">Run A: {{ runIdA }}</h4>
+              <h4 class="mb-2 text-xs font-semibold text-muted-foreground">Run A: <span class="font-mono">{{ runIdA }}</span></h4>
               <pre class="max-h-64 overflow-auto rounded bg-muted p-3 text-xs leading-relaxed"><code>{{ result.node_output_a ? JSON.stringify(result.node_output_a, null, 2) : '—' }}</code></pre>
             </div>
             <div>
-              <h4 class="mb-2 text-xs font-semibold text-muted-foreground">Run B: {{ runIdB }}</h4>
+              <h4 class="mb-2 text-xs font-semibold text-muted-foreground">Run B: <span class="font-mono">{{ runIdB }}</span></h4>
               <pre class="max-h-64 overflow-auto rounded bg-muted p-3 text-xs leading-relaxed"><code>{{ result.node_output_b ? JSON.stringify(result.node_output_b, null, 2) : '—' }}</code></pre>
             </div>
           </div>
