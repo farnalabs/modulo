@@ -1442,6 +1442,7 @@ export default {
       "item_license": "License",
       "item_mcp": "MCP",
       "item_triggers": "Triggers",
+      "item_admin_triggers": "Trigger Admin",
       "item_runtime_config": "Runtime Config",
       "item_rate_limits": "Rate Limits",
       "item_hitl_review": "HITL Review",

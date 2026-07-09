@@ -45,51 +45,6 @@
         </div>
       </div>
 
-      <!-- Active Features Checklist -->
-      <div class="rounded-lg border bg-card shadow-sm">
-        <div class="border-b px-6 py-4">
-          <h2 class="text-lg font-semibold">{{ $t('views.SettingsLicenseView.active_features') }}</h2>
-          <p class="mt-0.5 text-sm text-muted-foreground">
-            {{ flagsEnabled }} of {{ allFlags.length }} features active
-              <span v-if="flagsWouldActivate.length > 0" class="ml-2">
-                &middot; {{ flagsWouldActivate.length }} would activate with Team
-              </span>
-          </p>
-        </div>
-        <div v-if="allFlags.length === 0" class="px-6 py-8 text-center text-sm text-muted-foreground">
-          No feature flags defined.
-        </div>
-        <table v-else class="w-full">
-          <thead>
-            <tr class="border-b bg-muted/30 text-left text-xs font-medium uppercase text-muted-foreground">
-              <th class="px-6 py-3">Feature</th>
-              <th class="px-6 py-3">Description</th>
-              <th class="px-6 py-3">Status</th>
-            </tr>
-          </thead>
-          <tbody class="divide-y divide-border">
-            <tr
-              v-for="flag in allFlags"
-              :key="flag.name"
-              class="transition-colors hover:bg-muted/20"
-            >
-              <td class="px-6 py-3 font-mono text-sm font-medium">{{ flag.name }}</td>
-              <td class="px-6 py-3 text-sm text-muted-foreground">{{ flag.description }}</td>
-              <td class="px-6 py-3">
-                <span v-if="flag.currently_active" class="inline-flex items-center gap-1 text-sm text-success">
-                  <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg>
-                  Enabled
-                </span>
-                <span v-else class="inline-flex items-center gap-1 text-sm text-muted-foreground">
-                  <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
-                  Requires Team
-                </span>
-              </td>
-            </tr>
-          </tbody>
-        </table>
-      </div>
-
       <!-- License Key Management -->
       <div class="rounded-lg border bg-card p-6 shadow-sm">
         <h2 class="mb-4 text-lg font-semibold">{{ $t('views.AdminFeatureFlagsView.license_key') }}</h2>
@@ -188,6 +143,9 @@ import {
 
 const planStore = usePlanStore()
 
+const loading = ref(true)
+const loadError = ref<string | null>(null)
+
 interface LicenseStatus {
   has_license: boolean
   tier: string
@@ -196,23 +154,6 @@ interface LicenseStatus {
   org_id: string | null
 }
 
-interface FlagItem {
-  name: string
-  description: string
-  tier: string
-  currently_active: boolean
-  depends_on: string[] | null
-}
-
-interface FlagsResponse {
-  license: { tier: string; has_license_key: boolean; is_valid: boolean }
-  flags: FlagItem[]
-  would_activate: FlagItem[]
-}
-
-const loading = ref(true)
-const loadError = ref<string | null>(null)
-
 const licenseInfo = ref<LicenseStatus>({
   has_license: false,
   tier: 'community',
@@ -220,9 +161,6 @@ const licenseInfo = ref<LicenseStatus>({
   expires_at: null,
   org_id: null,
 })
-
-const allFlags = ref<FlagItem[]>([])
-const flagsWouldActivate = ref<FlagItem[]>([])
 
 const newLicenseKey = ref('')
 
@@ -234,8 +172,6 @@ const applyDialogOpen = ref(false)
 
 const removing = ref(false)
 const removeDialogOpen = ref(false)
-
-const flagsEnabled = computed(() => allFlags.value.filter((f) => f.currently_active).length)
 
 const maskedKey = computed(() => {
   return 'Team license key active'
@@ -257,24 +193,13 @@ async function loadAll() {
   loading.value = true
   loadError.value = null
   try {
-    const [licResp, flagsResp] = await Promise.all([
-      (api as any).GET('/api/v1/admin/license'),
-      (api as any).GET('/api/v1/admin/feature-flags'),
-    ])
+    const licResp = await (api as any).GET('/api/v1/admin/license')
 
     if (licResp.error) {
       loadError.value = `Failed to load license: ${formatApiError(licResp.error)}`
       return
     }
     licenseInfo.value = licResp.data as LicenseStatus
-
-    if (flagsResp.error) {
-      loadError.value = `Failed to load feature flags: ${formatApiError(flagsResp.error)}`
-      return
-    }
-    const flagsData = flagsResp.data as FlagsResponse
-    allFlags.value = flagsData.flags
-    flagsWouldActivate.value = flagsData.would_activate ?? []
   } catch (e: unknown) {
     loadError.value = `Failed to load data: ${formatApiError(e)}`
   } finally {

@@ -43,7 +43,7 @@ const routeConfigMap: Record<string, { icon: string; labelKey: string }> = {
   'settings-sso': { icon: 'Shield', labelKey: 'components.SidebarNav.item_sso' },
   'settings-license': { icon: 'KeyRound', labelKey: 'components.SidebarNav.item_license' },
   'settings-mcp': { icon: 'Cable', labelKey: 'components.SidebarNav.item_mcp' },
-  'admin-triggers': { icon: 'Zap', labelKey: 'components.SidebarNav.item_triggers' },
+  'admin-triggers': { icon: 'Shield', labelKey: 'components.SidebarNav.item_admin_triggers' },
   'settings-triggers': { icon: 'Zap', labelKey: 'components.SidebarNav.item_triggers' },
   'settings-runtime-config': { icon: 'Settings', labelKey: 'components.SidebarNav.item_runtime_config' },
   'settings-rate-limits': { icon: 'Gauge', labelKey: 'components.SidebarNav.item_rate_limits' },
