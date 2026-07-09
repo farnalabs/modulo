@@ -12,7 +12,6 @@ code:
   - backend/src/modulo/connectors/base.py
 depends-on:
   - feat-connectors-hub
-  - feat-connectors-base
 status: partial
 ---
 
