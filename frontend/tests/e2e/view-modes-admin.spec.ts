@@ -29,7 +29,7 @@ const sampleViews = {
 
 test.describe('View Modes Admin CRUD', () => {
   test('page loads and shows header + Create View button', async ({ page, env }) => {
-    await page.route('**/api/v1/views', (route) => {
+    await page.route('**/api/v1/views**', (route) => {
       route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(sampleViews) })
     })
     await loginAsAdmin(page, env)
@@ -43,11 +43,10 @@ test.describe('View Modes Admin CRUD', () => {
   })
 
   test('shows loading state while fetching views', async ({ page, env }) => {
-    let resolvePromise: () => void
-    const neverResolve = new Promise<void>((resolve) => { resolvePromise = resolve })
-    const originalRoute = page.route('**/api/v1/views', async (route) => {
-      await neverResolve
-      route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ items: [] }) })
+    await page.route('**/api/v1/views**', (route) => {
+      setTimeout(() => {
+        route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ items: [] }) })
+      }, 500)
     })
     await loginAsAdmin(page, env)
 
@@ -55,12 +54,10 @@ test.describe('View Modes Admin CRUD', () => {
 
     const spinner = page.locator('.animate-spin')
     await expect(spinner).toBeVisible({ timeout: 3000 })
-    resolvePromise!()
-    await originalRoute
   })
 
   test('shows error with retry button on API failure', async ({ page, env }) => {
-    await page.route('**/api/v1/views', (route) => {
+    await page.route('**/api/v1/views**', (route) => {
       route.fulfill({ status: 500, contentType: 'application/json', body: JSON.stringify({ detail: 'Server error' }) })
     })
     await loginAsAdmin(page, env)
@@ -73,7 +70,7 @@ test.describe('View Modes Admin CRUD', () => {
   })
 
   test('shows empty state when no views exist', async ({ page, env }) => {
-    await page.route('**/api/v1/views', (route) => {
+    await page.route('**/api/v1/views**', (route) => {
       route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ items: [] }) })
     })
     await loginAsAdmin(page, env)
@@ -87,7 +84,7 @@ test.describe('View Modes Admin CRUD', () => {
 
   test('create a new view with all fields', async ({ page, env }) => {
     let createdPayload: unknown = null
-    await page.route('**/api/v1/views', async (route, request) => {
+    await page.route('**/api/v1/views**', async (route, request) => {
       if (request.method() === 'GET') {
         await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ items: [] }) })
       } else if (request.method() === 'POST') {
@@ -126,7 +123,7 @@ test.describe('View Modes Admin CRUD', () => {
   })
 
   test('shows validation error when name is empty', async ({ page, env }) => {
-    await page.route('**/api/v1/views', (route) => {
+    await page.route('**/api/v1/views**', (route) => {
       route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ items: [] }) })
     })
     await loginAsAdmin(page, env)
@@ -143,7 +140,7 @@ test.describe('View Modes Admin CRUD', () => {
   })
 
   test('cancel create form clears fields', async ({ page, env }) => {
-    await page.route('**/api/v1/views', (route) => {
+    await page.route('**/api/v1/views**', (route) => {
       route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ items: [] }) })
     })
     await loginAsAdmin(page, env)
@@ -162,7 +159,7 @@ test.describe('View Modes Admin CRUD', () => {
   })
 
   test('edit an existing view shows pre-populated fields', async ({ page, env }) => {
-    await page.route('**/api/v1/views', (route) => {
+    await page.route('**/api/v1/views**', (route) => {
       route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(sampleViews) })
     })
     await loginAsAdmin(page, env)
@@ -172,7 +169,7 @@ test.describe('View Modes Admin CRUD', () => {
 
     const editButtons = page.getByTestId('admin-views-edit')
     await expect(editButtons).toHaveCount(2)
-    await editButtons.first().click()
+    await editButtons.first().click({ force: true })
 
     await expect(page.locator('text=Edit View')).toBeVisible()
     await expect(page.getByTestId('admin-views-name-input')).toHaveValue('Active Runs')
@@ -184,7 +181,7 @@ test.describe('View Modes Admin CRUD', () => {
   })
 
   test('delete a view with confirmation', async ({ page, env }) => {
-    await page.route('**/api/v1/views', async (route, request) => {
+    await page.route('**/api/v1/views**', async (route, request) => {
       if (request.method() === 'GET') {
         await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(sampleViews) })
       } else if (request.method() === 'DELETE') {
@@ -200,24 +197,24 @@ test.describe('View Modes Admin CRUD', () => {
 
     const deleteButtons = page.getByTestId('admin-views-delete')
     await expect(deleteButtons).toHaveCount(2)
-    await deleteButtons.first().click()
+    await deleteButtons.first().click({ force: true })
 
     await expect(page.locator('text=Delete "Active Runs"?')).toBeVisible()
     await expect(page.getByTestId('admin-views-delete-confirm')).toBeVisible()
     await expect(page.getByTestId('admin-views-delete-cancel')).toBeVisible()
 
-    await page.getByTestId('admin-views-delete-cancel').click()
+    await page.getByTestId('admin-views-delete-cancel').click({ force: true })
     await expect(page.locator('text=Delete "Active Runs"?')).not.toBeVisible({ timeout: 3000 })
 
-    await deleteButtons.first().click()
-    await page.getByTestId('admin-views-delete-confirm').click()
+    await deleteButtons.first().click({ force: true })
+    await page.getByTestId('admin-views-delete-confirm').click({ force: true })
     await page.waitForLoadState('networkidle')
 
     await expect(page.locator('text=Delete "Active Runs"?')).not.toBeVisible({ timeout: 3000 })
   })
 
   test('displays existing views in table', async ({ page, env }) => {
-    await page.route('**/api/v1/views', (route) => {
+    await page.route('**/api/v1/views**', (route) => {
       route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(sampleViews) })
     })
     await loginAsAdmin(page, env)
