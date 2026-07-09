@@ -1201,7 +1201,7 @@ Local and community primitives share a single `library_primitives` table with a 
 - `workflow`: the full YAML bundle (as JSON — same structure as the workflow export format in §7.15), including nodes and edges; connector abstract types listed in `requires.connector_types` are left unbound until the CopyToAdaptWizard binding step
 - `integration`: `{pip_package, version, capabilities, config_schema}` — the installable package reference; no runtime content
 
-**Copying a registry primitive** (copy-to-adapt): creates a new row with `source: local`, `forked_from: <registry_entry_id>`. From that point it is a fully independent local primitive with its own `owner_team_id` and `visibility`. No live upstream link.
+**Copying a registry primitive** (copy-to-adapt): creates a new row with `source: local`, `forked_from: <registry_entry_id>`. The local copy carries an `auto_update` flag (default `TRUE`) and a `version_group_id` linking it to the upstream version family. When the upstream primitive publishes a new version, the copy's `update_available_version_id` is set to signal an available update. The copy owner can apply the update (replacing `content_json` with the new version) or set `auto_update = FALSE` to opt out and diverge independently.
 
 **Rating and trust tiers** apply to `source: registry` entries only. Local primitives are not rated.
 
@@ -1221,7 +1221,7 @@ Local and community primitives share a single `library_primitives` table with a 
 - Reports for abuse: admin review queue
 
 #### Copy-to-Adapt
-One-click copy creates a local editable instance. No live upstream link. `forked_from` is immutable metadata. Local copy diverges freely — this is intentional (predictability over implicit updates).
+One-click copy creates a local editable instance. `forked_from` is immutable metadata. By default, copied primitives check for upstream updates (`auto_update = TRUE`); when an update is available, `update_available_version_id` is set on downstream forks. The owner can apply the update or set `auto_update = FALSE` to diverge freely.
 
 The copy-to-adapt flow includes the **ownership picker** (same rules as resource creation in §7.4): the user selects org-wide or a specific team before the copy is created. There is no silent default: community library primitives (`source: registry`) default the picker to `org`; local library entries (`source: local`) default to the same team as the source, if any. The user can override either default. For users in no team, only `Org-wide` is available. For users in a single team, that team is pre-selected but the picker is still shown (matching §7.4 resource creation rules — no silent defaults).
 
@@ -1493,27 +1493,20 @@ Every HITL rejection produces a `FeedbackRecord`:
 | `rejected_output` | Snapshot of the artifact payload at the gate |
 | `producing_node_id` | The agent node whose output was rejected |
 | `producing_agent_id` | The agent definition |
-| `feedback_status` | `pending` → `routing` → `correcting` → `resolved` \| `escalated` |
+| `feedback_status` | `pending` → `routing` → `correcting` → `resolved` \| `escalated` \| `dismissed` |
 | `correction_run_id` | The run ID of the correction attempt, if any |
 | `created_at` | |
 
 FeedbackRecords are immutable after creation. The correction loop produces new runs; it does not modify the original run.
 
 #### Feedback routing
-Pipelines carry a `default_feedback_handler` field (pipeline-level, optional; default: `human`) that applies to all HITL gates unless overridden at the gate level. Individual gates can override with their own `feedback_handler`. This follows the same cascading pattern as other gate config fields.
-
-Each pipeline's HITL gate config carries a `feedback_handler` field (optional, overrides pipeline default):
-
-```yaml
-hitl_gate_config:
-  feedback_handler:
-    type: human | ai_correction | ai_correction_with_human_review
-    target_node_id: <node to re-run>   # defaults to producing_node_id
-```
+Each FeedbackRecord carries a `feedback_handler_type` at creation time, set by the caller (typically the endpoint that creates the feedback record). The three handler types control what happens after creation:
 
 - **`human`** (default if unset): the FeedbackRecord is surfaced in a "Feedback inbox" for a human to review, annotate, and optionally trigger a correction run manually
-- **`ai_correction`**: an AI feedback agent analyses the FeedbackRecord (rejection reason + rejected output + original prompt + eval scores) and proposes a corrected output, then re-runs the pipeline from `target_node_id` with the correction in `run_context`. If evals pass, the correction is routed back to the HITL gate for human approval
+- **`ai_correction`**: an AI feedback agent analyses the FeedbackRecord (rejection reason + rejected output + original prompt + eval scores) and proposes a corrected output, then spawns a new correction run with the correction in `run_context`. If evals pass, the correction is resolved. If evals fail, the record is escalated.
 - **`ai_correction_with_human_review`**: same as above, but the proposed correction is shown to a human before the correction run fires
+
+The `feedback_handler_type` is set per-FeedbackRecord at creation, not cascaded from pipeline or gate config. The Pipeline model carries a `default_feedback_handler` column in the database schema, but runtime code does not yet use it — handler type must be explicitly provided when creating feedback. The `hitl_gate_config` JSON column on pipeline edges accepts freeform configuration; there is no typed `feedback_handler` sub-field on the gate config.
 
 #### AI correction agent
 The AI correction agent is a library primitive. It receives:
@@ -1530,19 +1523,13 @@ It produces:
 The correction proposal is injected into `run_context` as `feedback_correction`, readable by the target node when it re-runs.
 
 #### Correction run mechanics
-A correction run is a new LangGraph thread (new `run_id`, new thread ID) pre-seeded with the checkpoint state from the original run at the `target_node_id` boundary. This means:
-- The correction thread inherits all LangGraph state (artifact payload, run_context write log) as it existed when the original run reached `target_node_id`
-- Connector operations that occurred **before** `target_node_id` are not re-executed — the correction run inherits their outputs from the original checkpoint. If `target_node_id` is set to an earlier node that performed connector reads, those reads **are** re-executed, which may produce different results if the underlying data changed. Operators should set `target_node_id` to the producing node (not an earlier node) unless they explicitly want fresh connector data.
-- The correction run uses the same PipelineSnapshot as the original run
-- `run_context` is seeded from the original run's context plus `feedback_correction` (the AI-proposed fix) and `feedback_record_id`
-- `parent_run_id` links the correction run to the original
+A correction run is a new pipeline run (new `run_id`) created by `spawn_correction_run()`. It:
+- Uses the same PipelineSnapshot as the original run
+- Copies `input_payload` from the original run and injects a `_feedback_correction` block containing the rejection reason, rejected output, producing node ID, and a flag marking it as a correction run
+- Links to the original run via `parent_run_id`
+- Transitions the FeedbackRecord to `correcting` status
 
-The correction run goes through the full eval suite before reaching the HITL gate again. If evals fail, the correction run is marked `eval_failed` and the FeedbackRecord status becomes `escalated` — routed to the human feedback inbox regardless of handler type.
-
-#### reject_target and feedback_handler interaction
-These two gate config fields govern different mechanics and do not conflict:
-- **`reject_target`** (existing): routes the *current run* inline to a specified node when rejected. The run continues. Used when the pipeline itself handles the rejection (e.g. a "fix suggestions" node before retrying).
-- **`feedback_handler`** (new): when set, **supersedes** `reject_target`. On rejection, a *new correction run* is spawned rather than routing the current run. The current run transitions to `awaiting_correction`. If the correction run produces an approved output, the original run is marked `corrected_by: <correction_run_id>` and transitions to terminal. Setting both fields on the same gate is a validation error — the pipeline editor rejects this configuration with a named error (`reject_routing_conflict`).
+Correction runs are fresh runs — they do not inherit checkpoint state from the original run. The `_feedback_correction` block in `input_payload` is promoted to `run_context` by the executor so target nodes can read the correction proposal during re-execution. If evals fail on the correction run output, the FeedbackRecord is escalated to the human feedback inbox. The correction run itself uses the standard run lifecycle — there is no separate `eval_failed` status on FeedbackRecords.
 
 #### Eval suite growth
 Every FeedbackRecord is a signal that the eval suite may have a gap. The system surfaces this explicitly:
@@ -1561,6 +1548,8 @@ The feedback inbox is a first-class UI surface (v1), parallel to the HITL review
 - For `human` handler: annotation UI (add notes, trigger correction run)
 - For `ai_correction_with_human_review`: correction proposal display with accept/reject
 - Eval proposals queue with draft eval editor
+
+The inbox supports three review actions: **mark reviewed** (sets status to `resolved`), **dismiss** (sets status to `dismissed` — a terminal state indicating the feedback was reviewed but does not warrant a correction), and **create correction run** (spawns a new correction run from the `pending` or `routing` state).
 
 ---
 

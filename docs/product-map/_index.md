@@ -87,6 +87,13 @@ status: covered | partial | gap    # auto-updated by graph-validate
 - [feat-core-db-abstraction-remaining](core/db-abstraction-remaining.md) => PRD 8.17
 - [feat-core-feedback-correction](core/feedback-correction.md) => PRD 8.20
 - [feat-core-feature-flag-ui](core/feature-flag-ui.md) => PRD 8.17
+- [feat-core-view-modes](core/view-modes.md) => PRD 8.21
+- [feat-core-in-app-notifications](core/in-app-notifications.md) => PRD 8.11
+- [feat-core-run-retention](core/run-retention.md) => PRD 7.11
+- [feat-core-tier-catalog](core/tier-catalog.md) => PRD 6
+- [feat-core-determination](core/determination.md) => PRD 8.16
+- [feat-core-navigation-restructure](core/navigation-restructure.md) => PRD 8.26
+- [feat-core-shared-manifest](core/shared-manifest.md) => PRD 8.28
 
 ### Evals and Feedback
 - [feat-evals-feedback-proposals](evals/feedback-proposals.md) => PRD 8.20
@@ -118,6 +125,10 @@ status: covered | partial | gap    # auto-updated by graph-validate
 - [feat-community-library](library/community-library.md) => PRD 15
 - [feat-library-auto-update](library/auto-update.md) => PRD 8.14
 
+### Remy
+- [feat-remy-assistant](remy/remy-assistant.md) => PRD 8.23, 8.27
+- [feat-remy-context-sources](remy/remy-context-sources.md) => PRD 8.29, 8.30
+
 ### Model Backends
 - [feat-model-backends-management](model-backends/model-backend-management.md) => PRD 8.1
 - [feat-model-backends-hub](model-backends/model-backend-hub.md) => PRD 8.1
@@ -128,6 +139,7 @@ status: covered | partial | gap    # auto-updated by graph-validate
 - [feat-observability-data-residency](observability/data-residency.md) => PRD 10.5, 6.6, 6.2
 
 ### Pipelines
+- [feat-pipelines-composite-templates](pipelines/composite-templates.md) => PRD 8.24
 - [feat-pipelines-prompt-reveal](pipelines/prompt-reveal.md) => PRD 8.9
 - [feat-pipelines-pipeline-versioning](pipelines/pipeline-versioning.md) => PRD 8.13
 - [feat-pipelines-workflow-feature-files](pipelines/workflow-feature-files.md) => PRD 8.15
