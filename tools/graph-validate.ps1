@@ -21,7 +21,7 @@ Get-ChildItem -Recurse -Filter "*.md" -LiteralPath $productMap|Where-Object{$_.N
   $fm=$Matches[1]
   $id=if($fm-match'(?m)^id:\s*(\S+)'){$Matches[1]}else{$null}
   $prd=if($fm-match'(?m)^prd:\s*(.+?)[\r\n]'){$Matches[1]}else{$null}
-  $bdd=@();if($fm-match'(?m)^bdd:\s*(.+?)[\r\n]'){$bList=$Matches[1].Trim();if($bList-match'^\['){$bdd=$bList-replace'[\[\]" ]',''-split','}};if($fm-match'(?m)^bdd:\s*\n((?:\s+- .+\n?)+)'){$bBlock=$Matches[1]-split'\n'|ForEach-Object{$_-replace'^\s*-\s*',''-replace'"',''-replace"'",''.Trim()}|Where-Object{$_};if($bBlock){$bdd=@($bdd)+$bBlock}}
+  $bdd=@();if($fm-match'(?m)^bdd:\s*(.+?)[\r\n]'){$bList=$Matches[1].Trim();if($bList-match'^\['){$bdd=$bList-replace'[\[\]" ]',''-split','}};if($fm-match'(?m)^bdd:\s*\n((?:\s+- .+\n?)+)'){$bBlock=$Matches[1]-split'\n'|ForEach-Object{$_-replace'^\s*-\s*',''-replace'"',''-replace"'",''-replace'#.*',''.Trim()}|Where-Object{$_};if($bBlock){$bdd=@($bdd)+$bBlock}}
   $dep=@();if($fm-match'(?m)^depends-on:\s*\[(.*?)\]'){$dep=$Matches[1]-replace' ',''-split','};if($fm-match'(?m)^depends-on:\s*\n((?:\s+- .+\n?)+)'){$depBlock=$Matches[1]-split'\n'|ForEach-Object{$_-replace'^\s*-\s*',''-replace'"',''-replace"'",''-replace'#.*',''.Trim()}|Where-Object{$_};$dep=@($dep+$depBlock)|Where-Object{$_}}
   $entries+=@{id=$id;prd=$prd;bdd=$bdd;depends=$dep;path=$_.FullName;name=$_.Name}
   if(-not$id){$issues+="NODE|$($_.Name)|missing id field"}
