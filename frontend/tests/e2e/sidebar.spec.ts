@@ -2,7 +2,7 @@ import { test, expect, loginAsAdmin } from './setup/fixtures'
 import { getTestEnv } from './setup/env'
 
 test.describe('Sidebar Navigation', () => {
-  test('displays Core, Settings, and Remy groups in simple mode', async ({ page }) => {
+  test('displays Core, Settings, and Remy groups in simple mode', { tag: '@smoke' }, async ({ page }) => {
     await loginAsAdmin(page, getTestEnv())
 
     await page.goto('/')
