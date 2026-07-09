@@ -67,10 +67,10 @@ export async function loginAsAdmin(page: Page, env: TestEnv) {
   }
 
   await setupLocalMockApi(page)
-  await page.evaluate(() => {
-    localStorage.setItem('modulo_access_token', MOCK_ACCESS_TOKEN)
-    localStorage.setItem('modulo_refresh_token', MOCK_REFRESH_TOKEN)
-  })
-  await page.goto('/')
+  await page.goto('/login')
   await page.waitForLoadState('networkidle')
+  await page.evaluate(([token, refresh]) => {
+    localStorage.setItem('modulo_access_token', token)
+    localStorage.setItem('modulo_refresh_token', refresh)
+  }, [MOCK_ACCESS_TOKEN, MOCK_REFRESH_TOKEN])
 }
