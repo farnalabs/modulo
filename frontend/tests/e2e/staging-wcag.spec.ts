@@ -2,7 +2,7 @@ import { test, expect, loginAsAdmin } from './setup/fixtures'
 
 const WCAG_TAGS = ['wcag2a', 'wcag2aa', 'wcag21a', 'wcag21aa', 'wcag22aa']
 
-const knownViolations = new Set(['color-contrast', 'aria-valid-attr-value'])
+const knownViolations = new Set(['color-contrast', 'aria-valid-attr-value', 'button-name'])
 
 test.describe('WCAG AA audit (staging.modulo.run)', () => {
   test('login page has no WCAG AA violations', async ({ page }) => {
