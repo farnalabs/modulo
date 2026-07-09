@@ -17,10 +17,10 @@ const sampleBackends = {
 
 test.describe('Admin Model Backends', () => {
   test('page loads with correct heading and add button', async ({ page, env }) => {
+    await loginAsAdmin(page, env)
     await page.route('**/api/v1/model-backends*', (route) => {
       route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(sampleBackends) })
     })
-    await loginAsAdmin(page, env)
 
     await page.goto('/admin/model-backends')
     await page.waitForLoadState('networkidle')
@@ -30,10 +30,10 @@ test.describe('Admin Model Backends', () => {
   })
 
   test('shows existing backends in the list', async ({ page, env }) => {
+    await loginAsAdmin(page, env)
     await page.route('**/api/v1/model-backends*', (route) => {
       route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(sampleBackends) })
     })
-    await loginAsAdmin(page, env)
 
     await page.goto('/admin/model-backends')
     await page.waitForLoadState('networkidle')

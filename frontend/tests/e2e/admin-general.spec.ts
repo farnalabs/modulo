@@ -43,6 +43,12 @@ test.describe('Admin Notification Delivery', () => {
 test.describe('Admin Org Settings', () => {
   test('page loads with correct heading', async ({ page, env }) => {
     await loginAsAdmin(page, env)
+    await page.route('**/api/v1/admin/billing/overview*', (route) => {
+      route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ total_users: 5, total_teams: 2, total_pipelines: 10, plan_tier: 'team', plan_id: 'plan_1' }) })
+    })
+    await page.route('**/api/v1/admin/org/export*', (route) => {
+      route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ organisation: { id: 'org1', name: 'Test Org', slug: 'test-org', created_at: '2025-01-01T00:00:00Z' }, exported_at: '2025-06-01T12:00:00Z' }) })
+    })
     await page.goto('/admin/org')
     await page.waitForLoadState('networkidle')
     await expect(page.locator('h1')).toContainText('Organisation Settings')
@@ -63,6 +69,9 @@ test.describe('Admin Pipelines', () => {
 test.describe('Admin Plugins', () => {
   test('page loads with correct heading', async ({ page, env }) => {
     await loginAsAdmin(page, env)
+    await page.route('**/api/v1/plugins*', (route) => {
+      route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify([{ PLUGIN_ID: 'p1', display_name: 'Test Plugin', description: 'A test plugin', version: '1.0.0', capabilities: ['connector_type'], health_ok: true, health_detail: 'OK', health_checked_at: '2025-06-01T12:00:00Z' }]) })
+    })
     await page.goto('/admin/plugins')
     await page.waitForLoadState('networkidle')
     await expect(page.locator('h1')).toContainText('Plugins')
