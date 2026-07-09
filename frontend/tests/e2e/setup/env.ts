@@ -59,10 +59,9 @@ export function getBaseUrl(target?: string): string {
 }
 
 export function getTestEnv(): TestEnv {
-  const raw = process.env.E2E_TARGET || 'local'
-  const target = raw.toLowerCase()
+  const target = getTarget()
   if (!ENVS[target]) {
-    console.warn(`[env] Unknown E2E_TARGET "${raw}", falling back to "local". Valid values: ${Object.keys(ENVS).join(', ')}`)
+    console.warn(`[env] Unknown E2E_TARGET "${process.env.E2E_TARGET}", falling back to "local". Valid values: ${Object.keys(ENVS).join(', ')}`)
   }
   return ENVS[target] || ENVS.local
 }
