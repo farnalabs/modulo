@@ -1427,7 +1427,7 @@ async def stream_chat(
                                 })
                                 yield f"event: tool_call\ndata: {json.dumps(tool_results[-1])}\n\n"
 
-                            if all(r.get("error") == "cancelled_by_user" for r in results):
+                            if results and all(r.get("error") == "cancelled_by_user" for r in results):
                                 skipped = len(results)
                                 s = "s" if skipped != 1 else ""
                                 summary = f"Action cancelled by user. {skipped} action{s} skipped."
