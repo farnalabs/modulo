@@ -166,7 +166,7 @@ test.describe('View Modes Admin CRUD', () => {
     await page.goto('/admin/views')
     await page.waitForLoadState('networkidle')
 
-    const editButtons = page.getByRole('button', { name: /edit/i })
+    const editButtons = page.getByTestId('admin-views-edit')
     await expect(editButtons).toHaveCount(2)
     await editButtons.first().click()
 
@@ -194,7 +194,7 @@ test.describe('View Modes Admin CRUD', () => {
     await page.goto('/admin/views')
     await page.waitForLoadState('networkidle')
 
-    const deleteButtons = page.getByRole('button', { name: /delete/i })
+    const deleteButtons = page.getByTestId('admin-views-delete')
     await expect(deleteButtons).toHaveCount(2)
     await deleteButtons.first().click()
 
