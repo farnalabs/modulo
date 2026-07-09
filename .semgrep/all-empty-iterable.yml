@@ -1,0 +1,15 @@
+rules:
+  - id: all-empty-iterable
+    patterns:
+      - pattern-either:
+          - pattern: all($X for $Y in $Z)
+          - pattern: all([$X for $Y in $Z])
+      - pattern-not-inside: |
+          if not $Z:
+            ...
+          ...
+    message: "all() on empty iterable returns True — guard with `if not iterable: return False` before the all() call"
+    languages: [python]
+    severity: WARNING
+    paths:
+      include: ["**/backend/src/**"]
