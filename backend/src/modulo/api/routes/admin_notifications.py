@@ -1,23 +1,32 @@
 from __future__ import annotations
+
 """Admin notification webhook management — CRUD, test, re-enable, delivery log, retry."""
 
 
 import contextlib
+import hashlib
+import hmac
 import json
 import logging
 import uuid
 from datetime import UTC, datetime
 
+import httpx
 from cryptography.fernet import Fernet
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, Field, field_validator
-from sqlalchemy import select
+from sqlalchemy import func as sa_func
+from sqlalchemy import select, update
 from sqlalchemy.exc import ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.api.dependencies import get_db_session
 from modulo.auth.dependencies import get_current_user
 from modulo.auth.jwt import AuthenticatedPrincipal
+from modulo.core.notifier import (
+    EVENT_BUDGET_EXCEEDED,
+    EVENT_CIRCUIT_BREAKER_TRIPPED,
+)
 from modulo.db.models.notification_delivery import NotificationDeliveryLog
 from modulo.db.models.notification_endpoint import NotificationEndpoint
 from modulo.db.rls import set_rls_org
@@ -32,6 +41,8 @@ AVAILABLE_EVENTS = [
     "run_failed",
     "claim_expired",
     "hitl_overdue",
+    EVENT_BUDGET_EXCEEDED,
+    EVENT_CIRCUIT_BREAKER_TRIPPED,
 ]
 
 
@@ -191,94 +202,78 @@ async def _list_deliveries(
     session: AsyncSession,
     principal: AuthenticatedPrincipal,
 ) -> DeliveryLogResponse:
-    from sqlalchemy import func as sa_func
+    async with session.begin():
+        await set_rls_org(session, principal.organisation_id)
 
-    try:
-
-        async with session.begin():
-            await set_rls_org(session, principal.organisation_id)
-
-            query = (
-                select(
-                    NotificationDeliveryLog,
-                    NotificationEndpoint.url,
-                )
-                .outerjoin(
-                    NotificationEndpoint,
-                    NotificationDeliveryLog.endpoint_id == NotificationEndpoint.id,
-                )
-                .where(
-                    NotificationDeliveryLog.organisation_id == principal.organisation_id,
-                )
+        query = (
+            select(
+                NotificationDeliveryLog,
+                NotificationEndpoint.url,
             )
-
-            if status_filter:
-                query = query.where(NotificationDeliveryLog.status == status_filter)
-
-            if event_type_filter:
-                query = query.where(NotificationDeliveryLog.event_type == event_type_filter)
-
-            if endpoint_id_filter:
-                query = query.where(NotificationDeliveryLog.endpoint_id == endpoint_id_filter)
-
-            if date_from:
-                try:
-                    dt_from = datetime.fromisoformat(date_from)
-                except ValueError as exc:
-                    raise HTTPException(
-                        status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-                        detail="Invalid from date format",
-                    ) from exc
-                query = query.where(NotificationDeliveryLog.created_at >= dt_from)
-
-            if date_to:
-                try:
-                    dt_to = datetime.fromisoformat(date_to)
-                except ValueError as exc:
-                    raise HTTPException(
-                        status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-                        detail="Invalid to date format",
-                    ) from exc
-                query = query.where(NotificationDeliveryLog.created_at <= dt_to)
-
-            if cursor:
-                try:
-                    cursor_dt = datetime.fromisoformat(cursor)
-                except ValueError as exc:
-                    raise HTTPException(
-                        status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-                        detail="Invalid cursor format",
-                    ) from exc
-                query = query.where(NotificationDeliveryLog.created_at < cursor_dt)
-
-            query = query.order_by(NotificationDeliveryLog.created_at.desc()).limit(limit + 1)
-
-            rows = list((await session.execute(query)).all())
-
-            total = 0
-            count_query = select(sa_func.count(NotificationDeliveryLog.id)).where(
+            .outerjoin(
+                NotificationEndpoint,
+                NotificationDeliveryLog.endpoint_id == NotificationEndpoint.id,
+            )
+            .where(
                 NotificationDeliveryLog.organisation_id == principal.organisation_id,
             )
-            if status_filter:
-                count_query = count_query.where(NotificationDeliveryLog.status == status_filter)
-            if event_type_filter:
-                count_query = count_query.where(NotificationDeliveryLog.event_type == event_type_filter)
-            if endpoint_id_filter:
-                count_query = count_query.where(NotificationDeliveryLog.endpoint_id == endpoint_id_filter)
-            count_result = await session.execute(count_query)
-            total = count_result.scalar() or 0
-
-    except ProgrammingError:
-
-        logger.exception("routes.admin_notifications")
-
-        raise HTTPException(
-
-            status_code=status.HTTP_501_NOT_IMPLEMENTED,
-
-            detail="This feature is not available. Run database migrations to enable it.",
-
         )
+
+        if status_filter:
+            query = query.where(NotificationDeliveryLog.status == status_filter)
+
+        if event_type_filter:
+            query = query.where(NotificationDeliveryLog.event_type == event_type_filter)
+
+        if endpoint_id_filter:
+            query = query.where(NotificationDeliveryLog.endpoint_id == endpoint_id_filter)
+
+        if date_from:
+            try:
+                dt_from = datetime.fromisoformat(date_from)
+            except ValueError as exc:
+                raise HTTPException(
+                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                    detail="Invalid from date format",
+                ) from exc
+            query = query.where(NotificationDeliveryLog.created_at >= dt_from)
+
+        if date_to:
+            try:
+                dt_to = datetime.fromisoformat(date_to)
+            except ValueError as exc:
+                raise HTTPException(
+                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                    detail="Invalid to date format",
+                ) from exc
+            query = query.where(NotificationDeliveryLog.created_at <= dt_to)
+
+        if cursor:
+            try:
+                cursor_dt = datetime.fromisoformat(cursor)
+            except ValueError as exc:
+                raise HTTPException(
+                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                    detail="Invalid cursor format",
+                ) from exc
+            query = query.where(NotificationDeliveryLog.created_at < cursor_dt)
+
+        query = query.order_by(NotificationDeliveryLog.created_at.desc()).limit(limit + 1)
+
+        rows = list((await session.execute(query)).all())
+
+        total = 0
+        count_query = select(sa_func.count(NotificationDeliveryLog.id)).where(
+            NotificationDeliveryLog.organisation_id == principal.organisation_id,
+        )
+        if status_filter:
+            count_query = count_query.where(NotificationDeliveryLog.status == status_filter)
+        if event_type_filter:
+            count_query = count_query.where(NotificationDeliveryLog.event_type == event_type_filter)
+        if endpoint_id_filter:
+            count_query = count_query.where(NotificationDeliveryLog.endpoint_id == endpoint_id_filter)
+        count_result = await session.execute(count_query)
+        total = count_result.scalar() or 0
 
     has_more = len(rows) > limit
     if has_more:
@@ -315,7 +310,6 @@ async def retry_all_failed_deliveries(
 ) -> dict:
     """Retry all failed and dead_lettered deliveries across all webhooks in the org."""
     _require_admin(principal)
-    import httpx
 
     try:
         async with session.begin():
@@ -375,15 +369,10 @@ async def retry_all_failed_deliveries(
             try:
                 fernet = Fernet(settings.fernet_key.encode())
                 raw_secret = fernet.decrypt(ep.secret_ciphertext)
-                import hashlib
-                import hmac
-
                 sig = hmac.new(raw_secret, body, hashlib.sha256).hexdigest()
                 headers["X-Modulo-Signature"] = f"sha256={sig}"
             except Exception:
-                import logging
-
-                logging.getLogger(__name__).exception("Failed to sign retry payload")
+                logger.exception("Failed to sign retry payload")
 
         try:
             async with httpx.AsyncClient(timeout=15.0) as client:
@@ -403,6 +392,32 @@ async def retry_all_failed_deliveries(
                         last_error=(None if resp.is_success else f"HTTP {resp.status_code}: {resp.text[:200]}"),
                     )
                     session.add(new_log)
+
+                if resp.is_success:
+                    await session.execute(
+                        update(NotificationEndpoint)
+                        .where(
+                            NotificationEndpoint.id == ep.id,
+                            NotificationEndpoint.consecutive_dead_letter_count > 0,
+                        )
+                        .values(consecutive_dead_letter_count=0)
+                    )
+                else:
+                    result = await session.execute(
+                        update(NotificationEndpoint)
+                        .where(NotificationEndpoint.id == ep.id)
+                        .values(
+                            consecutive_dead_letter_count=(NotificationEndpoint.consecutive_dead_letter_count + 1),
+                        )
+                        .returning(NotificationEndpoint.consecutive_dead_letter_count)
+                    )
+                    new_count = result.scalar_one()
+                    if new_count >= 10:
+                        await session.execute(
+                            update(NotificationEndpoint)
+                            .where(NotificationEndpoint.id == ep.id)
+                            .values(auto_disabled=True, disabled_at=datetime.now(UTC))
+                        )
             except ProgrammingError:
                 logger.warning("notifications.delivery_table_missing", extra={"route": "retry_all_failed_deliveries.record"})
                 logger.exception("notifications.delivery_table_missing")
@@ -433,6 +448,22 @@ async def retry_all_failed_deliveries(
                         last_error=str(exc),
                     )
                     session.add(new_log)
+
+                    result = await session.execute(
+                        update(NotificationEndpoint)
+                        .where(NotificationEndpoint.id == ep.id)
+                        .values(
+                            consecutive_dead_letter_count=(NotificationEndpoint.consecutive_dead_letter_count + 1),
+                        )
+                        .returning(NotificationEndpoint.consecutive_dead_letter_count)
+                    )
+                    new_count = result.scalar_one()
+                    if new_count >= 10:
+                        await session.execute(
+                            update(NotificationEndpoint)
+                            .where(NotificationEndpoint.id == ep.id)
+                            .values(auto_disabled=True, disabled_at=datetime.now(UTC))
+                        )
             except ProgrammingError:
                 logger.warning("notifications.delivery_table_missing", extra={"route": "retry_all_failed_deliveries.error_record"})
                 logger.exception("notifications.delivery_table_missing")
@@ -720,8 +751,6 @@ async def test_webhook(
             detail="An unexpected error occurred.",
         ) from None
 
-    import httpx
-
     payload = json.dumps(
         {
             "event": "test",
@@ -735,15 +764,10 @@ async def test_webhook(
         try:
             fernet = Fernet(settings.fernet_key.encode())
             raw_secret = fernet.decrypt(ep.secret_ciphertext)
-            import hashlib
-            import hmac
-
             sig = hmac.new(raw_secret, payload, hashlib.sha256).hexdigest()
             headers["X-Modulo-Signature"] = f"sha256={sig}"
         except Exception:
-            import logging
-
-            logging.getLogger(__name__).exception("Failed to sign test payload")
+            logger.exception("Failed to sign test payload")
 
     try:
         async with httpx.AsyncClient(timeout=15.0) as client:
@@ -821,7 +845,6 @@ async def list_deliveries(
     principal: AuthenticatedPrincipal = Depends(get_current_user),
 ) -> DeliveryLogResponse:
     _require_admin(principal)
-    from sqlalchemy import func as sa_func
 
     try:
         async with session.begin():
@@ -922,7 +945,6 @@ async def retry_delivery(
     settings: Settings = Depends(get_settings),
 ) -> TestResult:
     _require_admin(principal)
-    import httpx
 
     try:
         async with session.begin():
@@ -974,15 +996,10 @@ async def retry_delivery(
         try:
             fernet = Fernet(settings.fernet_key.encode())
             raw_secret = fernet.decrypt(ep.secret_ciphertext)
-            import hashlib
-            import hmac
-
             sig = hmac.new(raw_secret, body, hashlib.sha256).hexdigest()
             headers["X-Modulo-Signature"] = f"sha256={sig}"
         except Exception:
-            import logging
-
-            logging.getLogger(__name__).exception("Failed to sign retry payload")
+            logger.exception("Failed to sign retry payload")
 
     try:
         async with httpx.AsyncClient(timeout=15.0) as client:
@@ -1002,6 +1019,32 @@ async def retry_delivery(
                     last_error=(None if resp.is_success else f"HTTP {resp.status_code}: {resp.text[:200]}"),
                 )
                 session.add(new_log)
+
+                if resp.is_success:
+                    await session.execute(
+                        update(NotificationEndpoint)
+                        .where(
+                            NotificationEndpoint.id == ep.id,
+                            NotificationEndpoint.consecutive_dead_letter_count > 0,
+                        )
+                        .values(consecutive_dead_letter_count=0)
+                    )
+                else:
+                    result = await session.execute(
+                        update(NotificationEndpoint)
+                        .where(NotificationEndpoint.id == ep.id)
+                        .values(
+                            consecutive_dead_letter_count=(NotificationEndpoint.consecutive_dead_letter_count + 1),
+                        )
+                        .returning(NotificationEndpoint.consecutive_dead_letter_count)
+                    )
+                    new_count = result.scalar_one()
+                    if new_count >= 10:
+                        await session.execute(
+                            update(NotificationEndpoint)
+                            .where(NotificationEndpoint.id == ep.id)
+                            .values(auto_disabled=True, disabled_at=datetime.now(UTC))
+                        )
         except ProgrammingError:
             logger.warning("notifications.delivery_table_missing", extra={"route": "retry_delivery.record", "webhook_id": str(webhook_id), "delivery_id": str(delivery_id)})
             logger.exception("notifications.delivery_table_missing")
@@ -1037,6 +1080,22 @@ async def retry_delivery(
                     last_error=str(exc),
                 )
                 session.add(new_log)
+
+                result = await session.execute(
+                    update(NotificationEndpoint)
+                    .where(NotificationEndpoint.id == ep.id)
+                    .values(
+                        consecutive_dead_letter_count=(NotificationEndpoint.consecutive_dead_letter_count + 1),
+                    )
+                    .returning(NotificationEndpoint.consecutive_dead_letter_count)
+                )
+                new_count = result.scalar_one()
+                if new_count >= 10:
+                    await session.execute(
+                        update(NotificationEndpoint)
+                        .where(NotificationEndpoint.id == ep.id)
+                        .values(auto_disabled=True, disabled_at=datetime.now(UTC))
+                    )
         except ProgrammingError:
             logger.warning("notifications.delivery_table_missing", extra={"route": "retry_delivery.error_record", "webhook_id": str(webhook_id), "delivery_id": str(delivery_id)})
             logger.exception("notifications.delivery_table_missing")
