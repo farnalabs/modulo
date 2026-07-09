@@ -10,6 +10,7 @@ unit-tests:
   - backend/tests/unit/api/test_remy.py
 code:
   - backend/src/modulo/api/routes/remy.py
+  - backend/src/modulo/api/routes/admin_remy.py
   - backend/src/modulo/db/models/remy_session.py
   - backend/src/modulo/db/models/remy_message.py
   - backend/src/modulo/db/models/remy_skill.py

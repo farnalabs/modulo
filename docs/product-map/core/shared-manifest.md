@@ -5,6 +5,8 @@ delivery-tasks: []
 bdd: []
 unit-tests: []
 code:
+  - backend/src/modulo/api/routes/manifest.py
+  - backend/src/modulo/core/manifest.py
   - frontend/src/manifest.yaml
 depends-on: [feat-core-navigation-restructure]
 status: partial
