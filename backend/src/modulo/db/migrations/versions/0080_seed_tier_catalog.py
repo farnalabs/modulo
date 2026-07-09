@@ -55,7 +55,7 @@ def upgrade() -> None:
                 ('audit_viewer', 'Tamper-evident audit log viewer', 'team', NULL, true),
                 ('admin_spend_limits', 'Per-organisation daily spend limits and budgets', 'team', NULL, true),
                 ('admin_cost_controls', 'Budget overview, team budgets, alert thresholds, and billing settings', 'team', NULL, true),
-                ('observability', 'OpenTelemetry export and LangSmith integration settings', 'team', NULL, true),
+                ('observability', 'OpenTelemetry export and LangSmith integration settings', 'community', NULL, true),
                 ('view_modes', 'Multiple named UI views with admin-defined feature visibility per view and user/team/role assignment', 'team', NULL, true),
                 ('environment_profiles', 'Sandbox environment profiles for code execution', 'team', NULL, true),
                 ('plugin_management', 'Manage plugins, connectors, and node categories', 'team', NULL, true),
@@ -66,10 +66,13 @@ def upgrade() -> None:
                 ('schema_union_types', 'Union types and polymorphic schemas', 'v1', NULL, true),
                 ('migration_cli', 'CLI tool for migrating pipelines across instances', 'v1', NULL, true),
                 ('checkpoint_encryption', 'Encrypt pipeline checkpoints at rest', 'v2', NULL, true),
-                ('audit_crypto_chain', 'Cryptographic chaining of audit events for tamper evidence', 'v2', NULL, true),
+                ('audit_crypto_chain', 'Cryptographic chaining of audit events for tamper evidence', 'team', NULL, true),
                 ('community_registry', 'Publish and discover community pipeline primitives', 'v2', NULL, true),
                 ('prompt_optimization', 'Automated prompt tuning and optimisation', 'v2', NULL, true),
-                ('pipeline_diff_rollback', 'Diff-based pipeline version comparison and rollback', 'v2', NULL, true)
+                ('pipeline_diff_rollback', 'Diff-based pipeline version comparison and rollback', 'v2', NULL, true),
+                ('email_config', 'SMTP email configuration for notifications', 'team', NULL, true),
+                ('error_tracking', 'External error tracking and alerting integrations', 'team', NULL, true),
+                ('scim', 'SCIM 2.0 user and group provisioning', 'team', NULL, true)
             """)
         )
 

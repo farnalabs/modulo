@@ -84,6 +84,11 @@ _KNOWN_FLAGS: list[FeatureFlag] = [
         description="Manage LLM backend connections and credentials",
         tier="community",
     ),
+    FeatureFlag(
+        name="observability",
+        description="OpenTelemetry export and LangSmith integration settings",
+        tier="community",
+    ),
     # ── Team tier ──────────────────────────────────────────────────────
     FeatureFlag(
         name="sso",
@@ -111,15 +116,25 @@ _KNOWN_FLAGS: list[FeatureFlag] = [
         tier="team",
     ),
     FeatureFlag(
-        name="observability",
-        description="OpenTelemetry export and LangSmith integration settings",
-        tier="team",
-    ),
-    FeatureFlag(
         name="view_modes",
         description=(
             "Multiple named UI views with admin-defined feature visibility per view and user/team/role assignment"
         ),
+        tier="team",
+    ),
+    FeatureFlag(
+        name="email_config",
+        description="SMTP email configuration for notifications",
+        tier="team",
+    ),
+    FeatureFlag(
+        name="error_tracking",
+        description="External error tracking and alerting integrations",
+        tier="team",
+    ),
+    FeatureFlag(
+        name="scim",
+        description="SCIM 2.0 user and group provisioning",
         tier="team",
     ),
     # ── v1 tier ────────────────────────────────────────────────────────
@@ -142,7 +157,7 @@ _KNOWN_FLAGS: list[FeatureFlag] = [
     FeatureFlag(
         name="audit_crypto_chain",
         description="Cryptographic chaining of audit events for tamper evidence",
-        tier="v2",
+        tier="team",
     ),
     FeatureFlag(
         name="community_registry",
