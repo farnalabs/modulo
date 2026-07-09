@@ -1,20 +1,31 @@
-﻿<template>
+<template>
   <FeatureGate feature-name="team_rbac" required-tier="team" show-disabled>
 
     <div class="mx-auto space-y-6 p-6">
     <header class="flex flex-wrap items-center justify-between gap-4">
       <div>
         <h1 class="text-3xl font-bold tracking-tight">Stage Board</h1>
-        <p class="mt-1 text-muted-foreground">Organise pipelines into stages — track progress as pipelines move through development, testing, and production phases. Drag pipelines between stages to update their lifecycle status.</p>
+        <p class="mt-1 text-muted-foreground">Organise pipelines into stages � track progress as pipelines move through development, testing, and production phases. Drag pipelines between stages to update their lifecycle status.</p>
       </div>
-      <button
-        data-testid="stage-board-create-btn"
-        class="inline-flex items-center gap-2 rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90"
-        @click="showCreateDialog = true"
-      >
-        <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
-        New Stage
-      </button>
+      <div class="flex items-center gap-2">
+        <button
+          data-testid="stage-board-create-btn"
+          class="inline-flex items-center gap-2 rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90"
+          @click="showCreateDialog = true"
+        >
+          <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+          New Stage
+        </button>
+        <button
+          data-testid="stage-board-reorder-btn"
+          class="inline-flex items-center gap-2 rounded-lg border border-input bg-background px-4 py-2 text-sm font-medium hover:bg-accent"
+          @click="reorderMode = !reorderMode"
+        >
+          <svg v-if="!reorderMode" xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><line x1="3" y1="6" x2="3.01" y2="6"/><line x1="3" y1="12" x2="3.01" y2="12"/><line x1="3" y1="18" x2="3.01" y2="18"/></svg>
+          <svg v-else xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="20 6 9 17 4 12"/></svg>
+          {{ reorderMode ? 'Done' : 'Reorder' }}
+        </button>
+      </div>
     </header>
 
     <div v-if="loading" class="flex items-center justify-center py-20">
@@ -101,16 +112,53 @@
               @keydown.space.prevent="selectedStageId = stage.id"
             >
               <div class="flex items-center justify-between">
-                <div class="flex items-center gap-2">
+                <div class="flex items-center gap-2 min-w-0">
                   <span
-                    class="inline-block h-2.5 w-2.5 rounded-full"
+                    class="inline-block h-2.5 w-2.5 shrink-0 rounded-full"
                     :class="stageStatusClass(stage)"
                   />
-                  <h3 class="font-semibold">{{ stage.name }}</h3>
+                  <template v-if="editingNameStageId === stage.id">
+                    <input
+                      v-model="editingNameValue"
+                      class="w-full rounded border border-input bg-background px-1 py-0.5 text-sm font-semibold"
+                      placeholder="Stage name"
+                      autofocus
+                      @click.stop
+                      @keydown.enter.prevent="saveEditingName"
+                      @keydown.escape.prevent="cancelEditingName"
+                      @blur="saveEditingName"
+                    />
+                  </template>
+                  <h3
+                    v-else
+                    class="truncate cursor-pointer font-semibold hover:text-primary"
+                    @click.stop="startEditingName(stage)"
+                    :title="'Click to rename'"
+                  >{{ stage.name }}</h3>
                 </div>
-                <span class="rounded-full bg-muted px-2 py-0.5 text-xs tabular-nums text-muted-foreground">
-                  {{ pipelinesByStage(stage.id).length }}
-                </span>
+                <div class="flex items-center gap-1 shrink-0">
+                  <div v-if="reorderMode" class="flex flex-col gap-0.5">
+                    <button
+                      :data-testid="'stage-board-move-up-' + stage.id"
+                      class="rounded p-0.5 text-muted-foreground hover:bg-accent hover:text-foreground disabled:opacity-30"
+                      :disabled="updatingStages[stage.id] || isFirstStage(stage)"
+                      @click.stop="moveStage(stage, -1)"
+                    >
+                      <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="18 15 12 9 6 15"/></svg>
+                    </button>
+                    <button
+                      :data-testid="'stage-board-move-down-' + stage.id"
+                      class="rounded p-0.5 text-muted-foreground hover:bg-accent hover:text-foreground disabled:opacity-30"
+                      :disabled="updatingStages[stage.id] || isLastStage(stage)"
+                      @click.stop="moveStage(stage, 1)"
+                    >
+                      <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"/></svg>
+                    </button>
+                  </div>
+                  <span class="rounded-full bg-muted px-2 py-0.5 text-xs tabular-nums text-muted-foreground">
+                    {{ pipelinesByStage(stage.id).length }}
+                  </span>
+                </div>
               </div>
               <p v-if="stage.description" class="mt-1 truncate text-xs text-muted-foreground">{{ stage.description }}</p>
             </div>
@@ -190,7 +238,24 @@
           <dl class="space-y-4 text-sm">
             <div>
               <dt class="text-muted-foreground">Name</dt>
-              <dd class="font-medium">{{ selectedStageDetail.name }}</dd>
+              <dd>
+                <template v-if="editingNameStageId === selectedStageDetail.id">
+                  <input
+                    v-model="editingNameValue"
+                    class="w-full rounded border border-input bg-background px-2 py-1 text-sm font-medium"
+                    placeholder="Stage name"
+                    autofocus
+                    @keydown.enter.prevent="saveEditingName"
+                    @keydown.escape.prevent="cancelEditingName"
+                    @blur="saveEditingName"
+                  />
+                </template>
+                <span
+                  v-else
+                  class="cursor-pointer font-medium hover:text-primary"
+                  @click="startEditingName(selectedStageDetail)"
+                >{{ selectedStageDetail.name }}</span>
+              </dd>
             </div>
             <div v-if="selectedStageDetail.description">
               <dt class="text-muted-foreground">Description</dt>
@@ -198,7 +263,28 @@
             </div>
             <div>
               <dt class="text-muted-foreground">Position</dt>
-              <dd>{{ selectedStageDetail.position }}</dd>
+              <dd>
+                <template v-if="editingPositionStageId === selectedStageDetail.id">
+                  <div class="flex items-center gap-2">
+                    <input
+                      v-model.number="editingPositionValue"
+                      type="number"
+                      min="0"
+                      autofocus
+                      class="w-20 rounded border border-input bg-background px-2 py-1 text-sm"
+                      @keydown.enter.prevent="saveEditingPosition"
+                      @keydown.escape.prevent="cancelEditingPosition"
+                      @blur="saveEditingPosition"
+                    />
+                  </div>
+                </template>
+                <span
+                  v-else
+                  class="cursor-pointer hover:text-primary"
+                  @click="startEditingPosition(selectedStageDetail)"
+                  :title="'Click to edit position'"
+                >{{ selectedStageDetail.position }}</span>
+              </dd>
             </div>
             <div>
               <dt class="text-muted-foreground">Visibility</dt>
@@ -387,6 +473,13 @@ const createPosition = ref(0)
 const createVisibility = ref('org')
 const createError = ref<string | null>(null)
 
+const editingNameStageId = ref<string | null>(null)
+const editingNameValue = ref('')
+const reorderMode = ref(false)
+const editingPositionStageId = ref<string | null>(null)
+const editingPositionValue = ref(0)
+const updatingStages = ref<Record<string, boolean>>({})
+
 const maxStagePosition = computed(() => {
   if (stages.value.length === 0) return 0
   return Math.max(...stages.value.map(s => s.position))
@@ -529,6 +622,106 @@ async function createStage() {
     await loadStages()
   } catch (e: unknown) {
     createError.value = formatApiError(e)
+  }
+}
+
+function isFirstStage(stage: any): boolean {
+  const sorted = [...stages.value].sort((a, b) => a.position - b.position)
+  return sorted.length > 0 && sorted[0].id === stage.id
+}
+
+function isLastStage(stage: any): boolean {
+  const sorted = [...stages.value].sort((a, b) => a.position - b.position)
+  return sorted.length > 0 && sorted[sorted.length - 1].id === stage.id
+}
+
+function startEditingName(stage: any) {
+  editingNameStageId.value = stage.id
+  editingNameValue.value = stage.name
+}
+
+async function saveEditingName() {
+  if (!editingNameStageId.value || !editingNameValue.value.trim()) {
+    editingNameStageId.value = null
+    return
+  }
+  const stageId = editingNameStageId.value
+  const name = editingNameValue.value.trim()
+  editingNameStageId.value = null
+  const existing = stages.value.find(s => s.id === stageId)
+  if (existing && existing.name === name) return
+  updatingStages.value[stageId] = true
+  try {
+    const updated = await patch<any>(`/api/v1/stages/${stageId}`, { name })
+    const idx = stages.value.findIndex(s => s.id === stageId)
+    if (idx !== -1) stages.value[idx] = updated
+  } catch (e) {
+    console.warn('Failed to rename stage', e)
+  } finally {
+    updatingStages.value[stageId] = false
+  }
+}
+
+function cancelEditingName() {
+  editingNameStageId.value = null
+  editingNameValue.value = ''
+}
+
+function startEditingPosition(stage: any) {
+  editingPositionStageId.value = stage.id
+  editingPositionValue.value = stage.position
+}
+
+async function saveEditingPosition() {
+  if (!editingPositionStageId.value) return
+  const stageId = editingPositionStageId.value
+  const position = editingPositionValue.value
+  editingPositionStageId.value = null
+  const existing = stages.value.find(s => s.id === stageId)
+  if (existing && existing.position === position) return
+  updatingStages.value[stageId] = true
+  try {
+    const updated = await patch<any>(`/api/v1/stages/${stageId}`, { position })
+    const idx = stages.value.findIndex(s => s.id === stageId)
+    if (idx !== -1) stages.value[idx] = updated
+    stages.value.sort((a, b) => a.position - b.position)
+  } catch (e) {
+    console.warn('Failed to update stage position', e)
+  } finally {
+    updatingStages.value[stageId] = false
+  }
+}
+
+function cancelEditingPosition() {
+  editingPositionStageId.value = null
+}
+
+async function moveStage(stage: any, direction: number) {
+  const sorted = [...stages.value].sort((a, b) => a.position - b.position)
+  const idx = sorted.findIndex(s => s.id === stage.id)
+  const targetIdx = idx + direction
+  if (targetIdx < 0 || targetIdx >= sorted.length) return
+  const target = sorted[targetIdx]
+  const myPos = stage.position
+  const targetPos = target.position
+
+  // Optimistic update
+  stage.position = targetPos
+  target.position = myPos
+  stages.value.sort((a, b) => a.position - b.position)
+
+  updatingStages.value[stage.id] = true
+  try {
+    await patch(`/api/v1/stages/${stage.id}`, { position: targetPos })
+    await patch(`/api/v1/stages/${target.id}`, { position: myPos })
+  } catch (e) {
+    // Revert on failure
+    stage.position = myPos
+    target.position = targetPos
+    stages.value.sort((a, b) => a.position - b.position)
+    console.warn('Failed to reorder stages', e)
+  } finally {
+    updatingStages.value[stage.id] = false
   }
 }
 
