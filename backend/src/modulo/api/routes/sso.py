@@ -252,21 +252,36 @@ async def saml_metadata(
 ) -> str:
     """Return SP metadata XML for SAML IdP configuration."""
 
-    public_url = settings.modulo_public_url.rstrip("/")
-    acs_url = f"{public_url}/api/v1/auth/saml/acs"
-    entity_id = settings.modulo_saml_entity_id
+    if not settings.modulo_saml_enabled:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="SAML is not enabled",
+        )
 
-    return (
-        '<?xml version="1.0"?>'
-        "<md:EntityDescriptor"
-        ' xmlns:md="urn:oasis:names:tc:SAML:2.0:metadata"'
-        f' entityID="{entity_id}">'
-        "  <md:SPSSODescriptor"
-        '   protocolSupportEnumeration="urn:oasis:names:tc:SAML:2.0:protocol">'
-        f"    <md:AssertionConsumerService"
-        f'     Binding="urn:oasis:names:tc:SAML:2.0:bindings:HTTP-POST"'
-        f'     Location="{acs_url}"'
-        f'     index="1"/>'
-        "  </md:SPSSODescriptor>"
-        "</md:EntityDescriptor>"
-    )
+    try:
+        public_url = settings.modulo_public_url.rstrip("/")
+        acs_url = f"{public_url}/api/v1/auth/saml/acs"
+        entity_id = settings.modulo_saml_entity_id
+
+        return (
+            '<?xml version="1.0"?>'
+            "<md:EntityDescriptor"
+            ' xmlns:md="urn:oasis:names:tc:SAML:2.0:metadata"'
+            f' entityID="{entity_id}">'
+            "  <md:SPSSODescriptor"
+            '   protocolSupportEnumeration="urn:oasis:names:tc:SAML:2.0:protocol">'
+            f"    <md:AssertionConsumerService"
+            f'     Binding="urn:oasis:names:tc:SAML:2.0:bindings:HTTP-POST"'
+            f'     Location="{acs_url}"'
+            f'     index="1"/>'
+            "  </md:SPSSODescriptor>"
+            "</md:EntityDescriptor>"
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        _log.exception("sso.saml_metadata.unexpected_error")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="An unexpected error occurred",
+        ) from e

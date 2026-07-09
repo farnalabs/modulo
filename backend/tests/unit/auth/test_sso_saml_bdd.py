@@ -144,6 +144,22 @@ class TestSpMetadata:
         resp = client.get("/api/v1/auth/saml/metadata")
         assert resp.status_code == 402
 
+    def test_metadata_returns_400_when_saml_disabled(self, client: TestClient) -> None:
+        _app.dependency_overrides[get_settings] = lambda: Settings(
+            database_url="postgresql+asyncpg://localhost/test",
+            secret_key=_VALID_32,
+            fernet_key=_VALID_32,
+            modulo_admin_password="testpass",
+            modulo_license_key="test-license-key",
+            modulo_csrf_enabled=False,
+            modulo_saml_enabled=False,
+            modulo_public_url="http://localhost:8000",
+        )
+        get_settings.cache_clear()
+
+        resp = client.get("/api/v1/auth/saml/metadata")
+        assert resp.status_code == 400
+
 
 # ---------------------------------------------------------------------------
 # Scenario: ACS callback creates new user via JIT provisioning

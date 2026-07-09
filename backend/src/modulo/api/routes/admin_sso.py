@@ -127,7 +127,7 @@ async def get_providers(
 ) -> list[SsoProviderResponse]:
     _require_admin(current_user)
     try:
-        provider = await get_provider(session, provider_id)
+        providers = await list_providers(session)
     except ProgrammingError as exc:
         _log.warning("SSO providers table not available: %s", exc)
         raise HTTPException(
