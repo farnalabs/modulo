@@ -4,7 +4,7 @@
   every PRD ref matches a section, every node has required fields.
   Exit code: 0 = clean, 1 = issues found.
 #>
-param([switch]$Fix,[switch]$CI,[switch]$Strict)
+param([switch]$Fix,[switch]$CI)
 $ErrorActionPreference="Stop"
 $repoRoot=Resolve-Path (Join-Path $PSScriptRoot "..")
 $productMap=Join-Path $repoRoot "docs\product-map"
@@ -59,9 +59,8 @@ if (Test-Path -LiteralPath $manifestValidator) {
     }
 }
 
-# 7. Strict mode checks
-if ($Strict) {
-    # Parse PRD section names
+# 7. Coverage orphans and anchors
+# Parse PRD section names
     $prdSectionNames = @{}
     Get-Content -LiteralPath $prdFile | ForEach-Object {
         if ($_ -match '^### ((\d+\.\d+[a-z]?))\s+(.+)') { $prdSectionNames[$Matches[1]] = $Matches[3].Trim() }
@@ -69,25 +68,31 @@ if ($Strict) {
     }
 
     # A. PRD→Map coverage — spec sections (§6–§12) with zero product map references
+    # Children are considered covered if their parent section has coverage
     $specSections = @{}
     $prdSections.Keys | Where-Object {
         $base = if ($_ -match '^(\d+)') { [int]$Matches[1] } else { -1 }
         $base -ge 6 -and $base -le 12
     } | ForEach-Object { $specSections[$_] = $true }
 
-    $prdCounts = @{}
+    $prdCounts = @{}; $parentCoverage = @{}
     foreach ($s in $specSections.Keys) { $prdCounts[$s] = 0 }
     foreach ($e in $entries) {
         if (-not $e.prd) { continue }
         $refs = $e.prd -split ',' | ForEach-Object { $_.Trim().TrimStart('§') }
         foreach ($r in $refs) {
             if ($prdCounts.ContainsKey($r)) { $prdCounts[$r]++ }
+            $base = if ($r -match '^(\d+)(\.|$)') { $Matches[1] } else { $r }
+            if ($specSections.ContainsKey($base)) { $parentCoverage[$base] = $true }
         }
     }
     foreach ($s in ($specSections.Keys | Sort-Object)) {
         if ($prdCounts[$s] -eq 0) {
-            $name = if ($prdSectionNames[$s]) { " ($($prdSectionNames[$s]))" } else { "" }
-            $issues += "COVERAGE|PRD $s${name} -- 0 product map entries reference this section"
+            $base = if ($s -match '^(\d+)') { $Matches[1] } else { $s }
+            if (-not $parentCoverage.ContainsKey($base)) {
+                $name = if ($prdSectionNames[$s]) { " ($($prdSectionNames[$s]))" } else { "" }
+                $issues += "COVERAGE|PRD $s${name} -- 0 product map entries reference this section"
+            }
         }
     }
 
@@ -118,6 +123,5 @@ if ($Strict) {
             }
         }
     }
-}
 
 if($issues.Count-eq 0){if(-not$CI){Write-Host "Graph is clean - $($entries.Count) entries, all refs resolve." -ForegroundColor Green};exit 0}else{if(-not$CI){Write-Host "$($issues.Count) issues found:" -ForegroundColor Red;$issues|ForEach-Object{$p=$_-split'\|';Write-Host "  [$($p[0])] $($p[1]) -> $($p[2])" -ForegroundColor Yellow}}else{$issues|ForEach-Object{Write-Host $_}};exit 1}
