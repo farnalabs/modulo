@@ -17,11 +17,12 @@ $entries=@()
 Get-ChildItem -Recurse -Filter "*.md" -LiteralPath $productMap|Where-Object{$_.Name-ne"_index.md"}|ForEach-Object{
   $c=Get-Content -Raw -Encoding UTF8 -LiteralPath $_.FullName
   if($c -notmatch '(?s)^---[\r\n]+(.+?)[\r\n]+---'){$issues+="FILE|$($_.Name)|missing frontmatter";return}
+  if($c-match'<<<<<<<|=======|>>>>>>>'){$issues+="CONFLICT|$($_.Name)|file contains unresolved merge conflict markers"}
   $fm=$Matches[1]
   $id=if($fm-match'(?m)^id:\s*(\S+)'){$Matches[1]}else{$null}
   $prd=if($fm-match'(?m)^prd:\s*(.+?)[\r\n]'){$Matches[1]}else{$null}
-  $bdd=@();if($fm-match'(?m)^bdd:\s*(.+?)[\r\n]'){$bList=$Matches[1].Trim();if($bList-match'^\['){$bdd=$bList-replace'[\[\]" ]',''-split','}}
-  $dep=@();if($fm-match'(?m)^depends-on:\s*\[(.*?)\]'){$dep=$Matches[1]-replace' ',''-split','}
+  $bdd=@();if($fm-match'(?m)^bdd:\s*(.+?)[\r\n]'){$bList=$Matches[1].Trim();if($bList-match'^\['){$bdd=$bList-replace'[\[\]" ]',''-split','}};if($fm-match'(?m)^bdd:\s*\n((?:\s+- .+\n?)+)'){$bBlock=$Matches[1]-split'\n'|ForEach-Object{$_-replace'^\s*-\s*',''-replace'"',''-replace"'",''.Trim()}|Where-Object{$_};if($bBlock){$bdd=@($bdd)+$bBlock}}
+  $dep=@();if($fm-match'(?m)^depends-on:\s*\[(.*?)\]'){$dep=$Matches[1]-replace' ',''-split','};if($fm-match'(?m)^depends-on:\s*\n((?:\s+- .+\n?)+)'){$depBlock=$Matches[1]-split'\n'|ForEach-Object{$_-replace'^\s*-\s*',''-replace'"',''-replace"'",''-replace'#.*',''.Trim()}|Where-Object{$_};$dep=@($dep+$depBlock)|Where-Object{$_}}
   $entries+=@{id=$id;prd=$prd;bdd=$bdd;depends=$dep;path=$_.FullName;name=$_.Name}
   if(-not$id){$issues+="NODE|$($_.Name)|missing id field"}
   if(-not$prd){$issues+="NODE|$($_.Name)|missing prd field"}
@@ -50,7 +51,11 @@ if($Fix){$idx=Join-Path $productMap "_index.md";$ic=Get-Content -Raw -Encoding U
 Write-Host "Manifest validation" -ForegroundColor Cyan
 $manifestValidator = Join-Path $PSScriptRoot "validate-manifest.ps1"
 if (Test-Path -LiteralPath $manifestValidator) {
-    & $manifestValidator -CI
+    $manifestOutput = & $manifestValidator -CI 2>&1
+    $manifestExitCode = $LASTEXITCODE
+    if ($manifestExitCode -ne 0) {
+        $manifestOutput | ForEach-Object { $issues += "MANIFEST|$($_.Trim())" }
+    }
 }
 
 if($issues.Count-eq 0){if(-not$CI){Write-Host "Graph is clean - $($entries.Count) entries, all refs resolve." -ForegroundColor Green};exit 0}else{if(-not$CI){Write-Host "$($issues.Count) issues found:" -ForegroundColor Red;$issues|ForEach-Object{$p=$_-split'\|';Write-Host "  [$($p[0])] $($p[1]) -> $($p[2])" -ForegroundColor Yellow}}else{$issues|ForEach-Object{Write-Host $_}};exit 1}
