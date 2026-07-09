@@ -1,6 +1,6 @@
 ---
 id: feat-core-feature-flag-ui
-prd: 8.17
+prd: 6.2,6.3
 delivery-tasks: [task-nv12-feature-flag-ui]
 code:
   - backend/src/modulo/core/feature_flags.py

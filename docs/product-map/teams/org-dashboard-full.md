@@ -1,6 +1,6 @@
 ---
 id: feat-teams-org-dashboard-full
-prd: 14
+prd: 8
 delivery-tasks: [task-nv7-org-dashboard-full]
 bdd:
   - backend/tests/bdd/features/dashboard/hitl_trends.feature

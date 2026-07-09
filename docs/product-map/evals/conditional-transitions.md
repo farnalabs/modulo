@@ -15,10 +15,7 @@ code:
 unit-tests:
   - backend/tests/unit/core/test_eval_suite.py
   - backend/tests/unit/api/test_evals_endpoint.py
-<<<<<<< HEAD
-=======
   - backend/tests/unit/pipeline_engine/test_conditional_transitions.py
->>>>>>> qa/arch-292
   - backend/tests/unit/pipeline_engine/test_conditional_transitions_audit_events.py
 depends-on: [feat-evals-eval-engine]
 status: partial
