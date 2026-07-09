@@ -238,9 +238,14 @@ onBeforeUnmount(() => {
   if (clearTimeoutId) clearTimeout(clearTimeoutId)
 })
 
-onMounted(() => {
-  planStore.fetchPlan()
-  loadSettings()
+onMounted(async () => {
+  const promise = planStore.fetchPlan()
+  if (promise) await promise
+  if (planStore.featureEnabled('email_config')) {
+    loadSettings()
+  } else {
+    loading.value = false
+  }
 })
 </script>
 

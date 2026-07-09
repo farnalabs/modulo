@@ -137,7 +137,7 @@ describe('SettingsLicenseView', () => {
     expect(wrapper.text()).toContain('Team license key active')
   })
 
-  it('renders feature flags list with enabled/disabled states', async () => {
+  it('does not render per-feature checklist (simplified UI)', async () => {
     const { api } = await import('../lib/api/client')
     mockApiResponses(api.GET, mockLicenseTeam, mockFlagsTeam)
 
@@ -147,10 +147,9 @@ describe('SettingsLicenseView', () => {
     await nextTick()
     await nextTick()
     await nextTick()
-    expect(wrapper.text()).toContain('parallel_branches')
-    expect(wrapper.text()).toContain('hitl_gates')
-    expect(wrapper.text()).toContain('Run parallel branches')
-    expect(wrapper.text()).toContain('2 of 2 features active')
+    expect(wrapper.text()).not.toContain('parallel_branches')
+    expect(wrapper.text()).not.toContain('features active')
+    expect(wrapper.text()).not.toContain('would activate with Team')
   })
 
   it('renders license key textarea and action buttons', async () => {
