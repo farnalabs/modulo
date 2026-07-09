@@ -4,7 +4,7 @@
 
     <div
       v-else-if="showDisabled"
-      class="relative"
+      class="relative min-h-[300px]"
       data-testid="feature-gate-disabled"
     >
       <div class="pointer-events-none select-none opacity-40">

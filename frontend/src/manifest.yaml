@@ -64,6 +64,7 @@ routes:
     sidebar_group: core
     sidebar_order: 3
     type: list_page
+    exact: true
     <<: *community
     deprecated: false
 
