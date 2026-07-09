@@ -1,9 +1,8 @@
 import { test, expect, loginAsAdmin } from './setup/fixtures'
-import { getTestEnv } from './setup/env'
 
 test.describe('Sidebar Navigation', () => {
-  test('displays Core, Settings, and Remy groups in simple mode', { tag: '@smoke' }, async ({ page }) => {
-    await loginAsAdmin(page, getTestEnv())
+  test('displays Core, Settings, and Remy groups in simple mode', { tag: '@smoke' }, async ({ page, env }) => {
+    await loginAsAdmin(page, env)
 
     await page.goto('/')
     await page.waitForLoadState('networkidle')
@@ -16,8 +15,8 @@ test.describe('Sidebar Navigation', () => {
     expect(headerCount).toBeGreaterThanOrEqual(3)
   })
 
-  test('sidebar link navigates to the correct page', async ({ page }) => {
-    await loginAsAdmin(page, getTestEnv())
+  test('sidebar link navigates to the correct page', async ({ page, env }) => {
+    await loginAsAdmin(page, env)
 
     await page.goto('/')
     await page.waitForLoadState('networkidle')
@@ -30,8 +29,8 @@ test.describe('Sidebar Navigation', () => {
     await expect(page).toHaveURL(/\/library/)
   })
 
-  test('all sidebar links have visible labels', async ({ page }) => {
-    await loginAsAdmin(page, getTestEnv())
+  test('all sidebar links have visible labels', async ({ page, env }) => {
+    await loginAsAdmin(page, env)
 
     await page.goto('/')
     await page.waitForLoadState('networkidle')
