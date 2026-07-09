@@ -30,7 +30,7 @@ unit-tests:
   - backend/tests/unit/db/crud/test_team.py
   - backend/tests/unit/db/crud/test_team_membership.py
   - backend/tests/integration/crud/test_team_isolation.py
-  - backend/tests/staging_e2e/test_teams.py
+  - frontend/tests/e2e/setup/fixtures.ts (loginAsAdmin real auth on staging)
 code:
   - frontend/src/views/SettingsTeamsView.vue
   - frontend/src/components/TeamNotificationEndpoints.vue

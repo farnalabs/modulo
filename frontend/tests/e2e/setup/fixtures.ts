@@ -23,6 +23,20 @@ const LOGIN_TIMEOUT: Record<string, number> = {
 }
 
 export async function loginAsAdmin(page: Page, env: TestEnv) {
+  const target = env.name
+
+  if (target !== 'local') {
+    // Real login against remote target
+    await page.goto('/login')
+    await page.waitForLoadState('networkidle')
+    await page.fill(env.credentials.loginFormEmailSelector, env.credentials.admin.email)
+    await page.fill(env.credentials.loginFormPasswordSelector, env.credentials.admin.password)
+    await page.click('button[type="submit"]')
+    await page.waitForURL(/^(?!.*\/login).*$/, { timeout: 15000 })
+    await page.waitForLoadState('networkidle')
+    return
+  }
+
   // Catch-all: mock every /api/v1/* call to return 200 with empty data
   await page.route('**/api/v1/**', async (route) => {
     const url = route.request().url()
