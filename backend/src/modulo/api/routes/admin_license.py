@@ -99,7 +99,7 @@ def _resolve_effective_license(settings: Settings, org: Organisation | None = No
                 org_id=d.org_id or None,
             )
 
-    return LicenseStatusResponse(has_license=False, tier="team")
+    return LicenseStatusResponse(has_license=False, tier="community")
 
 
 @router.get("", response_model=LicenseStatusResponse)

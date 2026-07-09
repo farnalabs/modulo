@@ -17,7 +17,8 @@ export const usePlanStore = defineStore("plan", () => {
   const tierRanks = ref<Record<string, number>>({
     community: 0,
     team: 1,
-    enterprise: 2,
+    v1: 2,
+    v2: 3,
   });
   const syncingIds = ref(new Set<string>());
   const unsubHandlers: (() => void)[] = [];
