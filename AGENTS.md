@@ -350,7 +350,7 @@ Before merging any worktree branch to `main`, run the smoke test:
 This checks:
 1. **All route component files exist** on disk — catches missing `.vue` files that the router imports
 2. **Vitest smoke tests pass** (`app-bootstrap.spec.ts` imports the router module and checks every import resolves)
-3. **Playwright @smoke E2E tests** — runs 6 critical tests (login, dashboard auth guard, sidebar, bootstrap, golden path) via `--grep "@smoke"`
+3. **Playwright @smoke E2E tests** — runs 5 critical tests (login error, login redirect, dashboard auth guard, sidebar, bootstrap) via `--grep "@smoke"`
 4. **Vue type-check** (`vue-tsc --noEmit` catches type errors)
 
 The `@smoke` tag is set per-test via `{ tag: '@smoke' }` in `frontend/tests/e2e/`. Add it to any critical test that should gate merges. Run just the smoke subset with `npm run test:e2e:smoke`.
