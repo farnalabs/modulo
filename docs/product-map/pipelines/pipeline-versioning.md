@@ -13,10 +13,11 @@ code:
   - backend/src/modulo/db/models/pipeline_snapshot.py
 depends-on:
   - feat-pipelines-core
-  - feat-agents
-  - feat-schemas-core
+  - feat-core-agent-model
+  - feat-core-schema-system
   - feat-connectors-hub
-  - feat-model-backends
+  - feat-model-backends-hub
+  - feat-model-backends-management
 status: partial
 ---
 
