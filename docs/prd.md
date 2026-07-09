@@ -2013,6 +2013,10 @@ Remy is a **Team-tier** feature (enterprise-gated via `remy` feature flag). The 
 
 ---
 
+### 8.24 (reserved)
+
+---
+
 ### 8.25 Error Tracking (Native)
 
 Modulo ships a **built-in error tracking system** that captures backend and frontend errors, deduplicates them, and surfaces them in an error dashboard — no external service required. External integrations (Sentry, DataDog, PagerDuty, Rollbar, OpsGenie, Grafana Loki) are available as Team-tier forwarders for users who want to pipe errors into their existing monitoring.
