@@ -33,6 +33,9 @@ class Settings(BaseSettings):
     modulo_public_url: str = Field("http://localhost:8000")
     modulo_demo_mode: bool = Field(False)
     modulo_license_key: str = Field("")
+    # Ed25519 public key (hex) for license signature verification.
+    # Defaults to dev/test key — set MODULO_LICENSE_PUBLIC_KEY in production.
+    modulo_license_public_key: str = Field("")
 
     # SSO / OIDC — JSON array of {provider_id, client_id, client_secret, discovery_url}
     modulo_oidc_providers: str = Field("[]")
