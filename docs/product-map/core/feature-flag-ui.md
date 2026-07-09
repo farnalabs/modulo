@@ -17,13 +17,17 @@ code:
   - frontend/src/stores/planStore.ts
   - frontend/src/router/index.ts
 
-bdd: []
+bdd:
+  - backend/tests/bdd/features/licensing/feature_flag_inspection.feature
 depends-on: [feat-core-db-abstraction-core]
 unit-tests:
   - backend/tests/unit/api/test_admin_feature_flags.py
   - backend/tests/unit/core/test_feature_flag_registration.py
   - backend/tests/unit/api/test_admin_license.py
+  - backend/tests/unit/core/test_plan_context.py
+  - backend/tests/unit/api/test_viewmodel_license.py
   - frontend/src/__tests__/AdminFeatureFlagsView.spec.ts
+  - frontend/src/__tests__/planStore.spec.ts
 status: partial
 ---
 
@@ -37,7 +41,7 @@ Feature flag inspection dashboard at `/admin/feature-flags` listing all known fl
 
 - [x] `FeatureFlagRegistry` catalogs all known flags with name, description, tier, and active status
 - [x] Seven Community-tier flags registered: `parallel_branches`, `eval_system`, `webhook_trigger`, `cron_trigger`, `mcp_server`, `community_library`, `saved_views`
-- [x] Additional Community-tier flags: `polling_trigger`, `agent_signal_trigger`, `helm_deployment`, `model_backend_management`, `remy`
+- [x] Additional Community-tier flags: `polling_trigger`, `agent_signal_trigger`, `helm_deployment`, `model_backend_management`, `remy`, `remy_ui_driving`
 - [x] Nine Team-tier flags registered: `sso`, `team_rbac`, `audit_viewer`, `admin_spend_limits`, `observability`, `view_modes`
 - [x] Additional Team-tier flags: `admin_cost_controls`, `admin_cost_breakdown`, `admin_run_retention`, `error_forwarders`, `schema_version_history`, `environment_profiles`, `plugin_management`
 - [x] Two v1-tier flags registered: `schema_union_types`, `migration_cli`
@@ -154,7 +158,10 @@ Feature flag inspection dashboard at `/admin/feature-flags` listing all known fl
 - [x] GET list route: returns 501 on `ProgrammingError` with migration hint
 - [x] GET by-name route: returns 501 on `ProgrammingError` with migration hint
 - [x] PUT toggle route: returns 501 on `ProgrammingError` with migration hint
-- [x] All 3 routes catch unexpected Exception and return 500 with `INTERNAL_ERROR` code
+- [x] All 3 main routes catch ProgrammingError→501 + SQLAlchemyError→503 + Exception→500
+- [x] All 3 org-override routes catch ProgrammingError→501 + SQLAlchemyError→503 + Exception→500 (added at index 351)
+- [x] `viewmodel.py` `me` route catches ProgrammingError→501 + SQLAlchemyError→503 + Exception→500 (added at index 351)
+- [x] `viewmodel_list_views` route catches ProgrammingError→501 + SQLAlchemyError→503 + Exception→500 (added at index 351)
 - [x] Unknown flag name returns 404 with specific flag name in detail
 - [x] Frontend catches network errors and displays user-facing error message with Retry
 - [x] Frontend handles undefined/null API fields gracefully (null-coalescing fallbacks)
@@ -165,8 +172,8 @@ Feature flag inspection dashboard at `/admin/feature-flags` listing all known fl
 - [x] `GET /api/v1/admin/license` (admin_license.py) has ProgrammingError→501 + SQLAlchemyError→503 handling; missing `except Exception→500` before index 286
 - [x] `GET /api/v1/license` (viewmodel.py) has `except Exception→500` but `logger` was undefined (NameError at runtime) — fixed at index 286
 - [x] `_build_registry` `has_key` checks org-level license keys (admin_feature_flags.py lines 88-92)
-- [ ] `viewmodel_current` route missing `except SQLAlchemyError→503` and `except Exception→500` guards — both added at index 286
-- [ ] `get_license_status` in admin_license.py missing `except Exception→500` guard — added at index 286
+- [x] `viewmodel_current` route missing `except SQLAlchemyError→503` and `except Exception→500` guards — both added at index 286, verified at index 351
+- [x] `get_license_status` in admin_license.py missing `except Exception→500` guard — added at index 286, verified at index 351
 
 ### Resilience
 
@@ -201,12 +208,27 @@ Feature flag inspection dashboard at `/admin/feature-flags` listing all known fl
 - [x] 18 backend tests for admin license management (parse/verify, GET/POST)
 - [x] 11 frontend component tests for AdminFeatureFlagsView
 - [x] All 19 API tests pass in isolated unit-test environment (no Postgres needed)
-- [ ] No FeatureFlagRegistry core unit tests (list_flags, get_flag, tier_gap_flags, refresh, overrides)
-- [ ] No tests for PlanContext classes (CommunityTier, LicenseKeyTier, DbPlanContext, resolve_plan_context)
-- [ ] No tests for GET /api/v1/license (viewmodel.py) endpoint
-- [ ] No BDD feature files for feature flag inspection
-- [ ] No frontend tests for error/loading/empty states in AdminFeatureFlagsView
-- [ ] No tests for SettingsLicenseView or planStore
+- [x] FeatureFlagRegistry core unit tests added (list_flags, get_flag, tier_gap_flags, refresh, overrides, from_db)
+- [x] PlanContext class unit tests added (CommunityTier, LicenseKeyTier, DbPlanContext, resolve_plan_context)
+- [x] Tests for GET /api/v1/license (viewmodel.py) endpoint added
+- [x] BDD feature files for feature flag inspection created
+- [x] Frontend tests for error/loading/empty states in AdminFeatureFlagsView added
+- [x] planStore unit tests exist at frontend/src/__tests__/planStore.spec.ts
+
+## QA History (index 351 — cross-cutting) 
+
+### Findings fixed
+
+- **MAJOR:** `admin_feature_flags.py` 3 main routes (list, get-by-name, toggle) only caught `ProgrammingError→501` and `Exception→500` — missing `SQLAlchemyError→503` for connection/deadlock failures. Added `except SQLAlchemyError→503` block to all 3.
+- **MAJOR:** `admin_feature_flags.py` 3 org-override routes (GET, PUT, DELETE) had NO error handling at all — `ProgrammingError` from missing DB tables would propagate as opaque 500. Added full error handling (ProgrammingError→501, SQLAlchemyError→503, Exception→500) to all 3 routes.
+- **MAJOR:** `viewmodel.py` `me` route only had `ProgrammingError→501` — missing `SQLAlchemyError→503` and `Exception→500`. Added both guards.
+- **MAJOR:** `viewmodel.py` `viewmodel_list_views` route only had `ProgrammingError→501` — missing `SQLAlchemyError→503` and `Exception→500`. Added both guards.
+- **MAJOR:** Added `test_feature_flag_registry.py` with comprehensive FeatureFlagRegistry unit tests (list_flags, get_flag, tier_gap_flags, refresh, overrides, from_db, known_flags_count) — previously only `saved_views` flag registration was tested.
+- **MAJOR:** Added `test_plan_context.py` with unit tests for CommunityTier, LicenseKeyTier, DbPlanContext, resolve_plan_context, and PlanContext protocol.
+- **MAJOR:** Added `test_viewmodel_license.py` with tests for GET /api/v1/license endpoint covering community tier, team tier, is_valid, and public accessibility.
+- **MAJOR:** Added BDD feature file `feature_flag_inspection.feature` for feature flag listing, viewing, toggling, and public license endpoint.
+- **MAJOR:** Added frontend tests for error state, loading spinner, empty search state, and pagination in AdminFeatureFlagsView.
+- **MINOR:** Product map `_KNOWN_FLAGS` tier listing was missing `remy_ui_driving` from the Community tier section. Added it.
 
 ## QA History (index 286 — cross-cutting re-check)
 
@@ -242,7 +264,9 @@ Feature flag inspection dashboard at `/admin/feature-flags` listing all known fl
 - **Frontend Lock icon links to modulo.run/pricing instead of /settings/license:** `FeatureGate.vue` and `LockIcon.vue` link to the external pricing page rather than the internal license settings page per PRD.
 - **Tier badge no "License expired" state:** `SidebarFooter.vue` only distinguishes Community vs Team — expired state shows as `team` badge.
 - **No frontend route guard for admin-only routes:** Any authenticated user can reach `/admin/feature-flags` (though RLS prevents viewing data outside their org).
-- **No BDD feature files:** No `.feature` files exist for feature flag inspection.
+- **Missing SQLAlchemyError→503 on admin_feature_flags.py ORG-OVERRIDE routes (3 routes)** — fixed at index 351
+- **Missing SQLAlchemyError→503 on admin_feature_flags.py 3 main routes** — fixed at index 351
+- **Missing error handling on viewmodel.py me and list_views routes** — fixed at index 351
 
 ## Known Gaps
 
@@ -262,15 +286,10 @@ Feature flag inspection dashboard at `/admin/feature-flags` listing all known fl
 - No frontend route guard for admin-only routes (any authenticated user can reach `/admin/feature-flags`)
 - Lock icon tooltip text and link point to modulo.run/pricing instead of /settings/license per PRD
 - No "License expired" badge state in sidebar footer
-- Frontend component tests (AdminFeatureFlagsView.spec.ts) do not cover error/loading/empty states
-- No frontend tests for SettingsLicenseView or planStore
+- No SettingsLicenseView frontend tests
 
 ### Test coverage
-- No FeatureFlagRegistry core unit tests (list_flags, get_flag, tier_gap_flags, refresh, overrides, from_db)
-- No PlanContext class unit tests (CommunityTier, LicenseKeyTier, DbPlanContext, resolve_plan_context)
-- No tests for GET /api/v1/license in viewmodel.py
-- No BDD feature files for feature flag inspection or license management
-- No SettingsLicenseView or planStore frontend tests
+- No SettingsLicenseView frontend tests
 
 ### Tier catalog
 - Tier names and feature-to-tier assignments are hardcoded in source; no DB-backed tier catalog mechanism to add/rename tiers without a code deploy (tracked as phase-tier-catalog refactor — PRD §6.2.1)

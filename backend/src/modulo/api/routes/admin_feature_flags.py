@@ -7,7 +7,7 @@ import logging
 from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
-from sqlalchemy.exc import ProgrammingError
+from sqlalchemy.exc import ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 from starlette.responses import Response
 
@@ -149,6 +149,17 @@ async def list_feature_flags(
                 }
             },
         )
+    except SQLAlchemyError:
+        logger.exception("feature_flags.list_failed")
+        return JSONResponse(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            content={
+                "error": {
+                    "code": "SERVICE_UNAVAILABLE",
+                    "message": "Database error while listing feature flags.",
+                }
+            },
+        )
     except Exception:
         logger.exception("feature_flags.list_failed")
         return JSONResponse(
@@ -194,6 +205,17 @@ async def get_feature_flag(
                 "error": {
                     "code": "NOT_IMPLEMENTED",
                     "message": "Feature flags are not available. Run database migrations to enable this feature.",
+                }
+            },
+        )
+    except SQLAlchemyError:
+        logger.exception("feature_flags.get_failed", extra={"flag_name": flag_name})
+        return JSONResponse(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            content={
+                "error": {
+                    "code": "SERVICE_UNAVAILABLE",
+                    "message": "Database error while getting feature flag.",
                 }
             },
         )
@@ -252,6 +274,17 @@ async def toggle_feature_flag(
                 }
             },
         )
+    except SQLAlchemyError:
+        logger.exception("feature_flags.toggle_failed", extra={"flag_name": flag_name})
+        return JSONResponse(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            content={
+                "error": {
+                    "code": "SERVICE_UNAVAILABLE",
+                    "message": "Database error while toggling feature flag.",
+                }
+            },
+        )
     except Exception:
         logger.exception("feature_flags.toggle_failed", extra={"flag_name": flag_name})
         return JSONResponse(
@@ -272,12 +305,48 @@ async def get_org_flag_override(
     session: AsyncSession = Depends(get_db_session),
 ) -> dict:
     _require_admin(current_user)
-    async with session.begin():
-        org = await get_organisation(session, current_user.organisation_id)
-    if not org or not org.settings_json:
-        return {"override": None}
-    overrides = org.settings_json.get("feature_overrides", {})
-    return {"override": overrides.get(flag_name)}
+    try:
+        async with session.begin():
+            org = await get_organisation(session, current_user.organisation_id)
+        if not org or not org.settings_json:
+            return {"override": None}
+        overrides = org.settings_json.get("feature_overrides", {})
+        return {"override": overrides.get(flag_name)}
+    except HTTPException:
+        raise
+    except ProgrammingError:
+        logger.exception("feature_flags.get_org_override_failed", extra={"flag_name": flag_name})
+        return JSONResponse(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            content={
+                "error": {
+                    "code": "NOT_IMPLEMENTED",
+                    "message": "Feature flags are not available. Run database migrations to enable this feature.",
+                }
+            },
+        )
+    except SQLAlchemyError:
+        logger.exception("feature_flags.get_org_override_failed", extra={"flag_name": flag_name})
+        return JSONResponse(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            content={
+                "error": {
+                    "code": "SERVICE_UNAVAILABLE",
+                    "message": "Database error while fetching org flag override.",
+                }
+            },
+        )
+    except Exception:
+        logger.exception("feature_flags.get_org_override_failed", extra={"flag_name": flag_name})
+        return JSONResponse(
+            status_code=500,
+            content={
+                "error": {
+                    "code": "INTERNAL_ERROR",
+                    "message": "Failed to get org flag override.",
+                }
+            },
+        )
 
 
 @router.put("/{flag_name}/org-override")
@@ -288,17 +357,53 @@ async def set_org_flag_override(
     session: AsyncSession = Depends(get_db_session),
 ) -> dict:
     _require_admin(current_user)
-    async with session.begin():
-        org = await get_organisation(session, current_user.organisation_id)
-        if not org:
-            raise HTTPException(status.HTTP_404_NOT_FOUND, "Org not found")
-        settings = dict(org.settings_json or {})
-        overrides = dict(settings.get("feature_overrides", {}))
-        overrides[flag_name] = req.enabled
-        settings["feature_overrides"] = overrides
-        org.settings_json = settings
-        session.add(org)
-    return {"override": req.enabled}
+    try:
+        async with session.begin():
+            org = await get_organisation(session, current_user.organisation_id)
+            if not org:
+                raise HTTPException(status.HTTP_404_NOT_FOUND, "Org not found")
+            settings_dict = dict(org.settings_json or {})
+            overrides = dict(settings_dict.get("feature_overrides", {}))
+            overrides[flag_name] = req.enabled
+            settings_dict["feature_overrides"] = overrides
+            org.settings_json = settings_dict
+            session.add(org)
+        return {"override": req.enabled}
+    except HTTPException:
+        raise
+    except ProgrammingError:
+        logger.exception("feature_flags.set_org_override_failed", extra={"flag_name": flag_name})
+        return JSONResponse(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            content={
+                "error": {
+                    "code": "NOT_IMPLEMENTED",
+                    "message": "Feature flags are not available. Run database migrations to enable this feature.",
+                }
+            },
+        )
+    except SQLAlchemyError:
+        logger.exception("feature_flags.set_org_override_failed", extra={"flag_name": flag_name})
+        return JSONResponse(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            content={
+                "error": {
+                    "code": "SERVICE_UNAVAILABLE",
+                    "message": "Database error while setting org flag override.",
+                }
+            },
+        )
+    except Exception:
+        logger.exception("feature_flags.set_org_override_failed", extra={"flag_name": flag_name})
+        return JSONResponse(
+            status_code=500,
+            content={
+                "error": {
+                    "code": "INTERNAL_ERROR",
+                    "message": "Failed to set org flag override.",
+                }
+            },
+        )
 
 
 @router.delete("/{flag_name}/org-override")
@@ -308,14 +413,50 @@ async def clear_org_flag_override(
     session: AsyncSession = Depends(get_db_session),
 ) -> dict:
     _require_admin(current_user)
-    async with session.begin():
-        org = await get_organisation(session, current_user.organisation_id)
-        if not org or not org.settings_json:
-            return {"override": None}
-        settings = dict(org.settings_json)
-        overrides = dict(settings.get("feature_overrides", {}))
-        overrides.pop(flag_name, None)
-        settings["feature_overrides"] = overrides
-        org.settings_json = settings
-        session.add(org)
-    return {"override": None}
+    try:
+        async with session.begin():
+            org = await get_organisation(session, current_user.organisation_id)
+            if not org or not org.settings_json:
+                return {"override": None}
+            settings_dict = dict(org.settings_json)
+            overrides = dict(settings_dict.get("feature_overrides", {}))
+            overrides.pop(flag_name, None)
+            settings_dict["feature_overrides"] = overrides
+            org.settings_json = settings_dict
+            session.add(org)
+        return {"override": None}
+    except HTTPException:
+        raise
+    except ProgrammingError:
+        logger.exception("feature_flags.clear_org_override_failed", extra={"flag_name": flag_name})
+        return JSONResponse(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            content={
+                "error": {
+                    "code": "NOT_IMPLEMENTED",
+                    "message": "Feature flags are not available. Run database migrations to enable this feature.",
+                }
+            },
+        )
+    except SQLAlchemyError:
+        logger.exception("feature_flags.clear_org_override_failed", extra={"flag_name": flag_name})
+        return JSONResponse(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            content={
+                "error": {
+                    "code": "SERVICE_UNAVAILABLE",
+                    "message": "Database error while clearing org flag override.",
+                }
+            },
+        )
+    except Exception:
+        logger.exception("feature_flags.clear_org_override_failed", extra={"flag_name": flag_name})
+        return JSONResponse(
+            status_code=500,
+            content={
+                "error": {
+                    "code": "INTERNAL_ERROR",
+                    "message": "Failed to clear org flag override.",
+                }
+            },
+        )

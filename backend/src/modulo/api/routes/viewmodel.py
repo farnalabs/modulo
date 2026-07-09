@@ -207,6 +207,20 @@ async def me(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
         )
+    except SQLAlchemyError:
+        logger.exception("me.failed")
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Database error while loading user info.",
+        )
+    except HTTPException:
+        raise
+    except Exception:
+        logger.exception("me.failed")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to load user info.",
+        )
 
     return MeResponse(
         user=UserInfo(username=current_user.username),
@@ -380,6 +394,20 @@ async def viewmodel_list_views(
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
+        )
+    except SQLAlchemyError:
+        logger.exception("viewmodel.list_views_failed")
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Database error while listing views.",
+        )
+    except HTTPException:
+        raise
+    except Exception:
+        logger.exception("viewmodel.list_views_failed")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to list views.",
         )
 
     items = [_enrich_view(v, current_user.account_id) for v in result.items]

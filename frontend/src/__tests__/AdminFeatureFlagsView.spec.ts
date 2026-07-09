@@ -113,6 +113,58 @@ describe('AdminFeatureFlagsView', () => {
     expect(teamSection).toBeDefined()
   })
 
+  it('shows loading spinner while fetching', async () => {
+    const { api } = await import('../lib/api/client')
+    ;(api.GET as any).mockReturnValue(new Promise(() => {})) // never resolves
+    const wrapper = await mountView()
+    const spinner = wrapper.find('.animate-spin')
+    expect(spinner.exists()).toBe(true)
+  })
+
+  it('shows error message with retry on API error', async () => {
+    const { api } = await import('../lib/api/client')
+    ;(api.GET as any).mockResolvedValue({ data: null, error: 'Network failure' })
+    const wrapper = await mountView()
+    for (let i = 0; i < 5; i++) {
+      await nextTick()
+    }
+    expect(wrapper.text()).toContain('Failed to load feature flags')
+  })
+
+  it('shows empty state when search yields no results', async () => {
+    const wrapper = await mountView()
+    const input = wrapper.find('input[placeholder="Search flags by name or description..."]')
+    await input.setValue('zzz_no_match_zzz')
+    await nextTick()
+    expect(wrapper.text()).toContain('No feature flags match your search')
+  })
+
+  it('shows pagination when flags exceed page size', async () => {
+    const { api } = await import('../lib/api/client')
+    const manyFlags = Array.from({ length: 25 }, (_, i) => ({
+      name: `flag-${i}`,
+      description: `Flag number ${i}`,
+      tier: i < 10 ? 'community' : i < 20 ? 'team' : 'v1',
+      currently_active: i < 5,
+      depends_on: null,
+    }))
+    ;(api.GET as any).mockResolvedValue({
+      data: {
+        license: { tier: 'community', has_license_key: false, is_valid: true },
+        flags: manyFlags,
+        would_activate: manyFlags.filter(f => !f.currently_active),
+      },
+      error: undefined,
+    })
+    const wrapper = await mountView()
+    for (let i = 0; i < 5; i++) {
+      await nextTick()
+    }
+    const pageText = wrapper.text()
+    expect(pageText).toContain('Next')
+    expect(pageText).toContain('Previous')
+  })
+
   it('shows tooltip trigger elements', async () => {
     const wrapper = await mountView()
     const triggers = wrapper.findAll('.cursor-help')
