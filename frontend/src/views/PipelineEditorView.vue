@@ -7,14 +7,30 @@
     <div v-else-if="pageError" class="flex flex-1 items-center justify-center">
       <div class="rounded-lg border border-destructive/50 bg-destructive/10 p-4 text-destructive">{{ pageError }}</div>
     </div>
-    <div v-else-if="flowNodes.length === 0" class="flex flex-1 items-center justify-center">
-      <p class="text-sm italic text-muted-foreground/60 select-none">no components in pipeline</p>
+    <div v-else-if="flowNodes.length === 0" class="flex flex-1 flex-col items-center justify-center gap-4">
+      <div class="text-center">
+        <h2 class="text-xl font-semibold">{{ pipeline?.name || 'Pipeline' }}</h2>
+        <p v-if="pipeline?.description" class="mt-1 text-sm text-muted-foreground">{{ pipeline.description }}</p>
+        <p class="mt-4 text-sm italic text-muted-foreground/60 select-none">no components in pipeline</p>
+      </div>
+      <div class="flex items-center gap-2">
+        <button class="rounded-md bg-primary px-3 py-1 text-xs font-medium text-primary-foreground hover:bg-primary/90" @click="openRenameDialog">Rename</button>
+        <button v-if="!pipeline?.archived_at" class="rounded-md border border-input bg-background px-3 py-1 text-xs font-medium hover:bg-accent" @click="handleArchive">Archive</button>
+        <button v-else class="rounded-md border border-input bg-background px-3 py-1 text-xs font-medium hover:bg-accent" @click="handleUnarchive">Unarchive</button>
+        <button v-if="planStore.featureEnabled('pipeline_delete')" class="rounded-md border border-destructive/50 bg-destructive/10 px-3 py-1 text-xs font-medium text-destructive hover:bg-destructive/20" @click="showDeleteConfirm = true">Delete</button>
+      </div>
     </div>
     <template v-else>
       <div class="relative flex-1">
         <!-- Toolbar -->
         <div class="absolute left-4 top-4 z-10 flex items-center gap-2 rounded-lg border bg-card px-3 py-2 shadow-sm">
-          <h2 class="text-sm font-semibold">{{ $t('views.PipelineEditorView.pipeline_editor') }}</h2>
+          <div class="flex items-center gap-2">
+            <h2 class="text-sm font-semibold">{{ pipeline?.name || $t('views.PipelineEditorView.pipeline_editor') }}</h2>
+            <button class="rounded p-1 hover:bg-accent" @click="openRenameDialog" title="Rename pipeline">
+              <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 3a2.85 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z"/></svg>
+            </button>
+            <span v-if="pipeline?.archived_at" class="rounded bg-warning/20 px-1.5 py-0.5 text-[10px] font-medium text-warning">Archived</span>
+          </div>
           <span class="mx-2 h-4 w-px bg-border" />
           <div class="relative" @click.stop>
             <button
@@ -35,6 +51,12 @@
                 Composite
               </button>
             </div>
+          </div>
+          <span class="mx-2 h-4 w-px bg-border" />
+          <div class="flex items-center gap-1">
+            <button v-if="!pipeline?.archived_at" class="rounded-md border border-input bg-background px-2 py-1 text-xs font-medium hover:bg-accent" @click="handleArchive">Archive</button>
+            <button v-else class="rounded-md border border-input bg-background px-2 py-1 text-xs font-medium hover:bg-accent" @click="handleUnarchive">Unarchive</button>
+            <button v-if="planStore.featureEnabled('pipeline_delete')" class="rounded-md border border-destructive/50 bg-destructive/10 px-2 py-1 text-xs font-medium text-destructive hover:bg-destructive/20" @click="showDeleteConfirm = true">Delete</button>
           </div>
         </div>
 
@@ -499,6 +521,77 @@
         </div>
       </div>
     </div>
+
+    <!-- Rename dialog -->
+    <div
+      v-if="showRenameDialog"
+      class="fixed inset-0 z-50 flex items-center justify-center bg-black/50"
+      @click.self="showRenameDialog = false"
+    >
+      <div class="w-full max-w-md rounded-lg border bg-card p-6 shadow-lg">
+        <h3 class="mb-4 text-lg font-semibold">Rename Pipeline</h3>
+        <div class="space-y-4">
+          <div>
+            <label class="mb-1 block text-sm font-medium">Name</label>
+            <input
+              v-model="renameName"
+              class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm"
+              placeholder="Pipeline name"
+              @keyup.enter="handleRename"
+            />
+          </div>
+          <div v-if="renameError" class="rounded-lg border border-destructive/50 bg-destructive/10 p-3 text-sm text-destructive">
+            {{ renameError }}
+          </div>
+          <div class="flex justify-end gap-2">
+            <button
+              class="rounded-lg border border-input bg-background px-4 py-2 text-sm hover:bg-accent"
+              @click="showRenameDialog = false"
+            >
+              Cancel
+            </button>
+            <button
+              :disabled="!renameName.trim() || renaming"
+              class="rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
+              @click="handleRename"
+            >
+              {{ renaming ? 'Saving...' : 'Save' }}
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Delete confirmation dialog -->
+    <div
+      v-if="showDeleteConfirm"
+      class="fixed inset-0 z-50 flex items-center justify-center bg-black/50"
+      @click.self="showDeleteConfirm = false"
+    >
+      <div class="w-full max-w-md rounded-lg border bg-card p-6 shadow-lg">
+        <h3 class="mb-4 text-lg font-semibold text-destructive">Delete Pipeline</h3>
+        <p class="mb-4 text-sm text-muted-foreground">
+          Are you sure? This permanently deletes the pipeline and all its runs.
+        </p>
+        <div v-if="deleteError" class="mb-4 rounded-lg border border-destructive/50 bg-destructive/10 p-3 text-sm text-destructive">
+          {{ deleteError }}
+        </div>
+        <div class="flex justify-end gap-2">
+          <button
+            class="rounded-lg border border-input bg-background px-4 py-2 text-sm hover:bg-accent"
+            @click="showDeleteConfirm = false"
+          >
+            Cancel
+          </button>
+          <button
+            class="rounded-lg bg-destructive px-4 py-2 text-sm font-medium text-destructive-foreground hover:bg-destructive/90"
+            @click="handleDelete"
+          >
+            Delete
+          </button>
+        </div>
+      </div>
+    </div>
   </div>
 </template>
 
@@ -512,10 +605,12 @@ import '@vue-flow/core/dist/style.css'
 import '@vue-flow/core/dist/theme-default.css'
 import { useApi } from '../composables/useApi'
 import { formatApiError } from '../lib/api/formatError'
+import { usePlanStore } from '../stores/planStore'
 import BackLink from '../components/BackLink.vue'
 import { shortId } from '../utils/format'
 
-const { get, post, patch } = useApi()
+const { get, post, patch, delete: del } = useApi()
+const planStore = usePlanStore()
 const route = useRoute()
 const router = useRouter()
 const pipelineId = route.params.id as string
@@ -557,6 +652,14 @@ const saving = ref(false)
 
 const savingEdge = ref(false)
 const edgeSaveError = ref<string | null>(null)
+
+const pipeline = ref<any>(null)
+const showRenameDialog = ref(false)
+const renameName = ref('')
+const renameError = ref<string | null>(null)
+const renaming = ref(false)
+const showDeleteConfirm = ref(false)
+const deleteError = ref<string | null>(null)
 
 const defaultEdgeForm = {
   edge_type: 'normal',
@@ -873,8 +976,66 @@ async function revertToManual() {
   }
 }
 
+async function loadPipeline() {
+  try {
+    const data = await get<any>(`/api/v1/pipelines/${pipelineId}`)
+    pipeline.value = data
+  } catch (e) {
+    pageError.value = `Failed to load pipeline: ${formatApiError(e)}`
+  }
+}
+
+function openRenameDialog() {
+  renameName.value = pipeline.value?.name || ''
+  renameError.value = null
+  showRenameDialog.value = true
+}
+
+async function handleRename() {
+  if (!renameName.value.trim()) return
+  renaming.value = true
+  renameError.value = null
+  try {
+    const updated = await patch<any>(`/api/v1/pipelines/${pipelineId}`, { name: renameName.value.trim() })
+    pipeline.value = updated
+    showRenameDialog.value = false
+  } catch (e: unknown) {
+    renameError.value = formatApiError(e)
+  } finally {
+    renaming.value = false
+  }
+}
+
+async function handleArchive() {
+  try {
+    const updated = await post<any>(`/api/v1/pipelines/${pipelineId}/archive`)
+    pipeline.value = updated
+  } catch (e: unknown) {
+    pageError.value = `Failed to archive pipeline: ${formatApiError(e)}`
+  }
+}
+
+async function handleUnarchive() {
+  try {
+    const updated = await post<any>(`/api/v1/pipelines/${pipelineId}/unarchive`)
+    pipeline.value = updated
+  } catch (e: unknown) {
+    pageError.value = `Failed to unarchive pipeline: ${formatApiError(e)}`
+  }
+}
+
+async function handleDelete() {
+  deleteError.value = null
+  try {
+    await del(`/api/v1/pipelines/${pipelineId}`)
+    router.push({ name: 'library' })
+  } catch (e: unknown) {
+    deleteError.value = formatApiError(e)
+  }
+}
+
 onMounted(async () => {
-  await Promise.all([loadGraph(), loadCatalog()])
+  await Promise.all([loadPipeline(), loadGraph(), loadCatalog()])
   loading.value = false
 })
 </script>

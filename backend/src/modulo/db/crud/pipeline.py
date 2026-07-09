@@ -7,6 +7,8 @@ before calling. The session must be within an active transaction.
 import copy
 import logging
 import uuid
+from datetime import datetime
+
 from typing import Any
 
 from sqlalchemy import delete, func, select
@@ -82,12 +84,17 @@ async def list_pipelines(
     page: int = 1,
     page_size: int = 20,
     cursor: str | None = None,
+    include_archived: bool = False,
 ) -> PageResult[Pipeline]:
+    base = select(Pipeline)
+    if not include_archived:
+        base = base.where(Pipeline.archived_at.is_(None))
+
     if cursor is not None:
         paginator = CursorPaginator()
         cp = await paginator.paginate(
             session,
-            select(Pipeline),
+            base,
             cursor=cursor,
             limit=page_size,
             model=Pipeline,
@@ -104,12 +111,16 @@ async def list_pipelines(
 
     offset = (page - 1) * page_size
     try:
-        total = (await session.execute(select(func.count()).select_from(Pipeline))).scalar_one()
+        total = (await session.execute(select(func.count()).select_from(Pipeline).where(
+            *([Pipeline.archived_at.is_(None)] if not include_archived else [])
+        ))).scalar_one()
     except ProgrammingError:
         return PageResult(items=[], total=0, page=page, page_size=page_size)
     items = list(
         (
-            await session.execute(select(Pipeline).order_by(Pipeline.created_at.desc()).offset(offset).limit(page_size))
+            await session.execute(
+                base.order_by(Pipeline.created_at.desc()).offset(offset).limit(page_size)
+            )
         ).scalars()
     )
     return PageResult(items=items, total=total, page=page, page_size=page_size)
@@ -135,6 +146,24 @@ async def delete_pipeline(session: AsyncSession, pipeline_id: uuid.UUID) -> bool
     await session.delete(pipeline)
     await session.flush()
     return True
+
+
+async def archive_pipeline(session: AsyncSession, pipeline_id: uuid.UUID) -> Pipeline | None:
+    pipeline = await get_pipeline(session, pipeline_id)
+    if pipeline is None:
+        return None
+    pipeline.archived_at = datetime.now(datetime.UTC)
+    await session.flush()
+    return pipeline
+
+
+async def unarchive_pipeline(session: AsyncSession, pipeline_id: uuid.UUID) -> Pipeline | None:
+    pipeline = await get_pipeline(session, pipeline_id)
+    if pipeline is None:
+        return None
+    pipeline.archived_at = None
+    await session.flush()
+    return pipeline
 
 
 async def get_pipeline_graph(

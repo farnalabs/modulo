@@ -25,7 +25,7 @@
       </div>
     </header>
 
-    <main class="max-w-6xl mx-auto px-6 py-6 space-y-6">
+    <main class="max-w-6xl mx-auto px-6 py-6 space-y-6" @click.self="showActionMenu = null">
       <div v-if="loading" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
         <div v-for="i in 6" :key="i" class="card p-5 animate-pulse">
           <div class="h-5 w-3/4 bg-muted rounded mb-2" />
@@ -77,13 +77,38 @@
         >
           <div class="flex items-start justify-between gap-2 mb-3">
             <h3 class="text-base font-medium text-foreground truncate">{{ p.name }}</h3>
-            <span
-              class="shrink-0 badge text-xs"
-              :class="p.visibility === 'org' ? 'badge-context-blue' : 'badge-context-purple'"
-              data-testid="pipeline-list-visibility-badge"
-            >
-              {{ p.visibility === 'org' ? 'Org' : 'Team' }}
-            </span>
+            <div class="flex items-center gap-1 shrink-0">
+              <span
+                v-if="p.archived_at"
+                class="badge text-xs badge-status-warning"
+              >Archived</span>
+              <span
+                class="badge text-xs"
+                :class="p.visibility === 'org' ? 'badge-context-blue' : 'badge-context-purple'"
+                data-testid="pipeline-list-visibility-badge"
+              >
+                {{ p.visibility === 'org' ? 'Org' : 'Team' }}
+              </span>
+              <div class="relative">
+                <button
+                  class="rounded p-1 hover:bg-accent"
+                  @click.stop="showActionMenu = (showActionMenu === p.id ? null : p.id)"
+                  data-testid="pipeline-list-action-menu"
+                >
+                  <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="1"/><circle cx="12" cy="5" r="1"/><circle cx="12" cy="19" r="1"/></svg>
+                </button>
+                <div
+                  v-if="showActionMenu === p.id"
+                  class="absolute right-0 top-full z-20 mt-1 w-40 rounded-lg border bg-card py-1 shadow-lg"
+                  @click.stop
+                >
+                  <button class="flex w-full items-center gap-2 px-3 py-2 text-left text-sm hover:bg-accent" @click.stop="openRename(p)">Rename</button>
+                  <button v-if="!p.archived_at" class="flex w-full items-center gap-2 px-3 py-2 text-left text-sm hover:bg-accent" @click.stop="handleArchive(p)">Archive</button>
+                  <button v-else class="flex w-full items-center gap-2 px-3 py-2 text-left text-sm hover:bg-accent" @click.stop="handleUnarchive(p)">Unarchive</button>
+                  <button v-if="planStore.featureEnabled('pipeline_delete')" class="flex w-full items-center gap-2 px-3 py-2 text-left text-sm text-destructive hover:bg-destructive/10" @click.stop="openDelete(p)">Delete</button>
+                </div>
+              </div>
+            </div>
           </div>
 
           <p v-if="p.description" class="text-sm text-muted-foreground mb-4 line-clamp-2">
@@ -237,6 +262,77 @@
           </div>
         </div>
       </div>
+
+      <!-- Rename dialog -->
+      <div
+        v-if="showRenameDialog"
+        class="fixed inset-0 z-50 flex items-center justify-center bg-black/50"
+        @click.self="showRenameDialog = false"
+      >
+        <div class="w-full max-w-md rounded-lg border bg-card p-6 shadow-lg">
+          <h3 class="mb-4 text-lg font-semibold">Rename Pipeline</h3>
+          <div class="space-y-4">
+            <div>
+              <label class="mb-1 block text-sm font-medium">Name</label>
+              <input
+                v-model="renameName"
+                class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm"
+                placeholder="Pipeline name"
+                @keyup.enter="handleRename"
+              />
+            </div>
+            <div v-if="renameError" class="rounded-lg border border-destructive/50 bg-destructive/10 p-3 text-sm text-destructive">
+              {{ renameError }}
+            </div>
+            <div class="flex justify-end gap-2">
+              <button
+                class="rounded-lg border border-input bg-background px-4 py-2 text-sm hover:bg-accent"
+                @click="showRenameDialog = false"
+              >
+                Cancel
+              </button>
+              <button
+                :disabled="!renameName.trim() || renaming"
+                class="rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
+                @click="handleRename"
+              >
+                {{ renaming ? 'Saving...' : 'Save' }}
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Delete confirmation dialog -->
+      <div
+        v-if="showDeleteConfirm"
+        class="fixed inset-0 z-50 flex items-center justify-center bg-black/50"
+        @click.self="showDeleteConfirm = false"
+      >
+        <div class="w-full max-w-md rounded-lg border bg-card p-6 shadow-lg">
+          <h3 class="mb-4 text-lg font-semibold text-destructive">Delete Pipeline</h3>
+          <p class="mb-4 text-sm text-muted-foreground">
+            Are you sure? This permanently deletes the pipeline and all its runs.
+          </p>
+          <div v-if="deleteError" class="mb-4 rounded-lg border border-destructive/50 bg-destructive/10 p-3 text-sm text-destructive">
+            {{ deleteError }}
+          </div>
+          <div class="flex justify-end gap-2">
+            <button
+              class="rounded-lg border border-input bg-background px-4 py-2 text-sm hover:bg-accent"
+              @click="showDeleteConfirm = false"
+            >
+              Cancel
+            </button>
+            <button
+              class="rounded-lg bg-destructive px-4 py-2 text-sm font-medium text-destructive-foreground hover:bg-destructive/90"
+              @click="handleDelete"
+            >
+              Delete
+            </button>
+          </div>
+        </div>
+      </div>
   </div>
 </template>
 
@@ -244,6 +340,7 @@
 import { ref, computed, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { useApi } from '../composables/useApi'
+import { usePlanStore } from '../stores/planStore'
 import ErrorAlert from '../components/shared/ErrorAlert.vue'
 import { formatApiError } from '../lib/api/formatError'
 
@@ -255,6 +352,7 @@ interface PipelineItem {
   visibility: string
   created_at: string
   updated_at: string
+  archived_at: string | null
 }
 
 interface PipelineListResponse {
@@ -265,9 +363,19 @@ interface PipelineListResponse {
 }
 
 const router = useRouter()
-const { get, post } = useApi()
+const { get, post, patch, delete: del } = useApi()
+const planStore = usePlanStore()
 
 const allPipelines = ref<PipelineItem[]>([])
+const showActionMenu = ref<string | null>(null)
+const showRenameDialog = ref(false)
+const renameTarget = ref<PipelineItem | null>(null)
+const renameName = ref('')
+const renameError = ref<string | null>(null)
+const renaming = ref(false)
+const showDeleteConfirm = ref(false)
+const deleteTarget = ref<PipelineItem | null>(null)
+const deleteError = ref<string | null>(null)
 const showRunDialog = ref(false)
 const selectedPipeline = ref<PipelineItem | null>(null)
 const prompt = ref('')
@@ -335,6 +443,70 @@ function openRunDialog(p: PipelineItem) {
   advancedPayload.value = ''
   runError.value = null
   showRunDialog.value = true
+}
+
+function openRename(p: PipelineItem) {
+  showActionMenu.value = null
+  renameTarget.value = p
+  renameName.value = p.name
+  renameError.value = null
+  showRenameDialog.value = true
+}
+
+async function handleRename() {
+  if (!renameTarget.value || !renameName.value.trim()) return
+  renaming.value = true
+  renameError.value = null
+  try {
+    await patch(`/api/v1/pipelines/${renameTarget.value.id}`, { name: renameName.value.trim() })
+    showRenameDialog.value = false
+    showActionMenu.value = null
+    await loadPipelines()
+  } catch (e: unknown) {
+    renameError.value = formatApiError(e)
+  } finally {
+    renaming.value = false
+  }
+}
+
+async function handleArchive(p: PipelineItem) {
+  try {
+    await post(`/api/v1/pipelines/${p.id}/archive`)
+    showActionMenu.value = null
+    await loadPipelines()
+  } catch (e) {
+    error.value = formatApiError(e)
+  }
+}
+
+async function handleUnarchive(p: PipelineItem) {
+  try {
+    await post(`/api/v1/pipelines/${p.id}/unarchive`)
+    showActionMenu.value = null
+    await loadPipelines()
+  } catch (e) {
+    error.value = formatApiError(e)
+  }
+}
+
+function openDelete(p: PipelineItem) {
+  showActionMenu.value = null
+  deleteTarget.value = p
+  deleteError.value = null
+  showDeleteConfirm.value = true
+}
+
+async function handleDelete() {
+  if (!deleteTarget.value) return
+  deleteError.value = null
+  try {
+    await del(`/api/v1/pipelines/${deleteTarget.value.id}`)
+    showDeleteConfirm.value = false
+    deleteTarget.value = null
+    await loadPipelines()
+  } catch (e: unknown) {
+    deleteError.value = formatApiError(e)
+  }
 }
 
 function closeRunDialog() {
