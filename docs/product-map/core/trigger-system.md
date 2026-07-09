@@ -107,7 +107,7 @@ concurrency management via `max_concurrent_runs`.
 
 - [x] `DatabasePollingScheduler` — Celery beat scheduler querying `triggers` where `trigger_type='polling'`, `active=true`, `next_fire_at <= now()`
 - [x] `DatabasePollingEntry` created per matching trigger row
-- [x] `PollingFireTask` with `autoretry_for=(Exception,)`, `max_retries=2`, `default_retry_delay=30`
+- [x] `PollingFireTask` with `autoretry_for=(ConnectionError, TimeoutError, OSError)`, `max_retries=2`, `default_retry_delay=30`
 - [x] Trigger re-read with `FOR UPDATE` lock for concurrency serialisation
 - [x] Next-fire guard: if `next_fire_at > now()` the task returns `already_fired_this_cycle` without firing
 - [x] `schedule_polling_trigger()` in TriggerEngine computes `next_fire_at` from `poll_interval_seconds`
@@ -118,7 +118,7 @@ concurrency management via `max_concurrent_runs`.
 - [x] JMESPath `condition_expression` evaluated against query result records
 - [x] Condition met → run created with `input_payload` containing `records`, `total`, `poll_query`
 - [x] Condition not met → `no_match` logged, `next_fire_at` updated regardless
-- [x] `snapshot_id` resolved from trigger config — falls back to `uuid.uuid4()` if unset or invalid
+- [x] `snapshot_id` resolved from trigger config — falls back to `uuid.UUID(int=0)` if unset or invalid
 - [x] Stale trigger entries removed from in-memory schedule when DB rows are deleted/deactivated
 - [x] Active/inactive toggle respected
 - [x] RLS org isolation on all DB queries
@@ -144,7 +144,7 @@ concurrency management via `max_concurrent_runs`.
 - [ ] Webhook X-Modulo-Timestamp is malformed (not an integer) → `TimestampExpiredError` → 400
 - [ ] Webhook body is not a JSON object → 400 "Request body must be a JSON object"
 - [ ] Polling trigger with `connector_instance_id=None` in config → `poll_error` event logged, trigger skipped
-- [ ] Polling trigger with unset/invalid `snapshot_id` → falls back to `uuid.uuid4()` (may create run against wrong snapshot)
+- [ ] Polling trigger with unset/invalid `snapshot_id` → falls back to `uuid.UUID(int=0)` (may create run against wrong snapshot)
 - [ ] Polling trigger with missing connector instance in DB → `poll_error` event logged
 - [ ] Polling connector init fails (bad creds, unsupported type) → `poll_error` event logged
 - [ ] Poll query execution fails → `poll_error` event logged
@@ -201,7 +201,7 @@ concurrency management via `max_concurrent_runs`.
 - `_build_polling_connector()` is a standalone copy of `connector_hub._build_connector()` — drifts as connector hub gains new types (41+ types registered vs 6 in polling)
 - Agent signal triggers have no BDD or unit test coverage for the `fire_agent_signal()` function
 - `list_trigger_events` in `triggers.py` uses a separate count query — not DRY with admin version
-- `snapshot_id` falls back to `uuid.uuid4()` in polling/agent_signal/cron — may create runs against latest snapshot instead of intended one
+- `snapshot_id` falls back to `uuid.UUID(int=0)` in polling/agent_signal/cron — may create runs against latest snapshot instead of intended one
 - Polling trigger has no `retain_payload` equivalent (webhook has it for replay)
 - `max_concurrent_runs` uses pipeline-level active-run counting; PRD 8.5 suggests trigger-level counting
 - Daily spend limit applies to cron triggers only — polling has no spend limit check
