@@ -1,6 +1,6 @@
 ﻿<template>
   <FeatureGate feature-name="model_backend_management" show-disabled>
-    <div class="mx-auto max-w-4xl space-y-8 p-6">
+    <div class="page-narrow">
       <header class="flex items-center justify-between">
         <div>
           <h1 class="text-2xl font-semibold tracking-tight">{{ $t('views.AdminModelBackendsView.model_backends') }}</h1>
@@ -150,17 +150,17 @@
           </p>
         </div>
 
-        <div v-else class="overflow-hidden rounded-lg border">
+        <div v-else class="table-wrapper">
           <table class="w-full text-left text-sm">
-            <thead class="bg-muted/50">
+            <thead>
               <tr>
-                <th class="px-4 py-3 font-medium">{{ $t('views.AdminModelBackendsView.name') }}</th>
-                <th class="px-4 py-3 font-medium">{{ $t('views.AdminModelBackendsView.provider') }}</th>
-                <th class="px-4 py-3 font-medium">{{ $t('views.AdminModelBackendsView.model_id') }}</th>
-                <th class="px-4 py-3 font-medium">{{ $t('views.AdminModelBackendsView.display_name') }}</th>
-                <th class="px-4 py-3 font-medium">{{ $t('views.AdminModelBackendsView.credentials') }}</th>
-                <th class="px-4 py-3 font-medium">{{ $t('views.AdminModelBackendsView.visibility') }}</th>
-                <th class="px-4 py-3 font-medium text-right">{{ $t('views.AdminModelBackendsView.actions') }}</th>
+                <th class="table-header">{{ $t('views.AdminModelBackendsView.name') }}</th>
+                <th class="table-header">{{ $t('views.AdminModelBackendsView.provider') }}</th>
+                <th class="table-header">{{ $t('views.AdminModelBackendsView.model_id') }}</th>
+                <th class="table-header">{{ $t('views.AdminModelBackendsView.display_name') }}</th>
+                <th class="table-header">{{ $t('views.AdminModelBackendsView.credentials') }}</th>
+                <th class="table-header">{{ $t('views.AdminModelBackendsView.visibility') }}</th>
+                <th class="table-header table-cell-numeric">{{ $t('views.AdminModelBackendsView.actions') }}</th>
               </tr>
             </thead>
             <tbody class="divide-y">
@@ -170,15 +170,15 @@
                 class="hover:bg-muted/30 transition-colors"
                 :data-testid="`model-backend-row-${backend.id}`"
               >
-                <td class="px-4 py-3 font-medium">{{ backend.name }}</td>
-                <td class="px-4 py-3">
+                <td class="table-cell font-medium">{{ backend.name }}</td>
+                <td class="table-cell">
                   <span class="rounded-full bg-primary/10 px-2.5 py-0.5 text-xs font-medium text-primary">
                     {{ backend.provider }}
                   </span>
                 </td>
-                <td class="px-4 py-3 font-mono text-xs">{{ backend.model_id }}</td>
-                <td class="px-4 py-3 text-muted-foreground">{{ backend.display_name }}</td>
-                <td class="px-4 py-3">
+                <td class="table-cell font-mono text-xs">{{ backend.model_id }}</td>
+                <td class="table-cell text-muted-foreground">{{ backend.display_name }}</td>
+                <td class="table-cell">
                   <span
                     class="inline-flex items-center gap-1.5 rounded-full px-2.5 py-0.5 text-xs font-medium"
                     :class="backend.has_credentials ? 'bg-success/10 text-success' : 'bg-muted text-muted-foreground'"
@@ -190,10 +190,10 @@
                     {{ backend.has_credentials ? $t('views.AdminModelBackendsView.configured') : $t('views.AdminModelBackendsView.missing') }}
                   </span>
                 </td>
-                <td class="px-4 py-3 text-xs text-muted-foreground">
+                <td class="table-cell text-xs text-muted-foreground">
                   {{ backend.visibility }}
                 </td>
-                <td class="px-4 py-3 text-right">
+                <td class="table-cell-numeric">
                   <div class="flex items-center justify-end gap-1">
                     <button
                       class="rounded p-1 text-muted-foreground hover:bg-accent"
@@ -229,34 +229,34 @@
             {{ $t('views.AdminModelBackendsView.preview_model_backends_count', { count: previewBackends.length }, previewBackends.length) }}
           </summary>
           <div class="overflow-hidden border-t">
-            <table class="w-full text-left text-sm">
-              <thead class="bg-muted/50">
-                <tr>
-                  <th class="px-4 py-3 font-medium">{{ $t('views.AdminModelBackendsView.name') }}</th>
-                  <th class="px-4 py-3 font-medium">{{ $t('views.AdminModelBackendsView.provider') }}</th>
-                  <th class="px-4 py-3 font-medium">{{ $t('views.AdminModelBackendsView.model_id') }}</th>
-                  <th class="px-4 py-3 font-medium">{{ $t('views.AdminModelBackendsView.tier') }}</th>
-                  <th class="px-4 py-3 font-medium text-right">{{ $t('views.AdminModelBackendsView.actions') }}</th>
-                </tr>
-              </thead>
-              <tbody class="divide-y">
-                <tr
-                  v-for="backend in previewBackends"
-                  :key="backend.id"
-                  class="hover:bg-muted/30 transition-colors"
-                  :data-testid="`model-backend-row-${backend.id}`"
-                >
-                  <td class="px-4 py-3 font-medium">{{ backend.name }}</td>
-                  <td class="px-4 py-3">
-                    <span class="rounded-full bg-primary/10 px-2.5 py-0.5 text-xs font-medium text-primary">
-                      {{ backend.provider }}
-                    </span>
-                  </td>
-                  <td class="px-4 py-3 font-mono text-xs">{{ backend.model_id }}</td>
-                  <td class="px-4 py-3">
-                    <span class="badge badge-context-amber text-xs">{{ $t('views.AdminModelBackendsView.preview_badge') }}</span>
-                  </td>
-                  <td class="px-4 py-3 text-right">
+          <table class="w-full text-left text-sm">
+            <thead>
+              <tr>
+                <th class="table-header">{{ $t('views.AdminModelBackendsView.name') }}</th>
+                <th class="table-header">{{ $t('views.AdminModelBackendsView.provider') }}</th>
+                <th class="table-header">{{ $t('views.AdminModelBackendsView.model_id') }}</th>
+                <th class="table-header">{{ $t('views.AdminModelBackendsView.tier') }}</th>
+                <th class="table-header table-cell-numeric">{{ $t('views.AdminModelBackendsView.actions') }}</th>
+              </tr>
+            </thead>
+            <tbody class="divide-y">
+              <tr
+                v-for="backend in previewBackends"
+                :key="backend.id"
+                class="hover:bg-muted/30 transition-colors"
+                :data-testid="`model-backend-row-${backend.id}`"
+              >
+                <td class="table-cell font-medium">{{ backend.name }}</td>
+                <td class="table-cell">
+                  <span class="rounded-full bg-primary/10 px-2.5 py-0.5 text-xs font-medium text-primary">
+                    {{ backend.provider }}
+                  </span>
+                </td>
+                <td class="table-cell font-mono text-xs">{{ backend.model_id }}</td>
+                <td class="table-cell">
+                  <span class="badge badge-context-amber text-xs">{{ $t('views.AdminModelBackendsView.preview_badge') }}</span>
+                </td>
+                <td class="table-cell-numeric">
                     <div class="flex items-center justify-end gap-1">
                       <button
                         class="rounded p-1 text-muted-foreground hover:bg-accent"

@@ -1,7 +1,7 @@
 ﻿<template>
   <FeatureGate feature-name="team_rbac" required-tier="team" show-disabled>
 
-    <div data-theme="agent" class="mx-auto max-w-6xl space-y-6 p-6">
+    <div data-theme="agent" class="page-wide">
     <header>
       <h1 class="text-2xl font-semibold tracking-tight">Organisation Settings</h1>
       <p class="mt-1 text-muted-foreground">Manage your organisation profile, export data, or delete the organisation</p>

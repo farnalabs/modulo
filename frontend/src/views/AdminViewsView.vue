@@ -1,5 +1,5 @@
 ﻿<template>
-  <div class="mx-auto max-w-5xl space-y-8 p-6">
+  <div class="page-narrow">
     <header class="flex items-center justify-between">
       <div>
         <h1 class="text-2xl font-semibold tracking-tight">{{ $t('components.ViewToggle.saved_views') }}</h1>

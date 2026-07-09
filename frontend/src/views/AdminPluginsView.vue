@@ -1,6 +1,6 @@
 ﻿<template>
   <FeatureGate feature-name="plugin_management">
-    <div class="mx-auto max-w-5xl space-y-8 p-6">
+    <div class="page-narrow">
       <header class="flex items-center justify-between">
         <div>
           <h1 class="text-2xl font-semibold tracking-tight">Plugins</h1>
@@ -28,15 +28,15 @@
           </p>
         </div>
 
-        <div class="overflow-hidden rounded-lg border">
+        <div class="table-wrapper">
           <table class="w-full text-left text-sm">
-            <thead class="bg-muted/50">
+            <thead>
               <tr>
-                <th class="px-4 py-3 font-medium">Plugin</th>
-                <th class="px-4 py-3 font-medium">Version</th>
-                <th class="px-4 py-3 font-medium">Type</th>
-                <th class="px-4 py-3 font-medium">Status</th>
-                <th class="px-4 py-3 font-medium text-right">Actions</th>
+                <th class="table-header">Plugin</th>
+                <th class="table-header">Version</th>
+                <th class="table-header">Type</th>
+                <th class="table-header">Status</th>
+                <th class="table-header table-cell-numeric">Actions</th>
               </tr>
             </thead>
             <tbody class="divide-y">
@@ -45,7 +45,7 @@
                   class="hover:bg-muted/30 transition-colors"
                   :class="{ 'opacity-60': !activeStates[plugin.PLUGIN_ID] }"
                 >
-                  <td class="px-4 py-3">
+                  <td class="table-cell">
                     <div>
                       <button
                         class="font-medium text-left hover:text-primary transition-colors"
@@ -58,17 +58,17 @@
                       </p>
                     </div>
                   </td>
-                  <td class="px-4 py-3 font-mono text-xs text-muted-foreground">
+                  <td class="table-cell font-mono text-xs text-muted-foreground">
                     {{ plugin.version }}
                   </td>
-                  <td class="px-4 py-3">
+                  <td class="table-cell">
                     <span
                       class="rounded-full bg-primary/10 px-2.5 py-0.5 text-xs font-medium text-primary"
                     >
                       {{ pluginTypeLabel(plugin.capabilities) }}
                     </span>
                   </td>
-                  <td class="px-4 py-3">
+                  <td class="table-cell">
                     <span
                       class="inline-flex items-center gap-1.5 rounded-full px-2.5 py-0.5 text-xs font-medium"
                       :class="activeStates[plugin.PLUGIN_ID] !== false && plugin.health_ok ? 'bg-success/10 text-success' : 'bg-muted text-muted-foreground'"
@@ -80,7 +80,7 @@
                       {{ activeStates[plugin.PLUGIN_ID] !== false && plugin.health_ok ? 'Active' : 'Inactive' }}
                     </span>
                   </td>
-                  <td class="px-4 py-3 text-right">
+                  <td class="table-cell-numeric">
                     <div class="flex items-center justify-end gap-1">
                       <label
                         class="relative inline-flex cursor-pointer items-center"

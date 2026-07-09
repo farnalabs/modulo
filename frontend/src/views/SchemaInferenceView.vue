@@ -4,7 +4,7 @@
     { label: $t('views.SchemaInferenceView.editor'), to: '/schemas/editor' },
     { label: $t('views.SchemaInferenceView.infer'), to: '/schemas/infer' },
   ]" />
-  <div class="mx-auto max-w-4xl space-y-8 p-6">
+    <div class="page-narrow">
     <header>
       <h1 class="text-2xl font-semibold tracking-tight">{{ $t('views.SchemaInferenceView.schema_inference') }}</h1>
       <p class="mt-1 text-muted-foreground">{{ $t('views.SchemaInferenceView.infer_a_schema_from_a_connected_data_source') }}</p>

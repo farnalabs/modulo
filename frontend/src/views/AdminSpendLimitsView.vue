@@ -4,7 +4,7 @@
     { label: 'Spend Limits', to: '/admin/costs/limits' },
     { label: 'Cost Controls', to: '/admin/costs/controls' },
   ]" />
-  <div data-theme="agent" class="mx-auto max-w-6xl space-y-6 p-6">
+  <div data-theme="agent" class="page-wide">
     <header>
       <h1 class="text-2xl font-semibold tracking-tight">{{ $t('views.AdminCostBreakdownView.spend_limits') }}</h1>
       <p class="mt-1 text-muted-foreground">{{ $t('views.AdminSpendLimitsView.configure_daily_spend_limits_at_the_org_and_team_level') }}</p>
@@ -48,16 +48,16 @@
             </div>
             <table v-else class="w-full text-sm">
               <thead>
-                <tr class="border-b text-left text-muted-foreground">
-                  <th class="pb-2 font-medium">Team</th>
-                  <th class="pb-2 font-medium">Daily Limit (USD)</th>
-                  <th class="pb-2 font-medium" />
+                <tr>
+                  <th class="table-header">Team</th>
+                  <th class="table-header">Daily Limit (USD)</th>
+                  <th class="table-header" />
                 </tr>
               </thead>
               <tbody>
                 <tr v-for="team in teams" :key="team.id" class="border-b last:border-b-0">
-                  <td class="py-3 font-medium">{{ team.name }}</td>
-                  <td class="py-3">
+                  <td class="table-cell font-medium">{{ team.name }}</td>
+                  <td class="table-cell">
                     <Input
                       :model-value="team.editingLimit ?? undefined" @update:model-value="(v: any) => team.editingLimit = v === '' ? null : Number(v)"
                       type="number"
@@ -69,7 +69,7 @@
                     />
                     <p v-if="team.saveError" class="mt-1 text-xs text-destructive">{{ team.saveError }}</p>
                   </td>
-                  <td class="py-3 text-right">
+                  <td class="table-cell-numeric">
                     <Button size="sm" :disabled="team.saving" :data-testid="'admin-spend-limits-team-save-' + team.id" @click="saveTeamLimit(team)">
                       {{ team.saving ? 'Saving...' : 'Save' }}
                     </Button>
