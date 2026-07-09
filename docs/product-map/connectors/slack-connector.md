@@ -12,6 +12,7 @@ code:
   - backend/src/modulo/connectors/base.py
 depends-on:
   - feat-connectors-hub
+  - feat-connectors-base
 status: partial
 ---
 
@@ -84,7 +85,7 @@ Async Slack Web API connector implementing `ConnectorBase`. Provides read/write 
 
 - [x] `ConnectorType.SLACK` defined in `base.py` enum
 - [x] `SlackConnector.connector_type` returns `ConnectorType.SLACK`
-- [x] `ConnectorType.SLACK.capabilities` returns `{read, write}` in `base.py`
+- [x] `ConnectorType.SLACK.capabilities` returns `{MESSAGING, read, write}` in `base.py`
 - [x] Slack capabilities set includes `MESSAGING` — appropriate for a messaging platform
 
 ### Health Check — connectivity and credential validation
@@ -131,5 +132,6 @@ Async Slack Web API connector implementing `ConnectorBase`. Provides read/write 
 - [ ] **No scheduling**: `chat.scheduleMessage` not implemented
 
 ## QA History
+- 2026-07-09: Cross-cutting QA (index 345). Fixed CRITICAL — `_RETRYABLE_STATUSES` expanded from `{429}` to `{429, 502, 503, 504}` matching GitHub/Jira connectors (Slack API can return 502/503/504 during transient failures). Fixed MAJOR — removed redundant case-insensitive header check in `_parse_retry_after` (httpx headers already case-insensitive). Fixed MAJOR — corrected product map capabilities entry to `{MESSAGING, read, write}`. Fixed MAJOR — updated BDD step registration comment from "5 scenarios" to "14 scenarios". Updated product map `depends-on:` to include `feat-connectors-base`. Added 4 missing BDD scenarios (channel_info, channel_members, thread_replies, thread_reply) with mock handlers. Added 4 new unit tests for 502/503/504 retry behavior. Created semgrep rule `retryable-5xx-missing` to prevent future connectors from omitting 5xx status codes. Deferred: website docs stub (outside worktree scope), per-request timeout standardization (30s client default is reasonable), client creation pattern (matches GitHub/Jira).
 - 2026-07-08: Cross-cutting QA (index 259). Fixed CRITICAL — health check misleadingly reported "Token is invalid or revoked" for network errors (connection errors, timeouts, HTTP errors during `verify_scopes` now return "network error" detail). Fixed MAJOR — extracted `_compute_retry_delay()` helper (retry delay calculation defined once instead of 3 times). Fixed MAJOR — extracted `_check_slack_ok()` helper (8 `if not body.get("ok")` patterns consolidated). Created `test_slack_resilience.py` with 8 new tests covering verify_scopes network error differentiation (3), empty response edge cases (3), `ok:false` no error field (1), connector type constant (1). All 57 existing + 8 new tests pass.
 - 2026-07-05: Cross-cutting QA (improve-architecture). Fixed: added retry/backoff for 429 (exponential backoff, max 3 retries); added `_call_api` centralised error handler with ConnectError/TimeoutException/HTTPStatusError coverage; added `_parse_json` for safe JSON decoding; added `verify_scopes()` via `auth.test` to detect revoked tokens; added health check scope verification; added `query("channel_info")`, `query("channel_members")`, `query("thread_replies")`, `write("thread_reply")` resources. Added 57 unit tests (from 30 originally). Updated Known Gaps.
