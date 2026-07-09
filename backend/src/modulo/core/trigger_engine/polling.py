@@ -322,7 +322,7 @@ async def fire_polling_trigger(
                 trigger=trigger,
                 org_id=org_id,
                 result="poll_error",
-                error_detail=f"Condition evaluation failed: {exc}",
+                error_detail=f"Condition evaluation failed: {str(exc)[:200]}",
             )
             await _update_next_fire_no_last(session, trigger)
             return {"status": "error", "reason": "condition_eval_failed", "error": str(exc)}
@@ -426,10 +426,20 @@ def _validate_poll_config(config: dict[str, Any]) -> None:
     """Validate polling trigger configuration.
     Raises ValueError on invalid config."""
     interval = config.get("poll_interval_seconds")
-    if interval is None:
-        return
-    if not isinstance(interval, (int, float)) or interval < 1:
-        raise ValueError(f"poll_interval_seconds must be >= 1, got {interval!r}")
+    if interval is not None:
+        if not isinstance(interval, (int, float)) or interval < 1:
+            raise ValueError(f"poll_interval_seconds must be >= 1, got {interval!r}")
+
+    ci_id = config.get("connector_instance_id")
+    if ci_id is not None:
+        try:
+            uuid.UUID(ci_id)
+        except (ValueError, TypeError):
+            raise ValueError(f"connector_instance_id must be a valid UUID, got {ci_id!r}")
+
+    poll_query = config.get("poll_query")
+    if poll_query is not None and not isinstance(poll_query, str):
+        raise ValueError(f"poll_query must be a string, got {poll_query!r}")
 
 
 # ---------------------------------------------------------------------------
@@ -597,7 +607,7 @@ class DatabasePollingScheduler(Scheduler):  # type: ignore[misc]
                             organisation_id=row.organisation_id,
                             trigger_id=row.id,
                             trigger_type="polling",
-                            raw_payload_hash=hashlib.sha256(b"").hexdigest(),
+                            raw_payload_hash=hashlib.sha256(f"polling:{row.id}:poll_error".encode()).hexdigest(),
                             validation_result="poll_error",
                             error_detail="Polling trigger missing connector_instance_id in config_json",
                         )
