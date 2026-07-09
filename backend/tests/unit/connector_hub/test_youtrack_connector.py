@@ -13,7 +13,7 @@ _BASE = "https://youtrack.mycompany.com/api"
 
 @pytest.fixture()
 def connector():
-    return YouTrackConnector(token=TOKEN)
+    return YouTrackConnector(token=TOKEN, base_url=_BASE)
 
 
 @pytest.fixture()
