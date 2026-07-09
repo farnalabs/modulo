@@ -54,10 +54,9 @@ test.describe('First-Run Golden Path', () => {
 
     // ── Step 4: Trigger a run ───────────────────────────────────────
     const triggerButton = page.getByTestId('pipeline-trigger-run')
-    if (await triggerButton.isVisible()) {
-      await triggerButton.click()
-      await page.waitForLoadState('networkidle')
-    }
+    await expect(triggerButton).toBeVisible()
+    await triggerButton.click()
+    await page.waitForLoadState('networkidle')
 
     // ── Step 5: Navigate to run detail and inspect output ───────────
     await page.goto(`/runs/${RUN_ID}`)
