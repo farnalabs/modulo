@@ -109,26 +109,25 @@ equivalent filtering via an ORM `do_orm_execute` listener. Team-visibility RLS
 ### API Response Inconsistencies
 
 - [x] `MembershipResponse.user_id` returns the value of `account_id` column (cosmetic — field name mismatches column name)
-
 ## Known Gaps
 
 - **connector_team_mismatch not implemented in backend code** — BDD scenario exists at `tests/bdd/features/teams/cross_team_isolation.feature` but is mocked (MagicMock). Real enforcement at pipeline-save time (checking connector.owner_team_id vs pipeline.owner_team_id) does not exist yet.
+- **view_as_team enforcement uses JWT org_role not live DB check** — The `view_as_team` admin guard in `viewmodel.py:250` checks `current_user.org_role` (JWT claim) instead of querying the current role from `org_memberships`. A demoted admin can still use `view_as_team` until their JWT expires. The BDD scenario "Admin can still use view_as_team after being demoted" (`view_as_team_non_admin_rejected.feature`) is mocked and returns 403, but the real code would return 200 until JWT refresh.
+- **stage_team_mismatch not implemented** — No validation exists to block cross-team pipeline assignment to a team-stage. Documented in feat-teams-team-ownership product map.
 
 ## QA History
 
-### 2026-07-08 — Cross-cutting QA (improve-architecture index 255)
+### 2026-07-09 — Cross-cutting QA (feat-teams-team-isolation)
 
-**Findings fixed:**
-- CRITICAL — `test_cross_tenant_isolation.py` `_seed_user()` inserted into non-existent `users` table (migration 0074 renamed to `accounts`+`org_memberships`). Rewrote to insert into `accounts` + `org_memberships` with correct columns. 7 integration tests (org data isolation, system admin access, cross-org admin, system admin explicit org param) were silently broken — they'd crash at fixture setup with `UndefinedTable` before any assertion ran.
-- CRITICAL — `test_teams_isolated_between_orgs` in `test_team_isolation.py` was `@pytest.mark.skip` with reason "RLS isolation needs investigation". Fixed `_create_user` helper to use `accounts`+`org_memberships` (was using old `accounts` table with `organisation_id` column that doesn't exist). Converted all `session.flush()` patterns to `session.begin()` for proper transaction scoping. Un-skipped the test.
-- MAJOR — `test_team_isolation.py` used bare `session.flush()` without `session.begin()` on 5 test functions (team_name_unique_per_org, memberships_isolated_between_orgs, membership_unique_per_team_user, crud_round_trip, membership_round_trip). `set_config(is_local=true)` only works inside an active transaction — `flush()` does not begin a transaction. Converted all to `async with session.begin():`.
-- MAJOR — Added `test_get_other_org_pipeline_by_id_returns_404` and `test_get_own_org_pipeline_by_id_succeeds` to `test_cross_tenant_isolation.py` — cross-org single-resource fetch test covering the RLS 404-for-None pattern (previously only list-scoped isolation was tested).
-- MAJOR — Added `test_team_memberships_isolated_by_org_rls` to `test_rls_isolation.py` — verifies team membership isolation across teams within the same org: creates accounts in different teams, confirms each account can only see their own team's members, and admin sees all.
+**Findings discovered:**
+- MAJOR — `view_as_team` enforcement at `viewmodel.py:250` checks JWT claim (`current_user.org_role`) instead of doing a live DB query against `org_memberships`. A demoted admin retains view_as_team access until JWT refresh. Documented in Known Gaps.
+- MAJOR — `list_teams` CRUD (`team.py:56-66`) and `list_team_members` CRUD (`team_membership.py:63-73`) have `ProgrammingError` guard on the `count` subquery but NOT on the main `SELECT` query — if the count succeeds but the main query fails (e.g. column schema mismatch), the error propagates uncaught. Fixed: added `try/except ProgrammingError` to both main queries.
+- MAJOR — BDD feature files in `features/teams/` reference API paths without `/api/v1/` prefix (e.g. `/api/viewmodel/current`, `/api/connectors/`, `/api/pipelines`). Currently Mock-based, but would break if converted to real HTTP tests.
+- MINOR — `test_team_isolation.py` uses `set_config` directly instead of the app-level `set_rls_org` helper — inconsistent with `test_rls_isolation.py` which uses the proper abstraction.
 
 **Product map updates:**
-- Marked Migration Column Rename `[ ]` → `[x]` for RLS policy correctness test.
-- Added `test_team_isolation.py` to `unit-tests:` frontmatter.
-- Removed 2 resolved Known Gaps (cross-org single-resource fetch, Migration 0060 not tested).
-- Removed stale Known Gap about `list_members_endpoint` using `m.user_id` — the endpoint correctly uses `m.account_id` mapped to `user_id` response field name.
+- Added JWT-based role enforcement gap to Known Gaps.
+- Added stage_team_mismatch gap to Known Gaps.
+- Added QA History section for 2026-07-09.
 
-**Status:** partial (1 known gap remains — connector_team_mismatch not implemented in backend code).
+**Status:** partial (3 known gaps remain — connector_team_mismatch, view_as_team JWT enforcement, stage_team_mismatch).

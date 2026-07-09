@@ -30,7 +30,7 @@ async def _domain_table_names(database_url: str) -> set[str]:
 
 @pytest.fixture(scope="session")
 def postgres_container() -> Generator[PostgresContainer, None, None]:
-    with PostgresContainer("postgres:16-alpine", startup_timeout=120) as pg:
+    with PostgresContainer("postgres:16-alpine") as pg:
         yield pg
 
 
