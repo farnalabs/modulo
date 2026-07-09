@@ -37,12 +37,11 @@ Discovered from 1 completed delivery task.
 
 ### Status Transitions
 
-- [x] Valid transitions: pending → routing/correcting/dismissed
+- [x] Valid transitions: pending → routing/correcting/resolved
 - [x] Valid transitions: routing → escalated/correcting/resolved
 - [x] Valid transitions: correcting → correcting/resolved/escalated
-- [x] Valid transitions: escalated → resolved/dismissed (terminal)
+- [x] Valid transitions: escalated → resolved (terminal)
 - [x] Valid transitions: resolved → (none — terminal)
-- [x] Valid transitions: dismissed → (none — terminal)
 - [x] Invalid transitions raise ValueError with descriptive message listing allowed transitions
 - [x] Unknown record returns None on status update
 - [x] RLS enforced on all status transitions (org-scoped)
@@ -136,7 +135,7 @@ Discovered from 1 completed delivery task.
 - [x] FeedbackManager methods raise typed exceptions: `FeedbackRecordNotFoundError`, `InvalidTransitionError`, `ConcurrentModificationError`, `ValidationError`
 - [x] Concurrent modification detected via atomic `UPDATE ... WHERE status = expected_status ... RETURNING` (optimistic locking)
 - [x] `_rls` decorator wraps every FeedbackManager method — RLS failure is caught, logged, and re-raised, not silently swallowed
-- [ ] `list_eval_proposals` route runs snapshot/node-name resolution queries OUTSIDE the `try/except ProgrammingError` block (lines 227–240 of `feedback.py`) — if `runs` or `pipeline_snapshots` tables exist but their data is stale (edge case after partial migration rollback), these unprotected queries would produce a raw 500 instead of structured 501
+- [x] `list_eval_proposals` route runs snapshot/node-name resolution queries OUTSIDE the `try/except ProgrammingError` block (lines 227–240 of `feedback.py`) — if `runs` or `pipeline_snapshots` tables exist but their data is stale (edge case after partial migration rollback), these unprotected queries would produce a raw 500 instead of structured 501
 
 ### Resilience
 
@@ -146,7 +145,7 @@ Discovered from 1 completed delivery task.
 - [x] `_paginate` validates page >= 1 and page_size >= 1 before executing queries
 - [x] `spawn_correction_run` handles `None` input_payload gracefully (`dict(original_run.input_payload or {})`)
 - [x] `detect_eval_gap` handles `None` eval_engine and empty eval_suite gracefully
-- [ ] Frontend `FeedbackInboxView.vue` uses bare `${err}` in template literals (6 locations) instead of `formatApiError(err)` — produces `[object Object]` on API error responses
+- [x] Frontend `FeedbackInboxView.vue` uses bare `${err}` in template literals (6 locations) instead of `formatApiError(err)` — produces `[object Object]` on API error responses
 
 ### Edge Cases
 
@@ -161,8 +160,8 @@ Discovered from 1 completed delivery task.
 - [x] `detect_eval_gap` with empty eval_suite returns `False` (no gap — skips further processing)
 - [x] `create_feedback` validates run exists AND belongs to user's org (returns 404 if either fails)
 - [x] `create_feedback_record` strips whitespace from `rejection_reason`
-- [x] `formatApiError` not imported/used in FeedbackInboxView.vue (uses bare `${err}`)
-- [x] `formatDate()` in FeedbackInboxView.vue hardcodes `'en-US'` locale — ignores user's locale preference
+- [x] formatApiError fix applied — 14 error handlers use formatApiError(err)
+- [x] formatDate uses locale.value (observed via useI18n()) — resolves locale preference correctly
 
 ## QA History
 
