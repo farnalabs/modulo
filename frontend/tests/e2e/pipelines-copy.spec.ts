@@ -6,6 +6,6 @@ test.describe('Copy Pipeline', () => {
     await page.goto('/pipelines/copy')
     await page.waitForLoadState('networkidle')
     await expect(page.locator('h1')).toContainText('Copy Pipeline')
-    await expect(page.getByTestId('page-pipeline-copy')).toBeVisible()
+    await expect(page.getByTestId('copy-wizard-step-indicator')).toBeVisible()
   })
 })

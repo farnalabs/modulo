@@ -6,6 +6,6 @@ test.describe('Feedback Inbox', () => {
     await page.goto('/feedback/inbox')
     await page.waitForLoadState('networkidle')
     await expect(page.locator('h1')).toContainText('Feedback Inbox')
-    await expect(page.getByTestId('page-feedback-inbox')).toBeVisible()
+    await expect(page.getByTestId('feedback-inbox-title')).toBeVisible()
   })
 })

@@ -6,7 +6,7 @@ test.describe('Settings License', () => {
     await page.goto('/settings/license')
     await page.waitForLoadState('networkidle')
     await expect(page.locator('h1')).toContainText('License')
-    await expect(page.getByTestId('page-settings-license')).toBeVisible()
+    await expect(page.getByTestId('license-title')).toBeVisible()
   })
 })
 
@@ -16,6 +16,6 @@ test.describe('Settings SSO', () => {
     await page.goto('/settings/sso')
     await page.waitForLoadState('networkidle')
     await expect(page.locator('h1')).toContainText('SSO')
-    await expect(page.getByTestId('page-settings-sso')).toBeVisible()
+    await expect(page.getByTestId('settings-sso-add-provider')).toBeVisible()
   })
 })
