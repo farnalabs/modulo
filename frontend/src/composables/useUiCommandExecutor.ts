@@ -245,24 +245,35 @@ export async function executeCommandBatch(commands: UiCommand[]): Promise<UiComm
 }
 
 async function executeWithTimeout(cmd: UiCommand, signal: AbortSignal): Promise<UiCommandResult> {
-  const result = await Promise.race([
-    executeSingle(cmd),
-    new Promise<UiCommandResult>(resolve => {
-      const timer = setTimeout(() => {
-        resolve({ id: cmd.id, name: cmd.name, success: false, error: 'command_timeout' })
-      }, PER_COMMAND_TIMEOUT_MS)
-      const checkAbort = () => {
-        clearTimeout(timer)
-        resolve({ id: cmd.id, name: cmd.name, success: false, error: 'cancelled_by_user' })
-      }
-      if (signal.aborted) {
-        checkAbort()
-      } else {
-        signal.addEventListener('abort', checkAbort, { once: true })
-      }
-    }),
-  ])
-  return result
+  return new Promise<UiCommandResult>(resolve => {
+    let resolved = false
+    const timer = setTimeout(() => {
+      if (resolved) return
+      resolved = true
+      resolve({ id: cmd.id, name: cmd.name, success: false, error: 'command_timeout' })
+    }, PER_COMMAND_TIMEOUT_MS)
+
+    const onAbort = () => {
+      if (resolved) return
+      resolved = true
+      clearTimeout(timer)
+      resolve({ id: cmd.id, name: cmd.name, success: false, error: 'cancelled_by_user' })
+    }
+
+    if (signal.aborted) {
+      onAbort()
+      return
+    }
+    signal.addEventListener('abort', onAbort, { once: true })
+
+    executeSingle(cmd).then(result => {
+      if (resolved) return
+      resolved = true
+      clearTimeout(timer)
+      signal.removeEventListener('abort', onAbort)
+      resolve(result)
+    })
+  })
 }
 
 async function executeSingle(cmd: UiCommand): Promise<UiCommandResult> {

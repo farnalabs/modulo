@@ -310,8 +310,15 @@ const slashCommands: SlashCommand[] = [
     command: '/rename',
     description: 'Rename current session',
     action: () => {
+      const text = inputText.value
+      const parts = text.split(' ')
+      const newName = parts.slice(1).join(' ').trim()
       showSlashMenu.value = false
-      store.triggerRename()
+      if (newName && store.activeSessionId) {
+        store.renameSession(store.activeSessionId, newName)
+      } else {
+        store.triggerRename()
+      }
     },
   },
   {
@@ -388,9 +395,9 @@ function onInput() {
 }
 
 function executeSlashCommand(cmd: SlashCommand) {
-  inputText.value = ''
   showSlashMenu.value = false
   cmd.action()
+  inputText.value = ''
 }
 
 function onInputKeydown(e: KeyboardEvent) {
@@ -407,7 +414,19 @@ function onInputKeydown(e: KeyboardEvent) {
     }
     if (e.key === 'Enter' || e.key === 'Tab') {
       e.preventDefault()
-      executeSlashCommand(filteredSlashCommands.value[slashHighlightIdx.value])
+      const cmd = filteredSlashCommands.value[slashHighlightIdx.value]
+      if (cmd.command === '/exit' || cmd.command === '/delete') {
+        executeSlashCommand(cmd)
+      } else {
+        inputText.value = cmd.command + ' '
+        showSlashMenu.value = false
+        nextTick(() => {
+          const textarea = document.querySelector('.remy-input') as HTMLTextAreaElement | null
+          if (textarea) {
+            textarea.focus()
+          }
+        })
+      }
       return
     }
     if (e.key === 'Escape') {
@@ -881,11 +900,22 @@ function renderMarkdown(text: string): string {
 .remy-slash-item {
   @apply flex items-center gap-3 w-full px-3 py-2 text-left text-sm transition-colors cursor-pointer;
   color: hsl(var(--popover-foreground));
+  border-left: 2px solid transparent;
 }
 .remy-slash-item:hover,
 .remy-slash-item.active {
   background-color: hsl(var(--accent));
 }
+.remy-slash-item.active {
+  border-left: 2px solid hsl(var(--primary));
+}
+.remy-slash-item.active .remy-slash-command {
+  color: hsl(var(--primary));
+}
+.remy-slash-item.active .remy-slash-desc {
+  color: hsl(var(--foreground));
+}
+
 .remy-slash-command {
   @apply font-mono font-medium shrink-0;
   color: hsl(var(--primary));

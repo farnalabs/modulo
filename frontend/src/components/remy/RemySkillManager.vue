@@ -149,8 +149,10 @@ import { ref, onMounted } from "vue";
 import { api } from "@/lib/api/client";
 import { formatApiError } from "@/lib/api/formatError";
 import { Button } from "@/components/ui/button";
+import { useRemyStore } from "@/composables/useRemyStore";
 import type { UserSkill } from "@/types/remy";
 
+const store = useRemyStore();
 const skills = ref<UserSkill[]>([]);
 const showForm = ref(false);
 const editingId = ref<string | null>(null);
@@ -235,6 +237,7 @@ async function saveSkill() {
     }
     showForm.value = false;
     editingId.value = null;
+    store.signalSkillsChanged();
     await fetchSkills();
   } catch (e: unknown) {
     skillError.value = e instanceof Error ? e.message : "Failed to save skill";
@@ -256,6 +259,7 @@ async function deleteSkill(id: string) {
       skillError.value = `Failed to delete skill: ${formatApiError(err)}`;
     } else {
       skills.value = skills.value.filter((s) => s.id !== id);
+      store.signalSkillsChanged();
     }
   } catch (e: unknown) {
     skillError.value =
