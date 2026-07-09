@@ -24,6 +24,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from starlette.status import HTTP_200_OK, HTTP_429_TOO_MANY_REQUESTS
 
+from modulo.api.dependencies import get_plan_context
 from modulo.api.middleware.rate_limiter import RateLimitMiddleware
 from modulo.core.rate_limiter import RateLimiterRegistry
 from modulo.settings import Settings
@@ -355,6 +356,9 @@ class TestAdminRateLimits:
         from modulo.auth.jwt import AuthenticatedPrincipal
 
         app.include_router(router)
+        mock_plan = MagicMock()
+        mock_plan.feature_enabled.return_value = True
+        app.dependency_overrides[get_plan_context] = lambda: mock_plan
         app.dependency_overrides[get_current_user] = lambda: AuthenticatedPrincipal(
             username="admin",
             organisation_id="00000000-0000-0000-0000-000000000001",
@@ -378,6 +382,9 @@ class TestAdminRateLimits:
         from modulo.auth.jwt import AuthenticatedPrincipal
 
         app.include_router(router)
+        mock_plan = MagicMock()
+        mock_plan.feature_enabled.return_value = True
+        app.dependency_overrides[get_plan_context] = lambda: mock_plan
         app.dependency_overrides[get_current_user] = lambda: AuthenticatedPrincipal(
             username="admin",
             organisation_id="00000000-0000-0000-0000-000000000001",
