@@ -56,14 +56,15 @@ A HITL gate may specify `required_team_id` to restrict claim/approve to members 
 
 ### MCP exposure
 - [x] `list_pending_hitl` exposes `required_team_id` in the gate resource
-- [ ] Gate context resource (`modulo://runs/{run_id}/hitl/{gate_id}`) does NOT expose `required_team_id` or `required_team_name` — only basic gate metadata (Gate, Run, Pipeline, Decision, Claimed by, Claim expires)
+- [x] Gate context resource (`modulo://runs/{run_id}/hitl/{gate_id}`) exposes `required_team_id` and `required_team_name`
 
 ### Expiry and overdue
 - [x] `expire_stale()` resets claims regardless of `required_team_id` (column is not reset — only claim fields)
 - [x] `list_overdue()` / `count_overdue()` work identically for team-scoped gates
 
 ### Notification routing
-- [ ] `hitl_awaiting` for `required_team_id` gates dispatches to team notification endpoints (falls back to org-wide endpoints if team has none)
+- [x] `hitl_awaiting` for `required_team_id` gates dispatches `team_id` in the event payload for routing to team notification endpoints
+- [ ] Actual dispatch to team notification endpoints (falls back to org-wide endpoints if team has none) — notifier layer not yet wired
 
 ### Unit test coverage
 - [x] `test_create_gate_with_required_team_id` — gate stores the team ref
@@ -72,15 +73,15 @@ A HITL gate may specify `required_team_id` to restrict claim/approve to members 
 - [x] `test_claim_no_required_team_still_works` — gate without team restriction is unchanged
 
 ### Error Handling
-- [ ] HITLManager.create_gate() is defined but never called from production code — gate row is never created. Claim endpoint returns GateNotFoundError for any gate reached during a pipeline run.
+- [x] `HITLManager.create_gate()` is called from the `NodeInterrupt` handler in `executor.py` — gate row is persisted during pipeline execution before the `hitl_awaiting` event is published
+- [ ] `required_team_id` extraction from graph state in executor handles invalid UUID gracefully (logged, not raised)
 
 ## Known Gaps
 
-- `HITLManager.create_gate()` is never called from production code - HitlClaim rows not created during pipeline execution
 - `ViewAsTeam` enforcement for HITL gate visibility not yet tested
 - No test for `human_only` + `required_team_id` additive enforcement at ViewModel layer
 - No test for team notification fallback chain (team endpoints → org endpoints)
 - No performance test for DB-live membership check on high-claim-contention gates
-- `PendingHitlGate` in viewmodel has `required_team_name` field defined but it is NEVER populated — `model_validate(h)` on a raw `HitlClaim` ORM row lacks the team name; no join or lookup is performed
-- MCP `resource_hitl_gate` (`modulo://runs/{run_id}/hitl/{gate_id}`) does not expose `required_team_id` or `required_team_name`
-- Team membership role enforcement: `claim()` checks TeamMembership existence only — any role (including `viewer`) can claim a team-scoped gate; no role filter applied 
+- Team membership role enforcement: `claim()` checks TeamMembership existence only — any role (including `viewer`) can claim a team-scoped gate; no role filter applied
+- BDD scenarios for team HITL gates are implemented as mock-based step definitions, not full integration tests with real DB
+- Notifier layer is not yet wired to use `team_id` from `hitl_awaiting` payload for team-specific dispatch

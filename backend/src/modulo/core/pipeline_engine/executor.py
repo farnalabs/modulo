@@ -43,6 +43,7 @@ from modulo.core.eval_engine import (
     EvalResult as EngineEvalResult,
 )
 from modulo.core.graph_validator import GraphValidator
+from modulo.core.hitl_manager import HITLManager
 from modulo.core.pipeline_engine.decorator import (
     RunCancelledError,
     set_cancellation_check,
@@ -423,12 +424,9 @@ class PipelineExecutor:
                 compiled.checkpointer = saver
                 await compiled.aupdate_state(config, {"_hitl_decision": resume_data})
                 final_status, error_code, _, node_token_usage = await self._stream_graph(
-                    compiled,
-                    None,
-                    config,
-                    node_ids,
-                    broker,
-                    run_id,
+                    compiled, None, config, node_ids, broker, run_id,
+                    pipeline_id=pipeline_id,
+                    org_id=org_id,
                     guard=guard,
                     node_token_budgets=node_token_budgets,
                 )
@@ -587,6 +585,8 @@ class PipelineExecutor:
                     compiled.checkpointer = saver
                     final_status, error_code, error_detail, node_token_usage = await self._stream_graph(
                         compiled, initial_state, config, node_ids, broker, run_id,
+                        pipeline_id=pipeline_id,
+                        org_id=org_id,
                         completed_node_outputs=completed_node_outputs,
                         guard=guard,
                         node_token_budgets=node_token_budgets,
@@ -594,6 +594,8 @@ class PipelineExecutor:
             else:
                 final_status, error_code, error_detail, node_token_usage = await self._stream_graph(
                     compiled, initial_state, config, node_ids, broker, run_id,
+                    pipeline_id=pipeline_id,
+                    org_id=org_id,
                     completed_node_outputs=completed_node_outputs,
                     guard=guard,
                     node_token_budgets=node_token_budgets,
@@ -806,6 +808,9 @@ class PipelineExecutor:
         node_ids: set[str],
         broker: RunEventBroker,
         run_id: uuid.UUID,
+        *,
+        pipeline_id: uuid.UUID | None = None,
+        org_id: uuid.UUID | None = None,
         completed_node_outputs: dict[str, Any] | None = None,
         guard: RunawayGuard | None = None,
         node_token_budgets: dict[str, int] | None = None,
@@ -882,7 +887,36 @@ class PipelineExecutor:
         except NodeInterrupt as exc:
             interrupts = exc.args[0] if exc.args else []
             gate_payload = interrupts[0].value if interrupts else {}
-            broker.publish("hitl_awaiting", {"gate_payload": gate_payload})
+            gate_id = gate_payload.get("gate_id", "")
+            required_team_id_str = gate_payload.get("required_team_id")
+            required_team_id = uuid.UUID(required_team_id_str) if required_team_id_str else None
+
+            if pipeline_id is not None and org_id is not None:
+                try:
+                    mgr = HITLManager()
+                    async with self._session_factory() as session, session.begin():
+                        await set_rls_org(session, org_id)
+                        await mgr.create_gate(
+                            session,
+                            run_id=run_id,
+                            gate_id=gate_id,
+                            pipeline_id=pipeline_id,
+                            org_id=org_id,
+                            required_team_id=required_team_id,
+                        )
+                except Exception:
+                    _log.exception(
+                        "hitl_gate.create_failed",
+                        extra={"run_id": str(run_id), "gate_id": gate_id},
+                    )
+
+            broker.publish(
+                "hitl_awaiting",
+                {
+                    "gate_payload": gate_payload,
+                    "team_id": str(required_team_id) if required_team_id else None,
+                },
+            )
             return "awaiting_human", None, None, None
         except EvalBlockedError as exc:
             broker.publish("run_failed", {"error": "eval_blocked", "detail": str(exc)})

@@ -1405,6 +1405,8 @@ async def resource_hitl_gate(run_id: str, gate_id: str) -> str:
         return "error: Token revoked or expired — re-authenticate"
     from sqlalchemy import select
 
+    from modulo.db.models.team import Team
+
     org_id = _ctx_org_id_val()
     rid = uuid.UUID(run_id)
     async with _session(org_id) as s:
@@ -1416,6 +1418,13 @@ async def resource_hitl_gate(run_id: str, gate_id: str) -> str:
             )
         )
         gate = result.scalar_one_or_none()
+        required_team_name = None
+        if gate is not None and gate.required_team_id is not None:
+            team_result = await s.execute(
+                select(Team).where(Team.id == gate.required_team_id)
+            )
+            team = team_result.scalar_one_or_none()
+            required_team_name = team.name if team else None
     if gate is None:
         return f"HITL gate '{gate_id}' not found on run {run_id}."
     parts = [
@@ -1425,6 +1434,9 @@ async def resource_hitl_gate(run_id: str, gate_id: str) -> str:
         f"Decision: {gate.decision or 'pending'}",
         f"Claimed by: {gate.account_id or 'unclaimed'}",
     ]
+    if gate.required_team_id:
+        parts.append(f"Required team: {gate.required_team_id}")
+        parts.append(f"Required team name: {required_team_name or 'unknown'}")
     if gate.expires_at:
         parts.append(f"Claim expires: {gate.expires_at.isoformat()}")
     return "\n".join(parts)

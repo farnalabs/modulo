@@ -289,14 +289,37 @@ async def viewmodel_current(
                 pipelines_page = await list_pipelines(session, page=1, page_size=20)
                 runs_page = await list_runs(session, page=1, page_size=10)
 
-                pending_hitl_result = await session.execute(
-                    select(HitlClaim).where(
+                user_team_ids = [m.team_id for m in memberships]
+                hitl_query = (
+                    select(HitlClaim, Team.name.label("required_team_name"))
+                    .outerjoin(Team, HitlClaim.required_team_id == Team.id)
+                    .where(
                         HitlClaim.organisation_id == current_user.organisation_id,
                         HitlClaim.decision.is_(None),
                     )
                 )
-                scalar_result = pending_hitl_result.scalars()
-                pending_hitl = scalar_result.all()
+                if user_team_ids:
+                    hitl_query = hitl_query.where(
+                        HitlClaim.required_team_id.is_(None)
+                        | HitlClaim.required_team_id.in_(user_team_ids)
+                    )
+                else:
+                    hitl_query = hitl_query.where(HitlClaim.required_team_id.is_(None))
+
+                pending_hitl_result = await session.execute(hitl_query)
+                pending_hitl = [
+                    PendingHitlGate(
+                        id=h.id,
+                        run_id=h.run_id,
+                        pipeline_id=h.pipeline_id,
+                        gate_id=h.gate_id,
+                        claimed_by=h.account_id,
+                        expires_at=h.expires_at,
+                        required_team_id=h.required_team_id,
+                        required_team_name=team_name,
+                    )
+                    for h, team_name in pending_hitl_result.all()
+                ]
 
                 all_views_result = await list_views(session, page=1, page_size=100)
                 all_views = [_enrich_view(v, current_user.account_id) for v in all_views_result.items]
