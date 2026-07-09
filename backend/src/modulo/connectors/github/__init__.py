@@ -2,6 +2,7 @@
 
 import asyncio
 import json
+import random
 import re
 from typing import Any
 
@@ -55,6 +56,7 @@ class GitHubConnector(ConnectorBase):
 
     Supports configurable ``base_url`` for GHES (default: ``https://api.github.com``).
     Retries 429/502/503/504 with exponential backoff + jitter (max 3 retries).
+    Includes random jitter in retry delays to avoid thundering herd.
     Parses Link header for pagination cursor on list endpoints.
 
     Supported query resources:
@@ -108,13 +110,18 @@ class GitHubConnector(ConnectorBase):
     def _client(self) -> httpx.AsyncClient:
         return httpx.AsyncClient(base_url=self._base_url, headers=self._headers(), timeout=30)
 
+    @staticmethod
+    def _jitter(delay: float) -> float:
+        """Add random jitter: [0, delay) to avoid thundering herd."""
+        return random.uniform(0, delay)  # noqa: S311 — non-cryptographic jitter for retry delays
+
     async def _call_api(self, method: str, path: str, **kwargs: Any) -> httpx.Response:
         """Call GitHub API with retry/backoff for retryable statuses.
 
         Retries on 429, 502, 503, 504 with exponential backoff + jitter.
+        Adds random jitter to retry delays to avoid thundering herd.
         Wraps HTTP/network/parse errors as ValueError.
         """
-        last_exc: Exception | None = None
         for attempt in range(_MAX_RETRIES + 1):
             try:
                 async with self._client() as client:
@@ -124,30 +131,27 @@ class GitHubConnector(ConnectorBase):
                     if r.status_code in _RETRYABLE_STATUSES and attempt < _MAX_RETRIES:
                         retry_after = _parse_retry_after(r)
                         delay = min(retry_after, _MAX_DELAY) if retry_after else min(_BASE_DELAY * (2 ** attempt), _MAX_DELAY)
-                        await asyncio.sleep(delay)
+                        await asyncio.sleep(self._jitter(delay))
                         continue
                     r.raise_for_status()
                     return r
             except httpx.HTTPStatusError as exc:
-                last_exc = exc
                 if exc.response.status_code in _RETRYABLE_STATUSES and attempt < _MAX_RETRIES:
                     retry_after = _parse_retry_after(exc.response)
                     delay = min(retry_after, _MAX_DELAY) if retry_after else min(_BASE_DELAY * (2 ** attempt), _MAX_DELAY)
-                    await asyncio.sleep(delay)
+                    await asyncio.sleep(self._jitter(delay))
                     continue
                 raise ValueError(f"GitHub API HTTP {exc.response.status_code}: {exc.response.text[:200]}") from exc
             except httpx.TimeoutException as exc:
-                last_exc = exc
                 if attempt < _MAX_RETRIES:
                     delay = min(_BASE_DELAY * (2 ** attempt), _MAX_DELAY)
-                    await asyncio.sleep(delay)
+                    await asyncio.sleep(self._jitter(delay))
                     continue
                 raise ValueError("GitHub API timeout") from exc
             except httpx.ConnectError as exc:
-                last_exc = exc
                 if attempt < _MAX_RETRIES:
                     delay = min(_BASE_DELAY * (2 ** attempt), _MAX_DELAY)
-                    await asyncio.sleep(delay)
+                    await asyncio.sleep(self._jitter(delay))
                     continue
                 raise ValueError("GitHub API connection error") from exc
 
