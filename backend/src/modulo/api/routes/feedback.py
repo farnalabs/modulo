@@ -390,7 +390,7 @@ async def update_feedback_status(
     session: AsyncSession = Depends(get_db_session),
     principal: AuthenticatedPrincipal = Depends(get_current_user),
 ) -> dict[str, Any]:
-    valid_statuses = {"pending", "routing", "correcting", "resolved", "escalated", "dismissed"}
+    valid_statuses = {"pending", "routing", "correcting", "resolved", "escalated"}
     if req.status not in valid_statuses:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
@@ -576,7 +576,7 @@ async def review_feedback(
                 record = await mgr.update_status(record_id, "resolved")
 
             elif req.action == "dismiss":
-                record = await mgr.update_status(record_id, "dismissed")
+                record = await mgr.update_status(record_id, "resolved")
 
             elif req.action == "create_correction_run":
                 if not record.run_id:
@@ -587,7 +587,17 @@ async def review_feedback(
 
                 try:
                     new_run_id = await mgr.spawn_correction_run(record_id)
-                except (FeedbackRecordNotFoundError, FeedbackManagerError) as exc:
+                except FeedbackRecordNotFoundError as exc:
+                    raise HTTPException(
+                        status_code=status.HTTP_404_NOT_FOUND,
+                        detail=str(exc),
+                    ) from exc
+                except (InvalidTransitionError, ConcurrentModificationError) as exc:
+                    raise HTTPException(
+                        status_code=status.HTTP_409_CONFLICT,
+                        detail=str(exc),
+                    ) from exc
+                except FeedbackManagerError as exc:
                     raise HTTPException(
                         status_code=status.HTTP_404_NOT_FOUND,
                         detail=str(exc),
@@ -623,6 +633,11 @@ async def review_feedback(
     except (InvalidTransitionError, ConcurrentModificationError) as exc:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
+            detail=str(exc),
+        ) from exc
+    except FeedbackRecordNotFoundError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
             detail=str(exc),
         ) from exc
     except HTTPException:

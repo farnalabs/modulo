@@ -151,7 +151,7 @@
               v-if="record.feedback_handler_type"
               class="inline-flex flex-shrink-0 items-center rounded-full bg-muted px-2 py-0.5 text-xs font-medium text-muted-foreground"
             >
-              {{ record.feedback_handler_type }}
+              {{ handlerTypeLabel(record.feedback_handler_type) }}
             </span>
           </div>
 
@@ -302,6 +302,12 @@ function formatDate(dateStr: string): string {
   const d = new Date(dateStr)
   if (isNaN(d.getTime())) return '-'
   return d.toLocaleDateString(locale.value, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })
+}
+
+function handlerTypeLabel(type: string): string {
+  const key = `views.FeedbackInboxView.handler_${type}`
+  const label = t(key)
+  return label !== key ? label : type
 }
 
 function formatJson(value: unknown): string {
@@ -469,7 +475,7 @@ async function dismissRecord(recordId: string) {
       detailMap.value[recordId] = data
       annotationMessage.value[recordId] = { type: 'success', text: t('views.FeedbackInboxView.dismissed') }
       const rec = records.value.find(r => r.id === recordId)
-      if (rec) rec.feedback_status = 'dismissed'
+      if (rec) rec.feedback_status = 'resolved'
       if (feedbackTimeouts.value[recordId]) clearTimeout(feedbackTimeouts.value[recordId])
       feedbackTimeouts.value[recordId] = setTimeout(() => { annotationMessage.value[recordId] = null }, 3000)
     }

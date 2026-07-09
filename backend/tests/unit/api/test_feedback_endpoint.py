@@ -396,7 +396,7 @@ class TestReviewFeedback:
         assert resp.json()["feedback_status"] == "resolved"
 
     def test_dismisses_feedback(self, client: TestClient) -> None:
-        mock_record = _make_mock_record(feedback_status="dismissed")
+        mock_record = _make_mock_record(feedback_status="resolved")
 
         with (
             patch("modulo.api.routes.feedback.set_rls_org"),
@@ -412,9 +412,9 @@ class TestReviewFeedback:
             )
 
         assert resp.status_code == 200
-        assert resp.json()["feedback_status"] == "dismissed"
+        assert resp.json()["feedback_status"] == "resolved"
         call_args, call_kwargs = mock_update.call_args
-        assert call_args[1] == "dismissed"
+        assert call_args[1] == "resolved"
 
     def test_rejects_invalid_action(self, client: TestClient) -> None:
         resp = client.post(

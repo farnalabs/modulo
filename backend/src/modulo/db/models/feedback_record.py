@@ -13,7 +13,7 @@ class FeedbackRecord(OrgScoped):
     __tablename__ = "feedback_records"
     __table_args__ = (
         CheckConstraint(
-            "feedback_status IN ('pending', 'routing', 'correcting', 'resolved', 'escalated', 'dismissed')",
+            "feedback_status IN ('pending', 'routing', 'correcting', 'resolved', 'escalated')",
             name="ck_feedback_records_status",
         ),
         CheckConstraint(

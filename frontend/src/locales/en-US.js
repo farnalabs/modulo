@@ -450,7 +450,10 @@ export default {
       "dismiss_failed": "Dismiss failed:",
       "dismissed": "Dismissed.",
       "dismissing": "Dismissing...",
-      "failed_to_load_pipelines": "Failed to load pipelines"
+      "failed_to_load_pipelines": "Failed to load pipelines",
+      "handler_human": "Human",
+      "handler_ai_correction": "AI Correction",
+      "handler_ai_correction_with_human_review": "AI Correction + Review"
     },
     "AdminSystemOrgsView": {
       "create_organisation": "Create Organisation",
