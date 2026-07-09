@@ -79,9 +79,14 @@ export const useRemyStore = defineStore('remy', () => {
   const isExecutingUi = ref(false)
   const isPaused = ref(false)
   const requestRename = ref(0)
+  const skillsVersion = ref(0)
 
   function triggerRename() {
     requestRename.value++
+  }
+
+  function signalSkillsChanged() {
+    skillsVersion.value++
   }
 
   const activeSession = computed(() =>
@@ -368,6 +373,8 @@ export const useRemyStore = defineStore('remy', () => {
     isPaused,
     requestRename,
     triggerRename,
+    skillsVersion,
+    signalSkillsChanged,
     activeSession,
     sortedSessions,
     fetchSessions,
