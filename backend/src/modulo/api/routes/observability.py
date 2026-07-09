@@ -12,7 +12,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy.exc import ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from modulo.api.dependencies import get_db_session
+from modulo.api.dependencies import get_db_session, require_feature
 from modulo.api.middleware.sensitive_mask import SENSITIVE_VALUE_MASK
 from modulo.auth.dependencies import get_current_user
 from modulo.auth.jwt import AuthenticatedPrincipal
@@ -135,7 +135,7 @@ def _build_degraded_response(org_id: str) -> OtelSettingsResponse:
     return _config_to_response(merged)
 
 
-@router.get("", response_model=OtelSettingsResponse)
+@router.get("", response_model=OtelSettingsResponse, dependencies=[require_feature("observability")])
 async def get_observability_settings(
     session: AsyncSession = Depends(get_db_session),
     principal: AuthenticatedPrincipal = Depends(get_current_user),
@@ -164,7 +164,7 @@ async def get_observability_settings(
     return _build_degraded_response(str(principal.organisation_id))
 
 
-@router.put("", response_model=OtelSettingsResponse)
+@router.put("", response_model=OtelSettingsResponse, dependencies=[require_feature("observability")])
 async def update_observability_settings(
     req: OtelSettingsUpdate,
     session: AsyncSession = Depends(get_db_session),
@@ -222,7 +222,7 @@ async def update_observability_settings(
         raise
 
 
-@router.post("/test", response_model=TestSpanResult)
+@router.post("/test", response_model=TestSpanResult, dependencies=[require_feature("observability")])
 async def test_otel_connection(
     req: TestOtelConfig,
     principal: AuthenticatedPrincipal = Depends(get_current_user),
@@ -290,7 +290,7 @@ async def test_otel_connection(
         return TestSpanResult(success=False, message=f"Connection failed: {exc}")
 
 
-@router.get("/preview", response_model=ExportPreviewResponse)
+@router.get("/preview", response_model=ExportPreviewResponse, dependencies=[require_feature("observability")])
 async def get_export_preview(
     session: AsyncSession = Depends(get_db_session),
     principal: AuthenticatedPrincipal = Depends(get_current_user),

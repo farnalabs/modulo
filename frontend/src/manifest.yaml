@@ -191,6 +191,7 @@ routes:
     sidebar_order: 2
     type: list_page
     <<: *community
+    preview: true
     deprecated: false
 
   /variants/compare:
@@ -204,6 +205,7 @@ routes:
     sidebar_order: 3
     type: page
     <<: *community
+    preview: true
     deprecated: false
 
   /variants/ab-test:
@@ -217,6 +219,7 @@ routes:
     sidebar_order: 4
     type: page
     <<: *community
+    preview: true
     deprecated: false
 
   /schemas:
@@ -298,7 +301,7 @@ routes:
     sidebar_group: settings
     sidebar_order: 1
     type: list_page
-    <<: *community
+    <<: *team
     deprecated: false
 
   /settings/sso:
@@ -403,6 +406,7 @@ routes:
     sidebar_order: 9
     type: page
     <<: *community
+    preview: true
     deprecated: false
 
   /settings/observability:
@@ -568,7 +572,7 @@ routes:
     parent: /
     product_map: null
     i18n_key: nav.node_categories
-    sidebar_group: system
+    sidebar_group: null
     sidebar_order: 3
     type: list_page
     <<: *team
@@ -581,7 +585,7 @@ routes:
     parent: /
     product_map: null
     i18n_key: nav.feature_flags
-    sidebar_group: system
+    sidebar_group: null
     sidebar_order: 4
     type: list_page
     <<: *team
@@ -594,7 +598,7 @@ routes:
     parent: /
     product_map: null
     i18n_key: nav.environments
-    sidebar_group: system
+    sidebar_group: null
     sidebar_order: 5
     type: list_page
     <<: *team
@@ -607,7 +611,7 @@ routes:
     parent: /
     product_map: null
     i18n_key: nav.run_retention
-    sidebar_group: system
+    sidebar_group: null
     sidebar_order: 6
     type: form_page
     <<: *team
@@ -620,7 +624,7 @@ routes:
     parent: /
     product_map: null
     i18n_key: nav.saved_views
-    sidebar_group: system
+    sidebar_group: null
     sidebar_order: 7
     type: list_page
     <<: *team
@@ -646,7 +650,7 @@ routes:
     parent: /
     product_map: null
     i18n_key: nav.error_dashboard
-    sidebar_group: monitoring
+    sidebar_group: null
     sidebar_order: 1
     type: list_page
     <<: *team
@@ -659,7 +663,7 @@ routes:
     parent: /admin/errors
     product_map: null
     i18n_key: nav.error_detail
-    sidebar_group: monitoring
+    sidebar_group: null
     sidebar_order: 2
     type: detail_page
     pattern: /admin/errors/:id
@@ -675,7 +679,7 @@ routes:
     parent: /
     product_map: null
     i18n_key: nav.notification_log
-    sidebar_group: monitoring
+    sidebar_group: null
     sidebar_order: 3
     type: list_page
     <<: *team
@@ -688,7 +692,7 @@ routes:
     parent: /
     product_map: null
     i18n_key: nav.api_changelog
-    sidebar_group: monitoring
+    sidebar_group: null
     sidebar_order: 4
     type: list_page
     <<: *team
@@ -701,7 +705,7 @@ routes:
     parent: /
     product_map: null
     i18n_key: nav.team_comparison
-    sidebar_group: monitoring
+    sidebar_group: null
     sidebar_order: 5
     type: page
     <<: *team
@@ -714,7 +718,7 @@ routes:
     parent: /
     product_map: null
     i18n_key: nav.plugins
-    sidebar_group: extensions
+    sidebar_group: null
     sidebar_order: 1
     type: list_page
     <<: *team

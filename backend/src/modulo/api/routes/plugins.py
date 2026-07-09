@@ -9,6 +9,7 @@ from datetime import datetime
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel
 
+from modulo.api.dependencies import require_feature
 from modulo.auth.dependencies import get_current_user
 from modulo.auth.jwt import AuthenticatedPrincipal
 from modulo.core.plugin_registry import PluginHealth, PluginManifest, get_plugin_registry
@@ -44,7 +45,7 @@ def _to_response(manifest: PluginManifest, health: PluginHealth) -> PluginRespon
     )
 
 
-@router.get("", response_model=list[PluginResponse])
+@router.get("", response_model=list[PluginResponse], dependencies=[require_feature("plugin_management")])
 async def list_plugins_endpoint(
     principal: AuthenticatedPrincipal = Depends(get_current_user),
 ) -> list[PluginResponse]:
@@ -56,7 +57,7 @@ async def list_plugins_endpoint(
     ]
 
 
-@router.get("/{plugin_id}/health")
+@router.get("/{plugin_id}/health", dependencies=[require_feature("plugin_management")])
 async def plugin_health_endpoint(
     plugin_id: str,
     principal: AuthenticatedPrincipal = Depends(get_current_user),

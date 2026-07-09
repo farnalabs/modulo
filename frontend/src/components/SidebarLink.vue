@@ -7,6 +7,7 @@
   >
     <span class="h-4 w-4 shrink-0"><SvgIcon :name="icon" /></span>
     <span class="truncate" :title="labelKey ? $t(labelKey) : label">{{ labelKey ? $t(labelKey) : label }}</span>
+    <span v-if="preview" class="badge badge-context-preview ml-auto text-[10px] leading-none py-0.5">Preview</span>
   </router-link>
 </template>
 
@@ -21,6 +22,7 @@ const props = defineProps<{
   label: string;
   labelKey: string;
   exact?: boolean;
+  preview?: boolean;
 }>();
 
 const route = useRoute();

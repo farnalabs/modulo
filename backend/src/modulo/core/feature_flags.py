@@ -194,6 +194,28 @@ _KNOWN_FLAGS: list[FeatureFlag] = [
         description="Remy browser UI driving — allows Remy to navigate, click, and fill forms on your behalf.",
         tier="community",
     ),
+    # ── In-Dev / community-visible but hidden from sidebar ──────────────
+    FeatureFlag(
+        name="notification_log",
+        description="In-app notification delivery log",
+        tier="community",
+    ),
+    FeatureFlag(
+        name="api_changelog",
+        description="API changelog and version history",
+        tier="community",
+    ),
+    # ── Team tier (runtime / system config) ─────────────────────────────
+    FeatureFlag(
+        name="rate_limits",
+        description="Configure API rate limits",
+        tier="team",
+    ),
+    FeatureFlag(
+        name="runtime_config",
+        description="Runtime configuration overrides",
+        tier="team",
+    ),
 ]
 
 
