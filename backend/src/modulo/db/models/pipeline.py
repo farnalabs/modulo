@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 import uuid
+from datetime import datetime
 from typing import TYPE_CHECKING, Any
 
-from sqlalchemy import JSON, CheckConstraint, ForeignKey, Integer, String, Uuid, text
+from sqlalchemy import JSON, CheckConstraint, DateTime, ForeignKey, Integer, String, Uuid, text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from modulo.db.models.base import OrgScoped
@@ -44,6 +45,7 @@ class Pipeline(OrgScoped):
     max_duration_seconds: Mapped[int | None] = mapped_column(Integer, nullable=True)
     max_steps: Mapped[int | None] = mapped_column(Integer, nullable=True)
     token_budget: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    archived_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     run_context_defaults: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False, default=dict)
     default_autonomy_level: Mapped[str | None] = mapped_column(String(30), server_default="manual_approval")
     graph_nodes_json: Mapped[list[dict[str, Any]]] = mapped_column(
