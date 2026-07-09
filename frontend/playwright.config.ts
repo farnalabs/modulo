@@ -9,6 +9,7 @@ const baseURL = getBaseUrl(target)
 
 export default defineConfig({
   testDir: './tests/e2e',
+  retries: target !== 'local' ? 2 : 0,
   use: {
     baseURL,
   },
