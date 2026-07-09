@@ -138,7 +138,7 @@ async def get_plan_context(
     4. SystemConfig.default_plan (deployment-wide, from DB)
     5. CommunityTier (default fallback)
     """
-    from modulo.core.feature_flags import resolve_plan_context
+    from modulo.core.feature_flags import CommunityTier, resolve_plan_context
     from modulo.db.crud.organisation import get_organisation
 
     org = None
@@ -162,5 +162,7 @@ async def get_plan_context(
         except Exception:
 
             logger.warning("Failed to resolve org for plan context, falling back to CommunityTier")
+
+            return CommunityTier()
 
     return await resolve_plan_context(settings, session, org=org)
