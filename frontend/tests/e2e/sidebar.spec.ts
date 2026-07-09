@@ -7,7 +7,7 @@ test.describe('Sidebar Navigation', () => {
     await page.goto('/')
     await page.waitForLoadState('networkidle')
 
-    const sidebar = page.locator('nav[aria-label="Main navigation"]')
+    const sidebar = page.locator('nav[aria-label="Main navigation"]').first()
     await expect(sidebar).toBeVisible()
 
     const groupHeaders = sidebar.locator('button.sidebar-group-header')
@@ -21,7 +21,7 @@ test.describe('Sidebar Navigation', () => {
     await page.goto('/')
     await page.waitForLoadState('networkidle')
 
-    const libraryLink = page.locator('a.sidebar-link', { hasText: 'Library' })
+    const libraryLink = page.locator('a.sidebar-link', { hasText: 'Library' }).first()
     await expect(libraryLink).toBeVisible()
     await libraryLink.click()
     await page.waitForLoadState('networkidle')
@@ -35,7 +35,8 @@ test.describe('Sidebar Navigation', () => {
     await page.goto('/')
     await page.waitForLoadState('networkidle')
 
-    const sidebarLinks = page.locator('nav[aria-label="Main navigation"] a.sidebar-link')
+    const sidebar = page.locator('nav[aria-label="Main navigation"]').first()
+    const sidebarLinks = sidebar.locator('a.sidebar-link')
     const count = await sidebarLinks.count()
     expect(count).toBeGreaterThan(0)
 
