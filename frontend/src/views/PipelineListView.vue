@@ -106,7 +106,7 @@
               {{ $t('views.PipelineListView.open_in_editor') }}
             </button>
             <button
-              class="flex-1 px-3 py-2 bg-primary text-primary-foreground text-sm font-medium rounded-lg border border-primary/30 hover:border-primary/60 hover:brightness-110 transition-all"
+              class="flex-1 px-3 py-2 border border-border bg-background text-foreground text-sm font-medium rounded-lg hover:bg-accent transition-colors"
               @click.stop="openRunDialog(p)"
               data-testid="pipeline-list-run"
             >
