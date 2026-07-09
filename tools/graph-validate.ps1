@@ -4,7 +4,7 @@
   every PRD ref matches a section, every node has required fields.
   Exit code: 0 = clean, 1 = issues found.
 #>
-param([switch]$Fix,[switch]$CI)
+param([switch]$Fix,[switch]$CI,[switch]$Strict)
 $ErrorActionPreference="Stop"
 $repoRoot=Resolve-Path (Join-Path $PSScriptRoot "..")
 $productMap=Join-Path $repoRoot "docs\product-map"
@@ -23,7 +23,8 @@ Get-ChildItem -Recurse -Filter "*.md" -LiteralPath $productMap|Where-Object{$_.N
   $prd=if($fm-match'(?m)^prd:\s*(.+?)[\r\n]'){$Matches[1]}else{$null}
   $bdd=@();if($fm-match'(?m)^bdd:\s*(.+?)[\r\n]'){$bList=$Matches[1].Trim();if($bList-match'^\['){$bdd=$bList-replace'[\[\]" ]',''-split','}};if($fm-match'(?m)^bdd:\s*\n((?:\s+- .+\n?)+)'){$bBlock=$Matches[1]-split'\n'|ForEach-Object{$_-replace'^\s*-\s*',''-replace'"',''-replace"'",''-replace'#.*',''.Trim()}|Where-Object{$_};if($bBlock){$bdd=@($bdd)+$bBlock}}
   $dep=@();if($fm-match'(?m)^depends-on:\s*\[(.*?)\]'){$dep=$Matches[1]-replace' ',''-split','};if($fm-match'(?m)^depends-on:\s*\n((?:\s+- .+\n?)+)'){$depBlock=$Matches[1]-split'\n'|ForEach-Object{$_-replace'^\s*-\s*',''-replace'"',''-replace"'",''-replace'#.*',''.Trim()}|Where-Object{$_};$dep=@($dep+$depBlock)|Where-Object{$_}}
-  $entries+=@{id=$id;prd=$prd;bdd=$bdd;depends=$dep;path=$_.FullName;name=$_.Name}
+  $codePaths=@();if($fm-match'(?m)^code:\s*\n((?:\s+- .+\n?)+)'){$lines=$Matches[1]-split'\n'|ForEach-Object{$_-replace'^\s*-\s*',''-replace'"',''.Trim()}|Where-Object{$_};$codePaths=$lines}
+  $entries+=@{id=$id;prd=$prd;bdd=$bdd;depends=$dep;codePaths=$codePaths;path=$_.FullName;name=$_.Name}
   if(-not$id){$issues+="NODE|$($_.Name)|missing id field"}
   if(-not$prd){$issues+="NODE|$($_.Name)|missing prd field"}
   if($fm-notmatch'(?m)^status:\s*(covered|partial|gap)'){$issues+="NODE|$($_.Name)|missing or invalid status"}
@@ -55,6 +56,67 @@ if (Test-Path -LiteralPath $manifestValidator) {
     $manifestExitCode = $LASTEXITCODE
     if ($manifestExitCode -ne 0) {
         $manifestOutput | ForEach-Object { $issues += "MANIFEST|$($_.Trim())" }
+    }
+}
+
+# 7. Strict mode checks
+if ($Strict) {
+    # Parse PRD section names
+    $prdSectionNames = @{}
+    Get-Content -LiteralPath $prdFile | ForEach-Object {
+        if ($_ -match '^### ((\d+\.\d+[a-z]?))\s+(.+)') { $prdSectionNames[$Matches[1]] = $Matches[3].Trim() }
+        elseif ($_ -match '^## (\d+)\.\s+(.+)') { $prdSectionNames[$Matches[1]] = $Matches[2].Trim().TrimEnd(':') }
+    }
+
+    # A. PRD→Map coverage — spec sections (§6–§12) with zero product map references
+    $specSections = @{}
+    $prdSections.Keys | Where-Object {
+        $base = if ($_ -match '^(\d+)') { [int]$Matches[1] } else { -1 }
+        $base -ge 6 -and $base -le 12
+    } | ForEach-Object { $specSections[$_] = $true }
+
+    $prdCounts = @{}
+    foreach ($s in $specSections.Keys) { $prdCounts[$s] = 0 }
+    foreach ($e in $entries) {
+        if (-not $e.prd) { continue }
+        $refs = $e.prd -split ',' | ForEach-Object { $_.Trim().TrimStart('§') }
+        foreach ($r in $refs) {
+            if ($prdCounts.ContainsKey($r)) { $prdCounts[$r]++ }
+        }
+    }
+    foreach ($s in ($specSections.Keys | Sort-Object)) {
+        if ($prdCounts[$s] -eq 0) {
+            $name = if ($prdSectionNames[$s]) { " ($($prdSectionNames[$s]))" } else { "" }
+            $issues += "COVERAGE|PRD $s${name} -- 0 product map entries reference this section"
+        }
+    }
+
+    # B. Route→Map orphan check — route modules not in any product map code path
+    $routeDir = Join-Path $repoRoot "backend/src/modulo/api/routes"
+    $routeFiles = Get-ChildItem -Name -Path "$routeDir/*.py" | Where-Object { $_ -ne "__init__.py" } | Sort-Object
+    foreach ($rf in $routeFiles) {
+        $found = $false
+        foreach ($e in $entries) {
+            foreach ($cp in $e.codePaths) {
+                if ($cp -match [regex]::Escape($rf)) { $found = $true; break }
+            }
+            if ($found) { break }
+        }
+        if (-not $found) { $issues += "ORPHAN|$rf|route module not referenced by any product map entry" }
+    }
+
+    # C. Naughty-section check — entries anchored to non-spec sections (§13–§15)
+    $nonSpecSections = @{}; foreach ($n in @("13", "14", "15")) { $nonSpecSections[$n] = $prdSectionNames[$n] }
+    foreach ($e in $entries) {
+        if (-not $e.prd) { continue }
+        $refs = $e.prd -split ',' | ForEach-Object { $_.Trim().TrimStart('§') }
+        foreach ($r in $refs) {
+            $base = if ($r -match '^(\d+)') { $Matches[1] } else { $r }
+            if ($nonSpecSections.ContainsKey($base)) {
+                $baseName = $nonSpecSections[$base]
+                $issues += "ANCHOR|$($e.id)|prd $r is a non-spec section ($baseName) -- use a feature subsection as anchor"
+            }
+        }
     }
 }
 
