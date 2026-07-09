@@ -99,7 +99,6 @@ Admin-initiated deactivation of an individual user — sets `active=false` inval
 
 - **No BDD scenario for 422 validation**: the unit test file covers malformed UUID, but no BDD scenario exists
 - **No WS token re-validation**: WebSocket connections may stay active for up to 15 min after deactivation
-- **No WS token re-validation**: WebSocket connections may stay active for up to 15 min after deactivation
 - **SCIM hard-delete mismatch**: SCIM DELETE does a hard delete rather than soft deactivate — inconsistent with admin deactivation
 - **No OAuth token family blacklisting**: deactivation flow only blacklists JWT token families, not OAuth families
 
