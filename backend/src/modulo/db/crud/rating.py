@@ -26,6 +26,10 @@ class RatingCooldownError(Exception):
     """Raised when a user tries to rate too soon after their last rating."""
 
 
+class DuplicateRatingError(Exception):
+    """Raised when a user tries to rate a primitive they have already rated."""
+
+
 class CopyToAdaptError(Exception):
     """Raised when a user rates a primitive they have not copied."""
 
@@ -95,6 +99,26 @@ async def _guard_copy_to_adapt(
 # ---------------------------------------------------------------------------
 
 
+async def _guard_duplicate_rating(
+    session: AsyncSession, primitive_id: uuid.UUID, org_id: uuid.UUID, account_id: uuid.UUID | None
+) -> None:
+    """Block duplicate ratings: a user cannot rate the same primitive twice."""
+    if account_id is None:
+        return
+    stmt = (
+        select(func.count())
+        .select_from(PrimitiveRating)
+        .where(
+            PrimitiveRating.organisation_id == org_id,
+            PrimitiveRating.primitive_id == primitive_id,
+            PrimitiveRating.account_id == account_id,
+        )
+    )
+    existing_count = (await session.execute(stmt)).scalar_one()
+    if existing_count > 0:
+        raise DuplicateRatingError("You have already rated this primitive")
+
+
 async def submit_rating(
     session: AsyncSession,
     *,
@@ -104,9 +128,9 @@ async def submit_rating(
     comment: str | None = None,
     account_id: uuid.UUID | None = None,
 ) -> PrimitiveRating:
-    """Submit a rating with validation guards (self-rating, cooldown, copy-to-adapt)."""
-    # Run validation guards in order.
+    """Submit a rating with validation guards (self-rating, duplicate, cooldown, copy-to-adapt)."""
     await _guard_self_rating(session, primitive_id, account_id)
+    await _guard_duplicate_rating(session, primitive_id, org_id, account_id)
     await _guard_cooldown(session, primitive_id, org_id, account_id)
     await _guard_copy_to_adapt(session, primitive_id, org_id, account_id)
 
