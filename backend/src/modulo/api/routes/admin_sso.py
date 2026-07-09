@@ -128,6 +128,7 @@ async def get_providers(
     _require_admin(current_user)
     try:
         providers = await list_providers(session)
+        return [SsoProviderResponse.from_orm(p) for p in providers]
     except ProgrammingError as exc:
         _log.warning("SSO providers table not available: %s", exc)
         raise HTTPException(

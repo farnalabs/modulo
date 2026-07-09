@@ -712,7 +712,7 @@ class UserListResponse(BaseModel):
 @router.get("/users", response_model=UserListResponse)
 async def admin_list_users(
     page: int = Query(1, ge=1),
-    page_size: int = Query(20, ge=1, le=100),
+    page_size: int = Query(20, ge=1, le=1000),
     search: str | None = Query(None, min_length=1),
     role: str | None = Query(None, pattern=r"^(admin|operator|runner|viewer)$"),
     current_user: AuthenticatedPrincipal = Depends(get_current_user),
@@ -1188,7 +1188,7 @@ class AdminTeamListResponse(BaseModel):
 @router.get("/teams", response_model=AdminTeamListResponse, dependencies=[require_feature("team_rbac")])
 async def admin_list_teams(
     page: int = Query(1, ge=1),
-    page_size: int = Query(20, ge=1, le=100),
+    page_size: int = Query(20, ge=1, le=1000),
     current_user: AuthenticatedPrincipal = Depends(get_current_user),
     session: AsyncSession = Depends(get_db_session),
 ) -> AdminTeamListResponse:
