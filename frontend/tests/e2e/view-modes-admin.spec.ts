@@ -64,8 +64,8 @@ test.describe('View Modes Admin CRUD', () => {
     await page.goto('/admin/views')
     await page.waitForLoadState('networkidle')
 
-    await expect(page.locator('text=Failed to load views')).toBeVisible({ timeout: 5000 })
-    await expect(page.locator('button:has-text("Retry")')).toBeVisible()
+    await expect(page.locator('text=Server error')).toBeVisible({ timeout: 5000 })
+    await expect(page.getByRole('button', { name: /retry/i })).toBeVisible()
   })
 
   test('shows empty state when no views exist', async ({ page, env }) => {
@@ -166,11 +166,11 @@ test.describe('View Modes Admin CRUD', () => {
     await page.goto('/admin/views')
     await page.waitForLoadState('networkidle')
 
-    const editButtons = page.getByTestId('admin-views-edit')
+    const editButtons = page.getByRole('button', { name: /edit/i })
     await expect(editButtons).toHaveCount(2)
-    await editButtons.first().click({ force: true })
+    await editButtons.first().click()
 
-    await expect(page.locator('text=Edit View')).toBeVisible()
+    await expect(page.getByText('Edit View')).toBeVisible()
     await expect(page.getByTestId('admin-views-name-input')).toHaveValue('Active Runs')
     await expect(page.getByTestId('admin-views-type-select')).toHaveValue('table')
     await expect(page.getByTestId('admin-views-filters-input')).toContainText('status')
@@ -194,22 +194,22 @@ test.describe('View Modes Admin CRUD', () => {
     await page.goto('/admin/views')
     await page.waitForLoadState('networkidle')
 
-    const deleteButtons = page.getByTestId('admin-views-delete')
+    const deleteButtons = page.getByRole('button', { name: /delete/i })
     await expect(deleteButtons).toHaveCount(2)
-    await deleteButtons.first().click({ force: true })
+    await deleteButtons.first().click()
 
-    await expect(page.locator('text=Delete "Active Runs"?')).toBeVisible()
+    await expect(page.getByText('Delete "Active Runs"?')).toBeVisible()
     await expect(page.getByTestId('admin-views-delete-confirm')).toBeVisible()
     await expect(page.getByTestId('admin-views-delete-cancel')).toBeVisible()
 
-    await page.getByTestId('admin-views-delete-cancel').click({ force: true })
-    await expect(page.locator('text=Delete "Active Runs"?')).not.toBeVisible({ timeout: 3000 })
+    await page.getByTestId('admin-views-delete-cancel').click()
+    await expect(page.getByText('Delete "Active Runs"?')).not.toBeVisible({ timeout: 3000 })
 
-    await deleteButtons.first().click({ force: true })
-    await page.getByTestId('admin-views-delete-confirm').click({ force: true })
+    await deleteButtons.first().click()
+    await page.getByTestId('admin-views-delete-confirm').click()
     await page.waitForLoadState('networkidle')
 
-    await expect(page.locator('text=Delete "Active Runs"?')).not.toBeVisible({ timeout: 3000 })
+    await expect(page.getByText('Delete "Active Runs"?')).not.toBeVisible({ timeout: 3000 })
   })
 
   test('displays existing views in table', async ({ page, env }) => {
