@@ -225,7 +225,7 @@ class TestCommunityTier:
         assert resp.status_code == 200
         data = resp.json()
         assert data["has_license"] is False
-        assert data["tier"] == "team"
+        assert data["tier"] == "community"
         assert data["features"] == []
 
     def test_community_tier_has_no_expiry(self, admin_client: TestClient) -> None:
@@ -316,7 +316,7 @@ class TestLicenseBadgeData:
         resp = admin_client.get(self.URL)
         data = resp.json()
         assert data["has_license"] is False
-        assert data["tier"] == "team"
+        assert data["tier"] == "community"
         assert data.get("org_id") is None
 
 
