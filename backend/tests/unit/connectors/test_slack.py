@@ -384,6 +384,61 @@ async def test_429_retry_exhausted(connector):
     assert route.call_count == 4
 
 
+# -- retry/backoff for 5xx --
+
+@respx.mock
+async def test_503_retry_then_succeed(connector):
+    route = respx.get("https://slack.com/api/conversations.list")
+    route.side_effect = [
+        httpx.Response(503, text="Service Unavailable"),
+        httpx.Response(200, json={"ok": True, "channels": [{"id": "C001", "name": "retried-after-503"}]}),
+    ]
+    result = await connector.query(ConnectorQuery(resource="channels"))
+    assert len(result.records) == 1
+    assert result.records[0]["name"] == "retried-after-503"
+    assert route.call_count == 2
+
+
+@respx.mock
+async def test_503_retry_exhausted(connector):
+    route = respx.get("https://slack.com/api/conversations.list")
+    route.side_effect = [
+        httpx.Response(503, text="Service Unavailable"),
+        httpx.Response(503, text="Service Unavailable"),
+        httpx.Response(503, text="Service Unavailable"),
+        httpx.Response(503, text="Service Unavailable"),
+    ]
+    with pytest.raises(ValueError, match="Slack API HTTP 503"):
+        await connector.query(ConnectorQuery(resource="channels"))
+    assert route.call_count == 4
+
+
+@respx.mock
+async def test_502_retry_then_succeed(connector):
+    route = respx.get("https://slack.com/api/conversations.list")
+    route.side_effect = [
+        httpx.Response(502, text="Bad Gateway"),
+        httpx.Response(200, json={"ok": True, "channels": [{"id": "C001", "name": "retried-after-502"}]}),
+    ]
+    result = await connector.query(ConnectorQuery(resource="channels"))
+    assert len(result.records) == 1
+    assert result.records[0]["name"] == "retried-after-502"
+    assert route.call_count == 2
+
+
+@respx.mock
+async def test_504_retry_then_succeed(connector):
+    route = respx.get("https://slack.com/api/conversations.list")
+    route.side_effect = [
+        httpx.Response(504, text="Gateway Timeout"),
+        httpx.Response(200, json={"ok": True, "channels": [{"id": "C001", "name": "retried-after-504"}]}),
+    ]
+    result = await connector.query(ConnectorQuery(resource="channels"))
+    assert len(result.records) == 1
+    assert result.records[0]["name"] == "retried-after-504"
+    assert route.call_count == 2
+
+
 # -- connection errors / timeouts --
 
 
