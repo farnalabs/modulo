@@ -1,4 +1,5 @@
 from __future__ import annotations
+
 """Ed25519 signing utilities — hex-string-based API for registry protocol v2."""
 
 

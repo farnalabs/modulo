@@ -7,11 +7,9 @@ import uuid
 from unittest.mock import patch
 
 import pytest
-from pytest_bdd import given, parsers, scenarios, then, when
+from pytest_bdd import given, parsers, then, when
 
 from tests.bdd.conftest import make_mock_pipeline
-
-
 
 
 @pytest.fixture

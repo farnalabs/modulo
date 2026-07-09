@@ -1,4 +1,5 @@
 from __future__ import annotations
+
 """Registry API — browse, publish, pull, and trust-verify registry primitives."""
 
 
@@ -9,6 +10,8 @@ import logging
 from datetime import datetime
 from typing import Any
 
+from cryptography.hazmat.primitives import serialization as pem_serialization
+from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, Field
 from sqlalchemy.exc import ProgrammingError, SQLAlchemyError
@@ -17,9 +20,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from modulo.api.dependencies import get_db_session
 from modulo.auth.dependencies import get_current_user
 from modulo.auth.jwt import AuthenticatedPrincipal
-from cryptography.hazmat.primitives import serialization as pem_serialization
-from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
-
 from modulo.core.registry import (
     get_publisher_status,
     get_registry_primitive,

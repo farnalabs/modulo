@@ -42,6 +42,10 @@ def make_session():
     begin_cm.__aenter__ = AsyncMock(return_value=None)
     begin_cm.__aexit__ = AsyncMock(return_value=False)
     session.begin = MagicMock(return_value=begin_cm)
+    begin_nested_cm = AsyncMock()
+    begin_nested_cm.__aenter__ = AsyncMock(return_value=None)
+    begin_nested_cm.__aexit__ = AsyncMock(return_value=False)
+    session.begin_nested = MagicMock(return_value=begin_nested_cm)
     session.info = {}
     default_result = MagicMock()
     default_result.scalar_one_or_none = MagicMock(return_value=None)
@@ -541,16 +545,15 @@ class TestRevertToManual:
         with (
             patch("modulo.api.routes.pipelines.get_snapshot_detail", return_value=snapshot),
             patch("modulo.api.routes.pipelines._save_graph", side_effect=IntegrityError("stmt", "params", "orig")),
-            patch("modulo.api.routes.pipelines.append_audit_event", AsyncMock()),
+            patch("modulo.api.routes.pipelines.append_audit_event", AsyncMock()),pytest.raises(HTTPException) as excinfo
         ):
-            with pytest.raises(HTTPException) as excinfo:
-                await revert_node_to_manual_endpoint(
-                    pipeline_id=PIPELINE_ID,
-                    node_id=NODE_ID,
-                    snapshot_id=SNAPSHOT_ID,
-                    session=session,
-                    principal=principal,
-                )
+            await revert_node_to_manual_endpoint(
+                pipeline_id=PIPELINE_ID,
+                node_id=NODE_ID,
+                snapshot_id=SNAPSHOT_ID,
+                session=session,
+                principal=principal,
+            )
 
         assert excinfo.value.status_code == status.HTTP_409_CONFLICT
 
@@ -563,16 +566,15 @@ class TestRevertToManual:
         with (
             patch("modulo.api.routes.pipelines.get_snapshot_detail", return_value=snapshot),
             patch("modulo.api.routes.pipelines._save_graph", side_effect=ProgrammingError("stmt", "params", "orig")),
-            patch("modulo.api.routes.pipelines.append_audit_event", AsyncMock()),
+            patch("modulo.api.routes.pipelines.append_audit_event", AsyncMock()),pytest.raises(HTTPException) as excinfo
         ):
-            with pytest.raises(HTTPException) as excinfo:
-                await revert_node_to_manual_endpoint(
-                    pipeline_id=PIPELINE_ID,
-                    node_id=NODE_ID,
-                    snapshot_id=SNAPSHOT_ID,
-                    session=session,
-                    principal=principal,
-                )
+            await revert_node_to_manual_endpoint(
+                pipeline_id=PIPELINE_ID,
+                node_id=NODE_ID,
+                snapshot_id=SNAPSHOT_ID,
+                session=session,
+                principal=principal,
+            )
 
         assert excinfo.value.status_code == status.HTTP_501_NOT_IMPLEMENTED
 
@@ -585,16 +587,15 @@ class TestRevertToManual:
         with (
             patch("modulo.api.routes.pipelines.get_snapshot_detail", return_value=snapshot),
             patch("modulo.api.routes.pipelines._save_graph", side_effect=SQLAlchemyError("stmt", "params", "orig")),
-            patch("modulo.api.routes.pipelines.append_audit_event", AsyncMock()),
+            patch("modulo.api.routes.pipelines.append_audit_event", AsyncMock()),pytest.raises(HTTPException) as excinfo
         ):
-            with pytest.raises(HTTPException) as excinfo:
-                await revert_node_to_manual_endpoint(
-                    pipeline_id=PIPELINE_ID,
-                    node_id=NODE_ID,
-                    snapshot_id=SNAPSHOT_ID,
-                    session=session,
-                    principal=principal,
-                )
+            await revert_node_to_manual_endpoint(
+                pipeline_id=PIPELINE_ID,
+                node_id=NODE_ID,
+                snapshot_id=SNAPSHOT_ID,
+                session=session,
+                principal=principal,
+            )
 
         assert excinfo.value.status_code == status.HTTP_503_SERVICE_UNAVAILABLE
 
@@ -607,15 +608,14 @@ class TestRevertToManual:
         with (
             patch("modulo.api.routes.pipelines.get_snapshot_detail", return_value=snapshot),
             patch("modulo.api.routes.pipelines._save_graph", side_effect=ValueError("unexpected")),
-            patch("modulo.api.routes.pipelines.append_audit_event", AsyncMock()),
+            patch("modulo.api.routes.pipelines.append_audit_event", AsyncMock()),pytest.raises(HTTPException) as excinfo
         ):
-            with pytest.raises(HTTPException) as excinfo:
-                await revert_node_to_manual_endpoint(
-                    pipeline_id=PIPELINE_ID,
-                    node_id=NODE_ID,
-                    snapshot_id=SNAPSHOT_ID,
-                    session=session,
-                    principal=principal,
-                )
+            await revert_node_to_manual_endpoint(
+                pipeline_id=PIPELINE_ID,
+                node_id=NODE_ID,
+                snapshot_id=SNAPSHOT_ID,
+                session=session,
+                principal=principal,
+            )
 
         assert excinfo.value.status_code == status.HTTP_500_INTERNAL_SERVER_ERROR

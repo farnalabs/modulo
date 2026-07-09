@@ -21,7 +21,7 @@ import re
 import sys
 from pathlib import Path
 
-from sqlalchemy import select, func
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 
 from modulo.core.manifest import get_manifest
@@ -34,7 +34,6 @@ from modulo.db.models import (
     Pipeline,
 )
 from modulo.settings import get_settings
-
 
 _log = logging.getLogger(__name__)
 
@@ -87,7 +86,7 @@ def _load_prd_glossary(prd_path: Path) -> dict[str, str]:
             if term and definition:
                 terms[term] = definition
 
-    return terms if terms else dict(_GLOSSARY_TERMS)
+    return terms or dict(_GLOSSARY_TERMS)
 
 
 # ---------------------------------------------------------------------------

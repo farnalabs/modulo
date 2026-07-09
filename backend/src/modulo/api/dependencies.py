@@ -7,6 +7,7 @@ singleton that persists across tests — override via `app.dependency_overrides`
 if test isolation is needed.
 """
 
+import logging
 from collections.abc import AsyncGenerator
 from typing import Any
 
@@ -24,8 +25,6 @@ from modulo.auth.dependencies import get_current_user
 from modulo.auth.jwt import AuthenticatedPrincipal
 from modulo.core.feature_flags import PlanContext
 from modulo.settings import Settings, get_settings
-import logging
-
 
 logger = logging.getLogger(__name__)
 def require_feature(feature_name: str):

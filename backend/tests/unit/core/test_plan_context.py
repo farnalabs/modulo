@@ -2,8 +2,6 @@
 
 from unittest.mock import AsyncMock, MagicMock, patch
 
-import pytest
-
 from modulo.core.feature_flags import (
     CommunityTier,
     DbPlanContext,
@@ -11,7 +9,7 @@ from modulo.core.feature_flags import (
     LicenseKeyTier,
     resolve_plan_context,
 )
-from modulo.core.license import LicenseData, clear_license, set_public_key
+from modulo.core.license import LicenseData
 
 
 def _make_license_data(**overrides) -> LicenseData:

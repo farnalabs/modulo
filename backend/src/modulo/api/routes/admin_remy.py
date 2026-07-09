@@ -1,4 +1,5 @@
 from __future__ import annotations
+
 """Admin Remy configuration and skills management."""
 
 

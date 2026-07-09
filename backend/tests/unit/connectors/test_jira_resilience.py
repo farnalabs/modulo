@@ -45,7 +45,7 @@ def test_compute_delay_exponential():
 
 def test_compute_delay_capped():
     """Verify _compute_delay is capped at _MAX_DELAY (30s)."""
-    from modulo.connectors.jira import _compute_delay, _MAX_DELAY
+    from modulo.connectors.jira import _MAX_DELAY, _compute_delay
     d = _compute_delay(10)  # would be ~1024s without cap
     assert d <= _MAX_DELAY
 
@@ -60,7 +60,7 @@ def test_compute_delay_respects_retry_after():
 
 def test_compute_delay_retry_after_capped():
     """Verify _compute_delay caps Retry-After at _MAX_DELAY."""
-    from modulo.connectors.jira import _compute_delay, _MAX_DELAY
+    from modulo.connectors.jira import _MAX_DELAY, _compute_delay
     resp = httpx.Response(429, headers={"Retry-After": "60"})
     delay = _compute_delay(0, resp)
     assert delay == _MAX_DELAY

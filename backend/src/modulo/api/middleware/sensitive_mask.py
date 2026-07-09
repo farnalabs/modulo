@@ -14,8 +14,8 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, PlainSerializer
 from redis.asyncio import Redis
 from sqlalchemy import select
-from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.exc import ProgrammingError
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.api.dependencies import get_db_session
 from modulo.auth.dependencies import get_current_user

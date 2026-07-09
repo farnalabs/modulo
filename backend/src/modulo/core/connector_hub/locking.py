@@ -64,7 +64,7 @@ class AdvisoryLockService:
                 ),
                 timeout=_LOCK_ACQUIRE_TIMEOUT,
             )
-        except asyncio.TimeoutError:
+        except TimeoutError:
             raise ConnectorLockError(resource_id, f"Timed out acquiring lock on resource {resource_id}")
         except SQLAlchemyError:
             raise ConnectorLockError(resource_id, f"Database error acquiring lock on resource {resource_id}")
@@ -145,7 +145,7 @@ class AdvisoryLockService:
                 logger.warning("Lock on resource %s was not held by this session — possible double-release", resource_id)
             else:
                 logger.info("Released lock on resource %s", resource_id)
-        except (asyncio.TimeoutError, SQLAlchemyError) as exc:
+        except (TimeoutError, SQLAlchemyError) as exc:
             logger.error("Failed to release lock on resource %s: %s", resource_id, exc, exc_info=True)
             raise ConnectorLockError(resource_id, f"Failed to release lock: {exc}")
         finally:

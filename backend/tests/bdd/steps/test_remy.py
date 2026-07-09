@@ -16,6 +16,7 @@ from tests.bdd.conftest import ORG_ID, USER_ID, make_settings
 
 def _make_client():
     from fastapi.testclient import TestClient
+
     from modulo.api.main import app
     from modulo.settings import get_settings
 

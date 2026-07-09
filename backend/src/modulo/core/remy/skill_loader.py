@@ -1,6 +1,6 @@
 from __future__ import annotations
-import asyncio
 
+import asyncio
 import logging
 import uuid
 from collections.abc import Callable

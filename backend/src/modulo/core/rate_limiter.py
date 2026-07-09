@@ -1,4 +1,5 @@
 from __future__ import annotations
+
 """Redis-backed sliding-window rate limiter.
 
 Uses ZADD + ZREMRANGEBYSCORE on a sorted set per key.

@@ -10,7 +10,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from modulo.api.dependencies import _get_engine, get_db_session, get_plan_context
-from modulo.api.dependencies import get_settings as get_settings_override, get_plan_context
+from modulo.api.dependencies import get_settings as get_settings_override
 from modulo.api.main import app
 from modulo.auth.dependencies import get_current_user
 from modulo.auth.jwt import AuthenticatedPrincipal
@@ -78,9 +78,10 @@ def _make_mock_session() -> AsyncMock:
     user_mock.id = _USER_ID
     user_mock.preferences = {}
     hitl_result = AsyncMock()
-    hitl_result.scalar_one_or_none = AsyncMock(return_value=team_mock)
+    hitl_result.scalar_one_or_none = MagicMock(return_value=team_mock)
     hitl_result.scalar_one = MagicMock(return_value=0)
     hitl_result.scalars = MagicMock(return_value=scalar_mock)
+    hitl_result.all = MagicMock(return_value=[])
     session.execute.return_value = hitl_result
     return session
 

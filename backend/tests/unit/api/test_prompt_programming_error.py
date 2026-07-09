@@ -9,12 +9,11 @@ import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy.exc import ProgrammingError, SQLAlchemyError
 
-from modulo.core.prompt_optimizer import OptimizationFailedError
-
 from modulo.api.dependencies import _get_engine, get_db_session, get_plan_context
 from modulo.api.main import app
 from modulo.auth.dependencies import get_current_user
 from modulo.auth.jwt import AuthenticatedPrincipal
+from modulo.core.prompt_optimizer import OptimizationFailedError
 from modulo.settings import Settings, get_settings
 
 _VALID_32 = "a" * 32

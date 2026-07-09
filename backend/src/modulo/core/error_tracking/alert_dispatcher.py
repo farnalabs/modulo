@@ -1,4 +1,5 @@
 from __future__ import annotations
+
 """Alert dispatch — routes triggered alerts to in_app, email, or webhook."""
 
 

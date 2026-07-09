@@ -1,4 +1,5 @@
 from __future__ import annotations
+
 """Admin API endpoints for Fernet key rotation."""
 
 
@@ -8,6 +9,7 @@ from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, Field
+from sqlalchemy.exc import IntegrityError, ProgrammingError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from modulo.api.dependencies import get_db_session, get_or_create_engine, get_or_create_session_factory
@@ -15,7 +17,6 @@ from modulo.auth.dependencies import get_current_user
 from modulo.auth.jwt import AuthenticatedPrincipal
 from modulo.core.audit_logger import append_audit_event
 from modulo.settings import Settings, get_settings
-from sqlalchemy.exc import IntegrityError, ProgrammingError
 
 _MIN_KEY_LEN = 32
 

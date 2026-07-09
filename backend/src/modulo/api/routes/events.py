@@ -1,4 +1,5 @@
 from __future__ import annotations
+
 """SSE endpoint for real-time event streaming.
 
 Latency: sub-second for all normal event delivery.

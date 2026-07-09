@@ -21,7 +21,8 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 
 logger = logging.getLogger(__name__)
 from pydantic import BaseModel
-from sqlalchemy import select, update as sa_update
+from sqlalchemy import select
+from sqlalchemy import update as sa_update
 from sqlalchemy.exc import IntegrityError, ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -37,7 +38,6 @@ from modulo.core.feedback_manager import (
 )
 from modulo.db.models.eval_definition import EvalDefinition
 from modulo.db.models.feedback_record import FeedbackRecord
-from modulo.db.models.pipeline import Pipeline
 from modulo.db.models.pipeline_snapshot import PipelineSnapshot
 from modulo.db.models.run import Run
 from modulo.db.rls import set_rls_org
@@ -572,10 +572,7 @@ async def review_feedback(
             if record is None:
                 raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Feedback record not found")
 
-            if req.action == "mark_reviewed":
-                record = await mgr.update_status(record_id, "resolved")
-
-            elif req.action == "dismiss":
+            if req.action == "mark_reviewed" or req.action == "dismiss":
                 record = await mgr.update_status(record_id, "resolved")
 
             elif req.action == "create_correction_run":

@@ -26,7 +26,6 @@ from collections import deque
 from typing import Any
 
 import websocket
-
 from locust import HttpUser, between, events, task
 
 from tests.load.conftest import (

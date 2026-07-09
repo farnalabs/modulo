@@ -10,7 +10,6 @@ Configures python-json-logger with:
 
 import asyncio
 import logging
-from sqlalchemy.exc import ProgrammingError
 import os
 import sys
 import traceback as tb_module
@@ -18,6 +17,7 @@ from contextvars import ContextVar
 from typing import Any
 
 from pythonjsonlogger import jsonlogger
+from sqlalchemy.exc import ProgrammingError
 
 correlation_id_var: ContextVar[str | None] = ContextVar("correlation_id", default=None)
 org_id_var: ContextVar[str | None] = ContextVar("org_id", default=None)

@@ -1,4 +1,5 @@
 from __future__ import annotations
+
 """Notification endpoint CRUD routes.
 
 Endpoints are org-scoped and managed via standard REST operations.

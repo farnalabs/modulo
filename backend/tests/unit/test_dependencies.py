@@ -1,8 +1,8 @@
 """Unit tests for api/dependencies.py — engine creation, session management, plan context."""
-import pytest
-from unittest.mock import AsyncMock, MagicMock, patch, PropertyMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
-from sqlalchemy.exc import ProgrammingError, SQLAlchemyError
+import pytest
+from sqlalchemy.exc import ProgrammingError
 
 
 class TestGetOrCreateEngine:
@@ -63,9 +63,8 @@ class TestGetOrCreateEngine:
 
     def test_engine_is_singleton(self):
         """get_or_create_engine returns the same engine on second call."""
-        from modulo.api.dependencies import get_or_create_engine, _engine
-
         import modulo.api.dependencies as deps
+        from modulo.api.dependencies import get_or_create_engine
         deps._engine = None
 
         settings = MagicMock()
@@ -104,8 +103,9 @@ class TestGetDbSession:
     @pytest.mark.asyncio
     async def test_programming_error_converted_to_501(self):
         """ProgrammingError raised during session use is converted to HTTPException 501."""
-        from modulo.api.dependencies import get_db_session
         from fastapi import HTTPException
+
+        from modulo.api.dependencies import get_db_session
 
         mock_session = AsyncMock()
         mock_session.__aenter__ = AsyncMock(return_value=mock_session)

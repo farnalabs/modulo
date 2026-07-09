@@ -1,4 +1,5 @@
 from __future__ import annotations
+
 """Celery beat scheduler for scheduled reports.
 
 Architecture

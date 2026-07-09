@@ -1,4 +1,5 @@
 from __future__ import annotations
+
 """CRUD for notifications and dismissals.
 
 All functions enforce org scoping via organisation_id filter.

@@ -1,4 +1,5 @@
 from __future__ import annotations
+
 """API routes for error forwarder configuration — list, configure, test."""
 
 
@@ -259,7 +260,7 @@ async def test_forwarder(
 
     try:
         ok = await asyncio.wait_for(forwarder.forward(org_id, test_group, test_event, config), timeout=15.0)
-    except asyncio.TimeoutError:
+    except TimeoutError:
         _log.warning("forwarder.test_connection_timeout", extra={"type": forwarder_type})
         ok = False
     except Exception:

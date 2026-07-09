@@ -1,4 +1,5 @@
 from __future__ import annotations
+
 """Plugin Registry — discovery, registration, and health-checking for third-party plugins.
 
 Plugins extend Modulo with additional connector types and model backend providers

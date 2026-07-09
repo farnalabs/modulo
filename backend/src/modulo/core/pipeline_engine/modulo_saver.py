@@ -1,4 +1,5 @@
 from __future__ import annotations
+
 """ModuloPostgresSaver — AsyncPostgresSaver with org_id column isolation.
 
 Adds ``organisation_id`` to all ``langgraph.*`` checkpoint tables, enforces

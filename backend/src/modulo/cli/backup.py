@@ -1,4 +1,5 @@
 from __future__ import annotations
+
 """modulo backup/restore: CLI for self-hosted backup and disaster recovery.
 
 Usage:

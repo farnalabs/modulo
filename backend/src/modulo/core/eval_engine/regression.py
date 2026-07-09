@@ -1,4 +1,5 @@
 from __future__ import annotations
+
 """Eval quality regression detection.
 
 Compares pass rates between a recent window and a baseline window

@@ -374,7 +374,7 @@ async def _init_checkpointer(conn_string: str, fernet_key: str, fernet_key_old: 
         ) as saver:
             await saver.setup()
             logger.info("startup.checkpointer_initialised")
-    except Exception as exc:
+    except Exception:
         logger.warning("startup.checkpointer_init_failed", exc_info=True)
 
 

@@ -14,8 +14,8 @@ from fastapi.testclient import TestClient
 from jose import jwt as jose_jwt
 from pytest_bdd import given, parsers, scenarios, then, when
 
-from modulo.settings import Settings
 from modulo.core.rate_limiter import AuthRateLimiter
+from modulo.settings import Settings
 
 # ---------------------------------------------------------------------------
 # Register feature file

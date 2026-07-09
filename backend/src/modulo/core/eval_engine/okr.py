@@ -1,4 +1,5 @@
 from __future__ import annotations
+
 """OKR-aligned eval suite progress tracking.
 
 Tracks pass rate trends for eval suites against configurable thresholds,

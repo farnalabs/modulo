@@ -1,4 +1,5 @@
 from __future__ import annotations
+
 """Recovery handler for failed manual-input nodes.
 
 Provides the core logic to replay or skip a manual node that failed or

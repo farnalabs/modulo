@@ -6,7 +6,8 @@ import secrets
 from typing import Any
 
 from redis.asyncio import Redis
-from redis.exceptions import RedisError, TimeoutError as RedisTimeoutError
+from redis.exceptions import RedisError
+from redis.exceptions import TimeoutError as RedisTimeoutError
 
 _log = logging.getLogger(__name__)
 

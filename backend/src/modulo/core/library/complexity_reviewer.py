@@ -1,4 +1,5 @@
 from __future__ import annotations
+
 """Complexity-reviewer canonical library primitive.
 
 A context-setter agent that analyses the most recent artifact in

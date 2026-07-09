@@ -8,9 +8,8 @@ from pathlib import Path
 
 import pytest
 
-from tests.connectors._conformance import get_registered_types, get_registered_fixture, register_conformance_connector
 from modulo.connectors.base import ConnectorBase
-
+from tests.connectors._conformance import get_registered_fixture, get_registered_types, register_conformance_connector
 
 # ═══════════════════════════════════════════════════════════════════════════
 # Connector fixture definitions

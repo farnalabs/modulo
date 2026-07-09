@@ -42,9 +42,9 @@ from modulo.db.crud.token_family import blacklist_family, list_families_for_acco
 from modulo.db.models.account import Account
 from modulo.db.models.api_key import OrgApiKey
 from modulo.db.models.connector_instance import ConnectorInstance
-from modulo.db.models.library_primitive import LibraryPrimitive
 from modulo.db.models.eval_definition import EvalDefinition
 from modulo.db.models.eval_result import EvalResult
+from modulo.db.models.library_primitive import LibraryPrimitive
 from modulo.db.models.model_backend import ModelBackend
 from modulo.db.models.org_membership import OrgMembership
 from modulo.db.models.organisation import Organisation

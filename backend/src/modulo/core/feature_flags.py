@@ -1,4 +1,5 @@
 from __future__ import annotations
+
 """Feature flag registry — catalogs all known feature flags and their current status."""
 
 

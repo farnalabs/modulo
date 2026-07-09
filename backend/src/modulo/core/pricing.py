@@ -1,4 +1,5 @@
 from __future__ import annotations
+
 """Configurable pricing for model backends.
 
 Provides a PRICING_TABLE of known model costs and a get_pricing() lookup

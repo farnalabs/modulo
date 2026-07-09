@@ -112,8 +112,6 @@ def get_viewmodel_with_view_as_team(
     from modulo.api.dependencies import _get_engine, get_db_session
     from modulo.api.main import app
 
-    from modulo.api.dependencies import _get_engine, get_db_session
-    from modulo.api.main import app
 
     mock_session = make_mock_session()
 

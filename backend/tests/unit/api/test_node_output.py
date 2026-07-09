@@ -316,53 +316,16 @@ class TestMaskOutputValue:
     def test_limits_recursion_depth(self) -> None:
         from modulo.api.routes.runs import _mask_output_value
 
-        deep = {
-            "a": {
-                "b": {
-                    "c": {
-                        "d": {
-                            "e": {
-                                "f": {
-                                    "g": {
-                                        "h": {
-                                            "i": {
-                                                "j": {
-                                                    "k": {
-                                                        "l": {
-                                                            "m": {
-                                                                "n": {
-                                                                    "o": {
-                                                                        "p": {
-                                                                            "q": {
-                                                                                "r": {
-                                                                                    "s": {
-                                                                                        "t": {
-                                                                                            "u": {"api_key": "deep"},
-                                                                                        },
-                                                                                    },
-                                                                                },
-                                                                            },
-                                                                        },
-                                                                    },
-                                                                },
-                                                            },
-                                                        },
-                                                    },
-                                                },
-                                            },
-                                        },
-                                    },
-                                },
-                            },
-                        },
-                    },
-                },
-            },
-        }
-        result = _mask_output_value(deep)
-        # At depth 20+, the value passes through without masking
-        deep_ref = result
+        deep = {"a": {}}
+        inner = deep["a"]
         for _ in range(20):
+            inner["a"] = {}
+            inner = inner["a"]
+        inner["api_key"] = "deep"
+        result = _mask_output_value(deep)
+        # At depth 21+, the value passes through without masking
+        deep_ref = result
+        for _ in range(21):
             deep_ref = deep_ref.get("a", {}) if isinstance(deep_ref, dict) else {}
         # Check we stopped recursing; the innermost value was NOT masked
         assert deep_ref.get("api_key") == "deep"

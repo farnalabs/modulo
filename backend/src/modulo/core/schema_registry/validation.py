@@ -1,4 +1,5 @@
 from __future__ import annotations
+
 """Schema validation — union types (oneOf/anyOf) and array schemas."""
 
 

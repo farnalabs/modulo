@@ -1,4 +1,5 @@
 from __future__ import annotations
+
 """Overdue HITL claim warning system.
 
 Finds pending (undecided) HITL claims whose creation time exceeds a
@@ -13,8 +14,8 @@ from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from sqlalchemy import select
-from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.exc import SQLAlchemyError
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.db.models.hitl_claim import HitlClaim
 

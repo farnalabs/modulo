@@ -1,4 +1,5 @@
 from __future__ import annotations
+
 """Event system for real-time resource-change notifications via SSE."""
 
 

@@ -23,6 +23,10 @@ from typing import Any, Self, cast
 from opentelemetry import trace
 from opentelemetry.trace import Status, StatusCode
 
+from modulo.connectors.asana import AsanaConnector
+from modulo.connectors.azure_key_vault import AzureKeyVaultConnector
+from modulo.connectors.azure_pipelines import AzurePipelinesConnector
+from modulo.connectors.azure_repos import AzureReposConnector
 from modulo.connectors.base import (
     ConnectorACL,
     ConnectorBase,
@@ -32,12 +36,6 @@ from modulo.connectors.base import (
     ConnectorType,
     HealthResult,
 )
-from modulo.core.plugin_registry import get_plugin_registry
-from modulo.core.secrets_backend import SecretsBackend
-from modulo.connectors.asana import AsanaConnector
-from modulo.connectors.azure_key_vault import AzureKeyVaultConnector
-from modulo.connectors.azure_pipelines import AzurePipelinesConnector
-from modulo.connectors.azure_repos import AzureReposConnector
 from modulo.connectors.bitbucket import BitbucketConnector
 from modulo.connectors.buildkite import BuildkiteConnector
 from modulo.connectors.ci_runner import GitHubActionsCIRunner, GitLabCIRunner
@@ -65,8 +63,8 @@ from modulo.connectors.opsgenie import OpsgenieConnector
 from modulo.connectors.pagerduty import PagerDutyConnector
 from modulo.connectors.pypi import PyPIConnector
 from modulo.connectors.sentry import SentryConnector
-from modulo.connectors.shell import ShellConnector
 from modulo.connectors.sharepoint import SharePointConnector
+from modulo.connectors.shell import ShellConnector
 from modulo.connectors.shortcut import ShortcutConnector
 from modulo.connectors.slack import SlackConnector
 from modulo.connectors.snyk import SnykConnector
@@ -76,6 +74,8 @@ from modulo.connectors.trello import TrelloConnector
 from modulo.connectors.trivy import TrivyConnector
 from modulo.connectors.youtrack import YouTrackConnector
 from modulo.core.pipeline_engine.output_filter import filter_payload_for_injection
+from modulo.core.plugin_registry import get_plugin_registry
+from modulo.core.secrets_backend import SecretsBackend
 from modulo.db.models.connector_instance import ConnectorInstance
 
 logger = logging.getLogger(__name__)
@@ -180,7 +180,7 @@ class ConnectorHub:
                     )
                     self._connectors[ci.id] = traced
                     self._acls[ci.id] = acl
-                except (ConnectorDecryptError, ValueError, TypeError, KeyError, json.JSONDecodeError, asyncio.TimeoutError, OSError):
+                except (TimeoutError, ConnectorDecryptError, ValueError, TypeError, KeyError, json.JSONDecodeError, OSError):
                     logger.warning(
                         "Skipping connector %s (%s)",
                         ci.id,

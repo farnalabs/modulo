@@ -1,4 +1,5 @@
 from __future__ import annotations
+
 """SQLAlchemy event listeners that publish resource-change events to the EventBus."""
 
 

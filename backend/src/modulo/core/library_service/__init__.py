@@ -1,4 +1,5 @@
 from __future__ import annotations
+
 """Library service — CRUD and community primitives for library_primitives."""
 
 
