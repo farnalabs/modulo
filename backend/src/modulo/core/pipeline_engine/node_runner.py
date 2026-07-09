@@ -127,7 +127,7 @@ def make_node_fn(
             run_context["input"] = truncate_input(raw_input, max_input_length)
 
         # Get agent data from node_def (embedded at snapshot creation).
-        prompt_template = node_def.get("prompt_template", "")
+        prompt_template = node_def.get("prompt_template") or ""
         model_backend_id_str = node_def.get("model_backend_id")
         output_schema_json = node_def.get("output_schema_json")
 
@@ -148,20 +148,14 @@ def make_node_fn(
 
         hub = get_model_backend_hub()
         if hub is None:
-            return {"artifacts": [{"node_id": node_id, "status": "executed", "error": "ModelBackendHub not available"}]}
+            raise RuntimeError(f"ModelBackendHub not available for node {node_id!r}")
 
         # Resolve backend ID and invoke the model.
         backend_id = uuid.UUID(model_backend_id_str)
-        try:
-            backend = await hub.get(backend_id)
-        except Exception:
-            return {"artifacts": [{"node_id": node_id, "status": "executed", "error": "Backend not available"}]}
+        backend = await hub.get(backend_id)
 
         messages = [HumanMessage(content=rendered_prompt)]
-        try:
-            response = await backend.invoke(messages)
-        except Exception:
-            return {"artifacts": [{"node_id": node_id, "status": "executed", "error": "Model invocation failed"}]}
+        response = await backend.invoke(messages)
 
         content = response.content if hasattr(response, "content") else str(response)
         output_data: Any = content
