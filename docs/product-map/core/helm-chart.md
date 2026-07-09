@@ -1,6 +1,6 @@
 ---
 id: feat-core-helm-chart
-prd: 11, 13
+prd: 11
 delivery-tasks: [task-nv9-helm-chart]
 code:
   - helm/
