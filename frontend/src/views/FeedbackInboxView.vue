@@ -74,20 +74,12 @@
     <ErrorAlert v-else-if="error" :message="error" :on-retry="loadFeedback" />
 
     <template v-else>
-      <div v-if="records.length === 0" data-testid="feedback-inbox-empty" class="rounded-lg border bg-card p-8 text-center">
-        <svg
-          class="mx-auto mb-3 h-12 w-12 text-muted-foreground"
-          xmlns="http://www.w3.org/2000/svg"
-          viewBox="0 0 24 24"
-          fill="none"
-          stroke="currentColor"
-          stroke-width="1.5"
-        >
-          <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
-        </svg>
-        <p class="text-lg font-medium">{{ $t('views.FeedbackInboxView.no_feedback_yet') }}</p>
-        <p class="mt-1 text-sm text-muted-foreground">{{ $t('views.FeedbackInboxView.all_feedback_records_have_been_resolved_or_no_evaluations_ha') }}</p>
-      </div>
+      <EmptyState
+        v-if="records.length === 0"
+        data-testid="feedback-inbox-empty"
+        :title="$t('views.FeedbackInboxView.no_feedback_yet')"
+        :description="$t('views.FeedbackInboxView.all_feedback_records_have_been_resolved_or_no_evaluations_ha')"
+      />
 
       <div v-else class="space-y-2">
         <div

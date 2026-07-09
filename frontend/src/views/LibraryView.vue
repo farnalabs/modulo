@@ -1,4 +1,4 @@
-﻿<template>
+<template>
   <div class="min-h-screen">
     <header class="bg-card border-b border-border px-6 py-4">
       <div class="max-w-6xl mx-auto flex items-center justify-between gap-3">
@@ -77,20 +77,21 @@
       </div>
 
       <div
-        v-else-if="section === 'native' && nativePrimitives.length === 0 && previewPrimitives.length === 0"
-        class="text-center py-12 text-muted-foreground"
-      >
-        {{ $t('views.LibraryView.no_primitives_found') }}
-      </div>
+      <EmptyState
+        v-else-if="section === 'native' &amp;&amp; nativePrimitives.length === 0 &amp;&amp; previewPrimitives.length === 0"
+        :title="$t('views.LibraryView.no_primitives_found')"
+      />
 
-      <div
-        v-else-if="section === 'community' && communityPrimitives.length === 0"
-        class="text-center py-12 text-muted-foreground"
-      >
-        {{ $t('views.LibraryView.no_primitives_found') }}
-      </div>
+      <EmptyState
+        v-else-if="section === 'community' &amp;&amp; communityPrimitives.length === 0"
+        :title="$t('views.LibraryView.no_primitives_found')"
+      />
+      <EmptyState
+        v-else-if="section === 'native' &amp;&amp; nativePrimitives.length === 0 &amp;&amp; previewPrimitives.length === 0"
+        :title="$t('views.LibraryView.no_primitives_found')"
+      />
 
-      <div v-else-if="section === 'native' && nativePrimitives.length > 0" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+      <div v-else-if="section === 'native' &amp;&amp; nativePrimitives.length > 0" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
         <div
           v-for="prim in nativePrimitives"
           :key="prim.id"
@@ -472,3 +473,4 @@ onMounted(() => {
   loadPrimitives()
 })
 </script>
+
