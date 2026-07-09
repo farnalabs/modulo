@@ -280,6 +280,39 @@ class PipelineExecutor:
                 )
         return eval_defs_by_node
 
+    async def _init_model_backend_hub(self, org_id: uuid.UUID) -> ModelBackendHub | None:
+        """Load active model backends for the org and initialise ModelBackendHub.
+
+        Sets the hub on the current ContextVar so node_runner can access it.
+        Returns the hub (or None if no backends are configured) for cleanup
+        in the caller's finally block.
+        """
+        hub: ModelBackendHub | None = None
+        try:
+            async with self._session_factory() as session, session.begin():
+                await set_rls_org(session, org_id)
+                backend_rows = (await session.execute(
+                    select(ModelBackend).where(
+                        ModelBackend.organisation_id == org_id,
+                        ModelBackend.status == "active",
+                    )
+                )).scalars().all()
+                if isinstance(backend_rows, list) and backend_rows:
+                    from modulo.settings import get_settings
+                    _settings = get_settings()
+                    from modulo.core.secrets_backend import create_secrets_backend
+                    secrets_backend = create_secrets_backend(
+                        fernet_key=_settings.fernet_key,
+                        session=session,
+                    )
+                    hub = ModelBackendHub()
+                    await hub.__aenter__()
+                    await hub.initialise(backend_rows, secrets_backend=secrets_backend)
+                    set_model_backend_hub(hub)
+        except Exception:
+            _log.warning("pipeline.model_backend_hub_init_failed", exc_info=True)
+        return hub
+
     def _check_db_cancellation(
         self,
         org_id: uuid.UUID,
@@ -417,30 +450,7 @@ class PipelineExecutor:
         self._otel_bridge.set_run_context(str(org_id), str(pipeline_id))
 
         # Load model backends for this run's org.
-        model_backend_hub: ModelBackendHub | None = None
-        try:
-            async with self._session_factory() as session, session.begin():
-                await set_rls_org(session, org_id)
-                backend_rows = (await session.execute(
-                    select(ModelBackend).where(
-                        ModelBackend.organisation_id == org_id,
-                        ModelBackend.status == "active",
-                    )
-                )).scalars().all()
-                if isinstance(backend_rows, list) and backend_rows:
-                    from modulo.settings import get_settings
-                    _settings = get_settings()
-                    from modulo.core.secrets_backend import create_secrets_backend
-                    secrets_backend = create_secrets_backend(
-                        fernet_key=_settings.fernet_key,
-                        session=session,
-                    )
-                    model_backend_hub = ModelBackendHub()
-                    await model_backend_hub.__aenter__()
-                    await model_backend_hub.initialise(backend_rows, secrets_backend=secrets_backend)
-                    set_model_backend_hub(model_backend_hub)
-        except Exception:
-            _log.warning("pipeline.model_backend_hub_init_failed", exc_info=True)
+        model_backend_hub = await self._init_model_backend_hub(org_id)
 
         try:
             from modulo.settings import get_settings
@@ -584,30 +594,7 @@ class PipelineExecutor:
         self._otel_bridge.set_run_context(str(org_id), str(pipeline_id))
 
         # Load model backends for this run's org — provides LLM access to agent nodes.
-        model_backend_hub: ModelBackendHub | None = None
-        try:
-            async with self._session_factory() as session, session.begin():
-                await set_rls_org(session, org_id)
-                backend_rows = (await session.execute(
-                    select(ModelBackend).where(
-                        ModelBackend.organisation_id == org_id,
-                        ModelBackend.status == "active",
-                    )
-                )).scalars().all()
-                if isinstance(backend_rows, list) and backend_rows:
-                    from modulo.settings import get_settings
-                    _settings = get_settings()
-                    from modulo.core.secrets_backend import create_secrets_backend
-                    secrets_backend = create_secrets_backend(
-                        fernet_key=_settings.fernet_key,
-                        session=session,
-                    )
-                    model_backend_hub = ModelBackendHub()
-                    await model_backend_hub.__aenter__()
-                    await model_backend_hub.initialise(backend_rows, secrets_backend=secrets_backend)
-                    set_model_backend_hub(model_backend_hub)
-        except Exception:
-            _log.warning("pipeline.model_backend_hub_init_failed", exc_info=True)
+        model_backend_hub = await self._init_model_backend_hub(org_id)
 
         try:
             # Compile (or retrieve from cache) the StateGraph.

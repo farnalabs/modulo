@@ -1046,19 +1046,24 @@ async def recover_run_node(
     action = "skip" if req.input_data is None else "replay"
 
     # Resume the graph with the recovery data.
-    resume_data: dict[str, Any] = {"output": req.input_data}
-    if action == "skip":
-        resume_data = {"action": "skip", "output": None}
+    resume_data: dict[str, Any] = {"action": action, "output": req.input_data}
 
     executor = PipelineExecutor(
         engine,
         checkpointer_conn_string=pg_connection_string(str(engine.url)),
     )
-    await executor.resume(
-        run_id=run_id,
-        org_id=principal.organisation_id,
-        resume_data=resume_data,
-    )
+    try:
+        await executor.resume(
+            run_id=run_id,
+            org_id=principal.organisation_id,
+            resume_data=resume_data,
+        )
+    except Exception as exc:
+        logger.exception("run.recover_node.resume_failed")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to resume pipeline after node recovery",
+        ) from exc
 
     return NodeRecoverResponse(
         run_id=run_id,
