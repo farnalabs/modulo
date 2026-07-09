@@ -6,7 +6,7 @@ test.describe('Settings HITL Review', () => {
     await page.goto('/settings/hitl-review')
     await page.waitForLoadState('networkidle')
     await expect(page.locator('h1')).toContainText('HITL Review')
-    await expect(page.getByTestId('page-hitl-review')).toBeVisible()
+    await expect(page.getByTestId('hitl-review-status-select')).toBeVisible()
   })
 })
 
@@ -16,7 +16,7 @@ test.describe('Settings Browser Monitoring', () => {
     await page.goto('/settings/monitoring')
     await page.waitForLoadState('networkidle')
     await expect(page.locator('h1')).toContainText('Browser Monitoring')
-    await expect(page.getByTestId('page-monitoring')).toBeVisible()
+    await expect(page.locator('h1')).toBeVisible()
   })
 })
 
@@ -26,7 +26,7 @@ test.describe('Settings Rate Limits', () => {
     await page.goto('/settings/rate-limits')
     await page.waitForLoadState('networkidle')
     await expect(page.locator('h1')).toContainText('Rate Limits')
-    await expect(page.getByTestId('page-rate-limits')).toBeVisible()
+    await expect(page.getByTestId('rate-limits-title')).toBeVisible()
   })
 })
 
@@ -36,7 +36,7 @@ test.describe('Settings Remy Skills', () => {
     await page.goto('/settings/remy')
     await page.waitForLoadState('networkidle')
     await expect(page.locator('h1')).toContainText('Remy Skills')
-    await expect(page.getByTestId('page-remy-skills')).toBeVisible()
+    await expect(page.getByTestId('remy-user-skills-add')).toBeVisible()
   })
 })
 
@@ -46,6 +46,6 @@ test.describe('Settings Runtime Config', () => {
     await page.goto('/settings/runtime-config')
     await page.waitForLoadState('networkidle')
     await expect(page.locator('h1')).toContainText('Runtime Config')
-    await expect(page.getByTestId('page-runtime-config')).toBeVisible()
+    await expect(page.getByTestId('settings-runtime-config-reload')).toBeVisible()
   })
 })

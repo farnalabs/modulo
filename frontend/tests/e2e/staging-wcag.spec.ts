@@ -44,7 +44,7 @@ test.describe('WCAG AA audit (staging.modulo.run)', () => {
     '/pipelines', '/stages', '/evals', '/schemas',
     '/settings/license', '/settings/teams',
     '/admin/users', '/admin/connectors',
-    '/admin/model-backends', '/admin/cost-overview',
+    '/admin/model-backends',     '/admin/costs',
   ]
 
   for (const pagePath of authedPages) {

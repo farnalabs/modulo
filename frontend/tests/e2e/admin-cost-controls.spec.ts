@@ -9,7 +9,7 @@ test.describe('Admin Spend Limits', () => {
     await page.goto('/admin/costs/limits')
     await page.waitForLoadState('networkidle')
     await expect(page.locator('h1')).toContainText('Spend Limits')
-    await expect(page.getByTestId('page-spend-limits')).toBeVisible()
+    await expect(page.getByTestId('admin-spend-limits-org-limit')).toBeVisible()
   })
 })
 
@@ -19,6 +19,6 @@ test.describe('Admin Cost Controls', () => {
     await page.goto('/admin/costs/controls')
     await page.waitForLoadState('networkidle')
     await expect(page.locator('h1')).toContainText('Cost Controls')
-    await expect(page.getByTestId('page-cost-controls')).toBeVisible()
+    await expect(page.getByTestId('cc-total-spend')).toBeVisible()
   })
 })

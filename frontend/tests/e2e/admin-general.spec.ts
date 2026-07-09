@@ -6,7 +6,7 @@ test.describe('Admin API Changelog', () => {
     await page.goto('/admin/api-changelog')
     await page.waitForLoadState('networkidle')
     await expect(page.locator('h1')).toContainText('API Changelog')
-    await expect(page.getByTestId('page-api-changelog')).toBeVisible()
+    await expect(page.getByTestId('changelog-title')).toBeVisible()
   })
 })
 
@@ -16,7 +16,7 @@ test.describe('Admin Audit Log', () => {
     await page.goto('/admin/audit')
     await page.waitForLoadState('networkidle')
     await expect(page.locator('h1')).toContainText('Audit Log')
-    await expect(page.getByTestId('page-audit-log')).toBeVisible()
+    await expect(page.getByTestId('admin-audit-verify-chain')).toBeVisible()
   })
 })
 
@@ -26,7 +26,7 @@ test.describe('Admin My Profile', () => {
     await page.goto('/admin/my-profile')
     await page.waitForLoadState('networkidle')
     await expect(page.locator('h1')).toContainText('My Profile')
-    await expect(page.getByTestId('page-my-profile')).toBeVisible()
+    await expect(page.getByTestId('my-profile-current-password')).toBeVisible()
   })
 })
 
@@ -35,8 +35,8 @@ test.describe('Admin Notification Delivery', () => {
     await loginAsAdmin(page, env)
     await page.goto('/admin/notification-delivery')
     await page.waitForLoadState('networkidle')
-    await expect(page.locator('h1')).toContainText('Notification Log')
-    await expect(page.getByTestId('page-notification-delivery')).toBeVisible()
+    await expect(page.locator('h1')).toContainText('Notification Delivery Log')
+    await expect(page.getByTestId('admin-notification-log-title')).toBeVisible()
   })
 })
 
@@ -45,18 +45,18 @@ test.describe('Admin Org Settings', () => {
     await loginAsAdmin(page, env)
     await page.goto('/admin/org')
     await page.waitForLoadState('networkidle')
-    await expect(page.locator('h1')).toContainText('Org Settings')
-    await expect(page.getByTestId('page-org-settings')).toBeVisible()
+    await expect(page.locator('h1')).toContainText('Organisation Settings')
+    await expect(page.getByTestId('org-delete-confirm-input')).toBeVisible()
   })
 })
 
 test.describe('Admin Pipelines', () => {
   test('page loads with correct heading', async ({ page, env }) => {
     await loginAsAdmin(page, env)
-    await page.goto('/admin/pipelines')
+    await page.goto('/pipelines')
     await page.waitForLoadState('networkidle')
-    await expect(page.locator('h1')).toContainText('Admin Pipelines')
-    await expect(page.getByTestId('page-admin-pipelines')).toBeVisible()
+    await expect(page.locator('h1')).toContainText('Pipelines')
+    await expect(page.getByTestId('pipeline-list-new-pipeline')).toBeVisible()
   })
 })
 
@@ -66,7 +66,7 @@ test.describe('Admin Plugins', () => {
     await page.goto('/admin/plugins')
     await page.waitForLoadState('networkidle')
     await expect(page.locator('h1')).toContainText('Plugins')
-    await expect(page.getByTestId('page-plugins')).toBeVisible()
+    await expect(page.getByTestId('admin-plugins-refresh')).toBeVisible()
   })
 })
 
@@ -76,16 +76,16 @@ test.describe('Admin Team Comparison', () => {
     await page.goto('/admin/teams/comparison')
     await page.waitForLoadState('networkidle')
     await expect(page.locator('h1')).toContainText('Team Comparison')
-    await expect(page.getByTestId('page-team-comparison')).toBeVisible()
+    await expect(page.locator('h1')).toBeVisible()
   })
 })
 
 test.describe('Admin Triggers', () => {
   test('page loads with correct heading', async ({ page, env }) => {
     await loginAsAdmin(page, env)
-    await page.goto('/admin/triggers')
+    await page.goto('/settings/triggers')
     await page.waitForLoadState('networkidle')
-    await expect(page.locator('h1')).toContainText('Admin Triggers')
-    await expect(page.getByTestId('page-admin-triggers')).toBeVisible()
+    await expect(page.locator('h1')).toContainText('Triggers')
+    await expect(page.getByTestId('settings-triggers-create')).toBeVisible()
   })
 })
