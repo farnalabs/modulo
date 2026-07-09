@@ -357,19 +357,6 @@ routes:
     <<: *community
     deprecated: false
 
-  /admin/triggers:
-    name: admin-triggers
-    testid: page-admin-triggers
-    breadcrumb: Admin Triggers
-    parent: /
-    product_map: null
-    i18n_key: nav.admin_triggers
-    sidebar_group: settings
-    sidebar_order: 6
-    type: list_page
-    <<: *team
-    deprecated: false
-
   /settings/runtime-config:
     name: settings-runtime-config
     testid: page-runtime-config
