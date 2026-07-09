@@ -52,7 +52,7 @@ test.describe('Admin Org Settings', () => {
     await page.goto('/admin/org')
     await page.waitForLoadState('networkidle')
     await expect(page.locator('h1')).toContainText('Organisation Settings')
-    await expect(page.getByTestId('org-delete-confirm-input')).toBeVisible()
+    await expect(page.locator('text=Organisation Info')).toBeVisible()
   })
 })
 
