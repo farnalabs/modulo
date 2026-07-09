@@ -1,4 +1,5 @@
 from __future__ import annotations
+
 """Notification event mapping — maps platform events to in-app Notification records.
 
 Event categories and their notification config:
