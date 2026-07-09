@@ -37,10 +37,16 @@ export async function setupLocalMockApi(page: Page) {
       return route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ id: '1', email: 'admin@example.com', display_name: 'Admin' }) })
     }
     if (url.includes('/api/v1/pipelines') && method === 'GET') {
-      return route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ items: [{ id: '1', name: 'Test Pipeline', status: 'idle', created_at: new Date().toISOString() }], total: 1 }) })
+      return route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ items: [{ id: '1', name: 'Test Pipeline', organisation_id: '1', description: 'A test pipeline', visibility: 'org', status: 'idle', created_at: new Date().toISOString(), updated_at: new Date().toISOString(), archived_at: null }], total: 1 }) })
     }
     if (url.includes('/api/v1/admin/feature-flags')) {
-      return route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ flags: {}, current_tier: 'enterprise' }) })
+      return route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ flags: [], license: { tier: 'enterprise' } }) })
+    }
+    if (url.includes('/api/v1/admin/license')) {
+      return route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ expires_at: null, org_id: '1', tier: 'enterprise' }) })
+    }
+    if (url.includes('/api/v1/admin/tiers')) {
+      return route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ tiers: [{ tier_id: 'community', label: 'Community', rank: 0 }, { tier_id: 'team', label: 'Team', rank: 1 }, { tier_id: 'enterprise', label: 'Enterprise', rank: 2 }] }) })
     }
     if (url.includes('/api/v1/views')) {
       return route.fulfill({
