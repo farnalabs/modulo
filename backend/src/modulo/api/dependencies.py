@@ -159,4 +159,8 @@ async def get_plan_context(
 
             )
 
+        except Exception:
+
+            logger.warning("Failed to resolve org for plan context, falling back to CommunityTier")
+
     return await resolve_plan_context(settings, session, org=org)
