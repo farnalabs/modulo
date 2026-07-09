@@ -94,8 +94,8 @@ Per-org, role-scoped API keys for CI/CD pipelines and external agents, with opti
 
 - [x] All 4 DB-accessing route handlers wrap queries in `try/except ProgrammingError` → 501 Not Implemented
 - [x] `ProgrammingError` catch returns structured JSON with `detail` explaining the migration requirement
-- [ ] Route handlers do NOT catch `SQLAlchemyError` for general DB failures (integrity, connection) — these propagate as 500
-- [ ] Route handlers do NOT catch generic `Exception` for Python-level errors (`TypeError`, `AttributeValue`) — also propagate as 500
+- [x] Route handlers DO catch `SQLAlchemyError` for general DB failures — returns 503 Service Unavailable
+- [x] Route handlers DO catch generic `Exception` for Python-level errors (`TypeError`, `AttributeValue`) — returns 500 Internal Server Error
 
 ### API key validation errors
 
@@ -112,7 +112,7 @@ Per-org, role-scoped API keys for CI/CD pipelines and external agents, with opti
 - [x] Invalid role (not `operator`/`runner`) → 422 from route handler guard
 - [x] Invalid `team_id` format (not a valid UUID) → 422 from `uuid.UUID()` conversion
 - [x] Invalid `expires_at` format (not ISO 8601) → 422 from `datetime.fromisoformat()`
-- [ ] Team-scoped key with admin role → raised as `ApiKeyInvalidError` at the `api_key.py` layer; route-level guard catches before service layer is reached
+- [x] Team-scoped key with admin role → caught at route level before service layer (422)
 
 ## Resilience
 
@@ -139,7 +139,7 @@ Per-org, role-scoped API keys for CI/CD pipelines and external agents, with opti
 
 ### Key lifecycle edge cases
 
-- [ ] Create key with `team_id` for a non-existent team → FK violation → 500 (not caught by ProgrammingError)
+- [ ] Create key with `team_id` for a non-existent team → FK violation → 409 (IntegrityError catch)
 - [ ] Create key with `expires_at` in the past → accepted (no validation that `expires_at > now`)
 - [ ] Update key with `expires_at` in the past → accepted (no validation that `expires_at > now`)
 - [ ] Update revoked key → returns 404 (query filters `revoked_at.is_(None)`)
