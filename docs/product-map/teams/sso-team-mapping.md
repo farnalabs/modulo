@@ -14,7 +14,7 @@ unit-tests:
   - backend/tests/unit/auth/test_sso.py
   - backend/tests/unit/auth/test_sso_team_mapping_bdd.py
 depends-on: [feat-teams-team-crud, feat-auth-sso-provider-ui]
-status: covered
+status: partial
 ---
 # SSO Team Mapping
 

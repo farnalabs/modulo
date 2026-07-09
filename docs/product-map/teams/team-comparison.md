@@ -65,7 +65,7 @@ Side-by-side eval pass rates and pipeline metrics across teams. Built on the org
 - **Snapshot-only view**: this is a point-in-time comparison with no trend or historical comparison. Time-series comparison (e.g. "pass rate this week vs last week per team") is not available.
 - **No cost data in comparison table**: token spend or cost per team is not shown, though the Elena persona scenario `@goal-elena-cost-by-team` describes this requirement.
 - **i18n violations (now fixed)**: 11 hardcoded English strings replaced with `$t()` wrappers in cross-cutting QA (index 144). New keys added to `en-US.js` under `views.TeamComparisonView`. No regression risk — translations default to English key values.
-- **PRD missing standalone spec**: Team Comparison is only listed as a sidebar route in PRD §8.26.2. No standalone PRD section exists (frontmatter references `prd: 14` which is the Future Roadmap section). Need a dedicated PRD spec.
+- **PRD missing standalone spec**: Team Comparison is only listed as a sidebar route in PRD §8.26.2. No standalone PRD section exists (frontmatter uses `prd: 8` but the correct targeted reference would be `prd: 8.26`). Need a dedicated PRD spec.
 
 ## QA History
 

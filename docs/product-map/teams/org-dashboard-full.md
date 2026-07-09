@@ -6,7 +6,6 @@ bdd:
   - backend/tests/bdd/features/dashboard/hitl_trends.feature
 code:
   - backend/src/modulo/api/routes/dashboard.py
-  - backend/src/modulo/api/routes/dashboard.py (summary, trends, daily-run-counts)
   - frontend/src/views/DashboardView.vue
   - frontend/src/stores/dashboard.ts
   - frontend/src/router/index.ts
