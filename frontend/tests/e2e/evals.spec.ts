@@ -13,8 +13,8 @@ test.describe('Evals', () => {
   })
 
   test('eval proposals page loads', async ({ page, env }) => {
-    await page.route('**/api/v1/evals/proposals*', (route) => {
-      route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ items: [{ id: 'ep1', name: 'Accuracy Improvement Proposal', eval_id: 'e1', status: 'pending', created_at: '2025-06-10T10:00:00Z' }], total: 1 }) })
+    await page.route('**/api/v1/feedback/proposals*', (route) => {
+      route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ items: [{ id: 'ep1', run_id: 'r1', gate_id: 'g1', rejected_by: null, rejection_reason: 'Accuracy below 90% threshold', rejected_output: {}, producing_node_id: 'pn1', producing_node_name: 'Evaluation Node', producing_agent_id: null, feedback_status: 'pending', feedback_handler_type: 'eval_gap', correction_run_id: null, eval_gap: true, needs_human_review: false, pipeline_name: 'Test Pipeline', created_at: '2025-06-10T10:00:00Z' }], total: 1, page: 1, page_size: 20 }) })
     })
     await loginAsAdmin(page, env)
     await page.goto('/evals/proposals')

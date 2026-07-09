@@ -2,6 +2,9 @@ import { test, expect, loginAsAdmin } from './setup/fixtures'
 
 test.describe('Notifications', () => {
   test('notifications page loads', async ({ page, env }) => {
+    await page.route('**/api/v1/notifications/in-app*', (route) => {
+      route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ items: [], total: 0, page: 1, page_size: 20 }) })
+    })
     await loginAsAdmin(page, env)
     await page.goto('/notifications')
     await page.waitForLoadState('networkidle')
@@ -11,7 +14,9 @@ test.describe('Notifications', () => {
 
   test('notification list renders elements', async ({ page, env }) => {
     await loginAsAdmin(page, env)
-    await page.route('**/api/v1/notifications*', (route) => {
+    await page.route('**/api/v1/notifications/in-app*', (route) => {
+      const url = new URL(route.request().url())
+      if (url.pathname.includes('/dashboard')) { route.fallback(); return }
       route.fulfill({
         status: 200,
         contentType: 'application/json',
@@ -19,22 +24,34 @@ test.describe('Notifications', () => {
           items: [
             {
               id: 'n1',
+              scope: 'org',
+              level: 'success',
+              category: 'pipeline_run',
               title: 'Pipeline run completed',
-              message: 'My Pipeline finished successfully',
-              type: 'success',
-              read: false,
+              body: 'My Pipeline finished successfully',
+              action_url: null,
+              dismiss_strategy: 'user_only',
+              dismissible_at_scope: false,
               created_at: '2025-06-01T10:00:00Z',
+              scope_label: 'Organization',
             },
             {
               id: 'n2',
+              scope: 'org',
+              level: 'warning',
+              category: 'hitl_review',
               title: 'HITL review requested',
-              message: 'Approval needed for production deploy',
-              type: 'warning',
-              read: true,
+              body: 'Approval needed for production deploy',
+              action_url: null,
+              dismiss_strategy: 'user_only',
+              dismissible_at_scope: false,
               created_at: '2025-06-01T11:00:00Z',
+              scope_label: 'Organization',
             },
           ],
           total: 2,
+          page: 1,
+          page_size: 20,
         }),
       })
     })
