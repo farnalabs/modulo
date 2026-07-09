@@ -2,7 +2,7 @@
 
 from collections.abc import Generator
 from typing import Any
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import MagicMock
 
 import pytest
 from fastapi.testclient import TestClient
@@ -70,16 +70,16 @@ def admin_client() -> Generator[TestClient, None, None]:
     async def override_session():
         yield mock_session
 
-    mock_plan = MagicMock()
-    mock_plan.feature_enabled.return_value = True
+    async def override_plan_context():
+        return MagicMock()
 
     app.dependency_overrides[get_settings] = _make_settings
     app.dependency_overrides[get_db_session] = override_session
-    app.dependency_overrides[get_plan_context] = lambda: mock_plan
     app.dependency_overrides[_get_engine] = lambda: MagicMock()
     app.dependency_overrides[get_current_user] = lambda: AuthenticatedPrincipal(
         username="admin", organisation_id=_ORG_ID, account_id="u1", org_role="admin"
     )
+    app.dependency_overrides[get_plan_context] = override_plan_context
     yield TestClient(app)
     app.dependency_overrides.clear()
 
@@ -87,19 +87,20 @@ def admin_client() -> Generator[TestClient, None, None]:
 @pytest.fixture()
 def viewer_client() -> Generator[TestClient, None, None]:
     mock_session = _make_session()
-    mock_plan = MagicMock()
-    mock_plan.feature_enabled.return_value = True
 
     async def override_session():
         yield mock_session
 
+    async def override_plan_context():
+        return MagicMock()
+
     app.dependency_overrides[get_settings] = _make_settings
     app.dependency_overrides[get_db_session] = override_session
-    app.dependency_overrides[get_plan_context] = lambda: mock_plan
     app.dependency_overrides[_get_engine] = lambda: MagicMock()
     app.dependency_overrides[get_current_user] = lambda: AuthenticatedPrincipal(
         username="viewer", organisation_id=_ORG_ID, account_id="u2", org_role="viewer"
     )
+    app.dependency_overrides[get_plan_context] = override_plan_context
     yield TestClient(app)
     app.dependency_overrides.clear()
 
