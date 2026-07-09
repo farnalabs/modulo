@@ -11,7 +11,7 @@ test.describe('Error Tracking', () => {
 
   test('error dashboard shows UI elements', async ({ page, env }) => {
     await loginAsAdmin(page, env)
-    await page.route('**/api/v1/admin/errors*', (route) => {
+    await page.route('**/api/v1/errors*', (route) => {
       route.fulfill({
         status: 200,
         contentType: 'application/json',

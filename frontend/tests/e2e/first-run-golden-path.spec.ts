@@ -17,6 +17,11 @@ test.describe('First-Run Golden Path', () => {
       return route.fallback()
     })
 
+    // Pipeline list: return at least one pipeline so the run button renders
+    await page.route('**/api/v1/pipelines*', (route) => {
+      route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ items: [{ id: '1', name: 'Demo Pipeline', status: 'idle', created_at: '2025-01-01T00:00:00Z' }], total: 1 }) })
+    })
+
     // Run status poll: start queued, then running, then complete
     let pollCount = 0
     await page.route('**/api/v1/runs/*', async (route) => {
