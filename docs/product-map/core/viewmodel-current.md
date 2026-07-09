@@ -49,7 +49,7 @@ Aggregate endpoint returning the current user's full view of the system — org 
 - No pagination on team memberships (truncated flag is always false)
 - No dedicated viewmodel BDD feature file — covered indirectly by view_as_team BDD
 - `/api/v1/license` route does not query DB, so no ProgrammingError catch needed (its `except Exception` is overly broad but harmless)
-- No website documentation page for viewmodel API — stub needed in `Website/modulo-website/src/docs/viewmodel.md`
+
 
 ## QA History
 

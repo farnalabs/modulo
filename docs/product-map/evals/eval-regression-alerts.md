@@ -26,7 +26,7 @@ Detects significant pass-rate drops for eval definitions by comparing a recent w
 
 ### Happy paths
 
-- [x] Eval with declining pass rate (drop >= threshold) returns alert with trend="declining"
+- [x] Eval with declining pass rate (drop > threshold) returns alert with trend="declining"
 - [x] Eval with improving pass rate (drop <= -threshold) returns alert with trend="improving"
 - [x] Eval with stable pass rate (drop within threshold) returns alert with trend="stable"
 - [x] Alert includes eval_id, eval_name, prev_pass_rate, current_pass_rate, drop_pct, trend, affected_run_ids
@@ -72,7 +72,7 @@ Detects significant pass-rate drops for eval definitions by comparing a recent w
 ### Error Handling
 - [x] ProgrammingError caught → 501 Not Implemented
 - [x] SQLAlchemyError caught → 503 Service Unavailable
-- [ ] Logged warning on ProgrammingError before returning 501
+- [x] Logged warning on ProgrammingError before returning 501
 - [x] Unauthenticated request returns 401
 - [x] Non-admin user returns 403
 
