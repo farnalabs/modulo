@@ -14,9 +14,6 @@ test.describe('Dashboard', () => {
 
     await loginAsAdmin(page, env)
 
-    const isOnDashboard = page.url() !== `${page.context().options.baseURL}/login`
-    if (isOnDashboard) {
-      await expect(page.locator('h1')).toContainText('Dashboard')
-    }
+    await expect(page.locator('h1')).toContainText('Dashboard')
   })
 })
