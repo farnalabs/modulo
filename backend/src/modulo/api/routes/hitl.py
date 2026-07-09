@@ -23,7 +23,7 @@ from sqlalchemy import select
 from sqlalchemy.exc import ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession
 
-from modulo.api.dependencies import _get_engine, get_db_session
+from modulo.api.dependencies import _get_engine, get_db_session, pg_connection_string
 from modulo.auth.dependencies import get_current_user
 from modulo.auth.jwt import AuthenticatedPrincipal
 from modulo.core.hitl_manager import (
@@ -238,7 +238,10 @@ async def approve_gate(
         resume_data["notes"] = req.notes
 
     try:
-        executor = PipelineExecutor(engine)
+        executor = PipelineExecutor(
+            engine,
+            checkpointer_conn_string=pg_connection_string(str(engine.url)),
+        )
         await executor.resume(
             run_id=run_id,
             org_id=principal.organisation_id,
@@ -326,7 +329,10 @@ async def approve_gate_with_modification(
         resume_data["notes"] = req.notes
 
     try:
-        executor = PipelineExecutor(engine)
+        executor = PipelineExecutor(
+            engine,
+            checkpointer_conn_string=pg_connection_string(str(engine.url)),
+        )
         await executor.resume(
             run_id=run_id,
             org_id=principal.organisation_id,
@@ -404,7 +410,10 @@ async def reject_gate(
     # reject_target branch.
     resume_data: dict[str, Any] = {"action": "rejected", "reason": req.reason}
     try:
-        executor = PipelineExecutor(engine)
+        executor = PipelineExecutor(
+            engine,
+            checkpointer_conn_string=pg_connection_string(str(engine.url)),
+        )
         await executor.resume(
             run_id=run_id,
             org_id=principal.organisation_id,
@@ -492,7 +501,10 @@ async def deliver_manual_output(
 
     resume_data: dict[str, Any] = {"action": "deliver_manual", "output": req.output}
     try:
-        executor = PipelineExecutor(engine)
+        executor = PipelineExecutor(
+            engine,
+            checkpointer_conn_string=pg_connection_string(str(engine.url)),
+        )
         await executor.resume(
             run_id=run_id,
             org_id=principal.organisation_id,
@@ -570,7 +582,10 @@ async def submit_manual_output(
 
     resume_data: dict[str, Any] = {"action": "manual_output", "output": req.output}
     try:
-        executor = PipelineExecutor(engine)
+        executor = PipelineExecutor(
+            engine,
+            checkpointer_conn_string=pg_connection_string(str(engine.url)),
+        )
         await executor.resume(
             run_id=run_id,
             org_id=principal.organisation_id,
