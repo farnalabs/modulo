@@ -17,6 +17,7 @@
           :label="item.label"
           :label-key="item.labelKey"
           :exact="item.exact"
+          :preview="item.preview"
           @click="$emit('navigate')"
         /></SidebarGroup>
     </template>

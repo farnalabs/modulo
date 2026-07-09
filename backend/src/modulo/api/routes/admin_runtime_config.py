@@ -10,6 +10,7 @@ from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, status
 
+from modulo.api.dependencies import require_feature
 from modulo.api.middleware.sensitive_mask import is_sensitive_env_key, mask_sensitive_value
 from modulo.auth.dependencies import get_current_user
 from modulo.auth.jwt import AuthenticatedPrincipal
@@ -55,7 +56,7 @@ def _build_response(store: RuntimeConfigStore) -> dict[str, Any]:
     return {"items": items, "has_drift": has_drift}
 
 
-@router.get("")
+@router.get("", dependencies=[require_feature("runtime_config")])
 def get_runtime_config(
     current_user: AuthenticatedPrincipal = Depends(get_current_user),
 ) -> dict[str, Any]:
@@ -72,7 +73,7 @@ def get_runtime_config(
         ) from exc
 
 
-@router.put("")
+@router.put("", dependencies=[require_feature("runtime_config")])
 def set_runtime_config_overrides(
     req: dict[str, Any],
     current_user: AuthenticatedPrincipal = Depends(get_current_user),
@@ -129,7 +130,7 @@ def set_runtime_config_overrides(
         ) from exc
 
 
-@router.post("/reload")
+@router.post("/reload", dependencies=[require_feature("runtime_config")])
 def reload_runtime_config(
     current_user: AuthenticatedPrincipal = Depends(get_current_user),
 ) -> dict[str, Any]:
