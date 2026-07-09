@@ -3,6 +3,7 @@ import logging
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, Field
 
+from modulo.api.dependencies import require_feature
 from modulo.api.middleware.rate_limiter import RateLimitMiddleware, redis_available
 from modulo.auth.dependencies import get_current_user
 from modulo.auth.jwt import AuthenticatedPrincipal
@@ -41,7 +42,7 @@ def _require_admin(principal: AuthenticatedPrincipal) -> None:
         )
 
 
-@router.get("", response_model=RateLimitStatusResponse)
+@router.get("", response_model=RateLimitStatusResponse, dependencies=[require_feature("rate_limits")])
 async def get_rate_limits(
     current_user: AuthenticatedPrincipal = Depends(get_current_user),
 ) -> RateLimitStatusResponse:
@@ -53,7 +54,7 @@ async def get_rate_limits(
     )
 
 
-@router.put("", response_model=RateLimitStatusResponse)
+@router.put("", response_model=RateLimitStatusResponse, dependencies=[require_feature("rate_limits")])
 async def update_rate_limits(
     req: RateLimitUpdateRequest,
     current_user: AuthenticatedPrincipal = Depends(get_current_user),

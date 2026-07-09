@@ -15,7 +15,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy.exc import IntegrityError, ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from modulo.api.dependencies import get_db_session
+from modulo.api.dependencies import get_db_session, require_feature
 from modulo.auth.dependencies import get_current_user
 from modulo.auth.jwt import AuthenticatedPrincipal
 from modulo.core.runtime_provider import RuntimeProvider, create_default_hub
@@ -142,7 +142,7 @@ async def _get_profile_or_404(session: AsyncSession, profile_id: uuid.UUID) -> E
 # ---------------------------------------------------------------------------
 
 
-@router.get("", response_model=ProfileListResponse)
+@router.get("", response_model=ProfileListResponse, dependencies=[require_feature("environment_profiles")])
 async def list_profiles(
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
@@ -184,7 +184,12 @@ async def list_profiles(
     )
 
 
-@router.post("", response_model=ProfileResponse, status_code=status.HTTP_201_CREATED)
+@router.post(
+    "",
+    response_model=ProfileResponse,
+    status_code=status.HTTP_201_CREATED,
+    dependencies=[require_feature("environment_profiles")],
+)
 async def create_profile(
     req: ProfileCreate,
     session: AsyncSession = Depends(get_db_session),
@@ -232,7 +237,7 @@ async def create_profile(
     return _to_response(profile)
 
 
-@router.get("/{profile_id}", response_model=ProfileResponse)
+@router.get("/{profile_id}", response_model=ProfileResponse, dependencies=[require_feature("environment_profiles")])
 async def get_profile(
     profile_id: uuid.UUID,
     session: AsyncSession = Depends(get_db_session),
@@ -268,7 +273,7 @@ async def get_profile(
     return _to_response(profile)
 
 
-@router.patch("/{profile_id}", response_model=ProfileResponse)
+@router.patch("/{profile_id}", response_model=ProfileResponse, dependencies=[require_feature("environment_profiles")])
 async def update_profile(
     profile_id: uuid.UUID,
     req: ProfileUpdate,
@@ -313,7 +318,11 @@ async def update_profile(
     return _to_response(profile)
 
 
-@router.delete("/{profile_id}", status_code=status.HTTP_204_NO_CONTENT)
+@router.delete(
+    "/{profile_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    dependencies=[require_feature("environment_profiles")],
+)
 async def delete_profile(
     profile_id: uuid.UUID,
     session: AsyncSession = Depends(get_db_session),
@@ -446,7 +455,7 @@ def _build_workspace_spec(profile: EnvironmentProfile) -> Any:
     )
 
 
-@router.post("/{profile_id}/test")
+@router.post("/{profile_id}/test", dependencies=[require_feature("environment_profiles")])
 async def test_profile(
     profile_id: uuid.UUID,
     session: AsyncSession = Depends(get_db_session),
