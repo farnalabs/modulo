@@ -63,6 +63,7 @@ def upgrade() -> None:
                 ('admin_run_retention', 'Configure run retention policies and manual purge', 'team', NULL, true),
                 ('error_forwarders', 'External error tracking and alerting integrations', 'team', NULL, true),
                 ('schema_version_history', 'Version history and diff for schema definitions', 'team', NULL, true),
+                ('external_secrets', 'External secrets backends (Vault, AWS, 1Password, Azure Key Vault)', 'team', NULL, true),
                 ('schema_union_types', 'Union types and polymorphic schemas', 'v1', NULL, true),
                 ('migration_cli', 'CLI tool for migrating pipelines across instances', 'v1', NULL, true),
                 ('checkpoint_encryption', 'Encrypt pipeline checkpoints at rest', 'v2', NULL, true),

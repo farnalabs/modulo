@@ -206,12 +206,12 @@ class TestKnownFlagsCount:
     def test_community_count(self) -> None:
         registry = FeatureFlagRegistry()
         community = [f for f in registry.list_flags() if f.tier == "community"]
-        assert len(community) == 13
+        assert len(community) == 15
 
     def test_team_count(self) -> None:
         registry = FeatureFlagRegistry()
         team = [f for f in registry.list_flags() if f.tier == "team"]
-        assert len(team) == 13
+        assert len(team) == 17
 
     def test_v1_count(self) -> None:
         registry = FeatureFlagRegistry()

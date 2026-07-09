@@ -64,6 +64,23 @@ def validate_key(key: str) -> str:
     return stripped
 
 
+def _check_external_secrets_licensed() -> bool:
+    """Return True if a valid license permits external secrets backends."""
+    from modulo.core.license import get_license, parse_and_verify
+
+    lic = get_license()
+    if lic is not None:
+        return True
+
+    raw_key = os.environ.get("MODULO_LICENSE_KEY", "")
+    if raw_key:
+        validation = parse_and_verify(raw_key)
+        if validation.valid and validation.license_data is not None:
+            return True
+
+    return False
+
+
 def create_secrets_backend(
     *,
     fernet_key: str | None = None,
@@ -75,6 +92,9 @@ def create_secrets_backend(
 
     Reads *backend_name* (default ``MODULO_SECRETS_BACKEND`` env var, fallback
     ``"fernet"``) and constructs the matching implementation.
+
+    External secrets backends (``vault``, ``aws``) require a valid license key.
+    Without one, the factory falls back to ``"fernet"`` and logs a warning.
 
     Args:
         fernet_key: Fernet encryption key (required only by FernetSecretsBackend).
@@ -101,14 +121,27 @@ def create_secrets_backend(
             if fernet_key is None:
                 raise ValueError("fernet_key is required when backend_name is 'fernet'")
             return FernetSecretsBackend(fernet_key=fernet_key, session=session, old_key=old_fernet_key)
-        case "vault":
-            from modulo.core.secrets_backend.vault import VaultSecretsBackend
+        case "vault" | "aws":
+            if not _check_external_secrets_licensed():
+                logger.warning(
+                    "External secrets backend %r requires a valid license key. "
+                    "Falling back to 'fernet' backend.",
+                    name,
+                )
+                from modulo.core.secrets_backend.fernet import FernetSecretsBackend
 
-            return VaultSecretsBackend()
-        case "aws":
-            from modulo.core.secrets_backend.aws import AWSSecretsManagerBackend
+                if fernet_key is None:
+                    raise ValueError("fernet_key is required when backend_name is 'fernet'")
+                return FernetSecretsBackend(fernet_key=fernet_key, session=session, old_key=old_fernet_key)
 
-            return AWSSecretsManagerBackend()
+            if name == "vault":
+                from modulo.core.secrets_backend.vault import VaultSecretsBackend
+
+                return VaultSecretsBackend()
+            else:
+                from modulo.core.secrets_backend.aws import AWSSecretsManagerBackend
+
+                return AWSSecretsManagerBackend()
         case _:
             msg = f"Unknown MODULO_SECRETS_BACKEND: {name!r}. Must be one of: 'fernet', 'vault', 'aws'."
             raise ValueError(msg)

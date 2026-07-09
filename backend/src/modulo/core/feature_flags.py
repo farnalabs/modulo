@@ -137,6 +137,11 @@ _KNOWN_FLAGS: list[FeatureFlag] = [
         description="SCIM 2.0 user and group provisioning",
         tier="team",
     ),
+    FeatureFlag(
+        name="external_secrets",
+        description="External secrets backends (Vault, AWS, 1Password, Azure Key Vault)",
+        tier="team",
+    ),
     # ── v1 tier ────────────────────────────────────────────────────────
     FeatureFlag(
         name="schema_union_types",
