@@ -127,17 +127,6 @@ def _make_scim_settings() -> Settings:
     )
 
 
-def _make_no_license_settings() -> Settings:
-    return Settings(
-        database_url="postgresql+asyncpg://localhost/test",
-        secret_key=_VALID_32,
-        fernet_key=_VALID_32,
-        modulo_admin_password="testpass",
-        modulo_license_key="",
-        modulo_public_url="http://localhost:8000",
-    )
-
-
 def _make_mock_session() -> AsyncMock:
     session = AsyncMock()
     begin_cm = AsyncMock()
@@ -201,10 +190,26 @@ def scim_client() -> Generator[TestClient, None, None]:
     async def override_session() -> AsyncGenerator[AsyncMock, None]:
         yield mock_session
 
+    from modulo.api.dependencies import _get_engine, get_plan_context
+    from modulo.api.main import app
+    from modulo.core.feature_flags import LicenseData, LicenseKeyTier, PlanContext
+
+    _plan: PlanContext = LicenseKeyTier(
+        LicenseData(
+            tier="team",
+            features=["scim"],
+            expires_at="",
+            org_id="",
+            raw_payload={},
+            raw_key="test-license-key",
+        )
+    )
+
     app.dependency_overrides[get_settings] = _make_scim_settings
     app.dependency_overrides[get_db_session] = override_session
     app.dependency_overrides[_get_engine] = lambda: MagicMock()
     app.dependency_overrides[get_scim_principal] = lambda: ScimPrincipal(organisation_id=_ORG_ID)
+    app.dependency_overrides[get_plan_context] = lambda: _plan
     yield TestClient(app)
     app.dependency_overrides.clear()
 
@@ -469,7 +474,11 @@ def _when_patch_group_remove_member(
 def _when_get_users_list(scim_client: Any, request: Any, ctx: dict[str, Any]) -> None:
     """GET /scim/v2/Users to list SCIM users."""
     if ctx.get("_no_enterprise_license"):
-        app.dependency_overrides[get_settings] = _make_no_license_settings
+        from modulo.api.dependencies import get_plan_context
+        from modulo.api.main import app
+        from modulo.core.feature_flags import CommunityTier
+
+        app.dependency_overrides[get_plan_context] = lambda: CommunityTier()
         app.dependency_overrides[get_scim_principal] = lambda: ScimPrincipal(organisation_id=_ORG_ID)
         headers = {"Authorization": f"Bearer {_SCIM_TOKEN}"}
         resp = TestClient(app).get("/scim/v2/Users", headers=headers)
