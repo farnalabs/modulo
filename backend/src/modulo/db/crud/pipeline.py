@@ -8,7 +8,6 @@ import copy
 import logging
 import uuid
 from datetime import datetime
-
 from typing import Any
 
 from sqlalchemy import delete, func, select
