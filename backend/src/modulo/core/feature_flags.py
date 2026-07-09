@@ -194,6 +194,11 @@ _KNOWN_FLAGS: list[FeatureFlag] = [
         description="Remy browser UI driving — allows Remy to navigate, click, and fill forms on your behalf.",
         tier="community",
     ),
+    FeatureFlag(
+        name="pipeline_delete",
+        description="Allow hard-deleting pipelines from the UI",
+        tier="team",
+    ),
     # ── In-Dev / community-visible but hidden from sidebar ──────────────
     FeatureFlag(
         name="notification_log",
