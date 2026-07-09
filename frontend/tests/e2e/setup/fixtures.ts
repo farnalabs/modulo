@@ -62,6 +62,20 @@ export async function loginAsAdmin(page: Page, env: TestEnv) {
         body: JSON.stringify({ access_token: 'mock-access-token-for-e2e-tests', refresh_token: 'mock-refresh-token-for-e2e-tests', token_type: 'bearer' }),
       })
     }
+    if (url.includes('/api/v1/views')) {
+      if (method === 'GET') {
+        return route.fulfill({
+          status: 200, contentType: 'application/json',
+          body: JSON.stringify({ items: [{ id: '1', name: 'Active Runs', view_type: 'table', columns: ['name','status'], filters: {}, sort_by: 'name', sort_order: 'asc', created_by: 'alice@test.com', created_at: new Date().toISOString() }], total: 1 }),
+        })
+      }
+      if (method === 'POST') {
+        return route.fulfill({
+          status: 201, contentType: 'application/json',
+          body: JSON.stringify({ id: '2', name: 'My Test View', view_type: 'grid', columns: ['name','status','created_at'], filters: {status:'active', env:'prod'}, sort_by: 'created_at', sort_order: 'asc', created_by: 'admin@example.com', created_at: new Date().toISOString() }),
+        })
+      }
+    }
     // Default: return empty 200 for any other API call
     return route.fulfill({ status: 200, contentType: 'application/json', body: '{}' })
   })
