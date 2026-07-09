@@ -1,4 +1,4 @@
-﻿<template>
+<template>
   <FeatureGate feature-name="team_rbac" required-tier="team" show-disabled>
 
     <div class="page-wide">
@@ -89,20 +89,11 @@
     <ErrorAlert v-else-if="error" :message="error" />
 
     <template v-else>
-      <div v-if="filteredGates.length === 0" class="rounded-lg border bg-card p-8 text-center">
-        <svg
-          class="mx-auto mb-3 h-12 w-12 text-muted-foreground"
-          xmlns="http://www.w3.org/2000/svg"
-          viewBox="0 0 24 24"
-          fill="none"
-          stroke="currentColor"
-          stroke-width="1.5"
-        >
-          <path d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0 1 12 2.944a11.955 11.955 0 0 1-8.618 3.04A12.02 12.02 0 0 0 3 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z" />
-        </svg>
-        <p class="text-lg font-medium">No pending HITL gates</p>
-        <p class="mt-1 text-sm text-muted-foreground">All gates have been resolved or no pipelines have hit a human-in-the-loop gate yet.</p>
-      </div>
+      <EmptyState
+        v-if="filteredGates.length === 0"
+        title="No pending HITL gates"
+        description="All gates have been resolved or no pipelines have hit a human-in-the-loop gate yet."
+      />
 
       <div v-else class="space-y-2">
         <div
@@ -137,7 +128,7 @@
             </span>
 
             <div class="min-w-0 flex-[2]">
-              <p class="truncate text-sm font-medium">{{ pipelineName(gate.pipeline_id) || shortId(gate.pipeline_id) }}</p>
+              <p class="truncate text-sm font-medium">{{ pipelineName(gate.pipeline_id) }}<span v-if="!pipelineName(gate.pipeline_id)" class="font-mono text-xs">{{ shortId(gate.pipeline_id) }}</span></p>
             </div>
 
             <div class="min-w-0 flex-[2]">
@@ -177,7 +168,7 @@
                     </div>
                     <div class="flex justify-between">
                       <span class="text-muted-foreground">Pipeline</span>
-                      <span>{{ pipelineName(gate.pipeline_id) || shortId(gate.pipeline_id) }}</span>
+                      <span>{{ pipelineName(gate.pipeline_id) }}<span v-if="!pipelineName(gate.pipeline_id)" class="font-mono text-xs">{{ shortId(gate.pipeline_id) }}</span></span>
                     </div>
                     <div class="flex justify-between">
                       <span class="text-muted-foreground">Created</span>

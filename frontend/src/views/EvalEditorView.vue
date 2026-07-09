@@ -183,9 +183,10 @@
             <div class="h-6 w-6 animate-spin rounded-full border-2 border-primary border-t-transparent" />
           </div>
 
-          <div v-else-if="evals.length === 0" class="rounded-lg border bg-card p-6 text-center text-sm text-muted-foreground">
-            {{ $t('views.EvalEditorView.no_evals_yet') }}
-          </div>
+          <EmptyState
+            v-else-if="evals.length === 0"
+            :title="$t('views.EvalEditorView.no_evals_yet')"
+          />
 
           <div v-else class="space-y-2">
             <div
@@ -207,7 +208,7 @@
                     <span v-if="ev.pass_threshold != null" class="text-xs text-muted-foreground">
                       threshold: {{ ev.pass_threshold.toFixed(2) }}
                     </span>
-                    <span v-if="ev.node_id" class="text-xs text-muted-foreground">
+                    <span v-if="ev.node_id" class="text-xs text-muted-foreground font-mono">
                       node: {{ shortId(ev.node_id) }}
                     </span>
                   </div>
@@ -272,6 +273,7 @@ import LoadingSpinner from '../components/shared/LoadingSpinner.vue'
 import ErrorAlert from '../components/shared/ErrorAlert.vue'
 import { shortId } from '../utils/format'
 import { formatApiError } from '../lib/api/formatError'
+import EmptyState from '../components/shared/EmptyState.vue'
 import { usePlanStore } from '../stores/planStore'
 import FeatureGate from '../components/FeatureGate.vue'
 import { Button } from '@/components/ui/button'

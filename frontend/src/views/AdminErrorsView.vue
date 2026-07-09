@@ -88,12 +88,11 @@
 
     <ErrorAlert v-else-if="error" :message="error" :on-retry="loadGroups" />
 
-    <div v-else-if="groups.length === 0" class="card p-8 text-center">
-      <p class="text-lg font-medium">{{ $t('views.AdminErrorsView.no_error_groups_found') }}</p>
-      <p class="mt-1 text-sm text-muted-foreground">
-        Try adjusting your filters or wait for errors to be ingested.
-      </p>
-    </div>
+    <EmptyState
+      v-else-if="groups.length === 0"
+      :title="$t('views.AdminErrorsView.no_error_groups_found')"
+      description="Try adjusting your filters or wait for errors to be ingested."
+    />
 
     <template v-else>
       <div class="table-wrapper">
@@ -145,7 +144,7 @@
                   {{ group.status }}
                 </span>
               </td>
-              <td class="table-cell text-xs text-muted-foreground">
+              <td class="table-cell text-xs text-muted-foreground font-mono">
                 {{ group.assigned_to ? shortId(group.assigned_to) : '—' }}
               </td>
             </tr>
@@ -196,6 +195,7 @@ import {
 } from '../components/ui/tooltip'
 import { formatApiError } from "../lib/api/formatError"
 import { Button } from '@/components/ui/button'
+import EmptyState from '../components/shared/EmptyState.vue'
 
 const router = useRouter()
 

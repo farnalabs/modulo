@@ -19,9 +19,11 @@
     <ErrorAlert v-else-if="pageError" :message="pageError" :on-retry="loadProposals" />
 
     <template v-else>
-      <div v-if="proposals.length === 0" class="rounded-lg border bg-card p-8 text-center text-sm text-muted-foreground">
-        No eval gap proposals found. All checked gates have adequate eval coverage.
-      </div>
+      <EmptyState
+        v-if="proposals.length === 0"
+        title="Eval Gap Proposals"
+        description="No eval gap proposals found. All checked gates have adequate eval coverage."
+      />
 
       <div v-else class="space-y-4">
         <div
@@ -42,7 +44,7 @@
                 >
                   {{ p.feedback_status }}
                 </span>
-                <span v-if="p.run_id" class="text-xs text-muted-foreground">
+                <span v-if="p.run_id" class="text-xs text-muted-foreground font-mono">
                   Run: {{ shortId(p.run_id) }}
                 </span>
               </div>
@@ -54,10 +56,12 @@
 
               <div class="grid grid-cols-2 gap-4 text-xs text-muted-foreground">
                 <div>
-                  <span class="font-medium text-foreground">Gate:</span> {{ shortId(p.gate_id) }}
+                  <span class="font-medium text-foreground">Gate:</span> <span class="font-mono text-xs">{{ shortId(p.gate_id) }}</span>
                 </div>
                 <div>
-                  <span class="font-medium text-foreground">Node:</span> {{ p.producing_node_name || shortId(p.producing_node_id) }}
+                  <span class="font-medium text-foreground">Node:</span>
+                  <span v-if="p.producing_node_name" class="text-muted-foreground">{{ p.producing_node_name }}</span>
+                  <span v-else class="font-mono text-xs text-muted-foreground">{{ shortId(p.producing_node_id) }}</span>
                 </div>
                 <div v-if="p.created_at">
                   <span class="font-medium text-foreground">Detected:</span> {{ formatDate(p.created_at) }}
@@ -110,6 +114,7 @@ import { usePlanStore } from '../stores/planStore'
 import FeatureGate from '../components/FeatureGate.vue'
 import { Button } from '@/components/ui/button'
 import PageTabs from "../components/PageTabs.vue"
+import EmptyState from '../components/shared/EmptyState.vue'
 
 const planStore = usePlanStore()
 

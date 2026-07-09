@@ -1,4 +1,4 @@
-﻿<template>
+<template>
   <div class="min-h-screen bg-background">
     <header class="bg-card border-b border-border px-6 py-4">
       <div class="max-w-6xl mx-auto flex items-center justify-between gap-3">
@@ -348,6 +348,7 @@ import { useRouter } from 'vue-router'
 import { useApi } from '../composables/useApi'
 import { usePlanStore } from '../stores/planStore'
 import ErrorAlert from '../components/shared/ErrorAlert.vue'
+import EmptyState from '../components/shared/EmptyState.vue'
 import { formatApiError } from '../lib/api/formatError'
 import { Button } from '@/components/ui/button'
 
