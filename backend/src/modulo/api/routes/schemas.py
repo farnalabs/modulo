@@ -15,7 +15,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy.exc import IntegrityError, ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from modulo.api.dependencies import get_db_session
+from modulo.api.dependencies import get_db_session, require_feature
 from modulo.auth.dependencies import get_current_user
 from modulo.auth.jwt import AuthenticatedPrincipal
 from modulo.core.audit_logger import append_audit_event
@@ -400,7 +400,11 @@ async def delete_schema_endpoint(
 # ---------------------------------------------------------------------------
 
 
-@router.get("/{schema_id}/versions", response_model=SchemaVersionListResponse)
+@router.get(
+    "/{schema_id}/versions",
+    response_model=SchemaVersionListResponse,
+    dependencies=[require_feature("schema_version_history")],
+)
 async def list_schema_versions_endpoint(
     schema_id: uuid.UUID,
     page: int = Query(default=1, ge=1),
@@ -452,6 +456,7 @@ async def list_schema_versions_endpoint(
     "/{schema_id}/versions",
     response_model=SchemaVersionResponse,
     status_code=status.HTTP_201_CREATED,
+    dependencies=[require_feature("schema_version_history")],
 )
 async def create_schema_version_endpoint(
     schema_id: uuid.UUID,
@@ -504,7 +509,11 @@ async def create_schema_version_endpoint(
     return SchemaVersionResponse.model_validate(sv)
 
 
-@router.get("/{schema_id}/versions/{version}", response_model=SchemaVersionResponse)
+@router.get(
+    "/{schema_id}/versions/{version}",
+    response_model=SchemaVersionResponse,
+    dependencies=[require_feature("schema_version_history")],
+)
 async def get_schema_version_endpoint(
     schema_id: uuid.UUID,
     version: str,
