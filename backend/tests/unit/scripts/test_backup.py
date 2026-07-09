@@ -6,11 +6,19 @@ import json
 import os
 import shutil
 import subprocess
+import sys
 import tarfile
 import tempfile
 from pathlib import Path
 
 import pytest
+
+for parent in Path(__file__).resolve().parents:
+    if (parent / "scripts" / "backup.py").exists():
+        sys.path.insert(0, str(parent))
+        break
+else:
+    raise RuntimeError("Could not find repo root (scripts/backup.py)")
 from scripts.backup import (
     collect_secrets,
     create_archive,
