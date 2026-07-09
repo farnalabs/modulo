@@ -408,6 +408,17 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
     if settings.modulo_public_url in ("", "http://localhost:8000"):
         logger.warning("startup.default_public_url")
 
+    if settings.modulo_license_public_key:
+        from modulo.core.license import set_public_key
+
+        set_public_key(settings.modulo_license_public_key)
+        logger.info("startup.license_public_key_configured")
+    elif not settings.debug:
+        logger.warning("startup.default_license_key_in_use")
+    from modulo.core.license import check_production_public_key
+
+    check_production_public_key(settings)
+
     if settings.modulo_db.lower() == "sqlite":
         logger.warning("startup.sqlite_mode")
 
