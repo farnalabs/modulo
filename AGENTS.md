@@ -343,14 +343,17 @@ npm run dev
 Before merging any worktree branch to `main`, run the smoke test:
 
 ```powershell
-../devtools/harness/tools/smoke-test.ps1          # full check (vitest + file existence + type-check)
+../devtools/harness/tools/smoke-test.ps1          # full check (file existence + vitest + Playwright @smoke + type-check)
 ../devtools/harness/tools/smoke-test.ps1 -Fast    # skip type-check
 ```
 
 This checks:
 1. **All route component files exist** on disk — catches missing `.vue` files that the router imports
 2. **Vitest smoke tests pass** (`app-bootstrap.spec.ts` imports the router module and checks every import resolves)
-3. **Vue type-check** (`vue-tsc --noEmit` catches type errors)
+3. **Playwright @smoke E2E tests** — runs 6 critical tests (login, dashboard auth guard, sidebar, bootstrap, golden path) via `--grep "@smoke"`
+4. **Vue type-check** (`vue-tsc --noEmit` catches type errors)
+
+The `@smoke` tag is set per-test via `{ tag: '@smoke' }` in `frontend/tests/e2e/`. Add it to any critical test that should gate merges. Run just the smoke subset with `npm run test:e2e:smoke`.
 
 The history of this rule: `SchemaBuilderView.vue` existed as an untracked file, was deleted during cleanup, and the router still imported it — causing a 500 on every page load. The smoke test would have caught it.
 
@@ -491,10 +494,10 @@ Wait-Process -Name "uv" -ErrorAction SilentlyContinue  # doesn't block; just con
 
 ### Frontend smoke tests
 
-| Test | File | What it catches |
+| Test | File/Command | What it catches |
 |---|---|---|
 | Unit | `tests/unit/app-bootstrap.spec.ts` | Missing route component files, module-level import errors |
-| Playwright E2E | `tests/e2e/ux-review.spec.ts` | Console errors, broken links, missing CTAs, sparse pages |
+| Playwright @smoke | `--grep "@smoke"` across all `tests/e2e/` | Login, auth, navigation, golden path — critical browser flows |
 | Route file check | Part of `smoke-test.ps1` | Every `.vue` imported by the router exists on disk |
 
 ---

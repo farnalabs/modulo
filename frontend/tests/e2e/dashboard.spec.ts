@@ -1,7 +1,7 @@
 import { test, expect, loginAsAdmin } from './setup/fixtures'
 
 test.describe('Dashboard', () => {
-  test('redirects to login when unauthenticated', async ({ page }) => {
+  test('redirects to login when unauthenticated', { tag: '@smoke' }, async ({ page }) => {
     await page.goto('/')
     await page.waitForLoadState('networkidle')
 
