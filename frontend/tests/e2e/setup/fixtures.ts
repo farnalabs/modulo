@@ -43,12 +43,16 @@ export async function setupLocalMockApi(page: Page) {
       return route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ flags: {}, current_tier: 'enterprise' }) })
     }
     if (url.includes('/api/v1/views')) {
-      if (method === 'GET') {
-        return route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ items: [{ id: '1', name: 'Active Runs', view_type: 'table', columns: ['name', 'status'], filters: {}, sort_by: 'name', sort_order: 'asc', created_by: 'alice@test.com', created_at: new Date().toISOString() }], total: 1 }) })
-      }
-      if (method === 'POST') {
-        return route.fulfill({ status: 201, contentType: 'application/json', body: JSON.stringify({ id: '2', name: 'My Test View', view_type: 'grid', columns: ['name', 'status', 'created_at'], filters: { status: 'active', env: 'prod' }, sort_by: 'created_at', sort_order: 'asc', created_by: 'admin@example.com', created_at: new Date().toISOString() }) })
-      }
+      return route.fulfill({
+        status: 200, contentType: 'application/json',
+        body: JSON.stringify({
+          items: [
+            { id: '1', name: 'Active Runs', view_type: 'table', columns: ['name', 'status'], filters: {}, sort_by: 'name', sort_order: 'asc', created_by: 'alice@test.com', created_at: new Date().toISOString() },
+            { id: '2', name: 'Kanban Board', view_type: 'grid', columns: ['name', 'status'], filters: {}, sort_by: 'name', sort_order: 'asc', created_by: 'bob@test.com', created_at: new Date().toISOString() },
+          ],
+          total: 2,
+        }),
+      })
     }
     return route.fulfill({ status: 200, contentType: 'application/json', body: '{}' })
   })
