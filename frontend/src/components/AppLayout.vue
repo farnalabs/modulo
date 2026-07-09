@@ -30,6 +30,7 @@
           <router-link
             to="/admin/my-profile"
             class="text-sm text-muted-foreground truncate hover:text-foreground transition-colors flex-1 min-w-0"
+            aria-label="User profile"
           >
             {{ userEmail }}
           </router-link>
@@ -178,6 +179,7 @@
         <router-link
           to="/admin/my-profile"
           class="text-sm text-muted-foreground truncate hover:text-foreground transition-colors flex-1 min-w-0"
+          aria-label="User profile"
         >
           {{ userEmail }}
         </router-link>
