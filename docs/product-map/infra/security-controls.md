@@ -1,6 +1,6 @@
 ---
 id: feat-infra-security
-prd: 7
+prd: 7,7.1,7.2,7.3,7.4,7.5,7.6,7.7,7.8,7.9,7.12,7.14,7.15,7.16,7.17
 delivery-tasks: []
 bdd: []
 code: []

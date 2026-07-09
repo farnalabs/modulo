@@ -1,6 +1,6 @@
 ---
 id: feat-infra-extensibility
-prd: 10
+prd: 10,10.2,10.3,10.3a,10.4
 delivery-tasks: []
 bdd: []
 code: []
