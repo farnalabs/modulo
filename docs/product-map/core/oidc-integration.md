@@ -38,6 +38,7 @@ status: partial
 - [x] `GET /api/v1/auth/sso/providers` returns list of configured OIDC providers with `provider_id`
 - [x] Returns `saml: bool` alongside OIDC list
 - [x] SAML is reported as enabled only when license present + SAML configured
+- [x] Unexpected error during provider list raises Exception → HTTP 500 with generic message
 
 ### Authorization redirect
 
@@ -172,6 +173,7 @@ status: partial
 - [x] All admin endpoints catch `ProgrammingError` → 501 Not Implemented
 - [x] Duplicate provider name on create raises ValueError → 409 Conflict
 - [x] Duplicate provider name on update raises ValueError → 409 Conflict (with proactive pre-check in CRUD + IntegrityError fallback on route)
+- [x] IntegrityError handler in update endpoint has specific duplicate-name message — no generic IntegrityError shadowing the specific handler
 
 ## Resilience & Integration Robustness
 
@@ -208,6 +210,7 @@ status: partial
 ### IdP unreachability
 
 - [x] Login redirect: IdP unreachable raises ValueError → HTTP 400
+- [x] Login redirect: unexpected error (non-ValueError) raises HTTP 500 with generic message
 - [x] Callback: discovery IdP unreachable raises ValueError → HTTP 401
 - [x] Callback: token endpoint IdP unreachable raises ValueError → HTTP 401
 - [x] Callback: JWKS endpoint IdP unreachable raises OidcVerifyError → ValueError → HTTP 401
@@ -236,7 +239,7 @@ status: partial
 - [x] Missing `name` falls back to `preferred_username` then email prefix
 - [x] Empty `groups` claim (empty list) treated as no groups — skipped
 - [x] Missing `groups` claim treated as no groups — skipped
-- [x] Non-list `groups` claim (string) would cause AttributeError — not enforced
+- [x] Non-list `groups` claim (string) coerced to `[]` via isinstance guard
 
 ### Group mapping
 
@@ -272,3 +275,9 @@ status: partial
 ### 2026-07-07 — Cross-cutting architecture QA re-check (index 240)
 - **Major**: `update_provider_endpoint` in `admin_sso.py` missing `IntegrityError` → 409 catch — duplicate name on update returned 503 instead of 409. Added `IntegrityError` catch and proactive duplicate-name check in `sso_provider.py:update_provider()` (matching `create_provider()` pattern).
 - **Minor**: Stale Known Gap "Non-list groups claim" — defensive type guard (`isinstance` check) already exists at `sso.py:306`. Marked gap as `[x]`.
+
+### 2026-07-12 — Cross-cutting architecture QA (index 357)
+- **Major**: Dead `except IntegrityError` handler in `update_provider_endpoint` (`admin_sso.py:225-228`) — generic `IntegrityError:` caught before specific `IntegrityError as exc:` handler with duplicate-name message. Removed generic handler, kept specific one.
+- **Major**: `sso_providers` route (`sso.py:49-64`) had no try/except at all — unexpected errors would propagate as raw 500. Added structured Exception→500 handler.
+- **Major**: `oidc_login` route (`sso.py:72-88`) only caught `ValueError` — non-ValueError exceptions (e.g. `RuntimeError`, `KeyError`) would propagate as raw 500. Added HTTPException pass-through and generic Exception→500 handler.
+- **Minor**: Added 2 new tests for the error-handling paths (login 500 on unexpected error, sso_providers 500 on unexpected error).

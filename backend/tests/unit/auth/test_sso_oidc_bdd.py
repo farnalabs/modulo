@@ -1,5 +1,4 @@
 """Unit tests mirroring BDD sso_oidc.feature scenarios — OIDC login, callback, JIT provisioning, gating."""
-
 import base64
 import json
 import uuid
@@ -116,6 +115,12 @@ class TestOidcLoginRedirect:
     def test_unknown_provider_returns_400(self, client: TestClient) -> None:
         resp = client.get("/api/v1/auth/oidc/unknown/login", follow_redirects=False)
         assert resp.status_code == 400
+
+    def test_unexpected_error_returns_500(self, client: TestClient) -> None:
+        with patch("modulo.api.routes.sso.oidc_get_authorize_url", new_callable=AsyncMock) as mock_auth:
+            mock_auth.side_effect = RuntimeError("Unexpected internal error")
+            resp = client.get("/api/v1/auth/oidc/google/login", follow_redirects=False)
+        assert resp.status_code == 500
 
 
 # ---------------------------------------------------------------------------
@@ -337,3 +342,18 @@ class TestSsoProviders:
         assert "google" in provider_ids
         assert "github" in provider_ids
         assert isinstance(body["saml"], bool)
+
+
+# ---------------------------------------------------------------------------
+# Scenario: SSO providers returns 500 on unexpected error
+# ---------------------------------------------------------------------------
+
+
+class TestSsoProvidersError:
+    def test_returns_500_on_unexpected_error(self, client: TestClient) -> None:
+        with patch("modulo.api.routes.sso.parse_oidc_providers") as mock_parse:
+            mock_parse.side_effect = RuntimeError("Unexpected error")
+            resp = client.get("/api/v1/auth/sso/providers")
+        assert resp.status_code == 500
+        body = resp.json()
+        assert "error" in body.get("detail", "").lower() or "unexpected" in body.get("detail", "").lower()

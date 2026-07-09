@@ -52,16 +52,25 @@ async def sso_providers(
     settings: Settings = Depends(get_settings),
 ) -> SsoProvidersResponse:
     """List configured SSO providers (OIDC) and whether SAML is enabled."""
-    oidc_providers = [{"provider_id": p["provider_id"]} for p in parse_oidc_providers(settings)]
-    saml_enabled = (
-        settings.modulo_saml_enabled
-        and bool(settings.modulo_license_key)
-        and (bool(settings.modulo_saml_idp_metadata_url) or bool(settings.modulo_saml_idp_metadata_xml))
-    )
-    return SsoProvidersResponse(
-        oidc=[OidcProviderInfo(**p) for p in oidc_providers],
-        saml=saml_enabled,
-    )
+    try:
+        oidc_providers = [{"provider_id": p["provider_id"]} for p in parse_oidc_providers(settings)]
+        saml_enabled = (
+            settings.modulo_saml_enabled
+            and bool(settings.modulo_license_key)
+            and (bool(settings.modulo_saml_idp_metadata_url) or bool(settings.modulo_saml_idp_metadata_xml))
+        )
+        return SsoProvidersResponse(
+            oidc=[OidcProviderInfo(**p) for p in oidc_providers],
+            saml=saml_enabled,
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        _log.exception("sso.sso_providers.unexpected_error")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="An unexpected error occurred",
+        ) from e
 
 
 # ---------------------------------------------------------------------------
@@ -84,6 +93,14 @@ async def oidc_login(
         auth_url, _ = await oidc_get_authorize_url(provider, settings, redirect_uri)
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from None
+    except HTTPException:
+        raise
+    except Exception as e:
+        _log.exception("sso.oidc_login.unexpected_error")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="An unexpected error occurred",
+        ) from e
 
     return Response(status_code=status.HTTP_307_TEMPORARY_REDIRECT, headers={"Location": auth_url})
 
