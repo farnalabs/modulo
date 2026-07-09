@@ -1,7 +1,7 @@
 import { test, expect } from './setup/fixtures'
 
 test.describe('App Bootstrap', () => {
-  test('page loads without console errors', async ({ page }) => {
+  test('page loads without console errors', { tag: '@smoke' }, async ({ page }) => {
     const logs: any[] = []
     page.on('console', (msg) => {
       logs.push(msg)

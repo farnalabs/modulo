@@ -3,7 +3,7 @@ import { getTestEnv } from './setup/env'
 
 test.describe('First-Run Golden Path', () => {
 
-  test('golden path: login -> browse pipelines -> trigger run -> inspect output', async ({ page, env }) => {
+  test('golden path: login -> browse pipelines -> trigger run -> inspect output', { tag: '@smoke' }, async ({ page, env }) => {
     // ── Mock API responses for the full golden path ──────────────────
     const RUN_ID = 'run-demo-001'
     const PIPELINE_ID = 'pipeline-demo-001'
