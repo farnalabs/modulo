@@ -3,7 +3,7 @@ id: feat-teams-team-comparison
 prd: 8
 delivery-tasks: [task-nv7-team-comparison]
 bdd:
-  - backend/tests/bdd/features/personas/elena-engineering-director.feature # @goal-elena-team-comparison (step defs NOT implemented — only placeholder scenario)
+  - backend/tests/bdd/features/personas/elena-engineering-director.feature
 code:
   - frontend/src/views/TeamComparisonView.vue
   - frontend/src/router/index.ts
