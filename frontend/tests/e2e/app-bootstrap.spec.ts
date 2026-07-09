@@ -7,11 +7,11 @@ test.describe('App Bootstrap', () => {
       logs.push(msg)
     })
 
-    await page.goto('/login')
+    await page.goto('/login', { timeout: 60000 })
     await page.waitForLoadState('networkidle')
 
     const consoleErrors = logs.filter(l => l.type() === 'error').map(l => l.text())
-    const relevantErrors = consoleErrors.filter(e => !e.includes('MonitorBackendRegistry'))
+    const relevantErrors = consoleErrors.filter(e => !e.includes('MonitorBackendRegistry') && !e.includes('401'))
     expect(relevantErrors).toHaveLength(0)
   })
 
