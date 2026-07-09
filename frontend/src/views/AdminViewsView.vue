@@ -5,13 +5,14 @@
         <h1 class="text-3xl font-bold tracking-tight">{{ $t('components.ViewToggle.saved_views') }}</h1>
         <p class="mt-1 text-muted-foreground">{{ $t('views.AdminViewsView.manage_saved_views_for_organizing_and_filtering_data') }}</p>
       </div>
-      <button
-        class="rounded-lg bg-primary px-4 py-2 text-sm font-semibold text-primary-foreground border border-primary/30 hover:border-primary/60 hover:brightness-110 transition-all duration-150"
+      <Button
+        variant="default"
+        class="border-primary/30 hover:border-primary/60"
         data-testid="admin-views-add"
         @click="openAddForm"
       >
         Create View
-      </button>
+      </Button>
     </header>
 
     <LoadingSpinner v-if="loading" />
@@ -90,14 +91,15 @@
           </div>
           <div v-if="saveError" class="text-sm text-destructive">{{ saveError }}</div>
           <div class="flex items-center gap-2">
-            <button
+            <Button
               type="submit"
               :disabled="saving"
-              class="rounded-lg bg-primary px-4 py-2 text-sm font-semibold text-primary-foreground border border-primary/30 hover:border-primary/60 hover:brightness-110 disabled:opacity-50 transition-all"
+              variant="default"
+              class="border-primary/30 hover:border-primary/60"
               data-testid="admin-views-save"
             >
               {{ saving ? 'Saving...' : 'Save' }}
-            </button>
+            </Button>
             <button
               type="button"
               class="rounded-lg border border-input bg-background px-4 py-2 text-sm font-medium hover:bg-accent"
@@ -219,14 +221,14 @@
         <p class="text-sm font-medium text-destructive">Delete "{{ deleteConfirmName }}"?</p>
         <p class="mt-1 text-sm text-destructive/80">{{ $t('views.AdminModelBackendsView.this_action_cannot_be_undone') }}</p>
         <div class="mt-3 flex items-center gap-2">
-          <button
+          <Button
             :disabled="deleting"
-            class="rounded-lg bg-destructive px-4 py-2 text-sm font-medium text-destructive-foreground hover:brightness-110 disabled:opacity-50 transition-all"
+            variant="destructive"
             data-testid="admin-views-delete-confirm"
             @click="deleteView"
           >
             {{ deleting ? 'Deleting...' : 'Delete' }}
-          </button>
+          </Button>
           <button
             class="rounded-lg border border-input bg-background px-4 py-2 text-sm font-medium hover:bg-accent"
             data-testid="admin-views-delete-cancel"
@@ -252,6 +254,7 @@ import {
   TooltipContent,
 } from '../components/ui/tooltip'
 import { formatApiError } from '../lib/api/formatError'
+import { Button } from '@/components/ui/button'
 
 interface SavedView {
   id: string

@@ -76,10 +76,11 @@
         >
           <p class="text-sm text-muted-foreground">{{ $t('views.DashboardView.welcome_subtitle') }}</p>
           <div class="flex flex-wrap items-center gap-3">
-            <button
+            <Button
               @click="createStarterPipeline"
               :disabled="creatingPipeline"
-              class="inline-flex items-center gap-2 rounded-lg bg-primary px-5 py-2.5 text-sm font-semibold text-primary-foreground hover:brightness-110 transition-all disabled:opacity-50 disabled:pointer-events-none"
+              variant="default"
+              class="px-5 py-2.5"
             >
               <svg
                 v-if="creatingPipeline"
@@ -93,7 +94,7 @@
               </svg>
               <svg v-else xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="5 3 19 12 5 21 5 3"/></svg>
               {{ $t('views.DashboardView.map_your_sdlc') }}
-            </button>
+            </Button>
             <a
               href="/onboarding"
               class="inline-flex items-center gap-2 rounded-lg border border-input bg-background px-4 py-2.5 text-sm font-medium hover:bg-accent transition-all"
@@ -172,7 +173,7 @@
       <!-- Run a Pipeline shortcut -->
       <router-link
         to="/pipelines"
-        class="card p-4 flex items-center gap-3 hover:brightness-110 transition-all cursor-pointer"
+        class="card p-4 flex items-center gap-3 hover:bg-accent/50 transition-all cursor-pointer"
         data-testid="dashboard-run-pipeline"
       >
         <div class="flex h-9 w-9 items-center justify-center rounded-lg bg-primary/10 text-primary">
@@ -307,6 +308,7 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
+import { Button } from '@/components/ui/button'
 import DashboardNotificationsPanel from '../components/DashboardNotificationsPanel.vue'
 import { usePlanStore } from '../stores/planStore'
 import { useDashboardStore } from '../stores/dashboard'

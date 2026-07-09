@@ -1,5 +1,6 @@
 ﻿<script setup lang="ts">
 import { ref } from "vue";
+import { Button } from "@/components/ui/button";
 import { useApi } from "../../../composables/useApi";
 import type { ParameterPort, ParameterPortType } from "../../../types/pipeline";
 
@@ -339,12 +340,13 @@ async function detectPlaceholders() {
           >
             Cancel
           </button>
-          <button
-            class="rounded-lg bg-primary px-3 py-1.5 text-xs font-medium text-primary-foreground hover:bg-primary/90"
+          <Button
+            variant="default"
+            size="sm"
             @click="savePort"
           >
             {{ editingIndex !== null ? "Update" : "Add" }}
-          </button>
+          </Button>
         </div>
       </div>
     </div>

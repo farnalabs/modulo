@@ -59,14 +59,15 @@
         </div>
         <p v-if="passError" class="text-sm text-destructive">{{ passError }}</p>
         <p v-if="passSuccess" class="text-sm text-success">{{ passSuccess }}</p>
-        <button
+        <Button
           type="submit"
           :disabled="passSaving"
-          class="px-4 py-2 bg-primary text-primary-foreground text-sm font-medium rounded-lg border border-primary/30 hover:brightness-110 transition-all disabled:opacity-50"
+          variant="default"
+          class="border border-primary/30"
           data-testid="my-profile-update-password"
         >
           {{ passSaving ? $t('common.saving') : $t('views.MyProfileView.update_password') }}
-        </button>
+        </Button>
       </form>
     </div>
   </div>
@@ -75,6 +76,7 @@
 <script setup lang="ts">
 import { ref, computed, onMounted } from 'vue'
 import { useI18n } from 'vue-i18n'
+import { Button } from '@/components/ui/button'
 import { useApi } from '../composables/useApi'
 
 const { t } = useI18n()
