@@ -12,6 +12,7 @@ module.exports = {
         popover: 'hsl(var(--popover))',
         'popover-foreground': 'hsl(var(--popover-foreground))',
         primary: 'hsl(var(--primary))',
+        'accent-bright': 'hsl(var(--accent-bright))',
         'primary-foreground': 'hsl(var(--primary-foreground))',
         secondary: 'hsl(var(--secondary))',
         'secondary-foreground': 'hsl(var(--secondary-foreground))',
