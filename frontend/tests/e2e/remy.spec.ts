@@ -2,6 +2,7 @@ import { test, expect, loginAsAdmin } from './setup/fixtures'
 
 test.describe('Remy Admin Configuration', () => {
   test('page loads with remy configuration sections', async ({ page, env }) => {
+    await loginAsAdmin(page, env)
     await page.route('**/api/v1/admin/remy/skills*', (route) => {
       route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ items: [{ id: 'rs1', name: 'Code Review', description: 'Automated code review skill', triggers: null, body: '', active: true, created_at: '2025-06-01T10:00:00Z', updated_at: '2025-06-01T10:00:00Z' }, { id: 'rs2', name: 'Documentation', description: 'Generates documentation from code', triggers: null, body: '', active: false, created_at: '2025-06-02T10:00:00Z', updated_at: '2025-06-02T10:00:00Z' }], total: 2 }) })
     })
@@ -23,7 +24,6 @@ test.describe('Remy Admin Configuration', () => {
     await page.route('**/api/v1/admin/teams*', (route) => {
       route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ items: [], total: 0 }) })
     })
-    await loginAsAdmin(page, env)
 
     await page.goto('/admin/remy')
     await page.waitForLoadState('networkidle')

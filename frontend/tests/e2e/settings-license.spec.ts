@@ -2,10 +2,10 @@ import { test, expect, loginAsAdmin } from './setup/fixtures'
 
 test.describe('Settings License', () => {
   test('page loads with correct heading', async ({ page, env }) => {
-    await page.route('**/api/v1/license*', (route) => {
-      route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ plan: 'enterprise', status: 'active', expires_at: '2026-06-01T10:00:00Z', seats: { total: 50, used: 12 }, features: ['sso', 'audit_log', 'custom_roles'] }) })
-    })
     await loginAsAdmin(page, env)
+    await page.route('**/api/v1/admin/license*', (route) => {
+      route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ has_license: true, tier: 'team', features: ['sso', 'audit_log', 'custom_roles'], expires_at: '2026-06-01T10:00:00Z', org_id: 'org1' }) })
+    })
     await page.goto('/settings/license')
     await page.waitForLoadState('networkidle')
     await expect(page.locator('h1')).toContainText('License')
