@@ -19,7 +19,7 @@ from sqlalchemy import select
 from sqlalchemy.exc import ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession
 
-from modulo.api.dependencies import _get_engine, get_db_session
+from modulo.api.dependencies import _get_engine, get_db_session, pg_connection_string
 from modulo.auth.dependencies import get_current_user
 from modulo.auth.jwt import AuthenticatedPrincipal
 from modulo.core.pipeline_engine.executor import PipelineExecutor
@@ -144,7 +144,10 @@ async def receive_webhook(
         ) from None
 
     run_id = run.id
-    executor = PipelineExecutor(engine)
+    executor = PipelineExecutor(
+        engine,
+        checkpointer_conn_string=pg_connection_string(str(engine.url)),
+    )
     background_tasks.add_task(_run_in_background, executor, run_id, principal.organisation_id, input_payload)
 
     return {"run_id": str(run_id), "status": "accepted"}
@@ -223,7 +226,10 @@ async def replay_webhook(
         ) from None
 
     run_id = run.id
-    executor = PipelineExecutor(engine)
+    executor = PipelineExecutor(
+        engine,
+        checkpointer_conn_string=pg_connection_string(str(engine.url)),
+    )
     background_tasks.add_task(_run_in_background, executor, run_id, principal.organisation_id, input_payload)
 
     return {"run_id": str(run_id), "status": "accepted"}
