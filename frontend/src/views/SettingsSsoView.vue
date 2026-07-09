@@ -4,7 +4,7 @@
     <div class="mx-auto max-w-4xl space-y-8 p-6">
       <header class="flex items-center justify-between">
         <div>
-          <h1 class="text-3xl font-bold tracking-tight">{{ $t('views.SettingsSsoView.title') }}</h1>
+          <h1 class="text-2xl font-semibold tracking-tight">{{ $t('views.SettingsSsoView.title') }}</h1>
           <p class="mt-1 text-muted-foreground">{{ $t('views.SettingsSsoView.description') }}</p>
         </div>
         <Button
@@ -23,7 +23,7 @@
 
       <template v-else>
         <div v-if="formMode === 'add'" class="card p-6">
-          <h2 class="mb-4 text-lg font-semibold">{{ $t('views.SettingsSsoView.new_sso_provider') }}</h2>
+          <h2 class="mb-4 text-base font-semibold">{{ $t('views.SettingsSsoView.new_sso_provider') }}</h2>
           <SsoProviderForm
             :data="formData"
             :saving="saving"

@@ -7,7 +7,7 @@
   <div class="flex h-[calc(100vh-3.5rem)]">
     <aside class="flex w-80 flex-col border-r bg-background">
       <div class="border-b p-4">
-        <h2 class="text-lg font-semibold">{{ $t('views.SchemaEditorView.schemas') }}</h2>
+        <h2 class="text-base font-semibold">{{ $t('views.SchemaEditorView.schemas') }}</h2>
         <div class="relative mt-2">
           <input
             v-model="searchQuery"
@@ -66,7 +66,7 @@
         <div class="space-y-6 p-6">
           <header class="flex items-center justify-between">
             <div>
-              <h1 class="text-2xl font-bold tracking-tight">{{ isNew ? $t('views.SchemaEditorView.new_schema_title') : $t('views.SchemaEditorView.edit_schema_title') }}</h1>
+              <h1 class="text-2xl font-semibold tracking-tight">{{ isNew ? $t('views.SchemaEditorView.new_schema_title') : $t('views.SchemaEditorView.edit_schema_title') }}</h1>
               <p class="mt-0.5 text-sm text-muted-foreground">{{ isNew ? $t('views.SchemaEditorView.define_new_schema') : schemaName }}</p>
             </div>
             <div class="flex items-center gap-2">
@@ -106,7 +106,7 @@
           <div class="grid grid-cols-1 gap-6 xl:grid-cols-2">
             <div class="space-y-6">
               <section class="rounded-lg border bg-card p-6 shadow-sm">
-                <h2 class="mb-4 text-lg font-semibold">{{ $t('views.SchemaEditorView.schema_details') }}</h2>
+                <h2 class="mb-4 text-base font-semibold">{{ $t('views.SchemaEditorView.schema_details') }}</h2>
                 <div class="space-y-4">
                   <div>
                     <label class="mb-1 block text-sm font-medium">{{ $t('views.SchemaEditorView.name') }}</label>
@@ -143,7 +143,7 @@
 
               <section class="rounded-lg border bg-card p-6 shadow-sm">
                 <div class="mb-4 flex items-center justify-between">
-                  <h2 class="text-lg font-semibold">{{ $t('views.SchemaEditorView.fields') }}</h2>
+                  <h2 class="text-base font-semibold">{{ $t('views.SchemaEditorView.fields') }}</h2>
                   <button
                     data-testid="schema-editor-add-field"
                     class="rounded-lg bg-primary px-3 py-1.5 text-xs font-medium text-primary-foreground hover:bg-primary/90"
@@ -269,7 +269,7 @@
             <div class="space-y-6">
               <FeatureGate feature-name="schema_version_history" required-tier="team" show-disabled>
                 <section class="rounded-lg border bg-card p-6 shadow-sm">
-                  <h2 class="mb-4 text-lg font-semibold">{{ $t('views.SchemaEditorView.version_history') }}</h2>
+                  <h2 class="mb-4 text-base font-semibold">{{ $t('views.SchemaEditorView.version_history') }}</h2>
                   <LoadingSpinner v-if="loadingVersions" />
                   <p v-else-if="versions.length === 0" class="text-sm text-muted-foreground">{{ $t('views.SchemaEditorView.no_version_history') }}</p>
                   <div v-else class="space-y-2">
@@ -299,7 +299,7 @@
               </FeatureGate>
 
               <section class="rounded-lg border bg-card p-6 shadow-sm">
-                <h2 class="mb-4 text-lg font-semibold">{{ $t('views.SchemaEditorView.json_preview') }}</h2>
+                <h2 class="mb-4 text-base font-semibold">{{ $t('views.SchemaEditorView.json_preview') }}</h2>
                 <div class="relative">
                   <button
                     class="absolute right-2 top-2 rounded p-1 text-muted-foreground hover:bg-accent"

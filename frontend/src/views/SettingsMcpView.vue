@@ -3,7 +3,7 @@
 
     <div data-theme="agent" class="mx-auto max-w-4xl space-y-8 p-6">
     <header>
-      <h1 class="text-3xl font-bold tracking-tight">MCP Configuration</h1>
+      <h1 class="text-2xl font-semibold tracking-tight">MCP Configuration</h1>
       <p class="mt-1 text-muted-foreground">Configure Model Context Protocol (MCP) server settings and API keys</p>
     </header>
 

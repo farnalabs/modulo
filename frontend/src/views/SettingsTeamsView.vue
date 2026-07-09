@@ -3,7 +3,7 @@
     <div class="mx-auto max-w-4xl space-y-8 p-6">
     <header class="flex items-center justify-between">
       <div>
-        <h1 class="text-3xl font-bold tracking-tight">Teams</h1>
+        <h1 class="text-2xl font-semibold tracking-tight">Teams</h1>
         <p class="mt-1 text-muted-foreground">Manage teams and team membership</p>
       </div>
       <Button
@@ -21,7 +21,7 @@
 
     <div v-if="!loading && !error">
       <div v-if="showCreateForm" class="card p-6">
-        <h2 class="mb-4 text-lg font-semibold">New Team</h2>
+        <h2 class="mb-4 text-base font-semibold">New Team</h2>
         <div class="space-y-4">
           <div>
             <label class="mb-1 block text-sm font-medium">Name</label>

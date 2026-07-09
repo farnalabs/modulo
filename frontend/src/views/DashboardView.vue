@@ -2,7 +2,7 @@
   <div class="mx-auto max-w-6xl space-y-8 p-6">
     <DashboardNotificationsPanel class="mb-4" />
     <header>
-      <h1 data-testid="dashboard-title" class="text-3xl font-bold tracking-tight">{{ $t('views.DashboardView.dashboard') }}</h1>
+      <h1 data-testid="dashboard-title" class="text-2xl font-semibold tracking-tight">{{ $t('views.DashboardView.dashboard') }}</h1>
       <p class="mt-1 text-muted-foreground">{{ $t('views.DashboardView.overview_of_your_organisations_pipelines_and_runs') }}</p>
     </header>
 
@@ -52,7 +52,7 @@
           :aria-expanded="welcomeExpanded"
           aria-controls="welcome-content"
         >
-          <h2 class="text-lg font-semibold">{{ $t('views.DashboardView.welcome_to_modulo') }}</h2>
+          <h2 class="text-base font-semibold">{{ $t('views.DashboardView.welcome_to_modulo') }}</h2>
           <svg
             xmlns="http://www.w3.org/2000/svg"
             width="20"
@@ -147,7 +147,7 @@
         <router-link to="/eval-editor" class="card card-hover p-4 block">
           <p class="text-sm font-medium text-muted-foreground mb-2">{{ $t('views.DashboardView.eval_pass_rate') }}</p>
           <div v-if="summary.eval_pass_rate">
-            <p class="text-3xl font-bold">{{ summary.eval_pass_rate.overall_pass_rate }}%</p>
+            <p class="text-2xl font-semibold tabular-nums">{{ summary.eval_pass_rate.overall_pass_rate }}%</p>
             <div class="flex items-center gap-2 mt-1">
               <span :class="evalTrendClass" class="inline-flex items-center text-sm font-medium">
                 <svg v-if="evalTrend === 'up'" xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="18 15 12 9 6 15"/></svg>
@@ -164,7 +164,7 @@
         <!-- Token spend card -->
         <router-link to="/admin/costs" class="card card-hover p-4 block">
           <p class="text-sm font-medium text-muted-foreground mb-2">{{ $t('views.DashboardView.token_spend_7d') }}</p>
-          <p class="text-3xl font-bold">${{ totalSpend.toFixed(2) }}</p>
+          <p class="text-2xl font-semibold tabular-nums">${{ totalSpend.toFixed(2) }}</p>
           <p class="text-xs text-muted-foreground mt-1">{{ summary.trend?.length ?? 0 }} {{ $t('views.DashboardView.days_tracked') }}</p>
           <Sparkline class="mt-2 h-10 w-full" :data="spendSparklineData" color="var(--color-warning)" />
         </router-link>
@@ -189,7 +189,7 @@
       <!-- Team breakdown (Team only) -->
       <div v-if="isTeam && summary.teams && summary.teams.length > 0" class="card p-4">
         <div class="flex items-center justify-between mb-4">
-          <h2 class="text-lg font-semibold">{{ $t('views.DashboardView.team_breakdown') }}</h2>
+          <h2 class="text-base font-semibold">{{ $t('views.DashboardView.team_breakdown') }}</h2>
           <span class="text-xs font-medium text-muted-foreground bg-muted px-2 py-0.5 rounded">{{ $t('views.DashboardView.team') }}</span>
         </div>
         <table class="w-full text-sm">
@@ -240,7 +240,7 @@
       <!-- Trend chart section -->
       <div class="card p-4">
         <div class="flex items-center justify-between mb-4">
-          <h2 class="text-lg font-semibold">{{ $t('views.DashboardView.run_activity') }}</h2>
+          <h2 class="text-base font-semibold">{{ $t('views.DashboardView.run_activity') }}</h2>
           <div class="flex gap-1">
             <button v-for="d in trendDurations" :key="d.value" :data-testid="'trend-duration-btn-' + d.value"
                     :class="['px-3 py-1 text-xs font-medium rounded transition-colors',
@@ -272,7 +272,7 @@
 
       <!-- Recent runs list -->
       <div class="card p-4">
-        <h2 class="text-lg font-semibold mb-4">{{ $t('views.DashboardView.recent_runs') }}</h2>
+        <h2 class="text-base font-semibold mb-4">{{ $t('views.DashboardView.recent_runs') }}</h2>
         <div v-if="summary.recent_runs && summary.recent_runs.length > 0" class="divide-y">
           <router-link v-for="run in summary.recent_runs" :key="run.id" :to="'/runs/' + run.id" class="flex items-center justify-between py-2.5 first:pt-0 last:pb-0">
             <div class="min-w-0 flex-1">

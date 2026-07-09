@@ -6,7 +6,7 @@
   ]" />
   <div data-theme="agent" class="mx-auto max-w-6xl space-y-6 p-6">
     <header>
-      <h1 class="text-3xl font-bold tracking-tight">{{ $t('views.AdminCostBreakdownView.cost_controls') }}</h1>
+      <h1 class="text-2xl font-semibold tracking-tight">{{ $t('views.AdminCostBreakdownView.cost_controls') }}</h1>
       <p class="mt-1 text-muted-foreground">{{ $t('views.AdminCostControlsView.budget_overview_team_budgets_alert_thresholds_and_billing_se') }}</p>
     </header>
 
@@ -29,15 +29,15 @@
               <div class="grid grid-cols-1 gap-4 sm:grid-cols-3">
                 <div class="rounded-lg border bg-muted p-4">
                   <p class="text-xs font-medium text-muted-foreground">{{ $t('views.AdminCostBreakdownView.total_spend') }}</p>
-                  <p class="mt-1 text-2xl font-bold" data-testid="cc-total-spend">{{ currencySymbol }}{{ totalSpend.toFixed(2) }}</p>
+                  <p class="mt-1 text-2xl font-semibold tabular-nums" data-testid="cc-total-spend">{{ currencySymbol }}{{ totalSpend.toFixed(2) }}</p>
                 </div>
                 <div class="rounded-lg border bg-muted p-4">
                   <p class="text-xs font-medium text-muted-foreground">{{ $t('views.AdminCostControlsView.budget') }}</p>
-                  <p class="mt-1 text-2xl font-bold" data-testid="cc-budget">{{ currencySymbol }}{{ settings.budget.toFixed(2) }}</p>
+                  <p class="mt-1 text-2xl font-semibold tabular-nums" data-testid="cc-budget">{{ currencySymbol }}{{ settings.budget.toFixed(2) }}</p>
                 </div>
                 <div class="rounded-lg border bg-muted p-4">
                   <p class="text-xs font-medium text-muted-foreground">{{ $t('views.AdminCostControlsView.remaining') }}</p>
-                  <p class="mt-1 text-2xl font-bold" :class="remainingClass" data-testid="cc-remaining">{{ currencySymbol }}{{ remainingBudget.toFixed(2) }}</p>
+                  <p class="mt-1 text-2xl font-semibold tabular-nums" :class="remainingClass" data-testid="cc-remaining">{{ currencySymbol }}{{ remainingBudget.toFixed(2) }}</p>
                 </div>
               </div>
               <div>

@@ -4,7 +4,7 @@
 
       <header class="flex items-center justify-between">
         <div>
-          <h1 class="text-3xl font-bold tracking-tight">Environment Profiles</h1>
+          <h1 class="text-2xl font-semibold tracking-tight">Environment Profiles</h1>
           <p class="mt-1 text-muted-foreground">Manage sandbox environment profiles for code execution</p>
         </div>
         <Button
@@ -23,7 +23,7 @@
 
       <template v-else>
         <div v-if="formMode" class="card p-6">
-          <h2 class="mb-4 text-lg font-semibold">{{ formMode === 'add' ? 'New Environment Profile' : 'Edit Environment Profile' }}</h2>
+          <h2 class="mb-4 text-base font-semibold">{{ formMode === 'add' ? 'New Environment Profile' : 'Edit Environment Profile' }}</h2>
           <form @submit.prevent="formMode === 'add' ? createProfile() : updateProfile()">
             <div class="space-y-4">
               <div>

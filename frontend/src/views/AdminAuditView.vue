@@ -4,7 +4,7 @@
     <div class="mx-auto max-w-6xl space-y-6 p-6">
     <header class="flex items-center justify-between">
       <div>
-        <h1 class="text-3xl font-bold tracking-tight">{{ $t('views.AdminAuditView.audit_log') }}</h1>
+        <h1 class="text-2xl font-semibold tracking-tight">{{ $t('views.AdminAuditView.audit_log') }}</h1>
         <p class="mt-1 text-muted-foreground">{{ $t('views.AdminAuditView.tamper_evident_event_trail') }}</p>
       </div>
       <div class="flex items-center gap-2">

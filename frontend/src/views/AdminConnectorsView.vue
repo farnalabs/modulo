@@ -4,7 +4,7 @@
     <div class="mx-auto max-w-4xl space-y-8 p-6">
     <header class="flex items-center justify-between">
       <div>
-        <h1 class="text-3xl font-bold tracking-tight">Connectors</h1>
+        <h1 class="text-2xl font-semibold tracking-tight">Connectors</h1>
         <p class="mt-1 text-muted-foreground">Manage connector instances for data source integration</p>
       </div>
       <Button
@@ -23,7 +23,7 @@
 
     <template v-else>
       <div v-if="formMode === 'add'" class="card p-6">
-        <h2 class="mb-4 text-lg font-semibold">New Connector</h2>
+        <h2 class="mb-4 text-base font-semibold">New Connector</h2>
         <form @submit.prevent="createConnector">
           <div class="space-y-4">
             <div>
@@ -233,7 +233,7 @@
       </details>
 
       <div v-if="editConnectorId" class="card p-6">
-        <h2 class="mb-4 text-lg font-semibold">Edit Connector</h2>
+        <h2 class="mb-4 text-base font-semibold">Edit Connector</h2>
         <form @submit.prevent="updateConnector">
           <div class="space-y-4">
             <div>

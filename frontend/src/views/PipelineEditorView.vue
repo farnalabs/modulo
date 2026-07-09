@@ -94,7 +94,7 @@
 
       <!-- Node Properties Panel -->
       <aside v-if="selectedNodeData && !selectedEdgeData" class="w-96 overflow-y-auto border-l bg-card p-4">
-        <h2 class="mb-4 text-lg font-semibold">{{ $t('views.PipelineEditorView.node_properties') }}</h2>
+        <h2 class="mb-4 text-base font-semibold">{{ $t('views.PipelineEditorView.node_properties') }}</h2>
         <dl class="space-y-3 text-sm">
           <div>
             <dt class="text-muted-foreground">ID</dt>
@@ -152,7 +152,7 @@
 
       <!-- Edge Properties Panel (with HITL gate config) -->
       <aside v-if="selectedEdgeData" class="w-96 overflow-y-auto border-l bg-card p-4">
-        <h2 class="mb-4 text-lg font-semibold">Edge Properties</h2>
+        <h2 class="mb-4 text-base font-semibold">Edge Properties</h2>
         <dl class="space-y-3 text-sm">
           <div>
             <dt class="text-muted-foreground">Source</dt>
@@ -334,7 +334,7 @@
 
     <div v-if="showAgentPicker" class="fixed inset-0 z-50 flex items-center justify-center bg-black/50" @click.self="showAgentPicker = false">
       <div class="w-full max-w-lg rounded-lg border bg-card p-6 shadow-lg">
-        <h3 class="mb-4 text-lg font-semibold">{{ $t('views.PipelineEditorView.convert_to_agent') }}</h3>
+        <h3 class="mb-4 text-base font-semibold">{{ $t('views.PipelineEditorView.convert_to_agent') }}</h3>
         <div class="space-y-4">
           <div>
             <label class="mb-1 block text-sm font-medium">{{ $t('views.PipelineEditorView.agent') }}</label>
@@ -400,7 +400,7 @@
 
     <div v-if="showRevertDialog" class="fixed inset-0 z-50 flex items-center justify-center bg-black/50" @click.self="showRevertDialog = false">
       <div class="w-full max-w-lg rounded-lg border bg-card p-6 shadow-lg">
-        <h3 class="mb-4 text-lg font-semibold">{{ $t('views.PipelineEditorView.revert_dialog_title') }}</h3>
+        <h3 class="mb-4 text-base font-semibold">{{ $t('views.PipelineEditorView.revert_dialog_title') }}</h3>
         <div v-if="revertLoading" class="flex items-center justify-center py-8">
           <div class="h-6 w-6 animate-spin rounded-full border-4 border-primary border-t-transparent" />
         </div>
@@ -459,7 +459,7 @@
       @click.self="showSaveAsComposite = false"
     >
       <div class="w-full max-w-lg rounded-lg border bg-card p-6 shadow-lg">
-        <h3 class="mb-4 text-lg font-semibold">Save as Composite</h3>
+        <h3 class="mb-4 text-base font-semibold">Save as Composite</h3>
         <p class="mb-4 text-sm text-muted-foreground">
           Extracts selected nodes from this pipeline into a reusable composite template.
           Parameter placeholders (&#123;&#123;parameter.*&#125;&#125;) in agent prompts are auto-detected.

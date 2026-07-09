@@ -4,8 +4,8 @@
     <div class="mx-auto space-y-6 p-6">
     <header class="flex flex-wrap items-center justify-between gap-4">
       <div>
-        <h1 class="text-3xl font-bold tracking-tight">Stage Board</h1>
-        <p class="mt-1 text-muted-foreground">Organise pipelines into stages — track progress as pipelines move through development, testing, and production phases. Drag pipelines between stages to update their lifecycle status.</p>
+        <h1 class="text-2xl font-semibold tracking-tight">Stage Board</h1>
+        <p class="mt-1 text-muted-foreground">Organise pipelines into stages ï¿½ track progress as pipelines move through development, testing, and production phases. Drag pipelines between stages to update their lifecycle status.</p>
       </div>
       <div class="flex items-center gap-2">
         <button
@@ -224,7 +224,7 @@
     <div v-if="selectedStageId" class="fixed inset-0 z-50 flex items-start justify-end" @click.self="selectedStageId = null">
       <div class="h-full w-full max-w-md overflow-y-auto border-l bg-card p-6 shadow-lg">
         <div class="mb-6 flex items-center justify-between">
-          <h2 class="text-lg font-semibold">Stage Details</h2>
+          <h2 class="text-base font-semibold">Stage Details</h2>
           <button
             data-testid="stage-board-detail-close"
             class="rounded-lg p-1.5 text-muted-foreground hover:bg-accent hover:text-foreground"
@@ -326,7 +326,7 @@
 
     <div v-if="showCreateDialog" class="fixed inset-0 z-50 flex items-center justify-center bg-black/50" @click.self="showCreateDialog = false">
       <div class="w-full max-w-md rounded-lg border bg-card p-6 shadow-lg">
-        <h3 class="mb-4 text-lg font-semibold">Create New Stage</h3>
+        <h3 class="mb-4 text-base font-semibold">Create New Stage</h3>
         <div class="space-y-4">
           <div>
             <label class="mb-1 block text-sm font-medium">Name</label>
@@ -398,7 +398,7 @@
     <div v-if="selectedPipeline" class="fixed inset-0 z-50 flex items-start justify-end" @click.self="selectedPipeline = null">
       <div class="h-full w-full max-w-md overflow-y-auto border-l bg-card p-6 shadow-lg">
         <div class="mb-6 flex items-center justify-between">
-          <h2 class="text-lg font-semibold">Pipeline Details</h2>
+          <h2 class="text-base font-semibold">Pipeline Details</h2>
           <button
             data-testid="stage-board-pipeline-close"
             class="rounded-lg p-1.5 text-muted-foreground hover:bg-accent hover:text-foreground"

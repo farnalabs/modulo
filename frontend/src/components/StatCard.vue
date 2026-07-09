@@ -19,7 +19,7 @@
       </div>
       <div class="min-w-0">
         <p class="text-sm font-medium text-muted-foreground">{{ label }}</p>
-        <p class="text-2xl font-bold" :class="valueClass">{{ value }}</p>
+        <p class="text-2xl font-semibold tabular-nums" :class="valueClass">{{ value }}</p>
       </div>
     </div>
   </component>
