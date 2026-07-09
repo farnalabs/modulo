@@ -2,7 +2,7 @@
 id: feat-integration-tiering
 prd: 15
 delivery-tasks: []
-bdd: []
+bdd: [backend/tests/bdd/features/library/tiering.feature]
 code:
   - backend/src/modulo/db/migrations/versions/0062_add_integration_tier.py
   - backend/src/modulo/db/models/connector_instance.py
@@ -25,6 +25,9 @@ unit-tests:
   - frontend/src/__tests__/AdminConnectorsView.spec.ts
   - frontend/src/__tests__/AdminModelBackendsView.spec.ts
   - frontend/src/__tests__/LibraryView.spec.ts
+  - backend/tests/unit/crud/test_connector_instance_tier.py
+  - backend/tests/unit/crud/test_model_backend_tier.py
+  - backend/tests/unit/crud/test_library_primitive_tier.py
 depends-on: [feat-connectors-hub, feat-model-backends-hub, feat-pipelines-library]
 status: partial
 ---
@@ -85,7 +88,7 @@ disclosure; In-Dev items are hidden from the UI entirely. See ADR 010.
 - [x] `ConnectorUpdate` makes `tier` optional (`None = None`) so PATCH without `tier` leaves the existing value unchanged
 - [x] `ConnectorResponse.tier` is typed as plain `str` (not `Literal`) — the Pydantic model accepts any string value from the DB, so an invalid DB value (e.g. from a direct SQL insert) would serialize but fail to re-parse if sent back to a Create/Update endpoint
 - [ ] `copy_to_adapt` in `library_primitive.py` CRUD does NOT propagate `tier` — copied primitives lose their tier classification and get `native` (server_default). This means a `preview` primitive copied via copy-to-adapt becomes `native` in the target org with no indication of changed status.
-- [ ] No test exercises the `excluded_tiers` parameter of `list_connector_instances`, `list_model_backends`, or `list_library_primitives` to verify that `in_dev` items are actually excluded from queries
+- [x] Unit tests (`test_connector_instance_tier.py`, `test_model_backend_tier.py`, `test_library_primitive_tier.py`) and integration tests exercise the `excluded_tiers` parameter of all three list CRUD functions to verify that `in_dev` items are actually excluded from queries
 
 ## QA History
 
@@ -97,13 +100,17 @@ disclosure; In-Dev items are hidden from the UI entirely. See ADR 010.
 
 **Fixed (MAJOR):** Replaced `String(err)` / `e instanceof Error ? e.message : String(e)` with `formatApiError(err)` in all 3 error handlers (create, update, delete) in `AdminConnectorsView.vue` frontend. API errors from openapi-fetch are objects, not strings — bare `String(err)` produced `[object Object]` on API failures.
 
-**Remaining gaps unchanged:** No API override for in-dev visibility, no tier promotion workflow, copy_to_adapt doesn't propagate tier, no BDD coverage, no migration rollback test, ConnectorResponse.tier typed as str.
+**Remaining gaps unchanged:** No API override for in-dev visibility, no tier promotion workflow, copy_to_adapt doesn't propagate tier, no migration rollback test, ConnectorResponse.tier typed as str.
+
+### 2026-07-09 — Cross-cutting QA (improve-architecture index 348)
+
+**Stale claims corrected:** Marked `excluded_tiers` test checkbox `[x]` — tests exist in `test_connector_instance_tier.py`, `test_model_backend_tier.py`, `test_library_primitive_tier.py`. Added these to `unit-tests:` frontmatter. Added `backend/tests/bdd/features/library/tiering.feature` to `bdd:` frontmatter. Updated Known Gaps to reflect that BDD coverage now exists for library primitives (but is still missing for connectors/model backends).
 
 ## Known Gaps
 
 - **No API override for In-Dev visibility.** Server-side filtering of `in_dev` items is hardcoded in the CRUD/service layer — there is no query parameter (`?include_in_dev=true`) that an admin could use to reveal In-Dev entries for testing. The frontend has no debug toggle either (ADR 010 open question).
 - **No tier promotion/demotion workflow.** Changing a connector/backend/primitive from `preview` to `native` (or vice versa) is a raw `PATCH` with no approval process, audit trail, or changelog entry — flagged as an open question in ADR 010.
 - **`copy_to_adapt` does not propagate tier.** The CRUD function creates a copy without setting `tier`, so the copy silently falls back to `"native"` via server_default. A user copying a `preview` primitive gets a `native` copy with no indication that the tier changed.
-- **No BDD coverage yet.** A parallel effort (branch `test/bdd-tiering-community`) is adding BDD scenarios for tiering; none exist in this worktree at the time of writing.
+- **Connector/ModelBackend tiering still lacks BDD coverage.** Only library primitives have BDD scenarios (`tiering.feature` — 2 scenarios covering create-with-tier and default-tier). Connector and ModelBackend tier creation/sorting lacks BDD coverage entirely.
 - **No dedicated migration rollback test** — `0062_add_integration_tier` has a `downgrade()` but no automated test exercises drop-and-recreate of the `tier` column/constraint.
 - **`ConnectorResponse.tier` is typed as `str` not `Literal`.** An invalid DB value would serialize to JSON correctly but a subsequent PATCH round-trip would fail Pydantic validation with 422. Consider using `Literal` on response models or adding a `@field_validator`.
