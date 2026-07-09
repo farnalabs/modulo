@@ -1050,7 +1050,10 @@ async def recover_run_node(
     if action == "skip":
         resume_data = {"action": "skip", "output": None}
 
-    executor = PipelineExecutor(engine)
+    executor = PipelineExecutor(
+        engine,
+        checkpointer_conn_string=pg_connection_string(str(engine.url)),
+    )
     await executor.resume(
         run_id=run_id,
         org_id=principal.organisation_id,
