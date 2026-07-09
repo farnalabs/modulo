@@ -1,5 +1,5 @@
 ﻿<template>
-  <div class="mx-auto max-w-6xl space-y-8 p-6">
+  <div class="page-wide">
     <DashboardNotificationsPanel class="mb-4" />
     <header>
       <h1 data-testid="dashboard-title" class="text-2xl font-semibold tracking-tight">{{ $t('views.DashboardView.dashboard') }}</h1>

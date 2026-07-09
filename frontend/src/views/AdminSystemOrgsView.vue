@@ -1,5 +1,5 @@
 ﻿<template>
-  <div data-theme="agent" class="mx-auto max-w-6xl space-y-6 p-6">
+  <div data-theme="agent" class="page-wide">
     <header>
       <h1 class="text-2xl font-semibold tracking-tight">{{ $t('views.AdminSystemOrgsView.system_admin_organisations') }}</h1>
       <p class="mt-1 text-muted-foreground">{{ $t('views.AdminSystemOrgsView.crosstenant_organisation_management_system_admin_only') }}</p>

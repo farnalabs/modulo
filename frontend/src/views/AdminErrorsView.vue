@@ -2,7 +2,7 @@
   <PageTabs :tabs="[
     { label: 'Dashboard', to: '/admin/errors' },
   ]" />
-  <div class="mx-auto max-w-6xl space-y-6 p-6">
+  <div class="page-wide">
     <header>
       <h1 class="text-2xl font-semibold tracking-tight">{{ $t('views.AdminErrorsView.error_dashboard') }}</h1>
       <p class="mt-1 text-muted-foreground">{{ $t('views.AdminErrorsView.monitor_and_manage_errors_across_your_organisation') }}</p>
@@ -96,17 +96,17 @@
     </div>
 
     <template v-else>
-      <div class="card overflow-hidden">
+      <div class="table-wrapper">
         <table class="w-full">
           <thead>
-            <tr class="border-b bg-muted/30 text-left text-xs font-medium uppercase text-muted-foreground">
-              <th class="px-4 py-3">Level</th>
-              <th class="px-4 py-3">Message</th>
-              <th class="px-4 py-3">Count</th>
-              <th class="px-4 py-3">{{ $t('views.AdminErrorDetailView.first_seen') }}</th>
-              <th class="px-4 py-3">{{ $t('views.AdminErrorDetailView.last_seen') }}</th>
-              <th class="px-4 py-3">Status</th>
-              <th class="px-4 py-3">Assignee</th>
+            <tr>
+              <th class="table-header">Level</th>
+              <th class="table-header">Message</th>
+              <th class="table-header table-cell-numeric">Count</th>
+              <th class="table-header">{{ $t('views.AdminErrorDetailView.first_seen') }}</th>
+              <th class="table-header">{{ $t('views.AdminErrorDetailView.last_seen') }}</th>
+              <th class="table-header">Status</th>
+              <th class="table-header">Assignee</th>
             </tr>
           </thead>
           <tbody class="divide-y">
@@ -120,32 +120,32 @@
               @keydown.enter="navigateToDetail(group.id)"
               @keydown.space.prevent="navigateToDetail(group.id)"
             >
-              <td class="px-4 py-3">
+              <td class="table-cell">
                 <span :class="levelBadgeClass(group.level_peak)">
                   {{ group.level_peak }}
                 </span>
               </td>
               <Tooltip :delay-duration="300">
                 <TooltipTrigger as-child>
-                  <td class="max-w-xs truncate px-4 py-3 text-sm font-medium">{{ group.sample_message || '(no message)' }}</td>
+                  <td class="table-cell max-w-xs truncate font-medium">{{ group.sample_message || '(no message)' }}</td>
                 </TooltipTrigger>
                 <TooltipContent side="top" class="max-w-xs">
                   <p>{{ group.sample_message || '(no message)' }}</p>
                 </TooltipContent>
               </Tooltip>
-              <td class="px-4 py-3 text-sm">{{ group.count }}</td>
-              <td class="whitespace-nowrap px-4 py-3 text-sm text-muted-foreground">
+              <td class="table-cell-numeric">{{ group.count }}</td>
+              <td class="table-cell whitespace-nowrap text-muted-foreground">
                 {{ formatDate(group.first_seen) }}
               </td>
-              <td class="whitespace-nowrap px-4 py-3 text-sm text-muted-foreground">
+              <td class="table-cell whitespace-nowrap text-muted-foreground">
                 {{ formatDate(group.last_seen) }}
               </td>
-              <td class="px-4 py-3">
+              <td class="table-cell">
                 <span :class="statusBadgeClass(group.status)">
                   {{ group.status }}
                 </span>
               </td>
-              <td class="px-4 py-3 text-xs text-muted-foreground">
+              <td class="table-cell text-xs text-muted-foreground">
                 {{ group.assigned_to ? shortId(group.assigned_to) : '—' }}
               </td>
             </tr>

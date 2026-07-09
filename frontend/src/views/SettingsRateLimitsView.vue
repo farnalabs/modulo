@@ -1,5 +1,5 @@
 ﻿<template>
-  <div data-theme="agent" class="mx-auto max-w-4xl space-y-8 p-6">
+  <div data-theme="agent" class="page-narrow">
     <header>
       <h1 data-testid="rate-limits-title" class="text-2xl font-semibold tracking-tight">{{ $t('views.SettingsRateLimitsView.rate_limits') }}</h1>
       <p class="mt-1 text-muted-foreground">{{ $t('views.SettingsRateLimitsView.view_perroute_rate_limiting_rules_and_current_usage') }}</p>

@@ -1,5 +1,5 @@
 ﻿<template>
-  <div data-theme="agent" data-loading="false" class="mx-auto max-w-4xl space-y-8 p-6">
+  <div data-theme="agent" data-loading="false" class="page-narrow">
     <header>
       <h1 data-testid="license-title" class="text-2xl font-semibold tracking-tight">License</h1>
       <p class="mt-1 text-muted-foreground">{{ $t('views.SettingsLicenseView.manage_your_modulo_team_license_key_and_view_plan_details') }}</p>

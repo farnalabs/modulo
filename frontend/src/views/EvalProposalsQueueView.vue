@@ -8,7 +8,7 @@
       { label: 'AB Test', to: '/variants/ab-test' },
     ]" />
 
-    <div class="mx-auto max-w-5xl space-y-8 p-6">
+    <div class="page-narrow">
     <header>
       <h1 class="text-2xl font-semibold tracking-tight">Eval Proposals Queue</h1>
       <p class="mt-1 text-muted-foreground">Eval gaps detected by the feedback system — review and publish as eval definitions</p>
