@@ -6,6 +6,7 @@ export interface NavItem {
   label: string
   labelKey: string
   exact?: boolean
+  preview?: boolean
   requiredRoles?: string[] | null
   requiredTier?: string | null
   requiredPermissions?: string[] | null
@@ -97,6 +98,7 @@ interface ManifestRoute {
   sidebar_order?: number | null
   type?: string
   exact?: boolean
+  preview?: boolean
   required_tier?: string | null
   required_roles?: string[] | null
   required_permissions?: string[] | null
@@ -156,6 +158,7 @@ function buildSidebarGroups(): NavGroup[] {
       label: route.breadcrumb || route.name,
       labelKey: routeConfigMap[route.name]?.labelKey || `nav.${route.name}`,
       exact: route.exact || undefined,
+      preview: route.preview || undefined,
       requiredRoles: route.required_roles || null,
       requiredTier: route.required_tier || null,
       requiredPermissions: route.required_permissions || null,
