@@ -21,12 +21,11 @@
       {{ error }}
     </div>
 
-    <div v-else-if="users.length === 0" class="card p-8 text-center">
-      <p class="text-lg font-medium">{{ $t('views.AdminUsersView.no_users_found') }}</p>
-      <p class="mt-1 text-sm text-muted-foreground">
-        Users will appear here once they are created or sign up.
-      </p>
-    </div>
+    <EmptyState
+      v-else-if="users.length === 0"
+      :title="$t('views.AdminUsersView.no_users_found')"
+      description="Users will appear here once they are created or sign up."
+    />
 
     <div v-else class="table-wrapper">
       <table class="w-full text-sm">
@@ -184,7 +183,7 @@
         <h2 class="text-base font-semibold">{{ $t('views.AdminUsersView.password_reset') }}</h2>
         <p class="text-sm text-muted-foreground">
           A temporary password has been generated for <strong>{{ resetUserEmail }}</strong>.
-          Share this password with the user — they will be prompted to change it on next login.
+          Share this password with the user � they will be prompted to change it on next login.
         </p>
         <div class="flex items-center gap-2 bg-muted rounded-lg px-4 py-3">
           <code class="flex-1 text-sm font-mono break-all">{{ tempPassword }}</code>
@@ -216,6 +215,7 @@ import { ref, onMounted, onBeforeUnmount } from 'vue'
 import { useApi } from '../composables/useApi'
 import LoadingSpinner from '../components/shared/LoadingSpinner.vue'
 import { Button } from '@/components/ui/button'
+import EmptyState from '../components/shared/EmptyState.vue'
 
 interface UserItem {
   id: string
