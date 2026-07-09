@@ -22,27 +22,18 @@ defaults:
     working-directory: backend
 
 jobs:
-  cleanup-stale:
+  playwright-smoke:
     runs-on: [self-hosted, windows, docker]
+    defaults:
+      run:
+        working-directory: frontend
     steps:
       - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v7
+      - uses: actions/setup-node@v6
         with:
-          python-version: "3.12"
-      - name: Clean stale E2E orgs
-        shell: powershell
-        run: |
-          uv run python -m tests.staging_e2e.cleanup
-
-  e2e:
-    needs: cleanup-stale
-    runs-on: [self-hosted, windows, docker]
-    steps:
-      - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v7
-        with:
-          python-version: "3.12"
-
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
       - name: Wait for staging health
         shell: powershell
         timeout-minutes: 5
@@ -55,34 +46,32 @@ jobs:
             } catch {}
             Start-Sleep -Seconds 5
           }
-          Write-Host "Staging not ready after 300s"
           exit 1
-
-      - name: Run staging E2E tests
-        shell: powershell
-        timeout-minutes: 30
-        run: |
-          uv run pytest tests/staging_e2e/ -v --timeout=120 `
-            --junit-xml=test-results/staging-e2e.xml `
-            -o "log_cli=true" -o "log_cli_level=INFO"
+      - name: Install frontend deps
+        run: npm ci
+      - name: Install Playwright browsers
+        run: npx playwright install chromium
+      - name: Run @smoke Playwright tests against staging
+        run: npm run test:e2e:smoke -- --reporter=line --reporter=junit
+        timeout-minutes: 10
         env:
-          STAGING_BASE_URL: https://staging.modulo.run
-
+          E2E_TARGET: staging
+          E2E_NO_WEBSERVER: "true"
+          PLAYWRIGHT_JUNIT_OUTPUT_NAME: test-results/junit.xml
       - name: Upload test results
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: staging-e2e-results
-          path: backend/test-results/staging-e2e.xml
-
+          name: playwright-smoke-results
+          path: frontend/test-results/
       - name: Final cleanup
         if: always()
         shell: powershell
         run: |
-          uv run python -m tests.staging_e2e.cleanup
+          $ErrorActionPreference = 'Continue'
+          Remove-Item -Path "$env:TEMP\ms-playwright" -Recurse -Force -ErrorAction SilentlyContinue
 
   wcag-audit:
-    needs: [cleanup-stale]
     runs-on: [self-hosted, windows, docker]
     defaults:
       run:
@@ -130,7 +119,6 @@ jobs:
           Remove-Item -Path "$env:TEMP\ms-playwright" -Recurse -Force -ErrorAction SilentlyContinue
 
   playwright-regression:
-    needs: [cleanup-stale]
     runs-on: [self-hosted, windows, docker]
     defaults:
       run:
