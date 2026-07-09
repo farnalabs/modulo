@@ -130,6 +130,7 @@ status: partial
 ### Security & concurrency
 - [x] RLS enforces org isolation on all team and membership queries
 - [x] SET LOCAL app.organisation_id set before every query
+- [x] set_rls_user_context called alongside set_rls_org on all admin team routes
 - [x] Team name uniqueness enforced at DB level (UniqueConstraint)
 - [x] Membership role constrained to valid values (CheckConstraint)
 - [x] Membership uniqueness (team_id + account_id) enforced at DB level
@@ -183,3 +184,13 @@ status: partial
 **Fixed (MAJOR):** `admin_update_team` and `admin_create_team` audit event blocks had no error handling — audit failures propagated after the team was already mutated. Added `except ProgrammingError`/`except SQLAlchemyError` catching.
 
 **All tests pass:** 30 API endpoint + 22 CRUD unit tests = 52/52 pass. No regressions.
+
+### 2026-07-09 — Cross-cutting QA (index 353) — feat-teams-team-crud
+
+**Lens:** Correctness, maintainability, error handling, edge cases
+
+**Fixed (MAJOR):** Added `set_rls_user_context` calls to all 4 admin team routes in `admin.py` and their audit event blocks — `admin_create_team`, `admin_list_teams`, `admin_update_team`, `admin_delete_team`. Previously only `set_rls_org` was set, missing user identity context for RLS policies and tenant-filter listener.
+
+**Fixed (MINOR):** Flattened nested try/except in `admin_create_team` — inner `try/except ProgrammingError` was redundant with outer `except ProgrammingError`; consolidated and added `logger.exception` to the outer handler.
+
+**All tests pass:** 30 API endpoint + 22 CRUD unit tests + 4 admin RLS context tests = 56/56 pass. No regressions.
