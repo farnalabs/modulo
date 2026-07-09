@@ -64,8 +64,10 @@ async def create_snapshot_from_live_graph(
         if agent is not None:
             if agent.token_budget is not None:
                 node["token_budget"] = agent.token_budget
-            node["prompt_template"] = agent.prompt_template
-            node["model_backend_id"] = str(agent.model_backend_id)
+            if agent.prompt_template is not None:
+                node["prompt_template"] = agent.prompt_template
+            if agent.model_backend_id is not None:
+                node["model_backend_id"] = str(agent.model_backend_id)
 
     connector_ids = _ids(
         binding.get("instance_id") for node in nodes if (binding := node.get("connector_binding")) is not None
@@ -83,7 +85,7 @@ async def create_snapshot_from_live_graph(
         schemas = list((await session.execute(select(Schema).where(Schema.id.in_(schema_ids)))).scalars())
     schemas_by_id = {schema.id: schema for schema in schemas}
 
-    backend_ids = {agent.model_backend_id for agent in agents}
+    backend_ids = {agent.model_backend_id for agent in agents if agent.model_backend_id is not None}
     backends: list[ModelBackend] = []
     if backend_ids:
         backends = list((await session.execute(select(ModelBackend).where(ModelBackend.id.in_(backend_ids)))).scalars())
