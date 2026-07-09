@@ -9,6 +9,7 @@ from langchain_core.messages import HumanMessage, SystemMessage
 
 from modulo.core.prompt_optimizer import (
     SYSTEM_PROMPT,
+    OptimizationFailedError,
     OptimizationResult,
     PromptOptimizer,
     _build_failure_context,
@@ -136,11 +137,11 @@ class TestParseLLMResponse:
         assert result.suggested_prompt == "hi"
 
     def test_raises_on_bad_json(self) -> None:
-        with pytest.raises(json.JSONDecodeError):
+        with pytest.raises(OptimizationFailedError, match="not valid JSON"):
             _parse_llm_response("not json")
 
     def test_raises_on_missing_required_keys(self) -> None:
-        with pytest.raises(KeyError):
+        with pytest.raises(OptimizationFailedError, match="missing required key"):
             _parse_llm_response(json.dumps({"analysis": "A"}))
 
 
@@ -189,11 +190,11 @@ class TestPromptOptimizer:
         assert result.rationale == "Added detail requirement to fix brevity failures"
         assert result.analysis == "Failures show brevity issue"
 
-    async def test_optimize_passes_through_llm_errors(self) -> None:
+    async def test_optimize_raises_optimization_failed_after_retry_exhaustion(self) -> None:
         mock = AsyncMock(side_effect=RuntimeError("LLM unavailable"))
         optimizer = PromptOptimizer(mock)
 
-        with pytest.raises(RuntimeError, match="LLM unavailable"):
+        with pytest.raises(OptimizationFailedError, match="after 3 attempts"):
             await optimizer.optimize("p", [], {})
 
     async def test_optimize_handles_empty_eval_results(self) -> None:

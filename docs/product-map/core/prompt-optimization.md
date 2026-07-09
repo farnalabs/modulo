@@ -125,8 +125,20 @@ LLM-driven prompt improvement from eval failures, with full version history, rol
 - No unauthorized access scenarios for prompt history (non-member org, viewer role)
 - Bound check on LLM response length — very long suggested_prompt could hit DB column limits
 - No website docs stub for prompt optimization
+- `version` path parameter in `optimize_prompt` is accepted but never validated or used — non-existent version accepted as source
 
 ## QA History
+
+### 2026-07-09 — Cross-cutting QA (improve-architecture index 358)
+- Fixed CRITICAL — 3 broken unit test assertions in `test_prompt_optimizer.py`: `test_raises_on_bad_json` expected `json.JSONDecodeError` but `_parse_llm_response` raises `OptimizationFailedError`; `test_raises_on_missing_required_keys` expected `KeyError` but `_parse_llm_response` raises `OptimizationFailedError`; `test_optimize_passes_through_llm_errors` expected `RuntimeError` to propagate but the retry loop catches it and raises `OptimizationFailedError` after 3 retries. Fixed all 3 to expect `OptimizationFailedError`.
+- Fixed MAJOR — 6 dead `except IntegrityError` blocks on SELECT-only operations in `agents.py`:
+  - `optimize_prompt`: 3 blocks wrapping `get_agent` SELECT, `get_eval_results_with_defs` SELECT, and `select(ModelBackend)` SELECT
+  - `list_prompt_versions`: 1 block wrapping `get_agent` SELECT
+  - `get_prompt_version_endpoint`: 1 block wrapping `get_prompt_version` SELECT
+  - `diff_prompt_versions`: 1 block wrapping `get_agent` SELECT
+  These catches were misleading dead code — SELECT queries cannot raise IntegrityError. Removed all 6. IntegrityError catches on write paths (apply, rollback) were preserved.
+- Added 1 new Known Gap: `optimize_prompt` accepts but never validates/uses the `version` path parameter — non-existent version accepted as source.
+- Status: partial (7 known gaps remain — 6 original + 1 new unused version param).
 
 ### 2026-07-08 — Cross-cutting QA (improve-architecture index 260)
 - Fixed CRITICAL — `OptimizationFailedError` from `PromptOptimizer` after LLM retry exhaustion propagated uncaught to `CatchAllMiddleware`, producing a generic 500 with no structured detail. Added `except OptimizationFailedError → 500` with `"Prompt optimization failed: LLM call failed after retries"` and `except Exception → 500` with `"Prompt optimization failed unexpectedly"` in the optimize endpoint.
