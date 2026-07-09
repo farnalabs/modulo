@@ -242,14 +242,14 @@
             {{ editError }}
           </div>
           <div class="flex items-center gap-2">
-            <button
+            <Button
               :disabled="!editForm.url.trim() || saving"
-              class="rounded-lg bg-primary px-3 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
+              variant="default"
               data-testid="team-notif-edit-save"
               @click="saveEdit"
             >
               {{ saving ? "Saving..." : "Save" }}
-            </button>
+            </Button>
             <button
               class="rounded-lg border border-input bg-background px-3 py-2 text-sm font-medium hover:bg-accent"
               data-testid="team-notif-edit-cancel"
@@ -318,14 +318,14 @@
           {{ addError }}
         </div>
         <div class="flex items-center gap-2">
-          <button
+          <Button
             :disabled="!addForm.url.trim() || adding"
-            class="rounded-lg bg-primary px-3 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
+            variant="default"
             data-testid="team-notif-add-save"
             @click="addEndpoint"
           >
             {{ adding ? "Adding..." : "Add" }}
-          </button>
+          </Button>
           <button
             class="rounded-lg border border-input bg-background px-3 py-2 text-sm font-medium hover:bg-accent"
             data-testid="team-notif-add-cancel"
@@ -362,6 +362,7 @@
 <script setup lang="ts">
 import { ref, computed, onMounted } from "vue";
 import { api } from "../lib/api/client";
+import { Button } from "@/components/ui/button";
 import { formatApiError } from "../lib/api/formatError";
 import type { components } from "../lib/api/client";
 import {

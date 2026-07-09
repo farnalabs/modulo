@@ -84,14 +84,14 @@
           {{ $t('views.SchemaListView.deprecate_confirm_description') }}
         </p>
         <div class="mt-3 flex items-center gap-2">
-          <button
+          <Button
             :disabled="deprecating"
-            class="rounded-lg bg-destructive px-4 py-2 text-sm font-medium text-destructive-foreground hover:brightness-110 disabled:opacity-50 transition-all"
+            variant="destructive"
             data-testid="schema-deprecate-confirm"
             @click="deprecateSchema"
           >
             {{ deprecating ? $t('views.SchemaListView.deprecating') : $t('views.SchemaListView.deprecate') }}
-          </button>
+          </Button>
           <button
             class="rounded-lg border border-input bg-background px-4 py-2 text-sm font-medium hover:bg-accent"
             data-testid="schema-deprecate-cancel"
@@ -114,6 +114,7 @@ import { formatApiError, type ProblemDetail } from '../lib/api/formatError'
 import type { components } from '../lib/api/client'
 import LoadingSpinner from '../components/shared/LoadingSpinner.vue'
 import ErrorAlert from '../components/shared/ErrorAlert.vue'
+import { Button } from '@/components/ui/button'
 import PageTabs from "../components/PageTabs.vue"
 
 const { t } = useI18n()

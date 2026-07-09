@@ -6,13 +6,14 @@
           <h1 class="text-3xl font-bold tracking-tight">{{ $t('views.AdminModelBackendsView.model_backends') }}</h1>
           <p class="mt-1 text-muted-foreground">{{ $t('views.AdminModelBackendsView.manage_llm_backend_connections_and_credentials') }}</p>
         </div>
-        <button
-          class="btn-glow rounded-lg bg-primary px-4 py-2 text-sm font-semibold text-primary-foreground border border-primary/30 hover:border-primary/60 hover:brightness-110 transition-all duration-150"
+        <Button
+          variant="default"
+          class="btn-glow border-primary/30 hover:border-primary/60"
           data-testid="admin-model-backends-add"
           @click="openAddForm"
         >
           {{ $t('views.AdminModelBackendsView.add_model_backend') }}
-        </button>
+        </Button>
       </header>
 
       <LoadingSpinner v-if="loading" />
@@ -121,14 +122,14 @@
               </div>
               <div v-if="formError" class="text-sm text-destructive">{{ formError }}</div>
               <div class="flex items-center gap-2">
-                <button
-                  :disabled="saving || !formData.name.trim() || !formData.display_name.trim() || !formData.model_id.trim() || !formData.api_key.trim()"
-                  type="submit"
-                  class="rounded-lg bg-primary px-4 py-2 text-sm font-semibold text-primary-foreground hover:brightness-110 disabled:opacity-50 transition-all"
-                  data-testid="admin-model-backends-submit"
-                >
-                  {{ saving ? $t('views.AdminModelBackendsView.creating') : $t('views.AdminModelBackendsView.create') }}
-                </button>
+              <Button
+                :disabled="saving || !formData.name.trim() || !formData.display_name.trim() || !formData.model_id.trim() || !formData.api_key.trim()"
+                type="submit"
+                variant="default"
+                data-testid="admin-model-backends-submit"
+              >
+                {{ saving ? $t('views.AdminModelBackendsView.creating') : $t('views.AdminModelBackendsView.create') }}
+              </Button>
                 <button
                   type="button"
                   class="rounded-lg border border-input bg-background px-4 py-2 text-sm font-medium hover:bg-accent"
@@ -347,14 +348,14 @@
               </div>
               <div v-if="formError" class="text-sm text-destructive">{{ formError }}</div>
               <div class="flex items-center gap-2">
-                <button
-                  :disabled="saving || !formData.name.trim() || !formData.display_name.trim() || !formData.model_id.trim()"
-                  type="submit"
-                  class="rounded-lg bg-primary px-4 py-2 text-sm font-semibold text-primary-foreground hover:brightness-110 disabled:opacity-50 transition-all"
-                  data-testid="admin-model-backends-save"
-                >
-                  {{ saving ? $t('views.AdminModelBackendsView.saving') : $t('views.AdminModelBackendsView.save') }}
-                </button>
+              <Button
+                :disabled="saving || !formData.name.trim() || !formData.display_name.trim() || !formData.model_id.trim()"
+                type="submit"
+                variant="default"
+                data-testid="admin-model-backends-save"
+              >
+                {{ saving ? $t('views.AdminModelBackendsView.saving') : $t('views.AdminModelBackendsView.save') }}
+              </Button>
                 <button
                   type="button"
                   class="rounded-lg border border-input bg-background px-4 py-2 text-sm font-medium hover:bg-accent"
@@ -372,14 +373,14 @@
           <p class="text-sm font-medium text-destructive">{{ $t('views.AdminModelBackendsView.delete_confirm', { name: deleteConfirmName }) }}</p>
           <p class="mt-1 text-sm text-destructive/80">{{ $t('views.AdminModelBackendsView.this_action_cannot_be_undone') }}</p>
           <div class="mt-3 flex items-center gap-2">
-            <button
-              :disabled="deleting"
-              class="rounded-lg bg-destructive px-4 py-2 text-sm font-medium text-destructive-foreground hover:brightness-110 disabled:opacity-50 transition-all"
-              data-testid="admin-model-backends-delete-confirm"
-              @click="deleteBackend"
-            >
-              {{ deleting ? $t('views.AdminModelBackendsView.deleting') : $t('views.AdminModelBackendsView.delete') }}
-            </button>
+          <Button
+            :disabled="deleting"
+            variant="destructive"
+            data-testid="admin-model-backends-delete-confirm"
+            @click="deleteBackend"
+          >
+            {{ deleting ? $t('views.AdminModelBackendsView.deleting') : $t('views.AdminModelBackendsView.delete') }}
+          </Button>
             <button
               type="button"
               class="rounded-lg border border-input bg-background px-4 py-2 text-sm font-medium hover:bg-accent"
@@ -404,6 +405,7 @@ import LoadingSpinner from '../components/shared/LoadingSpinner.vue'
 import ErrorAlert from '../components/shared/ErrorAlert.vue'
 import FeatureGate from '../components/FeatureGate.vue'
 import { formatApiError } from '../lib/api/formatError'
+import { Button } from '@/components/ui/button'
 
 type ModelBackendItem = components['schemas']['ModelBackendResponse']
 

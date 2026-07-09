@@ -7,13 +7,14 @@
           <h1 class="text-3xl font-bold tracking-tight">{{ $t('views.SettingsSsoView.title') }}</h1>
           <p class="mt-1 text-muted-foreground">{{ $t('views.SettingsSsoView.description') }}</p>
         </div>
-        <button
-          class="btn-glow rounded-lg bg-primary px-4 py-2 text-sm font-semibold text-primary-foreground border border-primary/30 hover:border-primary/60 hover:brightness-110 transition-all duration-150"
+        <Button
+          variant="default"
+          class="btn-glow border-primary/30 hover:border-primary/60"
           data-testid="settings-sso-add-provider"
           @click="openAddForm"
         >
           {{ $t('views.SettingsSsoView.add_provider') }}
-        </button>
+        </Button>
       </header>
 
       <LoadingSpinner v-if="loading" />
@@ -137,14 +138,14 @@
               <p class="text-sm font-medium text-destructive">{{ $t('views.SettingsSsoView.delete_confirm', { name: provider.name }) }}</p>
               <p class="mt-1 text-sm text-destructive/80">{{ $t('views.SettingsSsoView.delete_warning') }}</p>
               <div class="mt-3 flex items-center gap-2">
-                <button
+                <Button
                   :disabled="deleting"
+                  variant="destructive"
                   data-testid="settings-sso-delete-confirm"
-                  class="rounded-lg bg-destructive px-4 py-2 text-sm font-medium text-destructive-foreground hover:brightness-110 disabled:opacity-50 transition-all"
                   @click="deleteProvider(provider.id)"
                 >
                   {{ deleting ? $t('views.SettingsSsoView.deleting') : $t('views.SettingsSsoView.delete') }}
-                </button>
+                </Button>
                 <button
                   class="rounded-lg border border-input bg-background px-4 py-2 text-sm font-medium hover:bg-accent"
                   data-testid="settings-sso-delete-cancel"
@@ -178,6 +179,7 @@
 
 <script setup lang="ts">
 import { ref, reactive, onMounted, onBeforeUnmount } from 'vue'
+import { Button } from '@/components/ui/button'
 import { api } from '../lib/api/client'
 import type { components } from '../lib/api/client'
 import SsoProviderForm from '../components/SsoProviderForm.vue'

@@ -169,14 +169,14 @@
           <div v-if="accessError" class="text-sm text-destructive">{{ accessError }}</div>
           <Tooltip :delay-duration="300">
             <TooltipTrigger as-child>
-              <button
-                :disabled="accessSaving"
-                class="rounded-lg bg-primary px-4 py-2 text-sm font-semibold text-primary-foreground hover:brightness-110 disabled:opacity-50 transition-all"
-                data-testid="remy-access-save"
-                @click="saveAccessList"
-              >
-                {{ accessSaving ? 'Saving...' : 'Save Access List' }}
-              </button>
+                <Button
+                  :disabled="accessSaving"
+                  variant="default"
+                  data-testid="remy-access-save"
+                  @click="saveAccessList"
+                >
+                  {{ accessSaving ? 'Saving...' : 'Save Access List' }}
+                </Button>
             </TooltipTrigger>
             <TooltipContent side="top">
               <p>{{ $t('views.AdminRemyView.save_current_access_list_configuration') }}</p>
@@ -252,14 +252,14 @@
             <div v-if="modelError" class="text-sm text-destructive">{{ modelError }}</div>
             <Tooltip :delay-duration="300">
               <TooltipTrigger as-child>
-                <button
+                <Button
                   :disabled="modelSaving"
-                  class="rounded-lg bg-primary px-4 py-2 text-sm font-semibold text-primary-foreground hover:brightness-110 disabled:opacity-50 transition-all"
+                  variant="default"
                   data-testid="remy-model-save"
                   @click="saveModelConfig"
                 >
                   {{ modelSaving ? 'Saving...' : 'Save Model Config' }}
-                </button>
+                </Button>
               </TooltipTrigger>
               <TooltipContent side="top">
                 <p>{{ $t('views.AdminRemyView.save_default_model_provider_and_allowed_model_configuration') }}</p>
@@ -286,14 +286,14 @@
             <div v-if="promptError" class="text-sm text-destructive">{{ promptError }}</div>
             <Tooltip :delay-duration="300">
               <TooltipTrigger as-child>
-                <button
+                <Button
                   :disabled="promptSaving"
-                  class="rounded-lg bg-primary px-4 py-2 text-sm font-semibold text-primary-foreground hover:brightness-110 disabled:opacity-50 transition-all"
+                  variant="default"
                   data-testid="remy-prompt-save"
                   @click="saveSystemPrompt"
                 >
                   {{ promptSaving ? 'Saving...' : 'Save System Prompt' }}
-                </button>
+                </Button>
               </TooltipTrigger>
               <TooltipContent side="top">
                 <p>{{ $t('views.AdminRemyView.save_the_base_system_prompt_that_guides_remys_behaviour') }}</p>
@@ -320,14 +320,14 @@
             <div v-if="guidanceError" class="text-sm text-destructive">{{ guidanceError }}</div>
             <Tooltip :delay-duration="300">
               <TooltipTrigger as-child>
-                <button
+                <Button
                   :disabled="guidanceSaving"
-                  class="rounded-lg bg-primary px-4 py-2 text-sm font-semibold text-primary-foreground hover:brightness-110 disabled:opacity-50 transition-all"
+                  variant="default"
                   data-testid="remy-guidance-save"
                   @click="saveGuidance"
                 >
                   {{ guidanceSaving ? 'Saving...' : 'Save Guidance' }}
-                </button>
+                </Button>
               </TooltipTrigger>
               <TooltipContent side="top">
                 <p>{{ $t('views.AdminRemyView.save_extra_instructions_appended_to_the_system_prompt') }}</p>
@@ -377,9 +377,9 @@
         </div>
 
         <div v-if="toolPermError" class="mt-2 text-sm text-destructive">{{ toolPermError }}</div>
-        <button :disabled="toolPermSaving" class="mt-4 rounded-lg bg-primary px-4 py-2 text-sm font-semibold text-primary-foreground hover:brightness-110 disabled:opacity-50 transition-all" @click="saveToolPerms">
+        <Button :disabled="toolPermSaving" variant="default" class="mt-4" @click="saveToolPerms">
           {{ toolPermSaving ? 'Saving...' : 'Save Tool Permissions' }}
-        </button>
+        </Button>
       </div>
 
       <!-- Safety & Limits -->
@@ -478,14 +478,14 @@
           <div v-if="safetyError" class="text-sm text-destructive">{{ safetyError }}</div>
           <Tooltip :delay-duration="300">
             <TooltipTrigger as-child>
-              <button
+              <Button
                 :disabled="safetySaving"
-                class="rounded-lg bg-primary px-4 py-2 text-sm font-semibold text-primary-foreground hover:brightness-110 disabled:opacity-50 transition-all"
+                variant="default"
                 data-testid="remy-safety-save"
                 @click="saveSafetyConfig"
               >
                 {{ safetySaving ? 'Saving...' : 'Save Safety Config' }}
-              </button>
+              </Button>
             </TooltipTrigger>
             <TooltipContent side="top">
               <p>Save rate limits, threshold, no-go patterns, and allowlist.</p>
@@ -501,13 +501,14 @@
             <h2 class="text-lg font-semibold">Skills</h2>
             <p class="text-sm text-muted-foreground">{{ $t('views.AdminRemyView.organisationlevel_skills_that_remy_can_use') }}</p>
           </div>
-          <button
-            class="rounded-lg bg-primary px-4 py-2 text-sm font-semibold text-primary-foreground border border-primary/30 hover:brightness-110 transition-all"
+          <Button
+            variant="default"
+            class="border border-primary/30"
             data-testid="remy-skills-add"
             @click="skillDialogRef?.openCreate()"
           >
             Add Skill
-          </button>
+          </Button>
         </div>
 
         <div v-if="skills.length === 0" class="py-8 text-center">
@@ -695,13 +696,13 @@
         <h2 class="mb-3 text-lg font-semibold">{{ $t('views.AdminRemyView.product_primer') }}</h2>
         <p class="mb-4 text-sm text-muted-foreground">{{ $t('views.AdminRemyView.product_primer_description') }}</p>
         <div class="flex items-center gap-3">
-          <button
+          <Button
             :disabled="primerSaving"
-            class="rounded-lg bg-primary px-4 py-2 text-sm font-semibold text-primary-foreground hover:brightness-110 disabled:opacity-50 transition-all"
+            variant="default"
             @click="regeneratePrimer"
           >
             {{ primerSaving ? 'Regenerating...' : $t('views.AdminRemyView.regenerate_primer') }}
-          </button>
+          </Button>
           <span v-if="primerMessage" class="text-sm text-success">{{ primerMessage }}</span>
         </div>
       </div>
@@ -725,6 +726,7 @@ import {
   TooltipTrigger,
   TooltipContent,
 } from '../components/ui/tooltip'
+import { Button } from '@/components/ui/button'
 import type { SkillItem } from '../types/remy'
 
 interface ProviderStatus {

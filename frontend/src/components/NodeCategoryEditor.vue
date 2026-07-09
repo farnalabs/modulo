@@ -74,9 +74,9 @@
     <div v-if="error" class="text-sm text-destructive">{{ error }}</div>
 
     <div class="flex items-center gap-2">
-      <button
+      <Button
         :disabled="!form.name.trim() || saving"
-        class="rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
+        variant="default"
         @click="save"
       >
         {{
@@ -86,7 +86,7 @@
               ? "Update Category"
               : "Create Category"
         }}
-      </button>
+      </Button>
       <button
         class="rounded-lg border border-input bg-background px-4 py-2 text-sm font-medium hover:bg-accent"
         @click="emit('cancelled')"
@@ -101,6 +101,7 @@
 import { ref, reactive, computed, watch } from "vue";
 import { api } from "../lib/api/client";
 import { formatApiError } from "../lib/api/formatError";
+import { Button } from '@/components/ui/button';
 
 export interface NodeCategoryForm {
   name: string;

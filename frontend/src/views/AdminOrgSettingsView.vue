@@ -54,12 +54,13 @@
         </p>
 
         <div v-if="exportStatus === 'idle'" class="flex items-center gap-3">
-          <button
-            class="inline-flex h-8 items-center justify-center gap-1.5 rounded-lg border border-transparent bg-primary px-2.5 text-sm font-medium text-primary-foreground transition-all hover:bg-primary/80"
+          <Button
+            variant="default"
+            class="h-8 px-2.5"
             @click="startExport"
           >
             Export All Data
-          </button>
+          </Button>
         </div>
 
         <div v-else-if="exportStatus === 'loading'" class="flex items-center gap-3">
@@ -103,12 +104,13 @@
         <p class="mb-4 text-sm text-destructive/80">
           Permanently delete this organisation and all associated data. This action cannot be undone.
         </p>
-        <button
-          class="inline-flex h-8 items-center justify-center gap-1.5 rounded-lg border border-transparent bg-destructive px-2.5 text-sm font-medium text-destructive-foreground transition-all hover:brightness-110"
+        <Button
+          variant="destructive"
+          class="h-8 px-2.5"
           @click="deleteDialogOpen = true"
         >
           Delete Organisation
-        </button>
+        </Button>
       </div>
     </template>
 
@@ -145,15 +147,16 @@
           >
             Cancel
           </button>
-          <button
-            type="button"
-            :disabled="confirmName !== orgInfo.name || deleting"
-            class="inline-flex h-8 items-center justify-center gap-1.5 rounded-lg border border-transparent bg-destructive px-2.5 text-sm font-medium text-destructive-foreground transition-all hover:brightness-110 disabled:opacity-50"
-            data-testid="org-delete-confirm-button"
-            @click="confirmDelete"
+            <Button
+              type="button"
+              :disabled="confirmName !== orgInfo.name || deleting"
+              variant="destructive"
+              class="h-8 px-2.5"
+              data-testid="org-delete-confirm-button"
+              @click="confirmDelete"
           >
-            {{ deleting ? 'Deleting...' : 'Permanently Delete' }}
-          </button>
+              {{ deleting ? 'Deleting...' : 'Permanently Delete' }}
+            </Button>
         </DialogFooter>
       </DialogContent>
     </Dialog>
@@ -164,6 +167,7 @@
 <script setup lang="ts">
 import { ref, reactive, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
+import { Button } from '@/components/ui/button'
 import { api } from '../lib/api/client'
 import LoadingSpinner from '../components/shared/LoadingSpinner.vue'
 import ErrorAlert from '../components/shared/ErrorAlert.vue'

@@ -69,14 +69,14 @@
             </div>
 
             <div v-if="isActionable(p.feedback_status)" class="flex shrink-0 items-center gap-2">
-              <button
-                :disabled="actioningId === p.id"
-                data-testid="proposal-publish"
-                class="rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
-                @click="publishProposal(p)"
-              >
-                {{ actioningId === p.id ? 'Publishing...' : 'Publish' }}
-              </button>
+            <Button
+              :disabled="actioningId === p.id"
+              data-testid="proposal-publish"
+              variant="default"
+              @click="publishProposal(p)"
+            >
+              {{ actioningId === p.id ? 'Publishing...' : 'Publish' }}
+            </Button>
               <button
                 :disabled="actioningId === p.id"
                 data-testid="proposal-dismiss"
@@ -108,6 +108,7 @@ import LoadingSpinner from '../components/shared/LoadingSpinner.vue'
 import ErrorAlert from '../components/shared/ErrorAlert.vue'
 import { usePlanStore } from '../stores/planStore'
 import FeatureGate from '../components/FeatureGate.vue'
+import { Button } from '@/components/ui/button'
 import PageTabs from "../components/PageTabs.vue"
 
 const planStore = usePlanStore()

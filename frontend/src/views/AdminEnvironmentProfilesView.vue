@@ -7,13 +7,14 @@
           <h1 class="text-3xl font-bold tracking-tight">Environment Profiles</h1>
           <p class="mt-1 text-muted-foreground">Manage sandbox environment profiles for code execution</p>
         </div>
-        <button
-          class="btn-glow rounded-lg bg-primary px-4 py-2 text-sm font-semibold text-primary-foreground border border-primary/30 hover:border-primary/60 hover:brightness-110 transition-all duration-150"
+        <Button
+          variant="default"
+          class="btn-glow border-primary/30 hover:border-primary/60"
           data-testid="admin-envprofiles-add"
           @click="openAddForm"
         >
           Create Profile
-        </button>
+        </Button>
       </header>
 
       <LoadingSpinner v-if="loading" />
@@ -150,14 +151,14 @@
               </div>
               <div v-if="formError" class="text-sm text-destructive">{{ formError }}</div>
               <div class="flex items-center gap-2">
-                <button
-                  :disabled="saving || !formData.name.trim()"
-                  type="submit"
-                  class="rounded-lg bg-primary px-4 py-2 text-sm font-semibold text-primary-foreground hover:brightness-110 disabled:opacity-50 transition-all"
-                  :data-testid="`admin-envprofiles-${formMode === 'add' ? 'submit' : 'save'}`"
-                >
-                  {{ saving ? 'Saving...' : (formMode === 'add' ? 'Create' : 'Save') }}
-                </button>
+              <Button
+                :disabled="saving || !formData.name.trim()"
+                type="submit"
+                variant="default"
+                :data-testid="`admin-envprofiles-${formMode === 'add' ? 'submit' : 'save'}`"
+              >
+                {{ saving ? 'Saving...' : (formMode === 'add' ? 'Create' : 'Save') }}
+              </Button>
                 <button
                   type="button"
                   class="rounded-lg border border-input bg-background px-4 py-2 text-sm font-medium hover:bg-accent"
@@ -294,14 +295,14 @@
           <p class="text-sm font-medium text-destructive">Delete "{{ deleteConfirmName }}"?</p>
           <p class="mt-1 text-sm text-destructive/80">This action cannot be undone.</p>
           <div class="mt-3 flex items-center gap-2">
-            <button
-              :disabled="deleting"
-              class="rounded-lg bg-destructive px-4 py-2 text-sm font-medium text-destructive-foreground hover:brightness-110 disabled:opacity-50 transition-all"
-              data-testid="admin-envprofiles-delete-confirm"
-              @click="deleteProfile"
-            >
-              {{ deleting ? 'Deleting...' : 'Delete' }}
-            </button>
+          <Button
+            :disabled="deleting"
+            variant="destructive"
+            data-testid="admin-envprofiles-delete-confirm"
+            @click="deleteProfile"
+          >
+            {{ deleting ? 'Deleting...' : 'Delete' }}
+          </Button>
             <button
               class="rounded-lg border border-input bg-background px-4 py-2 text-sm font-medium hover:bg-accent"
               data-testid="admin-envprofiles-delete-cancel"
@@ -325,6 +326,7 @@ import type { components } from '../lib/api/client'
 import LoadingSpinner from '../components/shared/LoadingSpinner.vue'
 import ErrorAlert from '../components/shared/ErrorAlert.vue'
 import FeatureGate from '../components/FeatureGate.vue'
+import { Button } from '@/components/ui/button'
 
 type ProfileItem = components['schemas']['ProfileResponse']
 

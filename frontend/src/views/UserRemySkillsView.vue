@@ -6,13 +6,14 @@
         <h1 class="text-3xl font-bold tracking-tight">{{ $t('views.UserRemySkillsView.my_remy_skills') }}</h1>
         <p class="mt-1 text-muted-foreground">{{ $t('views.UserRemySkillsView.manage_your_personal_skills_for_the_remy_ai_assistant') }}</p>
       </div>
-      <button
-        class="rounded-lg bg-primary px-4 py-2 text-sm font-semibold text-primary-foreground border border-primary/30 hover:brightness-110 transition-all"
+      <Button
+        variant="default"
+        class="border border-primary/30"
         data-testid="remy-user-skills-add"
         @click="skillDialogRef?.openCreate()"
       >
         Add Skill
-      </button>
+      </Button>
     </header>
 
     <LoadingSpinner v-if="loading" />
@@ -125,6 +126,7 @@
 
 <script setup lang="ts">
 import { ref, onMounted } from 'vue'
+import { Button } from '@/components/ui/button'
 import { api } from '../lib/api/client'
 import { formatApiError } from '../lib/api/formatError'
 import { useRemyStore } from '../composables/useRemyStore'

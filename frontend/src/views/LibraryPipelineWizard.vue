@@ -136,14 +136,15 @@
         </div>
 
         <div class="flex items-center gap-3">
-          <button
+          <Button
             :disabled="creating"
-            class="px-6 py-2.5 bg-primary text-primary-foreground text-sm font-medium rounded-lg hover:brightness-110 disabled:opacity-50 transition-all"
+            variant="default"
+            class="px-6 py-2.5"
             @click="createPipeline"
             data-testid="library-wizard-create"
           >
             {{ creating ? 'Creating...' : 'Create Pipeline' }}
-          </button>
+          </Button>
           <button
             class="px-6 py-2.5 border border-input bg-background text-foreground text-sm font-medium rounded-lg hover:bg-accent transition-colors"
             @click="$router.push({ name: 'library' })"
@@ -178,6 +179,7 @@
 <script setup lang="ts">
 import { ref, computed, onMounted } from 'vue'
 import { useRoute } from 'vue-router'
+import { Button } from '@/components/ui/button'
 import { useApi } from '../composables/useApi'
 import LoadingSpinner from '../components/shared/LoadingSpinner.vue'
 import ErrorAlert from '../components/shared/ErrorAlert.vue'

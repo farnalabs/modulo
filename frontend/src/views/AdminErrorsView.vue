@@ -69,12 +69,12 @@
             class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring"
           />
         </div>
-        <button
-          class="rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90"
+        <Button
+          variant="default"
           @click="applyFilters"
         >
           Apply Filters
-        </button>
+        </Button>
         <button
           class="rounded-lg border border-input bg-background px-4 py-2 text-sm font-medium hover:bg-accent"
           @click="resetFilters"
@@ -195,6 +195,7 @@ import {
   TooltipContent,
 } from '../components/ui/tooltip'
 import { formatApiError } from "../lib/api/formatError"
+import { Button } from '@/components/ui/button'
 
 const router = useRouter()
 

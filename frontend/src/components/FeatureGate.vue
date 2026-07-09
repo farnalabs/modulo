@@ -42,14 +42,16 @@
           <h3 class="text-lg font-semibold">{{ $t('components.FeatureGate.team_feature') }}</h3>
           <p class="text-sm text-muted-foreground">{{ tooltipText }}</p>
         </div>
-        <a
+        <Button
+          variant="default"
+          as="a"
           :href="pricingUrl"
           target="_blank"
           rel="noopener noreferrer"
-          class="btn-glow inline-flex items-center gap-2 rounded-lg bg-primary px-4 py-2 text-sm font-semibold text-primary-foreground border border-primary/30 hover:border-primary/60 hover:brightness-110 transition-all duration-150"
+          class="btn-glow border-primary/30 hover:border-primary/60"
         >
           {{ $t('components.FeatureGate.view_plans') }}
-        </a>
+        </Button>
         <slot name="locked" :tooltip="tooltipText" />
       </div>
     </div>
@@ -58,6 +60,7 @@
 
 <script setup lang="ts">
 import { computed } from "vue";
+import { Button } from "@/components/ui/button";
 import { useI18n } from "vue-i18n";
 import { usePlanStore } from "../stores/planStore";
 import LockIcon from "./LockIcon.vue";

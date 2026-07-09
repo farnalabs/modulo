@@ -7,13 +7,14 @@
         <h1 class="text-3xl font-bold tracking-tight">Connectors</h1>
         <p class="mt-1 text-muted-foreground">Manage connector instances for data source integration</p>
       </div>
-      <button
-        class="btn-glow rounded-lg bg-primary px-4 py-2 text-sm font-semibold text-primary-foreground border border-primary/30 hover:border-primary/60 hover:brightness-110 transition-all duration-150"
+      <Button
+        variant="default"
+        class="btn-glow border-primary/30 hover:border-primary/60"
         data-testid="admin-connectors-add"
         @click="openAddForm"
       >
         Add Connector
-      </button>
+      </Button>
     </header>
 
     <LoadingSpinner v-if="loading" />
@@ -73,14 +74,14 @@
             </div>
             <div v-if="formError" class="text-sm text-destructive">{{ formError }}</div>
             <div class="flex items-center gap-2">
-              <button
+              <Button
                 :disabled="saving || !formData.name.trim()"
                 type="submit"
-                class="rounded-lg bg-primary px-4 py-2 text-sm font-semibold text-primary-foreground hover:brightness-110 disabled:opacity-50 transition-all"
+                variant="default"
                 data-testid="admin-connectors-submit"
               >
                 {{ saving ? 'Creating...' : 'Create' }}
-              </button>
+              </Button>
               <button
                 type="button"
                 class="rounded-lg border border-input bg-background px-4 py-2 text-sm font-medium hover:bg-accent"
@@ -264,14 +265,14 @@
             </div>
             <div v-if="formError" class="text-sm text-destructive">{{ formError }}</div>
             <div class="flex items-center gap-2">
-              <button
+              <Button
                 :disabled="saving || !formData.name.trim()"
                 type="submit"
-                class="rounded-lg bg-primary px-4 py-2 text-sm font-semibold text-primary-foreground hover:brightness-110 disabled:opacity-50 transition-all"
+                variant="default"
                 data-testid="admin-connectors-save"
               >
                 {{ saving ? 'Saving...' : 'Save' }}
-              </button>
+              </Button>
               <button
                 type="button"
                 class="rounded-lg border border-input bg-background px-4 py-2 text-sm font-medium hover:bg-accent"
@@ -289,14 +290,14 @@
         <p class="text-sm font-medium text-destructive">Delete "{{ deleteConfirmName }}"?</p>
         <p class="mt-1 text-sm text-destructive/80">This action cannot be undone.</p>
         <div class="mt-3 flex items-center gap-2">
-          <button
+          <Button
             :disabled="deleting"
-            class="rounded-lg bg-destructive px-4 py-2 text-sm font-medium text-destructive-foreground hover:brightness-110 disabled:opacity-50 transition-all"
+            variant="destructive"
             data-testid="admin-connectors-delete-confirm"
             @click="deleteConnector"
           >
             {{ deleting ? 'Deleting...' : 'Delete' }}
-          </button>
+          </Button>
           <button
             class="rounded-lg border border-input bg-background px-4 py-2 text-sm font-medium hover:bg-accent"
             data-testid="admin-connectors-delete-cancel"
@@ -321,6 +322,7 @@ import LoadingSpinner from '../components/shared/LoadingSpinner.vue'
 import ErrorAlert from '../components/shared/ErrorAlert.vue'
 import { usePlanStore } from '../stores/planStore'
 import FeatureGate from '../components/FeatureGate.vue'
+import { Button } from '@/components/ui/button'
 
 const planStore = usePlanStore()
 
