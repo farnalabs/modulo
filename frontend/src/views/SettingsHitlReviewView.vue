@@ -1,278 +1,252 @@
 <template>
-  <FeatureGate feature-name="team_rbac" required-tier="team" show-disabled>
-
-    <div class="page-wide">
-    <header>
-      <h1 class="text-2xl font-semibold tracking-tight">HITL Review</h1>
-      <p class="mt-1 text-muted-foreground">Review and respond to pending human-in-the-loop gates</p>
-    </header>
-
-    <div class="flex flex-wrap items-center gap-4">
-      <div class="flex items-center gap-2">
-        <label class="text-sm font-medium text-muted-foreground">Status</label>
-        <select
-          v-model="statusFilter"
-          data-testid="hitl-review-status-select"
-          aria-label="Status"
-          class="rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-          @change="loadGates"
-        >
-          <option value="">All</option>
-          <option value="pending">Pending</option>
-          <option value="claimed">Claimed</option>
-          <option value="approved">Approved</option>
-          <option value="rejected">Rejected</option>
-        </select>
-      </div>
-
-      <div class="flex items-center gap-2">
-        <label class="text-sm font-medium text-muted-foreground">Pipeline</label>
-        <select
-          v-model="pipelineFilter"
-          data-testid="hitl-review-pipeline-select"
-          aria-label="Pipeline"
-          class="rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-          @change="loadGates"
-        >
-          <option value="">All Pipelines</option>
-          <option
-            v-for="p in pipelines"
-            :key="p.id"
-            :value="p.id"
-          >
-            {{ p.name }}
-          </option>
-        </select>
-      </div>
-
-      <div class="flex-1 min-w-[200px]">
-        <input
-          v-model="searchQuery"
-          type="text"
-          placeholder="Search pipeline or node name..."
-          data-testid="hitl-review-search"
-          class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-          @input="loadGates"
-        />
-      </div>
-
-      <div class="flex items-center gap-2">
-        <label class="text-sm font-medium text-muted-foreground">From</label>
-        <input
-          v-model="dateFrom"
-          type="date"
-          data-testid="hitl-review-date-from"
-          class="rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-          @change="loadGates"
-        />
-      </div>
-
-      <div class="flex items-center gap-2">
-        <label class="text-sm font-medium text-muted-foreground">To</label>
-        <input
-          v-model="dateTo"
-          type="date"
-          data-testid="hitl-review-date-to"
-          class="rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-          @change="loadGates"
-        />
-      </div>
-
-      <div class="flex items-center gap-1 text-xs text-muted-foreground">
-        <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
-        Auto-refresh: {{ refreshCountdown }}s
-      </div>
+  <div class="page-wide">
+  <header>
+    <h1 class="text-2xl font-semibold tracking-tight">HITL Review</h1>
+    <p class="mt-1 text-muted-foreground">Review and respond to pending human-in-the-loop gates</p>
+  </header>
+  <div class="flex flex-wrap items-center gap-4">
+    <div class="flex items-center gap-2">
+      <label class="text-sm font-medium text-muted-foreground">Status</label>
+      <select
+        v-model="statusFilter"
+        data-testid="hitl-review-status-select"
+        aria-label="Status"
+        class="rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+        @change="loadGates"
+      >
+        <option value="">All</option>
+        <option value="pending">Pending</option>
+        <option value="claimed">Claimed</option>
+        <option value="approved">Approved</option>
+        <option value="rejected">Rejected</option>
+      </select>
     </div>
-
-    <LoadingSpinner v-if="loading" />
-
-    <ErrorAlert v-else-if="error" :message="error" />
-
-    <template v-else>
-      <EmptyState
-        v-if="filteredGates.length === 0"
-        title="No pending HITL gates"
-        description="All gates have been resolved or no pipelines have hit a human-in-the-loop gate yet."
-      />
-
-      <div v-else class="space-y-2">
-        <div
-          v-for="gate in filteredGates"
-          :key="gate.gate_id + gate.run_id"
-          class="rounded-lg border bg-card shadow-sm"
+    <div class="flex items-center gap-2">
+      <label class="text-sm font-medium text-muted-foreground">Pipeline</label>
+      <select
+        v-model="pipelineFilter"
+        data-testid="hitl-review-pipeline-select"
+        aria-label="Pipeline"
+        class="rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+        @change="loadGates"
+      >
+        <option value="">All Pipelines</option>
+        <option
+          v-for="p in pipelines"
+          :key="p.id"
+          :value="p.id"
         >
-          <div
-            data-testid="hitl-review-toggle-expand"
-            class="flex cursor-pointer items-center gap-4 p-4"
-            :class="{ 'border-b': expandedKey === expandKey(gate) }"
-            role="button"
-            tabindex="0"
-            @click="toggleExpand(gate)"
-            @keydown.enter="toggleExpand(gate)"
-            @keydown.space.prevent="toggleExpand(gate)"
+          {{ p.name }}
+        </option>
+      </select>
+    </div>
+    <div class="flex-1 min-w-[200px]">
+      <input
+        v-model="searchQuery"
+        type="text"
+        placeholder="Search pipeline or node name..."
+        data-testid="hitl-review-search"
+        class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+        @input="loadGates"
+      />
+    </div>
+    <div class="flex items-center gap-2">
+      <label class="text-sm font-medium text-muted-foreground">From</label>
+      <input
+        v-model="dateFrom"
+        type="date"
+        data-testid="hitl-review-date-from"
+        class="rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+        @change="loadGates"
+      />
+    </div>
+    <div class="flex items-center gap-2">
+      <label class="text-sm font-medium text-muted-foreground">To</label>
+      <input
+        v-model="dateTo"
+        type="date"
+        data-testid="hitl-review-date-to"
+        class="rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+        @change="loadGates"
+      />
+    </div>
+    <div class="flex items-center gap-1 text-xs text-muted-foreground">
+      <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+      Auto-refresh: {{ refreshCountdown }}s
+    </div>
+  </div>
+  <LoadingSpinner v-if="loading" />
+  <ErrorAlert v-else-if="error" :message="error" />
+  <template v-else>
+    <EmptyState
+      v-if="filteredGates.length === 0"
+      title="No pending HITL gates"
+      description="All gates have been resolved or no pipelines have hit a human-in-the-loop gate yet."
+    />
+    <div v-else class="space-y-2">
+      <div
+        v-for="gate in filteredGates"
+        :key="gate.gate_id + gate.run_id"
+        class="rounded-lg border bg-card shadow-sm"
+      >
+        <div
+          data-testid="hitl-review-toggle-expand"
+          class="flex cursor-pointer items-center gap-4 p-4"
+          :class="{ 'border-b': expandedKey === expandKey(gate) }"
+          role="button"
+          tabindex="0"
+          @click="toggleExpand(gate)"
+          @keydown.enter="toggleExpand(gate)"
+          @keydown.space.prevent="toggleExpand(gate)"
+        >
+          <svg
+            class="h-4 w-4 flex-shrink-0 text-muted-foreground transition-transform"
+            :class="{ 'rotate-90': expandedKey === expandKey(gate) }"
+            xmlns="http://www.w3.org/2000/svg"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="2"
           >
-            <svg
-              class="h-4 w-4 flex-shrink-0 text-muted-foreground transition-transform"
-              :class="{ 'rotate-90': expandedKey === expandKey(gate) }"
-              xmlns="http://www.w3.org/2000/svg"
-              viewBox="0 0 24 24"
-              fill="none"
-              stroke="currentColor"
-              stroke-width="2"
-            >
-              <path d="m9 18 6-6-6-6" />
-            </svg>
-
-            <span :class="statusBadgeClass(gateStatus(gate))">
-              {{ gateStatus(gate) }}
-            </span>
-
-            <div class="min-w-0 flex-[2]">
-              <p class="truncate text-sm font-medium">{{ pipelineName(gate.pipeline_id) }}<span v-if="!pipelineName(gate.pipeline_id)" class="font-mono text-xs">{{ shortId(gate.pipeline_id) }}</span></p>
-            </div>
-
-            <div class="min-w-0 flex-[2]">
-              <p class="truncate text-sm text-muted-foreground">
-                <span class="font-mono text-xs">{{ shortId(gate.gate_id) }}</span>
-              </p>
-            </div>
-
-            <div class="min-w-0 flex-1">
-              <p class="truncate text-xs text-muted-foreground">
-                {{ gate.claimed_by ? `Assigned: ${gate.claimed_by}` : 'Unassigned' }}
-              </p>
-            </div>
-
-            <span class="flex-shrink-0 text-xs text-muted-foreground">
-              {{ formatDate(gate.claimed_at || gate.created_at || '') }}
-            </span>
+            <path d="m9 18 6-6-6-6" />
+          </svg>
+          <span :class="statusBadgeClass(gateStatus(gate))">
+            {{ gateStatus(gate) }}
+          </span>
+          <div class="min-w-0 flex-[2]">
+            <p class="truncate text-sm font-medium">{{ pipelineName(gate.pipeline_id) }}<span v-if="!pipelineName(gate.pipeline_id)" class="font-mono text-xs">{{ shortId(gate.pipeline_id) }}</span></p>
           </div>
-
-          <div v-if="expandedKey === expandKey(gate)" class="border-t p-4">
-            <div v-if="actionLoading[expandKey(gate)]" class="flex items-center justify-center py-8">
-              <div class="h-6 w-6 animate-spin rounded-full border-2 border-primary border-t-transparent" />
-            </div>
-
-            <template v-else>
-              <div class="grid grid-cols-2 gap-6">
-                <div>
-                  <h3 class="mb-2 text-sm font-semibold text-muted-foreground uppercase tracking-wider">Claim Metadata</h3>
-                  <div class="space-y-1 text-sm">
-                    <div class="flex justify-between">
-                      <span class="text-muted-foreground">Run ID</span>
-                      <span class="font-mono text-xs">{{ shortId(gate.run_id) }}</span>
-                    </div>
-                    <div class="flex justify-between">
-                      <span class="text-muted-foreground">Node</span>
-                      <span class="font-mono text-xs">{{ shortId(gate.gate_id) }}</span>
-                    </div>
-                    <div class="flex justify-between">
-                      <span class="text-muted-foreground">Pipeline</span>
-                      <span>{{ pipelineName(gate.pipeline_id) }}<span v-if="!pipelineName(gate.pipeline_id)" class="font-mono text-xs">{{ shortId(gate.pipeline_id) }}</span></span>
-                    </div>
-                    <div class="flex justify-between">
-                      <span class="text-muted-foreground">Created</span>
-                      <span>{{ formatDate(gate.created_at || '') }}</span>
-                    </div>
-                    <div v-if="gate.claimed_at" class="flex justify-between">
-                      <span class="text-muted-foreground">Claimed</span>
-                      <span>{{ formatDate(gate.claimed_at) }}</span>
-                    </div>
-                    <div v-if="gate.expires_at" class="flex justify-between">
-                      <span class="text-muted-foreground">Expires</span>
-                      <span>{{ formatDate(gate.expires_at) }}</span>
-                    </div>
-                    <div v-if="gate.decision_at" class="flex justify-between">
-                      <span class="text-muted-foreground">Decided</span>
-                      <span>{{ formatDate(gate.decision_at) }}</span>
-                    </div>
-                    <div v-if="gate.decision" class="flex justify-between">
-                      <span class="text-muted-foreground">Decision</span>
-                      <span :class="gate.decision === 'approved' ? 'text-success' : 'text-destructive'">{{ gate.decision }}</span>
-                    </div>
-                    <div v-if="gate.claimed_by" class="flex justify-between">
-                      <span class="text-muted-foreground">Assignees</span>
-                      <span>{{ gate.claimed_by }}</span>
-                    </div>
-                    <div v-if="gate.team_scope" class="flex justify-between">
-                      <span class="text-muted-foreground">Team</span>
-                      <span>{{ gate.team_scope }}</span>
-                    </div>
+          <div class="min-w-0 flex-[2]">
+            <p class="truncate text-sm text-muted-foreground">
+              <span class="font-mono text-xs">{{ shortId(gate.gate_id) }}</span>
+            </p>
+          </div>
+          <div class="min-w-0 flex-1">
+            <p class="truncate text-xs text-muted-foreground">
+              {{ gate.claimed_by ? `Assigned: ${gate.claimed_by}` : 'Unassigned' }}
+            </p>
+          </div>
+          <span class="flex-shrink-0 text-xs text-muted-foreground">
+            {{ formatDate(gate.claimed_at || gate.created_at || '') }}
+          </span>
+        </div>
+        <div v-if="expandedKey === expandKey(gate)" class="border-t p-4">
+          <div v-if="actionLoading[expandKey(gate)]" class="flex items-center justify-center py-8">
+            <div class="h-6 w-6 animate-spin rounded-full border-2 border-primary border-t-transparent" />
+          </div>
+          <template v-else>
+            <div class="grid grid-cols-2 gap-6">
+              <div>
+                <h3 class="mb-2 text-sm font-semibold text-muted-foreground uppercase tracking-wider">Claim Metadata</h3>
+                <div class="space-y-1 text-sm">
+                  <div class="flex justify-between">
+                    <span class="text-muted-foreground">Run ID</span>
+                    <span class="font-mono text-xs">{{ shortId(gate.run_id) }}</span>
+                  </div>
+                  <div class="flex justify-between">
+                    <span class="text-muted-foreground">Node</span>
+                    <span class="font-mono text-xs">{{ shortId(gate.gate_id) }}</span>
+                  </div>
+                  <div class="flex justify-between">
+                    <span class="text-muted-foreground">Pipeline</span>
+                    <span>{{ pipelineName(gate.pipeline_id) }}<span v-if="!pipelineName(gate.pipeline_id)" class="font-mono text-xs">{{ shortId(gate.pipeline_id) }}</span></span>
+                  </div>
+                  <div class="flex justify-between">
+                    <span class="text-muted-foreground">Created</span>
+                    <span>{{ formatDate(gate.created_at || '') }}</span>
+                  </div>
+                  <div v-if="gate.claimed_at" class="flex justify-between">
+                    <span class="text-muted-foreground">Claimed</span>
+                    <span>{{ formatDate(gate.claimed_at) }}</span>
+                  </div>
+                  <div v-if="gate.expires_at" class="flex justify-between">
+                    <span class="text-muted-foreground">Expires</span>
+                    <span>{{ formatDate(gate.expires_at) }}</span>
+                  </div>
+                  <div v-if="gate.decision_at" class="flex justify-between">
+                    <span class="text-muted-foreground">Decided</span>
+                    <span>{{ formatDate(gate.decision_at) }}</span>
+                  </div>
+                  <div v-if="gate.decision" class="flex justify-between">
+                    <span class="text-muted-foreground">Decision</span>
+                    <span :class="gate.decision === 'approved' ? 'text-success' : 'text-destructive'">{{ gate.decision }}</span>
+                  </div>
+                  <div v-if="gate.claimed_by" class="flex justify-between">
+                    <span class="text-muted-foreground">Assignees</span>
+                    <span>{{ gate.claimed_by }}</span>
+                  </div>
+                  <div v-if="gate.team_scope" class="flex justify-between">
+                    <span class="text-muted-foreground">Team</span>
+                    <span>{{ gate.team_scope }}</span>
                   </div>
                 </div>
-
-                <div>
-                  <h3 class="mb-2 text-sm font-semibold text-muted-foreground uppercase tracking-wider">Actions</h3>
-                  <div class="space-y-3">
-                    <div v-if="gateStatus(gate) === 'pending'">
-                      <button
-                        :disabled="claiming[expandKey(gate)]"
-                        data-testid="hitl-review-claim"
-                        class="w-full rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
-                        @click="claimGate(gate)"
-                      >
-                        {{ claiming[expandKey(gate)] ? 'Claiming...' : 'Claim Gate' }}
-                      </button>
-                    </div>
-
-                    <div v-if="gateStatus(gate) === 'claimed'">
-                      <div class="space-y-2">
-                        <textarea
-                          v-model="reviewNotes[expandKey(gate)]"
-                          rows="2"
-                          data-testid="hitl-review-notes"
-                          class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-                          placeholder="Review notes..."
-                        />
-                        <div class="flex gap-2">
-                          <button
-                            :disabled="actioning[expandKey(gate)]"
-                            data-testid="hitl-review-approve"
-                            class="flex-1 rounded-lg bg-success px-4 py-2 text-sm font-medium text-white hover:bg-success/90 disabled:opacity-50"
-                            @click="approveGate(gate)"
-                          >
-                            {{ actioning[expandKey(gate)] === 'approve' ? 'Approving...' : 'Approve' }}
-                          </button>
-                          <button
-                            :disabled="actioning[expandKey(gate)]"
-                            data-testid="hitl-review-reject"
-                            class="flex-1 rounded-lg bg-destructive px-4 py-2 text-sm font-medium text-destructive-foreground hover:bg-destructive/90 disabled:opacity-50"
-                            @click="rejectGate(gate)"
-                          >
-                            {{ actioning[expandKey(gate)] === 'reject' ? 'Rejecting...' : 'Reject' }}
-                          </button>
-                        </div>
+              </div>
+              <div>
+                <h3 class="mb-2 text-sm font-semibold text-muted-foreground uppercase tracking-wider">Actions</h3>
+                <div class="space-y-3">
+                  <div v-if="gateStatus(gate) === 'pending'">
+                    <button
+                      :disabled="claiming[expandKey(gate)]"
+                      data-testid="hitl-review-claim"
+                      class="w-full rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
+                      @click="claimGate(gate)"
+                    >
+                      {{ claiming[expandKey(gate)] ? 'Claiming...' : 'Claim Gate' }}
+                    </button>
+                  </div>
+                  <div v-if="gateStatus(gate) === 'claimed'">
+                    <div class="space-y-2">
+                      <textarea
+                        v-model="reviewNotes[expandKey(gate)]"
+                        rows="2"
+                        data-testid="hitl-review-notes"
+                        class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                        placeholder="Review notes..."
+                      />
+                      <div class="flex gap-2">
+                        <button
+                          :disabled="actioning[expandKey(gate)]"
+                          data-testid="hitl-review-approve"
+                          class="flex-1 rounded-lg bg-success px-4 py-2 text-sm font-medium text-white hover:bg-success/90 disabled:opacity-50"
+                          @click="approveGate(gate)"
+                        >
+                          {{ actioning[expandKey(gate)] === 'approve' ? 'Approving...' : 'Approve' }}
+                        </button>
+                        <button
+                          :disabled="actioning[expandKey(gate)]"
+                          data-testid="hitl-review-reject"
+                          class="flex-1 rounded-lg bg-destructive px-4 py-2 text-sm font-medium text-destructive-foreground hover:bg-destructive/90 disabled:opacity-50"
+                          @click="rejectGate(gate)"
+                        >
+                          {{ actioning[expandKey(gate)] === 'reject' ? 'Rejecting...' : 'Reject' }}
+                        </button>
                       </div>
                     </div>
-
-                    <div v-if="gateStatus(gate) === 'approved'" class="rounded-lg bg-success/10 p-3 text-sm text-success">
-                      Gate was approved. The pipeline has resumed.
-                    </div>
-
-                    <div v-if="gateStatus(gate) === 'rejected'" class="rounded-lg bg-destructive/10 p-3 text-sm text-destructive">
-                      Gate was rejected. The pipeline was routed to the reject target.
-                    </div>
-
-                    <div v-if="gateStatus(gate) === 'claimed' && currentClaimToken[expandKey(gate)]">
-                      <div class="rounded-lg bg-muted p-3 text-xs">
-                        <p class="font-medium text-muted-foreground mb-1">Claim Token</p>
-                        <code class="break-all">{{ currentClaimToken[expandKey(gate)] }}</code>
-                      </div>
+                  </div>
+                  <div v-if="gateStatus(gate) === 'approved'" class="rounded-lg bg-success/10 p-3 text-sm text-success">
+                    Gate was approved. The pipeline has resumed.
+                  </div>
+                  <div v-if="gateStatus(gate) === 'rejected'" class="rounded-lg bg-destructive/10 p-3 text-sm text-destructive">
+                    Gate was rejected. The pipeline was routed to the reject target.
+                  </div>
+                  <div v-if="gateStatus(gate) === 'claimed' && currentClaimToken[expandKey(gate)]">
+                    <div class="rounded-lg bg-muted p-3 text-xs">
+                      <p class="font-medium text-muted-foreground mb-1">Claim Token</p>
+                      <code class="break-all">{{ currentClaimToken[expandKey(gate)] }}</code>
                     </div>
                   </div>
                 </div>
               </div>
-
-              <div v-if="actionMessage[expandKey(gate)]" class="mt-4 text-sm" :class="actionMessage[expandKey(gate)]?.type === 'error' ? 'text-destructive' : 'text-success'">
-                {{ actionMessage[expandKey(gate)]?.text }}
-              </div>
-            </template>
-          </div>
+            </div>
+            <div v-if="actionMessage[expandKey(gate)]" class="mt-4 text-sm" :class="actionMessage[expandKey(gate)]?.type === 'error' ? 'text-destructive' : 'text-success'">
+              {{ actionMessage[expandKey(gate)]?.text }}
+            </div>
+          </template>
         </div>
       </div>
-    </template>
-  </div>
-  </FeatureGate>
+    </div>
+  </template>
+</div>
 </template>
 
 <script setup lang="ts">
@@ -282,7 +256,6 @@ import { formatApiError, type ProblemDetail } from '../lib/api/formatError'
 import LoadingSpinner from '../components/shared/LoadingSpinner.vue'
 import ErrorAlert from '../components/shared/ErrorAlert.vue'
 import { usePlanStore } from '../stores/planStore'
-import FeatureGate from '../components/FeatureGate.vue'
 import { shortId } from '../utils/format'
 
 const planStore = usePlanStore()

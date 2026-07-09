@@ -1,5 +1,5 @@
 ﻿<template>
-  <FeatureGate feature-name="eval_system" required-tier="team" show-disabled>
+  <FeatureGate feature-name="eval_system" required-tier="community" show-disabled>
 
     <PageTabs :tabs="[
       { label: 'Evals', to: '/evals/editor' },
