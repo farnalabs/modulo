@@ -441,35 +441,22 @@ async def admin_create_team(
         )
 
     try:
-        try:
-
-            async with session.begin():
-                await set_rls_org(session, current_user.organisation_id)
-                existing = await get_team_by_name(session, current_user.organisation_id, req.name)
-                if existing is not None:
-                    raise HTTPException(
-                        status_code=status.HTTP_409_CONFLICT,
-                        detail="A team with this name already exists in your organisation",
-                    )
-                team = await create_team(
-                    session,
-                    org_id=current_user.organisation_id,
-                    name=req.name,
-                    account_id=current_user.account_id,
-                    description=req.description,
+        async with session.begin():
+            await set_rls_org(session, current_user.organisation_id)
+            await set_rls_user_context(session, current_user.account_id, current_user.org_role)
+            existing = await get_team_by_name(session, current_user.organisation_id, req.name)
+            if existing is not None:
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail="A team with this name already exists in your organisation",
                 )
-        except ProgrammingError:
-
-            logger.exception("routes.admin")
-
-            raise HTTPException(
-
-                status_code=status.HTTP_501_NOT_IMPLEMENTED,
-
-                detail="This feature is not available. Run database migrations to enable it.",
-
+            team = await create_team(
+                session,
+                org_id=current_user.organisation_id,
+                name=req.name,
+                account_id=current_user.account_id,
+                description=req.description,
             )
-
     except HTTPException:
         raise
     except IntegrityError:
@@ -478,6 +465,7 @@ async def admin_create_team(
             detail="A team with this name already exists in your organisation",
         ) from None
     except ProgrammingError:
+        logger.exception("routes.admin")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
@@ -500,6 +488,7 @@ async def admin_create_team(
     try:
         async with session.begin():
             await set_rls_org(session, current_user.organisation_id)
+            await set_rls_user_context(session, current_user.account_id, current_user.org_role)
             await append_audit_event(
                 session,
                 org_id=current_user.organisation_id,
@@ -1212,6 +1201,7 @@ async def admin_list_teams(
     try:
         async with session.begin():
             await set_rls_org(session, current_user.organisation_id)
+            await set_rls_user_context(session, current_user.account_id, current_user.org_role)
             org_id = current_user.organisation_id
             result = await list_teams(session, org_id=org_id, page=page, page_size=page_size)
 
@@ -1287,6 +1277,7 @@ async def admin_update_team(
     try:
         async with session.begin():
             await set_rls_org(session, current_user.organisation_id)
+            await set_rls_user_context(session, current_user.account_id, current_user.org_role)
 
             if "name" in updates:
                 existing = await get_team_by_name(session, current_user.organisation_id, updates["name"])
@@ -1330,6 +1321,7 @@ async def admin_update_team(
     try:
         async with session.begin():
             await set_rls_org(session, current_user.organisation_id)
+            await set_rls_user_context(session, current_user.account_id, current_user.org_role)
             await append_audit_event(
                 session,
                 org_id=current_user.organisation_id,
@@ -1373,6 +1365,7 @@ async def admin_delete_team(
     try:
         async with session.begin():
             await set_rls_org(session, current_user.organisation_id)
+            await set_rls_user_context(session, current_user.account_id, current_user.org_role)
 
             resource_checks: list[tuple[str, int]] = []
             for model_cls, label in [
@@ -1431,6 +1424,7 @@ async def admin_delete_team(
     try:
         async with session.begin():
             await set_rls_org(session, current_user.organisation_id)
+            await set_rls_user_context(session, current_user.account_id, current_user.org_role)
             await append_audit_event(
                 session,
                 org_id=current_user.organisation_id,
