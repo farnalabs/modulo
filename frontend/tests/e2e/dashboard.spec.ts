@@ -9,9 +9,6 @@ test.describe('Dashboard', () => {
   })
 
   test('displays dashboard heading when authenticated', async ({ page, env }) => {
-    await page.goto('/login')
-    await page.waitForLoadState('networkidle')
-
     await loginAsAdmin(page, env)
 
     await expect(page.locator('h1')).toContainText('Dashboard')
