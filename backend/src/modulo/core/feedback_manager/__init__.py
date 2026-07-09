@@ -6,6 +6,7 @@ detection via EvalEngine.standalone_evaluate(), and correction run mechanics.
 """
 import asyncio
 import functools
+import json
 import logging
 from collections.abc import Callable
 from datetime import datetime
@@ -99,8 +100,16 @@ class FeedbackManager:
         producing_agent_id: UUID | None = None,
         feedback_handler_type: str = "human",
     ) -> FeedbackRecord:
-        if not rejection_reason or not rejection_reason.strip():
+        stripped_reason = rejection_reason.strip() if rejection_reason else ""
+        if not stripped_reason:
             raise ValidationError("rejection_reason must not be empty")
+        if len(stripped_reason) > 5000:
+            raise ValidationError("rejection_reason must not exceed 5000 characters")
+
+        output_json = json.dumps(rejected_output, default=str)
+        if len(output_json) > 100_000:
+            raise ValidationError("rejected_output must not exceed 100KB when serialized")
+
         if feedback_handler_type not in _VALID_FEEDBACK_HANDLER_TYPES:
             raise ValidationError(
                 f"unknown feedback_handler_type '{feedback_handler_type}'. "
@@ -111,7 +120,7 @@ class FeedbackManager:
             run_id=run_id,
             gate_id=gate_id,
             account_id=account_id,
-            rejection_reason=rejection_reason.strip(),
+            rejection_reason=stripped_reason,
             rejected_output=rejected_output,
             producing_node_id=producing_node_id,
             producing_agent_id=producing_agent_id,
@@ -359,6 +368,11 @@ class FeedbackManager:
         record = await self.get_feedback_record(record_id)
         if record is None:
             raise FeedbackRecordNotFoundError(f"FeedbackRecord {record_id} not found")
+
+        if record.correction_run_id is not None:
+            raise ConcurrentModificationError(
+                f"FeedbackRecord {record_id} already has a correction run: {record.correction_run_id}"
+            )
 
         original_run = await get_run(self._session, record.run_id)
         if original_run is None:
