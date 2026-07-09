@@ -4,7 +4,7 @@
     { label: 'Spend Limits', to: '/admin/costs/limits' },
     { label: 'Cost Controls', to: '/admin/costs/controls' },
   ]" />
-  <div data-theme="agent" class="mx-auto max-w-6xl space-y-6 p-6">
+  <div data-theme="agent" class="page-wide">
     <header>
       <h1 class="text-2xl font-semibold tracking-tight">{{ $t('views.AdminCostBreakdownView.cost_breakdown') }}</h1>
       <p class="mt-1 text-muted-foreground">{{ $t('views.AdminCostBreakdownView.monthly_cost_report_and_anomaly_detection_across_teams') }}</p>
@@ -56,19 +56,19 @@
             <div v-else class="overflow-x-auto">
               <table class="w-full text-sm">
                 <thead>
-                  <tr class="border-b text-left text-muted-foreground">
-                    <th class="pb-3 pr-4 font-medium">{{ $t('views.AdminCostBreakdownView.team') }}</th>
-                    <th class="pb-3 pr-4 font-medium">{{ $t('views.AdminCostBreakdownView.total_spend') }}</th>
-                    <th class="pb-3 pr-4 font-medium">{{ $t('views.AdminCostBreakdownView.runs') }}</th>
-                    <th class="pb-3 font-medium">{{ $t('views.AdminCostBreakdownView.avg_per_run') }}</th>
+                  <tr class="table-header border-b text-left text-muted-foreground">
+                    <th class="table-header">{{ $t('views.AdminCostBreakdownView.team') }}</th>
+                    <th class="table-header table-cell-numeric">{{ $t('views.AdminCostBreakdownView.total_spend') }}</th>
+                    <th class="table-header table-cell-numeric">{{ $t('views.AdminCostBreakdownView.runs') }}</th>
+                    <th class="table-header table-cell-numeric">{{ $t('views.AdminCostBreakdownView.avg_per_run') }}</th>
                   </tr>
                 </thead>
                 <tbody>
                   <tr v-for="team in items" :key="team.entity_id" class="border-b last:border-b-0" :data-testid="'cost-team-row-' + team.entity_id">
-                    <td class="py-3 pr-4 font-medium">{{ team.entity_name }}</td>
-                    <td class="py-3 pr-4">${{ team.total_spend_usd.toFixed(2) }}</td>
-                    <td class="py-3 pr-4">{{ team.total_runs }}</td>
-                    <td class="py-3">${{ team.total_runs > 0 ? (team.total_spend_usd / team.total_runs).toFixed(2) : '0.00' }}</td>
+                    <td class="table-cell font-medium">{{ team.entity_name }}</td>
+                    <td class="table-cell-numeric">${{ team.total_spend_usd.toFixed(2) }}</td>
+                    <td class="table-cell-numeric">{{ team.total_runs }}</td>
+                    <td class="table-cell-numeric">${{ team.total_runs > 0 ? (team.total_spend_usd / team.total_runs).toFixed(2) : '0.00' }}</td>
                   </tr>
                 </tbody>
               </table>

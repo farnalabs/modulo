@@ -2,7 +2,7 @@
   <div class="min-h-screen bg-background">
     <header class="bg-card border-b border-border px-6 py-4">
       <div class="max-w-6xl mx-auto flex items-center justify-between gap-3">
-        <h1 class="text-xl font-semibold text-foreground">{{ $t('views.PipelineListView.title') }}</h1>
+        <h1 class="text-2xl font-semibold tracking-tight text-foreground">{{ $t('views.PipelineListView.title') }}</h1>
         <div class="relative">
           <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground pointer-events-none"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
           <input

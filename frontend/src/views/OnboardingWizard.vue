@@ -1,5 +1,5 @@
 ﻿<template>
-  <div class="mx-auto max-w-4xl space-y-8 p-6">
+  <div class="page-narrow">
     <header>
       <h1 class="text-2xl font-semibold tracking-tight">{{ $t('views.OnboardingWizard.sdlc_onboarding') }}</h1>
       <p class="mt-1 text-muted-foreground">{{ $t('views.OnboardingWizard.guided_setup_wizard_mdash_connect_tools_infer_schemas_browse') }}</p>

@@ -1,5 +1,5 @@
 ﻿<template>
-  <div data-theme="agent" class="mx-auto max-w-6xl space-y-6 p-6">
+  <div data-theme="agent" class="page-wide">
     <header>
       <h1 class="text-2xl font-semibold tracking-tight">{{ $t('views.AdminFeatureFlagsView.feature_flags') }}</h1>
       <p class="mt-1 text-muted-foreground">{{ $t('views.AdminFeatureFlagsView.all_known_feature_flags_and_their_current_activation_status') }}</p>
@@ -104,12 +104,12 @@
               </div>
               <table class="w-full" v-if="section.flags.length > 0">
                 <thead>
-                  <tr class="border-b bg-muted/10 text-left text-xs font-medium uppercase text-muted-foreground">
-                    <th class="px-4 py-3 w-12"></th>
-                    <th class="px-4 py-3">{{ $t('views.AdminFeatureFlagsView.flag') }}</th>
-                    <th class="px-4 py-3">{{ $t('views.AdminFeatureFlagsView.status') }}</th>
-                    <th class="px-4 py-3">{{ $t('views.AdminFeatureFlagsView.description') }}</th>
-                    <th class="px-4 py-3 w-32">{{ $t('views.AdminFeatureFlagsView.org_override') }}</th>
+                  <tr>
+                    <th class="table-header w-12"></th>
+                    <th class="table-header">{{ $t('views.AdminFeatureFlagsView.flag') }}</th>
+                    <th class="table-header">{{ $t('views.AdminFeatureFlagsView.status') }}</th>
+                    <th class="table-header">{{ $t('views.AdminFeatureFlagsView.description') }}</th>
+                    <th class="table-header w-32 table-cell-numeric">{{ $t('views.AdminFeatureFlagsView.org_override') }}</th>
                   </tr>
                 </thead>
                 <tbody class="divide-y divide-border">
@@ -118,7 +118,7 @@
                     :key="flag.name"
                     class="transition-colors hover:bg-muted/20"
                   >
-                    <td class="px-4 py-3">
+                    <td class="table-cell">
                       <span
                         class="inline-flex h-5 w-9 shrink-0 cursor-pointer items-center rounded-full transition-colors"
                         role="switch"
@@ -136,7 +136,7 @@
                         />
                       </span>
                     </td>
-                    <td class="px-4 py-3">
+                    <td class="table-cell">
                       <Tooltip :delay-duration="300">
                         <TooltipTrigger as-child>
                           <span class="font-mono text-sm font-medium cursor-help underline decoration-dotted decoration-muted-foreground/40 underline-offset-2">
@@ -151,13 +151,13 @@
                         </TooltipContent>
                       </Tooltip>
                     </td>
-                    <td class="px-4 py-3">
+                    <td class="table-cell">
                       <span :class="flag.currently_active ? 'badge badge-status-success' : 'badge badge-status-muted'">
                         {{ flag.currently_active ? $t('views.AdminFeatureFlagsView.active') : $t('views.AdminFeatureFlagsView.inactive') }}
                       </span>
                     </td>
-                    <td class="px-4 py-3 text-sm text-muted-foreground">{{ flag.description }}</td>
-                    <td class="px-4 py-3 text-right">
+                    <td class="table-cell text-muted-foreground">{{ flag.description }}</td>
+                    <td class="table-cell-numeric">
                       <Button variant="outline" size="sm" @click.stop="openOverrideDialog(flag)">
                         {{ getCurrentOverride(flag.name) === null ? $t('views.AdminFeatureFlagsView.default') : (getCurrentOverride(flag.name) ? $t('common.enabled') : $t('common.disabled')) }}
                       </Button>

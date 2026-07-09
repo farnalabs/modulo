@@ -1,7 +1,7 @@
 ﻿<template>
   <FeatureGate feature-name="plugin_management" required-tier="team" show-disabled>
 
-    <div class="mx-auto max-w-4xl space-y-8 p-6">
+    <div class="page-narrow">
     <header class="flex items-center justify-between">
       <div>
         <h1 class="text-2xl font-semibold tracking-tight">Connectors</h1>
@@ -102,15 +102,15 @@
         </p>
       </div>
 
-      <div v-else class="overflow-hidden rounded-lg border">
+      <div v-else class="table-wrapper">
         <table class="w-full text-left text-sm">
-          <thead class="bg-muted/50">
+          <thead>
             <tr>
-              <th class="px-4 py-3 font-medium">Name</th>
-              <th class="px-4 py-3 font-medium">Type</th>
-              <th class="px-4 py-3 font-medium">Description</th>
-              <th class="px-4 py-3 font-medium">Status</th>
-              <th class="px-4 py-3 font-medium text-right">Actions</th>
+              <th class="table-header">Name</th>
+              <th class="table-header">Type</th>
+              <th class="table-header">Description</th>
+              <th class="table-header">Status</th>
+              <th class="table-header table-cell-numeric">Actions</th>
             </tr>
           </thead>
           <tbody class="divide-y">
@@ -120,14 +120,14 @@
               class="hover:bg-muted/30 transition-colors"
               :data-testid="`connector-row-${connector.id}`"
             >
-              <td class="px-4 py-3 font-medium">{{ connector.name }}</td>
-              <td class="px-4 py-3">
+              <td class="table-cell font-medium">{{ connector.name }}</td>
+              <td class="table-cell">
                 <span class="rounded-full bg-primary/10 px-2.5 py-0.5 text-xs font-medium text-primary">
                   {{ connector.connector_type }}
                 </span>
               </td>
-              <td class="px-4 py-3 text-muted-foreground">{{ connector.description || '—' }}</td>
-              <td class="px-4 py-3">
+              <td class="table-cell text-muted-foreground">{{ connector.description || '—' }}</td>
+              <td class="table-cell">
                 <span
                   class="inline-flex items-center gap-1.5 rounded-full px-2.5 py-0.5 text-xs font-medium"
                   :class="connector.enabled ? 'bg-success/10 text-success' : 'bg-muted text-muted-foreground'"
@@ -139,7 +139,7 @@
                   {{ connector.enabled ? 'Enabled' : 'Disabled' }}
                 </span>
               </td>
-              <td class="px-4 py-3 text-right">
+              <td class="table-cell-numeric">
                 <div class="flex items-center justify-end gap-1">
                   <button
                     class="rounded p-1 text-muted-foreground hover:bg-accent"
@@ -176,12 +176,12 @@
         </summary>
         <div class="overflow-hidden border-t">
           <table class="w-full text-left text-sm">
-            <thead class="bg-muted/50">
+            <thead>
               <tr>
-                <th class="px-4 py-3 font-medium">Name</th>
-                <th class="px-4 py-3 font-medium">Type</th>
-                <th class="px-4 py-3 font-medium">Tier</th>
-                <th class="px-4 py-3 font-medium text-right">Actions</th>
+                <th class="table-header">Name</th>
+                <th class="table-header">Type</th>
+                <th class="table-header">Tier</th>
+                <th class="table-header table-cell-numeric">Actions</th>
               </tr>
             </thead>
             <tbody class="divide-y">
@@ -191,16 +191,16 @@
                 class="hover:bg-muted/30 transition-colors"
                 :data-testid="`connector-row-${connector.id}`"
               >
-                <td class="px-4 py-3 font-medium">{{ connector.name }}</td>
-                <td class="px-4 py-3">
+                <td class="table-cell font-medium">{{ connector.name }}</td>
+                <td class="table-cell">
                   <span class="rounded-full bg-primary/10 px-2.5 py-0.5 text-xs font-medium text-primary">
                     {{ connector.connector_type }}
                   </span>
                 </td>
-                <td class="px-4 py-3">
+                <td class="table-cell">
                   <span class="badge badge-context-amber text-xs">{{ $t('views.AdminConnectorsView.preview_badge') }}</span>
                 </td>
-                <td class="px-4 py-3 text-right">
+                <td class="table-cell-numeric">
                   <div class="flex items-center justify-end gap-1">
                     <button
                       class="rounded p-1 text-muted-foreground hover:bg-accent"
