@@ -268,7 +268,7 @@ def _make_key_response(status_code, **kwargs):
 
 @when(
     parsers.parse(
-        'I POST /api/api-keys with name "{name}" and role "{role}"'
+        'I POST /api/v1/api-keys with name "{name}" and role "{role}"'
     ),
 )
 def step_create_api_key(
@@ -316,7 +316,7 @@ def step_create_api_key(
 
 
 @when(
-    parsers.parse('I DELETE /api/api-keys/{key_id}'),
+    parsers.parse('I DELETE /api/v1/api-keys/{key_id}'),
 )
 def step_revoke_api_key(
     request: Any, ctx: dict[str, Any]
@@ -357,7 +357,7 @@ def step_revoke_api_key(
         loop.close()
 
 
-@when("I GET /api/api-keys")
+@when("I GET /api/v1/api-keys")
 def step_list_api_keys(
     request: Any, ctx: dict[str, Any]
 ) -> None:
