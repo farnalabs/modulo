@@ -6,11 +6,11 @@
       <div class="mb-6 flex items-center gap-2.5 pl-1">
         <router-link to="/" class="flex items-center gap-2.5">
           <div
-            class="flex items-center justify-center rounded-lg bg-gradient-to-br from-teal-500/20 to-transparent p-1.5"
-          >
-            <LogoMark :size="24" transparent />
-          </div>
-          <h2 class="text-lg font-bold tracking-tight">Modulo</h2>
+          class="flex items-center justify-center rounded-lg bg-primary/10 p-1.5"
+        >
+          <LogoMark :size="24" transparent />
+        </div>
+        <h2 class="text-lg font-bold tracking-tight">Modulo</h2>
           <Badge v-if="planStore.currentTier" variant="outline" class="text-[10px] px-1.5 py-0 leading-none opacity-70">
             {{ planStore.getTierLabel(planStore.currentTier) }}
           </Badge>
@@ -21,10 +21,10 @@
         <div class="flex items-center gap-2 pt-2 pb-2 border-b mb-2">
           <div class="avatar-ring">
             <div
-              class="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-gradient-to-br from-primary to-teal-600 text-xs font-bold text-primary-foreground"
-              :title="userEmail"
-            >
-              {{ userInitial }}
+            class="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-primary/10 text-xs font-bold text-primary"
+            :title="userEmail"
+          >
+            {{ userInitial }}
             </div>
           </div>
           <router-link
@@ -140,7 +140,7 @@
       <NotificationBell class="ml-auto mr-2" />
       <router-link to="/" class="flex items-center gap-2.5">
         <div
-          class="flex items-center justify-center rounded-lg bg-gradient-to-br from-teal-500/20 to-transparent p-1.5"
+          class="flex items-center justify-center rounded-lg bg-primary/10 p-1.5"
         >
           <LogoMark :size="24" transparent />
         </div>
@@ -170,7 +170,7 @@
       <div class="flex items-center gap-2 pt-2 pb-2 border-b mb-2">
         <div class="avatar-ring">
           <div
-            class="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-gradient-to-br from-primary to-teal-600 text-xs font-bold text-primary-foreground"
+            class="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-primary/10 text-xs font-bold text-primary"
             :title="userEmail"
           >
             {{ userInitial }}
