@@ -1,9 +1,8 @@
 import { test, expect, loginAsAdmin } from './setup/fixtures'
-import { getTestEnv } from './setup/env'
 
 test.describe('Schemas Page', () => {
-  test('Browse tab is active by default', async ({ page }) => {
-    await loginAsAdmin(page, getTestEnv())
+  test('Browse tab is active by default', async ({ page, env }) => {
+    await loginAsAdmin(page, env)
 
     await page.goto('/schemas')
     await page.waitForLoadState('networkidle')
@@ -16,8 +15,8 @@ test.describe('Schemas Page', () => {
     await expect(tabs.nth(2)).toContainText('Infer')
   })
 
-  test('navigates to Infer tab', async ({ page }) => {
-    await loginAsAdmin(page, getTestEnv())
+  test('navigates to Infer tab', async ({ page, env }) => {
+    await loginAsAdmin(page, env)
 
     await page.goto('/schemas/infer')
     await page.waitForLoadState('networkidle')
@@ -27,8 +26,8 @@ test.describe('Schemas Page', () => {
     await expect(activeTab).toContainText('Infer')
   })
 
-  test('navigates to Editor tab', async ({ page }) => {
-    await loginAsAdmin(page, getTestEnv())
+  test('navigates to Editor tab', async ({ page, env }) => {
+    await loginAsAdmin(page, env)
 
     await page.goto('/schemas/editor')
     await page.waitForLoadState('networkidle')
