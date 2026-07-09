@@ -164,4 +164,8 @@ In-memory fallbacks exist at many call sites (rate limiter `core/rate_limiter.py
 
 - When a backend references its API base URL in both `__init__` and `health_check`, define it as a module-level constant (`COHERE_BASE_URL = "..."`) rather than hardcoding the string twice. This prevents drift between the two usages.
 
+### Async init guards: use double-checked locking, not a bare boolean
+
+- Setting `self._initialised = True` at the end of an async `initialise()` method WITHOUT a lock creates a race window. Two concurrent coroutines can both pass the `if self._initialised: return` guard (the check is between the flag being False and being set), then interleave their state mutations into `self._connectors`. Fix: use `asyncio.Lock()` with a double-checked locking pattern — check the flag outside the lock for fast-path return, then re-check inside the lock before the write path. Found in `ConnectorHub.initialise()` at `backend/src/modulo/core/connector_hub/__init__.py`.
+
 The Remy in-memory event registries (`_pending_ui_results`, `_pending_permissions`, `_session_approvals` in `remy.py:93-97`) have NO fallback at all — they are process-local `asyncio.Event` objects. Any deploy restart destroys in-flight Remy conversations. A Redis pub/sub replacement for these registries is the highest-priority follow-up.
