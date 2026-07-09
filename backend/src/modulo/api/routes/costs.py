@@ -70,6 +70,7 @@ async def get_costs(
     group_by: str = Query("team", pattern=r"^(team|org)$"),
     period: str = Query("month", pattern=r"^(day|week|month|year)$"),
     _: None = require_feature("admin_spend_limits"),
+    __: None = require_feature("admin_cost_breakdown"),
     current_user: AuthenticatedPrincipal = Depends(get_current_user),
     session: AsyncSession = Depends(get_db_session),
 ) -> CostReportResponse:
@@ -114,6 +115,7 @@ async def get_costs(
 @router.get("/limits", response_model=SpendLimitResponse)
 async def get_spend_limits(
     _: None = require_feature("admin_spend_limits"),
+    __: None = require_feature("admin_cost_controls"),
     current_user: AuthenticatedPrincipal = Depends(get_current_user),
     session: AsyncSession = Depends(get_db_session),
 ) -> SpendLimitResponse:
@@ -165,6 +167,7 @@ async def get_spend_limits(
 async def set_org_spend_limit(
     req: SetSpendLimitRequest,
     _: None = require_feature("admin_spend_limits"),
+    __: None = require_feature("admin_cost_controls"),
     current_user: AuthenticatedPrincipal = Depends(get_current_user),
     session: AsyncSession = Depends(get_db_session),
 ) -> dict[str, Any]:
@@ -209,6 +212,7 @@ async def set_team_spend_limit(
     team_id: uuid.UUID,
     req: SetSpendLimitRequest,
     _: None = require_feature("admin_spend_limits"),
+    __: None = require_feature("admin_cost_controls"),
     current_user: AuthenticatedPrincipal = Depends(get_current_user),
     session: AsyncSession = Depends(get_db_session),
 ) -> dict[str, Any]:
@@ -268,6 +272,7 @@ class UpdateCostControlsRequest(BaseModel):
 @router.get("/controls", response_model=CostControlsResponse)
 async def get_cost_controls(
     _: None = require_feature("admin_spend_limits"),
+    __: None = require_feature("admin_cost_controls"),
     current_user: AuthenticatedPrincipal = Depends(get_current_user),
     session: AsyncSession = Depends(get_db_session),
 ) -> CostControlsResponse:
@@ -314,6 +319,7 @@ async def get_cost_controls(
 async def update_cost_controls(
     req: UpdateCostControlsRequest,
     _: None = require_feature("admin_spend_limits"),
+    __: None = require_feature("admin_cost_controls"),
     current_user: AuthenticatedPrincipal = Depends(get_current_user),
     session: AsyncSession = Depends(get_db_session),
 ) -> CostControlsResponse:
@@ -373,6 +379,7 @@ async def export_costs(
     group_by: str = Query("team", pattern=r"^(team|pipeline|model)$"),
     format: str = Query("csv", pattern=r"^(csv)$"),
     _: None = require_feature("admin_spend_limits"),
+    __: None = require_feature("admin_cost_breakdown"),
     current_user: AuthenticatedPrincipal = Depends(get_current_user),
     session: AsyncSession = Depends(get_db_session),
 ) -> Response:
@@ -454,6 +461,7 @@ class ReportResponse(BaseModel):
 async def create_report(
     req: CreateReportRequest,
     _: None = require_feature("admin_spend_limits"),
+    __: None = require_feature("admin_cost_controls"),
     current_user: AuthenticatedPrincipal = Depends(get_current_user),
     session: AsyncSession = Depends(get_db_session),
 ) -> ReportResponse:
@@ -506,6 +514,7 @@ async def create_report(
 @router.get("/reports", response_model=list[ReportResponse])
 async def list_reports(
     _: None = require_feature("admin_spend_limits"),
+    __: None = require_feature("admin_cost_controls"),
     current_user: AuthenticatedPrincipal = Depends(get_current_user),
     session: AsyncSession = Depends(get_db_session),
 ) -> list[ReportResponse]:
@@ -556,6 +565,7 @@ async def list_reports(
 async def delete_report(
     report_id: uuid.UUID,
     _: None = require_feature("admin_spend_limits"),
+    __: None = require_feature("admin_cost_controls"),
     current_user: AuthenticatedPrincipal = Depends(get_current_user),
     session: AsyncSession = Depends(get_db_session),
 ) -> None:
@@ -609,6 +619,7 @@ class AnomalyResponse(BaseModel):
 @router.get("/anomalies", response_model=list[AnomalyResponse])
 async def get_anomalies(
     _: None = require_feature("admin_spend_limits"),
+    __: None = require_feature("admin_cost_breakdown"),
     current_user: AuthenticatedPrincipal = Depends(get_current_user),
     session: AsyncSession = Depends(get_db_session),
 ) -> list[AnomalyResponse]:
@@ -718,6 +729,7 @@ async def get_anomalies(
 async def dismiss_anomaly_endpoint(
     anomaly_id: uuid.UUID,
     _: None = require_feature("admin_spend_limits"),
+    __: None = require_feature("admin_cost_breakdown"),
     current_user: AuthenticatedPrincipal = Depends(get_current_user),
     session: AsyncSession = Depends(get_db_session),
 ) -> None:

@@ -2550,7 +2550,7 @@ class RetentionPurgeRequest(BaseModel):
     max_age_days: int = 90
 
 
-@router.post("/purge/runs", status_code=status.HTTP_200_OK)
+@router.post("/purge/runs", status_code=status.HTTP_200_OK, dependencies=[require_feature("admin_run_retention")])
 async def admin_retention_purge_runs(
     req: RetentionPurgeRequest,
     current_user: AuthenticatedPrincipal = Depends(get_current_user),
@@ -2587,7 +2587,7 @@ class ManualPurgeRequest(BaseModel):
     older_than: str
 
 
-@router.post("/purge", status_code=status.HTTP_200_OK)
+@router.post("/purge", status_code=status.HTTP_200_OK, dependencies=[require_feature("admin_run_retention")])
 async def admin_manual_purge(
     req: ManualPurgeRequest,
     current_user: AuthenticatedPrincipal = Depends(get_current_user),
@@ -2635,7 +2635,7 @@ class PurgeRunsResponse(BaseModel):
     purged_count: int
 
 
-@router.post("/runs/purge", status_code=status.HTTP_200_OK)
+@router.post("/runs/purge", status_code=status.HTTP_200_OK, dependencies=[require_feature("admin_run_retention")])
 async def admin_purge_stale_runs(
     request: PurgeRunsRequest,
     current_user: AuthenticatedPrincipal = Depends(get_current_user),
@@ -2700,7 +2700,11 @@ class StatusCount(BaseModel):
     count: int
 
 
-@router.get("/runs/retention", response_model=RetentionConfigResponse)
+@router.get(
+    "/runs/retention",
+    response_model=RetentionConfigResponse,
+    dependencies=[require_feature("admin_run_retention")],
+)
 async def admin_get_retention(
     current_user: AuthenticatedPrincipal = Depends(get_current_user),
     session: AsyncSession = Depends(get_db_session),
@@ -2733,7 +2737,7 @@ async def admin_get_retention(
     return RetentionConfigResponse(retention_days=retention_days)
 
 
-@router.put("/runs/retention", status_code=status.HTTP_200_OK)
+@router.put("/runs/retention", status_code=status.HTTP_200_OK, dependencies=[require_feature("admin_run_retention")])
 async def admin_update_retention(
     req: UpdateRetentionRequest,
     current_user: AuthenticatedPrincipal = Depends(get_current_user),

@@ -9,7 +9,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy.exc import ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from modulo.api.dependencies import get_db_session
+from modulo.api.dependencies import get_db_session, require_feature
 from modulo.auth.dependencies import get_current_user
 from modulo.auth.jwt import AuthenticatedPrincipal
 from modulo.db.crud.view import (
@@ -72,7 +72,7 @@ class ViewListResponse(BaseModel):
     page_size: int
 
 
-@router.get("", response_model=ViewListResponse)
+@router.get("", response_model=ViewListResponse, dependencies=[require_feature("view_modes")])
 async def list_views_endpoint(
     view_type: str | None = Query(None, pattern=r"^(run_list|pipeline_list|audit_log)$"),
     page: int = Query(default=1, ge=1),
@@ -113,7 +113,12 @@ async def list_views_endpoint(
     )
 
 
-@router.post("", response_model=ViewResponse, status_code=status.HTTP_201_CREATED)
+@router.post(
+    "",
+    response_model=ViewResponse,
+    status_code=status.HTTP_201_CREATED,
+    dependencies=[require_feature("view_modes")],
+)
 async def create_view_endpoint(
     req: ViewCreate,
     session: AsyncSession = Depends(get_db_session),
@@ -158,7 +163,7 @@ async def create_view_endpoint(
     return ViewResponse.model_validate(view)
 
 
-@router.get("/{view_id}", response_model=ViewResponse)
+@router.get("/{view_id}", response_model=ViewResponse, dependencies=[require_feature("view_modes")])
 async def get_view_endpoint(
     view_id: uuid.UUID,
     session: AsyncSession = Depends(get_db_session),
@@ -194,7 +199,7 @@ async def get_view_endpoint(
     return ViewResponse.model_validate(view)
 
 
-@router.patch("/{view_id}", response_model=ViewResponse)
+@router.patch("/{view_id}", response_model=ViewResponse, dependencies=[require_feature("view_modes")])
 async def update_view_endpoint(
     view_id: uuid.UUID,
     req: ViewUpdate,
@@ -232,7 +237,7 @@ async def update_view_endpoint(
     return ViewResponse.model_validate(view)
 
 
-@router.delete("/{view_id}", status_code=status.HTTP_204_NO_CONTENT)
+@router.delete("/{view_id}", status_code=status.HTTP_204_NO_CONTENT, dependencies=[require_feature("view_modes")])
 async def delete_view_endpoint(
     view_id: uuid.UUID,
     session: AsyncSession = Depends(get_db_session),
