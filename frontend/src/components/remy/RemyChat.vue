@@ -238,6 +238,7 @@
             v-model="inputText"
             class="remy-input"
             rows="1"
+            aria-label="Chat input"
             @keydown="onInputKeydown"
             @input="onInput"
             @scroll="syncHighlightScroll"
