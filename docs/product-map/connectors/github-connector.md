@@ -109,9 +109,9 @@ Async GitHub REST API connector implementing `ConnectorBase`. Provides read/writ
 
 ### ConnectorType Capability Declaration
 
-- [x] `ConnectorType.GITHUB.capabilities` returns `{READ, WRITE, GIT_PUSH, CREATE_PR}` in `base.py`
+- [x] `ConnectorType.GITHUB.capabilities` returns `{READ, WRITE, GIT_PUSH, CREATE_PR, ISSUE_READ, ISSUE_WRITE}` in `base.py`
 - [x] `GitHubConnector.connector_type` returns `ConnectorType.GITHUB`
-- [ ] `CREATE_PR` capability declared but `write("pr")` not implemented — capability mismatch
+- [x] `CREATE_PR` capability is implemented via `write("pr")` — creates PRs with title, head, base, optional body/draft/maintainer_can_modify
 - [x] `ISSUE_READ` and `ISSUE_WRITE` assigned to `ConnectorType.GITHUB` in `base.py`
 
 ## Error Handling
@@ -213,4 +213,18 @@ Async GitHub REST API connector implementing `ConnectorBase`. Provides read/writ
 **Product map fixed:** Added missing `bdd:` entries (`github.feature`, `github_issues.feature`) and missing `unit-tests:` entries (`test_github_issues.py`, `test_github_resilience.py`, `test_github_scopes.py`). Previously only `test_github.py` and `github_connector.feature` were listed.
 
 **All 5 GitHub connector unit test files pass** (test_github.py, test_github_resilience.py, test_github_scopes.py, test_github_issues.py). No regressions.
+
+### 2026-07-09 — Cross-cutting QA feat-connectors-github (index 347)
+
+**Lens:** Behaviour completeness, edge case/boundary coverage, error path/presentation audit, cross-module contract check, gap freshness, resilience/robustness.
+
+**Fixed (MAJOR):** Removed dead `last_exc` variable from `_call_api()` — was assigned in all 3 exception handlers but never read after the loop. Previous QA pass (index 296) removed the only line (`raise ... from last_exc`) that consumed it, leaving the variable as dead code.
+
+**Fixed (MAJOR):** Product map `CREATE_PR` checkbox (`[ ]` → `[x]`). The checkbox claimed `write("pr")` was not implemented, but it IS fully implemented (line 420-434 in `__init__.py`) with test coverage (`test_write_create_pr` and `test_write_create_pr_minimal`). Also corrected capabilities list to include `ISSUE_READ` and `ISSUE_WRITE`.
+
+**Fixed (MINOR):** Added `_jitter()` static method — applies `random.uniform(0, delay)` to all retry delay calculations. Previously the code had pure exponential backoff (1s, 2s, 4s) with no jitter, creating a thundering-herd risk on coordinated retries. Class docstring updated to reflect actual jitter implementation.
+
+**Fixed (MINOR):** Added `import random` for jitter support.
+
+**All 4 GitHub connector unit test files pass** (test_github.py, test_github_resilience.py, test_github_scopes.py, test_github_issues.py). No regressions.
 
