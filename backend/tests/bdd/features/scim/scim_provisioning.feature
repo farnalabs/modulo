@@ -5,7 +5,6 @@ Feature: SCIM 2.0 Provisioning
 
   Background:
     Given I am authenticated as a SCIM client for org "acme"
-    And the Team license is valid
 
   Scenario: Create a SCIM user provisions a new Modulo user
     When I POST /scim/v2/Users with SCIM user "jane@example.com"
@@ -68,7 +67,7 @@ Feature: SCIM 2.0 Provisioning
     When I POST /scim/v2/Users with SCIM user "attacker@example.com" and no auth token
     Then the response status is 401
 
-  Scenario: Team license gate blocks SCIM without valid license
-    Given I do not have a Team license
+  Scenario: SCIM feature gate blocks access without scim feature flag
+    Given I do not have an enterprise license
     When I GET /scim/v2/Users
     Then the response status is 402
