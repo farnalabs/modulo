@@ -6,10 +6,12 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from modulo.core.feedback_manager import (
+    ConcurrentModificationError,
     FeedbackManager,
     FeedbackManagerError,
     FeedbackRecordNotFoundError,
     InvalidTransitionError,
+    ValidationError,
 )
 from modulo.db.models.feedback_record import FeedbackRecord
 
@@ -159,6 +161,54 @@ class TestCreateFeedbackRecord:
 
             mock_update.assert_called_once_with(record.id, "correcting")
             mock_spawn.assert_called_once_with(record.id)
+
+    async def test_rejects_empty_rejection_reason(self, mock_session: AsyncMock, mgr: FeedbackManager) -> None:
+        with pytest.raises(ValidationError, match="rejection_reason must not be empty"):
+            await mgr.create_feedback_record(
+                run_id=_RUN_ID,
+                gate_id=_GATE_ID,
+                account_id=_USER_ID,
+                rejection_reason="",
+                rejected_output={},
+                producing_node_id="node-b",
+                feedback_handler_type="human",
+            )
+
+    async def test_rejects_whitespace_rejection_reason(self, mock_session: AsyncMock, mgr: FeedbackManager) -> None:
+        with pytest.raises(ValidationError, match="rejection_reason must not be empty"):
+            await mgr.create_feedback_record(
+                run_id=_RUN_ID,
+                gate_id=_GATE_ID,
+                account_id=_USER_ID,
+                rejection_reason="   ",
+                rejected_output={},
+                producing_node_id="node-b",
+                feedback_handler_type="human",
+            )
+
+    async def test_rejects_oversized_rejection_reason(self, mock_session: AsyncMock, mgr: FeedbackManager) -> None:
+        with pytest.raises(ValidationError, match="must not exceed 5000"):
+            await mgr.create_feedback_record(
+                run_id=_RUN_ID,
+                gate_id=_GATE_ID,
+                account_id=_USER_ID,
+                rejection_reason="x" * 5001,
+                rejected_output={},
+                producing_node_id="node-b",
+                feedback_handler_type="human",
+            )
+
+    async def test_rejects_oversized_rejected_output(self, mock_session: AsyncMock, mgr: FeedbackManager) -> None:
+        with pytest.raises(ValidationError, match="must not exceed 100KB"):
+            await mgr.create_feedback_record(
+                run_id=_RUN_ID,
+                gate_id=_GATE_ID,
+                account_id=_USER_ID,
+                rejection_reason="bad output",
+                rejected_output={"data": "x" * 200_000},
+                producing_node_id="node-b",
+                feedback_handler_type="human",
+            )
 
     async def test_does_not_auto_trigger_for_human_handler(self, mock_session: AsyncMock, mgr: FeedbackManager) -> None:
         mock_session.add = MagicMock()
@@ -391,6 +441,18 @@ class TestSpawnCorrectionRun:
         with patch.object(mgr, "get_feedback_record", return_value=None):
             with pytest.raises(FeedbackRecordNotFoundError, match=r"FeedbackRecord .* not found"):
                 await mgr.spawn_correction_run(uuid.uuid4())
+
+    async def test_raises_when_correction_run_already_exists(
+        self,
+        mock_session: AsyncMock,
+        mgr: FeedbackManager,
+        sample_record: FeedbackRecord,
+    ) -> None:
+        sample_record.run_id = uuid.uuid4()
+        sample_record.correction_run_id = uuid.uuid4()
+        with patch.object(mgr, "get_feedback_record", return_value=sample_record):
+            with pytest.raises(ConcurrentModificationError, match=r"already has a correction run"):
+                await mgr.spawn_correction_run(sample_record.id)
 
     async def test_raises_when_original_run_not_found(
         self,

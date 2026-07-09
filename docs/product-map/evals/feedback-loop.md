@@ -1,4 +1,4 @@
----
+﻿---
 id: feat-evals-feedback-loop
 prd: 8.20
 delivery-tasks: [task-nv4-feedback-loop-auto]
@@ -33,7 +33,7 @@ The Feedback System treats every human rejection as structured signal. Handles F
 - [x] Invalid status transitions raise ValueError with descriptive message
 - [x] Correction run linked via correction_run_id field
 - [x] Organisation-scoped RLS enforced on all FeedbackRecord operations
-- [ ] FeedbackRecord status transitions are audited (no audit trail yet)
+  - [ ] FeedbackRecord status transitions are audited (no audit trail yet — audit_logger not integrated)
 
 ### Feedback routing
 - [ ] Pipeline-level default_feedback_handler field is defined on Pipeline model but NEVER consumed — create API hardcodes "human", no runtime code reads the field
@@ -60,9 +60,9 @@ The Feedback System treats every human rejection as structured signal. Handles F
 - [x] get_feedback_records_inbox returns paginated records with pipeline name enrichment
 - [x] get_feedback_records_inbox filters by handler_type, status, pipeline_id, date range
 - [x] get_feedback_records_inbox returns empty result set when no records match
-- [ ] Feedback inbox UI surface (first-class UI page with filters) — not implemented
-- [ ] Annotation UI for human handler type (add notes, trigger correction run manually) — not implemented
-- [ ] Correction proposal display with accept/reject for ai_correction_with_human_review — not implemented
+- [x] Feedback inbox UI surface (first-class UI page with filters, expand/collapse, detail panel) — FeedbackInboxView.vue
+- [x] Annotation UI for human handler type (add notes via textarea, save via review endpoint) — implemented in FeedbackInboxView.vue
+- [ ] Correction proposal accept/reject for ai_correction_with_human_review — display exists (correction_proposal section) but accept/reject actions not implemented
 
 ### Correction run spawning
 - [x] spawn_correction_run fetches FeedbackRecord and original run
@@ -88,7 +88,7 @@ The Feedback System treats every human rejection as structured signal. Handles F
 - [x] ai_correction: auto-resolves on eval pass (status -> "resolved"), needs_human_review = False
 - [x] ai_correction_with_human_review: resolves on eval pass with needs_human_review = True
 - [x] Does not resolve when eval fails; needs_human_review remains False
-- [ ] When evals fail, correction run marked eval_failed and FeedbackRecord escalated (escalated not implemented in run_post_correction_eval)
+- [ ] When evals fail, correction run marked eval_failed and FeedbackRecord escalated — run_post_correction_eval calls _escalate_record on eval failure, but correction_run status is NOT updated to eval_failed
 - [ ] Correction run goes through full eval suite before reaching HITL gate again — not end-to-end verified
 
 ### Eval gap detection
@@ -115,27 +115,27 @@ The Feedback System treats every human rejection as structured signal. Handles F
 - [ ] Input validation on rejected_output size — not enforced
 
 ### Error Handling
-- [ ] detect_eval_gap wraps eval_engine.evaluate() in a bare loop — eval engine exceptions (invalid eval_def, EvalBlockedError) propagate as 500s
+- [x] detect_eval_gap wraps eval_engine.evaluate() in a try/except — eval engine exceptions are caught and logged, iteration continues; does NOT propagate as 500s
 - [x] run_post_correction_eval raises specific exceptions: FeedbackRecordNotFoundError, InvalidTransitionError for each precondition violation
-- [ ] run_post_correction_eval does not catch exceptions from engine.standalone_evaluate() — an eval crash propagates as 500
-- [x] spawn_correction_run raises FeedbackRecordNotFoundError for missing record AND missing run (exception type reused for two distinct conditions)
+- [x] run_post_correction_eval catches exceptions from engine.standalone_evaluate() — calls _escalate_record on eval crash (fixed in earlier QA sweep)
+- [x] spawn_correction_run raises FeedbackRecordNotFoundError for missing record AND FeedbackManagerError for missing run
 - [x] All 9 API routes have ProgrammingError → 501 mapping, tested in test_feedback_programming_error.py
 - [x] Create feedback validates empty rejection_reason (ValidationError) and unknown handler_type (ValidationError)
 - [x] update_status validates transitions via _VALID_STATUS_TRANSITIONS with descriptive error message
 - [x] HITL reject path (/hitl/{gate_id}/reject) does NOT create a FeedbackRecord — feedback records are created exclusively via the explicit POST /runs/{run_id}/feedback endpoint
-- [ ] Review feedback endpoint catches ValueError from spawn_correction_run as 404 — too broad; ValueError could also come from other logic
-- [ ] Review feedback endpoint catches ValueError from spawn_correction_run as 404 — Valid for handler_type misuse
+- [x] Review feedback endpoint catches FeedbackRecordNotFoundError → 404, InvalidTransitionError/ConcurrentModificationError → 409, FeedbackManagerError → 404 (base class catch — not ValueError)
+- [ ] Review feedback endpoint base-class FeedbackManagerError → 404 is too broad — could mask unexpected subclasses; should be narrowed
 
 ### Resilience
 - [ ] ConcurrentModificationError on update_status/link_correction_run has no automatic retry — caller must catch and retry
-- [ ] spawn_correction_run does not check whether a correction run already exists before spawning — link_correction_run catches the duplicate but the spawned run is already created (leaked run)
-- [ ] No advisory lock or optimistic locking on FeedbackRecord row — concurrent transitions can race on the same record
+- [x] spawn_correction_run checks whether a correction run already exists before spawning — raises ConcurrentModificationError if correction_run_id is set (fixed in QA index 342)
+- [ ] No advisory lock on FeedbackRecord row — optimistic locking via WHERE clause exists on update_status and link_correction_run, but no advisory lock for cross-session coordination
 - [ ] detect_eval_gap iterates eval_suite sequentially — no timeout or circuit-breaker for slow evals
 - [ ] RLS decorator on all FeedbackManager methods catches/sets before each call — no caching, incurs per-call DB round-trip
 
 ### Edge Cases
-- [ ] rejection_reason is not length-validated — could accept very long strings hitting DB column (Text)
-- [ ] rejected_output size is not validated — could accept arbitrarily large JSON blobs
+- [x] rejection_reason is length-validated — max 5000 characters (fixed in QA index 342)
+- [x] rejected_output size is validated — max 100KB when serialized (fixed in QA index 342)
 - [ ] producing_node_id is not format-validated — accepts any string
 - [ ] Empty rejected_output {} is accepted without semantic validation
 - [ ] FeedbackRecord created for a deleted run (CASCADE deletes the record too) — no soft-delete or archival
@@ -143,9 +143,25 @@ The Feedback System treats every human rejection as structured signal. Handles F
 - [ ] Gate_id is limited to 255 chars but is validated by the route param, not the model
 
 ## Known Gaps
-- BDD feature file (feedback_system.feature) has 7 real scenarios (not a placeholder) — covers create, status transitions, invalid transitions, gap detection, and correction run spawning
-- detect_eval_gap logic is implemented — now returns True when all evals pass (gap) and False when any fails. API endpoint now fetches eval definitions from the pipeline (no longer passes eval_suite=[])
+- BDD feature file (feedback_system.feature) has 7 real scenarios — covers create, status transitions, invalid transitions, gap detection, and correction run spawning
 - Correction run mechanics create a fresh run rather than seeding from original LangGraph checkpoint
 - No feedback_handler supersedes reject_target enforcement at validation/gate level
 - No audit events recorded for FeedbackRecord status transitions
-- Feedback inbox UI exists (FeedbackInboxView.vue), but no annotation or eval proposal curation UI
+- No eval proposal curation UI (draft eval editor, publish, immediate activation)
+- Review endpoint catches FeedbackManagerError (base class) as 404 — too broad, should be narrowed to specific subclasses
+- run_post_correction_eval does not mark correction run status as eval_failed on eval failure
+- No advisory lock cross-session coordination on FeedbackRecord rows
+- producing_node_id not format-validated
+- CASCADE deletion of FeedbackRecord when parent run is deleted
+
+## QA History
+
+### QA index 342 (2026-07-09) — Cross-cutting QA sweep
+- **Fixed:** spawn_correction_run now checks correction_run_id before spawning — prevents leaked runs (raises ConcurrentModificationError).
+- **Fixed:** create_feedback_record validates rejection_reason length (max 5000 chars) and rejected_output serialized size (max 100KB).
+- **Verified:** Feedback inbox UI exists at FeedbackInboxView.vue with filters, expand/collapse, annotations, trigger correction, dismiss, mark resolved.
+- **Verified:** run_post_correction_eval catches exceptions from engine.standalone_evaluate() and escalates the record.
+- **Verified:** detect_eval_gap catches eval engine exceptions and continues iteration.
+- **Verified:** update_status and link_correction_run use optimistic locking via WHERE clause with ConcurrentModificationError.
+- **Verified:** spawn_correction_run raises FeedbackManagerError (not ValueError) for missing original run.
+- **Remaining gaps:** Audit trail integration, pipeline/gate-level feedback_handler routing, eval proposal curation UI, correction run checkpoint seeding, concurrent advisory locking.
