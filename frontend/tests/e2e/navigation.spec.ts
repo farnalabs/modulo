@@ -7,7 +7,7 @@ test.describe('Navigation Flow', () => {
     await page.goto('/')
     await page.waitForLoadState('networkidle')
 
-    const pipelinesLink = page.locator('a.sidebar-link', { hasText: 'My Pipelines' })
+    const pipelinesLink = page.locator('a.sidebar-link', { hasText: 'My Pipelines' }).first()
     await expect(pipelinesLink).toBeVisible()
     await pipelinesLink.click()
     await page.waitForLoadState('networkidle')
@@ -22,7 +22,7 @@ test.describe('Navigation Flow', () => {
     await page.goto('/')
     await page.waitForLoadState('networkidle')
 
-    const dashboardLink = page.locator('a.sidebar-link.active')
+    const dashboardLink = page.locator('a.sidebar-link.active').first()
     await expect(dashboardLink).toHaveCount(1)
     await expect(dashboardLink).toHaveAttribute('aria-current', 'page')
   })
