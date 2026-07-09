@@ -134,16 +134,22 @@ class TestOverrides:
         flag = registry.get_flag("sso")
         assert flag is not None
         assert flag.currently_active is False
-        registry.set_override("sso", True)
-        assert flag.currently_active is True
+        try:
+            registry.set_override("sso", True)
+            assert flag.currently_active is True
+        finally:
+            registry.clear_override("sso")
 
     def test_set_override_deactivates_flag(self) -> None:
         registry = FeatureFlagRegistry(current_tier="team", has_license_key=True)
         flag = registry.get_flag("sso")
         assert flag is not None
         assert flag.currently_active is True
-        registry.set_override("sso", False)
-        assert flag.currently_active is False
+        try:
+            registry.set_override("sso", False)
+            assert flag.currently_active is False
+        finally:
+            registry.clear_override("sso")
 
     def test_clear_override_restores_default(self) -> None:
         registry = FeatureFlagRegistry(current_tier="community")
@@ -206,12 +212,12 @@ class TestKnownFlagsCount:
     def test_community_count(self) -> None:
         registry = FeatureFlagRegistry()
         community = [f for f in registry.list_flags() if f.tier == "community"]
-        assert len(community) == 15
+        assert len(community) == 16
 
     def test_team_count(self) -> None:
         registry = FeatureFlagRegistry()
         team = [f for f in registry.list_flags() if f.tier == "team"]
-        assert len(team) == 17
+        assert len(team) == 20
 
     def test_v1_count(self) -> None:
         registry = FeatureFlagRegistry()
@@ -221,7 +227,7 @@ class TestKnownFlagsCount:
     def test_v2_count(self) -> None:
         registry = FeatureFlagRegistry()
         v2 = [f for f in registry.list_flags() if f.tier == "v2"]
-        assert len(v2) == 5
+        assert len(v2) == 4
 
     def test_remy_ui_driving_is_community(self) -> None:
         registry = FeatureFlagRegistry()

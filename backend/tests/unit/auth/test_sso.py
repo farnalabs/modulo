@@ -94,6 +94,7 @@ def client() -> Generator[TestClient, None, None]:
 
 
 def _override_settings(**kwargs: str | bool) -> None:
+    FeatureFlagRegistry._overrides.clear()
     _app.dependency_overrides[get_settings] = lambda: _override(**kwargs)
     settings = _override(**kwargs)
     _app.dependency_overrides[get_plan_context] = lambda: DbPlanContext(
