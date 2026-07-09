@@ -213,11 +213,10 @@ class TestSsoProvidersEndpoint:
         assert resp.json()["saml"] is True
 
     def test_saml_disabled_without_license(self, client: TestClient) -> None:
-        """SSO providers list returns saml=False when license is absent."""
+        """SSO providers list returns 402 when license is absent."""
         _override_settings(modulo_license_key="", modulo_saml_enabled=True)
         resp = client.get("/api/v1/auth/sso/providers")
-        assert resp.status_code == 200
-        assert resp.json()["saml"] is False
+        assert resp.status_code == 402
 
 
 # ---------------------------------------------------------------------------
@@ -253,18 +252,17 @@ class TestSamlRoutes:
     def test_saml_login_requires_license(self, client: TestClient) -> None:
         _override_settings(modulo_license_key="")
         resp = client.get("/api/v1/auth/saml/login", follow_redirects=False)
-        assert resp.status_code == 400
+        assert resp.status_code == 402
 
     def test_saml_acs_requires_license(self, client: TestClient) -> None:
         _override_settings(modulo_license_key="")
         resp = client.post("/api/v1/auth/saml/acs", data={})
-        assert resp.status_code == 400
+        assert resp.status_code == 402
 
     def test_saml_metadata_without_license(self, client: TestClient) -> None:
         _override_settings(modulo_license_key="")
         resp = client.get("/api/v1/auth/saml/metadata")
-        assert resp.status_code == 200
-        assert "EntityDescriptor" in resp.text
+        assert resp.status_code == 402
 
     def test_saml_login_with_license_and_no_metadata(self, client: TestClient) -> None:
         _override_settings(
@@ -284,7 +282,7 @@ class TestSamlRoutes:
         assert resp.status_code == 400
 
     def test_saml_metadata_with_license(self, client: TestClient) -> None:
-        # Default fixture already has a license key
+        _override_settings(modulo_saml_enabled=True)
         resp = client.get("/api/v1/auth/saml/metadata")
         assert resp.status_code == 200
         assert "EntityDescriptor" in resp.text
