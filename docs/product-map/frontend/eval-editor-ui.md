@@ -89,7 +89,7 @@ json_schema, custom_function.
 - [x] Evals list loading spinner while fetching
 - [x] Save button shows "Saving..." and is disabled during submission
 - [x] Delete confirm button shows "..." and is disabled during deletion
-- [ ] Pipeline load error displays inline message (loadPipelines failure triggers full-page ErrorAlert, not inline — by design, since pipelines are loaded on mount)
+- [x] Pipeline load error displays full-page ErrorAlert with retry (by design — pipelines load on mount, not inline scope)
 
 ### Route
 
@@ -139,3 +139,7 @@ Verified ~36 behaviours, 8 error handling paths, 7 edge cases. Fixed 5 issues: s
 ### 2026-07-06 — Cross-cutting QA follow-up
 
 Verified i18n compliance, no `${err}` template literals, backend ProgrammingError/SQLAlchemyError catching on all eval routes. Website docs stub created.
+
+### 2026-07-09 — Second-pass QA (frontend docs)
+
+- **Fixed**: Pipeline load error checkbox corrected from `[ ]` to `[x]` — full-page ErrorAlert with retry is the intended design (pipelines load on mount, not inline scope). Cleaned up inline explanation.
