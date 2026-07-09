@@ -1,6 +1,6 @@
 ---
 id: feat-integration-tiering
-prd: 15
+prd: 8.6
 delivery-tasks: []
 bdd: [backend/tests/bdd/features/library/tiering.feature]
 code:
