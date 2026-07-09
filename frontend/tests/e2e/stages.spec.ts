@@ -29,6 +29,8 @@ test.describe('Stages Board', () => {
     await page.goto('/stages')
     await page.waitForLoadState('networkidle')
 
-    await expect(page.locator('text=Development').or(page.locator('text=Review')).or(page.locator('text=Production'))).toBeVisible()
+    await expect(page.getByTestId('stage-board-column-s1')).toBeVisible()
+    await expect(page.getByTestId('stage-board-column-s2')).toBeVisible()
+    await expect(page.getByTestId('stage-board-column-s3')).toBeVisible()
   })
 })
