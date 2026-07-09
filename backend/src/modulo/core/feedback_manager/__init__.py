@@ -4,6 +4,7 @@ The Feedback System (§8.20) treats every human rejection as structured signal.
 This module manages the FeedbackRecord entity, status transitions, eval gap
 detection via EvalEngine.standalone_evaluate(), and correction run mechanics.
 """
+import asyncio
 import functools
 import logging
 from collections.abc import Callable
@@ -58,12 +59,11 @@ class ValidationError(FeedbackManagerError):
     """Raised when input validation fails."""
 
 _VALID_STATUS_TRANSITIONS: dict[str, set[str]] = {
-    "pending": {"routing", "correcting", "resolved", "dismissed"},
-    "routing": {"escalated", "correcting", "resolved", "dismissed"},
+    "pending": {"routing", "correcting", "resolved"},
+    "routing": {"escalated", "correcting", "resolved"},
     "correcting": {"correcting", "resolved", "escalated"},
-    "escalated": {"resolved", "dismissed"},
+    "escalated": {"resolved"},
     "resolved": set(),
-    "dismissed": set(),
 }
 
 
@@ -310,6 +310,8 @@ class FeedbackManager:
             processed_count += 1
             try:
                 result = eval_engine.evaluate(record.rejected_output, eval_def)
+            except asyncio.CancelledError:
+                raise
             except Exception:
                 logger.exception(
                     "EvalEngine.evaluate failed for FeedbackRecord %s on eval_def %s",
@@ -491,6 +493,8 @@ class FeedbackManager:
                 name=_POST_CORRECTION_EVAL_NAME,
                 config=eval_config or {},
             )
+        except asyncio.CancelledError:
+            raise
         except Exception:
             logger.exception(
                 "standalone_evaluate failed for FeedbackRecord %s correction run %s",

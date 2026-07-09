@@ -86,6 +86,9 @@ Correction run spawning, linking, and post-correction evaluation for the Feedbac
 - [x] Double-correction guard — link_correction_run allows re-linking with concurrent-status check
 - [x] Feedback with no run_id rejects create_correction_run with 422
 - [x] Eval engine failure during post-correction eval — error caught, record escalated, returns structured error dict
+- [x] InvalidTransitionError from spawn_correction_run returns 409 (state conflict), not 404
+- [x] FeedbackRecordNotFoundError from update_status in mark_reviewed/dismiss returns 404, not 500
+- [x] CancelledError guarded before except Exception in all eval error paths — prevents silent swallow on shutdown
 
 ### Resilience
 
@@ -98,9 +101,10 @@ Correction run spawning, linking, and post-correction evaluation for the Feedbac
 - [x] Correction run on feedback with no run_id — rejected with 422 before DB access
 - [x] All 9 API routes wrapped in except ProgrammingError for migrations-not-run safety
 - [x] All DB queries in get_inbox_item run inside session.begin() with RLS context — fixed cross-tenant leak
-- [x] "dismiss" action uses "resolved" status — no longer rejected by DB CHECK constraint
+- [x] "dismiss" action uses "resolved" status — aligned with PRD §8.20 status flow
 - [x] detect_eval_gap uses single transaction — no stale read risk between two transactions
 - [x] _VALID_STATUS_TRANSITIONS aligned with DB CHECK constraint and PRD §8.20 — no "dismissed" orphan state
+- [x] run_context_overrides can shadow standard _feedback_correction keys — caller responsibility, documented edge case
 
 ## QA History
 
@@ -122,14 +126,29 @@ Correction run spawning, linking, and post-correction evaluation for the Feedbac
 
 ### Findings fixed (index 248 — cross-cutting QA)
 - CRITICAL — `get_inbox_item` route ran pipeline name queries (Run + Pipeline) outside `session.begin()` transaction block, after `SET LOCAL app.organisation_id` had expired. On Postgres, `set_config(..., true)` is transaction-scoped, so subsequent queries lacked RLS context — cross-tenant data leak. Fixed: moved all DB queries inside the transaction block.
-- CRITICAL — "dismiss" review action used `update_status(record_id, "dismissed")` which was rejected by DB CHECK constraint `ck_feedback_records_status` (only allows 'pending', 'routing', 'correcting', 'resolved', 'escalated'). The `_VALID_STATUS_TRANSITIONS` state machine included "dismissed" but the DB constraint didn't — every dismiss action silently failed with a DB error. Fixed: changed "dismiss" action to set status "resolved" (same terminal state as "mark_reviewed"), removed "dismissed" from `_VALID_STATUS_TRANSITIONS`, added "resolved" to pending transitions.
+- CRITICAL — "dismiss" review action used `update_status(record_id, "dismissed")` which was rejected by DB CHECK constraint. The fix from this index was partially applied (DB constraint updated to include "dismissed") but the action was never changed to "resolved" and `_VALID_STATUS_TRANSITIONS` retained "dismissed" — the code and PRD diverged again. Re-applied in index 341.
 - MAJOR — `detect_eval_gap` route used two separate `async with session.begin()` blocks. Between the two transactions, the feedback record's status or data could change (stale read risk). Fixed: merged into single transaction block with early-exit 404 for missing record.
-- MAJOR — `_VALID_STATUS_TRANSITIONS` included "dismissed" which was inconsistent with DB CHECK constraint. Removed "dismissed" from state machine entirely — the "dismiss" action now resolves to "resolved". State machine is now fully aligned with DB constraint and PRD §8.20 spec (pending→routing→correcting→resolved|escalated).
+- MAJOR — `_VALID_STATUS_TRANSITIONS` included "dismissed" which was inconsistent with DB CHECK constraint. The state machine fix from index 248 did not persist — "dismissed" remained in the transitions. Re-applied in index 341.
+
+### Findings fixed (index 341 — cross-cutting QA)
+- CRITICAL — "dismiss" review action used `update_status(record_id, "dismissed")` which conflicts with PRD §8.20 status flow (`pending→routing→correcting→resolved|escalated`, no "dismissed"). Previous fix (index 248) was incomplete — DB constraint was widened to include "dismissed" but the action itself was never changed. Fixed: changed dismiss action to use "resolved", removed "dismissed" from `_VALID_STATUS_TRANSITIONS` everywhere, removed "dismissed" from DB CHECK constraint, removed "dismissed" from `valid_statuses` set in PATCH /status endpoint. Updated tests, frontend, and product map.
+- MAJOR — `InvalidTransitionError` raised by `spawn_correction_run` (via `link_correction_run`) was caught as `FeedbackManagerError` parent class in the inner try/except in `review_feedback` and mapped to 404. Since `InvalidTransitionError` is a state conflict (not a "not found" error), the correct response is 409. Fixed: split the inner catch into three clauses — `FeedbackRecordNotFoundError`→404, `(InvalidTransitionError, ConcurrentModificationError)`→409, and `FeedbackManagerError`→404 (for original run not found).
+- MAJOR — `FeedbackRecordNotFoundError` from `update_status` in `mark_reviewed`/`dismiss` paths fell through to the catch-all `except Exception`→500 handler in `review_feedback`. If the record was deleted between the SELECT and UPDATE, the caller got a misleading 500 instead of 404. Fixed: added explicit `except FeedbackRecordNotFoundError`→404 before the catch-all.
+- MINOR — Added `asyncio.CancelledError: raise` guard before `except Exception` in `detect_eval_gap` eval loop and `run_post_correction_eval` standalone_evaluate call. On Python < 3.12, `CancelledError` inherits from `Exception` and would be caught as a regular error instead of propagating.
+- MINOR — `feedback_handler_type` displayed raw in `FeedbackInboxView.vue` (e.g. "ai_correction" instead of "AI Correction"). Fixed: added `handlerTypeLabel()` translation helper with en-US keys for the three handler types.
+
+### Verified behaviours (index 341)
+- Verified `link_correction_run` UPDATE WHERE clause includes `correction_run_id.is_(None)` for atomicity — prevents TOCTOU double-correction ✓
+- Verified `_escalate_record` path in `run_post_correction_eval` follows the same `session.flush()` at line 542 ✓
+- Verified `spawn_correction_run` handles `create_run` failure via transaction rollback — orphan correction runs are rolled back if `link_correction_run` fails ✓
+- Verified all `except Exception` blocks have proper logging with `exc_info=True` ✓
+- Verified `CancelledError` guard added to both eval error paths ✓
+- Verified `run_context_overrides` merge can shadow standard keys (e.g. `producing_node_id`) — documented edge case, not fixed (caller responsibility)
 
 ## Known Gaps
 
 - No BDD feature files for the correction error paths — only happy-path BDD scenarios exist
 - No integration test for full correction lifecycle: reject → spawn → run → eval → resolve
-- No frontend UI for viewing correction runs linked to a feedback record
 - Correction run checkpoint pre-seeding is not implemented
-- Frontend `FeedbackInboxView.vue` not reviewed for i18n or error handling
+- Correction run that starts but fails during execution leaves the FeedbackRecord stuck in "correcting" status — no automatic escalation for runtime failures
+- `run_context_overrides` can shadow standard `_feedback_correction` keys (producing_node_id, rejection_reason, rejected_output, is_correction_run) — caller must not set conflicting keys
