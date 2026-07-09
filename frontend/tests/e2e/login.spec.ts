@@ -17,7 +17,7 @@ test.describe('Login Flow', () => {
     await expect(page.locator('button[type="submit"]')).toContainText('Sign in')
   })
 
-  test('shows error on failed login', async ({ page }) => {
+  test('shows error on failed login', { tag: '@smoke' }, async ({ page }) => {
     await page.route('**/api/v1/auth/login', async (route) => {
       await route.fulfill({ status: 401, contentType: 'application/json', body: JSON.stringify({ detail: 'Invalid credentials' }) })
     })
@@ -32,7 +32,7 @@ test.describe('Login Flow', () => {
     await expect(page.locator('text=Invalid credentials')).toBeVisible({ timeout: 5000 })
   })
 
-  test('redirects away from login on successful login', async ({ page }) => {
+  test('redirects away from login on successful login', { tag: '@smoke' }, async ({ page }) => {
     await page.route('**/api/v1/auth/login', async (route) => {
       await route.fulfill({
         status: 200,
