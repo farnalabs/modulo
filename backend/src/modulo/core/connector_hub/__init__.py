@@ -123,6 +123,7 @@ class ConnectorHub:
         self._org_id = org_id
         self._runtime_provider = runtime_provider
         self._initialised = False
+        self._init_lock = asyncio.Lock()
 
     async def __aenter__(self) -> Self:
         return self
@@ -142,54 +143,58 @@ class ConnectorHub:
         if self._initialised:
             logger.warning("ConnectorHub already initialised — skipping")
             return
-        for ci in instances:
-            try:
-                raw_str = await asyncio.wait_for(
-                    self._secrets_backend.get_secret(str(ci.id)),
-                    timeout=30.0,
-                )
-                if raw_str is None:
-                    raise ConnectorDecryptError(ci.id)
+        async with self._init_lock:
+            if self._initialised:
+                logger.warning("ConnectorHub already initialised — skipping")
+                return
+            for ci in instances:
                 try:
-                    parsed = json.loads(raw_str)
-                except json.JSONDecodeError as exc:
-                    raise ConnectorDecryptError(ci.id) from exc
-                if not isinstance(parsed, dict):
-                    raise ConnectorDecryptError(ci.id) from TypeError(f"Expected dict, got {type(parsed).__name__}")
-                creds: dict[str, Any] = parsed
-                connector = _build_connector(
-                    ci.connector_type_id,
-                    ci.config_json,
-                    creds,
-                    runtime_provider=self._runtime_provider,
-                )
-                acl = ConnectorACL(
-                    visibility=ci.visibility,
-                    allowed_operations=ci.allowed_operations,
-                )
-                traced = _TracedConnector(
-                    connector,
-                    tracer=self._tracer,
-                    org_id=self._org_id,
-                    acl=acl,
-                )
-                self._connectors[ci.id] = traced
-                self._acls[ci.id] = acl
-            except (ConnectorDecryptError, ValueError, TypeError, KeyError, json.JSONDecodeError, asyncio.TimeoutError, OSError):
-                logger.warning(
-                    "Skipping connector %s (%s)",
-                    ci.id,
-                    ci.connector_type_id,
-                    exc_info=True,
-                )
-            except Exception:
-                logger.error(
-                    "Unexpected error skipping connector %s (%s) — programming bug",
-                    ci.id,
-                    ci.connector_type_id,
-                    exc_info=True,
-                )
-        self._initialised = True
+                    raw_str = await asyncio.wait_for(
+                        self._secrets_backend.get_secret(str(ci.id)),
+                        timeout=30.0,
+                    )
+                    if raw_str is None:
+                        raise ConnectorDecryptError(ci.id)
+                    try:
+                        parsed = json.loads(raw_str)
+                    except json.JSONDecodeError as exc:
+                        raise ConnectorDecryptError(ci.id) from exc
+                    if not isinstance(parsed, dict):
+                        raise ConnectorDecryptError(ci.id) from TypeError(f"Expected dict, got {type(parsed).__name__}")
+                    creds: dict[str, Any] = parsed
+                    connector = _build_connector(
+                        ci.connector_type_id,
+                        ci.config_json,
+                        creds,
+                        runtime_provider=self._runtime_provider,
+                    )
+                    acl = ConnectorACL(
+                        visibility=ci.visibility,
+                        allowed_operations=ci.allowed_operations,
+                    )
+                    traced = _TracedConnector(
+                        connector,
+                        tracer=self._tracer,
+                        org_id=self._org_id,
+                        acl=acl,
+                    )
+                    self._connectors[ci.id] = traced
+                    self._acls[ci.id] = acl
+                except (ConnectorDecryptError, ValueError, TypeError, KeyError, json.JSONDecodeError, asyncio.TimeoutError, OSError):
+                    logger.warning(
+                        "Skipping connector %s (%s)",
+                        ci.id,
+                        ci.connector_type_id,
+                        exc_info=True,
+                    )
+                except Exception:
+                    logger.error(
+                        "Unexpected error skipping connector %s (%s) — programming bug",
+                        ci.id,
+                        ci.connector_type_id,
+                        exc_info=True,
+                    )
+            self._initialised = True
 
     def _get_or_raise(self, connector_id: uuid.UUID) -> ConnectorBase:
         try:
