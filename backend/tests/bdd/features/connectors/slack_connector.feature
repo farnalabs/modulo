@@ -73,3 +73,23 @@ Feature: Slack Connector
     Given a Slack connector with valid bot token
     When the API returns non-JSON response
     Then the health result indicates failure
+
+  Scenario: Get channel info
+    Given a Slack connector with valid bot token
+    When I query resource "channel_info" with channel "C001"
+    Then the result has records
+
+  Scenario: Get channel members
+    Given a Slack connector with valid bot token
+    When I query resource "channel_members" with channel "C001"
+    Then the result has records
+
+  Scenario: Get thread replies
+    Given a Slack connector with valid bot token
+    When I query resource "thread_replies" with channel "C001"
+    Then the result is an error
+
+  Scenario: Post a thread reply
+    Given a Slack connector with valid bot token
+    When I write resource "thread_reply" with channel "C001" and thread_ts "123456.000001" and text "A reply"
+    Then the write succeeds

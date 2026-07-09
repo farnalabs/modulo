@@ -19,14 +19,14 @@ _SLACK_API = "https://slack.com/api"
 
 _RATE_LIMITED_STATUS = 429
 
-_RETRYABLE_STATUSES = frozenset({429})
+_RETRYABLE_STATUSES = frozenset({429, 502, 503, 504})
 _MAX_RETRIES = 3
 _BASE_DELAY = 1.0
 _MAX_DELAY = 30.0
 
 
 def _parse_retry_after(response: httpx.Response) -> float | None:
-    value = response.headers.get("Retry-After") or response.headers.get("retry-after")
+    value = response.headers.get("Retry-After")
     if value:
         try:
             return float(value)
@@ -67,7 +67,7 @@ class SlackConnector(ConnectorBase):
             try:
                 async with self._client() as client:
                     r = await client.request(method, path, **kwargs)
-                    if r.status_code == _RATE_LIMITED_STATUS and attempt < _MAX_RETRIES:
+                    if r.status_code in _RETRYABLE_STATUSES and attempt < _MAX_RETRIES:
                         delay = _compute_retry_delay(attempt, r)
                         await asyncio.sleep(delay)
                         continue
@@ -75,7 +75,7 @@ class SlackConnector(ConnectorBase):
                     return r
             except httpx.HTTPStatusError as exc:
                 last_exc = exc
-                if exc.response.status_code == _RATE_LIMITED_STATUS and attempt < _MAX_RETRIES:
+                if exc.response.status_code in _RETRYABLE_STATUSES and attempt < _MAX_RETRIES:
                     delay = _compute_retry_delay(attempt, exc.response)
                     await asyncio.sleep(delay)
                     continue
