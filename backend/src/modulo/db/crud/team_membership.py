@@ -60,15 +60,18 @@ async def list_team_members(
     except ProgrammingError:
         return PageResult(items=[], total=0, page=page, page_size=page_size)
 
-    query = (
-        select(TeamMembership)
-        .where(TeamMembership.team_id == team_id)
-        .order_by(TeamMembership.created_at)
-        .offset((page - 1) * page_size)
-        .limit(page_size)
-    )
-    result = await session.execute(query)
-    items = list(result.scalars().all())
+    try:
+        query = (
+            select(TeamMembership)
+            .where(TeamMembership.team_id == team_id)
+            .order_by(TeamMembership.created_at)
+            .offset((page - 1) * page_size)
+            .limit(page_size)
+        )
+        result = await session.execute(query)
+        items = list(result.scalars().all())
+    except ProgrammingError:
+        return PageResult(items=[], total=0, page=page, page_size=page_size)
 
     return PageResult(items=items, total=total, page=page, page_size=page_size)
 
