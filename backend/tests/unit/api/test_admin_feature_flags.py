@@ -7,7 +7,7 @@ import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy.exc import ProgrammingError
 
-from modulo.api.dependencies import _get_engine, get_db_session
+from modulo.api.dependencies import _get_engine, get_db_session, get_plan_context
 from modulo.api.main import app
 from modulo.auth.dependencies import get_current_user
 from modulo.auth.jwt import AuthenticatedPrincipal
@@ -28,10 +28,12 @@ def _make_settings() -> Settings:
 
 @pytest.fixture()
 def client() -> Generator[TestClient, None, None]:
+    mock_plan = MagicMock()
+    mock_plan.feature_enabled.return_value = True
     app.dependency_overrides[get_settings] = _make_settings
+    app.dependency_overrides[get_plan_context] = lambda: mock_plan
     app.dependency_overrides[get_db_session] = lambda: MagicMock()
     app.dependency_overrides[_get_engine] = lambda: MagicMock()
-    # get_plan_context override removed)
     app.dependency_overrides[get_current_user] = lambda: AuthenticatedPrincipal(
         username="testuser",
         organisation_id="00000000-0000-0000-0000-000000000001",

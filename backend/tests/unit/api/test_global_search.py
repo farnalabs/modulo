@@ -8,7 +8,7 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from modulo.api.dependencies import get_db_session
+from modulo.api.dependencies import get_db_session, get_plan_context
 from modulo.api.routes.admin import router as admin_router
 from modulo.auth.dependencies import get_current_user
 from modulo.auth.jwt import AuthenticatedPrincipal
@@ -66,6 +66,9 @@ def mock_db() -> AsyncMock:
 @pytest.fixture()
 def client(mock_db: AsyncMock) -> Generator[TestClient, None, None]:
     app = _make_app(mock_db)
+    mock_plan = MagicMock()
+    mock_plan.feature_enabled.return_value = True
+    app.dependency_overrides[get_plan_context] = lambda: mock_plan
     app.dependency_overrides[get_current_user] = lambda: ADMIN_PRINCIPAL
     with patch("modulo.api.routes.admin.set_rls_org", AsyncMock()):
         yield TestClient(app)
@@ -75,6 +78,9 @@ def client(mock_db: AsyncMock) -> Generator[TestClient, None, None]:
 @pytest.fixture()
 def viewer_client(mock_db: AsyncMock) -> Generator[TestClient, None, None]:
     app = _make_app(mock_db)
+    mock_plan = MagicMock()
+    mock_plan.feature_enabled.return_value = True
+    app.dependency_overrides[get_plan_context] = lambda: mock_plan
     app.dependency_overrides[get_current_user] = lambda: VIEWER_PRINCIPAL
     with patch("modulo.api.routes.admin.set_rls_org", AsyncMock()):
         yield TestClient(app)

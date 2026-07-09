@@ -6,7 +6,7 @@ from uuid import uuid4
 import pytest
 from httpx import ASGITransport, AsyncClient
 
-from modulo.api.dependencies import get_db_session
+from modulo.api.dependencies import get_db_session, get_plan_context
 from modulo.api.main import app
 from modulo.auth.dependencies import get_current_user
 from modulo.auth.jwt import AuthenticatedPrincipal
@@ -49,6 +49,9 @@ def mock_session():
 
 @pytest.fixture
 def client_admin(mock_session):
+    mock_plan = MagicMock()
+    mock_plan.feature_enabled.return_value = True
+    app.dependency_overrides[get_plan_context] = lambda: mock_plan
     app.dependency_overrides[get_db_session] = lambda: mock_session
     app.dependency_overrides[get_current_user] = lambda: ADMIN_PRINCIPAL
     transport = ASGITransport(app=app)
@@ -59,6 +62,9 @@ def client_admin(mock_session):
 
 @pytest.fixture
 def client_viewer(mock_session):
+    mock_plan = MagicMock()
+    mock_plan.feature_enabled.return_value = True
+    app.dependency_overrides[get_plan_context] = lambda: mock_plan
     app.dependency_overrides[get_db_session] = lambda: mock_session
     app.dependency_overrides[get_current_user] = lambda: VIEWER_PRINCIPAL
     transport = ASGITransport(app=app)
@@ -69,6 +75,9 @@ def client_viewer(mock_session):
 
 @pytest.fixture
 def client_system_admin(mock_session):
+    mock_plan = MagicMock()
+    mock_plan.feature_enabled.return_value = True
+    app.dependency_overrides[get_plan_context] = lambda: mock_plan
     app.dependency_overrides[get_db_session] = lambda: mock_session
     app.dependency_overrides[get_current_user] = lambda: SYSTEM_ADMIN_PRINCIPAL
     transport = ASGITransport(app=app)
