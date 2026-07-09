@@ -1,5 +1,5 @@
 ﻿<template>
-  <div class="mx-auto max-w-7xl space-y-6 p-6">
+    <div class="page-wide">
     <header>
       <h1 data-testid="admin-notification-log-title" class="text-2xl font-semibold tracking-tight">{{ $t('views.AdminNotificationDeliveryLogView.notification_delivery_log') }}</h1>
       <p class="mt-1 text-muted-foreground">{{ $t('views.AdminNotificationDeliveryLogView.admin_view_of_all_webhook_notification_deliveries') }}</p>
@@ -105,18 +105,18 @@
     </div>
 
     <template v-else>
-      <div class="overflow-hidden rounded-lg border bg-card shadow-sm">
+      <div class="table-wrapper">
         <table class="w-full">
           <thead>
-            <tr class="border-b bg-muted/50 text-left text-xs font-medium uppercase text-muted-foreground">
-              <th class="w-8 px-4 py-3"></th>
-              <th class="px-4 py-3">Timestamp</th>
-              <th class="px-4 py-3">{{ $t('views.AdminAuditView.event_type') }}</th>
-              <th class="px-4 py-3">Destination</th>
-              <th class="px-4 py-3">Status</th>
-              <th class="px-4 py-3">Attempts</th>
-              <th class="px-4 py-3">Error</th>
-              <th class="px-4 py-3">Actions</th>
+            <tr>
+              <th class="w-8 table-header"></th>
+              <th class="table-header">Timestamp</th>
+              <th class="table-header">{{ $t('views.AdminAuditView.event_type') }}</th>
+              <th class="table-header">Destination</th>
+              <th class="table-header">Status</th>
+              <th class="table-header table-cell-numeric">Attempts</th>
+              <th class="table-header">Error</th>
+              <th class="table-header">Actions</th>
             </tr>
           </thead>
           <tbody class="divide-y">
@@ -130,7 +130,7 @@
               @keydown.enter="toggleRow(entry.id)"
               @keydown.space.prevent="toggleRow(entry.id)"
             >
-              <td class="px-4 py-3 text-sm text-muted-foreground">
+              <td class="table-cell text-muted-foreground">
                 <svg
                   xmlns="http://www.w3.org/2000/svg"
                   width="14"
@@ -147,23 +147,23 @@
                   <polyline points="9 18 15 12 9 6" />
                 </svg>
               </td>
-              <td class="whitespace-nowrap px-4 py-3 text-sm text-muted-foreground">
+              <td class="table-cell whitespace-nowrap text-muted-foreground">
                 {{ formatTimestamp(entry.created_at) }}
               </td>
-              <td class="px-4 py-3 text-sm font-medium">{{ entry.event_type }}</td>
-              <td class="max-w-xs truncate px-4 py-3 text-sm text-muted-foreground" :title="entry.endpoint_url ?? undefined">
+              <td class="table-cell font-medium">{{ entry.event_type }}</td>
+              <td class="table-cell max-w-xs truncate text-muted-foreground" :title="entry.endpoint_url ?? undefined">
                 {{ entry.endpoint_url || '—' }}
               </td>
-              <td class="px-4 py-3">
+              <td class="table-cell">
                 <span :class="statusBadge(entry.status)" class="capitalize">
                   {{ entry.status }}
                 </span>
               </td>
-              <td class="px-4 py-3 text-sm text-muted-foreground">{{ entry.attempt_count }}</td>
-              <td class="max-w-xs truncate px-4 py-3 text-sm text-muted-foreground" :title="entry.last_error ?? undefined">
+              <td class="table-cell table-cell-numeric text-muted-foreground">{{ entry.attempt_count }}</td>
+              <td class="table-cell max-w-xs truncate text-muted-foreground" :title="entry.last_error ?? undefined">
                 {{ entry.last_error || '—' }}
               </td>
-              <td class="px-4 py-3">
+              <td class="table-cell">
                 <div v-if="retryMessages[entry.id]" class="text-xs" :class="retryMessages[entry.id].type === 'error' ? 'text-destructive' : 'text-success'">
                   {{ retryMessages[entry.id].text }}
                 </div>

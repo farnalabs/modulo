@@ -1,5 +1,5 @@
 ﻿<template>
-  <div data-theme="agent" class="mx-auto max-w-4xl space-y-8 p-6">
+  <div data-theme="agent" class="page-narrow">
     <header>
       <h1 class="text-2xl font-semibold tracking-tight">{{ $t('views.SettingsErrorForwardersView.error_forwarders') }}</h1>
       <p class="mt-1 text-muted-foreground">{{ $t('views.SettingsErrorForwardersView.configure_external_error_tracking_and_alerting_integrations') }}</p>

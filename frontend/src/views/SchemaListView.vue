@@ -4,7 +4,7 @@
     { label: 'Editor', to: '/schemas/editor' },
     { label: 'Infer', to: '/schemas/infer' },
   ]" />
-  <div class="mx-auto max-w-4xl space-y-8 p-6">
+    <div class="page-narrow">
     <header>
       <h1 class="text-2xl font-semibold tracking-tight">Schemas</h1>
       <p class="mt-1 text-muted-foreground">{{ $t('views.SchemaListView.manage_schemas_and_deprecate_outdated_definitions') }}</p>

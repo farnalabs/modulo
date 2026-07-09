@@ -1,5 +1,5 @@
 ﻿<template>
-  <div class="p-6 max-w-5xl mx-auto space-y-6">
+  <div class="page-wide">
     <div class="flex items-center justify-between">
       <div>
         <h1 class="text-2xl font-semibold tracking-tight">Users</h1>
@@ -28,21 +28,21 @@
       </p>
     </div>
 
-    <div v-else class="card overflow-hidden">
+    <div v-else class="table-wrapper">
       <table class="w-full text-sm">
         <thead>
-          <tr class="border-b bg-muted/30">
-            <th class="text-left px-4 py-3 font-medium text-muted-foreground">User</th>
-            <th class="text-left px-4 py-3 font-medium text-muted-foreground">Role</th>
-            <th class="text-left px-4 py-3 font-medium text-muted-foreground">Status</th>
-            <th class="text-left px-4 py-3 font-medium text-muted-foreground">Auth</th>
-            <th class="text-right px-4 py-3 font-medium text-muted-foreground">Created</th>
-            <th class="text-right px-4 py-3 font-medium text-muted-foreground">Actions</th>
+          <tr>
+            <th class="table-header">User</th>
+            <th class="table-header">Role</th>
+            <th class="table-header">Status</th>
+            <th class="table-header">Auth</th>
+            <th class="table-header table-cell-numeric">Created</th>
+            <th class="table-header table-cell-numeric">Actions</th>
           </tr>
         </thead>
         <tbody>
           <tr v-for="u in users" :key="u.id" class="border-b last:border-0 hover:bg-muted/20 transition-colors">
-            <td class="px-4 py-3">
+            <td class="table-cell">
               <div class="flex items-center gap-2">
                 <div class="avatar-ring">
                   <div class="flex h-7 w-7 items-center justify-center rounded-full bg-primary text-xs font-bold text-primary-foreground">
@@ -55,7 +55,7 @@
                 </div>
               </div>
             </td>
-            <td class="px-4 py-3">
+            <td class="table-cell">
               <select
                 v-model="u.org_role"
                 :data-testid="`admin-users-role-${u.id}`"
@@ -70,7 +70,7 @@
                 <option value="viewer">Viewer</option>
               </select>
             </td>
-            <td class="px-4 py-3">
+            <td class="table-cell">
               <span v-if="u.is_active" class="inline-flex items-center gap-1.5 rounded-full bg-success/10 px-2.5 py-0.5 text-xs font-medium text-success">
                 <span class="h-1.5 w-1.5 rounded-full bg-success" />
                 Active
@@ -80,11 +80,11 @@
                 Inactive
               </span>
             </td>
-            <td class="px-4 py-3 text-xs text-muted-foreground">{{ u.auth_provider }}</td>
-            <td class="px-4 py-3 text-right text-xs text-muted-foreground">
+            <td class="table-cell text-xs text-muted-foreground">{{ u.auth_provider }}</td>
+            <td class="table-cell-numeric text-xs text-muted-foreground">
               {{ u.created_at ? new Date(u.created_at).toLocaleDateString() : '—' }}
             </td>
-            <td class="px-4 py-3 text-right">
+            <td class="table-cell-numeric">
               <div class="flex items-center justify-end gap-2">
                 <button
                   :data-testid="`admin-users-reset-password-${u.id}`"

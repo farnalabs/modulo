@@ -6,7 +6,7 @@
       </div>
     </template>
     <template #default>
-      <div class="max-w-3xl mx-auto space-y-8 p-6">
+      <div class="page-narrow">
         <h1 class="text-2xl font-semibold">{{ $t('views.SettingsMonitorConfigView.browser_monitoring') }}</h1>
         <p class="text-muted-foreground text-sm">
           {{ $t('views.SettingsMonitorConfigView.description') }}

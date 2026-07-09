@@ -5,7 +5,7 @@
     { label: 'Variants', to: '/variants/compare' },
     { label: 'AB Test', to: '/variants/ab-test' },
   ]" />
-  <div class="mx-auto max-w-6xl space-y-8 p-6">
+  <div class="page-wide">
     <LoadingSpinner v-if="loading" />
     <ErrorAlert v-else-if="error" :message="error" />
     <template v-else>
@@ -187,15 +187,15 @@
         <section v-if="runEntries.size > 0" class="space-y-4">
           <h2 class="text-xl font-semibold tracking-tight">{{ $t('views.ABTestModelsView.results_title') }}</h2>
 
-          <div class="overflow-x-auto rounded-lg border bg-card">
+          <div class="table-wrapper">
             <table class="w-full text-left text-sm">
               <thead>
-                <tr class="border-b bg-muted/50">
-                  <th class="px-4 py-3 font-semibold text-muted-foreground">{{ $t('views.ABTestModelsView.metric') }}</th>
+                <tr>
+                  <th class="table-header">{{ $t('views.ABTestModelsView.metric') }}</th>
                   <th
                     v-for="s in summaryByVariant"
                     :key="s.name"
-                    class="min-w-[180px] px-4 py-3 font-semibold"
+                    class="table-header min-w-[180px]"
                   >
                     <div class="flex flex-col gap-0.5">
                       <span>{{ s.name }}</span>
@@ -208,11 +208,11 @@
               </thead>
               <tbody>
                 <tr class="border-b hover:bg-muted/30">
-                  <td class="px-4 py-3 font-medium text-muted-foreground">{{ $t('views.ABTestModelsView.eval_pass_rate') }}</td>
+                  <td class="table-cell font-medium text-muted-foreground">{{ $t('views.ABTestModelsView.eval_pass_rate') }}</td>
                   <td
                     v-for="s in summaryByVariant"
                     :key="`pass-${s.name}`"
-                    class="px-4 py-3"
+                    class="table-cell"
                   >
                     <span
                       v-if="s.passRate !== null"
@@ -230,22 +230,22 @@
                   </td>
                 </tr>
                 <tr class="border-b hover:bg-muted/30">
-                  <td class="px-4 py-3 font-medium text-muted-foreground">{{ $t('views.ABTestModelsView.cost') }}</td>
+                  <td class="table-cell font-medium text-muted-foreground">{{ $t('views.ABTestModelsView.cost') }}</td>
                   <td
                     v-for="s in summaryByVariant"
                     :key="`cost-${s.name}`"
-                    class="px-4 py-3 font-mono tabular-nums text-xs"
+                    class="table-cell table-cell-numeric font-mono text-xs"
                   >
                     <span v-if="s.totalCost !== null">${{ Number(s.totalCost).toFixed(6) }}</span>
                     <span v-else class="text-muted-foreground">—</span>
                   </td>
                 </tr>
                 <tr class="hover:bg-muted/30">
-                  <td class="px-4 py-3 font-medium text-muted-foreground">{{ $t('views.ABTestModelsView.tokens') }}</td>
+                  <td class="table-cell font-medium text-muted-foreground">{{ $t('views.ABTestModelsView.tokens') }}</td>
                   <td
                     v-for="s in summaryByVariant"
                     :key="`tokens-${s.name}`"
-                    class="px-4 py-3 font-mono tabular-nums text-xs"
+                    class="table-cell table-cell-numeric font-mono text-xs"
                   >
                     <span v-if="s.tokenTotal !== null">{{ s.tokenTotal.toLocaleString() }}</span>
                     <span v-else class="text-muted-foreground">—</span>

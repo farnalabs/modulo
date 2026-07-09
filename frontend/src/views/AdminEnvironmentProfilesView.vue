@@ -1,5 +1,5 @@
 ﻿<template>
-  <div class="mx-auto max-w-5xl space-y-8 p-6">
+  <div class="page-wide">
     <FeatureGate feature-name="environment_profiles" required-tier="team" show-disabled>
 
       <header class="flex items-center justify-between">
@@ -179,45 +179,45 @@
           </p>
         </div>
 
-        <div class="overflow-hidden rounded-lg border">
-          <table class="w-full text-left text-sm">
-            <thead class="bg-muted/50">
-              <tr>
-                <th class="px-4 py-3 font-medium">Name</th>
-                <th class="px-4 py-3 font-medium">Provider</th>
-                <th class="px-4 py-3 font-medium">Timeout</th>
-                <th class="px-4 py-3 font-medium">Status</th>
-                <th class="px-4 py-3 font-medium">Created</th>
-                <th class="px-4 py-3 font-medium text-right">Actions</th>
-              </tr>
-            </thead>
-            <tbody class="divide-y">
-              <tr
-                v-for="profile in profiles"
-                :key="profile.id"
-                class="hover:bg-muted/30 transition-colors"
-              >
-                <td class="px-4 py-3 font-medium">{{ profile.name }}</td>
-                <td class="px-4 py-3">
-                  <span class="rounded-full bg-primary/10 px-2.5 py-0.5 text-xs font-medium text-primary">
-                    {{ providerLabel(profile) }}
-                  </span>
-                </td>
-                <td class="px-4 py-3 text-muted-foreground">{{ formatTimeout(profile.timeout_seconds) }}</td>
-                <td class="px-4 py-3">
+      <div class="table-wrapper">
+        <table class="w-full text-left text-sm">
+          <thead>
+            <tr>
+              <th class="table-header">Name</th>
+              <th class="table-header">Provider</th>
+              <th class="table-header table-cell-numeric">Timeout</th>
+              <th class="table-header">Status</th>
+              <th class="table-header">Created</th>
+              <th class="table-header table-cell-numeric">Actions</th>
+            </tr>
+          </thead>
+          <tbody class="divide-y">
+            <tr
+              v-for="profile in profiles"
+              :key="profile.id"
+              class="hover:bg-muted/30 transition-colors"
+            >
+              <td class="table-cell font-medium">{{ profile.name }}</td>
+              <td class="table-cell">
+                <span class="rounded-full bg-primary/10 px-2.5 py-0.5 text-xs font-medium text-primary">
+                  {{ providerLabel(profile) }}
+                </span>
+              </td>
+              <td class="table-cell table-cell-numeric text-muted-foreground">{{ formatTimeout(profile.timeout_seconds) }}</td>
+              <td class="table-cell">
+                <span
+                  class="inline-flex items-center gap-1.5 rounded-full px-2.5 py-0.5 text-xs font-medium"
+                  :class="profile.is_active ? 'bg-success/10 text-success' : 'bg-muted text-muted-foreground'"
+                >
                   <span
-                    class="inline-flex items-center gap-1.5 rounded-full px-2.5 py-0.5 text-xs font-medium"
-                    :class="profile.is_active ? 'bg-success/10 text-success' : 'bg-muted text-muted-foreground'"
-                  >
-                    <span
-                      class="h-1.5 w-1.5 rounded-full"
-                      :class="profile.is_active ? 'bg-success' : 'bg-muted-foreground'"
-                    />
-                    {{ profile.is_active ? 'Active' : 'Inactive' }}
-                  </span>
-                </td>
-                <td class="px-4 py-3 text-muted-foreground">{{ formatDate(profile.created_at) }}</td>
-                <td class="px-4 py-3 text-right">
+                    class="h-1.5 w-1.5 rounded-full"
+                    :class="profile.is_active ? 'bg-success' : 'bg-muted-foreground'"
+                  />
+                  {{ profile.is_active ? 'Active' : 'Inactive' }}
+                </span>
+              </td>
+              <td class="table-cell text-muted-foreground">{{ formatDate(profile.created_at) }}</td>
+              <td class="table-cell-numeric">
                   <div class="flex items-center justify-end gap-1">
                     <button
                       class="rounded p-1 text-muted-foreground hover:bg-accent"

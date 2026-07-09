@@ -1,7 +1,7 @@
 ﻿<template>
   <FeatureGate feature-name="audit_viewer" required-tier="team" show-disabled>
 
-    <div class="mx-auto max-w-6xl space-y-6 p-6">
+    <div class="page-wide">
     <header class="flex items-center justify-between">
       <div>
         <h1 class="text-2xl font-semibold tracking-tight">{{ $t('views.AdminAuditView.audit_log') }}</h1>
@@ -187,16 +187,16 @@
     </div>
 
     <template v-else>
-      <div class="card overflow-hidden">
+      <div class="table-wrapper">
         <table class="w-full">
           <thead>
-            <tr class="border-b bg-muted/30 text-left text-xs font-medium uppercase text-muted-foreground">
-              <th class="px-4 py-3">{{ $t('views.AdminAuditView.timestamp') }}</th>
-              <th class="px-4 py-3">{{ $t('views.AdminAuditView.event_type') }}</th>
-              <th class="px-4 py-3">{{ $t('views.AdminAuditView.actor') }}</th>
-              <th class="px-4 py-3">{{ $t('views.AdminAuditView.target') }}</th>
-              <th class="px-4 py-3">{{ $t('views.AdminAuditView.summary') }}</th>
-              <th class="w-8 px-4 py-3" />
+            <tr>
+              <th class="table-header">{{ $t('views.AdminAuditView.timestamp') }}</th>
+              <th class="table-header">{{ $t('views.AdminAuditView.event_type') }}</th>
+              <th class="table-header">{{ $t('views.AdminAuditView.actor') }}</th>
+              <th class="table-header">{{ $t('views.AdminAuditView.target') }}</th>
+              <th class="table-header">{{ $t('views.AdminAuditView.summary') }}</th>
+              <th class="w-8 table-header" />
             </tr>
           </thead>
           <tbody class="divide-y">
@@ -212,18 +212,18 @@
               @keydown.enter="toggleExpand(event.id)"
               @keydown.space.prevent="toggleExpand(event.id)"
             >
-              <td class="whitespace-nowrap px-4 py-3 text-sm">
+              <td class="table-cell whitespace-nowrap">
                 {{ formatTimestamp(event.created_at) }}
               </td>
-              <td class="px-4 py-3">
+              <td class="table-cell">
                 <span :class="badgeClass(event.event_type)">
                   {{ event.event_type }}
                 </span>
               </td>
-              <td class="px-4 py-3 text-sm font-mono">
+              <td class="table-cell font-mono">
                 {{ formatActor(event.actor_user_id) }}
               </td>
-              <td class="px-4 py-3 text-sm">
+              <td class="table-cell">
                 <span v-if="event.resource_type" class="text-muted-foreground">
                   {{ event.resource_type }}
                 </span>
@@ -234,13 +234,13 @@
               </td>
               <Tooltip :delay-duration="300">
                 <TooltipTrigger as-child>
-                  <td class="max-w-xs truncate px-4 py-3 text-sm text-muted-foreground">{{ summarize(event) }}</td>
+                  <td class="table-cell max-w-xs truncate text-muted-foreground">{{ summarize(event) }}</td>
                 </TooltipTrigger>
                 <TooltipContent side="top" class="max-w-xs">
                   <p>{{ summarize(event) }}</p>
                 </TooltipContent>
               </Tooltip>
-              <td class="px-4 py-3 text-xs text-muted-foreground">
+              <td class="table-cell text-xs text-muted-foreground">
                 <svg
                   class="h-4 w-4 transition-transform"
                   :class="{ 'rotate-180': expandedId === event.id }"

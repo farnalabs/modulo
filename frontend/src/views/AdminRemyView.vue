@@ -1,5 +1,5 @@
 ﻿<template>
-  <div data-theme="agent" class="mx-auto max-w-6xl space-y-8 p-6">
+  <div data-theme="agent" class="page-wide">
     <header>
       <h1 class="text-2xl font-semibold tracking-tight">{{ $t('views.AdminRemyView.remy_configuration') }}</h1>
       <p class="mt-1 text-muted-foreground">{{ $t('views.AdminRemyView.configure_remy_ai_assistant_behaviour_access_and_skills') }}</p>
@@ -351,20 +351,20 @@
           </select>
         </div>
 
-        <div class="overflow-hidden rounded-lg border">
+        <div class="table-wrapper">
           <table class="w-full text-left text-sm">
-            <thead class="bg-muted/50">
+            <thead>
               <tr>
-                <th class="px-4 py-3 font-medium">Tool</th>
-                <th class="px-4 py-3 font-medium">Description</th>
-                <th class="px-4 py-3 font-medium">Permission</th>
+                <th class="table-header">Tool</th>
+                <th class="table-header">Description</th>
+                <th class="table-header">Permission</th>
               </tr>
             </thead>
             <tbody class="divide-y">
               <tr v-for="(info, toolName) in uiTools" :key="toolName">
-                <td class="px-4 py-3 font-mono text-xs">{{ toolName }}</td>
-                <td class="px-4 py-3 text-muted-foreground text-xs">{{ info.description }}</td>
-                <td class="px-4 py-3">
+                <td class="table-cell font-mono text-xs">{{ toolName }}</td>
+                <td class="table-cell text-muted-foreground text-xs">{{ info.description }}</td>
+                <td class="table-cell">
                   <select v-model="toolPerms[toolName]" :disabled="toolPermMode !== 'custom'" aria-label="Tool permission" class="rounded border border-input bg-background px-2 py-1 text-xs">
                     <option value="always_allowed">Auto-allow</option>
                     <option value="requires_approval">Requires approval</option>
@@ -514,15 +514,15 @@
         <div v-if="skills.length === 0" class="py-8 text-center">
           <p class="text-sm text-muted-foreground">{{ $t('views.AdminRemyView.no_skills_configured_yet') }}</p>
         </div>
-        <div v-else class="overflow-hidden rounded-lg border">
+        <div v-else class="table-wrapper">
           <table class="w-full text-left text-sm">
-            <thead class="bg-muted/50">
+            <thead>
               <tr>
-                <th class="px-4 py-3 font-medium">Name</th>
-                <th class="px-4 py-3 font-medium">Description</th>
-                <th class="px-4 py-3 font-medium">Triggers</th>
-                <th class="px-4 py-3 font-medium">Active</th>
-                <th class="px-4 py-3 font-medium text-right">Actions</th>
+                <th class="table-header">Name</th>
+                <th class="table-header">Description</th>
+                <th class="table-header">Triggers</th>
+                <th class="table-header">Active</th>
+                <th class="table-header table-cell-numeric">Actions</th>
               </tr>
             </thead>
             <tbody class="divide-y">
@@ -531,8 +531,8 @@
                 :key="skill.id"
                 class="hover:bg-muted/30 transition-colors"
               >
-                <td class="px-4 py-3 font-medium">{{ skill.name }}</td>
-                <td class="px-4 py-3 text-muted-foreground max-w-xs truncate">
+                <td class="table-cell font-medium">{{ skill.name }}</td>
+                <td class="table-cell text-muted-foreground max-w-xs truncate">
                   <Tooltip :delay-duration="300">
                     <TooltipTrigger as-child>
                       <span>{{ skill.description || '—' }}</span>
@@ -542,7 +542,7 @@
                     </TooltipContent>
                   </Tooltip>
                 </td>
-                <td class="px-4 py-3">
+                <td class="table-cell">
                   <div class="flex flex-wrap gap-1">
                     <span
                       v-for="trigger in (skill.triggers || [])"
@@ -554,7 +554,7 @@
                     <span v-if="!skill.triggers?.length" class="text-xs text-muted-foreground">—</span>
                   </div>
                 </td>
-                <td class="px-4 py-3">
+                <td class="table-cell">
                   <button
                     class="inline-flex items-center gap-1.5 rounded-full px-2.5 py-0.5 text-xs font-medium transition-colors disabled:opacity-50"
                     :class="skill.active ? 'bg-success/10 text-success' : 'bg-muted text-muted-foreground'"
@@ -568,7 +568,7 @@
                     {{ skillToggling[skill.id] ? '...' : (skill.active ? 'Active' : 'Inactive') }}
                   </button>
                 </td>
-                <td class="px-4 py-3 text-right">
+                <td class="table-cell-numeric">
                   <div class="flex items-center justify-end gap-1">
                     <button
                       class="rounded p-1 text-muted-foreground hover:bg-accent"
@@ -612,18 +612,18 @@
         <p class="mb-4 text-sm text-muted-foreground">{{ $t('views.AdminRemyView.control_what_remy_knows') }}</p>
 
         <div v-if="contextLoading" class="py-4 text-center text-sm text-muted-foreground">Loading sources...</div>
-        <div v-else class="overflow-hidden rounded-lg border">
+        <div v-else class="table-wrapper">
           <table class="w-full text-left text-sm">
-            <thead class="bg-muted/50">
+            <thead>
               <tr>
-                <th class="px-4 py-3 font-medium">{{ $t('views.AdminRemyView.source') }}</th>
-                <th class="px-4 py-3 font-medium">{{ $t('views.AdminRemyView.mode') }}</th>
-                <th class="px-4 py-3 font-medium">{{ $t('views.AdminRemyView.tokens') }}</th>
+                <th class="table-header">{{ $t('views.AdminRemyView.source') }}</th>
+                <th class="table-header">{{ $t('views.AdminRemyView.mode') }}</th>
+                <th class="table-header table-cell-numeric">{{ $t('views.AdminRemyView.tokens') }}</th>
               </tr>
             </thead>
             <tbody class="divide-y">
               <tr v-for="src in contextSourceDefs" :key="src.key" class="hover:bg-muted/30 transition-colors">
-                <td class="px-4 py-3">
+                <td class="table-cell">
                   <Tooltip :delay-duration="300">
                     <TooltipTrigger as-child>
                       <span class="font-medium cursor-help">{{ src.label }}</span>
@@ -633,7 +633,7 @@
                     </TooltipContent>
                   </Tooltip>
                 </td>
-                <td class="px-4 py-3">
+                <td class="table-cell">
                   <select
                     v-model="contextSources[src.key]"
                     class="rounded border border-input bg-background px-2 py-1 text-xs"
@@ -646,7 +646,7 @@
                     <option value="off">{{ $t('views.AdminRemyView.off') }}</option>
                   </select>
                 </td>
-                <td class="px-4 py-3 text-xs text-muted-foreground">
+                <td class="table-cell table-cell-numeric text-xs text-muted-foreground">
                   <span v-if="src.tokens">{{ src.tokens }}</span>
                   <code v-else-if="src.toolCall" class="text-[10px]">{{ src.toolCall }}</code>
                 </td>
@@ -661,18 +661,18 @@
       <div v-if="skills.length > 0" class="card p-4">
         <h2 class="mb-3 text-base font-semibold">{{ $t('views.AdminRemyView.skills_as_knowledge') }}</h2>
         <p class="mb-4 text-sm text-muted-foreground">{{ $t('views.AdminRemyView.control_what_remy_knows') }}</p>
-        <div class="overflow-hidden rounded-lg border">
+        <div class="table-wrapper">
           <table class="w-full text-left text-sm">
-            <thead class="bg-muted/50">
+            <thead>
               <tr>
-                <th class="px-4 py-3 font-medium">{{ $t('views.AdminRemyView.skill_name') }}</th>
-                <th class="px-4 py-3 font-medium">{{ $t('views.AdminRemyView.mode') }}</th>
+                <th class="table-header">{{ $t('views.AdminRemyView.skill_name') }}</th>
+                <th class="table-header">{{ $t('views.AdminRemyView.mode') }}</th>
               </tr>
             </thead>
             <tbody class="divide-y">
               <tr v-for="skill in skills" :key="skill.id" class="hover:bg-muted/30 transition-colors">
-                <td class="px-4 py-3 font-medium">{{ skill.name }}</td>
-                <td class="px-4 py-3">
+                <td class="table-cell font-medium">{{ skill.name }}</td>
+                <td class="table-cell">
                   <select
                     v-model="skillModes[skill.id]"
                     class="rounded border border-input bg-background px-2 py-1 text-xs"

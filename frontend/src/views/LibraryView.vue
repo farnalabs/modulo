@@ -2,7 +2,7 @@
   <div class="min-h-screen">
     <header class="bg-card border-b border-border px-6 py-4">
       <div class="max-w-6xl mx-auto flex items-center justify-between gap-3">
-        <h1 class="text-xl font-semibold text-foreground">{{ $t('views.LibraryView.title') }}</h1>
+        <h1 class="text-2xl font-semibold tracking-tight text-foreground">{{ $t('views.LibraryView.title') }}</h1>
         <div class="flex items-center gap-3">
           <Button
             variant="default"

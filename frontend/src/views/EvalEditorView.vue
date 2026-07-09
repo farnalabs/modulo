@@ -8,7 +8,7 @@
       { label: 'AB Test', to: '/variants/ab-test' },
     ]" />
 
-    <div class="mx-auto max-w-5xl space-y-8 p-6">
+    <div class="page-narrow">
     <header>
       <h1 class="text-2xl font-semibold tracking-tight">{{ $t('views.EvalEditorView.eval_editor') }}</h1>
       <p class="mt-1 text-muted-foreground">{{ $t('views.EvalEditorView.create_and_manage_eval_definitions') }}</p>
