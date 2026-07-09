@@ -29,12 +29,12 @@ test.describe('Search', () => {
 
   test('library page search filters results', async ({ page, env }) => {
     await loginAsAdmin(page, env)
-    await page.route('**/api/v1/library*', (route) => {
+    await page.route('**/api/v1/libraries*', (route) => {
       route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({
         items: [
-          { id: 'l1', name: 'Code Review Agent', type: 'agent' },
-          { id: 'l2', name: 'Deploy Workflow', type: 'workflow' },
-          { id: 'l3', name: 'Data Validator', type: 'agent' },
+          { id: 'l1', name: 'Code Review Agent', primitive_type: 'agent', source: 'native', slug: 'code-review-agent', author: 'Modulo', version: '1.0.0', tags: [], visibility: 'org', created_at: new Date().toISOString(), updated_at: new Date().toISOString() },
+          { id: 'l2', name: 'Deploy Workflow', primitive_type: 'workflow', source: 'native', slug: 'deploy-workflow', author: 'Modulo', version: '1.0.0', tags: [], visibility: 'org', created_at: new Date().toISOString(), updated_at: new Date().toISOString() },
+          { id: 'l3', name: 'Data Validator', primitive_type: 'agent', source: 'native', slug: 'data-validator', author: 'Modulo', version: '1.0.0', tags: [], visibility: 'org', created_at: new Date().toISOString(), updated_at: new Date().toISOString() },
         ],
         total: 3,
       })})
