@@ -1,12 +1,12 @@
 """Tests for the admin system config API."""
 
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, MagicMock
 from uuid import uuid4
 
 import pytest
 from httpx import ASGITransport, AsyncClient
 
-from modulo.api.dependencies import get_db_session
+from modulo.api.dependencies import get_db_session, get_plan_context
 from modulo.auth.dependencies import get_current_user
 from modulo.auth.jwt import AuthenticatedPrincipal
 
@@ -45,6 +45,9 @@ def mock_session():
 def client_sys_admin(mock_session):
     from modulo.api.main import app
 
+    mock_plan = MagicMock()
+    mock_plan.feature_enabled.return_value = True
+    app.dependency_overrides[get_plan_context] = lambda: mock_plan
     app.dependency_overrides[get_db_session] = lambda: mock_session
     app.dependency_overrides[get_current_user] = lambda: SYSTEM_ADMIN
     transport = ASGITransport(app=app)
@@ -57,6 +60,9 @@ def client_sys_admin(mock_session):
 def client_regular_admin(mock_session):
     from modulo.api.main import app
 
+    mock_plan = MagicMock()
+    mock_plan.feature_enabled.return_value = True
+    app.dependency_overrides[get_plan_context] = lambda: mock_plan
     app.dependency_overrides[get_db_session] = lambda: mock_session
     app.dependency_overrides[get_current_user] = lambda: REGULAR_ADMIN
     transport = ASGITransport(app=app)

@@ -9,7 +9,7 @@ import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy.exc import ProgrammingError, SQLAlchemyError
 
-from modulo.api.dependencies import _get_engine, get_db_session
+from modulo.api.dependencies import _get_engine, get_db_session, get_plan_context
 from modulo.api.main import app
 from modulo.api.routes.dashboard import _in_memory_cache
 from modulo.auth.dependencies import get_current_user
@@ -45,7 +45,10 @@ def _setup_client(session_mock: AsyncMock) -> Generator[TestClient, None, None]:
         yield session_mock
 
     _in_memory_cache.clear()
+    mock_plan = MagicMock()
+    mock_plan.feature_enabled.return_value = True
     app.dependency_overrides[get_settings] = _make_settings
+    app.dependency_overrides[get_plan_context] = lambda: mock_plan
     app.dependency_overrides[get_db_session] = override_session
     app.dependency_overrides[_get_engine] = lambda: MagicMock()
     app.dependency_overrides[get_current_user] = lambda: AuthenticatedPrincipal(

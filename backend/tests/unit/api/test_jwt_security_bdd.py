@@ -15,7 +15,7 @@ from fastapi.testclient import TestClient
 from jose import jwt as jose_jwt
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from modulo.api.dependencies import _get_engine, get_db_session
+from modulo.api.dependencies import _get_engine, get_db_session, get_plan_context
 from modulo.api.main import app
 from modulo.auth.passwords import hash_password
 from modulo.settings import Settings, get_settings
@@ -66,7 +66,10 @@ def client(mock_session: AsyncMock) -> Generator[TestClient, None, None]:
     async def override_session():
         yield mock_session
 
+    mock_plan = MagicMock()
+    mock_plan.feature_enabled.return_value = True
     app.dependency_overrides[get_settings] = _override
+    app.dependency_overrides[get_plan_context] = lambda: mock_plan
     app.dependency_overrides[get_db_session] = override_session
     app.dependency_overrides[_get_engine] = lambda: MagicMock()
 
