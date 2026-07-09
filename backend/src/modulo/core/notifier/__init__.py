@@ -1,4 +1,5 @@
 from __future__ import annotations
+
 """Notifier — dispatch webhook notifications with HMAC signing, retry, and dead-letter tracking.
 
 Event types dispatched:
@@ -40,6 +41,7 @@ from modulo.db.rls import set_rls_org
 
 __all__ = [
     "EVENT_BUDGET_EXCEEDED",
+    "EVENT_CIRCUIT_BREAKER_TRIPPED",
     "EVENT_CLAIM_EXPIRED",
     "EVENT_EVAL_BLOCKED",
     "EVENT_EVAL_REGRESSION",
@@ -59,12 +61,13 @@ _log = logging.getLogger(__name__)
 
 MAX_ATTEMPTS = 4  # 1 initial + 3 retries
 MAX_DEAD_LETTERS = 10
-RETRY_DELAYS = [5.0, 30.0, 120.0]
+RETRY_DELAYS = [1.0, 5.0, 30.0]
 
 # Event type constants — single source of truth
 EVENT_HITL_AWAITING = "hitl_awaiting"
 EVENT_RUN_FAILED = "run_failed"
 EVENT_BUDGET_EXCEEDED = "budget_exceeded"
+EVENT_CIRCUIT_BREAKER_TRIPPED = "circuit_breaker_tripped"
 EVENT_CLAIM_EXPIRED = "claim_expired"
 EVENT_HITL_OVERDUE = "hitl_overdue"
 EVENT_EVAL_REGRESSION = "eval_regression"
@@ -297,6 +300,21 @@ class Notifier:
         for ep in endpoints:
             result = await self._dispatch_to_endpoint(http_client, ep, event_type, body, run_id, retain_payload)
             results.append(result)
+
+        # Create in-app notification record alongside webhook dispatches
+        try:
+            from modulo.core.notifier.event_mapper import NotificationEventMapper
+            mapper = NotificationEventMapper()
+            async with self._session_factory() as session, session.begin():
+                await set_rls_org(session, org_id)
+                await mapper.create_from_event(
+                    session, org_id=org_id, event_type=event_type, payload=payload,
+                )
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            _log.exception("notifier.in_app_notification_failed", extra={"event_type": event_type, "org_id": str(org_id)})
+
         return results
 
     async def _dispatch_to_endpoint(
@@ -349,8 +367,18 @@ class Notifier:
                         "last_error": last_error,
                     },
                 )
-                delay_idx = min(attempt - 1, len(RETRY_DELAYS) - 1)
-                await asyncio.sleep(RETRY_DELAYS[delay_idx])
+                if response_code == 429:
+                    retry_after = resp.headers.get("Retry-After")
+                    if retry_after is not None:
+                        try:
+                            delay = min(float(retry_after), 60.0)
+                        except (ValueError, TypeError):
+                            delay = RETRY_DELAYS[min(attempt - 1, len(RETRY_DELAYS) - 1)]
+                    else:
+                        delay = RETRY_DELAYS[min(attempt - 1, len(RETRY_DELAYS) - 1)]
+                else:
+                    delay = RETRY_DELAYS[min(attempt - 1, len(RETRY_DELAYS) - 1)]
+                await asyncio.sleep(delay)
 
         status = "delivered" if succeeded else "dead_lettered"
 

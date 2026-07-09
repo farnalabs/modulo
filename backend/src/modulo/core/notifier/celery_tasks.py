@@ -1,4 +1,5 @@
 from __future__ import annotations
+
 """Celery task for notification dispatch with retry and dead-letter tracking.
 
 This module defines the ``DispatchNotificationTask`` and a convenience
