@@ -128,6 +128,18 @@
 
 - `if not value` after `dict.get(key)` rejects falsy-but-valid values (empty string `""`, integer `0`, boolean `False`). For required fields validation, use `if key not in filters` / `if key not in data` instead. This matches the GitLab connector's correct pattern and avoids introducing subtle bugs when a valid field value is falsy.
 
+### Python `all([])` returns `True` for empty iterables
+
+- When checking `all(result.error == "cancelled_by_user" for result in results)` on an empty results list, `all([])` returns `True` — the condition vacuously holds for all zero elements. This caused every Remy streaming response with an empty UI-command batch to emit "Action cancelled by user." Always guard `all()` calls with a preceding `if not results: return False` (or equivalent) when `all()` is used to check error conditions.
+
+### FastAPI router ordering: include specific routes before catch-all path-param routers
+
+- When a router with a path parameter (e.g. `errors_router` with `/{error_id}` where `error_id` is a UUID) is included BEFORE a router with a more specific path (e.g. `error_forwarder_config_router` with `/forwarders`), the catch-all router matches first — it tries to parse `"forwarders"` as a UUID and fails with a 422 validation error. Always include routers with specific, non-parameterized paths before routers with path parameters. This applies to `include_router()` ordering in `main.py`.
+
+### Response model serialization: never return raw ORM objects from route handlers
+
+- FastAPI route handlers that return a `response_model` must pass Pydantic-model-converted objects, not raw SQLAlchemy ORM instances. Returning a raw ORM object causes FastAPI's response serialization to fail with a 500 Internal Server Error because ORM instances don't match the Pydantic response schema structure. Always wrap ORM results: `return [SsoProviderResponse.from_orm(p) for p in providers]` or use `model_validate()`.
+
 ### AsyncSession must always pass `autobegin=False`
 
 The DI factory in `dependencies.py:93` creates sessions with `autobegin=False`. Any code that manually constructs an `AsyncSession` (e.g. `AsyncSession(engine)` or `AsyncSession(session.bind)`) MUST pass `autobegin=False` to match.

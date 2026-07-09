@@ -64,3 +64,11 @@ is edited, re-run `npm install` (not just the script) to ensure the hook fires.
 - Dashboard trend data (`fetchTrends`) must be fetched in parallel with summary (`fetchSummary`) on mount, not lazily on first duration-button click. The user sees a blank trend section until they interact with the 7d/30d/90d buttons, making the dashboard feel slow. Add `dashboardStore.fetchTrends(7)` to the `onMounted` promise array.
 
 - API client 401 handling must attempt a refresh token rotation before redirecting to login. Use a module-level `_refreshingPromise` to deduplicate concurrent refresh attempts — when multiple API calls get 401 simultaneously, they should share one refresh request and all retry with the new token. Pattern: `const resp = await fn(...); if (resp.response?.status === 401) { const refreshed = await attemptTokenRefresh(); if (refreshed) resp = await fn(...); }`
+
+### Nav link `exact` matching: child routes activate parent nav items unless `exact: true`
+
+- When a sidebar nav item links to `/pipelines` (router-link default matches prefix), navigating to `/pipelines/copy` also activates the "My Pipelines" link because Vue Router's default matching is prefix-based. Set `exact: true` on parent nav items when child routes exist (e.g. `/pipelines/copy`, `/pipelines/new`) to prevent double-highlighting. In `manifest.yaml`, add `exact: true` to the parent route entry.
+
+### Skills change signal: after adding/editing/deleting a skill, signal the store to rebuild system prompt
+
+- The Remy system prompt is built once per session and caches the skill list. When a user adds or modifies a skill (via `RemySkillManager.vue` or `UserRemySkillsView.vue`), the store needs a `signalSkillsChanged()` mechanism (e.g. incrementing a `skillsVersion` ref) so the next Remy session `/stream` call re-fetches skills and includes the new one. Without this signal, newly added skills don't appear in the conversation until a page refresh. Pattern: maintain a `skillsVersion` counter in `useRemyStore.ts`, increment it on skill change, and read it when building the stream request payload.
