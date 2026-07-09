@@ -4,7 +4,7 @@
   ]" />
   <div class="mx-auto max-w-6xl space-y-6 p-6">
     <header>
-      <h1 class="text-3xl font-bold tracking-tight">{{ $t('views.AdminErrorsView.error_dashboard') }}</h1>
+      <h1 class="text-2xl font-semibold tracking-tight">{{ $t('views.AdminErrorsView.error_dashboard') }}</h1>
       <p class="mt-1 text-muted-foreground">{{ $t('views.AdminErrorsView.monitor_and_manage_errors_across_your_organisation') }}</p>
     </header>
 

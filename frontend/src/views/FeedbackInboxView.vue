@@ -1,7 +1,7 @@
 ﻿<template>
   <div class="mx-auto max-w-6xl space-y-8 p-6">
     <header>
-      <h1 data-testid="feedback-inbox-title" class="text-3xl font-bold tracking-tight">{{ $t('views.FeedbackInboxView.feedback_inbox') }}</h1>
+      <h1 data-testid="feedback-inbox-title" class="text-2xl font-semibold tracking-tight">{{ $t('views.FeedbackInboxView.feedback_inbox') }}</h1>
       <p class="mt-1 text-muted-foreground">{{ $t('views.FeedbackInboxView.review_and_resolve_pending_feedback_from_pipeline_evaluation') }}</p>
     </header>
 

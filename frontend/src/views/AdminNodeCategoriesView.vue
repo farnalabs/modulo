@@ -4,7 +4,7 @@
     <div class="mx-auto max-w-4xl space-y-8 p-6">
     <header class="flex items-center justify-between">
       <div>
-        <h1 class="text-3xl font-bold tracking-tight">Node Categories</h1>
+        <h1 class="text-2xl font-semibold tracking-tight">Node Categories</h1>
         <p class="mt-1 text-muted-foreground">Manage categories for classifying nodes in pipelines</p>
       </div>
       <Button
@@ -23,7 +23,7 @@
 
     <template v-else>
       <div v-if="editorMode === 'add'" class="card p-6">
-        <h2 class="mb-4 text-lg font-semibold">New Node Category</h2>
+        <h2 class="mb-4 text-base font-semibold">New Node Category</h2>
         <NodeCategoryEditor
           :category="null"
           @saved="onCategoryCreated"
@@ -107,7 +107,7 @@
       </div>
 
       <div v-if="editCategoryId" class="card p-6">
-        <h2 class="mb-4 text-lg font-semibold">Edit Node Category</h2>
+        <h2 class="mb-4 text-base font-semibold">Edit Node Category</h2>
         <NodeCategoryEditor
           :category="editingCategory"
           @saved="onCategoryUpdated"

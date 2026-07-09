@@ -3,7 +3,7 @@
     <div class="mx-auto max-w-4xl space-y-8 p-6">
       <header class="flex items-center justify-between">
         <div>
-          <h1 class="text-3xl font-bold tracking-tight">{{ $t('views.AdminModelBackendsView.model_backends') }}</h1>
+          <h1 class="text-2xl font-semibold tracking-tight">{{ $t('views.AdminModelBackendsView.model_backends') }}</h1>
           <p class="mt-1 text-muted-foreground">{{ $t('views.AdminModelBackendsView.manage_llm_backend_connections_and_credentials') }}</p>
         </div>
         <Button
@@ -22,7 +22,7 @@
 
       <template v-else>
         <div v-if="formMode === 'add'" class="card p-6">
-          <h2 class="mb-4 text-lg font-semibold">{{ $t('views.AdminModelBackendsView.new_model_backend') }}</h2>
+          <h2 class="mb-4 text-base font-semibold">{{ $t('views.AdminModelBackendsView.new_model_backend') }}</h2>
           <form @submit.prevent="createBackend">
             <div class="space-y-4">
               <div>
@@ -285,7 +285,7 @@
         </details>
 
         <div v-if="editBackendId" class="card p-6">
-          <h2 class="mb-4 text-lg font-semibold">{{ $t('views.AdminModelBackendsView.edit_model_backend') }}</h2>
+          <h2 class="mb-4 text-base font-semibold">{{ $t('views.AdminModelBackendsView.edit_model_backend') }}</h2>
           <form @submit.prevent="updateBackend">
             <div class="space-y-4">
               <div>

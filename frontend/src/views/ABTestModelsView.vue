@@ -10,7 +10,7 @@
     <ErrorAlert v-else-if="error" :message="error" />
     <template v-else>
       <header>
-        <h1 class="text-3xl font-bold tracking-tight">{{ $t('views.ABTestModelsView.ab_test_models') }}</h1>
+        <h1 class="text-2xl font-semibold tracking-tight">{{ $t('views.ABTestModelsView.ab_test_models') }}</h1>
         <p class="mt-1 text-muted-foreground">
           Compare model backends side by side with weighted A/B testing — eval scores, costs, and token usage
         </p>
@@ -50,7 +50,7 @@
 
       <template v-if="selectedPipelineId">
         <section class="space-y-4 rounded-lg border bg-card p-6">
-          <h2 class="text-lg font-semibold tracking-tight">
+          <h2 class="text-base font-semibold tracking-tight">
             {{ $t(selectedGroupId ? 'views.ABTestModelsView.edit_variant_group' : 'views.ABTestModelsView.new_variant_group') }}
           </h2>
           <div class="grid gap-4 sm:grid-cols-2">

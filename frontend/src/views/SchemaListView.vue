@@ -6,7 +6,7 @@
   ]" />
   <div class="mx-auto max-w-4xl space-y-8 p-6">
     <header>
-      <h1 class="text-3xl font-bold tracking-tight">Schemas</h1>
+      <h1 class="text-2xl font-semibold tracking-tight">Schemas</h1>
       <p class="mt-1 text-muted-foreground">{{ $t('views.SchemaListView.manage_schemas_and_deprecate_outdated_definitions') }}</p>
     </header>
 

@@ -3,7 +3,7 @@
 
     <div class="mx-auto max-w-6xl space-y-8 p-6">
     <header>
-      <h1 class="text-3xl font-bold tracking-tight">HITL Review</h1>
+      <h1 class="text-2xl font-semibold tracking-tight">HITL Review</h1>
       <p class="mt-1 text-muted-foreground">Review and respond to pending human-in-the-loop gates</p>
     </header>
 

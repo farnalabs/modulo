@@ -1,7 +1,7 @@
 ﻿<template>
   <div class="mx-auto max-w-7xl space-y-6 p-6">
     <header>
-      <h1 data-testid="admin-notification-log-title" class="text-3xl font-bold tracking-tight">{{ $t('views.AdminNotificationDeliveryLogView.notification_delivery_log') }}</h1>
+      <h1 data-testid="admin-notification-log-title" class="text-2xl font-semibold tracking-tight">{{ $t('views.AdminNotificationDeliveryLogView.notification_delivery_log') }}</h1>
       <p class="mt-1 text-muted-foreground">{{ $t('views.AdminNotificationDeliveryLogView.admin_view_of_all_webhook_notification_deliveries') }}</p>
     </header>
 
@@ -230,7 +230,7 @@
       <div v-if="deadLetteredCount > 0" data-testid="admin-notification-log-dlq" class="rounded-lg border bg-card p-4 shadow-sm">
         <div class="flex items-center justify-between">
           <div>
-            <h3 class="text-lg font-semibold">Dead Letter Queue</h3>
+            <h3 class="text-base font-semibold">Dead Letter Queue</h3>
             <p class="text-sm text-muted-foreground">
               {{ deadLetteredCount }} undeliverable notification{{ deadLetteredCount === 1 ? '' : 's' }} across all endpoints
             </p>

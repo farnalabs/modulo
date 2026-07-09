@@ -3,7 +3,7 @@
 
     <div data-theme="agent" class="mx-auto max-w-6xl space-y-6 p-6">
     <header>
-      <h1 class="text-3xl font-bold tracking-tight">Organisation Settings</h1>
+      <h1 class="text-2xl font-semibold tracking-tight">Organisation Settings</h1>
       <p class="mt-1 text-muted-foreground">Manage your organisation profile, export data, or delete the organisation</p>
     </header>
 
@@ -13,7 +13,7 @@
     <template v-else>
       <!-- Org Info -->
       <div class="card p-4">
-        <h2 class="mb-3 text-lg font-semibold">Organisation Info</h2>
+        <h2 class="mb-3 text-base font-semibold">Organisation Info</h2>
         <div class="grid grid-cols-1 gap-4 sm:grid-cols-3">
           <div>
             <span class="text-xs font-medium text-muted-foreground">Name</span>
@@ -48,7 +48,7 @@
 
       <!-- Data Export -->
       <div class="card p-4">
-        <h2 class="mb-3 text-lg font-semibold">Data Export</h2>
+        <h2 class="mb-3 text-base font-semibold">Data Export</h2>
         <p class="mb-4 text-sm text-muted-foreground">
           Export all organisation data including runs, pipelines, schemas, connectors, and settings.
         </p>
@@ -100,7 +100,7 @@
 
       <!-- Delete Organization -->
       <div class="card border-destructive/30 p-4">
-        <h2 class="mb-3 text-lg font-semibold text-destructive">Delete Organisation</h2>
+        <h2 class="mb-3 text-base font-semibold text-destructive">Delete Organisation</h2>
         <p class="mb-4 text-sm text-destructive/80">
           Permanently delete this organisation and all associated data. This action cannot be undone.
         </p>

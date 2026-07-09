@@ -1,7 +1,7 @@
 ﻿<template>
   <div class="mx-auto max-w-6xl space-y-6 p-6">
     <header>
-      <h1 class="text-3xl font-bold tracking-tight">{{ $t('views.SettingsTriggerEventLogView.trigger_event_log') }}</h1>
+      <h1 class="text-2xl font-semibold tracking-tight">{{ $t('views.SettingsTriggerEventLogView.trigger_event_log') }}</h1>
       <p class="mt-1 text-muted-foreground">{{ $t('views.SettingsTriggerEventLogView.event_history_for_all_triggers_across_the_organisation') }}</p>
     </header>
 

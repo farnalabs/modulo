@@ -10,7 +10,7 @@
 
     <div class="mx-auto max-w-5xl space-y-8 p-6">
     <header>
-      <h1 class="text-3xl font-bold tracking-tight">Eval Proposals Queue</h1>
+      <h1 class="text-2xl font-semibold tracking-tight">Eval Proposals Queue</h1>
       <p class="mt-1 text-muted-foreground">Eval gaps detected by the feedback system — review and publish as eval definitions</p>
     </header>
 

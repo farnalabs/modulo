@@ -1,7 +1,7 @@
 ﻿<template>
   <div data-theme="agent" data-loading="false" class="mx-auto max-w-4xl space-y-8 p-6">
     <header>
-      <h1 data-testid="license-title" class="text-3xl font-bold tracking-tight">License</h1>
+      <h1 data-testid="license-title" class="text-2xl font-semibold tracking-tight">License</h1>
       <p class="mt-1 text-muted-foreground">{{ $t('views.SettingsLicenseView.manage_your_modulo_team_license_key_and_view_plan_details') }}</p>
     </header>
 
@@ -14,7 +14,7 @@
         <div v-if="licenseInfo.tier === 'team'" class="flex items-start justify-between">
           <div>
             <div class="flex items-center gap-2">
-              <h2 class="text-lg font-semibold">Team</h2>
+              <h2 class="text-base font-semibold">Team</h2>
               <Badge variant="default">Active</Badge>
             </div>
             <p v-if="licenseInfo.org_id" class="mt-2 text-sm text-muted-foreground">
@@ -27,7 +27,7 @@
         </div>
         <div v-else>
           <div class="flex items-center gap-2">
-            <h2 class="text-lg font-semibold">Community</h2>
+            <h2 class="text-base font-semibold">Community</h2>
             <Badge variant="outline">Community</Badge>
           </div>
           <p class="mt-2 text-sm text-muted-foreground">
@@ -49,7 +49,7 @@
 
       <!-- License Key Management -->
       <div class="rounded-lg border bg-card p-6 shadow-sm">
-        <h2 class="mb-4 text-lg font-semibold">{{ $t('views.AdminFeatureFlagsView.license_key') }}</h2>
+        <h2 class="mb-4 text-base font-semibold">{{ $t('views.AdminFeatureFlagsView.license_key') }}</h2>
 
         <div v-if="licenseInfo.has_license" class="mb-6 rounded-lg bg-muted/50 p-4">
           <p class="text-xs font-medium text-muted-foreground uppercase tracking-wide">{{ $t('views.SettingsLicenseView.current_key') }}</p>

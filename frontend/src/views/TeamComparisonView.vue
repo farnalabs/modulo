@@ -1,7 +1,7 @@
 ﻿<template>
   <div class="mx-auto max-w-6xl space-y-6 p-6">
     <header>
-      <h1 class="text-3xl font-bold tracking-tight">{{ $t('views.TeamComparisonView.team_comparison') }}</h1>
+      <h1 class="text-2xl font-semibold tracking-tight">{{ $t('views.TeamComparisonView.team_comparison') }}</h1>
       <p class="mt-1 text-muted-foreground">{{ $t('views.TeamComparisonView.sidebyside_eval_pass_rates_and_pipeline_metrics_across_teams') }}</p>
     </header>
 
@@ -14,21 +14,21 @@
       <div class="grid gap-4 sm:grid-cols-4">
         <div class="rounded-lg border bg-card p-4 text-card-foreground shadow-sm">
           <p class="text-sm font-medium text-muted-foreground">{{ $t('views.TeamComparisonView.total_runs') }}</p>
-          <p class="mt-1 text-3xl font-bold">{{ data.summary.total_runs }}</p>
+          <p class="mt-1 text-2xl font-semibold tabular-nums">{{ data.summary.total_runs }}</p>
         </div>
         <div class="rounded-lg border bg-card p-4 text-card-foreground shadow-sm">
           <p class="text-sm font-medium text-muted-foreground">{{ $t('views.TeamComparisonView.active_pipelines') }}</p>
-          <p class="mt-1 text-3xl font-bold">{{ data.summary.active_pipelines }}</p>
+          <p class="mt-1 text-2xl font-semibold tabular-nums">{{ data.summary.active_pipelines }}</p>
         </div>
         <div class="rounded-lg border bg-card p-4 text-card-foreground shadow-sm">
           <p class="text-sm font-medium text-muted-foreground">{{ $t('views.ABTestModelsView.eval_pass_rate') }}</p>
-          <p class="mt-1 text-3xl font-bold" :class="passRateClass(data.orgEvalPassRate)">
+          <p class="mt-1 text-2xl font-semibold tabular-nums" :class="passRateClass(data.orgEvalPassRate)">
             {{ data.orgEvalPassRate != null ? `${data.orgEvalPassRate}%` : '—' }}
           </p>
         </div>
         <div class="rounded-lg border bg-card p-4 text-card-foreground shadow-sm">
           <p class="text-sm font-medium text-muted-foreground">{{ $t('views.TeamComparisonView.teams') }}</p>
-          <p class="mt-1 text-3xl font-bold">{{ data.teams.length }}</p>
+          <p class="mt-1 text-2xl font-semibold tabular-nums">{{ data.teams.length }}</p>
         </div>
       </div>
 
@@ -104,7 +104,7 @@
               <td colspan="7" class="border-t bg-muted p-4">
                 <div class="space-y-4">
                   <div class="flex items-center justify-between">
-                    <h3 class="text-lg font-semibold">{{ $t('views.TeamComparisonView.pipeline_eval_breakdown', { name: expandedTeam?.name }) }}</h3>
+                    <h3 class="text-base font-semibold">{{ $t('views.TeamComparisonView.pipeline_eval_breakdown', { name: expandedTeam?.name }) }}</h3>
                     <span class="text-sm text-muted-foreground">
                       {{ $t('views.TeamComparisonView.pipeline_count', { count: pipelineEvals.length }, pipelineEvals.length) }}
                     </span>

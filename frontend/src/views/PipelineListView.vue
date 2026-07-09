@@ -176,7 +176,7 @@
       >
         <div class="bg-card border border-border rounded-xl shadow-xl w-full max-w-lg mx-4 p-6 space-y-4">
           <div class="flex items-center justify-between">
-            <h2 class="text-lg font-semibold text-foreground">{{ $t('views.PipelineListView.run_pipeline') }}</h2>
+            <h2 class="text-base font-semibold text-foreground">{{ $t('views.PipelineListView.run_pipeline') }}</h2>
             <button
               class="text-muted-foreground hover:text-foreground transition-colors"
               @click="closeRunDialog"

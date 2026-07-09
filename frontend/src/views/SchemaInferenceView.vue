@@ -6,7 +6,7 @@
   ]" />
   <div class="mx-auto max-w-4xl space-y-8 p-6">
     <header>
-      <h1 class="text-3xl font-bold tracking-tight">{{ $t('views.SchemaInferenceView.schema_inference') }}</h1>
+      <h1 class="text-2xl font-semibold tracking-tight">{{ $t('views.SchemaInferenceView.schema_inference') }}</h1>
       <p class="mt-1 text-muted-foreground">{{ $t('views.SchemaInferenceView.infer_a_schema_from_a_connected_data_source') }}</p>
     </header>
 
@@ -16,7 +16,7 @@
 
     <template v-else>
       <section class="rounded-lg border bg-card p-6 shadow-sm">
-        <h2 class="mb-4 text-lg font-semibold">{{ $t('views.SchemaInferenceView.source') }}</h2>
+        <h2 class="mb-4 text-base font-semibold">{{ $t('views.SchemaInferenceView.source') }}</h2>
         <div class="space-y-4">
           <div>
             <label class="mb-1 block text-sm font-medium">{{ $t('views.SchemaInferenceView.connector') }}</label>
@@ -80,7 +80,7 @@
       </section>
 
       <section v-if="draftSchema" class="rounded-lg border bg-card p-6 shadow-sm">
-        <h2 class="mb-4 text-lg font-semibold">{{ $t('views.SchemaInferenceView.draft_schema') }}</h2>
+        <h2 class="mb-4 text-base font-semibold">{{ $t('views.SchemaInferenceView.draft_schema') }}</h2>
 
         <div class="mb-3">
           <label class="block text-sm font-medium text-muted-foreground">{{ $t('views.SchemaInferenceView.name_label') }}</label>

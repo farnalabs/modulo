@@ -1,7 +1,7 @@
 ﻿<template>
   <div data-theme="agent" class="mx-auto max-w-4xl space-y-8 p-6">
     <header>
-      <h1 data-testid="rate-limits-title" class="text-3xl font-bold tracking-tight">{{ $t('views.SettingsRateLimitsView.rate_limits') }}</h1>
+      <h1 data-testid="rate-limits-title" class="text-2xl font-semibold tracking-tight">{{ $t('views.SettingsRateLimitsView.rate_limits') }}</h1>
       <p class="mt-1 text-muted-foreground">{{ $t('views.SettingsRateLimitsView.view_perroute_rate_limiting_rules_and_current_usage') }}</p>
     </header>
 
@@ -12,7 +12,7 @@
     <div v-else class="space-y-6">
       <div data-testid="rate-limits-mode" class="rounded-lg border bg-card p-6 shadow-sm">
         <div class="mb-4 flex items-center justify-between">
-          <h2 class="text-lg font-semibold">Mode</h2>
+          <h2 class="text-base font-semibold">Mode</h2>
           <span
             class="rounded-full px-3 py-1 text-xs font-medium"
             :class="mode === 'redis' ? 'badge badge-status-success' : 'badge badge-status-warning'"
@@ -26,7 +26,7 @@
       </div>
 
       <div data-testid="rate-limits-rules" class="rounded-lg border bg-card p-6 shadow-sm">
-        <h2 class="mb-4 text-lg font-semibold">Rules</h2>
+        <h2 class="mb-4 text-base font-semibold">Rules</h2>
         <table v-if="rules.length > 0" data-testid="rate-limits-table" class="w-full text-sm">
           <thead>
             <tr class="border-b text-left text-muted-foreground">

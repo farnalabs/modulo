@@ -1,7 +1,7 @@
 ﻿<template>
   <div data-theme="agent" class="mx-auto max-w-6xl space-y-8 p-6">
     <header>
-      <h1 class="text-3xl font-bold tracking-tight">{{ $t('views.AdminRemyView.remy_configuration') }}</h1>
+      <h1 class="text-2xl font-semibold tracking-tight">{{ $t('views.AdminRemyView.remy_configuration') }}</h1>
       <p class="mt-1 text-muted-foreground">{{ $t('views.AdminRemyView.configure_remy_ai_assistant_behaviour_access_and_skills') }}</p>
     </header>
 
@@ -13,7 +13,7 @@
       <TooltipProvider>
       <!-- Configured Providers -->
       <div class="card p-4" data-testid="remy-providers">
-        <h2 class="mb-3 text-lg font-semibold">{{ $t('views.AdminRemyView.configured_providers') }}</h2>
+        <h2 class="mb-3 text-base font-semibold">{{ $t('views.AdminRemyView.configured_providers') }}</h2>
         <p class="mb-4 text-sm text-muted-foreground">{{ $t('views.AdminRemyView.api_keys_configured_for_each_llm_provider_remy_will_use_thes') }}</p>
 
         <div v-if="providersLoading" class="py-4 text-center text-sm text-muted-foreground">
@@ -62,7 +62,7 @@
 
       <!-- Custom Backends -->
       <div class="card p-4" data-testid="remy-custom-backends">
-        <h2 class="mb-3 text-lg font-semibold">{{ $t('views.AdminRemyView.custom_backends') }}</h2>
+        <h2 class="mb-3 text-base font-semibold">{{ $t('views.AdminRemyView.custom_backends') }}</h2>
         <p class="mb-4 text-sm text-muted-foreground">{{ $t('views.AdminRemyView.custom_backends_description') }}</p>
 
         <div v-if="providersLoading" class="py-4 text-center text-sm text-muted-foreground">
@@ -101,7 +101,7 @@
 
       <!-- Access List -->
       <div class="card p-4">
-        <h2 class="mb-3 text-lg font-semibold">{{ $t('views.AdminRemyView.access_list') }}</h2>
+        <h2 class="mb-3 text-base font-semibold">{{ $t('views.AdminRemyView.access_list') }}</h2>
         <p class="mb-4 text-sm text-muted-foreground">{{ $t('views.AdminRemyView.control_who_can_use_remy_within_the_organisation') }}</p>
 
         <div class="space-y-6">
@@ -187,7 +187,7 @@
 
       <!-- Default Model Configuration -->
       <div class="card p-4">
-        <h2 class="mb-3 text-lg font-semibold">{{ $t('views.AdminRemyView.default_model_configuration') }}</h2>
+        <h2 class="mb-3 text-base font-semibold">{{ $t('views.AdminRemyView.default_model_configuration') }}</h2>
         <p class="mb-4 text-sm text-muted-foreground">{{ $t('views.AdminRemyView.set_the_default_model_and_allowed_providers_for_remy') }}</p>
 
         <div class="space-y-4">
@@ -270,7 +270,7 @@
 
       <!-- System Prompt -->
       <div class="card p-4">
-        <h2 class="mb-3 text-lg font-semibold">{{ $t('views.AdminRemyView.system_prompt') }}</h2>
+        <h2 class="mb-3 text-base font-semibold">{{ $t('views.AdminRemyView.system_prompt') }}</h2>
         <p class="mb-4 text-sm text-muted-foreground">{{ $t('views.AdminRemyView.base_system_prompt_that_guides_remys_behaviour') }}</p>
 
         <div class="space-y-4">
@@ -304,7 +304,7 @@
 
       <!-- Additional Guidance -->
       <div class="card p-4">
-        <h2 class="mb-3 text-lg font-semibold">{{ $t('views.AdminRemyView.additional_guidance') }}</h2>
+        <h2 class="mb-3 text-base font-semibold">{{ $t('views.AdminRemyView.additional_guidance') }}</h2>
         <p class="mb-4 text-sm text-muted-foreground">{{ $t('views.AdminRemyView.extra_instructions_to_append_to_the_system_prompt') }}</p>
 
         <div class="space-y-4">
@@ -338,7 +338,7 @@
 
       <!-- Tool Permissions -->
       <div class="card p-4">
-        <h2 class="mb-3 text-lg font-semibold">Tool Permissions</h2>
+        <h2 class="mb-3 text-base font-semibold">Tool Permissions</h2>
         <p class="mb-4 text-sm text-muted-foreground">Control which UI actions Remy can perform and whether approval is required.</p>
 
         <div class="mb-6">
@@ -384,7 +384,7 @@
 
       <!-- Safety & Limits -->
       <div class="card p-4">
-        <h2 class="mb-3 text-lg font-semibold">Safety & Limits</h2>
+        <h2 class="mb-3 text-base font-semibold">Safety & Limits</h2>
         <p class="mb-4 text-sm text-muted-foreground">Configure rate limits, auto-execution thresholds, and no-go patterns for Remy's browser automation.</p>
 
         <div class="space-y-4">
@@ -498,7 +498,7 @@
       <div class="card p-4">
         <div class="flex items-center justify-between mb-4">
           <div>
-            <h2 class="text-lg font-semibold">Skills</h2>
+            <h2 class="text-base font-semibold">Skills</h2>
             <p class="text-sm text-muted-foreground">{{ $t('views.AdminRemyView.organisationlevel_skills_that_remy_can_use') }}</p>
           </div>
           <Button
@@ -608,7 +608,7 @@
 
       <!-- Knowledge Sources -->
       <div class="card p-4">
-        <h2 class="mb-3 text-lg font-semibold">{{ $t('views.AdminRemyView.knowledge_sources') }}</h2>
+        <h2 class="mb-3 text-base font-semibold">{{ $t('views.AdminRemyView.knowledge_sources') }}</h2>
         <p class="mb-4 text-sm text-muted-foreground">{{ $t('views.AdminRemyView.control_what_remy_knows') }}</p>
 
         <div v-if="contextLoading" class="py-4 text-center text-sm text-muted-foreground">Loading sources...</div>
@@ -659,7 +659,7 @@
 
       <!-- Skills as Knowledge Sources -->
       <div v-if="skills.length > 0" class="card p-4">
-        <h2 class="mb-3 text-lg font-semibold">{{ $t('views.AdminRemyView.skills_as_knowledge') }}</h2>
+        <h2 class="mb-3 text-base font-semibold">{{ $t('views.AdminRemyView.skills_as_knowledge') }}</h2>
         <p class="mb-4 text-sm text-muted-foreground">{{ $t('views.AdminRemyView.control_what_remy_knows') }}</p>
         <div class="overflow-hidden rounded-lg border">
           <table class="w-full text-left text-sm">
@@ -693,7 +693,7 @@
 
       <!-- Product Primer -->
       <div class="card p-4">
-        <h2 class="mb-3 text-lg font-semibold">{{ $t('views.AdminRemyView.product_primer') }}</h2>
+        <h2 class="mb-3 text-base font-semibold">{{ $t('views.AdminRemyView.product_primer') }}</h2>
         <p class="mb-4 text-sm text-muted-foreground">{{ $t('views.AdminRemyView.product_primer_description') }}</p>
         <div class="flex items-center gap-3">
           <Button
