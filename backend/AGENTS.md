@@ -64,8 +64,6 @@
 
 - `except Exception` for external library calls (JMESPath, regex, etc.) → narrow to the specific exception type the library documents (e.g. `jmespath.exceptions.JMESPathError`, `re.error`). Bare `except Exception` masks programming bugs like `TypeError` from wrong argument types.
 
-- `str(mapped_output.get(field, ""))` when the field value can be `None` → check for None explicitly: `raw = mapped_output.get(field); value = "" if raw is None else str(raw)`. `str(None)` produces the literal string `"None"`, which passes regex patterns like `r".*"` and `r"^None$"` — masking a missing/null field as valid data.
-
 - Failure routing by `startswith(f"'{name}'")` → add a trailing delimiter (`startswith(f"'{name}':")`) so that a short name like `"a"` does not also route failures for `"ab"`.
 
 - Integer fields that must be non-negative (retry counts, pages, sizes) → always add `Field(ge=0)`. Without it, negative values pass Pydantic validation and cause logic errors (e.g. `retry_count (0) >= -1` → immediate exhaustion).
@@ -112,10 +110,6 @@
 
 - When prepending env vars to a shell command in `_build_exec_cmd`, env vars must prefix the final command itself (`KEY=VALUE cmd`), not appear as a separate `&&`-delimited statement (`KEY=VALUE && cmd` which is invalid shell).
 
-### Connectors: retry loop `last_exc` must be assigned in every `except` block
-
-- In retry-loop patterns with `last_exc: Exception | None = None`, every `except` block must set `last_exc = exc` before `continue` or `raise`. Without assignment, `raise ... from last_exc` on retry exhaustion is `from None` — the original exception chain is lost. Found in 3 connectors (GitHub, Slack, Jira).
-
 ### Connectors: pagination cursor must not double as resource identifier
 
 - Never use `q.filters.get("id") or q.cursor` as a fallback resource ID. The pagination cursor is a bookmark, not an entity identifier. Mixing them means a caller that passes a cursor gets a wrong/failed API call instead of a clear validation error.
@@ -127,10 +121,6 @@
 ### Connectors: use `key in dict` for required filter validation, not `dict.get(key)` with falsy check
 
 - `if not value` after `dict.get(key)` rejects falsy-but-valid values (empty string `""`, integer `0`, boolean `False`). For required fields validation, use `if key not in filters` / `if key not in data` instead. This matches the GitLab connector's correct pattern and avoids introducing subtle bugs when a valid field value is falsy.
-
-### Python `all([])` returns `True` for empty iterables
-
-- When checking `all(result.error == "cancelled_by_user" for result in results)` on an empty results list, `all([])` returns `True` — the condition vacuously holds for all zero elements. This caused every Remy streaming response with an empty UI-command batch to emit "Action cancelled by user." Always guard `all()` calls with a preceding `if not results: return False` (or equivalent) when `all()` is used to check error conditions.
 
 ### FastAPI router ordering: include specific routes before catch-all path-param routers
 
