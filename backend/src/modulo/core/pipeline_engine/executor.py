@@ -47,7 +47,9 @@ from modulo.core.hitl_manager import HITLManager
 from modulo.core.pipeline_engine.decorator import (
     RunCancelledError,
     set_cancellation_check,
+    set_model_backend_hub,
 )
+from modulo.core.model_backend_hub import ModelBackendHub
 from modulo.core.pipeline_engine.event_broker import RunEventBroker, get_registry
 from modulo.core.pipeline_engine.graph_cache import build_graph_from_json, get_or_compile
 from modulo.core.pipeline_engine.modulo_saver import ModuloPostgresSaver
@@ -61,6 +63,7 @@ from modulo.db.crud.run import (
 )
 from modulo.db.models.eval_definition import EvalDefinition
 from modulo.db.models.eval_result import EvalResult
+from modulo.db.models.model_backend import ModelBackend
 from modulo.db.models.pipeline import Pipeline
 from modulo.db.models.pipeline_snapshot import PipelineSnapshot
 from modulo.db.models.run import Run
@@ -412,6 +415,33 @@ class PipelineExecutor:
         broker = get_registry().get_or_create(run_id)
         set_cancellation_check(self._check_db_cancellation(org_id, run_id))
         self._otel_bridge.set_run_context(str(org_id), str(pipeline_id))
+
+        # Load model backends for this run's org.
+        model_backend_hub: ModelBackendHub | None = None
+        try:
+            async with self._session_factory() as session, session.begin():
+                await set_rls_org(session, org_id)
+                backend_rows = (await session.execute(
+                    select(ModelBackend).where(
+                        ModelBackend.organisation_id == org_id,
+                        ModelBackend.status == "active",
+                    )
+                )).scalars().all()
+                if isinstance(backend_rows, list) and backend_rows:
+                    from modulo.settings import get_settings
+                    _settings = get_settings()
+                    from modulo.core.secrets_backend import create_secrets_backend
+                    secrets_backend = create_secrets_backend(
+                        fernet_key=_settings.fernet_key,
+                        session=session,
+                    )
+                    model_backend_hub = ModelBackendHub()
+                    await model_backend_hub.__aenter__()
+                    await model_backend_hub.initialise(backend_rows, secrets_backend=secrets_backend)
+                    set_model_backend_hub(model_backend_hub)
+        except Exception:
+            _log.warning("pipeline.model_backend_hub_init_failed", exc_info=True)
+
         try:
             from modulo.settings import get_settings
 
@@ -443,6 +473,9 @@ class PipelineExecutor:
             error_code = type(exc).__name__
         finally:
             set_cancellation_check(None)
+            set_model_backend_hub(None)
+            if model_backend_hub is not None:
+                await model_backend_hub.__aexit__(None, None, None)
             if final_status != "awaiting_human":
                 get_registry().close(run_id)
 
@@ -549,6 +582,33 @@ class PipelineExecutor:
         broker = get_registry().get_or_create(run_id)
         set_cancellation_check(self._check_db_cancellation(org_id, run_id))
         self._otel_bridge.set_run_context(str(org_id), str(pipeline_id))
+
+        # Load model backends for this run's org — provides LLM access to agent nodes.
+        model_backend_hub: ModelBackendHub | None = None
+        try:
+            async with self._session_factory() as session, session.begin():
+                await set_rls_org(session, org_id)
+                backend_rows = (await session.execute(
+                    select(ModelBackend).where(
+                        ModelBackend.organisation_id == org_id,
+                        ModelBackend.status == "active",
+                    )
+                )).scalars().all()
+                if isinstance(backend_rows, list) and backend_rows:
+                    from modulo.settings import get_settings
+                    _settings = get_settings()
+                    from modulo.core.secrets_backend import create_secrets_backend
+                    secrets_backend = create_secrets_backend(
+                        fernet_key=_settings.fernet_key,
+                        session=session,
+                    )
+                    model_backend_hub = ModelBackendHub()
+                    await model_backend_hub.__aenter__()
+                    await model_backend_hub.initialise(backend_rows, secrets_backend=secrets_backend)
+                    set_model_backend_hub(model_backend_hub)
+        except Exception:
+            _log.warning("pipeline.model_backend_hub_init_failed", exc_info=True)
+
         try:
             # Compile (or retrieve from cache) the StateGraph.
             compiled = get_or_compile(
@@ -691,6 +751,9 @@ class PipelineExecutor:
         finally:
             # Close broker after all post-stream work (suite checks, signals).
             set_cancellation_check(None)
+            set_model_backend_hub(None)
+            if model_backend_hub is not None:
+                await model_backend_hub.__aexit__(None, None, None)
             if final_status != "awaiting_human":
                 get_registry().close(run_id)
 

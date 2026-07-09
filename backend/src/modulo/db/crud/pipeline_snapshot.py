@@ -55,14 +55,17 @@ async def create_snapshot_from_live_graph(
         agents = list((await session.execute(select(Agent).where(Agent.id.in_(agent_ids)))).scalars())
         agents_by_id = {a.id: a for a in agents}
 
-    # Enrich node_defs with agent token_budget for per-node runaway protection.
+    # Enrich node_defs with agent data — token_budget, prompt_template, model_backend_id.
     for node in nodes:
         agent_id = node.get("agent_id")
         if agent_id is None:
             continue
         agent = agents_by_id.get(uuid.UUID(str(agent_id)))
-        if agent is not None and agent.token_budget is not None:
-            node["token_budget"] = agent.token_budget
+        if agent is not None:
+            if agent.token_budget is not None:
+                node["token_budget"] = agent.token_budget
+            node["prompt_template"] = agent.prompt_template
+            node["model_backend_id"] = str(agent.model_backend_id)
 
     connector_ids = _ids(
         binding.get("instance_id") for node in nodes if (binding := node.get("connector_binding")) is not None
