@@ -4,7 +4,11 @@ const sampleCostData = {
   totalSpend: 1234.56,
   avgCostPerRun: 2.34,
   totalRuns: 528,
-  items: [],
+  items: [
+    { category: 'LLM Calls', amount: 800.00, percentage: 64.8, run_count: 320 },
+    { category: 'Embeddings', amount: 250.00, percentage: 20.2, run_count: 150 },
+    { category: 'Storage', amount: 184.56, percentage: 15.0, run_count: 58 },
+  ],
 }
 
 test.describe('Admin Cost Breakdown', () => {
