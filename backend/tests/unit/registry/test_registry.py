@@ -178,7 +178,7 @@ class TestPublish(_PreserveRegistry):
         key_hex = private.private_bytes_raw().hex()
         original_count = len(_BUILTIN_REGISTRY)
 
-        entry = await publish_primitive(
+        entry = publish_primitive(
             author="test-author",
             name="test-primitive",
             primitive_type="schema",
@@ -196,7 +196,7 @@ class TestPublish(_PreserveRegistry):
         private, public = generate_signing_key()
         key_hex = private.private_bytes_raw().hex()
 
-        entry = await publish_primitive(
+        entry = publish_primitive(
             author="sig-test",
             name="sig-check",
             primitive_type="agent",

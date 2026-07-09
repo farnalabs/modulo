@@ -130,7 +130,7 @@ class TestPublishPullVerifyFlow(_PreserveRegistry):
         sig = sign_primitive(data, kp["private_key"])
         assert verify_signature(data, sig, kp["public_key"]) is True
 
-        entry = await publish_primitive(
+        entry = publish_primitive(
             author="e2e-author",
             name="e2e-primitive",
             primitive_type="workflow",

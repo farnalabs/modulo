@@ -85,12 +85,13 @@ Cryptographic signing, verification, and fork tracking for community library pri
 
 ### Rating system
 
-- [ ] One rating per user per primitive (unique constraint)
+- [x] One rating per user per primitive (unique constraint at DB + application layer)
 - [x] Self-rating blocked at application layer
 - [x] Rating requires at least one prior copy-to-adapt of the primitive
 - [x] 10-minute submission cooldown per user
 - [x] Ratings displayed as weighted average with review count
 - [x] Report abuse: admin review queue
+- [x] SelfRatingError → 403, RatingCooldownError → 429, CopyToAdaptError → 403, DuplicateRatingError → 409
 
 ### Plugin registry (ConnectorType discovery)
 
@@ -126,6 +127,10 @@ Cryptographic signing, verification, and fork tracking for community library pri
 - [x] Registry 404 for publisher not found on revoke — `routes/registry.py:591-593`
 - [x] Registry 404 for missing primitive in download endpoint — `routes/registry.py:249-253`
 - [x] Registry endpoints that are in-memory-only do not need `ProgrammingError` catches (correct, no DB dependency)
+- [x] `publish_primitive_endpoint` catches `ValueError` → 400 for invalid signing key hex
+- [x] `publish_primitive_v2` catches `ValueError` → 400 and generic `Exception` → 500
+- [x] `submit_rating_endpoint` catches `SelfRatingError` → 403, `RatingCooldownError` → 429, `CopyToAdaptError` → 403, `DuplicateRatingError` → 409
+- [x] `PrimitiveRating` has `UniqueConstraint(organisation_id, primitive_id, account_id)` — DB + app-level duplicate enforcement
 
 ### BDD-tested scenarios
 
@@ -155,3 +160,24 @@ Cryptographic signing, verification, and fork tracking for community library pri
 - No BDD tests for self-rating block
 - No BDD tests for rating-requires-prior-adapt rule
 - No BDD tests for ownership picker during copy-to-adapt
+
+### Error handling & security
+- `register_publisher_endpoint` has no admin role check — any authenticated user can register a verified publisher
+- `list_registry_primitives_endpoint` and `list_publishers_endpoint` have no authentication at all (public access)
+- `publish_primitive_v2` had lazy `cryptography` import inside function body (FIXED — moved to module level)
+- `publish_primitive_endpoint` (v1) lacked `ValueError` catch for invalid signing key hex → 500 (FIXED)
+- `submit_rating_endpoint` lacked domain exception catches (`SelfRatingError`, `RatingCooldownError`, `CopyToAdaptError`) → 500s (FIXED)
+- `PrimitiveRating.__table_args__` had no `UniqueConstraint` — DB allowed duplicate ratings per user per primitive (FIXED — model + app guard added)
+
+## QA History
+
+### 2026-07-09 — Cross-cutting QA (index 350)
+- Verified all error handling assertions against code
+- Fixed: PrimitiveRating model now has UniqueConstraint + app-layer duplicate guard
+- Fixed: v1 publish endpoint catches ValueError → 400
+- Fixed: v2 publish endpoint has proper try/except chain
+- Fixed: cryptography lazy import moved to module level
+- Fixed: rating endpoint catches domain exceptions (SelfRatingError, DuplicateRatingError, RatingCooldownError, CopyToAdaptError)
+- Confirmed: trust tier display, ownership picker, verified publisher program remain unimplemented (UI features)
+- Confirmed: plugin_registry.feature @awaiting-implementation scenarios still not implemented
+- New Known Gaps: register_publisher missing admin auth, unauthenticated registry endpoints (tracked separately)

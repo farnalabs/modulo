@@ -17,6 +17,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from modulo.api.dependencies import get_db_session
 from modulo.auth.dependencies import get_current_user
 from modulo.auth.jwt import AuthenticatedPrincipal
+from cryptography.hazmat.primitives import serialization as pem_serialization
+from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
+
 from modulo.core.registry import (
     get_publisher_status,
     get_registry_primitive,
@@ -222,15 +225,29 @@ async def publish_primitive_endpoint(
     principal: AuthenticatedPrincipal = Depends(get_current_user),
 ) -> RegistryEntryResponse:
     """Publish a new primitive to the registry (in-memory for alpha)."""
-    entry = await publish_primitive(
-        author=req.author,
-        name=req.name,
-        primitive_type=req.primitive_type,
-        description=req.description,
-        tags=req.tags,
-        content_json=req.content_json,
-        signing_key_hex=req.signing_key_hex,
-    )
+    try:
+        entry = publish_primitive(
+            author=req.author,
+            name=req.name,
+            primitive_type=req.primitive_type,
+            description=req.description,
+            tags=req.tags,
+            content_json=req.content_json,
+            signing_key_hex=req.signing_key_hex,
+        )
+    except ValueError as e:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(e),
+        ) from e
+    except HTTPException:
+        raise
+    except Exception as e:
+        _log.exception("registry.publish_primitive.unexpected_error")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="An unexpected error occurred",
+        ) from e
     return RegistryEntryResponse.model_validate(entry)
 
 
@@ -387,59 +404,70 @@ async def publish_primitive_v2(
     their Ed25519 private key and sends the signature + public key.
     The server verifies the signature before accepting.
     """
-    payload_bytes = json.dumps(
-        {
-            "author": req.author,
-            "name": req.name,
-            "primitive_type": req.primitive_type,
-            "description": req.description,
-            "tags": req.tags,
-            "content_json": req.content_json,
-        },
-        separators=(",", ":"),
-        sort_keys=True,
-    ).encode()
+    try:
+        payload_bytes = json.dumps(
+            {
+                "author": req.author,
+                "name": req.name,
+                "primitive_type": req.primitive_type,
+                "description": req.description,
+                "tags": req.tags,
+                "content_json": req.content_json,
+            },
+            separators=(",", ":"),
+            sort_keys=True,
+        ).encode()
 
-    if not crypto_pem_verify(req.public_key_pem, payload_bytes, req.signature):
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Signature verification failed — payload does not match the provided public key",
+        if not crypto_pem_verify(req.public_key_pem, payload_bytes, req.signature):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Signature verification failed — payload does not match the provided public key",
+            )
+
+        trust_anchor_ok = verify_trust_anchor(req.public_key_pem, req.signature)
+
+        pub_key = pem_serialization.load_pem_public_key(req.public_key_pem.encode())
+        if not isinstance(pub_key, Ed25519PublicKey):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Invalid Ed25519 public key PEM",
+            )
+        public_raw = pub_key.public_bytes(
+            encoding=pem_serialization.Encoding.Raw,
+            format=pem_serialization.PublicFormat.Raw,
+        )
+        fingerprint = hashlib.sha256(public_raw).hexdigest()[:16]
+
+        sig_hex = base64.b64decode(req.signature).hex()
+
+        temp_keypair = crypto_generate_keypair()
+        entry = publish_primitive(
+            author=req.author,
+            name=req.name,
+            primitive_type=req.primitive_type,
+            description=req.description,
+            tags=req.tags,
+            content_json=req.content_json,
+            signing_key_hex=temp_keypair["private_key"],
         )
 
-    trust_anchor_ok = verify_trust_anchor(req.public_key_pem, req.signature)
+        entry.ed25519_signature_hex = sig_hex
+        entry.signing_key_fingerprint = fingerprint
 
-    from cryptography.hazmat.primitives import serialization as pem_serialization
-    from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
-
-    pub_key = pem_serialization.load_pem_public_key(req.public_key_pem.encode())
-    if not isinstance(pub_key, Ed25519PublicKey):
+        checksum = hashlib.sha256(payload_bytes).hexdigest()
+    except ValueError as e:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Invalid Ed25519 public key PEM",
-        )
-    public_raw = pub_key.public_bytes(
-        encoding=pem_serialization.Encoding.Raw,
-        format=pem_serialization.PublicFormat.Raw,
-    )
-    fingerprint = hashlib.sha256(public_raw).hexdigest()[:16]
-
-    sig_hex = base64.b64decode(req.signature).hex()
-
-    temp_keypair = crypto_generate_keypair()
-    entry = await publish_primitive(
-        author=req.author,
-        name=req.name,
-        primitive_type=req.primitive_type,
-        description=req.description,
-        tags=req.tags,
-        content_json=req.content_json,
-        signing_key_hex=temp_keypair["private_key"],
-    )
-
-    entry.ed25519_signature_hex = sig_hex
-    entry.signing_key_fingerprint = fingerprint
-
-    checksum = hashlib.sha256(payload_bytes).hexdigest()
+            detail=str(e),
+        ) from e
+    except HTTPException:
+        raise
+    except Exception as e:
+        _log.exception("registry.publish_primitive_v2.unexpected_error")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="An unexpected error occurred",
+        ) from e
 
     return PublishResponseV2(
         slug=entry.slug,

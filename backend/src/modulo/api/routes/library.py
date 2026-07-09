@@ -49,6 +49,10 @@ from modulo.db.crud.pipeline import (
     get_pipeline,
 )
 from modulo.db.crud.rating import (
+    CopyToAdaptError,
+    DuplicateRatingError,
+    RatingCooldownError,
+    SelfRatingError,
     get_rating_aggregate,
     list_ratings_for_primitive,
     submit_abuse_report,
@@ -1002,11 +1006,19 @@ async def submit_rating_endpoint(
                 account_id=principal.account_id,
             )
             await update_primitive_ratings_aggregate(session, primitive_id)
-    except IntegrityError:
+    except SelfRatingError as e:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(e)) from e
+    except DuplicateRatingError as e:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(e)) from e
+    except RatingCooldownError as e:
+        raise HTTPException(status_code=status.HTTP_429_TOO_MANY_REQUESTS, detail=str(e)) from e
+    except CopyToAdaptError as e:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(e)) from e
+    except IntegrityError as e:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="A resource with this value already exists",
-        )
+        ) from e
     except ProgrammingError:
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
