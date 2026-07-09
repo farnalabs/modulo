@@ -1,5 +1,5 @@
 <template>
-  <FeatureGate feature-name="error_tracking" required-tier="community" show-disabled>
+  <FeatureGate feature-name="error_tracking" show-disabled>
     <template #locked>
       <div class="flex items-center justify-center h-64 text-muted-foreground">
         {{ $t('views.SettingsMonitorConfigView.feature_locked') }}

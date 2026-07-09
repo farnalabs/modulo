@@ -1,5 +1,5 @@
 ﻿<template>
-  <FeatureGate feature-name="plugin_management" required-tier="team" show-disabled>
+  <FeatureGate feature-name="plugin_management" required-tier="community" show-disabled>
 
     <div class="page-narrow">
     <header class="flex items-center justify-between">
