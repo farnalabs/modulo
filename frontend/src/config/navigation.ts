@@ -26,7 +26,7 @@ const routeConfigMap: Record<string, { icon: string; labelKey: string }> = {
   dashboard: { icon: 'LayoutDashboard', labelKey: 'components.SidebarNav.item_dashboard' },
   notifications: { icon: 'Bell', labelKey: 'components.SidebarNav.item_notifications' },
   library: { icon: 'BookOpen', labelKey: 'components.SidebarNav.item_library' },
-  'pipeline-list': { icon: 'BookOpen', labelKey: 'components.SidebarNav.item_my_pipelines' },
+  'pipeline-list': { icon: 'GitFork', labelKey: 'components.SidebarNav.item_my_pipelines' },
 
   'pipeline-copy': { icon: 'Copy', labelKey: 'components.SidebarNav.item_copy_pipeline' },
   stages: { icon: 'Columns', labelKey: 'components.SidebarNav.item_stages_board' },

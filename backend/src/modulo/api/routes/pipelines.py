@@ -33,6 +33,7 @@ from modulo.core.run_context.autonomy import (
 )
 from modulo.db.crud.composite_template import create_composite_template
 from modulo.db.crud.pipeline import (
+    archive_pipeline,
     check_pipeline_name_available,
     clone_pipeline,
     create_pipeline,
@@ -41,6 +42,7 @@ from modulo.db.crud.pipeline import (
     get_pipeline_graph,
     list_pipelines,
     replace_pipeline_graph,
+    unarchive_pipeline,
     update_pipeline,
 )
 from modulo.db.crud.pipeline_snapshot_versioning import (
@@ -118,6 +120,7 @@ class PipelineResponse(BaseModel):
     run_context_defaults: dict[str, Any]
     default_autonomy_level: str | None = None
     snapshot_count: int = 0
+    archived_at: datetime | None = None
     owner_team_id: uuid.UUID | None = None
     created_by: uuid.UUID = Field(validation_alias="account_id")
     created_at: datetime
@@ -386,6 +389,7 @@ async def list_pipelines_endpoint(
     page: int = Query(default=1, ge=1),
     page_size: int = Query(default=20, ge=1, le=100),
     cursor: str | None = Query(default=None),
+    include_archived: bool = Query(default=False),
     session: AsyncSession = Depends(get_db_session),
     principal: AuthenticatedPrincipal = Depends(get_current_user),
 ) -> PipelineListResponse:
@@ -394,7 +398,9 @@ async def list_pipelines_endpoint(
         async with session.begin():
             await set_rls_org(session, principal.organisation_id)
             await set_rls_user_context(session, principal.account_id, principal.org_role)
-            result = await list_pipelines(session, page=page, page_size=page_size, cursor=cursor)
+            result = await list_pipelines(
+                session, page=page, page_size=page_size, cursor=cursor, include_archived=include_archived
+            )
     except ProgrammingError:
 
         logger.exception("routes.pipelines")
@@ -693,6 +699,52 @@ async def delete_pipeline_endpoint(
 
     if not deleted:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Pipeline not found")
+
+
+@router.post("/{pipeline_id}/archive", response_model=PipelineResponse)
+@handle_db_errors("pipelines.archive")
+async def archive_pipeline_endpoint(
+    pipeline_id: uuid.UUID,
+    session: AsyncSession = Depends(get_db_session),
+    principal: AuthenticatedPrincipal = Depends(get_current_user),
+) -> PipelineResponse:
+    try:
+        async with session.begin():
+            await set_rls_org(session, principal.organisation_id)
+            await set_rls_user_context(session, principal.account_id, principal.org_role)
+            pipeline = await archive_pipeline(session, pipeline_id)
+    except ProgrammingError:
+        logger.exception("routes.pipelines")
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="This feature is not available. Run database migrations to enable it.",
+        )
+    if pipeline is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Pipeline not found")
+    return PipelineResponse.model_validate(pipeline)
+
+
+@router.post("/{pipeline_id}/unarchive", response_model=PipelineResponse)
+@handle_db_errors("pipelines.unarchive")
+async def unarchive_pipeline_endpoint(
+    pipeline_id: uuid.UUID,
+    session: AsyncSession = Depends(get_db_session),
+    principal: AuthenticatedPrincipal = Depends(get_current_user),
+) -> PipelineResponse:
+    try:
+        async with session.begin():
+            await set_rls_org(session, principal.organisation_id)
+            await set_rls_user_context(session, principal.account_id, principal.org_role)
+            pipeline = await unarchive_pipeline(session, pipeline_id)
+    except ProgrammingError:
+        logger.exception("routes.pipelines")
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="This feature is not available. Run database migrations to enable it.",
+        )
+    if pipeline is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Pipeline not found")
+    return PipelineResponse.model_validate(pipeline)
 
 
 # ---------------------------------------------------------------------------
