@@ -300,11 +300,6 @@ async def list_library_primitives_endpoint(
                     source=source,
                     cursor=cursor,
                 )
-        except IntegrityError:
-                raise HTTPException(
-                        status_code=status.HTTP_409_CONFLICT,
-                        detail="A resource with this value already exists",
-                )
         except ProgrammingError:
             _log.warning("list_library_primitives_endpoint: ProgrammingError — missing DB table or migration")
             raise HTTPException(
