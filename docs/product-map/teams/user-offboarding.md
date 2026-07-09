@@ -49,7 +49,7 @@ Admin-initiated deactivation of an individual user — sets `active=false` inval
 - [x] Reactivate already-active user → succeeds (idempotent; `active` stays `true`)
 - [x] User has zero token families → deactivation still succeeds (no-op on families — empty for loop)
 - [x] User has zero team memberships → deactivation still succeeds (no-op on memberships — empty for loop)
-- [ ] Deactivate user who is the sole admin of the org → 422 or blocked (policy check — verify if enforced)
+- [x] Deactivate user who is the sole admin of the org → 422 with "Cannot deactivate the last admin"
 - [ ] Deactivate user who is the last member of a team → team now has zero members (edge: UI should handle empty team gracefully)
 
 ### Cross-Org Isolation
@@ -78,9 +78,13 @@ Admin-initiated deactivation of an individual user — sets `active=false` inval
 
 ### Error Handling
 - [x] `POST /admin/users/{user_id}/deactivate` returns 501 with migrations message when DB table missing (ProgrammingError caught)
+- [x] `POST /admin/users/{user_id}/deactivate` returns 503 with unavailable message on SQLAlchemyError
+- [x] `POST /admin/users/{user_id}/deactivate` returns 500 with unexpected error message on generic Exception
 - [x] `POST /admin/users/{user_id}/reactivate` returns 501 with migrations message when DB table missing (ProgrammingError caught)
-- [ ] Deactivate with malformed UUID → 422 (FastAPI validation)
-- [ ] Reactivate with malformed UUID → 422
+- [x] `POST /admin/users/{user_id}/reactivate` returns 503 with unavailable message on SQLAlchemyError
+- [x] `POST /admin/users/{user_id}/reactivate` returns 500 with unexpected error message on generic Exception
+- [x] Deactivate with malformed UUID → 422 (FastAPI validation)
+- [x] Reactivate with malformed UUID → 422
 
 ### PRD 9.4 Stale Membership Gap
 - [ ] Deactivation takes effect immediately for DB-level checks (login, HITL `required_team_id` gates)
@@ -93,9 +97,8 @@ Admin-initiated deactivation of an individual user — sets `active=false` inval
 
 ## Known Gaps
 
-- **BDD deactivation scenario is a stub**: `backend/tests/bdd/features/orgs/member_management.feature` has "Deactivate user removes access" but the step `deactivate_user` at `test_orgs.py:160` only sets `ctx["user_active"] = False` — it does NOT call the API. No actual endpoint test for the deactivation happy path.
-- **No malformed UUID test coverage**: the unit test file now covers this, but no BDD scenario exists for the 422 validation
-- **No sole-admin guard on deactivation**: `_prevent_last_admin_lockout` exists and is called from `admin_update_user` (PUT) but NOT from `admin_deactivate_user` (POST). Deactivating the last admin in an org bypasses the guard.
+- **No BDD scenario for 422 validation**: the unit test file covers malformed UUID, but no BDD scenario exists
+- **No WS token re-validation**: WebSocket connections may stay active for up to 15 min after deactivation
 - **No WS token re-validation**: WebSocket connections may stay active for up to 15 min after deactivation
 - **SCIM hard-delete mismatch**: SCIM DELETE does a hard delete rather than soft deactivate — inconsistent with admin deactivation
 - **No OAuth token family blacklisting**: deactivation flow only blacklists JWT token families, not OAuth families
@@ -115,3 +118,12 @@ Admin-initiated deactivation of an individual user — sets `active=false` inval
 - Confirmed `[ ] Deactivate with malformed UUID → 422` is unimplemented in tests — added `test_admin_deactivate_malformed_uuid` test coverage
 - Confirmed `[ ] Deactivate user who is the last member of a team → team has zero members` — no test for this edge case
 - Added malformed UUID → 422 validation tests for both deactivate and reactivate endpoints
+
+### 2026-07-09 — Cross-cutting QA (feat-teams-user-offboarding, index 352)
+- Added SQLAlchemyError→503 and Exception→500 catches to both `admin_deactivate_user` and `admin_reactivate_user` routes
+- Moved `_get_org_role` call inside the try block (after session.flush()) for both routes
+- Added sole-admin guard to `admin_deactivate_user` — blocks deactivation if target user is the last admin in the org
+- Fixed BDD deactivate step (`test_orgs.py:deactivate_user`) to actually call the POST API endpoint instead of just setting a stub value
+- Added proper `Then the response status is 200` assertion to the BDD feature file
+- Added SQLAlchemyError→503 and Exception→500 unit tests for both deactivate and reactivate endpoints
+- Updated Known Gaps: removed resolved items (BDD stub, sole-admin guard, malformed UUID tests)

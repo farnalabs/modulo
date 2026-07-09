@@ -983,7 +983,31 @@ async def admin_deactivate_user(
                 payload_json={"target_user_id": str(user_id)},
             )
 
+            # Check if target user is the last admin in the org
+            membership = await session.execute(
+                select(OrgMembership).where(
+                    OrgMembership.account_id == user_id,
+                    OrgMembership.organisation_id == current_user.organisation_id,
+                )
+            )
+            target_membership = membership.scalar_one_or_none()
+            if target_membership is not None and target_membership.role == "admin":
+                admin_result = await session.execute(
+                    select(func.count()).where(
+                        OrgMembership.organisation_id == current_user.organisation_id,
+                        OrgMembership.role == "admin",
+                    )
+                )
+                admin_count = admin_result.scalar() or 0
+                if admin_count <= 1:
+                    raise HTTPException(
+                        status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                        detail="Cannot deactivate the last admin. Promote another user to admin first.",
+                    )
+
             await session.flush()
+
+            org_role = await _get_org_role(session, user_id, current_user.organisation_id)
     except IntegrityError:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
@@ -994,8 +1018,27 @@ async def admin_deactivate_user(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
         ) from None
+    except SQLAlchemyError:
+        logger.warning(
+            "admin_deactivate_user SQLAlchemyError",
+            extra={"org_id": str(current_user.organisation_id), "user_id": str(user_id)},
+        )
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Database temporarily unavailable. Please try again.",
+        ) from None
+    except HTTPException:
+        raise
+    except Exception:
+        logger.exception(
+            "admin_deactivate_user unexpected error",
+            extra={"org_id": str(current_user.organisation_id), "user_id": str(user_id)},
+        )
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="An unexpected error occurred while deactivating the user.",
+        ) from None
 
-    org_role = await _get_org_role(session, user_id, current_user.organisation_id)
     return UserListItem(
         id=str(account.id),
         email=account.email,
@@ -1041,6 +1084,8 @@ async def admin_reactivate_user(
             )
 
             await session.flush()
+
+            org_role = await _get_org_role(session, user_id, current_user.organisation_id)
     except IntegrityError:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
@@ -1051,8 +1096,27 @@ async def admin_reactivate_user(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
         ) from None
+    except SQLAlchemyError:
+        logger.warning(
+            "admin_reactivate_user SQLAlchemyError",
+            extra={"org_id": str(current_user.organisation_id), "user_id": str(user_id)},
+        )
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Database temporarily unavailable. Please try again.",
+        ) from None
+    except HTTPException:
+        raise
+    except Exception:
+        logger.exception(
+            "admin_reactivate_user unexpected error",
+            extra={"org_id": str(current_user.organisation_id), "user_id": str(user_id)},
+        )
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="An unexpected error occurred while reactivating the user.",
+        ) from None
 
-    org_role = await _get_org_role(session, user_id, current_user.organisation_id)
     return UserListItem(
         id=str(account.id),
         email=account.email,

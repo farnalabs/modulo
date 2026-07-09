@@ -75,7 +75,7 @@ def make_mock_session() -> AsyncMock:
     begin_cm.__aexit__ = AsyncMock(return_value=False)
     session.begin = MagicMock(return_value=begin_cm)
     scalar_mock = MagicMock()
-    scalar_mock.all = AsyncMock(return_value=[])
+    scalar_mock.all = MagicMock(return_value=[])
     team_mock = MagicMock()
     team_mock.id = uuid.uuid4()
     team_mock.organisation_id = ORG_ID
