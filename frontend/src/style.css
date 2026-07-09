@@ -385,6 +385,11 @@
     background-color: hsla(142 71% 45% / 0.1);
   }
 
+  .badge-context-preview {
+    background-color: hsla(var(--preview) / 0.12);
+    color: hsl(var(--preview));
+  }
+
 @media (prefers-reduced-motion: no-preference) {
   html {
     scroll-behavior: smooth;
@@ -411,6 +416,7 @@
   --success: 142 71% 45%;
   --warning: 38 92% 50%;
   --pending: 210 40% 60%;
+  --preview: 18 60% 50%;
   --border: 224 18% 26%;
   --input: 224 18% 26%;
   --ring: 169 100% 50%;
@@ -441,6 +447,7 @@
   --success: 142 71% 45%;
   --warning: 38 92% 50%;
   --pending: 210 40% 60%;
+  --preview: 18 60% 40%;
   --border: 214.3 31.8% 91.4%;
   --input: 214.3 31.8% 91.4%;
   --ring: 170 95% 26%;
@@ -477,6 +484,7 @@
   --destructive-foreground: 0 0% 100%;
   --success: 142 80% 50%;
   --warning: 38 95% 55%;
+  --preview: 18 60% 55%;
   --border: 222 20% 30%;
   --input: 222 20% 30%;
   --ring: 169 100% 55%;

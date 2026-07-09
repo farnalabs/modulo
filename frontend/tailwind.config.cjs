@@ -24,6 +24,7 @@ module.exports = {
         success: 'hsl(var(--success))',
         warning: 'hsl(var(--warning))',
         pending: 'hsl(var(--pending))',
+        preview: 'hsl(var(--preview))',
         border: 'hsl(var(--border))',
         input: 'hsl(var(--input))',
         ring: 'hsl(var(--ring))',
