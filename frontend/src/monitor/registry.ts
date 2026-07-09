@@ -34,20 +34,16 @@ export class MonitorBackendRegistry implements MonitorBackend {
 
   setUser(user: UserInfo | null): void {
     for (const backend of this.backends) {
-      try {
+      if (typeof backend.setUser === 'function') {
         backend.setUser(user)
-      } catch (e) {
-        console.error('[MonitorBackendRegistry] Backend error:', e)
       }
     }
   }
 
   setTags(tags: Record<string, string>): void {
     for (const backend of this.backends) {
-      try {
+      if (typeof backend.setTags === 'function') {
         backend.setTags(tags)
-      } catch (e) {
-        console.error('[MonitorBackendRegistry] Backend error:', e)
       }
     }
   }
