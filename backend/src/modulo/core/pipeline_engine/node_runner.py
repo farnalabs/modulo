@@ -40,12 +40,14 @@ Eval-before-interrupt (§8.17):
     ``EvalBlockedError`` is raised instead of a ``NodeInterrupt``.
 """
 
+import json
 import logging
 import uuid
 from collections.abc import Callable, Sequence
 from typing import Any
 
 import jmespath
+from langchain_core.messages import HumanMessage
 from langgraph.errors import NodeInterrupt
 
 from modulo.core.eval_engine import EvalDefinition, EvalEngine, EvalResult
@@ -99,9 +101,13 @@ def make_node_fn(
 ) -> Any:
     """Return a decorated async node function for use in a StateGraph.
 
-    At this phase the node body is a stub: it records node entry in state["artifacts"]
-    and returns.  Real agent invocation is wired in once ModelBackendHub and
-    ConnectorHub are plumbed into the run context (phase2-10 execution path).
+    Renders the agent's prompt template against state via SandboxedEnvironment,
+    invokes the configured model backend via ModelBackendHub, validates the
+    output against the output schema (if defined), and returns the result
+    in state["artifacts"] and state["output"].
+
+    Nodes without a ``model_backend_id`` (connector-bindings, etc.) return a
+    stub artifact without invoking a model.
 
     When *max_input_length* is set, input text from ``run_context["input"]`` is
     truncated before being passed to the LLM.
@@ -113,13 +119,66 @@ def make_node_fn(
 
     @cancellable_node(timeout=timeout, role=role)
     async def _node(state: dict[str, Any]) -> dict[str, Any]:
-        # Truncate input if max_input_length is configured for this agent.
         run_context: dict[str, Any] = state.get("run_context") or {}
         raw_input = run_context.get("input", {})
+
+        # Truncate input if max_input_length is configured for this agent.
         if max_input_length is not None and isinstance(raw_input, str):
             run_context["input"] = truncate_input(raw_input, max_input_length)
 
-        return {"artifacts": [{"node_id": node_id, "status": "executed"}]}
+        # Get agent data from node_def (embedded at snapshot creation).
+        prompt_template = node_def.get("prompt_template", "")
+        model_backend_id_str = node_def.get("model_backend_id")
+        output_schema_json = node_def.get("output_schema_json")
+
+        # If no model_backend_id, fall back to stub behavior
+        # (connector_binding nodes, manual nodes routed through wrong path, etc.).
+        if not model_backend_id_str:
+            return {"artifacts": [{"node_id": node_id, "status": "executed"}]}
+
+        # Render prompt template against state using SandboxedEnvironment.
+        from jinja2.sandbox import SandboxedEnvironment
+
+        env = SandboxedEnvironment()
+        template = env.from_string(prompt_template)
+        rendered_prompt = template.render(state=state, run_context=run_context, input=raw_input)
+
+        # Get ModelBackendHub from ContextVar.
+        from modulo.core.pipeline_engine.decorator import get_model_backend_hub
+
+        hub = get_model_backend_hub()
+        if hub is None:
+            return {"artifacts": [{"node_id": node_id, "status": "executed", "error": "ModelBackendHub not available"}]}
+
+        # Resolve backend ID and invoke the model.
+        backend_id = uuid.UUID(model_backend_id_str)
+        try:
+            backend = await hub.get(backend_id)
+        except Exception:
+            return {"artifacts": [{"node_id": node_id, "status": "executed", "error": "Backend not available"}]}
+
+        messages = [HumanMessage(content=rendered_prompt)]
+        try:
+            response = await backend.invoke(messages)
+        except Exception:
+            return {"artifacts": [{"node_id": node_id, "status": "executed", "error": "Model invocation failed"}]}
+
+        content = response.content if hasattr(response, "content") else str(response)
+        output_data: Any = content
+        if isinstance(content, str):
+            try:
+                output_data = json.loads(content)
+            except (json.JSONDecodeError, ValueError):
+                pass
+
+        # Validate against output schema if defined.
+        if isinstance(output_schema_json, dict) and isinstance(output_data, dict):
+            _validate_against_schema(output_data, output_schema_json)
+
+        return {
+            "artifacts": [{"node_id": node_id, "status": "completed", "output": output_data}],
+            "output": output_data,
+        }
 
     _node.__name__ = f"node_{node_id}"
     return _node
