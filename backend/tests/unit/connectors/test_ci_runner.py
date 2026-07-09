@@ -6,6 +6,7 @@ import respx
 
 from modulo.connectors.base import CIRunStatus, ConnectorType
 from modulo.connectors.ci_runner import GitHubActionsCIRunner, GitLabCIRunner
+from modulo.connectors.ci_runner.base import ConnectorTypeError
 from modulo.connectors.ci_runner.github_actions import _GitHubActionsTestDouble
 from modulo.connectors.ci_runner.gitlab_ci import _GitLabCITestDouble
 
@@ -487,10 +488,10 @@ def test_ci_run_status_values():
 
 
 async def test_ci_runner_query_not_implemented(gh_runner):
-    with pytest.raises(NotImplementedError):
+    with pytest.raises(ConnectorTypeError):
         await gh_runner.query(None)  # type: ignore[arg-type]
 
 
 async def test_ci_runner_write_not_implemented(gh_runner):
-    with pytest.raises(NotImplementedError):
+    with pytest.raises(ConnectorTypeError):
         await gh_runner.write(None)  # type: ignore[arg-type]
