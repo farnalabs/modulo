@@ -1,7 +1,7 @@
 ﻿<template>
   <div class="mx-auto max-w-4xl space-y-8 p-6">
     <header>
-      <h1 class="text-3xl font-bold tracking-tight">{{ $t('views.SettingsObservabilityView.observability') }}</h1>
+      <h1 class="text-2xl font-semibold tracking-tight">{{ $t('views.SettingsObservabilityView.observability') }}</h1>
       <p class="mt-1 text-muted-foreground">{{ $t('views.SettingsObservabilityView.configure_opentelemetry_export_and_langsmith_integration') }}</p>
     </header>
 
@@ -24,7 +24,7 @@
 
       <form v-else @submit.prevent="saveSettings" class="space-y-6">
         <div class="rounded-lg border bg-card p-6 shadow-sm">
-          <h2 class="mb-4 text-lg font-semibold">{{ $t('views.SettingsObservabilityView.otlp_endpoint') }}</h2>
+          <h2 class="mb-4 text-base font-semibold">{{ $t('views.SettingsObservabilityView.otlp_endpoint') }}</h2>
           <div>
             <label class="mb-1 block text-sm font-medium">{{ $t('views.SettingsObservabilityView.endpoint_url') }}</label>
             <input
@@ -39,7 +39,7 @@
 
         <div class="rounded-lg border bg-card p-6 shadow-sm">
           <div class="mb-4 flex items-center justify-between">
-            <h2 class="text-lg font-semibold">{{ $t('views.SettingsObservabilityView.otlp_headers') }}</h2>
+            <h2 class="text-base font-semibold">{{ $t('views.SettingsObservabilityView.otlp_headers') }}</h2>
             <button
               type="button"
               class="rounded-lg bg-primary px-3 py-1.5 text-xs font-medium text-primary-foreground hover:bg-primary/90"
@@ -83,7 +83,7 @@
         </div>
 
         <div class="rounded-lg border bg-card p-6 shadow-sm">
-          <h2 class="mb-4 text-lg font-semibold">{{ $t('views.SettingsObservabilityView.export_interval') }}</h2>
+          <h2 class="mb-4 text-base font-semibold">{{ $t('views.SettingsObservabilityView.export_interval') }}</h2>
           <div>
             <label class="mb-1 block text-sm font-medium">{{ $t('views.SettingsObservabilityView.interval_seconds') }}</label>
             <input
@@ -98,7 +98,7 @@
         </div>
 
         <div class="rounded-lg border bg-card p-6 shadow-sm">
-          <h2 class="mb-4 text-lg font-semibold">{{ $t('views.SettingsObservabilityView.langsmith') }}</h2>
+          <h2 class="mb-4 text-base font-semibold">{{ $t('views.SettingsObservabilityView.langsmith') }}</h2>
           <div class="space-y-4">
             <div class="flex items-center gap-3">
               <button

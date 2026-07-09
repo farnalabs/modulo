@@ -8,7 +8,7 @@
       <header class="flex flex-wrap items-center justify-between gap-4">
         <div>
           <div class="flex items-center gap-3">
-            <h1 class="text-3xl font-bold tracking-tight">{{ $t('views.RunDetailView.run_detail') }}</h1>
+            <h1 class="text-2xl font-semibold tracking-tight">{{ $t('views.RunDetailView.run_detail') }}</h1>
             <span :class="statusBadgeClass" class="capitalize">{{ run.status }}</span>
           </div>
           <p class="mt-1 text-sm text-muted-foreground">
@@ -62,7 +62,7 @@
 
       <div v-if="run?.status === 'complete' && lastNodeOutput" class="card p-5 mb-6">
         <div class="flex items-center justify-between mb-3">
-          <h2 class="text-lg font-semibold text-foreground">{{ $t('views.RunDetailView.final_output') }}</h2>
+          <h2 class="text-base font-semibold text-foreground">{{ $t('views.RunDetailView.final_output') }}</h2>
           <button
             class="px-3 py-1.5 text-xs font-medium rounded-lg border border-input bg-background hover:bg-accent transition-colors"
             @click="copyOutput"
@@ -76,7 +76,7 @@
 
       <!-- Per-Node Execution Trace -->
       <section class="space-y-4 rounded-lg border bg-card p-6">
-        <h2 class="text-lg font-semibold tracking-tight">{{ $t('views.RunDetailView.execution_trace') }}</h2>
+        <h2 class="text-base font-semibold tracking-tight">{{ $t('views.RunDetailView.execution_trace') }}</h2>
 
         <div v-if="nodeEntries.length === 0" class="py-4 text-center text-sm text-muted-foreground">
           {{ $t('views.RunDetailView.no_node_data') }}
@@ -179,8 +179,8 @@
       <!-- Total Run Cost -->
       <section v-if="run.total_cost_usd != null" class="rounded-lg border bg-card p-6">
         <div class="flex items-center justify-between">
-          <h2 class="text-lg font-semibold tracking-tight">{{ $t('views.RunDetailView.total_run_cost') }}</h2>
-          <span class="text-2xl font-bold tabular-nums">${{ formattedCost }}</span>
+          <h2 class="text-base font-semibold tracking-tight">{{ $t('views.RunDetailView.total_run_cost') }}</h2>
+          <span class="text-2xl font-semibold tabular-nums">${{ formattedCost }}</span>
         </div>
         <p v-if="totalTokens != null" class="mt-1 text-xs text-muted-foreground">
           {{ $t('views.RunDetailView.total_tokens', { count: totalTokens.toLocaleString() }) }}

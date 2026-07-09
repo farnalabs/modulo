@@ -1,7 +1,7 @@
 ﻿<template>
   <div data-theme="agent" class="mx-auto max-w-4xl space-y-8 p-6">
     <header>
-      <h1 class="text-3xl font-bold tracking-tight">{{ $t('views.SettingsEmailView.email_settings') }}</h1>
+      <h1 class="text-2xl font-semibold tracking-tight">{{ $t('views.SettingsEmailView.email_settings') }}</h1>
       <p class="mt-1 text-muted-foreground">{{ $t('views.SettingsEmailView.configure_smtp_provider_for_transactional_emails') }}</p>
     </header>
 

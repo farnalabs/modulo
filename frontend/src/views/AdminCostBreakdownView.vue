@@ -6,7 +6,7 @@
   ]" />
   <div data-theme="agent" class="mx-auto max-w-6xl space-y-6 p-6">
     <header>
-      <h1 class="text-3xl font-bold tracking-tight">{{ $t('views.AdminCostBreakdownView.cost_breakdown') }}</h1>
+      <h1 class="text-2xl font-semibold tracking-tight">{{ $t('views.AdminCostBreakdownView.cost_breakdown') }}</h1>
       <p class="mt-1 text-muted-foreground">{{ $t('views.AdminCostBreakdownView.monthly_cost_report_and_anomaly_detection_across_teams') }}</p>
     </header>
 
@@ -23,7 +23,7 @@
               <CardTitle class="text-sm font-medium text-muted-foreground">{{ $t('views.AdminCostBreakdownView.total_spend_this_month') }}</CardTitle>
             </CardHeader>
             <CardContent>
-              <p class="text-3xl font-bold" data-testid="cost-total-spend">${{ totalSpend.toFixed(2) }}</p>
+              <p class="text-2xl font-semibold tabular-nums" data-testid="cost-total-spend">${{ totalSpend.toFixed(2) }}</p>
             </CardContent>
           </Card>
           <Card>
@@ -31,7 +31,7 @@
               <CardTitle class="text-sm font-medium text-muted-foreground">{{ $t('views.AdminCostBreakdownView.avg_cost_per_run') }}</CardTitle>
             </CardHeader>
             <CardContent>
-              <p class="text-3xl font-bold" data-testid="cost-avg-per-run">${{ avgCostPerRun.toFixed(2) }}</p>
+              <p class="text-2xl font-semibold tabular-nums" data-testid="cost-avg-per-run">${{ avgCostPerRun.toFixed(2) }}</p>
             </CardContent>
           </Card>
           <Card>
@@ -39,7 +39,7 @@
               <CardTitle class="text-sm font-medium text-muted-foreground">{{ $t('views.AdminCostBreakdownView.total_runs') }}</CardTitle>
             </CardHeader>
             <CardContent>
-              <p class="text-3xl font-bold" data-testid="cost-total-runs">{{ totalRuns }}</p>
+              <p class="text-2xl font-semibold tabular-nums" data-testid="cost-total-runs">{{ totalRuns }}</p>
             </CardContent>
           </Card>
         </div>

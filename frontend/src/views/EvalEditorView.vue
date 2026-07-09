@@ -10,7 +10,7 @@
 
     <div class="mx-auto max-w-5xl space-y-8 p-6">
     <header>
-      <h1 class="text-3xl font-bold tracking-tight">{{ $t('views.EvalEditorView.eval_editor') }}</h1>
+      <h1 class="text-2xl font-semibold tracking-tight">{{ $t('views.EvalEditorView.eval_editor') }}</h1>
       <p class="mt-1 text-muted-foreground">{{ $t('views.EvalEditorView.create_and_manage_eval_definitions') }}</p>
     </header>
 
@@ -54,7 +54,7 @@
       <div class="grid gap-8 lg:grid-cols-5">
         <div class="lg:col-span-3">
           <div class="rounded-lg border bg-card p-6 shadow-sm">
-            <h2 class="mb-4 text-lg font-semibold">{{ editingEvalId ? $t('views.EvalEditorView.edit_eval') : $t('views.EvalEditorView.new_eval') }}</h2>
+            <h2 class="mb-4 text-base font-semibold">{{ editingEvalId ? $t('views.EvalEditorView.edit_eval') : $t('views.EvalEditorView.new_eval') }}</h2>
 
             <div class="space-y-4">
               <div>
@@ -171,7 +171,7 @@
         </div>
 
         <div class="lg:col-span-2">
-          <h2 class="mb-4 text-lg font-semibold">{{ $t('views.EvalEditorView.existing_evals') }}</h2>
+          <h2 class="mb-4 text-base font-semibold">{{ $t('views.EvalEditorView.existing_evals') }}</h2>
 
           <div v-if="evalsError" class="mb-2 text-sm text-destructive">{{ evalsError }}</div>
 

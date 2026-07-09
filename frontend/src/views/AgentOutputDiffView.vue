@@ -4,7 +4,7 @@
     <ErrorAlert v-else-if="error" :message="error" />
     <template v-else>
       <header>
-        <h1 class="text-3xl font-bold tracking-tight">{{ $t('views.AgentOutputDiffView.agent_output_diff') }}</h1>
+        <h1 class="text-2xl font-semibold tracking-tight">{{ $t('views.AgentOutputDiffView.agent_output_diff') }}</h1>
         <p class="mt-1 text-muted-foreground">
           Compare agent outputs across two pipeline runs
         </p>
