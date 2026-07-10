@@ -8,7 +8,7 @@
       </div>
       <Button
         variant="default"
-        class="btn-glow border-primary/30 hover:border-primary/60"
+           class="border-primary/30 hover:border-primary/60"
         data-testid="settings-teams-create-team"
         @click="showCreateForm = true"
       >

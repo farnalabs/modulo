@@ -48,7 +48,7 @@
           :href="pricingUrl"
           target="_blank"
           rel="noopener noreferrer"
-          class="btn-glow border-primary/30 hover:border-primary/60"
+           class="border-primary/30 hover:border-primary/60"
         >
           {{ $t('components.FeatureGate.view_plans') }}
         </Button>
