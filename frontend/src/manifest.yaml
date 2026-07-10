@@ -619,6 +619,20 @@ routes:
         <<: *community
         deprecated: false
 
+    /setup/model-backend/:id:
+        name: ModelBackendSetup
+        breadcrumb: Complete Setup
+        parent: /
+        product_map:
+        sidebar_group:
+        sidebar_order:
+        type: form_page
+        <<: *community
+        deprecated: false
+        pattern: /setup/model-backend/:id
+        dynamic_params:
+        -   id
+
 elements:
     /admin/remy:
     -   testid: remy-access-save
