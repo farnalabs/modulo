@@ -23,6 +23,7 @@ def test_initial_schema_contains_required_tables() -> None:
         "feedback_records",
         "hitl_claims",
         "library_primitives",
+        "lifecycle_maps",
         "mcp_setup_tokens",
         "model_backends",
         "node_categories",
@@ -73,7 +74,14 @@ def test_initial_schema_contains_required_tables() -> None:
 
 def test_all_resource_tables_are_organisation_scoped() -> None:
     for name, table in Base.metadata.tables.items():
-        if name not in ("organisations", "accounts"):
+        if name not in (
+            "organisations",
+            "accounts",
+            "dismissals",
+            "system_config",
+            "tier_catalog",
+            "feature_flag_catalog",
+        ):
             assert "organisation_id" in table.c, f"{name} is missing organisation_id"
 
 
@@ -102,7 +110,7 @@ def test_initial_schema_includes_forward_compatible_fields() -> None:
         "run_id",
         "gate_id",
         "pipeline_id",
-        "claimed_by",
+        "account_id",
         "claimed_at",
         "claim_token",
         "expires_at",
