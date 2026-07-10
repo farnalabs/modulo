@@ -19,10 +19,12 @@ test.describe('Error Tracking', () => {
           items: [
             {
               id: 'e1',
-              message: 'Connection timeout',
+              sample_message: 'Connection timeout',
+              level_peak: 'error',
               count: 15,
+              first_seen: '2025-06-01T12:00:00Z',
               last_seen: '2025-06-01T12:00:00Z',
-              status: 'unresolved',
+              status: 'new',
             },
           ],
           total: 1,

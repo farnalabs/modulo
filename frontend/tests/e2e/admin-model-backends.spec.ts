@@ -8,6 +8,8 @@ const sampleBackends = {
       display_name: 'GPT-4',
       provider: 'openai',
       model_id: 'gpt-4',
+      has_credentials: true,
+      tier: 'native',
       visibility: 'org',
       created_by: 'admin@test.com',
       created_at: '2025-01-15T10:00:00Z',
