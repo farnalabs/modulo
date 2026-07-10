@@ -19,7 +19,7 @@ test.describe('First-Run Golden Path', () => {
 
     // Pipeline list: return at least one pipeline so the run button renders
     await page.route('**/api/v1/pipelines*', (route) => {
-      route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ items: [{ id: '1', name: 'Demo Pipeline', status: 'idle', created_at: '2025-01-01T00:00:00Z' }], total: 1 }) })
+      route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ items: [{ id: '1', name: 'Demo Pipeline', organisation_id: '1', description: 'A demo pipeline to test the golden path', visibility: 'org', status: 'idle', created_at: '2025-01-01T00:00:00Z', updated_at: '2025-01-01T00:00:00Z', archived_at: null }], total: 1 }) })
     })
 
     // Run status poll: start queued, then running, then complete
