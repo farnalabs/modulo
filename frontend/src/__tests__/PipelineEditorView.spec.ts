@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { mount } from '@vue/test-utils'
 import { createRouter, createWebHistory } from 'vue-router'
+import { createPinia } from 'pinia'
 import { nextTick } from 'vue'
 
 vi.mock('../composables/useApi', () => ({
@@ -37,7 +38,7 @@ describe('PipelineEditorView', () => {
     await router.isReady()
     const wrapper = mount(PipelineEditorView, {
       global: {
-        plugins: [router],
+        plugins: [createPinia(), router],
         stubs: {
           VueFlow: { template: '<div><slot /></div>' },
           Background: true,

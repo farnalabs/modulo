@@ -100,6 +100,8 @@ describe('AppLayout', () => {
         stubs: { LogoMark: true },
       },
     })
+    const store = usePlanStore()
+    store.currentTier = 'team'
     await nextTick()
 
     const licenseBadgeLinks = wrapper.findAll('a[href="/settings/license"]')
