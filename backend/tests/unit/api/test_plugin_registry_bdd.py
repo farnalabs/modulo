@@ -66,6 +66,12 @@ ALL_PLUGINS: dict[str, dict[str, Any]] = {
 # ---------------------------------------------------------------------------
 
 
+def _allow_all_plan():
+    ctx = MagicMock()
+    ctx.feature_enabled = MagicMock(return_value=True)
+    return ctx
+
+
 def _make_settings() -> Settings:
     return Settings(
         database_url="postgresql+asyncpg://localhost/test",
@@ -154,6 +160,7 @@ def client(mock_session: AsyncMock) -> Generator[TestClient, None, None]:
         account_id=USER_ID,
         org_role="admin",
     )
+    app.dependency_overrides[get_plan_context] = lambda: _allow_all_plan()
 
     yield TestClient(app)
 

@@ -24,7 +24,6 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from starlette.status import HTTP_200_OK, HTTP_429_TOO_MANY_REQUESTS
 
-from modulo.api.dependencies import get_plan_context
 from modulo.api.middleware.rate_limiter import RateLimitMiddleware
 from modulo.core.rate_limiter import RateLimiterRegistry
 from modulo.settings import Settings
@@ -348,23 +347,29 @@ class TestRetryAfterHeader:
 # ===========================================================================
 
 
+def _rate_limit_app(user_role: str = "admin") -> FastAPI:
+    from modulo.api.dependencies import get_plan_context
+    from modulo.api.routes.admin_rate_limits import router
+    from modulo.auth.dependencies import get_current_user
+    from modulo.auth.jwt import AuthenticatedPrincipal
+
+    app = FastAPI()
+    app.include_router(router)
+    app.dependency_overrides[get_current_user] = lambda: AuthenticatedPrincipal(
+        username=user_role,
+        organisation_id="00000000-0000-0000-0000-000000000001",
+        account_id="00000000-0000-0000-0000-000000000002",
+        org_role=user_role,
+    )
+    _plan = MagicMock()
+    _plan.feature_enabled = MagicMock(return_value=True)
+    app.dependency_overrides[get_plan_context] = lambda: _plan
+    return app
+
+
 class TestAdminRateLimits:
     def test_get_rate_limits_returns_rules(self) -> None:
-        app = FastAPI()
-        from modulo.api.routes.admin_rate_limits import router
-        from modulo.auth.dependencies import get_current_user
-        from modulo.auth.jwt import AuthenticatedPrincipal
-
-        app.include_router(router)
-        mock_plan = MagicMock()
-        mock_plan.feature_enabled.return_value = True
-        app.dependency_overrides[get_plan_context] = lambda: mock_plan
-        app.dependency_overrides[get_current_user] = lambda: AuthenticatedPrincipal(
-            username="admin",
-            organisation_id="00000000-0000-0000-0000-000000000001",
-            account_id="00000000-0000-0000-0000-000000000002",
-            org_role="admin",
-        )
+        app = _rate_limit_app()
 
         with TestClient(app) as client:
             resp = client.get("/api/v1/admin/rate-limits")
@@ -376,21 +381,7 @@ class TestAdminRateLimits:
         assert len(body["rules"]) > 0
 
     def test_put_updates_rules_dynamically(self) -> None:
-        app = FastAPI()
-        from modulo.api.routes.admin_rate_limits import router
-        from modulo.auth.dependencies import get_current_user
-        from modulo.auth.jwt import AuthenticatedPrincipal
-
-        app.include_router(router)
-        mock_plan = MagicMock()
-        mock_plan.feature_enabled.return_value = True
-        app.dependency_overrides[get_plan_context] = lambda: mock_plan
-        app.dependency_overrides[get_current_user] = lambda: AuthenticatedPrincipal(
-            username="admin",
-            organisation_id="00000000-0000-0000-0000-000000000001",
-            account_id="00000000-0000-0000-0000-000000000002",
-            org_role="admin",
-        )
+        app = _rate_limit_app()
 
         new_rules = {"rules": [{"path_prefix": "/api/v1/runs", "max_requests": 10, "window_s": 30}]}
 
@@ -406,21 +397,7 @@ class TestAdminRateLimits:
         assert run_rule["window_s"] == 30
 
     def test_put_requires_admin_role(self) -> None:
-        app = FastAPI()
-        from modulo.api.routes.admin_rate_limits import router
-        from modulo.auth.dependencies import get_current_user
-        from modulo.auth.jwt import AuthenticatedPrincipal
-
-        app.include_router(router)
-        mock_plan = MagicMock()
-        mock_plan.feature_enabled.return_value = True
-        app.dependency_overrides[get_plan_context] = lambda: mock_plan
-        app.dependency_overrides[get_current_user] = lambda: AuthenticatedPrincipal(
-            username="viewer",
-            organisation_id="00000000-0000-0000-0000-000000000001",
-            account_id="00000000-0000-0000-0000-000000000002",
-            org_role="viewer",
-        )
+        app = _rate_limit_app(user_role="viewer")
 
         new_rules = {"rules": [{"path_prefix": "/api/v1/runs", "max_requests": 10, "window_s": 30}]}
 
@@ -430,21 +407,7 @@ class TestAdminRateLimits:
         assert resp.status_code == 403
 
     def test_put_rejects_empty_rules(self) -> None:
-        app = FastAPI()
-        from modulo.api.routes.admin_rate_limits import router
-        from modulo.auth.dependencies import get_current_user
-        from modulo.auth.jwt import AuthenticatedPrincipal
-
-        app.include_router(router)
-        mock_plan = MagicMock()
-        mock_plan.feature_enabled.return_value = True
-        app.dependency_overrides[get_plan_context] = lambda: mock_plan
-        app.dependency_overrides[get_current_user] = lambda: AuthenticatedPrincipal(
-            username="admin",
-            organisation_id="00000000-0000-0000-0000-000000000001",
-            account_id="00000000-0000-0000-0000-000000000002",
-            org_role="admin",
-        )
+        app = _rate_limit_app()
 
         with TestClient(app) as client:
             resp = client.put("/api/v1/admin/rate-limits", json={"rules": []})
@@ -452,21 +415,7 @@ class TestAdminRateLimits:
         assert resp.status_code == 400
 
     def test_put_rejects_negative_max_requests(self) -> None:
-        app = FastAPI()
-        from modulo.api.routes.admin_rate_limits import router
-        from modulo.auth.dependencies import get_current_user
-        from modulo.auth.jwt import AuthenticatedPrincipal
-
-        app.include_router(router)
-        mock_plan = MagicMock()
-        mock_plan.feature_enabled.return_value = True
-        app.dependency_overrides[get_plan_context] = lambda: mock_plan
-        app.dependency_overrides[get_current_user] = lambda: AuthenticatedPrincipal(
-            username="admin",
-            organisation_id="00000000-0000-0000-0000-000000000001",
-            account_id="00000000-0000-0000-0000-000000000002",
-            org_role="admin",
-        )
+        app = _rate_limit_app()
 
         with TestClient(app) as client:
             resp = client.put(

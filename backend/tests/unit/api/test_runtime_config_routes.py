@@ -38,6 +38,9 @@ def client() -> Generator[TestClient, None, None]:
         account_id="00000000-0000-0000-0000-000000000002",
         org_role="admin",
     )
+    _plan = MagicMock()
+    _plan.feature_enabled = MagicMock(return_value=True)
+    app.dependency_overrides[get_plan_context] = lambda: _plan
     yield TestClient(app)
     app.dependency_overrides.clear()
 
