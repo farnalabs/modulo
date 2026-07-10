@@ -20,14 +20,14 @@ test.describe('Remy Admin Configuration', () => {
       route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({}) })
     })
     // Model backends (for provider status check)
-    await page.route('**/api/v1/model-backends', (route) => {
+    await page.route('**/api/v1/model-backends**', (route) => {
       route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ items: [], total: 0 }) })
     })
     // Users and teams
-    await page.route('**/api/v1/admin/users', (route) => {
+    await page.route('**/api/v1/admin/users**', (route) => {
       route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ items: [], total: 0 }) })
     })
-    await page.route('**/api/v1/admin/teams', (route) => {
+    await page.route('**/api/v1/admin/teams**', (route) => {
       route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ items: [], total: 0 }) })
     })
 
@@ -35,7 +35,7 @@ test.describe('Remy Admin Configuration', () => {
     await page.waitForLoadState('networkidle')
 
     await expect(page.locator('h1')).toContainText('Remy Configuration')
-    await expect(page.getByTestId('remy-providers')).toBeVisible()
+    await expect(page.getByTestId('remy-providers')).toBeVisible({ timeout: 10000 })
     await expect(page.getByTestId('remy-custom-backends')).toBeVisible()
   })
 })

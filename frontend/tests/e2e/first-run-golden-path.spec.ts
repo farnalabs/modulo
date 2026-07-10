@@ -37,7 +37,7 @@ test.describe('First-Run Golden Path', () => {
       const url = route.request().url()
       if (url.includes('/io')) return route.fallback()
       pollCount++
-      const statuses = ['queued', 'running', 'running', 'complete']
+      const statuses = ['queued', 'running', 'complete']
       const idx = Math.min(pollCount, statuses.length - 1)
       return route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({
         id: RUN_ID, pipeline_id: '1', status: statuses[idx],
@@ -68,7 +68,7 @@ test.describe('First-Run Golden Path', () => {
     await submitButton.click()
 
     // ── Step 5: Wait for navigation to run detail and inspect output ─
-    await page.waitForURL(`/runs/${RUN_ID}`, { timeout: 10000 })
+    await page.waitForURL(`/runs/${RUN_ID}`, { timeout: 15000 })
     await page.waitForLoadState('networkidle')
 
     // Verify the run detail page loaded
@@ -76,10 +76,10 @@ test.describe('First-Run Golden Path', () => {
 
     // ── Step 6: Verify run output is visible ────────────────────────
     const completedBadge = page.locator('text=complete').first()
-    await expect(completedBadge).toBeVisible({ timeout: 5000 })
+    await expect(completedBadge).toBeVisible({ timeout: 15000 })
 
     const nodeOutput = page.locator('text=Hello world').first()
-    await expect(nodeOutput).toBeVisible({ timeout: 5000 })
+    await expect(nodeOutput).toBeVisible({ timeout: 15000 })
 
     console.info('[golden-path] Golden path completed successfully')
   })

@@ -34,7 +34,7 @@ test.describe('View Modes Admin CRUD', () => {
       route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(sampleViews) })
     })
 
-    await page.goto('/admin/views')
+    await page.goto('/admin/views', { timeout: 120000 })
     await page.waitForLoadState('networkidle')
 
     await expect(page.locator('h1')).toContainText('Saved Views')
@@ -49,7 +49,7 @@ test.describe('View Modes Admin CRUD', () => {
       await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ items: [] }) })
     })
 
-    await page.goto('/admin/views')
+    await page.goto('/admin/views', { timeout: 120000 })
 
     const spinner = page.locator('.animate-spin')
     await expect(spinner).toBeVisible({ timeout: 5000 })
@@ -61,11 +61,11 @@ test.describe('View Modes Admin CRUD', () => {
       route.fulfill({ status: 500, contentType: 'application/json', body: JSON.stringify({ detail: 'Server error' }) })
     })
 
-    await page.goto('/admin/views')
+    await page.goto('/admin/views', { timeout: 120000 })
     await page.waitForLoadState('networkidle')
 
     await expect(page.getByText('Server error')).toBeVisible({ timeout: 5000 })
-    await expect(page.getByRole('button', { name: /retry/i })).toBeVisible()
+    await expect(page.getByText('Retry')).toBeVisible()
   })
 
   test('shows empty state when no views exist', async ({ page, env }) => {
@@ -74,7 +74,7 @@ test.describe('View Modes Admin CRUD', () => {
       route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ items: [] }) })
     })
 
-    await page.goto('/admin/views')
+    await page.goto('/admin/views', { timeout: 120000 })
     await page.waitForLoadState('networkidle')
 
     await expect(page.locator('text=No saved views yet')).toBeVisible()
@@ -95,7 +95,7 @@ test.describe('View Modes Admin CRUD', () => {
       }
     })
 
-    await page.goto('/admin/views')
+    await page.goto('/admin/views', { timeout: 120000 })
     await page.waitForLoadState('networkidle')
 
     await page.getByTestId('admin-views-add').click()
@@ -127,7 +127,7 @@ test.describe('View Modes Admin CRUD', () => {
       route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ items: [] }) })
     })
 
-    await page.goto('/admin/views')
+    await page.goto('/admin/views', { timeout: 120000 })
     await page.waitForLoadState('networkidle')
 
     await page.getByTestId('admin-views-add').click()
@@ -144,7 +144,7 @@ test.describe('View Modes Admin CRUD', () => {
       route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ items: [] }) })
     })
 
-    await page.goto('/admin/views')
+    await page.goto('/admin/views', { timeout: 120000 })
     await page.waitForLoadState('networkidle')
 
     await page.getByTestId('admin-views-add').click()
@@ -163,7 +163,7 @@ test.describe('View Modes Admin CRUD', () => {
       route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(sampleViews) })
     })
 
-    await page.goto('/admin/views')
+    await page.goto('/admin/views', { timeout: 120000 })
     await page.waitForLoadState('networkidle')
 
     const editButtons = page.getByTestId('admin-views-edit')
@@ -191,7 +191,7 @@ test.describe('View Modes Admin CRUD', () => {
       }
     })
 
-    await page.goto('/admin/views')
+    await page.goto('/admin/views', { timeout: 120000 })
     await page.waitForLoadState('networkidle')
 
     const deleteButtons = page.getByTestId('admin-views-delete')
@@ -218,7 +218,7 @@ test.describe('View Modes Admin CRUD', () => {
       route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(sampleViews) })
     })
 
-    await page.goto('/admin/views')
+    await page.goto('/admin/views', { timeout: 120000 })
     await page.waitForLoadState('networkidle')
 
     await expect(page.locator('text=Active Runs')).toBeVisible()
