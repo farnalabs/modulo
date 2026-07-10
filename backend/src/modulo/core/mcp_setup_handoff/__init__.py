@@ -10,6 +10,7 @@ Future tools: call create_handoff() and consume_handoff().
 """
 
 import hashlib
+import logging
 import secrets
 import uuid
 from datetime import UTC, datetime, timedelta
@@ -20,6 +21,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.db.models.mcp_setup_token import McpSetupToken
 from modulo.settings import get_settings
+
+_log = logging.getLogger(__name__)
 
 HANDOFF_TTL_MINUTES = 15
 
@@ -55,6 +58,8 @@ async def create_handoff(
     )
     session.add(token_record)
 
+    _log.info("Created handoff: type=%s resource_id=%s org=%s", resource_type, resource_id, org_id)
+
     settings = get_settings()
     base_url = settings.modulo_public_url.rstrip("/")
     setup_url = f"{base_url}/setup/{resource_type}/{resource_id}?token={raw_token}"
@@ -83,11 +88,13 @@ async def consume_handoff(
             McpSetupToken.organisation_id == org_id,
             McpSetupToken.completed_at.is_(None),
             McpSetupToken.expires_at > now,
-        )
+        ).with_for_update()
     )
     record = result.scalar_one_or_none()
     if record is None:
+        _log.warning("Handoff token not found or expired: type=%s org=%s", resource_type, org_id)
         return None
 
+    _log.info("Consumed handoff: type=%s resource_id=%s", resource_type, record.resource_id)
     record.completed_at = now
     return record

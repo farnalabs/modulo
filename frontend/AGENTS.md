@@ -84,3 +84,7 @@ is edited, re-run `npm install` (not just the script) to ensure the hook fires.
 ### `locator.evaluate(el => el.click())` to bypass overlays in Playwright
 
 - When a UI overlay (e.g. the Remy panel) covers an element, Playwright's `locator.click()` refuses to click because the element is not actionable. `click({ force: true })` dispatches the event but Vue's `@click` handler may not fire if an overlay captures the event. Use `locator.evaluate((el) => el.click())` to dispatch a native DOM click that always triggers the handler, regardless of overlays.
+
+### Concurrent save guard: use a shared `configSaving` mutex
+
+- When multiple save functions (`saveAccessList`, `saveModelConfig`, `saveToolPerms`, etc.) all PUT to the same API endpoint, they must share a `configSaving` flag to prevent concurrent requests. Without the guard, clicking "Save" in two sections simultaneously fires parallel PUT calls — one section's changes silently overwrite the other's. Pattern: `if (configSaving.value) return; configSaving.value = true; ... configSaving.value = false` at the start and end of every save function that targets the shared endpoint.
