@@ -16,6 +16,7 @@ from modulo.db.models.eval_result import EvalResult
 from modulo.db.models.feedback_record import FeedbackRecord
 from modulo.db.models.hitl_claim import HitlClaim
 from modulo.db.models.library_primitive import LibraryPrimitive
+from modulo.db.models.lifecycle_map import LifecycleMap
 from modulo.db.models.mcp_setup_token import McpSetupToken
 from modulo.db.models.model_backend import ModelBackend
 from modulo.db.models.node import Node
@@ -79,6 +80,7 @@ __all__ = [
     "FeedbackRecord",
     "HitlClaim",
     "LibraryPrimitive",
+    "LifecycleMap",
     "McpSetupToken",
     "ModelBackend",
     "Node",

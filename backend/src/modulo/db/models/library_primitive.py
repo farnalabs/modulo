@@ -24,7 +24,7 @@ class LibraryPrimitive(OrgScoped):
         CheckConstraint("source IN ('local', 'registry', 'modulo', 'community')", name="ck_library_primitives_source"),
         CheckConstraint(
             "primitive_type IN ('schema', 'workflow', 'agent', 'integration', "
-            "'test_fixture', 'pipeline_template', 'composite')",
+            "'test_fixture', 'pipeline_template', 'composite', 'lifecycle_map')",
             name="ck_library_primitives_type",
         ),
         CheckConstraint(
