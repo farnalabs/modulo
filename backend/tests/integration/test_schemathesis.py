@@ -9,7 +9,7 @@ Run with::
     pytest tests/integration/test_schemathesis.py -x --timeout=120
 
 Requires env vars (minimally SECRET_KEY, FERNET_KEY).  The app's
-lifespan is NOT triggered by ``from_asgi``, so DB connectivity is
+lifespan is NOT triggered by ``schemathesis.openapi.from_asgi``, so DB connectivity is
 not required for the schema load — individual endpoints may still
 fail with 5xx if they depend on a database, and that is expected.
 """
@@ -19,7 +19,7 @@ from hypothesis import HealthCheck, settings
 
 from modulo.api.main import app
 
-schema = schemathesis.from_asgi("/openapi.json", app)
+schema = schemathesis.openapi.from_asgi("/openapi.json", app)
 
 
 @schema.parametrize(endpoint=r"^/api/v1/(pipelines|schemas|library|connectors|model-backends)(\?.*)?$")

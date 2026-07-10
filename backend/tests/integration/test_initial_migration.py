@@ -11,11 +11,11 @@ from sqlalchemy.orm import Session
 
 from modulo.db.models import Base, LibraryPrimitive, Organisation, Run
 from tests.factories import (
+    AccountFactory,
     OrganisationFactory,
     PipelineFactory,
     PipelineSnapshotFactory,
     RunFactory,
-    UserFactory,
 )
 
 
@@ -49,8 +49,8 @@ async def test_persisted_factories_insert_valid_relationships(db_engine: AsyncEn
     def insert_graph(connection: Any) -> tuple[object, object]:
         with Session(bind=connection) as session:
             factories = (
+                AccountFactory,
                 OrganisationFactory,
-                UserFactory,
                 PipelineFactory,
                 PipelineSnapshotFactory,
                 RunFactory,
