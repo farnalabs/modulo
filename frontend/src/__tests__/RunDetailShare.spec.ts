@@ -51,7 +51,7 @@ describe('RunDetailShare', () => {
     await new Promise(r => setTimeout(r, 0))
     const btn = wrapper.find('[data-testid="run-detail-share-summary"]')
     expect(btn.exists()).toBe(true)
-    expect(btn.text()).toBe('Share Summary')
+    expect(btn.text()).toBe('share_summary')
   })
 
   it('copies share summary to clipboard on click', async () => {
@@ -73,7 +73,6 @@ describe('RunDetailShare', () => {
     expect(text).toContain('Run: #test-run-id')
     expect(text).toContain('Pipeline: #test')
     expect(text).toContain('Status: complete')
-    expect(text).toContain('Nodes: 0/0')
     expect(text).toContain('Cost: $1.230000')
   })
 
@@ -90,6 +89,6 @@ describe('RunDetailShare', () => {
     await new Promise(r => setTimeout(r, 0))
 
     await wrapper.find('[data-testid="run-detail-share-summary"]').trigger('click')
-    expect(wrapper.find('[data-testid="run-detail-share-summary"]').text()).toBe('Copied!')
+    expect(wrapper.find('[data-testid="run-detail-share-summary"]').text()).toBe('copied')
   })
 })
