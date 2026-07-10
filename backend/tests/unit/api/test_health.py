@@ -23,6 +23,7 @@ def _make_settings() -> Settings:
 
 @pytest.fixture()
 def client() -> Generator[TestClient, None, None]:
+    app.dependency_overrides.clear()
     app.dependency_overrides[get_settings] = _make_settings
     yield TestClient(app)
     app.dependency_overrides.clear()
