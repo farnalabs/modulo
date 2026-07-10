@@ -27,7 +27,7 @@ T = TypeVar("T")
 _ModelT = TypeVar("_ModelT")  # bound=DeclarativeBase — omitted for pydantic compatibility
 
 
-class CursorPage(BaseModel, Generic[T]):  # noqa: UP046
+class CursorPage(BaseModel, Generic[T]):
     model_config = {"arbitrary_types_allowed": True}
     items: list[T]
     next_cursor: str | None = None
