@@ -17,7 +17,9 @@
 
     <LoadingSpinner v-if="loading" />
 
-    <ErrorAlert v-else-if="error" :message="error" :on-retry="loadViews" />
+    <div v-else-if="error" data-testid="admin-views-error">
+      <ErrorAlert :message="error" :on-retry="loadViews" />
+    </div>
 
     <template v-else>
       <div v-if="showForm" class="card p-6">
