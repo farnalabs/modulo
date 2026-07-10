@@ -40,7 +40,7 @@ test.describe('Admin Model Backends', () => {
     await page.goto('/admin/model-backends')
     await page.waitForLoadState('networkidle')
 
-    await expect(page.locator('text=GPT-4')).toBeVisible()
+    await expect(page.locator('text=GPT-4').first()).toBeVisible()
     await expect(page.getByTestId('admin-model-backends-edit').first()).toBeVisible()
     await expect(page.getByTestId('admin-model-backends-delete').first()).toBeVisible()
   })

@@ -65,7 +65,7 @@ test.describe('View Modes Admin CRUD', () => {
     await page.waitForLoadState('networkidle')
 
     await expect(page.getByText('Server error')).toBeVisible({ timeout: 5000 })
-    await expect(page.getByText('Retry')).toBeVisible()
+    await expect(page.getByRole('button', { name: /retry/i })).toBeVisible()
   })
 
   test('shows empty state when no views exist', async ({ page, env }) => {
