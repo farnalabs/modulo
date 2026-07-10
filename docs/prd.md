@@ -1,9 +1,10 @@
 # Modulo — Product Requirements Document
 
-**Version**: 0.32
-**Date**: 2026-07-04
+**Version**: 0.33
+**Date**: 2026-07-10
 **Status**: Pre-development
 **Changelog**:
+- v0.33 — §8.31 Lifecycle Map: declarative multi-diagram SDLC model with stage node types (`modulo`\|`external`\|`manual`\|`placeholder`), transition edge trigger metadata, fractal double-click navigation, graduation path from model-only to Modulo-managed. v0.31.
 - v0.32 — §8.29 Remy Context Sources: configurable knowledge domains with always-on/tool/off modes, per-skill source_mode, `source_contexts` field on RemyConfig, 4 new MCP retrieval tools (get_documentation, get_integration_status, get_org_config, get_available_features). §8.30 Remy Product Primer: auto-generated always-on product overview in system prompt, primer generator script reading PRD + product map + manifest + live counts. ADR 011.
 - v0.31 — §8.25.1 Frontend Monitor Backend Abstraction: plugable MonitorBackend interface (builtin/sentry/datadog-rum/grafana-faro), dual-layer config (build-time VITE_* + runtime MODULO_MONITOR_CONFIG), ErrorTracker refactor with MonitorBackendRegistry dispatch, CSP superset strategy, per-backend privacy data sheets, unauthenticated error ingest endpoint, i18n missing-key capture, 2 existing pipeline bugfixes. ADR 009.
 - v0.30 — §8.28 Core Shared Manifest: single YAML source of truth for routes, elements, sidebar, permissions, tiers, product map refs, i18n keys. Binary consumption (frontend Vite import + backend startup load). `get_manifest(path?)` Remy tool. 7-rule pre-commit + CI validator. ADR 008.
@@ -3706,6 +3707,198 @@ The feature decomposes into these delivery tasks:
 
 ---
 
+### 8.31 Lifecycle Map
+
+A Lifecycle Map is a declarative, multi-diagram model of an organisation's SDLC — or any business process that moves work through governed stages. It is the top-level view of "how does work get from idea to customer?" Each stage in the map is a node; each handoff between stages is a transition edge. Stages can be linked to executable Modulo pipelines (clickable → shows the pipeline graph), marked as external (documented but not managed by Modulo), or left as manual (human process with no automation).
+
+Lifecycle Maps exist because a single pipeline cannot capture an entire SDLC. Pipelines are linear or branching execution graphs — they start, run, and finish. A Lifecycle Map is a **state machine** that describes how a unit of work (a task, a ticket, a PR, a deploy) moves through logically ordered stages over hours, days, or weeks. The pipeline is the *execution* primitive. The Lifecycle Map is the *orchestration* primitive.
+
+From the user's perspective: the Lifecycle Map is the first thing they see when they want to understand or design "how we deliver software." It is the TL;DR of their SDLC — each heading is a clickable stage, each arrow is a documented handoff. It is useful on day 0 with zero Modulo-managed steps. Over time, stages graduate to Modulo-managed pipelines. The goal is not 100% management — it is 100% model fidelity. Some stages will always live in external systems (deploy pipelines in CircleCI, incident response in PagerDuty), and the map documents that honestly.
+
+**Core philosophy**: the Lifecycle Map is a semantic model, not a workflow engine. It says "tasks should flow through these stages in this order" without prescribing *how* each transition happens. Some transitions are tight (pipeline A's output triggers pipeline B via Modulo signals). Others are loose (a label change on a Jira ticket is detected by an external cron; Modulo just documents the relationship). Both belong in the same map.
+
+#### 8.31.1 Map Concepts
+
+| Term | Definition |
+|---|---|
+| **Lifecycle Map** | A DAG of stage nodes and transition edges describing a logical work lifecycle. Versioned, org-scoped, renderable as an interactive diagram. |
+| **Stage Node** | A named step in the lifecycle. Has a `type` (see §8.31.2) and optionally links to a Modulo pipeline or an external system URL. |
+| **Transition Edge** | A directed connection between two stage nodes. Carries trigger metadata describing *how* work moves from one stage to the next — even if Modulo doesn't own the trigger. |
+| **Trigger Metadata** | A structured annotation on a transition edge: `trigger_type: "pipeline_completed" \| "webhook" \| "cron" \| "manual" \| "external"`, a human-readable description of who/what fires it, and optionally a link to the trigger definition if Modulo-managed. |
+| **Graduated Stage** | A stage node that started as `external` or `manual` and was later linked to a Modulo pipeline. The map preserves its history — previous versions show what it looked like before graduation. |
+| **Map Version** | An immutable snapshot of the entire map DAG. Versions are created on explicit save. Older versions remain viewable to track process evolution. |
+
+#### 8.31.2 Stage Node Types
+
+| Type | Rendered | Meaning |
+|---|---|---|
+| `modulo` | Solid border, clickable to pipeline graph | This stage is a Modulo pipeline. Clicking opens the pipeline editor or run history. |
+| `external` | Dashed border, clickable to external URL | This stage runs in an external system (CircleCI, GitHub Actions, PagerDuty). The map documents its existence; Modulo does not own execution. |
+| `manual` | Dotted border, no click-through | This stage is a human process with no automation or tooling. The map documents it for completeness. |
+| `placeholder` | Ghost/faded border | This stage is planned but not yet implemented in any system. Represents a gap in the current process. |
+
+Each stage node carries:
+- `name`, `description`, `type`
+- `pipeline_id` (if type `modulo`) — links to the pipeline definition
+- `external_url` (if type `external`) — links to the external system
+- `owner` — which team or person owns this stage
+- `required_schema_in` / `schemas_produced` — what artifacts this stage expects and produces (optional, documentary)
+
+#### 8.31.3 Transition Edges
+
+Each edge carries:
+- `from_stage_id`, `to_stage_id`
+- `trigger_type` — `pipeline_completed` \| `webhook` \| `cron` \| `manual` \| `external`
+- `trigger_description` — human-readable explanation: "A human clicks 'Deploy' in CircleCI after soak tests pass"
+- `trigger_id` — optional, links to a Modulo Trigger entity if Modulo-managed
+- `condition` — optional JMESPath expression describing when this transition fires (e.g. only on green builds)
+- `estimated_frequency` — how often this transition typically fires (daily, per-PR, hourly)
+
+#### 8.31.4 Fractal Navigation
+
+A Lifecycle Map is the outermost layer of a fractal hierarchy:
+
+```
+Lifecycle Map (the DAG you drew)
+  └── Stage Node: "Task Delivery"
+        └── Pipeline (clickable → opens pipeline editor)
+              └── Agent Node: "Coder"
+                    └── Agent config (prompt, schema, model backend)
+                          └── Sub-pipeline (if composite node)
+```
+
+At every level, the user can "double-click" to drill down. A `modulo` stage node opens its pipeline graph. An agent node opens its config panel. A composite node opens its sub-pipeline. Navigation is breadcrumb-based with viewport state preserved per level (§8.4).
+
+Not every stage needs a Modulo pipeline attached. An `external` stage node with no `pipeline_id` renders as documentation — clicking it opens the `external_url` in a new tab. The map is still useful: it shows the complete lifecycle even when Modulo only owns pieces of it.
+
+#### 8.31.5 Graduation Path
+
+The graduating-track is the core adoption model. A stage starts as `placeholder` (planned), becomes `manual` or `external` (documented), and optionally graduates to `modulo` (managed):
+
+1. **Day 0**: A team creates a Lifecycle Map of their current SDLC. All stages are `external` or `manual`. Transitions are annotated with trigger descriptions but no Modulo trigger IDs. The map is a documentation artifact — useful for onboarding, process review, and gap analysis.
+2. **Day 1**: The team replaces one `manual` stage with a Modulo pipeline. The stage node type changes to `modulo` and links to the pipeline. The incoming transition edge gains a `trigger_id`. The map now has one graduated stage.
+3. **Day N**: More stages graduate. Some never do — the external deploy pipeline in CircleCI stays `external`. The map remains accurate because `external` is a first-class stage type, not a shortcoming.
+4. **Maturity**: Over time, the map becomes a hybrid — some stages Modulo-managed, some external, some manual. The map truthfully reflects the real SDLC at every point in its evolution.
+
+**Why not force 100%:** Forcing all stages into Modulo pipelines creates perverse incentives — teams either stop using the map (because it doesn't reflect reality) or they build shallow pipelines that obscure where the real work happens. Honest stage types keep the map useful forever.
+
+#### 8.31.6 Multiple Maps
+
+Any org member can create a Lifecycle Map. Maps are not limited to "the main SDLC." Teams and individuals create maps for any process they want to document or evolve:
+
+| Map | Audience | Stages |
+|---|---|---|
+| **Main SDLC** | Entire team | Issue → Groom → Dev → Review → Staging → Prod |
+| **Dependency Renovation** | Platform team | Crawl → Triage → PR → Merge → Deploy |
+| **Incident Response** | On-call | Alert → Classify → Remediate → Postmortem |
+| **Content Publishing** | Marketing | Draft → Review → Approve → Publish |
+
+Maps are independent — a single task might appear in multiple maps (a deploy shows up in both "Main SDLC" and "Infra Change" maps). Maps carry `owner_team_id` and `visibility` (`org` \| `team`), following the same pattern as other Modulo resources.
+
+#### 8.31.7 Visual Editor
+
+The Lifecycle Map editor is an interactive canvas (built on Vue Flow, same as the pipeline editor):
+
+- **Drag-and-drop stage nodes** from a palette
+- **Click to configure** each node: type, name, pipeline link, external URL
+- **Draw transition edges** between nodes by dragging from one node's output port to another's input
+- **Edge properties panel**: trigger type picker, description field, condition expression, trigger link
+- **Version history browser**: time-machine slider to see how the map has evolved
+- **Graduation indicator**: graduated stages show a small badge (shield icon) with the graduation date
+- **Map list page**: card grid of all maps in the org, searchable, filterable by team
+
+The editor is available from `/lifecycle-maps` in the sidebar (Core group, or a new "Lifecycle" group if maps reach sufficient adoption).
+
+**Alpha scope**: view-only map rendering from JSON/YAML. Creating and editing maps via JSON editor. No drag-and-drop canvas. Stage node types render with correct border styles. Clicking a `modulo` stage navigates to the pipeline editor. Clicking an `external` stage opens the URL.
+
+**V1 scope**: Full drag-and-drop visual editor. Transition edge drawing. Version history browser. Map list page. Team ownership. Graduation badge.
+
+**V2 scope**: Multiple maps per org. Community map templates ("Start from SDLC template"). Map diff view (side-by-side version comparison). Map export as PNG/SVG for embedding in Confluence/Notion.
+
+#### 8.31.8 Relationship to Existing Primitives
+
+| Existing Concept | How It Relates |
+|---|---|
+| **Pipeline** (§8.4) | An executable pipeline is attached to a `modulo` stage node. The same pipeline can appear in multiple maps. |
+| **Stage Board** (§8.4) | The Stage Board shows cards for pipelines. The Lifecycle Map shows the *logical flow* that those pipelines belong to. They are complementary views: the board is "what's running now"; the map is "what are all the steps." |
+| **Trigger** (§8.5) | A transition edge with `trigger_type: "webhook"` or `"cron"` can link to a Modulo Trigger entity. The trigger definition lives separately; the edge just references it. |
+| **Manual Node** (§8.4) | A `manual` stage node is the lifecycle-level equivalent of a Manual pipeline node — a human step with no automation. Manual stages document the handoff; Manual pipeline nodes pause execution for human input. They are independent concepts at different fractal levels. |
+| **Pipeline Template** (library) | A Pipeline Template can be "slotted into" a stage node as a starting point. "Use template" in the stage config creates a new pipeline from the template and links it. |
+| **Composite Node** (§8.24) | A composite node within a pipeline is sub-pipeline execution. A Lifecycle Map stage is cross-pipeline orchestration. They operate at different fractal levels and are not interchangeable. |
+
+#### 8.31.9 Primitive Model
+
+Lifecycle Maps are stored as a new `lifecycle_map` primitive type in the library system (same pattern as `pipeline_template` and `workflow`):
+
+```yaml
+primitive_type: lifecycle_map
+content_json:
+  stages:
+    - id: "stage-gen"
+      name: "Task Generation"
+      description: "Issues, bugs, and feature requests enter here"
+      type: modulo  # or external, manual, placeholder
+      pipeline_id: "uuid-of-pipeline"         # if type=modulo
+      external_url: "https://github.com/..."  # if type=external
+      owner: "platform-team"
+      position:
+        x: 100
+        y: 200
+  transitions:
+    - from: "stage-gen"
+      to: "stage-delivery"
+      trigger_type: external
+      trigger_description: >
+        A human adds a 'ready_for_dev' label on the
+        GitHub issue, which is detected by a scheduled
+        GitHub Actions workflow that fires the delivery
+        pipeline via webhook.
+      trigger_id: "uuid-of-trigger"  # optional
+      condition: "issue.labels contains 'ready_for_dev'"
+      estimated_frequency: daily
+```
+
+Versioning follows the same pattern as schemas: explicit save creates a new version. Old versions are browsable. The `lifecycle_map` primitive can be exported, imported, and shared via bundles.
+
+#### 8.31.10 The 80% Target
+
+The product target is that 80% of an organisation's SDLC stages are *managed* by Modulo (type `modulo` with a live pipeline), while 100% of stages are *modeled* in the Lifecycle Map. The remaining 20% are honestly annotated as `external` or `manual` — not because we want them there permanently, but because honest annotation is more valuable than forced coverage.
+
+Metrics surfaced in the map UI:
+- **Coverage**: "8 of 12 stages graduated (67%)" — a progress indicator, not a shame metric
+- **Gap analysis**: stages that have been `placeholder` for >30 days are surfaced as "consider graduating"
+- **Velocity**: average time per stage (only for Modulo-managed stages where timing data exists)
+
+#### 8.31.11 Delivery Tasks
+
+1. `task-lm-data-model` (L) — LifecycleMap entity, StageNode model, TransitionEdge model, JSON schema, migration, CRUD service + API routes
+2. `task-lm-library-primitive` (M) — `lifecycle_map` primitive type in library system, bundle export/import support, versioning
+3. `task-lm-readonly-render` (M) — Vue Flow read-only renderer: stage nodes with type-based border styling, transition arrows, click-to-navigate on `modulo` / `external` stages, version browser
+4. `task-lm-visual-editor` (XL) — Full drag-and-drop canvas: stage palette, node config panel, edge drawing, trigger metadata panel, save/publish flow
+5. `task-lm-map-list` (S) — Card grid of all maps, searchable, filterable, create-new flow
+6. `task-lm-graduation-flow` (M) — "Graduate stage" action: promote manual/external to modulo, link to existing pipeline or create new, version snapshot
+7. `task-lm-bdd-tests` (M) — BDD feature files for map CRUD, rendering, navigation, graduation
+8. `task-lm-dogfood` (L) — Modulo's own Lifecycle Map defined, stages graduated to Modulo pipelines progressively, used as the primary onboarding example
+
+**Phase**: `phase-lm` (new — independent of alpha/v1 phases; can ship incrementally)
+
+#### 8.31.12 Flag / Gating
+
+| Component | Tier |
+|---|---|
+| Read-only map rendering (from JSON) | Community |
+| Visual map editor | Community |
+| Multiple maps per org | Community |
+| Map version history browser | Team |
+| Team-owned maps | Team |
+| Graduation metrics / gap analysis | Team |
+| Map templates ("Start from SDLC") | Community (library) |
+| Map diff view (version comparison) | Team |
+
+Lifecycle Maps are a core onboarding and documentation feature. The base feature (create, view, navigate stages) is Community-tier. Advanced features (version history, team scoping, analytics) are Team-tier.
+
+---
+
 ## 15. Resolved Design Decisions
 
 | Decision | Resolution |
@@ -3822,6 +4015,7 @@ The feature decomposes into these delivery tasks:
 | WebSocket fan-out | Per-run event broker; one `astream_events()` consumer per active run; N subscriber connections. In-memory alpha; Redis pub/sub for multi-process v1. |
 | Async driver mandate | AsyncPostgresSaver + asyncpg; AsyncSqliteSaver + aiosqlite. psycopg2/sqlite3 not permitted in async path — blocks event loop. Hard rule. |
 | LangGraph startup sequence | Alembic upgrade head → AsyncPostgresSaver.setup() → app start. Postgres advisory lock for multi-worker. Both operations idempotent. |
+| Lifecycle Map vs Pipeline | A Lifecycle Map is a state machine for cross-run task progression. A Pipeline is a single-run execution graph. Maps contain stages, optionally linked to pipelines. Pipelines are not maps. They coexist at different fractal levels. |
 | Pipeline edge entity | First-class DB entity with `hitl_gate_config JSON`. HITL gate is an edge property, not a node property. Compiles to conditional edge + interrupt wrapper in LangGraph. |
 | ConnectorHub credential lifetime | Decrypt once at run-start into run-scoped context object. Discarded at run end. Never enters LangGraph state. One Fernet decrypt per connector per run. |
 | StubModelBackend interface | Implements LangChain BaseChatModel (async). Returns AIMessage from fixture map. No special-casing in agent runtime. Built before any pipeline tests. |
