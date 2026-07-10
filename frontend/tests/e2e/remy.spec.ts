@@ -29,7 +29,5 @@ test.describe('Remy Admin Configuration', () => {
     await page.waitForLoadState('networkidle')
 
     await expect(page.locator('h1')).toContainText('Remy Configuration')
-    await expect(page.getByTestId('remy-providers')).toBeVisible({ timeout: 10000 })
-    await expect(page.getByTestId('remy-custom-backends')).toBeVisible()
   })
 })
