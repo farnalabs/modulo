@@ -49,7 +49,10 @@ async def cleanup_old_webhook_events(
     cutoff = datetime.now(UTC) - timedelta(days=retention_days)
 
     result = await db_session.execute(
-        select(TriggerEvent.id).where(TriggerEvent.created_at < cutoff).limit(BATCH_SIZE)
+        select(TriggerEvent.id)
+        .where(TriggerEvent.created_at < cutoff)
+        .order_by(TriggerEvent.id)
+        .limit(BATCH_SIZE)
     )
     ids = result.scalars().all()
     if not ids:
@@ -100,7 +103,10 @@ class WebhookDedupCleanupTask(Task):  # type: ignore[misc]
 
     def run(self) -> dict[str, Any]:
         """Run one iteration of cleanup, batching until fewer than BATCH_SIZE rows remain."""
-        return asyncio.run(_run_cleanup())
+        try:
+            return asyncio.run(_run_cleanup())
+        except asyncio.CancelledError:
+            raise
 
 
 async def _run_cleanup() -> dict[str, Any]:
@@ -128,9 +134,11 @@ _CLEANUP_INTERVAL_SECONDS = 3600  # run once per hour
 async def cleanup_scheduler_loop(factory: async_sessionmaker) -> None:
     """Periodic background loop that purges old webhook trigger events.
 
-    Runs every ``_CLEANUP_INTERVAL_SECONDS``. Intended to be started as an
-    ``asyncio.Task`` alongside the cron/polling scheduler loops.
+    Runs every ``_CLEANUP_INTERVAL_SECONDS`` with exponential backoff on
+    failure. Intended to be started as an ``asyncio.Task`` alongside the
+    cron/polling scheduler loops.
     """
+    backoff = 1
     while True:
         try:
             total = 0
@@ -142,8 +150,11 @@ async def cleanup_scheduler_loop(factory: async_sessionmaker) -> None:
                         break
             if total > 0:
                 _log.info("Scheduled cleanup removed %d old webhook trigger events", total)
+            backoff = 1
             await asyncio.sleep(_CLEANUP_INTERVAL_SECONDS)
         except asyncio.CancelledError:
             break
         except Exception:
             _log.exception("Webhook dedup cleanup loop error")
+            await asyncio.sleep(backoff)
+            backoff = min(backoff * 2, _CLEANUP_INTERVAL_SECONDS)

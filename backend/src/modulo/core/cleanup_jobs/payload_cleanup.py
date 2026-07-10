@@ -43,6 +43,7 @@ async def cleanup_retained_payloads(
                 Run.status.in_(_TERMINAL_STATES),
                 (Run.input_payload.isnot(None) | Run.outputs_json.isnot(None)),
             )
+            .order_by(Run.id)
             .limit(BATCH_SIZE)
         )
         ids = result.scalars().all()

@@ -41,6 +41,7 @@ async def cleanup_old_runs(
                 Run.status.in_(_TERMINAL_STATES),
                 Run.created_at < cutoff,
             )
+            .order_by(Run.id)
             .limit(BATCH_SIZE)
         )
         ids = result.scalars().all()
