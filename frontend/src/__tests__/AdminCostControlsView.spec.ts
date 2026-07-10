@@ -11,7 +11,7 @@ const mockGet = vi.hoisted(() => vi.fn().mockImplementation((path: string) => {
   }
   if (path === '/api/v1/admin/costs/limits') {
     return Promise.resolve({
-      data: { org_daily_limit_usd: 10000.0, teams: [{ id: 'team-1', name: 'Alpha', daily_limit_usd: 5000.0 }, { id: 'team-2', name: 'Beta', daily_limit_usd: null }] },
+      data: { org_daily_spend_limit: 10000.0, team_limits: [{ team_id: 'team-1', team_name: 'Alpha', daily_spend_limit: 5000.0 }, { team_id: 'team-2', team_name: 'Beta', daily_spend_limit: null }] },
       error: undefined,
     })
   }
