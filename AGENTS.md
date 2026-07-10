@@ -22,7 +22,7 @@ git branch -d <branch-name>
 ```
 Accepts `-Semver patch|minor|major` (default patch) and `-SkipTests` (migration-collision check still runs). There is no `-Fast` or `-Yes` parameter.
 
-**Publish:** A Windows scheduled task runs `publish.ps1` every 4 hours — it tests local main and pushes to remote only if clean. Remote main is always green.
+**Publish:** A Windows scheduled task runs `publish.ps1` every 4 hours — it tests local main and pushes to remote only if clean. Remote main should always be green, but Workers sometimes merge broken tests despite the gate (see AGENTS.md Lessons Learned — "Never use -SkipTests to bypass preexisting failures on main"). If you see a CI failure on main, fix it immediately — don't merge on top of it.
 
 ### Subagent pattern (mandatory)
 
@@ -428,9 +428,7 @@ npm run generate:api
 This runs `scripts/generate-api-types.ps1` which imports the backend, dumps the OpenAPI
 schema as JSON, and feeds it to `openapi-typescript` to produce the typed client.
 
-A pre-commit hook triggers this automatically whenever any file under `backend/src/` changes.
-If the generated `schema.ts` differs from what's staged, the commit fails — stage the
-updated `schema.ts` and retry.
+There is no pre-commit hook for this — the pre-commit framework runs `generate-api-types` as a manual-stage hook only (`gate.ps1` Phase 1d). You must regenerate manually or run `pre-commit run generate-api-types` when the backend API changes. If CI fails because `schema.ts` is out of date, run `npm run generate:api`, commit the updated file, and retry.
 
 ---
 

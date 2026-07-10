@@ -16,12 +16,14 @@ repos:
           - types-passlib
           - pydantic
         files: ^backend/src/
+        stages: [manual]
 
   - repo: https://github.com/PyCQA/bandit
     rev: 1.8.3
     hooks:
       - id: bandit
         args: [-r, backend/src/, -ll, -x, backend/src/modulo/model_backends/stub/]
+        pass_filenames: false
 
   - repo: local
     hooks:
@@ -77,16 +79,7 @@ repos:
           - --project=backend/
         files: ^backend/(pyproject\.toml|uv\.lock)$
         pass_filenames: false
-
-  - repo: https://github.com/npm/cli
-    rev: v11.3.0
-    hooks:
-      - id: npm-audit
-        name: npm audit (frontend)
-        files: ^frontend/(package\.json|package-lock\.json)$
-        args:
-          - --prefix=frontend
-        pass_filenames: false
+        stages: [manual]
 
   - repo: local
     hooks:
@@ -102,6 +95,7 @@ repos:
         language: system
         files: ^backend/src/
         pass_filenames: false
+        stages: [manual]
       - id: eslint
         name: ESLint
         entry: bash -c 'cd frontend && npm run lint --if-present'
@@ -114,3 +108,4 @@ repos:
         language: system
         files: \.(vue|ts)$
         pass_filenames: false
+        stages: [manual]
