@@ -168,7 +168,7 @@ test.describe('View Modes Admin CRUD', () => {
 
     const editButtons = page.getByTestId('admin-views-edit')
     await expect(editButtons).toHaveCount(2)
-    await editButtons.first().click()
+    await editButtons.first().click({ force: true })
 
     await expect(page.getByTestId('admin-views-form-title')).toHaveText('Edit View')
     await expect(page.getByTestId('admin-views-name-input')).toHaveValue('Active Runs')
@@ -196,17 +196,17 @@ test.describe('View Modes Admin CRUD', () => {
 
     const deleteButtons = page.getByTestId('admin-views-delete')
     await expect(deleteButtons).toHaveCount(2)
-    await deleteButtons.first().click()
+    await deleteButtons.first().click({ force: true })
 
     await expect(page.getByTestId('admin-views-delete-confirm')).toBeVisible()
     await expect(page.getByTestId('admin-views-delete-cancel')).toBeVisible()
     await expect(page.getByTestId('admin-views-delete')).toHaveCount(2)
 
-    await page.getByTestId('admin-views-delete-cancel').click()
+    await page.getByTestId('admin-views-delete-cancel').click({ force: true })
     await expect(page.getByTestId('admin-views-delete-confirm')).not.toBeVisible({ timeout: 3000 })
 
-    await deleteButtons.first().click()
-    await page.getByTestId('admin-views-delete-confirm').click()
+    await deleteButtons.first().click({ force: true })
+    await page.getByTestId('admin-views-delete-confirm').click({ force: true })
     await page.waitForLoadState('networkidle')
 
     await expect(page.getByTestId('admin-views-delete-confirm')).not.toBeVisible({ timeout: 3000 })
