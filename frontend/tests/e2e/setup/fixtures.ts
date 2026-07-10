@@ -60,12 +60,6 @@ export async function setupLocalMockApi(page: Page) {
         }),
       })
     }
-    if (url.includes('/api/v1/admin/license')) {
-      return route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ has_license: true, tier: 'enterprise', features: ['all'], expires_at: null, org_id: '1' }) })
-    }
-    if (url.includes('/api/v1/admin/tiers')) {
-      return route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ tiers: [{ id: 'enterprise', label: 'Enterprise' }, { id: 'team', label: 'Team' }, { id: 'community', label: 'Community' }] }) })
-    }
     if (method === 'GET') {
       return route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ items: [], total: 0 }) })
     }
