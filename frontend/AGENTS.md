@@ -72,3 +72,15 @@ is edited, re-run `npm install` (not just the script) to ensure the hook fires.
 ### Skills change signal: after adding/editing/deleting a skill, signal the store to rebuild system prompt
 
 - The Remy system prompt is built once per session and caches the skill list. When a user adds or modifies a skill (via `RemySkillManager.vue` or `UserRemySkillsView.vue`), the store needs a `signalSkillsChanged()` mechanism (e.g. incrementing a `skillsVersion` ref) so the next Remy session `/stream` call re-fetches skills and includes the new one. Without this signal, newly added skills don't appear in the conversation until a page refresh. Pattern: maintain a `skillsVersion` counter in `useRemyStore.ts`, increment it on skill change, and read it when building the stream request payload.
+
+### reka-ui TooltipContent + vue-i18n: `$t()` crashes inside Teleported content
+
+- reka-ui's `TooltipContent` uses `Teleport` internally. `$t()` called directly inside a `<TooltipContent>` template throws `TypeError: _ctx.t is not a function` because the teleported content loses access to `app.config.globalProperties`. **Fix:** pre-translate the text in the parent component (or use plain English strings) and reference the variable in the tooltip — never call `$t()` inside `TooltipContent`.
+
+### Null-guard computed properties that access nested properties of async-loaded refs
+
+- When a ref is populated from an API response (`ref.value = data as SomeType`), the response may not match the expected shape in tests (catch-all mock returns `{items:[], total:0}`). Any computed or template code accessing nested properties like `data.value.native.map(...)` must use `(data.value.native ?? []).map(...)` — otherwise a shape mismatch throws `TypeError: Cannot read properties of undefined`. This applies to ALL computed properties, not just the one that first exhibits the failure.
+
+### `locator.evaluate(el => el.click())` to bypass overlays in Playwright
+
+- When a UI overlay (e.g. the Remy panel) covers an element, Playwright's `locator.click()` refuses to click because the element is not actionable. `click({ force: true })` dispatches the event but Vue's `@click` handler may not fire if an overlay captures the event. Use `locator.evaluate((el) => el.click())` to dispatch a native DOM click that always triggers the handler, regardless of overlays.
