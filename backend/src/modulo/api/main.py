@@ -68,6 +68,7 @@ from modulo.api.routes.hitl import router as hitl_router
 from modulo.api.routes.in_app_notifications import router as in_app_notifications_router
 from modulo.api.routes.library import router as library_router
 from modulo.api.routes.manifest import router as manifest_router
+from modulo.api.routes.mcp_setup import router as mcp_setup_router
 from modulo.api.routes.mcp_oauth import router as mcp_oauth_router
 from modulo.api.routes.me import router as me_router
 from modulo.api.routes.model_backends import router as model_backends_router
@@ -617,6 +618,7 @@ app.include_router(api_keys_router)
 app.include_router(audit_router)
 app.include_router(library_router)
 app.include_router(mcp_oauth_router)
+app.include_router(mcp_setup_router)
 app.include_router(me_router)
 app.include_router(registry_router)
 app.include_router(determination_router)
