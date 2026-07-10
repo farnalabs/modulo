@@ -281,7 +281,7 @@ class TestTokenExchangeEndpoint:
         with (
             patch.object(RateLimiterRegistry, "check", AsyncMock(return_value=True)),
             patch("modulo.api.mcp_server._get_session_factory") as mock_sf,
-            patch("modulo.settings.get_settings", return_value=_make_settings()),
+            patch("modulo.api.mcp_server.get_settings", return_value=_make_settings()),
             patch("modulo.auth.oauth.get_oauth_client_by_client_id") as mock_get,
             patch("modulo.auth.oauth.consume_authorization_code") as mock_consume,
             patch("modulo.auth.oauth.create_oauth_token_family") as mock_create_family,
@@ -758,7 +758,7 @@ class TestPKCEEnforcement:
         with (
             patch.object(RateLimiterRegistry, "check", AsyncMock(return_value=True)),
             patch("modulo.api.mcp_server._get_session_factory") as mock_sf,
-            patch("modulo.settings.get_settings", return_value=_make_settings()),
+            patch("modulo.api.mcp_server.get_settings", return_value=_make_settings()),
             patch("modulo.auth.oauth.get_oauth_client_by_client_id") as mock_get,
             patch("modulo.auth.oauth.consume_authorization_code") as mock_consume,
         ):
