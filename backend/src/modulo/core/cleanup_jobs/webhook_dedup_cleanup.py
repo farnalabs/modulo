@@ -1,12 +1,15 @@
 """Cleanup job that removes old webhook trigger events to prevent table bloat."""
 
+from __future__ import annotations
+
 import asyncio
 import logging
 from datetime import UTC, datetime, timedelta
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
+from sqlalchemy.pool import NullPool
 
 from modulo.db.models.trigger_event import TriggerEvent
 from modulo.settings import get_settings
@@ -55,7 +58,11 @@ async def cleanup_old_webhook_events(
         return 0
 
     await db_session.execute(delete(TriggerEvent).where(TriggerEvent.id.in_(ids)))
-    await db_session.commit()
+    try:
+        await db_session.commit()
+    except Exception:
+        _log.exception("Failed to commit webhook dedup cleanup for %d events", len(ids))
+        raise
 
     _log.info("Cleaned up %d old webhook trigger events", len(ids))
     return len(ids)
@@ -77,15 +84,18 @@ def get_celery_app() -> Any:
     return CELERY_APP_GLOBAL
 
 
-_ENGINE_GLOBAL: Any = None
+if TYPE_CHECKING:
+    from sqlalchemy.ext.asyncio import AsyncEngine
+
+_ENGINE_GLOBAL: AsyncEngine | None = None
 
 
-def _get_engine() -> Any:
+def _get_engine() -> AsyncEngine:
     global _ENGINE_GLOBAL
     if _ENGINE_GLOBAL is None:
         from sqlalchemy.ext.asyncio import create_async_engine
 
-        _ENGINE_GLOBAL = create_async_engine(get_settings().database_url)
+        _ENGINE_GLOBAL = create_async_engine(get_settings().database_url, poolclass=NullPool)
     return _ENGINE_GLOBAL
 
 
