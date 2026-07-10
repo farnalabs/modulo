@@ -112,6 +112,7 @@ def _ctx_role_val() -> str | None:
     global _auth_role_fallback
     return _auth_role_fallback
 
+
 # Fallback sentinel — replaced by the real org_id from the API key record or OAuth claims.
 _PLACEHOLDER_ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
 
@@ -180,6 +181,7 @@ async def validate_current_auth() -> bool:
                 # Regular JWT (used by Remy) — skip OAuth token family check
                 try:
                     from modulo.auth.jwt import decode_principal
+
                     decode_principal(token, settings.secret_key)
                 except JWTError:
                     return False
@@ -241,7 +243,8 @@ class McpAuthMiddleware(BaseHTTPMiddleware):
             try:
                 # Validate the key without RLS first (the key's org is unknown).
                 from modulo.auth.api_key import _MK_PREFIX, _PREFIX_LEN
-                prefix = token[len(_MK_PREFIX):][:_PREFIX_LEN]
+
+                prefix = token[len(_MK_PREFIX) :][:_PREFIX_LEN]
                 from sqlalchemy import select
 
                 from modulo.db.models.api_key import OrgApiKey
@@ -250,6 +253,7 @@ class McpAuthMiddleware(BaseHTTPMiddleware):
                 async with factory() as s:
                     async with s.begin():
                         from sqlalchemy import text
+
                         await s.execute(text("SET LOCAL row_security TO OFF"))
                         result = await s.execute(
                             select(OrgApiKey).where(
@@ -263,6 +267,7 @@ class McpAuthMiddleware(BaseHTTPMiddleware):
                     import hmac
 
                     from modulo.auth.api_key import _hash_key
+
                     if not hmac.compare_digest(key_record.hashed_secret, _hash_key(token)):
                         raise ApiKeyInvalidError()
 
@@ -302,6 +307,7 @@ class McpAuthMiddleware(BaseHTTPMiddleware):
             # Fall back to regular JWT access token (used by Remy MCP tool calls).
             try:
                 from modulo.auth.jwt import decode_principal
+
                 principal = decode_principal(token, settings.secret_key)
             except JWTError:
                 return Response(
@@ -473,6 +479,58 @@ async def create_pipeline(
     except Exception:
         _log.exception("create_pipeline failed")
         return _tool_error("Failed to create pipeline")
+
+
+@mcp.tool(
+    description="List pipeline runs with filtering and cursor-based pagination.",
+)
+async def list_runs(
+    pipeline_id: str | None = None,
+    status: str | None = None,
+    cursor: str | None = None,
+    limit: int = 20,
+) -> dict[str, Any]:
+    try:
+        if not await validate_current_auth():
+            return _tool_error("Token revoked or expired — re-authenticate")
+        check_tool_scope(_ctx_role_val(), "list_runs")
+        from modulo.db.crud.run import list_runs as db_list_runs
+
+        org_id = _ctx_org_id_val()
+        pid = uuid.UUID(pipeline_id) if pipeline_id else None
+        async with _session(org_id) as s:
+            result = await db_list_runs(
+                s,
+                pipeline_id=pid,
+                status=status,
+                page=1,
+                page_size=limit,
+                cursor=cursor,
+            )
+        return {
+            "items": [
+                {
+                    "id": str(r.id),
+                    "pipeline_id": str(r.pipeline_id),
+                    "status": r.status,
+                    "trigger_type": r.trigger_type,
+                    "run_number": r.run_number,
+                    "created_at": r.created_at.isoformat() if r.created_at else None,
+                    "started_at": r.started_at.isoformat() if r.started_at else None,
+                    "completed_at": r.completed_at.isoformat() if r.completed_at else None,
+                    "error_code": r.error_code,
+                }
+                for r in result.items
+            ],
+            "total": result.total,
+            "next_cursor": result.next_cursor,
+            "has_more": result.has_more,
+        }
+    except MCPAuthorizationError as exc:
+        return {"error": "insufficient_scope", "detail": str(exc)}
+    except Exception:
+        _log.exception("list_runs failed")
+        return _tool_error("Failed to list runs")
 
 
 @mcp.tool(
@@ -681,6 +739,90 @@ async def get_run_output(run_id: str, node_id: str) -> dict[str, Any]:
         return _tool_error("Failed to get node output")
 
 
+@mcp.tool(
+    description="Get eval results for a given run. Returns structured eval outcomes "
+    "including pass/fail status, scores, and detailed feedback.",
+)
+async def get_run_evals(run_id: str) -> dict[str, Any]:
+    try:
+        if not await validate_current_auth():
+            return _tool_error("Token revoked or expired — re-authenticate")
+        check_tool_scope(_ctx_role_val(), "get_run_evals")
+        from modulo.db.crud.eval_run import get_run_evals as db_get_run_evals
+
+        org_id = _ctx_org_id_val()
+        rid = uuid.UUID(run_id)
+
+        async with _session(org_id) as s:
+            run = await get_run(s, rid)
+            if run is None:
+                return {"error": "run_not_found", "run_id": run_id}
+            evals = await db_get_run_evals(s, rid)
+
+        return {
+            "run_id": run_id,
+            "status": run.status,
+            "evals": [
+                {
+                    "id": str(e.id),
+                    "eval_id": str(e.eval_id),
+                    "node_id": str(e.node_id) if e.node_id else None,
+                    "passed": e.passed,
+                    "score": e.score,
+                    "detail": e.detail,
+                    "evaluated_at": e.evaluated_at.isoformat() if e.evaluated_at else None,
+                }
+                for e in evals
+            ],
+            "eval_count": len(evals),
+        }
+    except MCPAuthorizationError as exc:
+        return {"error": "insufficient_scope", "detail": str(exc)}
+    except Exception:
+        _log.exception("get_run_evals failed")
+        return _tool_error("Failed to get run evals")
+
+
+@mcp.tool(
+    description="List eval definitions configured for the organisation. Optionally filter by pipeline_id.",
+)
+async def list_eval_definitions(
+    pipeline_id: str | None = None,
+) -> dict[str, Any]:
+    try:
+        if not await validate_current_auth():
+            return _tool_error("Token revoked or expired — re-authenticate")
+        check_tool_scope(_ctx_role_val(), "list_eval_definitions")
+        from modulo.db.crud.eval_definition import list_eval_definitions as db_list_eval_definitions
+
+        org_id = _ctx_org_id_val()
+        pid = uuid.UUID(pipeline_id) if pipeline_id else None
+
+        async with _session(org_id) as s:
+            defs = await db_list_eval_definitions(s, org_id, pipeline_id=pid)
+
+        return {
+            "eval_definitions": [
+                {
+                    "id": str(d.id),
+                    "name": d.name,
+                    "type": d.eval_type,
+                    "pipeline_id": str(d.pipeline_id),
+                    "failure_behaviour": d.failure_behaviour,
+                    "pass_threshold": d.pass_threshold,
+                    "suite_id": d.suite_id,
+                }
+                for d in defs
+            ],
+            "count": len(defs),
+        }
+    except MCPAuthorizationError as exc:
+        return {"error": "insufficient_scope", "detail": str(exc)}
+    except Exception:
+        _log.exception("list_eval_definitions failed")
+        return _tool_error("Failed to list eval definitions")
+
+
 @mcp.tool(description="Cancel a running pipeline run.")
 async def cancel_run(run_id: str) -> dict[str, Any]:
     try:
@@ -822,9 +964,7 @@ async def review_hitl(
                 if edge and edge.hitl_gate_config and edge.hitl_gate_config.get("human_only", False):
                     return {
                         "error": "human_only_gate",
-                        "detail": (
-                            "This gate has human_only=true. Only a browser-authenticated human can approve it."
-                        ),
+                        "detail": ("This gate has human_only=true. Only a browser-authenticated human can approve it."),
                     }
 
         try:
@@ -1063,6 +1203,49 @@ async def get_trigger_events(
 
 
 @mcp.tool(
+    description="List triggers configured for the organisation. "
+    "Optionally filter by pipeline_id. Returns trigger metadata "
+    "including type, active status, and cron schedule.",
+)
+async def list_triggers(
+    pipeline_id: str | None = None,
+) -> dict[str, Any]:
+    try:
+        if not await validate_current_auth():
+            return _tool_error("Token revoked or expired — re-authenticate")
+        check_tool_scope(_ctx_role_val(), "list_triggers")
+        from modulo.db.crud.trigger import list_triggers as db_list_triggers
+
+        org_id = _ctx_org_id_val()
+        pid = uuid.UUID(pipeline_id) if pipeline_id else None
+
+        async with _session(org_id) as s:
+            triggers = await db_list_triggers(s, org_id, pipeline_id=pid)
+
+        return {
+            "triggers": [
+                {
+                    "id": str(t.id),
+                    "pipeline_id": str(t.pipeline_id),
+                    "trigger_type": t.trigger_type,
+                    "active": t.active,
+                    "max_concurrent_runs": t.max_concurrent_runs,
+                    "cron_expression": t.cron_expression,
+                    "last_fired_at": t.last_fired_at.isoformat() if t.last_fired_at else None,
+                    "created_at": t.created_at.isoformat() if t.created_at else None,
+                }
+                for t in triggers
+            ],
+            "count": len(triggers),
+        }
+    except MCPAuthorizationError as exc:
+        return {"error": "insufficient_scope", "detail": str(exc)}
+    except Exception:
+        _log.exception("list_triggers failed")
+        return _tool_error("Failed to list triggers")
+
+
+@mcp.tool(
     description="Create a new model backend (API key + provider configuration). "
     "Use this to register a new LLM provider so the org can use it in pipelines and Remy chat. "
     "Common providers include: openai, anthropic, gemini, deepseek, groq, opencode. "
@@ -1142,6 +1325,7 @@ _DOC_INDEX_TTL: float = 300.0  # 5 minutes
 def _get_doc_index() -> DocumentationIndex:
     global _DOC_INDEX, _DOC_INDEX_TS
     import time as _time
+
     now = _time.time()
     if _DOC_INDEX is None or (now - _DOC_INDEX_TS) > _DOC_INDEX_TTL:
         _DOC_INDEX = DocumentationIndex.build()
@@ -1192,8 +1376,7 @@ async def get_documentation(query: str, section: str | None = None) -> dict[str,
 
 @mcp.tool(
     description=(
-        "Get current health status of all connectors, model backends, and triggers. "
-        "Returns a Markdown table."
+        "Get current health status of all connectors, model backends, and triggers. Returns a Markdown table."
     ),
 )
 async def get_integration_status() -> dict[str, Any]:
@@ -1209,33 +1392,31 @@ async def get_integration_status() -> dict[str, Any]:
         org_id = _ctx_org_id_val()
         async with _session(org_id) as s:
             connector_rows = (
-                (await s.execute(
-                    select(ConnectorInstance).where(ConnectorInstance.organisation_id == org_id)
-                ))
+                (await s.execute(select(ConnectorInstance).where(ConnectorInstance.organisation_id == org_id)))
                 .scalars()
                 .all()
             )
             backend_rows = (
-                (await s.execute(
-                    select(ModelBackend).where(ModelBackend.organisation_id == org_id)
-                ))
-                .scalars()
-                .all()
+                (await s.execute(select(ModelBackend).where(ModelBackend.organisation_id == org_id))).scalars().all()
             )
             trigger_count_result = await s.execute(
                 select(func.count()).select_from(Trigger).where(Trigger.organisation_id == org_id)
             )
             trigger_count = trigger_count_result.scalar_one()
 
-        connector_lines = ["| Name | Type | Status | Last Check | Error |",
-                           "|------|------|--------|------------|-------|"]
+        connector_lines = [
+            "| Name | Type | Status | Last Check | Error |",
+            "|------|------|--------|------------|-------|",
+        ]
         for c in connector_rows:
             last_check = c.last_health_check_at.isoformat() if c.last_health_check_at else "never"
             error = c.last_health_check_error or ""
             connector_lines.append(f"| {c.name} | {c.connector_type_id} | {c.status} | {last_check} | {error} |")
 
-        backend_lines = ["| Name | Provider | Model | Has Credentials | Status |",
-                         "|------|----------|-------|-----------------|--------|"]
+        backend_lines = [
+            "| Name | Provider | Model | Has Credentials | Status |",
+            "|------|----------|-------|-----------------|--------|",
+        ]
         for b in backend_rows:
             has_creds = "yes" if b.credentials_ciphertext else "no"
             backend_lines.append(f"| {b.name} | {b.provider} | {b.model_id} | {has_creds} | {b.status} |")
@@ -1327,8 +1508,7 @@ async def get_available_features() -> dict[str, Any]:
         current_tier = plan_ctx.tier()
         all_flags = plan_ctx.list_enabled_features()
 
-        lines = ["| Feature | Required Tier | Available |",
-                 "|---------|---------------|-----------|"]
+        lines = ["| Feature | Required Tier | Available |", "|---------|---------------|-----------|"]
         for flag in all_flags:
             available = "yes" if flag.currently_active else "no"
             lines.append(f"| {flag.name} | {flag.tier} | {available} |")
@@ -1484,9 +1664,7 @@ async def resource_hitl_gate(run_id: str, gate_id: str) -> str:
         gate = result.scalar_one_or_none()
         required_team_name = None
         if gate is not None and gate.required_team_id is not None:
-            team_result = await s.execute(
-                select(Team).where(Team.id == gate.required_team_id)
-            )
+            team_result = await s.execute(select(Team).where(Team.id == gate.required_team_id))
             team = team_result.scalar_one_or_none()
             required_team_name = team.name if team else None
     if gate is None:
@@ -1567,18 +1745,22 @@ async def resource_schema_detail(schema_id: str, version: str) -> str:
     if "properties" in defn:
         required_set = set(defn.get("required", []))
         for name, prop in defn["properties"].items():
-            fields.append({
-                "name": name,
-                "type": prop.get("type", "unknown"),
-                "required": name in required_set,
-            })
+            fields.append(
+                {
+                    "name": name,
+                    "type": prop.get("type", "unknown"),
+                    "required": name in required_set,
+                }
+            )
     elif "fields" in defn:
         for f in defn["fields"]:
-            fields.append({
-                "name": f.get("name", "?"),
-                "type": f.get("type", "unknown"),
-                "required": f.get("required", False),
-            })
+            fields.append(
+                {
+                    "name": f.get("name", "?"),
+                    "type": f.get("type", "unknown"),
+                    "required": f.get("required", False),
+                }
+            )
 
     lines = [
         f"Schema: {schema.name}",

@@ -43,14 +43,17 @@ TOOL_SCOPE_REQUIREMENTS: dict[str, str] = {
     "create_pipeline": "operator",
     "update_pipeline_graph": "operator",
     "create_model_backend": "operator",
+    "list_runs": "runner",
+    "get_run_evals": "runner",
+    "list_eval_definitions": "runner",
+    "list_triggers": "runner",
 }
 
 _VALID_ROLES = frozenset(ORG_ROLE_HIERARCHY)
 for tool, role in TOOL_SCOPE_REQUIREMENTS.items():
     if role not in _VALID_ROLES:
         raise MCPConfigurationError(
-            f"Misconfigured scope requirement for '{tool}': "
-            f"role '{role}' is not in the role hierarchy",
+            f"Misconfigured scope requirement for '{tool}': role '{role}' is not in the role hierarchy",
         )
 
 
@@ -103,9 +106,10 @@ def check_tool_scope(
     if current_level < required_level:
         _log.warning(
             "Insufficient scope for '%s': requires '%s' role, got '%s'",
-            tool_name, required, current_role,
+            tool_name,
+            required,
+            current_role,
         )
         raise MCPAuthorizationError(
-            f"Insufficient scope for '{tool_name}': "
-            f"requires '{required}' role, got '{current_role}'",
+            f"Insufficient scope for '{tool_name}': requires '{required}' role, got '{current_role}'",
         )
