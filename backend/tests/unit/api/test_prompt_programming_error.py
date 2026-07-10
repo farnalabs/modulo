@@ -53,7 +53,6 @@ def _make_mock_session(*, configure_execute: bool = False):
 def client():
     mock_session = _make_mock_session()
 
-
     async def override_session() -> AsyncGenerator[AsyncMock, None]:
         yield mock_session
 

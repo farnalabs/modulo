@@ -152,7 +152,11 @@ def build_system_prompt(request, ctx) -> None:
         tool_lines.append("- get_skill(name) — Load a skill by name")
 
     if tool_lines:
-        parts.append("## Available Knowledge Tools\n\nYou can retrieve additional knowledge by calling these tools:\n" + "\n".join(tool_lines) + "\n")
+        parts.append(
+            "## Available Knowledge Tools\n\nYou can retrieve additional knowledge by calling these tools:\n"
+            + "\n".join(tool_lines)
+            + "\n"
+        )
 
     # Organisation Skills (always_on or null)
     always_on_org = [s for s in ctx.get("org_skills", []) if s.source_mode is None or s.source_mode == "always_on"]
@@ -167,9 +171,21 @@ def build_system_prompt(request, ctx) -> None:
 @when(parsers.parse('the user calls get_documentation with query "{query}"'))
 def call_get_documentation(query: str, request, ctx) -> None:
     entries = [
-        DocEntry(heading_path="Pipelines > Overview", heading="Pipeline Overview", first_paragraph="Pipelines are the core execution unit in Modulo."),
-        DocEntry(heading_path="Pipelines > Configuration", heading="Pipeline Configuration", first_paragraph="Configure pipeline nodes and edges."),
-        DocEntry(heading_path="Triggers", heading="Trigger Setup", first_paragraph="Set up triggers to fire pipelines automatically."),
+        DocEntry(
+            heading_path="Pipelines > Overview",
+            heading="Pipeline Overview",
+            first_paragraph="Pipelines are the core execution unit in Modulo.",
+        ),
+        DocEntry(
+            heading_path="Pipelines > Configuration",
+            heading="Pipeline Configuration",
+            first_paragraph="Configure pipeline nodes and edges.",
+        ),
+        DocEntry(
+            heading_path="Triggers",
+            heading="Trigger Setup",
+            first_paragraph="Set up triggers to fire pipelines automatically.",
+        ),
     ]
     index = DocumentationIndex(entries=entries)
     results = index.search(query)
@@ -195,9 +211,7 @@ def call_get_integration_status(request, ctx) -> None:
 @when(parsers.parse('the user calls get_org_config with section "{section}"'))
 def call_get_org_config(section: str, request, ctx) -> None:
     ctx["org_config_result"] = (
-        "| Key | Value |\n"
-        "|-----|-------|\n"
-        "| remy_config:org-1 | {\"system_prompt\": \"You are helpful.\"} |\n"
+        '| Key | Value |\n|-----|-------|\n| remy_config:org-1 | {"system_prompt": "You are helpful."} |\n'
     )
 
 
@@ -249,14 +263,14 @@ def results_include_matching_sections(ctx) -> None:
     assert any("pipeline" in r.heading.lower() or "pipeline" in r.first_paragraph.lower() for r in results)
 
 
-@then('the result contains a Markdown table with connector names')
+@then("the result contains a Markdown table with connector names")
 def result_has_markdown_table(ctx) -> None:
     result = ctx.get("integration_result", "")
     assert "|" in result, "Expected Markdown table in integration status result"
     assert "Slack" in result, "Expected connector name in result"
 
 
-@then(parsers.parse('the result contains Remy configuration keys'))
+@then(parsers.parse("the result contains Remy configuration keys"))
 def result_contains_remy_keys(ctx) -> None:
     result = ctx.get("org_config_result", "")
     assert "remy_config" in result, "Expected remy_config keys in org config result"

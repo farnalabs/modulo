@@ -130,7 +130,9 @@ def _users_table_exists() -> bool:
     """Check if the old ``users`` table exists (fresh DB vs migration scenario)."""
     conn = op.get_bind()
     result = conn.execute(
-        sa.text("SELECT EXISTS (SELECT FROM information_schema.tables WHERE table_schema = 'public' AND table_name = 'users')")
+        sa.text(
+            "SELECT EXISTS (SELECT FROM information_schema.tables WHERE table_schema = 'public' AND table_name = 'users')"
+        )
     ).scalar()
     return bool(result)
 

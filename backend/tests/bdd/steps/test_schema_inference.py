@@ -173,11 +173,15 @@ def step_infer_schema(request, client):
     mock_ci = request.node._mock_ci
     records = request.node._records
     mock_mb = request.node._model_backend
-    expected_schema = getattr(request.node, "_expected_schema", {
-        "type": "object",
-        "properties": {"title": {"type": "string"}, "completed": {"type": "boolean"}},
-        "required": ["title"],
-    })
+    expected_schema = getattr(
+        request.node,
+        "_expected_schema",
+        {
+            "type": "object",
+            "properties": {"title": {"type": "string"}, "completed": {"type": "boolean"}},
+            "required": ["title"],
+        },
+    )
     ci_id = str(mock_ci.id) if mock_ci is not None else str(uuid.uuid4())
 
     with contextlib_patch_multi(_base_infer_patches(mock_ci, mock_mb, records, expected_schema)):
@@ -371,7 +375,7 @@ def step_assert_field_type(type_name: str, field_name: str, request):
     )
 
 
-@then("the inferred schema includes an enum constraint for field \"status\"")
+@then('the inferred schema includes an enum constraint for field "status"')
 def step_assert_enum_constraint(request):
     data = request.node._resp.json()
     definition = data["definition_json"]
@@ -393,9 +397,7 @@ def step_assert_default_limit(request):
 def step_suggestion_name_mentions(text: str, request):
     data = request.node._resp.json()
     suggestion_name = data.get("suggestion_name", "")
-    assert text.lower() in suggestion_name.lower(), (
-        f"Suggestion name '{suggestion_name}' does not contain '{text}'"
-    )
+    assert text.lower() in suggestion_name.lower(), f"Suggestion name '{suggestion_name}' does not contain '{text}'"
 
 
 @then("the schema version is published")
@@ -494,6 +496,7 @@ def step_response_has_suggestion_name(request):
 def step_schema_is_structurally_valid(request):
     import pytest
     from jsonschema import Draft202012Validator, ValidationError
+
     definition = getattr(request.node, "_schema_definition", {})
     try:
         Draft202012Validator.check_schema(definition)
@@ -510,6 +513,7 @@ def step_response_has_field_additions_removals(request):
 
 def contextlib_patch_multi(patches):
     from contextlib import ExitStack
+
     stack = ExitStack()
     for p in patches:
         stack.enter_context(p)

@@ -86,9 +86,13 @@ def _mask_sensitive(config: dict | None) -> dict:
     return {k: ("••••••" if k in _SENSITIVE_KEYS else v) for k, v in config.items()}
 
 
-def _make_forwarder_list_item(forwarder_type: str, enabled: bool = False, configured: bool = False,
-                               last_test_at: datetime | None = None,
-                               last_test_ok: bool | None = None) -> dict[str, Any]:
+def _make_forwarder_list_item(
+    forwarder_type: str,
+    enabled: bool = False,
+    configured: bool = False,
+    last_test_at: datetime | None = None,
+    last_test_ok: bool | None = None,
+) -> dict[str, Any]:
     display_names = {
         "sentry": "Sentry",
         "datadog": "DataDog",
@@ -107,10 +111,13 @@ def _make_forwarder_list_item(forwarder_type: str, enabled: bool = False, config
     }
 
 
-def _make_forwarder_config_response(forwarder_type: str, enabled: bool = False,
-                                     config_json: dict | None = None,
-                                     last_test_at: datetime | None = None,
-                                     last_test_ok: bool | None = None) -> dict[str, Any]:
+def _make_forwarder_config_response(
+    forwarder_type: str,
+    enabled: bool = False,
+    config_json: dict | None = None,
+    last_test_at: datetime | None = None,
+    last_test_ok: bool | None = None,
+) -> dict[str, Any]:
     return {
         "forwarder_type": forwarder_type,
         "enabled": enabled,
@@ -147,8 +154,11 @@ def community_tier_org(ctx):
 @when("I GET /api/v1/errors/forwarders")
 def list_forwarders(fwd_client, ctx, request):
     if ctx.get("tier") == "community":
-        detail = {"detail": "error_forwarders is not available on your plan",
-                  "code": "feature_required", "feature": "error_forwarders"}
+        detail = {
+            "detail": "error_forwarders is not available on your plan",
+            "code": "feature_required",
+            "feature": "error_forwarders",
+        }
         request.node._resp = MagicMock(status_code=402)
         request.node._resp.json = lambda: {"detail": detail}
         ctx["_last_resp"] = request.node._resp
@@ -195,10 +205,13 @@ def configure_sentry(fwd_client, ctx, request):
         last_test_ok=True,
     )
 
-    resp = fwd_client.put("/api/v1/errors/forwarders/sentry", json={
-        "enabled": True,
-        "config_json": sentry_config,
-    })
+    resp = fwd_client.put(
+        "/api/v1/errors/forwarders/sentry",
+        json={
+            "enabled": True,
+            "config_json": sentry_config,
+        },
+    )
     request.node._resp = resp
     ctx["_last_resp"] = resp
     ctx["_config_response_data"] = response_data

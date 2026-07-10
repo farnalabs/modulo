@@ -57,18 +57,10 @@ _SAML_RESPONSE_XML = """<?xml version="1.0" encoding="UTF-8"?>
 def _make_saml_response(email: str, display_name: str, groups: list[str] | None = None) -> str:
     groups_xml = ""
     if groups:
-        values = "".join(
-            f'        <saml:AttributeValue>{g}</saml:AttributeValue>'
-            for g in groups
-        )
-        groups_xml = (
-            '      <saml:Attribute Name="groups">\n'
-            f"{values}\n"
-            '      </saml:Attribute>'
-        )
+        values = "".join(f"        <saml:AttributeValue>{g}</saml:AttributeValue>" for g in groups)
+        groups_xml = f'      <saml:Attribute Name="groups">\n{values}\n      </saml:Attribute>'
     xml = (
-        _SAML_RESPONSE_XML
-        .replace("__EMAIL__", email)
+        _SAML_RESPONSE_XML.replace("__EMAIL__", email)
         .replace("__DISPLAY_NAME__", display_name)
         .replace("__GROUPS_XML__", groups_xml)
     )
@@ -160,11 +152,7 @@ def existing_saml_user(email: str, ctx: dict[str, Any]) -> None:
 # ── Given: group mapping ──────────────────────────────────────────────────
 
 
-@given(
-    parsers.parse(
-        'SAML group mapping is configured for "{idp_group}" to team "{team_id}" with role "{role}"'
-    )
-)
+@given(parsers.parse('SAML group mapping is configured for "{idp_group}" to team "{team_id}" with role "{role}"'))
 def group_mapping_configured(idp_group: str, team_id: str, role: str, ctx: dict[str, Any]) -> None:
     ctx["group_mappings"] = [{"idp_group": idp_group, "team_id": team_id, "team_role": role}]
 
@@ -348,9 +336,7 @@ def new_user_provisioned(ctx: dict[str, Any], request: Any) -> None:
     mock_jit.assert_awaited_once()
     call_kwargs = mock_jit.await_args[1] if mock_jit.await_args else {}
     email_arg = mock_jit.call_args[0][2] if mock_jit.call_args else call_kwargs.get("email", "")
-    assert email_arg == ctx.get("expected_email", ""), (
-        f"Expected JIT for {ctx.get('expected_email')}, got {email_arg}"
-    )
+    assert email_arg == ctx.get("expected_email", ""), f"Expected JIT for {ctx.get('expected_email')}, got {email_arg}"
 
 
 @then("no duplicate account was created")
@@ -380,6 +366,4 @@ def error_detail_mentions(text: str, request: Any) -> None:
     resp = request.node._resp
     body = resp.json()
     detail = body.get("detail", "")
-    assert text.lower() in detail.lower(), (
-        f"Expected detail to mention '{text}', got '{detail}'"
-    )
+    assert text.lower() in detail.lower(), f"Expected detail to mention '{text}', got '{detail}'"

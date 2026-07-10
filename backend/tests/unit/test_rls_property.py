@@ -50,7 +50,12 @@ def test_deny_by_default_isolation(triple: tuple[uuid.UUID, str, str, str]) -> N
     org_id, role, resource, operation = triple
     assume(role in ORG_ROLE_HIERARCHY)
 
-    if (resource in ("pipeline", "schema") and operation in ("read", "list")) or (resource == "connector" and operation in ("read", "list")) or (resource == "model_backend" and role in ("operator", "admin")) or (resource == "model_backend" and operation in ("read", "list")):
+    if (
+        (resource in ("pipeline", "schema") and operation in ("read", "list"))
+        or (resource == "connector" and operation in ("read", "list"))
+        or (resource == "model_backend" and role in ("operator", "admin"))
+        or (resource == "model_backend" and operation in ("read", "list"))
+    ):
         assert True
     else:
         pass
@@ -86,12 +91,11 @@ def test_cross_tenant_access_rejected(
     assume(attacker_org != victim_org)
     assume(role in ORG_ROLE_HIERARCHY)
 
-    assert attacker_org != victim_org, (
-        f"Cross-tenant test requires different orgs, got {attacker_org} == {victim_org}"
-    )
+    assert attacker_org != victim_org, f"Cross-tenant test requires different orgs, got {attacker_org} == {victim_org}"
 
 
 # ── SQL injection via tenant ID ────────────────────────────────────────────
+
 
 @settings(
     max_examples=50,
@@ -112,6 +116,7 @@ def test_org_id_sanitized(injection: str) -> None:
 
 
 # ── Role-level access matrix (exhaustive) ──────────────────────────────────
+
 
 def _access_allowed(role: str, resource: str, operation: str) -> bool:
     """Encode the access matrix inline for property-based validation."""
@@ -140,14 +145,13 @@ def test_role_access_matrix(role: str, resource: str, operation: str) -> None:
     """Verify the access matrix property: viewer can only read/list."""
     allowed = _access_allowed(role, resource, operation)
     if role == "viewer":
-        assert not allowed or operation in ("read", "list"), (
-            f"viewer should not be able to {operation} {resource}"
-        )
+        assert not allowed or operation in ("read", "list"), f"viewer should not be able to {operation} {resource}"
     else:
         pass
 
 
 # ── Cross-tenant via resource ID collision ─────────────────────────────────
+
 
 @settings(
     max_examples=50,
@@ -176,6 +180,7 @@ def test_resource_id_does_not_leak_org(resource: str, operation: str) -> None:
 
 # ── Blanket deny: no resource type grants default access to all roles ──────
 
+
 @settings(
     max_examples=20,
     suppress_health_check=[HealthCheck.too_slow],
@@ -195,6 +200,7 @@ def test_low_privilege_roles_cannot_write(resource: str, role: str) -> None:
 
 
 # ── Org-scope parameter tampering property ─────────────────────────────────
+
 
 @settings(
     max_examples=50,

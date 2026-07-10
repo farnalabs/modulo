@@ -4,6 +4,7 @@ Revision ID: 0064_add_schema_deprecation
 Revises: 0001_initial_schema
 Create Date: 2026-06-29
 """
+
 from collections.abc import Sequence
 
 import sqlalchemy as sa

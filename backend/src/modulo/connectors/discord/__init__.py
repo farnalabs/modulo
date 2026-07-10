@@ -62,7 +62,7 @@ class DiscordConnector(ConnectorBase):
                     resp = await c.get(f"/guilds/{guild_id}/channels")
                     resp.raise_for_status()
                     data = cast(list[dict[str, Any]], resp.json())
-                    return ConnectorResult(records=data[:q.limit] if q.limit else data, total=len(data))
+                    return ConnectorResult(records=data[: q.limit] if q.limit else data, total=len(data))
                 case "messages":
                     channel_id = q.filters.get("channel_id", "")
                     if not channel_id:

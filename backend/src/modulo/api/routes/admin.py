@@ -92,7 +92,6 @@ async def global_search(
         )
 
     try:
-
         async with session.begin():
             await set_rls_org(session, current_user.organisation_id)
 
@@ -310,15 +309,11 @@ async def global_search(
             paginated = [item for _, item in all_items[offset : offset + limit]]
 
     except ProgrammingError:
-
         logger.exception("routes.admin")
 
         raise HTTPException(
-
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-
             detail="This feature is not available. Run database migrations to enable it.",
-
         )
 
     return SearchResponse(results=paginated, total_by_type=total_by_type)
@@ -504,9 +499,15 @@ async def admin_create_team(
             detail="A resource with this value already exists",
         )
     except ProgrammingError:
-        logger.warning("admin_create_team audit event ProgrammingError — team was created", extra={"org_id": str(current_user.organisation_id), "team_id": str(team.id)})
+        logger.warning(
+            "admin_create_team audit event ProgrammingError — team was created",
+            extra={"org_id": str(current_user.organisation_id), "team_id": str(team.id)},
+        )
     except SQLAlchemyError:
-        logger.warning("admin_create_team audit event SQLAlchemyError — team was created", extra={"org_id": str(current_user.organisation_id), "team_id": str(team.id)})
+        logger.warning(
+            "admin_create_team audit event SQLAlchemyError — team was created",
+            extra={"org_id": str(current_user.organisation_id), "team_id": str(team.id)},
+        )
 
     return AdminCreateTeamResponse(
         id=str(team.id),
@@ -725,7 +726,6 @@ async def admin_list_users(
         )
 
     try:
-
         async with session.begin():
             await set_rls_org(session, current_user.organisation_id)
             accounts_memberships, total = await _list_org_accounts(
@@ -738,15 +738,11 @@ async def admin_list_users(
             )
 
     except ProgrammingError:
-
         logger.exception("routes.admin")
 
         raise HTTPException(
-
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-
             detail="This feature is not available. Run database migrations to enable it.",
-
         )
 
     return UserListResponse(
@@ -850,7 +846,6 @@ async def admin_update_user(
         )
 
     try:
-
         async with session.begin():
             await set_rls_org(session, current_user.organisation_id)
             await _prevent_last_admin_lockout(
@@ -880,15 +875,11 @@ async def admin_update_user(
                 )
 
     except ProgrammingError:
-
         logger.exception("routes.admin")
 
         raise HTTPException(
-
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-
             detail="This feature is not available. Run database migrations to enable it.",
-
         )
 
     org_role = req.org_role or (await _get_org_role(session, user_id, current_user.organisation_id))
@@ -946,13 +937,17 @@ async def admin_deactivate_user(
                 await blacklist_family(session, family.family_id)
 
             active_keys = (
-                await session.execute(
-                    select(OrgApiKey).where(
-                        OrgApiKey.account_id == user_id,
-                        OrgApiKey.revoked_at.is_(None),
+                (
+                    await session.execute(
+                        select(OrgApiKey).where(
+                            OrgApiKey.account_id == user_id,
+                            OrgApiKey.revoked_at.is_(None),
+                        )
                     )
                 )
-            ).scalars().all()
+                .scalars()
+                .all()
+            )
             for key in active_keys:
                 await revoke_api_key(session, key.id, current_user.organisation_id)
 
@@ -1135,7 +1130,6 @@ async def admin_reset_password(
         )
 
     try:
-
         async with session.begin():
             await set_rls_org(session, current_user.organisation_id)
             account = await get_account_by_id(session, user_id)
@@ -1152,15 +1146,11 @@ async def admin_reset_password(
             await session.flush()
 
     except ProgrammingError:
-
         logger.exception("routes.admin")
 
         raise HTTPException(
-
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-
             detail="This feature is not available. Run database migrations to enable it.",
-
         )
 
     return AdminResetPasswordResponse(temporary_password=temporary_password)
@@ -1299,7 +1289,10 @@ async def admin_update_team(
             detail="Feature is not available. Run database migrations to enable it.",
         ) from None
     except SQLAlchemyError:
-        logger.warning("admin_update_team SQLAlchemyError", extra={"org_id": str(current_user.organisation_id), "team_id": str(team_id)})
+        logger.warning(
+            "admin_update_team SQLAlchemyError",
+            extra={"org_id": str(current_user.organisation_id), "team_id": str(team_id)},
+        )
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database temporarily unavailable. Please try again.",
@@ -1307,7 +1300,10 @@ async def admin_update_team(
     except HTTPException:
         raise
     except Exception:
-        logger.exception("admin_update_team unexpected error", extra={"org_id": str(current_user.organisation_id), "team_id": str(team_id)})
+        logger.exception(
+            "admin_update_team unexpected error",
+            extra={"org_id": str(current_user.organisation_id), "team_id": str(team_id)},
+        )
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="An unexpected error occurred while updating the team.",
@@ -1337,9 +1333,15 @@ async def admin_update_team(
             detail="A resource with this value already exists",
         )
     except ProgrammingError:
-        logger.warning("admin_update_team audit event ProgrammingError — team was updated", extra={"org_id": str(current_user.organisation_id), "team_id": str(team_id)})
+        logger.warning(
+            "admin_update_team audit event ProgrammingError — team was updated",
+            extra={"org_id": str(current_user.organisation_id), "team_id": str(team_id)},
+        )
     except SQLAlchemyError:
-        logger.warning("admin_update_team audit event SQLAlchemyError — team was updated", extra={"org_id": str(current_user.organisation_id), "team_id": str(team_id)})
+        logger.warning(
+            "admin_update_team audit event SQLAlchemyError — team was updated",
+            extra={"org_id": str(current_user.organisation_id), "team_id": str(team_id)},
+        )
 
     return AdminTeamItem(
         id=str(team.id),
@@ -1402,7 +1404,10 @@ async def admin_delete_team(
             detail="Feature is not available. Run database migrations to enable it.",
         ) from None
     except SQLAlchemyError:
-        logger.warning("admin_delete_team SQLAlchemyError", extra={"org_id": str(current_user.organisation_id), "team_id": str(team_id)})
+        logger.warning(
+            "admin_delete_team SQLAlchemyError",
+            extra={"org_id": str(current_user.organisation_id), "team_id": str(team_id)},
+        )
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database temporarily unavailable. Please try again.",
@@ -1410,7 +1415,10 @@ async def admin_delete_team(
     except HTTPException:
         raise
     except Exception:
-        logger.exception("admin_delete_team unexpected error", extra={"org_id": str(current_user.organisation_id), "team_id": str(team_id)})
+        logger.exception(
+            "admin_delete_team unexpected error",
+            extra={"org_id": str(current_user.organisation_id), "team_id": str(team_id)},
+        )
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="An unexpected error occurred while deleting the team.",
@@ -1486,9 +1494,7 @@ async def admin_billing_overview(
             ).scalar() or 0
 
             team_count = (
-                await session.execute(
-                    select(func.count()).select_from(Team).where(Team.organisation_id == org_id)
-                )
+                await session.execute(select(func.count()).select_from(Team).where(Team.organisation_id == org_id))
             ).scalar() or 0
 
             pipeline_count = (
@@ -1927,17 +1933,22 @@ async def eval_dashboard(
             )
 
             # ── Trend (daily buckets) ───────────────────────────────────
-            trend_q = select(
-                cast(EvalResult.evaluated_at, Date).label("bucket"),
-                func.count().label("total"),
-                func.sum(case((EvalResult.passed, 1), else_=0)).label("passed"),
-                func.sum(case((EvalResult.passed.is_(False), 1), else_=0)).label("failed"),
-            ).where(
-                EvalResult.organisation_id == current_user.organisation_id,
-            ).group_by(
-                cast(EvalResult.evaluated_at, Date),
-            ).order_by(
-                cast(EvalResult.evaluated_at, Date),
+            trend_q = (
+                select(
+                    cast(EvalResult.evaluated_at, Date).label("bucket"),
+                    func.count().label("total"),
+                    func.sum(case((EvalResult.passed, 1), else_=0)).label("passed"),
+                    func.sum(case((EvalResult.passed.is_(False), 1), else_=0)).label("failed"),
+                )
+                .where(
+                    EvalResult.organisation_id == current_user.organisation_id,
+                )
+                .group_by(
+                    cast(EvalResult.evaluated_at, Date),
+                )
+                .order_by(
+                    cast(EvalResult.evaluated_at, Date),
+                )
             )
             trend_rows = (await session.execute(trend_q)).all()
 
@@ -1952,19 +1963,23 @@ async def eval_dashboard(
             ]
 
             # ── By eval type ────────────────────────────────────────────
-            by_type_q = select(
-                EvalDefinition.eval_type,
-                func.count(EvalResult.id).label("total"),
-                func.sum(case((EvalResult.passed, 1), else_=0)).label("passed"),
-                func.sum(case((EvalResult.passed.is_(False), 1), else_=0)).label("failed"),
-            ).outerjoin(
-                EvalResult, EvalResult.eval_id == EvalDefinition.id
-            ).where(
-                EvalDefinition.organisation_id == current_user.organisation_id,
-            ).group_by(
-                EvalDefinition.eval_type,
-            ).order_by(
-                EvalDefinition.eval_type,
+            by_type_q = (
+                select(
+                    EvalDefinition.eval_type,
+                    func.count(EvalResult.id).label("total"),
+                    func.sum(case((EvalResult.passed, 1), else_=0)).label("passed"),
+                    func.sum(case((EvalResult.passed.is_(False), 1), else_=0)).label("failed"),
+                )
+                .outerjoin(EvalResult, EvalResult.eval_id == EvalDefinition.id)
+                .where(
+                    EvalDefinition.organisation_id == current_user.organisation_id,
+                )
+                .group_by(
+                    EvalDefinition.eval_type,
+                )
+                .order_by(
+                    EvalDefinition.eval_type,
+                )
             )
             by_type_rows = (await session.execute(by_type_q)).all()
 
@@ -2563,21 +2578,16 @@ async def admin_retention_purge_runs(
         )
 
     try:
-
         async with session.begin():
             await set_rls_org(session, current_user.organisation_id)
             deleted = await batch_delete_old_terminal_runs(session, max_age_days=req.max_age_days)
 
     except ProgrammingError:
-
         logger.exception("routes.admin")
 
         raise HTTPException(
-
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-
             detail="This feature is not available. Run database migrations to enable it.",
-
         )
 
     return {"deleted_run_count": deleted}
@@ -2651,12 +2661,10 @@ async def admin_purge_stale_runs(
     terminal_states = ("complete", "failed", "eval_failed", "cancelled")
 
     try:
-
         async with session.begin():
             await set_rls_org(session, current_user.organisation_id)
             result = await session.execute(
-                delete(Run)
-                .where(
+                delete(Run).where(
                     Run.organisation_id == current_user.organisation_id,
                     Run.status.in_(terminal_states),
                     Run.created_at < cutoff,
@@ -2664,15 +2672,11 @@ async def admin_purge_stale_runs(
             )
 
     except ProgrammingError:
-
         logger.exception("routes.admin")
 
         raise HTTPException(
-
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-
             detail="This feature is not available. Run database migrations to enable it.",
-
         )
 
     return PurgeRunsResponse(purged_count=result.rowcount)  # type: ignore[attr-defined]
@@ -2712,7 +2716,6 @@ async def admin_get_retention(
     if current_user.org_role != "admin":
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Only admin users can view retention")
     try:
-
         async with session.begin():
             await set_rls_org(session, current_user.organisation_id)
             result = await session.execute(
@@ -2720,15 +2723,11 @@ async def admin_get_retention(
             )
             row = result.scalar_one_or_none()
     except ProgrammingError:
-
         logger.exception("routes.admin")
 
         raise HTTPException(
-
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-
             detail="This feature is not available. Run database migrations to enable it.",
-
         )
 
     retention_days = 90
@@ -2746,7 +2745,6 @@ async def admin_update_retention(
     if current_user.org_role != "admin":
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Only admin users can update retention")
     try:
-
         async with session.begin():
             await set_rls_org(session, current_user.organisation_id)
             result = await session.execute(
@@ -2760,15 +2758,11 @@ async def admin_update_retention(
             org.settings_json = settings
             await session.flush()
     except ProgrammingError:
-
         logger.exception("routes.admin")
 
         raise HTTPException(
-
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-
             detail="This feature is not available. Run database migrations to enable it.",
-
         )
 
     logger.info(
@@ -2789,7 +2783,6 @@ async def admin_get_storage(
     if current_user.org_role != "admin":
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Only admin users can view storage")
     try:
-
         async with session.begin():
             await set_rls_org(session, current_user.organisation_id)
             total = (
@@ -2807,15 +2800,11 @@ async def admin_get_storage(
             ).all()
 
     except ProgrammingError:
-
         logger.exception("routes.admin")
 
         raise HTTPException(
-
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-
             detail="This feature is not available. Run database migrations to enable it.",
-
         )
 
     breakdown: dict[str, int] = {}
@@ -2862,21 +2851,16 @@ async def admin_overdue_hitl_claims(
         )
 
     try:
-
         async with session.begin():
             await set_rls_org(session, current_user.organisation_id)
             claims = await get_overdue_claims(session, current_user.organisation_id)
 
     except ProgrammingError:
-
         logger.exception("routes.admin")
 
         raise HTTPException(
-
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-
             detail="This feature is not available. Run database migrations to enable it.",
-
         )
 
     return OverdueClaimsResponse(claims=[OverdueClaimItem(**c) for c in claims])

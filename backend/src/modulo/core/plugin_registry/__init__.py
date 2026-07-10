@@ -62,6 +62,7 @@ _CAP_MODEL_BACKEND = "model_backend"
 class PluginNotFoundError(KeyError):
     """Raised when a plugin or builder is not found in the registry."""
 
+
 _DISCOVERED: PluginRegistry | None = None
 _DISCOVERED_LOCK: threading.Lock = threading.Lock()
 
@@ -126,9 +127,7 @@ class PluginRegistry:
         discovered: list[PluginManifest] = []
         try:
             entries: list[tuple[str, importlib.metadata.EntryPoint]] = [
-                (group, ep)
-                for group in _ENTRY_POINT_GROUPS
-                for ep in importlib.metadata.entry_points(group=group)
+                (group, ep) for group in _ENTRY_POINT_GROUPS for ep in importlib.metadata.entry_points(group=group)
             ]
         except Exception:
             logger.exception("Failed to query entry points during plugin discovery")

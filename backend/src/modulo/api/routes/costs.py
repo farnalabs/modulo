@@ -332,6 +332,7 @@ async def update_cost_controls(
                 if org is None:
                     raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Organisation not found")
                 from decimal import Decimal
+
                 org.daily_spend_limit = Decimal(str(req.budget))
                 await session.flush()
 

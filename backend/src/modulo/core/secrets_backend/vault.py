@@ -92,7 +92,9 @@ class VaultSecretsBackend(SecretsBackend):
                         timeout=_TIMEOUT,
                     )
                 else:
-                    raise RuntimeError("VaultSecretsBackend: neither VAULT_TOKEN nor VAULT_ROLE_ID+VAULT_SECRET_ID are set")
+                    raise RuntimeError(
+                        "VaultSecretsBackend: neither VAULT_TOKEN nor VAULT_ROLE_ID+VAULT_SECRET_ID are set"
+                    )
             except asyncio.CancelledError:
                 raise
             except Exception:

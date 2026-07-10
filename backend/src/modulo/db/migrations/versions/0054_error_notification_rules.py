@@ -21,9 +21,11 @@ def upgrade() -> None:
         "error_notification_rules",
         sa.Column("id", sa.Uuid(), primary_key=True, server_default=sa.text("gen_random_uuid()")),
         sa.Column(
-            "organisation_id", sa.Uuid(),
+            "organisation_id",
+            sa.Uuid(),
             sa.ForeignKey("organisations.id", ondelete="CASCADE"),
-            nullable=False, index=True,
+            nullable=False,
+            index=True,
         ),
         sa.Column("name", sa.String(100), nullable=False),
         sa.Column("enabled", sa.Boolean(), nullable=False, server_default=sa.text("true")),

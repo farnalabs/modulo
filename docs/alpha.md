@@ -1,7 +1,7 @@
 # Alpha — Modulo Platform
 
-**Last updated:** 2026-06-30  
-**Current status:** Pre-release / Internal alpha  
+**Last updated:** 2026-06-30
+**Current status:** Pre-release / Internal alpha
 **Scope source:** PRD §10.3a, §10.3b, §13
 
 ---
@@ -313,12 +313,12 @@ npm run dev
 
 Set `MODULO_DEMO_MODE=true` in your `.env`. The pre-loaded `prd-to-requirements` pipeline is available on the dashboard. No external API keys are needed — the demo uses `StubModelBackend`.
 
-**Full quickstart**: See [quickstart.md](./quickstart.md)  
-**Architecture overview**: See [architecture.md](./architecture.md)  
-**Deployment guide**: See [deployment.md](./deployment.md)  
-**System requirements**: See [system-requirements.md](./system-requirements.md)  
-**Configuration reference**: See [configuration-reference.md](./configuration-reference.md)  
-**Upgrade process**: See [upgrade-process.md](./upgrade-process.md)  
+**Full quickstart**: See [quickstart.md](./quickstart.md)
+**Architecture overview**: See [architecture.md](./architecture.md)
+**Deployment guide**: See [deployment.md](./deployment.md)
+**System requirements**: See [system-requirements.md](./system-requirements.md)
+**Configuration reference**: See [configuration-reference.md](./configuration-reference.md)
+**Upgrade process**: See [upgrade-process.md](./upgrade-process.md)
 **Launch checklist**: See [public-launch-checklist.md](./public-launch-checklist.md)
 
 ---

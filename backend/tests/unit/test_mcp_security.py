@@ -149,9 +149,7 @@ class TestHumanOnlyGateBypass:
                 claim_token="test-token",
             )
 
-        assert result.get("error") == "human_only_gate", (
-            f"Expected human_only_gate error, got {result}"
-        )
+        assert result.get("error") == "human_only_gate", f"Expected human_only_gate error, got {result}"
 
     async def test_non_human_only_approve_proceeds(self) -> None:
         """A gate without human_only=true should not be blocked."""
@@ -182,9 +180,7 @@ class TestHumanOnlyGateBypass:
             with patch("modulo.api.mcp_server.HITLManager") as mock_mgr:
                 mock_mgr_instance = AsyncMock()
                 mock_mgr.return_value = mock_mgr_instance
-                mock_mgr_instance.approve = AsyncMock(
-                    return_value=MagicMock(status="approved")
-                )
+                mock_mgr_instance.approve = AsyncMock(return_value=MagicMock(status="approved"))
 
                 result = await _rh(
                     run_id=_FAKE_ID,
@@ -193,9 +189,7 @@ class TestHumanOnlyGateBypass:
                     claim_token="test-token",
                 )
 
-        assert result.get("error") != "human_only_gate", (
-            f"Non-human_only gate should not be blocked: {result}"
-        )
+        assert result.get("error") != "human_only_gate", f"Non-human_only gate should not be blocked: {result}"
 
     async def test_human_only_bypass_fails_for_runner_role(self) -> None:
         """Runner role claiming a human_only gate should work, but approve blocked by scope."""

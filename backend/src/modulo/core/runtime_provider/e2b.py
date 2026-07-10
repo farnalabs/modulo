@@ -183,6 +183,4 @@ class E2BRuntimeProvider(RuntimeProvider):
         exit_code = getattr(result, "exit_code", 1)
         if exit_code != 0:
             stderr = getattr(result, "stderr", "") or ""
-            raise RuntimeError(
-                f"Repo clone failed (exit {exit_code}) for {repo_url}: {stderr}"
-            )
+            raise RuntimeError(f"Repo clone failed (exit {exit_code}) for {repo_url}: {stderr}")

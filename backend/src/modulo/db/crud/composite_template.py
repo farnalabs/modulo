@@ -48,9 +48,7 @@ async def get_composite_template(
     session: AsyncSession,
     template_id: uuid.UUID,
 ) -> CompositeTemplate | None:
-    result = await session.execute(
-        select(CompositeTemplate).where(CompositeTemplate.id == template_id)
-    )
+    result = await session.execute(select(CompositeTemplate).where(CompositeTemplate.id == template_id))
     return result.scalar_one_or_none()
 
 
@@ -65,9 +63,7 @@ async def list_composite_templates(
     try:
         total = (
             await session.execute(
-                select(func.count()).select_from(CompositeTemplate).where(
-                    CompositeTemplate.organisation_id == org_id
-                )
+                select(func.count()).select_from(CompositeTemplate).where(CompositeTemplate.organisation_id == org_id)
             )
         ).scalar_one()
     except ProgrammingError:

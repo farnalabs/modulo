@@ -228,14 +228,12 @@ class Notifier:
 
         When ``team_id`` is None, returns only org-wide endpoints.
         """
+
         async def _query(team_filter: uuid.UUID | None) -> list[NotificationEndpoint]:
-            stmt = (
-                select(NotificationEndpoint)
-                .where(
-                    NotificationEndpoint.organisation_id == org_id,
-                    NotificationEndpoint.team_id.is_(team_filter),
-                    NotificationEndpoint.auto_disabled.is_(False),
-                )
+            stmt = select(NotificationEndpoint).where(
+                NotificationEndpoint.organisation_id == org_id,
+                NotificationEndpoint.team_id.is_(team_filter),
+                NotificationEndpoint.auto_disabled.is_(False),
             )
             async with self._session_factory() as session:
                 result = await session.execute(stmt)
@@ -304,16 +302,22 @@ class Notifier:
         # Create in-app notification record alongside webhook dispatches
         try:
             from modulo.core.notifier.event_mapper import NotificationEventMapper
+
             mapper = NotificationEventMapper()
             async with self._session_factory() as session, session.begin():
                 await set_rls_org(session, org_id)
                 await mapper.create_from_event(
-                    session, org_id=org_id, event_type=event_type, payload=payload,
+                    session,
+                    org_id=org_id,
+                    event_type=event_type,
+                    payload=payload,
                 )
         except asyncio.CancelledError:
             raise
         except Exception:
-            _log.exception("notifier.in_app_notification_failed", extra={"event_type": event_type, "org_id": str(org_id)})
+            _log.exception(
+                "notifier.in_app_notification_failed", extra={"event_type": event_type, "org_id": str(org_id)}
+            )
 
         return results
 

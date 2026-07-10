@@ -28,9 +28,7 @@ class Finding:
 
     def __post_init__(self) -> None:
         if self.confidence not in _VALID_CONFIDENCES:
-            raise ValueError(
-                f"confidence must be one of {sorted(_VALID_CONFIDENCES)}, got {self.confidence!r}"
-            )
+            raise ValueError(f"confidence must be one of {sorted(_VALID_CONFIDENCES)}, got {self.confidence!r}")
 
 
 _CI_FILES = {

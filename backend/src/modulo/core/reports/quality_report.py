@@ -251,7 +251,7 @@ def _trend_symbol(delta_pct: float | None) -> str:
 
 
 def _format_summary_block(summary: dict[str, Any]) -> dict[str, Any]:
-    rate_str = _fmt_pct(summary['avg_eval_pass_rate'])
+    rate_str = _fmt_pct(summary["avg_eval_pass_rate"])
     return {
         "type": "section",
         "fields": [
@@ -263,7 +263,7 @@ def _format_summary_block(summary: dict[str, Any]) -> dict[str, Any]:
 
 
 def _format_trend_section(wow: dict[str, Any], summary: dict[str, Any]) -> dict[str, Any]:
-    rate_str = _fmt_pct(summary['avg_eval_pass_rate'])
+    rate_str = _fmt_pct(summary["avg_eval_pass_rate"])
     prev_rate = wow["previous_week_avg_pass_rate"]
     prev_rate_str = _fmt_pct(prev_rate)
 
@@ -298,8 +298,8 @@ def _fmt_delta(delta_pct: float | None) -> str:
 def _format_eval_breakdown(eval_bd: dict[str, Any]) -> dict[str, Any]:
     cw = eval_bd["current_week"]
     pw = eval_bd["previous_week"]
-    cw_rate = _fmt_pct(cw['pass_rate'])
-    pw_rate = _fmt_pct(pw['pass_rate'])
+    cw_rate = _fmt_pct(cw["pass_rate"])
+    pw_rate = _fmt_pct(pw["pass_rate"])
     return {
         "type": "section",
         "text": {
@@ -316,7 +316,7 @@ def _format_eval_breakdown(eval_bd: dict[str, Any]) -> dict[str, Any]:
 def _format_trend_block(trend: list[dict[str, Any]]) -> dict[str, Any]:
     lines = ["*Daily Trend (last 7 days)*"]
     for entry in trend:
-        rate_str = _fmt_pct(entry['eval_pass_rate'])
+        rate_str = _fmt_pct(entry["eval_pass_rate"])
         lines.append(
             f"\u2022 {entry['date']}: {entry['run_count']} runs, {rate_str} pass, ${entry['token_spend_usd']:.2f}"
         )

@@ -115,9 +115,7 @@ async def delete_variant_group(session: AsyncSession, group_id: uuid.UUID) -> bo
 
 
 async def increment_run_count(session: AsyncSession, group_id: uuid.UUID) -> VariantGroup | None:
-    result = await session.execute(
-        select(VariantGroup).where(VariantGroup.id == group_id).with_for_update()
-    )
+    result = await session.execute(select(VariantGroup).where(VariantGroup.id == group_id).with_for_update())
     group = result.scalar_one_or_none()
     if group is None:
         return None
@@ -179,9 +177,7 @@ async def run_variant_weighted(
     Returns dict with run_id, variant, merged_payload, or None if quota exceeded.
     Locks the variant group row to prevent concurrent quota races.
     """
-    result = await session.execute(
-        select(VariantGroup).where(VariantGroup.id == group.id).with_for_update()
-    )
+    result = await session.execute(select(VariantGroup).where(VariantGroup.id == group.id).with_for_update())
     locked = result.scalar_one_or_none()
     if locked is None:
         return None
@@ -293,9 +289,7 @@ async def get_prompt_diffs(
 
     base_sids = set(base_snapshot_ids or [])
     base_variants = [v for v in group.variants if _snapshot_uuid(v) in base_sids]
-    comparison_variants = [
-        v for v in group.variants if _snapshot_uuid(v) not in base_sids
-    ]
+    comparison_variants = [v for v in group.variants if _snapshot_uuid(v) not in base_sids]
 
     diffs: list[dict[str, Any]] = []
     for cv in comparison_variants:
@@ -311,8 +305,7 @@ async def get_prompt_diffs(
                 raw = snapshot.prompt_pins_json
                 if not isinstance(raw, list):
                     return {}
-                return {p.get("agent_id"): p.get("prompt_version_hash")
-                        for p in raw if p.get("agent_id")}
+                return {p.get("agent_id"): p.get("prompt_version_hash") for p in raw if p.get("agent_id")}
 
             bv_pins = _pins(bv_snapshot)
             cv_pins = _pins(cv_snapshot)

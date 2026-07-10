@@ -102,7 +102,7 @@ def _make_stmt(*, entities: list | None = None) -> MagicMock:
 # ===========================================================================
 
 
-@given(parsers.parse('a GenericRepository connected to {dialect}'))
+@given(parsers.parse("a GenericRepository connected to {dialect}"))
 def generic_repo_for_dialect(dialect: str, ctx) -> None:
     ctx["repo"] = GenericRepository(session_factory=MagicMock())
     ctx["dialect"] = dialect.lower()
@@ -127,8 +127,7 @@ def call_set_org_context(org: str, ctx) -> None:
 def check_session_info(ctx) -> None:
     session = ctx["session"]
     assert session.info.get(_TENANT_KEY) == ctx["org_id"], (
-        f"Expected session.info[{_TENANT_KEY!r}] = {ctx['org_id']!r}, "
-        f"got {session.info.get(_TENANT_KEY)!r}"
+        f"Expected session.info[{_TENANT_KEY!r}] = {ctx['org_id']!r}, got {session.info.get(_TENANT_KEY)!r}"
     )
 
 
@@ -245,9 +244,7 @@ def check_sqlite_batch(ctx) -> None:
 @then("the async-to-sync driver conversion succeeds for each backend")
 def check_driver_conversion(ctx) -> None:
     for name, converted in ctx["conversions"].items():
-        assert "+async" not in converted, (
-            f"Async prefix not converted for {name}: {converted}"
-        )
+        assert "+async" not in converted, f"Async prefix not converted for {name}: {converted}"
 
 
 # ===========================================================================
@@ -295,7 +292,7 @@ def check_asyncio_lock(ctx) -> None:
     assert _generic_locks[key].locked()
 
 
-@when(parsers.parse('a lock is acquired for the same key'))
+@when(parsers.parse("a lock is acquired for the same key"))
 def acquire_lock_same_key(ctx) -> None:
     session = AsyncMock(spec=AsyncSession)
     ctx["lock_session"] = session

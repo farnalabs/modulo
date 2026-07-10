@@ -49,14 +49,16 @@ class LokiErrorForwarder(BaseForwarder):
             }
             stream_labels = {k: str(v) for k, v in stream_labels.items()}
 
-            log_entry = json.dumps({
-                "message": error_event.message or "",
-                "level": level,
-                "fingerprint": error_group.fingerprint if error_group else "",
-                "count": error_group.count if error_group else 1,
-                "version": error_event.version or "unknown",
-                "stacktrace": (error_event.stacktrace or "")[:5000],
-            })
+            log_entry = json.dumps(
+                {
+                    "message": error_event.message or "",
+                    "level": level,
+                    "fingerprint": error_group.fingerprint if error_group else "",
+                    "count": error_group.count if error_group else 1,
+                    "version": error_event.version or "unknown",
+                    "stacktrace": (error_event.stacktrace or "")[:5000],
+                }
+            )
 
             body = {
                 "streams": [

@@ -35,7 +35,9 @@ async def test_create_pipeline(rls_session: AsyncSession, test_org: uuid.UUID, t
 
 
 async def test_get_pipeline_returns_existing(
-    rls_session: AsyncSession, test_org: uuid.UUID, test_user: uuid.UUID,
+    rls_session: AsyncSession,
+    test_org: uuid.UUID,
+    test_user: uuid.UUID,
 ) -> None:
     p = await create_pipeline(rls_session, org_id=test_org, name="Fetch Me", account_id=test_user)
     fetched = await get_pipeline(rls_session, p.id)
@@ -85,7 +87,9 @@ async def test_delete_pipeline_unknown_returns_false(
 
 
 async def test_replace_pipeline_graph_persists_nodes_and_first_class_edges(
-    rls_session: AsyncSession, test_org: uuid.UUID, test_user: uuid.UUID,
+    rls_session: AsyncSession,
+    test_org: uuid.UUID,
+    test_user: uuid.UUID,
 ) -> None:
     pipeline = await create_pipeline(
         rls_session,
@@ -137,7 +141,9 @@ async def test_replace_pipeline_graph_persists_nodes_and_first_class_edges(
 
 
 async def test_clone_pipeline_returns_new_id_and_name_prefix(
-    rls_session: AsyncSession, test_org: uuid.UUID, test_user: uuid.UUID,
+    rls_session: AsyncSession,
+    test_org: uuid.UUID,
+    test_user: uuid.UUID,
 ) -> None:
     source = await create_pipeline(
         rls_session,
@@ -191,7 +197,9 @@ async def test_clone_pipeline_returns_new_id_and_name_prefix(
 
 
 async def test_clone_pipeline_independent_from_original(
-    rls_session: AsyncSession, test_org: uuid.UUID, test_user: uuid.UUID,
+    rls_session: AsyncSession,
+    test_org: uuid.UUID,
+    test_user: uuid.UUID,
 ) -> None:
     source = await create_pipeline(
         rls_session,
@@ -249,7 +257,9 @@ async def test_clone_pipeline_not_found_returns_none(
 
 
 async def test_replace_pipeline_graph_removes_stale_edges(
-    rls_session: AsyncSession, test_org: uuid.UUID, test_user: uuid.UUID,
+    rls_session: AsyncSession,
+    test_org: uuid.UUID,
+    test_user: uuid.UUID,
 ) -> None:
     pipeline = await create_pipeline(
         rls_session,

@@ -413,7 +413,10 @@ def _tool_auth_error(msg: str) -> dict[str, Any]:
     return {"error": "auth_expired", "detail": msg}
 
 
-@mcp.tool(name="list_pipelines", description="List pipelines in the organisation. Returns summaries. For raw text output, see the modulo://pipelines resource.")
+@mcp.tool(
+    name="list_pipelines",
+    description="List pipelines in the organisation. Returns summaries. For raw text output, see the modulo://pipelines resource.",
+)
 async def list_pipelines_tool(page: int = 1, page_size: int = 20) -> dict[str, Any]:
     try:
         if not await validate_current_auth():
@@ -678,12 +681,14 @@ async def get_run_status(run_id: str, detail: bool = False) -> dict[str, Any]:
                 usage = token_usage.get(nid, {})
                 t_in = usage.get("tokens_in", 0) if usage else 0
                 t_out = usage.get("tokens_out", 0) if usage else 0
-                nodes.append({
-                    "node_id": nid,
-                    "status": "completed" if nid in outputs_json else "processed",
-                    "tokens": t_in + t_out,
-                    "has_output": nid in outputs_json,
-                })
+                nodes.append(
+                    {
+                        "node_id": nid,
+                        "status": "completed" if nid in outputs_json else "processed",
+                        "tokens": t_in + t_out,
+                        "has_output": nid in outputs_json,
+                    }
+                )
             result["nodes"] = nodes
         return result
     except Exception:
@@ -1098,10 +1103,7 @@ async def copy_library_primitive(
 
 @mcp.tool(
     name="browse_library",
-    description=(
-        "[DEPRECATED — use search_library] "
-        "Browse/search the library of primitives."
-    ),
+    description=("[DEPRECATED — use search_library] Browse/search the library of primitives."),
 )
 async def browse_library_alias(
     primitive_type: str | None = None,
@@ -1166,10 +1168,7 @@ async def search_library(
 
 @mcp.tool(
     name="get_trigger_events",
-    description=(
-        "[DEPRECATED — use list_trigger_events] "
-        "Get recent trigger events for a given trigger or pipeline."
-    ),
+    description=("[DEPRECATED — use list_trigger_events] Get recent trigger events for a given trigger or pipeline."),
 )
 async def get_trigger_events_alias(
     trigger_id: str | None = None,
@@ -1214,14 +1213,22 @@ async def list_trigger_events(
                 try:
                     tid = uuid.UUID(trigger_id)
                 except ValueError:
-                    return {"error": "invalid_id", "field": "trigger_id", "detail": f"Invalid UUID format: {trigger_id}"}
+                    return {
+                        "error": "invalid_id",
+                        "field": "trigger_id",
+                        "detail": f"Invalid UUID format: {trigger_id}",
+                    }
                 q = q.where(TriggerEvent.trigger_id == tid)
 
             if pipeline_id is not None:
                 try:
                     pid = uuid.UUID(pipeline_id)
                 except ValueError:
-                    return {"error": "invalid_id", "field": "pipeline_id", "detail": f"Invalid UUID format: {pipeline_id}"}
+                    return {
+                        "error": "invalid_id",
+                        "field": "pipeline_id",
+                        "detail": f"Invalid UUID format: {pipeline_id}",
+                    }
                 q = q.join(Trigger, TriggerEvent.trigger_id == Trigger.id).where(
                     Trigger.pipeline_id == pid,
                 )
@@ -1400,10 +1407,7 @@ def _is_sensitive_key(key: str) -> bool:
 
 @mcp.tool(
     name="get_documentation",
-    description=(
-        "[DEPRECATED — use search_documentation] "
-        "Search product documentation."
-    ),
+    description=("[DEPRECATED — use search_documentation] Search product documentation."),
 )
 async def get_documentation_alias(query: str, section: str | None = None) -> dict[str, Any]:
     return await search_documentation(query=query, section=section)
@@ -1465,33 +1469,41 @@ async def get_integration_status() -> dict[str, Any]:
             trigger_count = trigger_count_result.scalar_one()
 
         connector_list: list[dict[str, Any]] = []
-        connector_lines = ["| Name | Type | Status | Last Check | Error |",
-                           "|------|------|--------|------------|-------|"]
+        connector_lines = [
+            "| Name | Type | Status | Last Check | Error |",
+            "|------|------|--------|------------|-------|",
+        ]
         for c in connector_rows:
             last_check = c.last_health_check_at.isoformat() if c.last_health_check_at else "never"
             error = c.last_health_check_error or ""
             connector_lines.append(f"| {c.name} | {c.connector_type_id} | {c.status} | {last_check} | {error} |")
-            connector_list.append({
-                "name": c.name,
-                "type": c.connector_type_id,
-                "status": c.status,
-                "last_check": last_check,
-                "error": error,
-            })
+            connector_list.append(
+                {
+                    "name": c.name,
+                    "type": c.connector_type_id,
+                    "status": c.status,
+                    "last_check": last_check,
+                    "error": error,
+                }
+            )
 
         backend_list: list[dict[str, Any]] = []
-        backend_lines = ["| Name | Provider | Model | Has Credentials | Status |",
-                         "|------|----------|-------|-----------------|--------|"]
+        backend_lines = [
+            "| Name | Provider | Model | Has Credentials | Status |",
+            "|------|----------|-------|-----------------|--------|",
+        ]
         for b in backend_rows:
             has_creds = "yes" if b.credentials_ciphertext else "no"
             backend_lines.append(f"| {b.name} | {b.provider} | {b.model_id} | {has_creds} | {b.status} |")
-            backend_list.append({
-                "name": b.name,
-                "provider": b.provider,
-                "model": b.model_id,
-                "has_credentials": bool(b.credentials_ciphertext),
-                "status": b.status,
-            })
+            backend_list.append(
+                {
+                    "name": b.name,
+                    "provider": b.provider,
+                    "model": b.model_id,
+                    "has_credentials": bool(b.credentials_ciphertext),
+                    "status": b.status,
+                }
+            )
 
         parts = [
             f"## Connectors ({len(connector_rows)})",

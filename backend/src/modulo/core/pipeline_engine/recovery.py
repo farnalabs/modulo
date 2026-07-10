@@ -108,9 +108,7 @@ async def recover_node(
     if run.status not in _RECOVERABLE_STATUSES:
         raise RecoveryNotAllowedError(run_id, run.status)
 
-    snapshot_result = await session.execute(
-        select(PipelineSnapshot).where(PipelineSnapshot.id == run.snapshot_id)
-    )
+    snapshot_result = await session.execute(select(PipelineSnapshot).where(PipelineSnapshot.id == run.snapshot_id))
     snapshot = snapshot_result.scalar_one_or_none()
     if snapshot is None:
         raise RuntimeError(f"Snapshot {run.snapshot_id} not found for run {run_id}")

@@ -1,4 +1,4 @@
-﻿"""Tests for schema route error handling â€” ProgrammingError, SQLAlchemyError, IntegrityError."""
+"""Tests for schema route error handling â€” ProgrammingError, SQLAlchemyError, IntegrityError."""
 
 import uuid
 from collections.abc import AsyncGenerator, Generator
@@ -308,6 +308,7 @@ class TestSchemaMigrateErrors:
             )
         assert resp.status_code == 503
 
+
 class TestSchemaValidateEndpoint:
     def test_validate_valid_schema(self, client: TestClient) -> None:
         schema = {
@@ -438,12 +439,14 @@ class TestSchemaImportErrors:
 
     def test_import_non_object_json_returns_400(self, client: TestClient) -> None:
         import json as _json
+
         resp = client.post("/api/v1/schemas/import", json={"content": _json.dumps(["list"])})
         assert resp.status_code == 400
         assert "must be a json object" in resp.json()["detail"].lower()
 
     def test_import_valid_schema_returns_200(self, client: TestClient) -> None:
         import json as _json
+
         schema = {
             "type": "object",
             "title": "Person",
@@ -461,6 +464,7 @@ class TestSchemaImportErrors:
 
     def test_import_invalid_schema_returns_422(self, client: TestClient) -> None:
         import json as _json
+
         resp = client.post(
             "/api/v1/schemas/import",
             json={"content": _json.dumps({"type": "nonexistent"})},
@@ -535,7 +539,10 @@ class TestSchemaMigrateDataErrors:
     def test_migrate_create_plan_error_returns_500(self, mock_create: MagicMock, client: TestClient) -> None:
         with (
             patch("modulo.api.routes.schemas.get_schema", return_value=MagicMock()),
-            patch("modulo.api.routes.schemas._get_latest_version", return_value=MagicMock(definition_json={"type": "object"})),
+            patch(
+                "modulo.api.routes.schemas._get_latest_version",
+                return_value=MagicMock(definition_json={"type": "object"}),
+            ),
             patch("modulo.api.routes.schemas.set_rls_org"),
         ):
             resp = client.post(
@@ -553,8 +560,14 @@ class TestSchemaMigrateDataErrors:
     def test_migrate_apply_error_returns_500(self, mock_apply: MagicMock, client: TestClient) -> None:
         with (
             patch("modulo.api.routes.schemas.get_schema", return_value=MagicMock()),
-            patch("modulo.api.routes.schemas._get_latest_version", return_value=MagicMock(definition_json={"type": "object"})),
-            patch("modulo.api.routes.schemas.create_migration", return_value=MagicMock(field_additions={}, field_removals=[], type_changes={}, renames={})),
+            patch(
+                "modulo.api.routes.schemas._get_latest_version",
+                return_value=MagicMock(definition_json={"type": "object"}),
+            ),
+            patch(
+                "modulo.api.routes.schemas.create_migration",
+                return_value=MagicMock(field_additions={}, field_removals=[], type_changes={}, renames={}),
+            ),
             patch("modulo.api.routes.schemas.set_rls_org"),
         ):
             resp = client.post(

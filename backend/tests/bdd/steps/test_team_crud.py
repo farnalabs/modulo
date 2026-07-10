@@ -112,6 +112,7 @@ def create_team(name: str, description: str, request, ctx) -> None:
 def list_teams(request, ctx) -> None:
     from modulo.api.main import app
     from modulo.settings import get_settings
+
     client = TestClient(app)
     app.dependency_overrides[get_settings] = make_settings
     app.dependency_overrides = {}
@@ -139,6 +140,7 @@ def list_teams(request, ctx) -> None:
 def get_team_by_name(team_name: str, request, ctx) -> None:
     from modulo.api.main import app
     from modulo.settings import get_settings
+
     client = TestClient(app)
     app.dependency_overrides[get_settings] = make_settings
     app.dependency_overrides = {}
@@ -157,6 +159,7 @@ def get_team_by_name(team_name: str, request, ctx) -> None:
 def get_team_by_uuid(team_id: str, request, ctx) -> None:
     from modulo.api.main import app
     from modulo.settings import get_settings
+
     client = TestClient(app)
     app.dependency_overrides[get_settings] = make_settings
     app.dependency_overrides = {}
@@ -174,6 +177,7 @@ def get_team_by_uuid(team_id: str, request, ctx) -> None:
 def rename_team(old_name: str, new_name: str, request, ctx) -> None:
     from modulo.api.main import app
     from modulo.settings import get_settings
+
     client = TestClient(app)
     app.dependency_overrides[get_settings] = make_settings
     app.dependency_overrides = {}
@@ -216,6 +220,7 @@ def rename_team(old_name: str, new_name: str, request, ctx) -> None:
 def delete_team(team_name: str, request, ctx) -> None:
     from modulo.api.main import app
     from modulo.settings import get_settings
+
     client = TestClient(app)
     app.dependency_overrides[get_settings] = make_settings
     app.dependency_overrides = {}
@@ -244,6 +249,7 @@ def delete_team(team_name: str, request, ctx) -> None:
 def delete_team_by_id(team_id: str, request, ctx) -> None:
     from modulo.api.main import app
     from modulo.settings import get_settings
+
     client = TestClient(app)
     app.dependency_overrides[get_settings] = make_settings
     app.dependency_overrides = {}

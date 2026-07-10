@@ -63,9 +63,7 @@ async def list_stages(
     except ProgrammingError:
         return PageResult(items=[], total=0, page=page, page_size=page_size)
     items = list(
-        (
-            await session.execute(query.order_by(Stage.position, Stage.name).offset(offset).limit(page_size))
-        ).scalars()
+        (await session.execute(query.order_by(Stage.position, Stage.name).offset(offset).limit(page_size))).scalars()
     )
     return PageResult(items=items, total=total, page=page, page_size=page_size)
 

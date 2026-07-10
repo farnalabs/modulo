@@ -1,4 +1,5 @@
 """Unit tests for SQLAlchemyError handling on feedback API routes."""
+
 import uuid
 from collections.abc import AsyncGenerator, Generator
 from unittest.mock import AsyncMock, MagicMock

@@ -110,17 +110,17 @@ async def list_pipelines(
 
     offset = (page - 1) * page_size
     try:
-        total = (await session.execute(select(func.count()).select_from(Pipeline).where(
-            *([Pipeline.archived_at.is_(None)] if not include_archived else [])
-        ))).scalar_one()
+        total = (
+            await session.execute(
+                select(func.count())
+                .select_from(Pipeline)
+                .where(*([Pipeline.archived_at.is_(None)] if not include_archived else []))
+            )
+        ).scalar_one()
     except ProgrammingError:
         return PageResult(items=[], total=0, page=page, page_size=page_size)
     items = list(
-        (
-            await session.execute(
-                base.order_by(Pipeline.created_at.desc()).offset(offset).limit(page_size)
-            )
-        ).scalars()
+        (await session.execute(base.order_by(Pipeline.created_at.desc()).offset(offset).limit(page_size))).scalars()
     )
     return PageResult(items=items, total=total, page=page, page_size=page_size)
 

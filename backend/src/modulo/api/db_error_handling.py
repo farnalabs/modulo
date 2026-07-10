@@ -16,6 +16,7 @@ def handle_db_errors(log_prefix: str = "api"):
         async def my_endpoint(...):
             ...
     """
+
     def decorator(func):
 
         @wraps(func)

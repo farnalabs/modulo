@@ -355,8 +355,20 @@ def test_replace_pipeline_graph_accepts_manual_node_contract(client: TestClient)
 
     assert resp.status_code == 200
     actual = resp.json()["nodes"][0]
-    for key in ("id", "node_type", "agent_id", "position", "connector_binding", "output_schema_id", "label", "role", "autonomy_recommendation"):
-        assert actual.get(key) == nodes[0].get(key), f"Mismatch on key '{key}': {actual.get(key)} != {nodes[0].get(key)}"
+    for key in (
+        "id",
+        "node_type",
+        "agent_id",
+        "position",
+        "connector_binding",
+        "output_schema_id",
+        "label",
+        "role",
+        "autonomy_recommendation",
+    ):
+        assert actual.get(key) == nodes[0].get(key), (
+            f"Mismatch on key '{key}': {actual.get(key)} != {nodes[0].get(key)}"
+        )
 
 
 def test_replace_pipeline_graph_rejects_excessive_node_count(client: TestClient) -> None:

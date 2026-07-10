@@ -79,9 +79,7 @@ async def when_health_check(sonarqube_connector):
 @when(parsers.parse('I query resource "{resource}" with limit {limit:d}'))
 async def when_query_with_limit(sonarqube_connector, resource, limit):
     global _last_query_result
-    _last_query_result = await sonarqube_connector.query(
-        ConnectorQuery(resource=resource, limit=limit)
-    )
+    _last_query_result = await sonarqube_connector.query(ConnectorQuery(resource=resource, limit=limit))
     return _last_query_result
 
 
@@ -115,9 +113,7 @@ async def when_query_issues(sonarqube_connector, resource, component):
 @when(parsers.parse('I query resource "{resource}" with id "{gate_id}"'))
 async def when_query_quality_gate(sonarqube_connector, resource, gate_id):
     global _last_query_result
-    _last_query_result = await sonarqube_connector.query(
-        ConnectorQuery(resource=resource, filters={"id": gate_id})
-    )
+    _last_query_result = await sonarqube_connector.query(ConnectorQuery(resource=resource, filters={"id": gate_id}))
     return _last_query_result
 
 
@@ -152,9 +148,7 @@ async def when_write_transition(sonarqube_connector, resource, issue, transition
 @when(parsers.parse('I write SonarQube resource "{resource}" with name "{name}"'))
 async def when_write_gate(sonarqube_connector, resource, name):
     global _last_write_result
-    _last_write_result = await sonarqube_connector.write(
-        ConnectorPayload(resource=resource, data={"name": name})
-    )
+    _last_write_result = await sonarqube_connector.write(ConnectorPayload(resource=resource, data={"name": name}))
     return _last_write_result
 
 

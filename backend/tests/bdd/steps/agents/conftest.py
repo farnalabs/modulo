@@ -25,6 +25,7 @@ _USER_ID = uuid.UUID("00000000-0000-0000-0000-000000000002")
 
 def make_settings():
     from modulo.settings import Settings
+
     return Settings(
         database_url="postgresql+asyncpg://localhost/test",
         secret_key="a" * 32,

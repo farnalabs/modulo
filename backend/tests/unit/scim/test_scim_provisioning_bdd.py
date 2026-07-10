@@ -293,8 +293,11 @@ class TestJitProvisioning:
 
     def test_duplicate_username_returns_409(self, client: TestClient) -> None:
         from sqlalchemy.exc import IntegrityError
+
         with (
-            patch("modulo.api.routes.scim.scim_create_user", side_effect=IntegrityError("mock", {}, Exception("mock dup"))),
+            patch(
+                "modulo.api.routes.scim.scim_create_user", side_effect=IntegrityError("mock", {}, Exception("mock dup"))
+            ),
             patch("modulo.api.routes.scim.set_rls_org"),
         ):
             headers = {"Authorization": f"Bearer {_SCIM_TOKEN}"}
@@ -372,8 +375,12 @@ class TestCreateScimGroup:
 
     def test_duplicate_displayname_returns_409(self, client: TestClient) -> None:
         from sqlalchemy.exc import IntegrityError
+
         with (
-            patch("modulo.api.routes.scim.scim_create_group", side_effect=IntegrityError("mock", {}, Exception("mock dup"))),
+            patch(
+                "modulo.api.routes.scim.scim_create_group",
+                side_effect=IntegrityError("mock", {}, Exception("mock dup")),
+            ),
             patch("modulo.api.routes.scim.set_rls_org"),
         ):
             headers = {"Authorization": f"Bearer {_SCIM_TOKEN}"}

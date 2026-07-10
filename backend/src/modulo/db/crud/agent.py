@@ -212,11 +212,7 @@ async def rollback_prompt_version(
     if not target_template:
         return None
 
-    prev_version = (
-        agent.prompt_version_history[-1]["version"]
-        if agent.prompt_version_history
-        else "current"
-    )
+    prev_version = agent.prompt_version_history[-1]["version"] if agent.prompt_version_history else "current"
     notes = f"Rolled back from {prev_version} to {target_version}"
 
     history.append(

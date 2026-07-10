@@ -50,9 +50,7 @@ async def cleanup_retained_payloads(
         if not ids:
             break
 
-        await db_session.execute(
-            update(Run).where(Run.id.in_(ids)).values(input_payload=None, outputs_json=None)
-        )
+        await db_session.execute(update(Run).where(Run.id.in_(ids)).values(input_payload=None, outputs_json=None))
         await db_session.commit()
         total += len(ids)
 

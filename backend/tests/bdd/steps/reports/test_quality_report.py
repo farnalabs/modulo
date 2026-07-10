@@ -67,6 +67,7 @@ def _make_notification_endpoint(
     events: list[str] | None = None,
 ) -> MagicMock:
     import json
+
     ep = MagicMock()
     ep.url = url
     ep.events = json.dumps(events or ["quality_report"])

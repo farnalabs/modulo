@@ -355,9 +355,7 @@ def _run_detail_updated_statuses(page: Page) -> None:
     node = page.locator('[data-testid^="node-status-"]').first
     if node.is_visible():
         text = node.text_content().lower()
-        assert "complete" in text or "running" in text or "success" in text, (
-            f"Unexpected node status: '{text}'"
-        )
+        assert "complete" in text or "running" in text or "success" in text, f"Unexpected node status: '{text}'"
 
 
 @given("I am on the run detail page for a running run")
@@ -676,6 +674,4 @@ def _see_empty_state(page: Page) -> None:
     empty = page.locator('[data-testid="empty-state"]')
     if not empty.is_visible():
         placeholder = page.locator("text=no eval")
-        assert placeholder.count() > 0 or empty.count() > 0, (
-            "Expected empty state message when no evals exist"
-        )
+        assert placeholder.count() > 0 or empty.count() > 0, "Expected empty state message when no evals exist"

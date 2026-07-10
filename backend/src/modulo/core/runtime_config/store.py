@@ -61,12 +61,8 @@ _KEY_CONFIG: dict[str, _KeyConfig] = {
 }
 
 KNOWN_KEYS: list[str] = list(_KEY_CONFIG.keys())
-HOT_RELOADABLE_KEYS: frozenset[str] = frozenset(
-    k for k, v in _KEY_CONFIG.items() if v.hot_reloadable
-)
-DEFAULT_VALUES: dict[str, str] = {
-    k: v.default for k, v in _KEY_CONFIG.items() if v.default is not None
-}  # nosec B105 — empty-string placeholders, not hardcoded secrets
+HOT_RELOADABLE_KEYS: frozenset[str] = frozenset(k for k, v in _KEY_CONFIG.items() if v.hot_reloadable)
+DEFAULT_VALUES: dict[str, str] = {k: v.default for k, v in _KEY_CONFIG.items() if v.default is not None}  # nosec B105 — empty-string placeholders, not hardcoded secrets
 
 
 def _validate_key_registries() -> None:
@@ -75,14 +71,10 @@ def _validate_key_registries() -> None:
         _log.warning("HOT_RELOADABLE_KEYS contains keys not in KNOWN_KEYS: %s", orphans)
     missing_defaults = set(KNOWN_KEYS) - set(DEFAULT_VALUES) - _NO_DEFAULT_KEYS
     if missing_defaults:
-        _log.warning(
-            "KNOWN_KEYS has entries missing from DEFAULT_VALUES: %s", missing_defaults
-        )
+        _log.warning("KNOWN_KEYS has entries missing from DEFAULT_VALUES: %s", missing_defaults)
 
 
-_NO_DEFAULT_KEYS: frozenset[str] = frozenset(
-    k for k, v in _KEY_CONFIG.items() if v.default is None
-)
+_NO_DEFAULT_KEYS: frozenset[str] = frozenset(k for k, v in _KEY_CONFIG.items() if v.default is None)
 
 
 @dataclass

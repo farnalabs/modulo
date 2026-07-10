@@ -218,7 +218,9 @@ class TestSchemaMigrateExceptionGuard:
 
 class TestSchemaMigratePlanExceptionGuard:
     @patch("modulo.api.routes.schemas.create_migration", side_effect=ValueError("bad schema"))
-    def test_migration_plan_create_migration_exception_returns_500(self, mock_create: MagicMock, client: TestClient) -> None:
+    def test_migration_plan_create_migration_exception_returns_500(
+        self, mock_create: MagicMock, client: TestClient
+    ) -> None:
         resp = client.post(
             "/api/v1/schemas/migrate/plan",
             json={

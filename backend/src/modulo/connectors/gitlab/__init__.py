@@ -111,7 +111,9 @@ class GitLabConnector(ConnectorBase):
                         raise ValueError("GitLab API returned 304 Not Modified — resource unchanged")
                     if r.status_code in _RETRYABLE_STATUSES and attempt < _MAX_RETRIES:
                         retry_after = _parse_retry_after(r)
-                        delay = min(retry_after, _MAX_DELAY) if retry_after else min(_BASE_DELAY * (2 ** attempt), _MAX_DELAY)
+                        delay = (
+                            min(retry_after, _MAX_DELAY) if retry_after else min(_BASE_DELAY * (2**attempt), _MAX_DELAY)
+                        )
                         await asyncio.sleep(delay)
                         continue
                     r.raise_for_status()
@@ -120,28 +122,28 @@ class GitLabConnector(ConnectorBase):
                 last_exc = exc
                 if exc.response.status_code in _RETRYABLE_STATUSES and attempt < _MAX_RETRIES:
                     retry_after = _parse_retry_after(exc.response)
-                    delay = min(retry_after, _MAX_DELAY) if retry_after else min(_BASE_DELAY * (2 ** attempt), _MAX_DELAY)
+                    delay = min(retry_after, _MAX_DELAY) if retry_after else min(_BASE_DELAY * (2**attempt), _MAX_DELAY)
                     await asyncio.sleep(delay)
                     continue
                 raise ValueError(f"GitLab API HTTP {exc.response.status_code}: {exc.response.text[:200]}") from exc
             except httpx.TimeoutException as exc:
                 last_exc = exc
                 if attempt < _MAX_RETRIES:
-                    delay = min(_BASE_DELAY * (2 ** attempt), _MAX_DELAY)
+                    delay = min(_BASE_DELAY * (2**attempt), _MAX_DELAY)
                     await asyncio.sleep(delay)
                     continue
                 raise ValueError("GitLab API timeout") from exc
             except httpx.ConnectError as exc:
                 last_exc = exc
                 if attempt < _MAX_RETRIES:
-                    delay = min(_BASE_DELAY * (2 ** attempt), _MAX_DELAY)
+                    delay = min(_BASE_DELAY * (2**attempt), _MAX_DELAY)
                     await asyncio.sleep(delay)
                     continue
                 raise ValueError("GitLab API connection error") from exc
             except httpx.HTTPError as exc:
                 last_exc = exc
                 if attempt < _MAX_RETRIES:
-                    delay = min(_BASE_DELAY * (2 ** attempt), _MAX_DELAY)
+                    delay = min(_BASE_DELAY * (2**attempt), _MAX_DELAY)
                     await asyncio.sleep(delay)
                     continue
                 raise ValueError(f"GitLab API HTTP error: {exc}") from exc
@@ -184,7 +186,9 @@ class GitLabConnector(ConnectorBase):
                 if projects_r.status_code in (401, 403):
                     return HealthResult(ok=False, detail="Missing scopes: API access not granted")
                 if not projects_r.is_success:
-                    return HealthResult(ok=False, detail=f"Projects API returned HTTP {projects_r.status_code}: {projects_r.text[:200]}")
+                    return HealthResult(
+                        ok=False, detail=f"Projects API returned HTTP {projects_r.status_code}: {projects_r.text[:200]}"
+                    )
 
             return HealthResult(ok=True, detail=username)
         except httpx.RequestError as e:

@@ -59,12 +59,7 @@ async def list_node_categories(
         total = (await session.execute(select(func.count()).select_from(NodeCategory))).scalar_one()
     except ProgrammingError:
         return PageResult(items=[], total=0, page=page, page_size=page_size)
-    stmt = (
-        select(NodeCategory)
-        .order_by(NodeCategory.sort_order, NodeCategory.name)
-        .offset(offset)
-        .limit(page_size)
-    )
+    stmt = select(NodeCategory).order_by(NodeCategory.sort_order, NodeCategory.name).offset(offset).limit(page_size)
     items = list((await session.execute(stmt)).scalars())
     return PageResult(items=items, total=total, page=page, page_size=page_size)
 

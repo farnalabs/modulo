@@ -85,6 +85,7 @@ class TestLicenseModuleImport:
 
     def test_parse_and_verify_importable(self) -> None:
         from modulo.core.license import parse_and_verify
+
         assert callable(parse_and_verify)
 
 
@@ -94,9 +95,7 @@ class TestLicenseModuleImport:
 class TestTamperedSignature:
     """Prove signature tampering is detected."""
 
-    def test_tampered_signature_rejected(
-        self, valid_license_key: str, valid_payload: dict[str, Any]
-    ) -> None:
+    def test_tampered_signature_rejected(self, valid_license_key: str, valid_payload: dict[str, Any]) -> None:
         sig_b64 = valid_license_key.split(".")[1]
         tampered = list(base64.urlsafe_b64decode(sig_b64 + "=="))
         tampered[0] ^= 0xFF
@@ -127,9 +126,7 @@ class TestTamperedSignature:
 class TestExpiredKey:
     """Prove expired license keys are rejected."""
 
-    def test_expired_key_rejected(
-        self, authority_keys: dict[str, str], valid_payload: dict[str, Any]
-    ) -> None:
+    def test_expired_key_rejected(self, authority_keys: dict[str, str], valid_payload: dict[str, Any]) -> None:
         past = (datetime.now(UTC) - timedelta(days=1)).isoformat()
         payload = {**valid_payload, "expires_at": past}
         payload_bytes = json.dumps(payload, separators=(",", ":"), sort_keys=True).encode()
@@ -220,9 +217,7 @@ class TestWrongOrg:
 class TestForgedPayload:
     """Prove a payload signed with a wrong key is rejected."""
 
-    def test_wrong_key_rejected(
-        self, valid_payload: dict[str, Any], wrong_keys: dict[str, str]
-    ) -> None:
+    def test_wrong_key_rejected(self, valid_payload: dict[str, Any], wrong_keys: dict[str, str]) -> None:
         payload_bytes = json.dumps(valid_payload, separators=(",", ":"), sort_keys=True).encode()
         payload_b64 = base64.urlsafe_b64encode(payload_bytes).rstrip(b"=").decode()
         sig = sign_primitive(valid_payload, wrong_keys["private_key"])
@@ -443,13 +438,12 @@ class TestLicenseKeyFuzz:
 class TestPublicKeyTampering:
     """Prove that changing the public key invalidates existing signatures."""
 
-    def test_alternate_public_key_rejects_canonical(
-        self, valid_license_key: str, wrong_keys: dict[str, str]
-    ) -> None:
+    def test_alternate_public_key_rejects_canonical(self, valid_license_key: str, wrong_keys: dict[str, str]) -> None:
         set_public_key(wrong_keys["public_key"])
         try:
             result = parse_and_verify(valid_license_key)
             assert result.valid is False
         finally:
             from modulo.core.license import _LICENSE_PUBLIC_KEY_HEX
+
             set_public_key(_LICENSE_PUBLIC_KEY_HEX)

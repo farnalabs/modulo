@@ -274,20 +274,20 @@ async def get_step_data(
                     )
                     templates = templates_result.scalars().all()
                     data["templates"] = [
-                    {
-                        "id": str(t.id),
-                        "name": t.name,
-                        "description": t.description,
-                        "category": t.category,
-                        "tags": t.tags or [],
-                    }
-                    for t in templates
-                ]
+                        {
+                            "id": str(t.id),
+                            "name": t.name,
+                            "description": t.description,
+                            "category": t.category,
+                            "tags": t.tags or [],
+                        }
+                        for t in templates
+                    ]
             except IntegrityError:
-                        raise HTTPException(
-                                    status_code=status.HTTP_409_CONFLICT,
-                                    detail="A resource with this value already exists",
-                        )
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail="A resource with this value already exists",
+                )
             except ProgrammingError:
                 raise HTTPException(
                     status_code=status.HTTP_501_NOT_IMPLEMENTED,
@@ -365,30 +365,34 @@ async def create_starter_pipeline(
             prev_id = None
             for label, x, y in node_defs:
                 node_id = uuid.uuid4()
-                nodes.append({
-                    "id": str(node_id),
-                    "node_type": "manual",
-                    "position": {"x": x, "y": y},
-                    "label": label,
-                    "output_schema_id": str(schema_id),
-                    "agent_id": None,
-                    "connector_binding": None,
-                    "role": None,
-                    "autonomy_recommendation": None,
-                    "composite_ref": None,
-                    "composite_parameter_values": None,
-                    "composite_input_mapping": None,
-                    "composite_output_mapping": None,
-                })
+                nodes.append(
+                    {
+                        "id": str(node_id),
+                        "node_type": "manual",
+                        "position": {"x": x, "y": y},
+                        "label": label,
+                        "output_schema_id": str(schema_id),
+                        "agent_id": None,
+                        "connector_binding": None,
+                        "role": None,
+                        "autonomy_recommendation": None,
+                        "composite_ref": None,
+                        "composite_parameter_values": None,
+                        "composite_input_mapping": None,
+                        "composite_output_mapping": None,
+                    }
+                )
                 if prev_id is not None:
-                    edges.append({
-                        "id": str(uuid.uuid4()),
-                        "source_node_id": str(prev_id),
-                        "target_node_id": str(node_id),
-                        "edge_type": "normal",
-                        "condition_expression": None,
-                        "hitl_gate_config": None,
-                    })
+                    edges.append(
+                        {
+                            "id": str(uuid.uuid4()),
+                            "source_node_id": str(prev_id),
+                            "target_node_id": str(node_id),
+                            "edge_type": "normal",
+                            "condition_expression": None,
+                            "hitl_gate_config": None,
+                        }
+                    )
                 prev_id = node_id
 
             await replace_pipeline_graph(

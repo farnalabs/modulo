@@ -204,25 +204,32 @@ async def append_audit_event(
         except IntegrityError:
             _log.warning(
                 "append_audit_event: IntegrityError on attempt %d/%d for org=%s event_type=%s",
-                attempt + 1, APPEND_MAX_RETRIES, org_id, event_type,
+                attempt + 1,
+                APPEND_MAX_RETRIES,
+                org_id,
+                event_type,
             )
             if attempt == APPEND_MAX_RETRIES - 1:
                 _log.error(
                     "append_audit_event: exhausted %d retries for org=%s event_type=%s",
-                    APPEND_MAX_RETRIES, org_id, event_type,
+                    APPEND_MAX_RETRIES,
+                    org_id,
+                    event_type,
                 )
                 raise
             await asyncio.sleep(RETRY_BASE_DELAY_S * (attempt + 1))
         except ProgrammingError:
             _log.error(
                 "append_audit_event: ProgrammingError (missing table) for org=%s event_type=%s",
-                org_id, event_type,
+                org_id,
+                event_type,
             )
             raise
         except SQLAlchemyError:
             _log.exception(
                 "append_audit_event: SQLAlchemyError for org=%s event_type=%s",
-                org_id, event_type,
+                org_id,
+                event_type,
             )
             raise
     raise RuntimeError("append_audit_event: unexpected fallthrough")
@@ -234,9 +241,7 @@ async def _get_chain_head_locked(session: AsyncSession, org_id: uuid.UUID) -> Au
     Prevents concurrent appends from reading the same head and creating a fork.
     """
     result = await session.execute(
-        select(AuditChainHead)
-        .where(AuditChainHead.organisation_id == org_id)
-        .with_for_update()
+        select(AuditChainHead).where(AuditChainHead.organisation_id == org_id).with_for_update()
     )
     return result.scalar_one_or_none()
 
@@ -283,9 +288,7 @@ async def verify_chain(
       - chain_head_match: bool | None
       - chain_count_mismatch: bool | None
     """
-    count_result = await session.execute(
-        select(func.count(AuditEvent.id)).where(AuditEvent.organisation_id == org_id)
-    )
+    count_result = await session.execute(select(func.count(AuditEvent.id)).where(AuditEvent.organisation_id == org_id))
     total_events = count_result.scalar() or 0
 
     result = await session.execute(
@@ -394,7 +397,8 @@ async def export_chain(
     safe_page_size = max(1, min(page_size, EXPORT_MAX_PAGE_SIZE))
 
     query = _apply_filters(
-        select(AuditEvent), org_id,
+        select(AuditEvent),
+        org_id,
         event_type=event_type,
         actor_user_id=actor_user_id,
         resource_type=resource_type,
@@ -408,7 +412,8 @@ async def export_chain(
     events = list(result.scalars())
 
     count_query = _apply_filters(
-        select(func.count(AuditEvent.id)), org_id,
+        select(func.count(AuditEvent.id)),
+        org_id,
         event_type=event_type,
         actor_user_id=actor_user_id,
         resource_type=resource_type,
@@ -453,7 +458,8 @@ async def list_audit_events(
     resolved_limit = max(LIST_MIN_LIMIT, min(limit, LIST_MAX_LIMIT))
 
     query = _apply_filters(
-        select(AuditEvent), org_id,
+        select(AuditEvent),
+        org_id,
         event_type=event_type,
         actor_user_id=actor_user_id,
         resource_type=resource_type,

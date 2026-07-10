@@ -116,21 +116,16 @@ async def _load_and_scan(settings: Settings) -> tuple[list[ScanSample], list[Fin
 
     async for session in _get_session():
         try:
-
             async with session.begin():
                 await set_rls_org(session, _PLACEHOLDER_ORG_ID)
                 instances = await list_connector_instances(session, page_size=100)
 
         except ProgrammingError:
-
             logger.exception("routes.determination")
 
             raise HTTPException(
-
                 status_code=status.HTTP_501_NOT_IMPLEMENTED,
-
                 detail="This feature is not available. Run database migrations to enable it.",
-
             )
 
     relevant: list[ConnectorInstance] = [
@@ -161,21 +156,16 @@ async def run_determination(
     """Scan all connected tools and produce an SDLC maturity assessment."""
     try:
         try:
-
             async with session.begin():
                 await set_rls_org(session, _PLACEHOLDER_ORG_ID)
                 instances = await list_connector_instances(session, page_size=100)
 
         except ProgrammingError:
-
             logger.exception("routes.determination")
 
             raise HTTPException(
-
                 status_code=status.HTTP_501_NOT_IMPLEMENTED,
-
                 detail="This feature is not available. Run database migrations to enable it.",
-
             )
 
         relevant: list[ConnectorInstance] = [
@@ -236,21 +226,16 @@ async def create_determination_draft(
     """
     try:
         try:
-
             async with session.begin():
                 await set_rls_org(session, _PLACEHOLDER_ORG_ID)
                 instances = await list_connector_instances(session, page_size=100)
 
         except ProgrammingError:
-
             logger.exception("routes.determination")
 
             raise HTTPException(
-
                 status_code=status.HTTP_501_NOT_IMPLEMENTED,
-
                 detail="This feature is not available. Run database migrations to enable it.",
-
             )
 
         relevant: list[ConnectorInstance] = [

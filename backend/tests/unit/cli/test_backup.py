@@ -768,10 +768,24 @@ class TestRestoreCheckpointsSync:
         mock_connect.return_value.__enter__.return_value = mock_conn
 
         checkpoints = [
-            {"organisation_id": None, "thread_id": "t1", "checkpoint_ns": "ns", "checkpoint_id": "cp1",
-             "parent_checkpoint_id": None, "checkpoint": None, "metadata": None},
-            {"organisation_id": None, "thread_id": "t2", "checkpoint_ns": "ns", "checkpoint_id": "cp2",
-             "parent_checkpoint_id": None, "checkpoint": None, "metadata": None},
+            {
+                "organisation_id": None,
+                "thread_id": "t1",
+                "checkpoint_ns": "ns",
+                "checkpoint_id": "cp1",
+                "parent_checkpoint_id": None,
+                "checkpoint": None,
+                "metadata": None,
+            },
+            {
+                "organisation_id": None,
+                "thread_id": "t2",
+                "checkpoint_ns": "ns",
+                "checkpoint_id": "cp2",
+                "parent_checkpoint_id": None,
+                "checkpoint": None,
+                "metadata": None,
+            },
         ]
 
         result = _restore_checkpoints_sync("postgresql://localhost/db", checkpoints)
@@ -1659,7 +1673,10 @@ class TestRestoreIntegrity:
         manifest = {
             "timestamp": "2024-01-01T00:00:00+00:00",
             "backup_type": "full",
-            "file_checksums": {"database.sql": _file_checksum(tmp_path / "database.sql"), "nonexistent.json": "...schecksum..."},
+            "file_checksums": {
+                "database.sql": _file_checksum(tmp_path / "database.sql"),
+                "nonexistent.json": "...schecksum...",
+            },
         }
         (tmp_path / "backup-info.json").write_text(json.dumps(manifest), encoding="utf-8")
         (tmp_path / "checkpoints.json").write_text("[]", encoding="utf-8")

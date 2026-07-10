@@ -123,13 +123,9 @@ class CursorPaginator:
             bound_cursor = literal(cursor_value)
             bound_id = literal(cursor_id)
             if sd == "desc":
-                stmt = stmt.where(
-                    sa_tuple(sort_col, id_col) < sa_tuple(bound_cursor, bound_id)
-                )
+                stmt = stmt.where(sa_tuple(sort_col, id_col) < sa_tuple(bound_cursor, bound_id))
             else:
-                stmt = stmt.where(
-                    sa_tuple(sort_col, id_col) > sa_tuple(bound_cursor, bound_id)
-                )
+                stmt = stmt.where(sa_tuple(sort_col, id_col) > sa_tuple(bound_cursor, bound_id))
 
         order_col = sort_col.desc() if sd == "desc" else sort_col.asc()
         id_order = id_col.desc() if sd == "desc" else id_col.asc()

@@ -83,9 +83,7 @@ async def list_forwarders(
             await set_rls_org(session, org_id)
 
             result = await session.execute(
-                select(ErrorForwarderConfig).where(
-                    ErrorForwarderConfig.organisation_id == org_id
-                )
+                select(ErrorForwarderConfig).where(ErrorForwarderConfig.organisation_id == org_id)
             )
             existing = {r.forwarder_type: r for r in result.scalars().all()}
     except ProgrammingError:
@@ -109,14 +107,16 @@ async def list_forwarders(
     items: list[ForwarderListItem] = []
     for ftype in _FORWARDER_TYPES:
         cfg = existing.get(ftype)
-        items.append(ForwarderListItem(
-            forwarder_type=ftype,
-            display_name=_FORWARDER_DISPLAY_NAMES[ftype],
-            enabled=cfg.enabled if cfg else False,
-            configured=_is_configured(ftype, cfg.config_json if cfg else None),
-            last_test_at=cfg.last_test_at if cfg else None,
-            last_test_ok=cfg.last_test_ok if cfg else None,
-        ))
+        items.append(
+            ForwarderListItem(
+                forwarder_type=ftype,
+                display_name=_FORWARDER_DISPLAY_NAMES[ftype],
+                enabled=cfg.enabled if cfg else False,
+                configured=_is_configured(ftype, cfg.config_json if cfg else None),
+                last_test_at=cfg.last_test_at if cfg else None,
+                last_test_ok=cfg.last_test_ok if cfg else None,
+            )
+        )
 
     return ForwarderListResponse(forwarders=items)
 

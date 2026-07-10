@@ -156,9 +156,7 @@ async def _dispatch_email(
         account_ids = [m.account_id for m in memberships]
 
         async with factory() as session:
-            result = await session.execute(
-                select(Account).where(Account.id.in_(account_ids), Account.active.is_(True))
-            )
+            result = await session.execute(select(Account).where(Account.id.in_(account_ids), Account.active.is_(True)))
             admin_accounts = list(result.scalars().all())
 
         if not admin_accounts:
@@ -178,7 +176,7 @@ async def _dispatch_email(
             f"<p><strong>Count:</strong> {alert.count}</p>"
             f"<p><strong>Fingerprint:</strong> {alert.fingerprint}</p>"
             f"<p><strong>Environment:</strong> {_escape_html(alert.environment or 'N/A')}</p>"
-            f"<p><a href=\"{_escape_html(admin_url)}\">View in Modulo</a></p>"
+            f'<p><a href="{_escape_html(admin_url)}">View in Modulo</a></p>'
             "</body></html>"
         )
 
@@ -287,4 +285,3 @@ def _escape_html(text: str) -> str:
 
 def _build_summary(alert: TriggeredAlert, sample_message: str) -> str:
     return f"[{alert.level}] {alert.rule_name}: {sample_message[:200]} (count={alert.count})"
-

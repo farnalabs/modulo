@@ -112,7 +112,6 @@ def get_viewmodel_with_view_as_team(
     from modulo.api.dependencies import _get_engine, get_db_session
     from modulo.api.main import app
 
-
     mock_session = make_mock_session()
 
     async def override_session():
@@ -206,9 +205,7 @@ def check_response_team_scoped(team_name: str, request) -> None:
     body = request.node._resp.json()
     pipelines = body.get("pipelines", [])
     for p in pipelines:
-        assert p.get("owner_team_id") is not None, (
-            f"Pipeline {p['name']} is not team-scoped (owner_team_id is null)"
-        )
+        assert p.get("owner_team_id") is not None, f"Pipeline {p['name']} is not team-scoped (owner_team_id is null)"
 
 
 @then(parsers.parse('the response contains pipeline "{name}"'))

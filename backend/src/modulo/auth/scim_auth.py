@@ -23,6 +23,7 @@ _scim_bearer = HTTPBearer(auto_error=False)
 async def _get_db_session() -> AsyncGenerator[AsyncSession, None]:
     """Lazily import get_db_session to avoid circular imports."""
     from modulo.api.dependencies import get_db_session
+
     async for session in get_db_session():
         yield session
 

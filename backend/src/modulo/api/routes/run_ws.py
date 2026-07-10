@@ -69,6 +69,7 @@ async def run_websocket(
 
             redis = Redis.from_url(settings.redis_url, decode_responses=False)
             from modulo.auth.ws_token import WsTokenExpired as _WsTokenExpired
+
             try:
                 payload = await consume_ws_token(redis, token)
                 principal = AuthenticatedPrincipal(

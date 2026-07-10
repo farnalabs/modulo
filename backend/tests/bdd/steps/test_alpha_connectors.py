@@ -211,11 +211,7 @@ def connector_create_label(name: str, color: str, request):
     pass
 
 
-@when(
-    parsers.parse(
-        'the connector creates a milestone "{title}" with description "{desc}"'
-    )
-)
+@when(parsers.parse('the connector creates a milestone "{title}" with description "{desc}"'))
 def connector_create_milestone(title: str, desc: str, request):
     pass
 

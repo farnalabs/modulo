@@ -51,6 +51,7 @@ def _safe_float(value: object, default: float = 0.0) -> float:
     except (TypeError, ValueError):
         return default
 
+
 _ACTIVE_RUN_STATUSES = frozenset({"pending", "running", "awaiting_human", "claimed", "waiting_for_lock"})
 _TRACKED_STATUSES = ("running", "awaiting_human", "failed", "idle")
 
@@ -257,15 +258,19 @@ async def dashboard_summary(
                 team_entry["passed_evals"] += passed
                 team_entry["pass_rate"] = (
                     round(team_entry["passed_evals"] / team_entry["total_evals"] * 100, 1)
-                    if team_entry["total_evals"] > 0 else 0.0
+                    if team_entry["total_evals"] > 0
+                    else 0.0
                 )
                 # Derive per-pipeline aggregates
-                pipe_entry = per_pipeline.setdefault(pipeline_id, {"total_evals": 0, "passed_evals": 0, "pass_rate": 0.0})
+                pipe_entry = per_pipeline.setdefault(
+                    pipeline_id, {"total_evals": 0, "passed_evals": 0, "pass_rate": 0.0}
+                )
                 pipe_entry["total_evals"] += total
                 pipe_entry["passed_evals"] += passed
                 pipe_entry["pass_rate"] = (
                     round(pipe_entry["passed_evals"] / pipe_entry["total_evals"] * 100, 1)
-                    if pipe_entry["total_evals"] > 0 else 0.0
+                    if pipe_entry["total_evals"] > 0
+                    else 0.0
                 )
 
             eval_pass_rate: dict[str, Any] | None = None
@@ -371,7 +376,9 @@ async def dashboard_summary(
 
             try:
                 mb_with_creds_result = await session.execute(
-                    select(func.count()).select_from(ModelBackend).where(
+                    select(func.count())
+                    .select_from(ModelBackend)
+                    .where(
                         ModelBackend.organisation_id == org_id,
                         ModelBackend.credentials_ciphertext.is_not(None),
                     )
@@ -395,7 +402,9 @@ async def dashboard_summary(
                     remy_config = await RemyConfigService(session).get_config(org_id)
                     default_provider = remy_config.default_provider
                     default_provider_result = await session.execute(
-                        select(func.count()).select_from(ModelBackend).where(
+                        select(func.count())
+                        .select_from(ModelBackend)
+                        .where(
                             ModelBackend.organisation_id == org_id,
                             ModelBackend.provider == default_provider,
                             ModelBackend.credentials_ciphertext.is_not(None),
@@ -408,7 +417,7 @@ async def dashboard_summary(
                                 "type": "remy_provider_not_configured",
                                 "severity": "low",
                                 "message": f"Remy is configured to use {default_provider} but no API key is set for that provider. "
-                                           "Remy will auto-detect the first configured provider. Change the default in Remy Config.",
+                                "Remy will auto-detect the first configured provider. Change the default in Remy Config.",
                                 "action_label": f"Configure {default_provider}",
                                 "action_url": "/admin/model-backends",
                             }
@@ -602,7 +611,9 @@ async def dashboard_trends(
                     cast(FeedbackRecord.created_at, Date).label("feedback_date"),
                     func.count().label("feedback_count"),
                     func.sum(case((FeedbackRecord.feedback_status == "resolved", 1), else_=0)).label("resolved_count"),
-                    func.sum(case((FeedbackRecord.feedback_status == "correcting", 1), else_=0)).label("correcting_count"),
+                    func.sum(case((FeedbackRecord.feedback_status == "correcting", 1), else_=0)).label(
+                        "correcting_count"
+                    ),
                 )
                 .where(
                     FeedbackRecord.organisation_id == org_id,

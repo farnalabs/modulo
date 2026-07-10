@@ -120,7 +120,10 @@ async def detect_regressions(
         if recent_total == 0 or baseline_total == 0:
             _log.info(
                 "Skipping eval %s (%s) — insufficient data for regression check (recent=%s, baseline=%s)",
-                row.eval_id, row.eval_name, recent_total, baseline_total,
+                row.eval_id,
+                row.eval_name,
+                recent_total,
+                baseline_total,
             )
             continue
 

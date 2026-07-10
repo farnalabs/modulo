@@ -141,7 +141,11 @@ async def test_upsert_daily_run_count_with_team(
         await session.flush()
 
         team_row = await upsert_daily_run_count(
-            session, org_id=org, team_id=team.id, increment_count=2, increment_spend=Decimal(20),
+            session,
+            org_id=org,
+            team_id=team.id,
+            increment_count=2,
+            increment_spend=Decimal(20),
         )
         await session.flush()
 

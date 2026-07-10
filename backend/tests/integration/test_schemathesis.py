@@ -20,7 +20,9 @@ from hypothesis import HealthCheck, settings
 from modulo.api.main import app
 
 schema = schemathesis.openapi.from_asgi("/openapi.json", app)
-filtered = schema.include(method="GET", path_regex=r"^/api/v1/(pipelines|schemas|library|connectors|model-backends)(\?.*)?$")
+filtered = schema.include(
+    method="GET", path_regex=r"^/api/v1/(pipelines|schemas|library|connectors|model-backends)(\?.*)?$"
+)
 
 
 @filtered.parametrize()

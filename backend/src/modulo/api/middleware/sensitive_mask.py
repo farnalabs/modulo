@@ -29,16 +29,29 @@ _log = logging.getLogger(__name__)
 
 SENSITIVE_VALUE_MASK = "\u2022\u2022\u2022\u2022\u2022\u2022"
 
-_SENSITIVE_ENV_KEYS: frozenset[str] = frozenset({
-    "MODULO_USERS",
-    "DATABASE_URL",
-    "PYPI_TOKEN",
-})
+_SENSITIVE_ENV_KEYS: frozenset[str] = frozenset(
+    {
+        "MODULO_USERS",
+        "DATABASE_URL",
+        "PYPI_TOKEN",
+    }
+)
 
-_SENSITIVE_KEY_PATTERNS = frozenset({
-    "token", "secret", "api_key", "password", "passwd", "key", "credential",
-    "database_url", "encryption", "signing", "private",
-})
+_SENSITIVE_KEY_PATTERNS = frozenset(
+    {
+        "token",
+        "secret",
+        "api_key",
+        "password",
+        "passwd",
+        "key",
+        "credential",
+        "database_url",
+        "encryption",
+        "signing",
+        "private",
+    }
+)
 
 
 def is_sensitive_key(key: str) -> bool:
@@ -56,8 +69,7 @@ def mask_sensitive_value(value: str) -> str:
 
 def mask_config_json(config: dict[str, Any]) -> dict[str, Any]:
     return {
-        k: (mask_sensitive_value(v) if isinstance(v, str) and is_sensitive_key(k) else v)
-        for k, v in config.items()
+        k: (mask_sensitive_value(v) if isinstance(v, str) and is_sensitive_key(k) else v) for k, v in config.items()
     }
 
 
@@ -157,21 +169,16 @@ async def reveal_sensitive_value(
     _require_admin(principal)
 
     try:
-
         async with session.begin():
             await set_rls_org(session, principal.organisation_id)
             actual_value = await _fetch_value(body, session, principal)
 
     except ProgrammingError:
-
         logger.exception("middleware.sensitive_mask")
 
         raise HTTPException(
-
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-
             detail="This feature is not available. Run database migrations to enable it.",
-
         )
 
     token = str(uuid.uuid4())

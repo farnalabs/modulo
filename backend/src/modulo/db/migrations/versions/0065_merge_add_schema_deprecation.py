@@ -4,6 +4,7 @@ Revision ID: 0065_merge_add_schema_deprecation
 Revises: 0063_library_community_source, 0064_add_schema_deprecation
 Create Date: 2026-07-04
 """
+
 from collections.abc import Sequence
 
 revision: str = "0065_merge_add_schema_deprecation"

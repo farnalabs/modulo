@@ -62,7 +62,8 @@ def generate_keypair() -> tuple[str, str]:
 def _load_private_key(private_key_pem: str) -> Ed25519PrivateKey:
     """Load an Ed25519 private key from PEM string."""
     key = serialization.load_pem_private_key(
-        private_key_pem.encode(), password=None,
+        private_key_pem.encode(),
+        password=None,
     )
     if not isinstance(key, Ed25519PrivateKey):
         raise TypeError("Key is not an Ed25519 private key")

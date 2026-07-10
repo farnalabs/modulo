@@ -4,6 +4,7 @@ The Feedback System (§8.20) treats every human rejection as structured signal.
 This module manages the FeedbackRecord entity, status transitions, eval gap
 detection via EvalEngine.standalone_evaluate(), and correction run mechanics.
 """
+
 import asyncio
 import functools
 import json
@@ -25,15 +26,19 @@ from modulo.db.rls import set_rls_org
 
 logger = logging.getLogger(__name__)
 
-_VALID_FEEDBACK_HANDLER_TYPES = frozenset({
-    "human",
-    "ai_correction",
-    "ai_correction_with_human_review",
-})
-_AI_HANDLER_TYPES = frozenset({
-    "ai_correction",
-    "ai_correction_with_human_review",
-})
+_VALID_FEEDBACK_HANDLER_TYPES = frozenset(
+    {
+        "human",
+        "ai_correction",
+        "ai_correction_with_human_review",
+    }
+)
+_AI_HANDLER_TYPES = frozenset(
+    {
+        "ai_correction",
+        "ai_correction_with_human_review",
+    }
+)
 _FEEDBACK_CORRECTION_KEY = "_feedback_correction"
 _POST_CORRECTION_EVAL_NAME = "post_correction_eval"
 _DEFAULT_PAGE_SIZE = 20
@@ -58,6 +63,7 @@ class ConcurrentModificationError(FeedbackManagerError):
 
 class ValidationError(FeedbackManagerError):
     """Raised when input validation fails."""
+
 
 _VALID_STATUS_TRANSITIONS: dict[str, set[str]] = {
     "pending": {"routing", "correcting", "resolved", "dismissed"},
@@ -138,7 +144,9 @@ class FeedbackManager:
 
         logger.info(
             "Created FeedbackRecord %s (run=%s, handler=%s)",
-            record.id, run_id, feedback_handler_type,
+            record.id,
+            run_id,
+            feedback_handler_type,
         )
         return record
 
@@ -325,7 +333,8 @@ class FeedbackManager:
             except Exception:
                 logger.exception(
                     "EvalEngine.evaluate failed for FeedbackRecord %s on eval_def %s",
-                    record.id, eval_def,
+                    record.id,
+                    eval_def,
                 )
                 continue
             if not result.passed:
@@ -333,7 +342,8 @@ class FeedbackManager:
         if processed_count == 0:
             logger.warning(
                 "detect_eval_gap: all %d eval_defs in eval_suite were malformed for FeedbackRecord %s",
-                len(eval_suite), record.id,
+                len(eval_suite),
+                record.id,
             )
         record.eval_gap = True
         await self._session.flush()
@@ -377,9 +387,7 @@ class FeedbackManager:
 
         original_run = await get_run(self._session, record.run_id)
         if original_run is None:
-            raise FeedbackManagerError(
-                f"Original run {record.run_id} not found for FeedbackRecord {record_id}"
-            )
+            raise FeedbackManagerError(f"Original run {record.run_id} not found for FeedbackRecord {record_id}")
 
         feedback_correction: dict[str, Any] = {
             "rejection_reason": record.rejection_reason,
@@ -408,7 +416,9 @@ class FeedbackManager:
 
         logger.info(
             "Spawned correction run %s for FeedbackRecord %s (original run %s)",
-            new_run.id, record_id, record.run_id,
+            new_run.id,
+            record_id,
+            record.run_id,
         )
         return new_run.id
 
@@ -437,7 +447,8 @@ class FeedbackManager:
             )
         logger.warning(
             "Escalated FeedbackRecord %s: %s",
-            record_id, reason,
+            record_id,
+            reason,
         )
 
     @_rls
@@ -483,8 +494,7 @@ class FeedbackManager:
             raise FeedbackRecordNotFoundError(f"Correction run {record.correction_run_id} not found")
         if correction_run.status != "complete":
             raise InvalidTransitionError(
-                f"Correction run {record.correction_run_id} has status "
-                f"'{correction_run.status}', expected 'complete'"
+                f"Correction run {record.correction_run_id} has status '{correction_run.status}', expected 'complete'"
             )
 
         engine = eval_engine or EvalEngine()
@@ -513,7 +523,8 @@ class FeedbackManager:
         except Exception:
             logger.exception(
                 "standalone_evaluate failed for FeedbackRecord %s correction run %s",
-                record_id, record.correction_run_id,
+                record_id,
+                record.correction_run_id,
             )
             await self._escalate_record(
                 record_id,
@@ -555,7 +566,9 @@ class FeedbackManager:
             )
         logger.info(
             "Post-correction eval for FeedbackRecord %s: passed=%s, needs_human_review=%s",
-            record_id, result.passed, needs_human_review,
+            record_id,
+            result.passed,
+            needs_human_review,
         )
 
         await self._session.flush()

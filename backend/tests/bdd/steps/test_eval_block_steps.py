@@ -225,9 +225,7 @@ def executor_catches_error(ctx):
 
 @then('the error_code is "eval_blocked"')
 def error_code_is_eval_blocked(ctx):
-    assert ctx.get("error_code") == "eval_blocked", (
-        f"Expected eval_blocked, got {ctx.get('error_code')}"
-    )
+    assert ctx.get("error_code") == "eval_blocked", f"Expected eval_blocked, got {ctx.get('error_code')}"
 
 
 @then("a warning is logged")
@@ -248,23 +246,17 @@ def run_not_eval_failed(ctx):
 
 @then('the final status is "failed"')
 def final_status_failed(ctx):
-    assert ctx.get("final_status") == "failed", (
-        f"Expected failed, got {ctx.get('final_status')}"
-    )
+    assert ctx.get("final_status") == "failed", f"Expected failed, got {ctx.get('final_status')}"
 
 
 @then('the final status is "complete"')
 def final_status_complete(ctx):
-    assert ctx.get("final_status") == "complete", (
-        f"Expected complete, got {ctx.get('final_status')}"
-    )
+    assert ctx.get("final_status") == "complete", f"Expected complete, got {ctx.get('final_status')}"
 
 
 @then('the error_code is "eval_suite_blocked"')
 def error_code_suite_blocked(ctx):
-    assert ctx.get("error_code") == "eval_suite_blocked", (
-        f"Expected eval_suite_blocked, got {ctx.get('error_code')}"
-    )
+    assert ctx.get("error_code") == "eval_suite_blocked", f"Expected eval_suite_blocked, got {ctx.get('error_code')}"
 
 
 @then("no suite-level error is raised")
@@ -286,9 +278,7 @@ def event_type_eval_blocked(ctx):
 
 @then("the event includes the eval name and detail")
 def event_includes_name_and_detail(ctx):
-    assert ctx.get("eval_name") or ctx.get("eval_blocked_detail"), (
-        "Expected eval name and detail in audit event"
-    )
+    assert ctx.get("eval_name") or ctx.get("eval_blocked_detail"), "Expected eval name and detail in audit event"
 
 
 @then(
@@ -307,6 +297,4 @@ def remaining_not_evaluated(ctx):
     failed_one = ctx.get("eval_blocked_detail")
     for name, data in ctx.get("eval_defs", {}).items():
         if name != failed_one:
-            assert not data.get("evaluated"), (
-                f"Eval {name!r} was evaluated but should not have been"
-            )
+            assert not data.get("evaluated"), f"Eval {name!r} was evaluated but should not have been"

@@ -152,7 +152,8 @@ class ModelBackendHub:
                     if not isinstance(raw_fallback_ids, list | tuple):
                         logger.warning(
                             "Non-iterable fallback_backend_ids for backend %s: %r",
-                            mb.id, raw_fallback_ids,
+                            mb.id,
+                            raw_fallback_ids,
                         )
                         continue
                     parsed: list[uuid.UUID] = []
@@ -163,7 +164,9 @@ class ModelBackendHub:
                             except ValueError as exc:
                                 logger.warning(
                                     "Invalid fallback ID string %r for backend %s: %s",
-                                    fid, mb.id, exc,
+                                    fid,
+                                    mb.id,
+                                    exc,
                                 )
                                 continue
                         elif isinstance(fid, uuid.UUID):
@@ -171,7 +174,8 @@ class ModelBackendHub:
                         else:
                             logger.warning(
                                 "Unexpected fallback ID type %r for backend %s",
-                                type(fid).__name__, mb.id,
+                                type(fid).__name__,
+                                mb.id,
                             )
                             continue
                     if parsed:
@@ -349,11 +353,27 @@ _LOCAL_BACKENDS: dict[str, tuple[type[ModelBackendBase], str]] = {
     "vllm": (VllmBackend, "http://localhost:8000/v1"),
 }
 
-_API_KEY_REQUIRED_PROVIDERS: frozenset[str] = frozenset({
-    "ai21", "anthropic", "cohere", "azure_openai", "openai", "opencode", "openrouter",
-    "mistral", "togetherai", "deepseek", "gemini", "grok", "fireworks",
-    "groq", "perplexity", "qwen", "watsonx",
-})
+_API_KEY_REQUIRED_PROVIDERS: frozenset[str] = frozenset(
+    {
+        "ai21",
+        "anthropic",
+        "cohere",
+        "azure_openai",
+        "openai",
+        "opencode",
+        "openrouter",
+        "mistral",
+        "togetherai",
+        "deepseek",
+        "gemini",
+        "grok",
+        "fireworks",
+        "groq",
+        "perplexity",
+        "qwen",
+        "watsonx",
+    }
+)
 
 
 def _build_backend(
@@ -364,13 +384,9 @@ def _build_backend(
 ) -> ModelBackendBase:
     if provider == "bedrock":
         if "aws_access_key_id" not in creds:
-            raise ValueError(
-                "Missing 'aws_access_key_id' in credentials for provider 'bedrock'"
-            )
+            raise ValueError("Missing 'aws_access_key_id' in credentials for provider 'bedrock'")
         if "aws_secret_access_key" not in creds:
-            raise ValueError(
-                "Missing 'aws_secret_access_key' in credentials for provider 'bedrock'"
-            )
+            raise ValueError("Missing 'aws_secret_access_key' in credentials for provider 'bedrock'")
         return BedrockBackend(
             aws_access_key_id=creds["aws_access_key_id"],
             aws_secret_access_key=creds["aws_secret_access_key"],
@@ -420,9 +436,7 @@ def _build_backend(
 
     if provider == "watsonx":
         if "project_id" not in creds:
-            raise ValueError(
-                "Missing 'project_id' in credentials for provider 'watsonx'"
-            )
+            raise ValueError("Missing 'project_id' in credentials for provider 'watsonx'")
         return WatsonXBackend(
             api_key=creds["api_key"],
             model_id=model_id,
@@ -435,13 +449,9 @@ def _build_backend(
     if registry.has_model_backend(provider):
         api_key = creds.get("api_key")
         if not api_key:
-            raise ValueError(
-                f"Missing 'api_key' in credentials for provider {provider!r}"
-            )
+            raise ValueError(f"Missing 'api_key' in credentials for provider {provider!r}")
         try:
             return registry.build_model_backend(provider, model_id, api_key, **default_params)
         except Exception as exc:
-            raise ValueError(
-                f"Failed to build plugin model backend for provider {provider!r}: {exc}"
-            ) from exc
+            raise ValueError(f"Failed to build plugin model backend for provider {provider!r}: {exc}") from exc
     raise ValueError(f"Unknown model backend provider: {provider!r}")

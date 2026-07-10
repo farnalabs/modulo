@@ -590,17 +590,22 @@ _MODULO_PRIMITIVES: list[LibraryPrimitive] = [
         description="Binary approval gate. Output starts with APPROVED or REJECTED. Self-corrects on failure.",
         content_json={
             "parameter_ports": [
-                {"name": "system_prompt", "label": "System Prompt", "type": "string", "required": True,
-                 "description": "Instructions for what to approve/reject",
-                 "default_value": (
-                     "You are an approver. Respond with APPROVED or REJECTED"
-                     " as the first word, followed by your reasoning."
-                 ),
-                 "target_injection": {
-                     "mode": "prompt_replace",
-                     "node_id": "decision-agent",
-                     "injection_point": "prompt_template",
-                 }},
+                {
+                    "name": "system_prompt",
+                    "label": "System Prompt",
+                    "type": "string",
+                    "required": True,
+                    "description": "Instructions for what to approve/reject",
+                    "default_value": (
+                        "You are an approver. Respond with APPROVED or REJECTED"
+                        " as the first word, followed by your reasoning."
+                    ),
+                    "target_injection": {
+                        "mode": "prompt_replace",
+                        "node_id": "decision-agent",
+                        "injection_point": "prompt_template",
+                    },
+                },
             ],
             "sub_pipeline_graph_json": {
                 "nodes": [{"id": "decision-agent", "node_type": "agent", "label": "Decision Agent"}],
@@ -616,12 +621,14 @@ _MODULO_PRIMITIVES: list[LibraryPrimitive] = [
                 "required": ["result"],
             },
             "output_validation": {
-                "eval_definitions": [{
-                    "name": "first_word_approved_rejected",
-                    "type": "regex",
-                    "config": {"pattern": "^(APPROVED|REJECTED)\\b", "field": "result"},
-                    "failure_behaviour": "retry",
-                }],
+                "eval_definitions": [
+                    {
+                        "name": "first_word_approved_rejected",
+                        "type": "regex",
+                        "config": {"pattern": "^(APPROVED|REJECTED)\\b", "field": "result"},
+                        "failure_behaviour": "retry",
+                    }
+                ],
                 "max_validation_retries": 2,
             },
         },
@@ -635,17 +642,22 @@ _MODULO_PRIMITIVES: list[LibraryPrimitive] = [
         description="Forces TRUE or FALSE decision. First word is forced. Useful for conditional routing.",
         content_json={
             "parameter_ports": [
-                {"name": "system_prompt", "label": "System Prompt", "type": "string", "required": True,
-                 "description": "Instructions for what to evaluate as true or false",
-                 "default_value": (
-                     "You are a boolean evaluator. Respond with TRUE"
-                     " or FALSE as the first word, followed by your reasoning."
-                 ),
-                 "target_injection": {
-                     "mode": "prompt_replace",
-                     "node_id": "decision-agent",
-                     "injection_point": "prompt_template",
-                 }},
+                {
+                    "name": "system_prompt",
+                    "label": "System Prompt",
+                    "type": "string",
+                    "required": True,
+                    "description": "Instructions for what to evaluate as true or false",
+                    "default_value": (
+                        "You are a boolean evaluator. Respond with TRUE"
+                        " or FALSE as the first word, followed by your reasoning."
+                    ),
+                    "target_injection": {
+                        "mode": "prompt_replace",
+                        "node_id": "decision-agent",
+                        "injection_point": "prompt_template",
+                    },
+                },
             ],
             "sub_pipeline_graph_json": {
                 "nodes": [{"id": "decision-agent", "node_type": "agent", "label": "Decision Agent"}],
@@ -661,12 +673,14 @@ _MODULO_PRIMITIVES: list[LibraryPrimitive] = [
                 "required": ["result"],
             },
             "output_validation": {
-                "eval_definitions": [{
-                    "name": "first_word_true_false",
-                    "type": "regex",
-                    "config": {"pattern": "^(TRUE|FALSE)\\b", "field": "result"},
-                    "failure_behaviour": "retry",
-                }],
+                "eval_definitions": [
+                    {
+                        "name": "first_word_true_false",
+                        "type": "regex",
+                        "config": {"pattern": "^(TRUE|FALSE)\\b", "field": "result"},
+                        "failure_behaviour": "retry",
+                    }
+                ],
                 "max_validation_retries": 2,
             },
         },
@@ -683,46 +697,65 @@ _MODULO_PRIMITIVES: list[LibraryPrimitive] = [
         ),
         content_json={
             "parameter_ports": [
-                {"name": "position", "label": "Position to Challenge", "type": "string", "required": True,
-                 "description": "The plan, argument, or decision to scrutinise",
-                 "default_value": "We should migrate our monolith to microservices.",
-                 "target_injection": {
-                     "mode": "prompt_replace",
-                     "node_id": "advocate-for",
-                     "injection_point": "prompt_template",
-                 }},
-                {"name": "advocate_prompt", "label": "Advocate Instructions", "type": "string", "required": False,
-                 "description": "Prompt shaping how the pro side argues",
-                 "default_value": (
-                     "You are an advocate. Argue strongly in favour of this position:"
-                     " {{parameter.position}}"
-                 ),
-                 "target_injection": {
-                     "mode": "prompt_replace",
-                     "node_id": "advocate-for",
-                     "injection_point": "prompt_template",
-                 }},
-                {"name": "critic_prompt", "label": "Critic Instructions", "type": "string", "required": False,
-                 "description": "Prompt shaping how the con side argues",
-                 "default_value": "You are a critic. Argue strongly against this position: {{parameter.position}}",
-                 "target_injection": {
-                     "mode": "prompt_replace",
-                     "node_id": "advocate-against",
-                     "injection_point": "prompt_template",
-                 }},
-                {"name": "mediator_prompt", "label": "Mediator Instructions", "type": "string", "required": False,
-                 "description": "Prompt shaping how the mediator synthesises",
-                 "default_value": (
-                     "You are a mediator. Below are two arguments about: {{parameter.position}}"
-                     "\n\n--- PRO ---\n{{nodes.advocate-for.output}}"
-                     "\n\n--- CON ---\n{{nodes.advocate-against.output}}"
-                     "\n\nSynthesise both sides into balanced, actionable advice."
-                 ),
-                 "target_injection": {
-                     "mode": "prompt_replace",
-                     "node_id": "mediator",
-                     "injection_point": "prompt_template",
-                 }},
+                {
+                    "name": "position",
+                    "label": "Position to Challenge",
+                    "type": "string",
+                    "required": True,
+                    "description": "The plan, argument, or decision to scrutinise",
+                    "default_value": "We should migrate our monolith to microservices.",
+                    "target_injection": {
+                        "mode": "prompt_replace",
+                        "node_id": "advocate-for",
+                        "injection_point": "prompt_template",
+                    },
+                },
+                {
+                    "name": "advocate_prompt",
+                    "label": "Advocate Instructions",
+                    "type": "string",
+                    "required": False,
+                    "description": "Prompt shaping how the pro side argues",
+                    "default_value": (
+                        "You are an advocate. Argue strongly in favour of this position: {{parameter.position}}"
+                    ),
+                    "target_injection": {
+                        "mode": "prompt_replace",
+                        "node_id": "advocate-for",
+                        "injection_point": "prompt_template",
+                    },
+                },
+                {
+                    "name": "critic_prompt",
+                    "label": "Critic Instructions",
+                    "type": "string",
+                    "required": False,
+                    "description": "Prompt shaping how the con side argues",
+                    "default_value": "You are a critic. Argue strongly against this position: {{parameter.position}}",
+                    "target_injection": {
+                        "mode": "prompt_replace",
+                        "node_id": "advocate-against",
+                        "injection_point": "prompt_template",
+                    },
+                },
+                {
+                    "name": "mediator_prompt",
+                    "label": "Mediator Instructions",
+                    "type": "string",
+                    "required": False,
+                    "description": "Prompt shaping how the mediator synthesises",
+                    "default_value": (
+                        "You are a mediator. Below are two arguments about: {{parameter.position}}"
+                        "\n\n--- PRO ---\n{{nodes.advocate-for.output}}"
+                        "\n\n--- CON ---\n{{nodes.advocate-against.output}}"
+                        "\n\nSynthesise both sides into balanced, actionable advice."
+                    ),
+                    "target_injection": {
+                        "mode": "prompt_replace",
+                        "node_id": "mediator",
+                        "injection_point": "prompt_template",
+                    },
+                },
             ],
             "sub_pipeline_graph_json": {
                 "nodes": [
@@ -756,22 +789,27 @@ _MODULO_PRIMITIVES: list[LibraryPrimitive] = [
         description="Classifies into BUG, FEATURE, INFRA, DOCS. First word is forced to one of the four.",
         content_json={
             "parameter_ports": [
-                {"name": "system_prompt", "label": "System Prompt", "type": "string", "required": True,
-                 "description": "Instructions for the triage classification",
-                 "default_value": (
-                     "You are a triage classifier. Respond with one of"
-                     " BUG, FEATURE, INFRA, or DOCS as the first word,"
-                     " followed by your reasoning."
-                 ),
-                 "target_injection": {
-                     "mode": "prompt_replace",
-                     "node_id": "classifier-agent",
-                     "injection_point": "prompt_template",
-                 }},
+                {
+                    "name": "system_prompt",
+                    "label": "System Prompt",
+                    "type": "string",
+                    "required": True,
+                    "description": "Instructions for the triage classification",
+                    "default_value": (
+                        "You are a triage classifier. Respond with one of"
+                        " BUG, FEATURE, INFRA, or DOCS as the first word,"
+                        " followed by your reasoning."
+                    ),
+                    "target_injection": {
+                        "mode": "prompt_replace",
+                        "node_id": "classifier-agent",
+                        "injection_point": "prompt_template",
+                    },
+                },
             ],
             "sub_pipeline_graph_json": {
                 "nodes": [{"id": "classifier-agent", "node_type": "agent", "label": "Classifier Agent"}],
-                "edges": []
+                "edges": [],
             },
             "input_schema_id": None,
             "output_schema": {
@@ -783,12 +821,14 @@ _MODULO_PRIMITIVES: list[LibraryPrimitive] = [
                 "required": ["result"],
             },
             "output_validation": {
-                "eval_definitions": [{
-                    "name": "first_word_category",
-                    "type": "regex",
-                    "config": {"pattern": "^(BUG|FEATURE|INFRA|DOCS)\\b", "field": "result"},
-                    "failure_behaviour": "retry",
-                }],
+                "eval_definitions": [
+                    {
+                        "name": "first_word_category",
+                        "type": "regex",
+                        "config": {"pattern": "^(BUG|FEATURE|INFRA|DOCS)\\b", "field": "result"},
+                        "failure_behaviour": "retry",
+                    }
+                ],
                 "max_validation_retries": 2,
             },
         },
@@ -805,30 +845,45 @@ _MODULO_PRIMITIVES: list[LibraryPrimitive] = [
         ),
         content_json={
             "parameter_ports": [
-                {"name": "council_prompt", "label": "Council Prompt", "type": "string", "required": True,
-                 "description": "The prompt each council member responds to",
-                 "default_value": "Analyse the following and provide your best recommendation.",
-                 "target_injection": {
-                     "mode": "prompt_replace",
-                     "node_id": "member-1",
-                     "injection_point": "prompt_template",
-                 }},
-                {"name": "member_count", "label": "Number of Members", "type": "number", "required": True,
-                 "description": "How many LLM calls to run in parallel (1-5)",
-                 "default_value": 3,
-                 "target_injection": {"mode": "run_context_key", "key": "council_member_count"}},
-                {"name": "mediator_instructions", "label": "Mediator Instructions", "type": "string", "required": False,
-                 "description": "How the mediator should combine responses",
-                 "default_value": (
-                     "Below are {{council_member_count}} responses from different AI council"
-                     " members.\n\n{{nodes.council.output}}\n\nSynthesise them into a single"
-                     " coherent recommendation, noting areas of agreement and disagreement."
-                 ),
-                 "target_injection": {
-                     "mode": "prompt_replace",
-                     "node_id": "council-mediator",
-                     "injection_point": "prompt_template",
-                 }},
+                {
+                    "name": "council_prompt",
+                    "label": "Council Prompt",
+                    "type": "string",
+                    "required": True,
+                    "description": "The prompt each council member responds to",
+                    "default_value": "Analyse the following and provide your best recommendation.",
+                    "target_injection": {
+                        "mode": "prompt_replace",
+                        "node_id": "member-1",
+                        "injection_point": "prompt_template",
+                    },
+                },
+                {
+                    "name": "member_count",
+                    "label": "Number of Members",
+                    "type": "number",
+                    "required": True,
+                    "description": "How many LLM calls to run in parallel (1-5)",
+                    "default_value": 3,
+                    "target_injection": {"mode": "run_context_key", "key": "council_member_count"},
+                },
+                {
+                    "name": "mediator_instructions",
+                    "label": "Mediator Instructions",
+                    "type": "string",
+                    "required": False,
+                    "description": "How the mediator should combine responses",
+                    "default_value": (
+                        "Below are {{council_member_count}} responses from different AI council"
+                        " members.\n\n{{nodes.council.output}}\n\nSynthesise them into a single"
+                        " coherent recommendation, noting areas of agreement and disagreement."
+                    ),
+                    "target_injection": {
+                        "mode": "prompt_replace",
+                        "node_id": "council-mediator",
+                        "injection_point": "prompt_template",
+                    },
+                },
             ],
             "sub_pipeline_graph_json": {
                 "nodes": [
@@ -869,17 +924,22 @@ _MODULO_PRIMITIVES: list[LibraryPrimitive] = [
         ),
         content_json={
             "parameter_ports": [
-                {"name": "system_prompt", "label": "System Prompt", "type": "string", "required": True,
-                 "description": "Instructions describing how to structure the output",
-                 "default_value": (
-                     "Restructure the input text into the required JSON format."
-                     " Ensure all required fields are present and correctly typed."
-                 ),
-                 "target_injection": {
-                     "mode": "prompt_replace",
-                     "node_id": "structurer",
-                     "injection_point": "prompt_template",
-                 }},
+                {
+                    "name": "system_prompt",
+                    "label": "System Prompt",
+                    "type": "string",
+                    "required": True,
+                    "description": "Instructions describing how to structure the output",
+                    "default_value": (
+                        "Restructure the input text into the required JSON format."
+                        " Ensure all required fields are present and correctly typed."
+                    ),
+                    "target_injection": {
+                        "mode": "prompt_replace",
+                        "node_id": "structurer",
+                        "injection_point": "prompt_template",
+                    },
+                },
             ],
             "sub_pipeline_graph_json": {
                 "nodes": [{"id": "structurer", "node_type": "agent", "label": "Structurer"}],
@@ -895,21 +955,23 @@ _MODULO_PRIMITIVES: list[LibraryPrimitive] = [
                 "required": ["structured"],
             },
             "output_validation": {
-                "eval_definitions": [{
-                    "name": "valid_json_schema",
-                    "type": "json_schema",
-                    "config": {
-                        "schema": {
-                            "type": "object",
-                            "properties": {
-                                "structured": {"type": "object"},
-                                "original": {"type": "string"},
+                "eval_definitions": [
+                    {
+                        "name": "valid_json_schema",
+                        "type": "json_schema",
+                        "config": {
+                            "schema": {
+                                "type": "object",
+                                "properties": {
+                                    "structured": {"type": "object"},
+                                    "original": {"type": "string"},
+                                },
+                                "required": ["structured"],
                             },
-                            "required": ["structured"],
                         },
-                    },
-                    "failure_behaviour": "retry",
-                }],
+                        "failure_behaviour": "retry",
+                    }
+                ],
                 "max_validation_retries": 3,
             },
         },
@@ -926,18 +988,23 @@ _MODULO_PRIMITIVES: list[LibraryPrimitive] = [
         ),
         content_json={
             "parameter_ports": [
-                {"name": "system_prompt", "label": "System Prompt", "type": "string", "required": True,
-                 "description": "Instructions describing what to estimate complexity for",
-                 "default_value": (
-                     "Analyse the following work item and estimate its complexity."
-                     " Respond with exactly one of XS, S, M, L, or XL as the first word,"
-                     " followed by your reasoning."
-                 ),
-                 "target_injection": {
-                     "mode": "prompt_replace",
-                     "node_id": "estimator",
-                     "injection_point": "prompt_template",
-                 }},
+                {
+                    "name": "system_prompt",
+                    "label": "System Prompt",
+                    "type": "string",
+                    "required": True,
+                    "description": "Instructions describing what to estimate complexity for",
+                    "default_value": (
+                        "Analyse the following work item and estimate its complexity."
+                        " Respond with exactly one of XS, S, M, L, or XL as the first word,"
+                        " followed by your reasoning."
+                    ),
+                    "target_injection": {
+                        "mode": "prompt_replace",
+                        "node_id": "estimator",
+                        "injection_point": "prompt_template",
+                    },
+                },
             ],
             "sub_pipeline_graph_json": {
                 "nodes": [{"id": "estimator", "node_type": "agent", "label": "Estimator"}],
@@ -953,12 +1020,14 @@ _MODULO_PRIMITIVES: list[LibraryPrimitive] = [
                 "required": ["result"],
             },
             "output_validation": {
-                "eval_definitions": [{
-                    "name": "valid_complexity_size",
-                    "type": "regex",
-                    "config": {"pattern": "^(XS|S|M|L|XL)\\b", "field": "result"},
-                    "failure_behaviour": "retry",
-                }],
+                "eval_definitions": [
+                    {
+                        "name": "valid_complexity_size",
+                        "type": "regex",
+                        "config": {"pattern": "^(XS|S|M|L|XL)\\b", "field": "result"},
+                        "failure_behaviour": "retry",
+                    }
+                ],
                 "max_validation_retries": 2,
             },
         },
@@ -1066,7 +1135,10 @@ async def list_primitives(
             )
             if include_community and (source is None or source == "community"):
                 db_community = await _fetch_published_community_from_db(
-                    session, org_id, primitive_type=primitive_type, search=search,
+                    session,
+                    org_id,
+                    primitive_type=primitive_type,
+                    search=search,
                 )
     except ProgrammingError:
         _log.warning("list_primitives — DB not migrated for org %s", org_id)
@@ -1204,7 +1276,6 @@ async def copy_to_adapt(
         )
 
     try:
-
         async with session.begin():
             await set_rls_org(session, org_id)
             if created_by is not None:
@@ -1252,15 +1323,14 @@ async def copy_to_adapt(
                 auto_update=True,
             )
 
-
     # ---------------------------------------------------------------------------
     # Starter pipeline templates
 
     except ProgrammingError:
-
         logger.exception("core.library_service")
 
         raise
+
 
 _PR_TEMPLATE_AGENTS = [
     {
@@ -1652,9 +1722,7 @@ _MODULO_PRIMITIVES.extend(
 
 # Indexes for O(1) community lookup
 _MODULO_BY_ID: dict[uuid.UUID, LibraryPrimitive] = {p.id: p for p in _MODULO_PRIMITIVES}
-_MODULO_BY_SLUG: dict[tuple[str, str], LibraryPrimitive] = {
-    (p.primitive_type, p.slug): p for p in _MODULO_PRIMITIVES
-}
+_MODULO_BY_SLUG: dict[tuple[str, str], LibraryPrimitive] = {(p.primitive_type, p.slug): p for p in _MODULO_PRIMITIVES}
 
 # ---------------------------------------------------------------------------
 # Community database — opinionated, narrower example pipelines contributed
@@ -1770,6 +1838,7 @@ def _filter_community(
 ) -> list[LibraryPrimitive]:
     return _filter_primitives(_COMMUNITY_PRIMITIVES, primitive_type=primitive_type, search=search)
 
+
 async def _fetch_published_community_from_db(
     session: AsyncSession,
     org_id: uuid.UUID,
@@ -1841,7 +1910,6 @@ async def contribute_fixture(
     }
 
     try:
-
         async with session.begin():
             await set_rls_org(session, org_id)
             prim = await create_library_primitive(
@@ -1876,7 +1944,6 @@ async def contribute_fixture(
             if update is None:
                 raise ContributionNotFoundError(f"Contribution {prim.id} not found after creation")
     except ProgrammingError:
-
         logger.exception("core.library_service")
 
         raise
@@ -1904,7 +1971,6 @@ async def contribute_primitive(
     An admin can review and publish it to the community library.
     """
     try:
-
         async with session.begin():
             await set_rls_org(session, org_id)
             prim = await create_library_primitive(
@@ -1939,7 +2005,6 @@ async def contribute_primitive(
             if update is None:
                 raise ContributionNotFoundError(f"Contribution {prim.id} not found after creation")
     except ProgrammingError:
-
         logger.exception("core.library_service")
 
         raise
@@ -1960,7 +2025,6 @@ async def submit_contribution_for_review(
     Raises ContributionInvalidTransitionError if the primitive is not in draft status.
     """
     try:
-
         async with session.begin():
             await set_rls_org(session, org_id)
             prim = await get_library_primitive(session, primitive_id)
@@ -1982,7 +2046,6 @@ async def submit_contribution_for_review(
             if updated is None:
                 raise ContributionNotFoundError(f"Contribution {primitive_id} not found")
     except ProgrammingError:
-
         logger.exception("core.library_service")
 
         raise
@@ -2004,7 +2067,6 @@ async def publish_contribution(
     for all users. Accepts contributions in either 'draft' or 'review_queue' status.
     """
     try:
-
         async with session.begin():
             await set_rls_org(session, org_id)
             prim = await get_library_primitive(session, primitive_id)
@@ -2033,7 +2095,6 @@ async def publish_contribution(
 
         # Add to in-memory community cache so it appears in community listings immediately.
     except ProgrammingError:
-
         logger.exception("core.library_service")
 
         raise
@@ -2060,7 +2121,6 @@ async def list_contributions(
 ) -> PageResult[LibraryPrimitive]:
     """List fixture contributions scoped to the org."""
     try:
-
         async with session.begin():
             await set_rls_org(session, org_id)
             result = await list_library_primitives(
@@ -2070,7 +2130,6 @@ async def list_contributions(
                 primitive_type="test_fixture",
             )
     except ProgrammingError:
-
         logger.exception("core.library_service")
 
         raise
@@ -2091,7 +2150,6 @@ async def list_org_contributions(
 ) -> PageResult[LibraryPrimitive]:
     """List contributions submitted by the org, optionally filtered by status."""
     try:
-
         async with session.begin():
             await set_rls_org(session, org_id)
             result = await list_library_primitives(
@@ -2100,7 +2158,6 @@ async def list_org_contributions(
                 page_size=page_size,
             )
     except ProgrammingError:
-
         logger.exception("core.library_service")
 
         raise
@@ -2144,7 +2201,6 @@ async def submit_contribution_version(
     }
 
     try:
-
         async with session.begin():
             await set_rls_org(session, org_id)
             existing = await get_library_primitive(session, primitive_id)
@@ -2205,7 +2261,6 @@ async def submit_contribution_version(
             if update is None:
                 raise ContributionNotFoundError(f"Contribution version {prim.id} not found after creation")
     except ProgrammingError:
-
         logger.exception("core.library_service")
 
         raise
@@ -2220,7 +2275,6 @@ async def list_contribution_versions(
 ) -> list[LibraryPrimitive]:
     """Return all versions for a contribution primitive, newest first."""
     try:
-
         async with session.begin():
             await set_rls_org(session, org_id)
             prim = await get_library_primitive(session, primitive_id)
@@ -2237,7 +2291,6 @@ async def list_contribution_versions(
         # its own id) — it won't appear in the version-group query because it
         # may not yet have the version_group_id set if it predates the feature.
     except ProgrammingError:
-
         logger.exception("core.library_service")
 
         raise

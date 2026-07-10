@@ -5,6 +5,7 @@ Revises: 0079_add_opencode_provider
 Create Date: 2026-07-05 14:50:00.000000
 
 """
+
 from collections.abc import Sequence
 
 from alembic import op

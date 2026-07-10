@@ -4,6 +4,7 @@ Revision ID: 0078_merge_error_tracking
 Revises: 0077_merge_account_org_membership, 0075_error_tracking
 Create Date: 2026-07-04
 """
+
 from collections.abc import Sequence
 
 revision: str = "0078_merge_error_tracking"

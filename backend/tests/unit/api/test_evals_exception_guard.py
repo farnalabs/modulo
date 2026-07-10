@@ -3,6 +3,7 @@
 Tests that all route handlers return structured 500 on unexpected Python
 errors (e.g. TypeError, KeyError) and 409 on IntegrityError (FK violations).
 """
+
 import uuid
 from collections.abc import AsyncGenerator
 from unittest.mock import AsyncMock, MagicMock

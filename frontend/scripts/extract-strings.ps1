@@ -314,7 +314,7 @@ $byFile = @{}
 foreach ($kv in $unique.GetEnumerator()) {
   if ($seenInCommon.ContainsKey($kv.Key)) { continue }
   $firstFile = $kv.Value.file
-  
+
   # Determine category
   if ($firstFile -match '^views/(.+?)(/|$)') {
     $category = "views.views_$($Matches[1])"
@@ -327,13 +327,13 @@ foreach ($kv in $unique.GetEnumerator()) {
   # Remove 'index' suffix
   $category = $category -replace '\.index$', ''
   $category = $category -replace '^views\.views_', 'views.'
-  
+
   if (-not $byFile.ContainsKey($category)) { $byFile[$category] = @{} }
-  
+
   $text = $kv.Key
   $key = $text -replace '[^a-zA-Z0-9\s]', '' -replace '\s+', '_' -replace '_+', '_' -replace '^_|_$', ''
   $key = $key.Substring(0, [Math]::Min($key.Length, 60)).ToLower()
-  
+
   # Ensure uniqueness within category
   $counter = 1
   $origKey = $key

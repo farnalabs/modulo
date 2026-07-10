@@ -76,7 +76,11 @@ class AdvisoryLockService:
         logger.info("Acquired lock on resource %s", resource_id)
 
     async def try_acquire(
-        self, session: AsyncSession, resource_id: uuid.UUID, lock_timeout: float = _LOCK_TIMEOUT, interval: float = _POLL_INTERVAL
+        self,
+        session: AsyncSession,
+        resource_id: uuid.UUID,
+        lock_timeout: float = _LOCK_TIMEOUT,
+        interval: float = _POLL_INTERVAL,
     ) -> bool:
         """Acquire a lock with a polling loop and timeout.
 
@@ -142,7 +146,9 @@ class AdvisoryLockService:
             )
             released = result.scalar_one()
             if not released:
-                logger.warning("Lock on resource %s was not held by this session — possible double-release", resource_id)
+                logger.warning(
+                    "Lock on resource %s was not held by this session — possible double-release", resource_id
+                )
             else:
                 logger.info("Released lock on resource %s", resource_id)
         except (TimeoutError, SQLAlchemyError) as exc:
@@ -175,5 +181,5 @@ def _uuid_to_lock_keys(resource_id: uuid.UUID) -> tuple[int, int]:
         raise TypeError(f"Expected uuid.UUID, got {type(resource_id).__name__}")
     digest = hashlib.md5(str(resource_id).encode("ascii"), usedforsecurity=False).digest()
     key1 = int.from_bytes(digest[:_INT4_BYTES], "big", signed=True)
-    key2 = int.from_bytes(digest[_INT4_BYTES:_INT4_BYTES * 2], "big", signed=True)
+    key2 = int.from_bytes(digest[_INT4_BYTES : _INT4_BYTES * 2], "big", signed=True)
     return (key1, key2)

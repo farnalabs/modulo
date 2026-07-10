@@ -1,9 +1,9 @@
 # Modulo — Product Requirements Document
 
-**Version**: 0.32  
-**Date**: 2026-07-04  
-**Status**: Pre-development  
-**Changelog**:  
+**Version**: 0.32
+**Date**: 2026-07-04
+**Status**: Pre-development
+**Changelog**:
 - v0.32 — §8.29 Remy Context Sources: configurable knowledge domains with always-on/tool/off modes, per-skill source_mode, `source_contexts` field on RemyConfig, 4 new MCP retrieval tools (get_documentation, get_integration_status, get_org_config, get_available_features). §8.30 Remy Product Primer: auto-generated always-on product overview in system prompt, primer generator script reading PRD + product map + manifest + live counts. ADR 011.
 - v0.31 — §8.25.1 Frontend Monitor Backend Abstraction: plugable MonitorBackend interface (builtin/sentry/datadog-rum/grafana-faro), dual-layer config (build-time VITE_* + runtime MODULO_MONITOR_CONFIG), ErrorTracker refactor with MonitorBackendRegistry dispatch, CSP superset strategy, per-backend privacy data sheets, unauthenticated error ingest endpoint, i18n missing-key capture, 2 existing pipeline bugfixes. ADR 009.
 - v0.30 — §8.28 Core Shared Manifest: single YAML source of truth for routes, elements, sidebar, permissions, tiers, product map refs, i18n keys. Binary consumption (frontend Vite import + backend startup load). `get_manifest(path?)` Remy tool. 7-rule pre-commit + CI validator. ADR 008.
@@ -16,10 +16,10 @@
 - v0.23 — §8.21 View Modes (Enterprise): multiple named UI views with admin-defined feature visibility per view, assignment to users/teams/org roles, enforcement, self-lockout prevention guards; `view_modes` enterprise feature flag replaces previously planned `view_mode` + `view_mode_enforcement`
 - v0.22 — Enterprise tier clarified: no SLAs, no dedicated support, no bespoke services. Enterprise = self-serve feature gate only (SSO, RBAC, audit viewer, admin spend limits). Pricing page updated. BSL 1.1 LICENSE file created at repo root; `Dev-Harness/tools/release.ps1` release script created with placeholder steps for Docker Hub, GitHub release, etc.
 - v0.21 — shadcn-vue + Radix Vue added as component library foundation (replaces build-from-scratch UI primitives); tier badge spec (Free/Enterprise pill in sidebar nav footer; lock icon on gated features); `/settings/license` page spec; `planStore` added to Pinia stores; `GET /api/v1/license` endpoint; frontend tech stack table updated
-- v0.20 — Licensing and monetization model: BSL/Fair Source with 3-year Apache 2.0 auto-conversion; cryptographic offline license key replaces modulo-cloud plan injection for self-hosted; DefaultPlanContext now defaults to Free Tier (not permissive); enterprise feature gate defined (SSO, team RBAC, audit viewer, admin spend limits); modulo-cloud deferred to V3; billing changed from telemetry-metered to flat annual fee (token counting remains for internal cost controls only); MODULO_LICENSE_KEY env var added; audit event *recording* stays free, viewer/export is enterprise; open question on audit gate documented  
-- v0.2 — first reviewer critique; shareable workflows, user management, SSO  
+- v0.20 — Licensing and monetization model: BSL/Fair Source with 3-year Apache 2.0 auto-conversion; cryptographic offline license key replaces modulo-cloud plan injection for self-hosted; DefaultPlanContext now defaults to Free Tier (not permissive); enterprise feature gate defined (SSO, team RBAC, audit viewer, admin spend limits); modulo-cloud deferred to V3; billing changed from telemetry-metered to flat annual fee (token counting remains for internal cost controls only); MODULO_LICENSE_KEY env var added; audit event *recording* stays free, viewer/export is enterprise; open question on audit gate documented
+- v0.2 — first reviewer critique; shareable workflows, user management, SSO
 - v0.3 — security hardening, distribution strategy, community library, runner role, plugin API
-- v0.4 — SaaS-first multi-tenant architecture; 2 implementations per primitive; removed time estimates  
+- v0.4 — SaaS-first multi-tenant architecture; 2 implementations per primitive; removed time estimates
 - v0.5 — RLS `SET LOCAL` fix; API key format; registry Ed25519 signing; model backend management (new); connector_binding spec; webhook payload_mapping; TriggerEvent log; run concurrency controls; modulo-cloud boundary; org migration/deletion policy; prompt versioning; long-run retention; pre-run input validation; rating system spec
 - v0.6 — Remote MCP server as first-class MVVM view (replaces LLM driveability stretch goal with standards-based protocol)
 - v0.7 — OAuth 2.0 deferred to v1 (API key only in alpha MCP); review_hitl tool merged; human_only HITL flag; SSE conflation fixed; MCP onboarding page; accessibility spec; dual-layer scope enforcement; per-event SSE org validation; pipeline writes browser-only until v2
@@ -230,7 +230,7 @@ RLS context is set using `SET LOCAL app.organisation_id = :org_id` **inside a tr
 #### LangGraph Checkpoint Isolation
 LangGraph's `PostgresSaver` creates its own tables (`checkpoints`, `checkpoint_blobs`, `checkpoint_writes`) with no `organisation_id` column. RLS cannot be applied to these tables without schema modification. Thread ID prefixing (`org_id:thread_id`) is application-layer isolation only — insufficient for SaaS.
 
-**Alpha**: Acceptable. Alpha is single-org. Thread ID prefix is documented as partial isolation.  
+**Alpha**: Acceptable. Alpha is single-org. Thread ID prefix is documented as partial isolation.
 **V2 (before SaaS launch)**: Subclass `PostgresSaver` to add `organisation_id` to all checkpoint tables and enforce it on every read/write. This is required work before multi-tenant SaaS deployment. Documented as a known gap.
 
 #### modulo-cloud Service Layer
@@ -397,8 +397,8 @@ The ViewModel is consumed by three first-class view surfaces. All three share th
 
 The browser UI views are the **same Vue application and the same component tree**. Theme switching is CSS-only — no duplicate components, no separate routes, no alternative HTML structures.
 
-**ViewModel**: serialisable state and named commands — REST contract. Every user action is a named command.  
-**Event bus**: real-time push via WebSocket consuming LangGraph `astream_events()` — separate contract. MCP clients subscribe to run events via SSE (MCP's native streaming transport).  
+**ViewModel**: serialisable state and named commands — REST contract. Every user action is a named command.
+**Event bus**: real-time push via WebSocket consuming LangGraph `astream_events()` — separate contract. MCP clients subscribe to run events via SSE (MCP's native streaming transport).
 These must not be conflated. The ViewModel does not manage subscriptions.
 
 **WebSocket fan-out**: `astream_events()` is a single async generator per run. Multiple browser tabs or MCP clients watching the same run must not each trigger a separate `astream_events()` call (which would double-stream events and waste resources). Architecture: one `astream_events()` consumer per active run, managed by a per-run **event broker** (in-process pub/sub). WebSocket and SSE connections subscribe to the broker for their run. The broker fans events to all subscribers. In multi-process deployments (Gunicorn/uvicorn workers), the broker uses Redis pub/sub — Redis is required for production multi-worker deployments (alpha: single-process, in-memory broker acceptable with startup warning).
@@ -3308,8 +3308,8 @@ These are not required for the initial release but should follow shortly after.
 
 ### 8.24 Parameterizable Composite Nodes
 
-**Status**: Pre-development  
-**PRD ref**: §8.2 Agent Model, §8.4 Pipeline Builder, §8.14 Community Library  
+**Status**: Pre-development
+**PRD ref**: §8.2 Agent Model, §8.4 Pipeline Builder, §8.14 Community Library
 **RFC ref**: `docs/proposals/rfc-node-metacategories.md` (§2.5 Composite)
 
 #### Concept

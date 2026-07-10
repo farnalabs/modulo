@@ -509,8 +509,11 @@ def test_create_model_backend_exception_returns_500(client: TestClient) -> None:
         resp = client.post(
             "/api/v1/model-backends",
             json={
-                "name": "x", "display_name": "x", "provider": "openai",
-                "model_id": "gpt-4", "api_key": "sk-test",
+                "name": "x",
+                "display_name": "x",
+                "provider": "openai",
+                "model_id": "gpt-4",
+                "api_key": "sk-test",
             },
         )
     assert resp.status_code == 500

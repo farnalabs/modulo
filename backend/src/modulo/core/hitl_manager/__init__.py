@@ -540,13 +540,15 @@ class HITLManager:
         now = datetime.now(UTC)
         threshold = timedelta(minutes=threshold_minutes)
         result = await session.execute(
-            select(func.count()).where(
+            select(func.count())
+            .where(
                 HitlClaim.organisation_id == org_id,
                 HitlClaim.account_id.is_not(None),
                 HitlClaim.decision.is_(None),
                 HitlClaim.claimed_at.is_not(None),
                 HitlClaim.claimed_at < now - threshold,
-            ).select_from(HitlClaim)
+            )
+            .select_from(HitlClaim)
         )
         return result.scalar() or 0
 
@@ -681,5 +683,3 @@ class HITLManager:
         except Exception:
             _log.exception("Failed to log audit event for claim %s", gate.id)
             raise
-
-

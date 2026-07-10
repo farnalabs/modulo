@@ -157,10 +157,12 @@ _MUTATING_METHODS = frozenset({"post", "put", "patch", "delete"})
 # Known exceptions to the "every mutating route must emit an audit event" rule.
 # These are routes that mutate state but do not record audit events by design.
 # Any new route file added here must have a documented reason.
-_AUDIT_EXEMPT_FILES: frozenset[str] = frozenset({
-    "admin_runtime_config.py",  # Runtime config reload — no audit trail for config overrides
-    "viewmodel.py",             # Saved views — meta-level, not core domain events
-})
+_AUDIT_EXEMPT_FILES: frozenset[str] = frozenset(
+    {
+        "admin_runtime_config.py",  # Runtime config reload — no audit trail for config overrides
+        "viewmodel.py",  # Saved views — meta-level, not core domain events
+    }
+)
 
 
 class TestEveryMutatingRouteEmitsAuditEvent:
@@ -215,8 +217,14 @@ class TestMcpToolsAuditCoverage:
     def test_mcp_mutating_tools_exist(self) -> None:
         """Verify each MCP tool that changes state exists in the server."""
         source = self.mcp_server_path.read_text()
-        tools = ["create_pipeline", "update_pipeline_graph", "trigger_pipeline",
-                 "create_model_backend", "review_hitl", "copy_library_primitive"]
+        tools = [
+            "create_pipeline",
+            "update_pipeline_graph",
+            "trigger_pipeline",
+            "create_model_backend",
+            "review_hitl",
+            "copy_library_primitive",
+        ]
         for tool in tools:
             assert tool in source, f"MCP tool {tool} must exist in mcp_server.py"
 
@@ -229,9 +237,7 @@ class TestMcpToolsAuditCoverage:
 class TestAuditChainIntegrity:
     """Prove the audit chain is not corrupted by failed mutation attempts."""
 
-    async def test_chain_verify_passes_after_failed_mutation(
-        self, db_session: AsyncSession
-    ) -> None:
+    async def test_chain_verify_passes_after_failed_mutation(self, db_session: AsyncSession) -> None:
         """After a failed DELETE attempt, chain verification must still pass."""
         from modulo.core.audit_logger import append_audit_event, verify_chain
 
@@ -266,6 +272,4 @@ class TestAuditChainIntegrity:
         await db_session.rollback()
 
         result_after = await verify_chain(db_session, org_id)
-        assert result_after["valid"] is True, (
-            f"Chain invalid after failed mutation: {result_after}"
-        )
+        assert result_after["valid"] is True, f"Chain invalid after failed mutation: {result_after}"

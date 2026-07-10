@@ -406,9 +406,7 @@ async def create_library_primitive_endpoint(
         async with session.begin():
             await set_rls_org(session, principal.organisation_id)
             await set_rls_user_context(session, principal.account_id, principal.org_role)
-            existing = await get_primitive_by_slug(
-                session, principal.organisation_id, req.primitive_type, req.slug
-            )
+            existing = await get_primitive_by_slug(session, principal.organisation_id, req.primitive_type, req.slug)
             if existing is not None:
                 raise HTTPException(
                     status_code=status.HTTP_409_CONFLICT,
@@ -712,7 +710,9 @@ async def _analyse_bundle(
             seen_names: set[str] = set()
             for aname in agent_names_in_bundle:
                 if aname and aname in seen_names:
-                    warnings.append(f"Duplicate agent name '{aname}' found in bundle. Each agent must have a unique name.")
+                    warnings.append(
+                        f"Duplicate agent name '{aname}' found in bundle. Each agent must have a unique name."
+                    )
                 if aname:
                     seen_names.add(aname)
 
@@ -1181,7 +1181,9 @@ async def create_pipeline_from_template_endpoint(
         )
 
     name, description, graph_nodes, edges, agent_count, edge_count = _build_pipeline_from_template(
-        primitive, req.name, req.description,
+        primitive,
+        req.name,
+        req.description,
     )
 
     try:
@@ -1189,18 +1191,26 @@ async def create_pipeline_from_template_endpoint(
             await set_rls_org(session, principal.organisation_id)
             await set_rls_user_context(session, principal.account_id, principal.org_role)
             pipeline = await create_pipeline(
-                session, org_id=principal.organisation_id, name=name, account_id=principal.account_id,
+                session,
+                org_id=principal.organisation_id,
+                name=name,
+                account_id=principal.account_id,
                 description=description,
                 run_context_defaults={"library_source_id": str(primitive_id), "library_template_name": primitive.name},
             )
             pipeline.graph_nodes_json = graph_nodes
             for edge_data in edges:
-                session.add(PipelineEdge(
-                    id=uuid.uuid4(), organisation_id=principal.organisation_id, pipeline_id=pipeline.id,
-                    source_node_id=uuid.UUID(edge_data["source_node_id"]),
-                    target_node_id=uuid.UUID(edge_data["target_node_id"]),
-                    edge_type=edge_data["edge_type"], hitl_gate_config=edge_data.get("hitl_gate_config"),
-                ))
+                session.add(
+                    PipelineEdge(
+                        id=uuid.uuid4(),
+                        organisation_id=principal.organisation_id,
+                        pipeline_id=pipeline.id,
+                        source_node_id=uuid.UUID(edge_data["source_node_id"]),
+                        target_node_id=uuid.UUID(edge_data["target_node_id"]),
+                        edge_type=edge_data["edge_type"],
+                        hitl_gate_config=edge_data.get("hitl_gate_config"),
+                    )
+                )
             await session.flush()
     except IntegrityError:
         raise HTTPException(
@@ -1214,10 +1224,17 @@ async def create_pipeline_from_template_endpoint(
         ) from None
 
     return PipelineFromTemplateResponse(
-        id=pipeline.id, organisation_id=pipeline.organisation_id, name=pipeline.name,
-        description=pipeline.description, visibility=pipeline.visibility,
-        template_source_id=primitive_id, agent_count=agent_count, edge_count=edge_count,
-        ready_to_run=True, created_at=pipeline.created_at, updated_at=pipeline.updated_at,
+        id=pipeline.id,
+        organisation_id=pipeline.organisation_id,
+        name=pipeline.name,
+        description=pipeline.description,
+        visibility=pipeline.visibility,
+        template_source_id=primitive_id,
+        agent_count=agent_count,
+        edge_count=edge_count,
+        ready_to_run=True,
+        created_at=pipeline.created_at,
+        updated_at=pipeline.updated_at,
     )
 
 
@@ -1303,10 +1320,10 @@ async def list_community_contributions_endpoint(
                 page_size=page_size,
             )
         except IntegrityError:
-                raise HTTPException(
-                        status_code=status.HTTP_409_CONFLICT,
-                        detail="A resource with this value already exists",
-                )
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="A resource with this value already exists",
+            )
         except ProgrammingError:
             _log.warning("list_community_contributions_endpoint: ProgrammingError — missing DB table or migration")
             raise HTTPException(
@@ -1377,4 +1394,3 @@ async def admin_publish_contribution_endpoint(
             detail="The library feature is temporarily unavailable due to a database issue. Please retry.",
         ) from None
     return LibraryPrimitiveResponse.model_validate(result)
-

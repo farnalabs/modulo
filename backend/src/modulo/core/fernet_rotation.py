@@ -21,6 +21,7 @@ _log = logging.getLogger(__name__)
 @dataclass
 class RotationResult:
     """Result of a full rotation pass across all encrypted stores."""
+
     tables_processed: list[str] = field(default_factory=list)
     total_rows_reencrypted: int = 0
     details: dict[str, int] = field(default_factory=dict)

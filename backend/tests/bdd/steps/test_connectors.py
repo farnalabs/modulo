@@ -60,8 +60,6 @@ def get_connector_health(request, connector_id, ctx):
         request.node._resp_body = ctx["health_result"]
 
 
-
-
 @then("the response ok is true")
 def response_ok_true(request):
     assert request.node._resp["ok"] is True
@@ -309,9 +307,6 @@ def step_response_has_suggestion_name(request, ctx):
     assert "suggestion_name" in body, f"Response missing suggestion_name: {body}"
 
 
-
-
-
 @when("I validate the schema")
 def step_validate_schema(ctx):
     from jsonschema import Draft202012Validator, ValidationError
@@ -333,16 +328,11 @@ def step_schema_structurally_valid(ctx):
 def step_migration_plan(request, ctx):
     from modulo.core.schema_registry import create_migration
 
-    plan = create_migration(
-        ctx["source_definition"], ctx["target_definition"]
-    )
+    plan = create_migration(ctx["source_definition"], ctx["target_definition"])
     ctx["migration_plan"] = {
         "field_additions": plan.field_additions,
         "field_removals": plan.field_removals,
-        "type_changes": {
-            k: {"old_type": v.old_type, "new_type": v.new_type}
-            for k, v in plan.type_changes.items()
-        },
+        "type_changes": {k: {"old_type": v.old_type, "new_type": v.new_type} for k, v in plan.type_changes.items()},
         "renames": plan.renames,
     }
 
@@ -420,9 +410,7 @@ def step_github_connector(ctx):
     ctx["query_error"] = None
 
 
-@when(
-    parsers.parse('I query resource "{resource}" with limit {limit:d}')
-)
+@when(parsers.parse('I query resource "{resource}" with limit {limit:d}'))
 def step_github_query_resource_limit(resource, limit, ctx):
     from modulo.connectors.base import ConnectorQuery
 
@@ -439,12 +427,7 @@ def step_github_query_resource_limit(resource, limit, ctx):
         ctx["query_error"] = str(exc)
 
 
-@when(
-    parsers.parse(
-        'I query resource "{resource}" with filters repo'
-        ' "{repo}" and path "{path}"'
-    )
-)
+@when(parsers.parse('I query resource "{resource}" with filters repo "{repo}" and path "{path}"'))
 def step_github_query_file_with_filters(resource, repo, path, ctx):
     from modulo.connectors.base import ConnectorQuery
 
@@ -464,12 +447,7 @@ def step_github_query_file_with_filters(resource, repo, path, ctx):
         ctx["query_error"] = str(exc)
 
 
-@when(
-    parsers.parse(
-        'I query resource "{resource}" with filters repo'
-        ' "{repo}" and state "{state}"'
-    )
-)
+@when(parsers.parse('I query resource "{resource}" with filters repo "{repo}" and state "{state}"'))
 def step_github_query_pulls_with_filters(resource, repo, state, ctx):
     from modulo.connectors.base import ConnectorQuery
 
@@ -506,12 +484,7 @@ def step_github_query_invalid(ctx):
         ctx["query_error"] = str(exc)
 
 
-@when(
-    parsers.parse(
-        'I write resource "{resource}" with content "{content}"'
-        ' and path "{path}"'
-    )
-)
+@when(parsers.parse('I write resource "{resource}" with content "{content}" and path "{path}"'))
 def step_github_write_file(resource, content, path, ctx):
     from modulo.connectors.base import ConnectorPayload
 
@@ -547,18 +520,14 @@ def step_result_has_records(ctx):
 def step_records_contain_repo_metadata(ctx):
     result = ctx["query_result"]
     for rec in result.records:
-        assert "full_name" in rec or "name" in rec, (
-            f"Record missing repo metadata: {rec}"
-        )
+        assert "full_name" in rec or "name" in rec, f"Record missing repo metadata: {rec}"
 
 
 @then("the record contains file content")
 def step_record_contains_file_content(ctx):
     result = ctx["query_result"]
     assert len(result.records) > 0
-    assert "content" in result.records[0], (
-        f"Record missing content: {result.records[0]}"
-    )
+    assert "content" in result.records[0], f"Record missing content: {result.records[0]}"
 
 
 @then("the record contains issue fields")
@@ -566,9 +535,7 @@ def step_record_contains_issue_fields(ctx):
     result = ctx["query_result"]
     assert len(result.records) > 0
     rec = result.records[0]
-    assert any(k in rec for k in ("id", "key", "identifier")), (
-        f"Record missing issue identifier: {rec}"
-    )
+    assert any(k in rec for k in ("id", "key", "identifier")), f"Record missing issue identifier: {rec}"
 
 
 @then("the write succeeds")
@@ -613,14 +580,14 @@ def step_connector_raises_value_error(expected, ctx):
             loop = asyncio.new_event_loop()
             loop.run_until_complete(
                 connector.write(
-                    ConnectorPayload(resource="file", data={"repo": "owner/repo", "path": "test.txt", "content": "data"})
+                    ConnectorPayload(
+                        resource="file", data={"repo": "owner/repo", "path": "test.txt", "content": "data"}
+                    )
                 )
             )
         else:
             loop = asyncio.new_event_loop()
-            loop.run_until_complete(
-                connector.query(ConnectorQuery(resource="repos", limit=5))
-            )
+            loop.run_until_complete(connector.query(ConnectorQuery(resource="repos", limit=5)))
         ctx["query_result"] = "unexpected_success"
         ctx["query_error"] = None
     except ValueError as exc:
@@ -669,9 +636,7 @@ def step_jira_connector(ctx):
                 key = q.filters.get("issue_key", "")
                 if not key:
                     raise ValueError("Jira issue query requires 'issue_key' filter")
-                return ConnectorResult(
-                    records=[{"id": "10001", "key": key, "fields": {"summary": "Test"}}]
-                )
+                return ConnectorResult(records=[{"id": "10001", "key": key, "fields": {"summary": "Test"}}])
             case "search":
                 return ConnectorResult(
                     records=[
@@ -698,9 +663,7 @@ def step_jira_connector(ctx):
     ctx["query_error"] = None
 
 
-@when(
-    parsers.parse('I query resource "{resource}" with issue_key "{key}"')
-)
+@when(parsers.parse('I query resource "{resource}" with issue_key "{key}"'))
 def step_jira_query_issue(resource, key, ctx):
     from modulo.connectors.base import ConnectorQuery
 
@@ -716,11 +679,7 @@ def step_jira_query_issue(resource, key, ctx):
         ctx["query_error"] = str(exc)
 
 
-@when(
-    parsers.parse(
-        'I query resource "{resource}" with JQL "{jql}"'
-    )
-)
+@when(parsers.parse('I query resource "{resource}" with JQL "{jql}"'))
 def step_jira_query_search(resource, jql, ctx):
     from modulo.connectors.base import ConnectorQuery
 
@@ -736,12 +695,7 @@ def step_jira_query_search(resource, jql, ctx):
         ctx["query_error"] = str(exc)
 
 
-@when(
-    parsers.parse(
-        'I write resource "{resource}" with summary "{summary}"'
-        ' and project "{project}"'
-    )
-)
+@when(parsers.parse('I write resource "{resource}" with summary "{summary}" and project "{project}"'))
 def step_jira_write_issue(resource, summary, project, ctx):
     from modulo.connectors.base import ConnectorPayload
 
@@ -764,12 +718,7 @@ def step_jira_write_issue(resource, summary, project, ctx):
         ctx["query_error"] = str(exc)
 
 
-@when(
-    parsers.parse(
-        'I write resource "{resource}" with issue_key "{key}"'
-        ' and updated fields'
-    )
-)
+@when(parsers.parse('I write resource "{resource}" with issue_key "{key}" and updated fields'))
 def step_jira_update_issue(resource, key, ctx):
     from modulo.connectors.base import ConnectorPayload
 
@@ -791,9 +740,7 @@ def step_jira_update_issue(resource, key, ctx):
         ctx["query_error"] = str(exc)
 
 
-@when(
-    parsers.parse('I query resource "{resource}" without issue_key')
-)
+@when(parsers.parse('I query resource "{resource}" without issue_key'))
 def step_jira_query_without_key(resource, ctx):
     from modulo.connectors.base import ConnectorQuery
 
@@ -941,11 +888,7 @@ def step_linear_query_issue(resource, id_val, ctx):
         ctx["query_error"] = str(exc)
 
 
-@when(
-    parsers.parse(
-        'I query resource "{resource}" with query "{query_text}"'
-    )
-)
+@when(parsers.parse('I query resource "{resource}" with query "{query_text}"'))
 def step_linear_search(resource, query_text, ctx):
     from modulo.connectors.base import ConnectorQuery
 
@@ -961,11 +904,7 @@ def step_linear_search(resource, query_text, ctx):
         ctx["query_error"] = str(exc)
 
 
-@when(
-    parsers.parse(
-        'I write resource "{resource}" with title "{title}" and team "{team}"'
-    )
-)
+@when(parsers.parse('I write resource "{resource}" with title "{title}" and team "{team}"'))
 def step_linear_create_issue(resource, title, team, ctx):
     from modulo.connectors.base import ConnectorPayload
 
@@ -1009,11 +948,7 @@ def step_linear_connector_api_errors(ctx):
     ctx["query_error"] = None
 
 
-@when(
-    parsers.parse(
-        'I write resource "{resource}" with id "{id_val}" and new title'
-    )
-)
+@when(parsers.parse('I write resource "{resource}" with id "{id_val}" and new title'))
 def step_linear_update_issue(resource, id_val, ctx):
     from modulo.connectors.base import ConnectorPayload
 
@@ -1160,11 +1095,7 @@ def step_slack_connector(ctx):
     ctx["query_error"] = None
 
 
-@when(
-    parsers.parse(
-        'I query resource "{resource}" with limit {limit:d}'
-    )
-)
+@when(parsers.parse('I query resource "{resource}" with limit {limit:d}'))
 def step_slack_query_resource(resource, limit, ctx):
     from modulo.connectors.base import ConnectorQuery
 
@@ -1182,11 +1113,7 @@ def step_slack_query_resource(resource, limit, ctx):
         ctx["query_error"] = str(exc)
 
 
-@when(
-    parsers.parse(
-        'I query resource "{resource}" with channel "{channel}"'
-    )
-)
+@when(parsers.parse('I query resource "{resource}" with channel "{channel}"'))
 def step_slack_query_messages(resource, channel, ctx):
     from modulo.connectors.base import ConnectorQuery
 
@@ -1202,11 +1129,7 @@ def step_slack_query_messages(resource, channel, ctx):
         ctx["query_error"] = str(exc)
 
 
-@when(
-    parsers.parse(
-        'I query resource "{resource}" without channel filter'
-    )
-)
+@when(parsers.parse('I query resource "{resource}" without channel filter'))
 def step_slack_query_messages_no_channel(resource, ctx):
     from modulo.connectors.base import ConnectorQuery
 
@@ -1222,12 +1145,7 @@ def step_slack_query_messages_no_channel(resource, ctx):
         ctx["query_error"] = str(exc)
 
 
-@when(
-    parsers.parse(
-        'I write resource "{resource}" with channel "{channel}"'
-        ' and text "{text}"'
-    )
-)
+@when(parsers.parse('I write resource "{resource}" with channel "{channel}" and text "{text}"'))
 def step_slack_post_message(resource, channel, text, ctx):
     from modulo.connectors.base import ConnectorPayload
 
@@ -1248,8 +1166,7 @@ def step_slack_post_message(resource, channel, text, ctx):
 
 @when(
     parsers.parse(
-        'I write resource "{resource}" with channel "{channel}"'
-        ' and thread_ts "{thread_ts}" and text "{text}"'
+        'I write resource "{resource}" with channel "{channel}" and thread_ts "{thread_ts}" and text "{text}"'
     )
 )
 def step_slack_post_thread_reply(resource, channel, thread_ts, text, ctx):
@@ -1274,16 +1191,11 @@ def step_slack_post_thread_reply(resource, channel, thread_ts, text, ctx):
 def step_records_contain_channel_metadata(ctx):
     result = ctx["query_result"]
     for rec in result.records:
-        assert "id" in rec and "name" in rec, (
-            f"Record missing channel metadata: {rec}"
-        )
+        assert "id" in rec and "name" in rec, f"Record missing channel metadata: {rec}"
 
 
 @when(
-    parsers.parse(
-        'I query resource "{resource}" with channel "{channel}"'
-        ' and oldest "{oldest}" and latest "{latest}"'
-    )
+    parsers.parse('I query resource "{resource}" with channel "{channel}" and oldest "{oldest}" and latest "{latest}"')
 )
 def step_slack_query_messages_with_dates(resource, channel, oldest, latest, ctx):
     from modulo.connectors.base import ConnectorQuery
@@ -1470,9 +1382,7 @@ def step_gitlab_connector(ctx):
                     records=[{"id": 1, "iid": int(q.filters.get("iid", 0)), "title": "Fix bug", "state": "opened"}]
                 )
             case "branch":
-                return ConnectorResult(
-                    records=[{"name": q.filters.get("name", ""), "commit": {"id": "abc123"}}]
-                )
+                return ConnectorResult(records=[{"name": q.filters.get("name", ""), "commit": {"id": "abc123"}}])
             case "branches":
                 return ConnectorResult(
                     records=[{"name": "main", "commit": {"id": "abc123"}}],
@@ -1519,6 +1429,7 @@ def step_gitlab_connector(ctx):
 
     async def mock_health_check():
         from modulo.connectors.base import HealthResult
+
         return HealthResult(ok=True, detail="testuser")
 
     mock_connector.query = mock_query
@@ -1533,8 +1444,10 @@ def step_gitlab_connector(ctx):
 @when(parsers.parse('I query GitLab resource "{resource}" with project "{project}" and state "{state}"'))
 def step_gitlab_query_with_state(resource, project, state, ctx):
     from modulo.connectors.base import ConnectorQuery
+
     q = ConnectorQuery(resource=resource, filters={"project": project, "state": state})
     import asyncio
+
     try:
         result = asyncio.run(ctx["connector"].query(q))
         ctx["query_result"] = result
@@ -1547,8 +1460,10 @@ def step_gitlab_query_with_state(resource, project, state, ctx):
 @when(parsers.parse('I query GitLab resource "{resource}" with project "{project}"'))
 def step_gitlab_query_project(resource, project, ctx):
     from modulo.connectors.base import ConnectorQuery
+
     q = ConnectorQuery(resource=resource, filters={"project": project})
     import asyncio
+
     try:
         result = asyncio.run(ctx["connector"].query(q))
         ctx["query_result"] = result
@@ -1561,8 +1476,10 @@ def step_gitlab_query_project(resource, project, ctx):
 @when(parsers.parse('I query GitLab resource "{resource}" with project "{project}" and iid "{iid}"'))
 def step_gitlab_query_with_iid(resource, project, iid, ctx):
     from modulo.connectors.base import ConnectorQuery
+
     q = ConnectorQuery(resource=resource, filters={"project": project, "iid": iid})
     import asyncio
+
     try:
         result = asyncio.run(ctx["connector"].query(q))
         ctx["query_result"] = result
@@ -1575,8 +1492,10 @@ def step_gitlab_query_with_iid(resource, project, iid, ctx):
 @when(parsers.parse('I query GitLab resource "{resource}" with project "{project}" and label_id "{label_id}"'))
 def step_gitlab_query_with_label_id(resource, project, label_id, ctx):
     from modulo.connectors.base import ConnectorQuery
+
     q = ConnectorQuery(resource=resource, filters={"project": project, "label_id": label_id})
     import asyncio
+
     try:
         result = asyncio.run(ctx["connector"].query(q))
         ctx["query_result"] = result
@@ -1589,8 +1508,10 @@ def step_gitlab_query_with_label_id(resource, project, label_id, ctx):
 @when(parsers.parse('I query GitLab resource "{resource}" with project "{project}" and name "{name}"'))
 def step_gitlab_query_with_name(resource, project, name, ctx):
     from modulo.connectors.base import ConnectorQuery
+
     q = ConnectorQuery(resource=resource, filters={"project": project, "name": name})
     import asyncio
+
     try:
         result = asyncio.run(ctx["connector"].query(q))
         ctx["query_result"] = result
@@ -1603,8 +1524,10 @@ def step_gitlab_query_with_name(resource, project, name, ctx):
 @when(parsers.parse('I query GitLab resource "{resource}" with project "{project}" and pipeline_id "{pipeline_id}"'))
 def step_gitlab_query_with_pipeline_id(resource, project, pipeline_id, ctx):
     from modulo.connectors.base import ConnectorQuery
+
     q = ConnectorQuery(resource=resource, filters={"project": project, "pipeline_id": pipeline_id})
     import asyncio
+
     try:
         result = asyncio.run(ctx["connector"].query(q))
         ctx["query_result"] = result
@@ -1617,8 +1540,10 @@ def step_gitlab_query_with_pipeline_id(resource, project, pipeline_id, ctx):
 @when(parsers.parse('I write GitLab issue with project "{project}" and title "{title}"'))
 def step_gitlab_write_issue(project, title, ctx):
     from modulo.connectors.base import ConnectorPayload
+
     payload = ConnectorPayload(resource="issue", data={"project": project, "title": title})
     import asyncio
+
     try:
         result = asyncio.run(ctx["connector"].write(payload))
         ctx["write_result"] = result
@@ -1635,11 +1560,13 @@ def step_gitlab_write_issue(project, title, ctx):
 )
 def step_gitlab_update_issue(iid, project, state_event, ctx):
     from modulo.connectors.base import ConnectorPayload
+
     payload = ConnectorPayload(
         resource="issue_update",
         data={"project": project, "iid": iid, "state_event": state_event},
     )
     import asyncio
+
     try:
         result = asyncio.run(ctx["connector"].write(payload))
         ctx["write_result"] = result
@@ -1652,11 +1579,13 @@ def step_gitlab_update_issue(iid, project, state_event, ctx):
 @when(parsers.parse('I write GitLab issue_note for issue "{iid}" with project "{project}" and body "{body}"'))
 def step_gitlab_write_note(iid, project, body, ctx):
     from modulo.connectors.base import ConnectorPayload
+
     payload = ConnectorPayload(
         resource="issue_note",
         data={"project": project, "iid": iid, "body": body},
     )
     import asyncio
+
     try:
         result = asyncio.run(ctx["connector"].write(payload))
         ctx["write_result"] = result
@@ -1669,11 +1598,13 @@ def step_gitlab_write_note(iid, project, body, ctx):
 @when(parsers.parse('I write GitLab issue_label for issue "{iid}" with project "{project}" and labels "{labels}"'))
 def step_gitlab_write_label(iid, project, labels, ctx):
     from modulo.connectors.base import ConnectorPayload
+
     payload = ConnectorPayload(
         resource="issue_label",
         data={"project": project, "iid": iid, "labels": labels.split(",")},
     )
     import asyncio
+
     try:
         result = asyncio.run(ctx["connector"].write(payload))
         ctx["write_result"] = result
@@ -1686,11 +1617,13 @@ def step_gitlab_write_label(iid, project, labels, ctx):
 @when(parsers.parse('I write GitLab label with project "{project}" and name "{name}"'))
 def step_gitlab_write_project_label(project, name, ctx):
     from modulo.connectors.base import ConnectorPayload
+
     payload = ConnectorPayload(
         resource="label",
         data={"project": project, "name": name},
     )
     import asyncio
+
     try:
         result = asyncio.run(ctx["connector"].write(payload))
         ctx["write_result"] = result
@@ -1703,11 +1636,13 @@ def step_gitlab_write_project_label(project, name, ctx):
 @when(parsers.parse('I write GitLab milestone with project "{project}" and title "{title}"'))
 def step_gitlab_write_milestone(project, title, ctx):
     from modulo.connectors.base import ConnectorPayload
+
     payload = ConnectorPayload(
         resource="milestone",
         data={"project": project, "title": title},
     )
     import asyncio
+
     try:
         result = asyncio.run(ctx["connector"].write(payload))
         ctx["write_result"] = result
@@ -1720,11 +1655,13 @@ def step_gitlab_write_milestone(project, title, ctx):
 @when(parsers.parse('I write GitLab pipeline_run with project "{project}" and ref "{ref}"'))
 def step_gitlab_trigger_pipeline(project, ref, ctx):
     from modulo.connectors.base import ConnectorPayload
+
     payload = ConnectorPayload(
         resource="pipeline_run",
         data={"project": project, "ref": ref},
     )
     import asyncio
+
     try:
         result = asyncio.run(ctx["connector"].write(payload))
         ctx["write_result"] = result
@@ -1764,6 +1701,7 @@ def step_gitlab_connector_invalid_token(ctx):
 @when("I check the connector health")
 def step_gitlab_health_check(ctx):
     import asyncio
+
     try:
         result = asyncio.run(ctx["connector"].health_check())
         ctx["health_result"] = result
@@ -1795,6 +1733,7 @@ def step_gitlab_api_unreachable(ctx):
 
     ctx["connector"].health_check = mock_health_check
     import asyncio
+
     try:
         result = asyncio.run(ctx["connector"].health_check())
         ctx["health_result"] = result
@@ -1909,12 +1848,7 @@ def step_gitea_connector(ctx):
     ctx["query_error"] = None
 
 
-@when(
-    parsers.parse(
-        'I query resource "{resource}" with filters repo'
-        ' "{repo}" and state "{state}"'
-    )
-)
+@when(parsers.parse('I query resource "{resource}" with filters repo "{repo}" and state "{state}"'))
 def step_gitea_query_pulls_issues(resource, repo, state, ctx):
     from modulo.connectors.base import ConnectorQuery
 
@@ -1934,12 +1868,7 @@ def step_gitea_query_pulls_issues(resource, repo, state, ctx):
         ctx["query_error"] = str(exc)
 
 
-@when(
-    parsers.parse(
-        'I write Gitea resource "{resource}" with title "{title}"'
-        ' head "{head}" and base "{base}"'
-    )
-)
+@when(parsers.parse('I write Gitea resource "{resource}" with title "{title}" head "{head}" and base "{base}"'))
 def step_gitea_create_pr(resource, title, head, base, ctx):
     from modulo.connectors.base import ConnectorPayload
 
@@ -1964,11 +1893,7 @@ def step_gitea_create_pr(resource, title, head, base, ctx):
         ctx["query_error"] = str(exc)
 
 
-@when(
-    parsers.parse(
-        'I write Gitea resource "{resource}" with title "{title}"'
-    )
-)
+@when(parsers.parse('I write Gitea resource "{resource}" with title "{title}"'))
 def step_gitea_create_issue(resource, title, ctx):
     from modulo.connectors.base import ConnectorPayload
 
@@ -2051,9 +1976,7 @@ def step_monday_connector(ctx):
                 item_id = q.filters.get("item_id", "")
                 if not item_id:
                     raise ValueError("Monday item query requires 'item_id' filter")
-                return ConnectorResult(
-                    records=[{"id": str(item_id), "name": "Single Item", "column_values": []}]
-                )
+                return ConnectorResult(records=[{"id": str(item_id), "name": "Single Item", "column_values": []}])
             case "users":
                 return ConnectorResult(
                     records=[
@@ -2114,6 +2037,7 @@ def step_monday_connector(ctx):
 def step_monday_health_valid(ctx):
     async def mock_health():
         return HealthResult(ok=True, detail="Test User")
+
     ctx["connector"].health_check = mock_health
 
 
@@ -2121,6 +2045,7 @@ def step_monday_health_valid(ctx):
 def step_monday_health_401(ctx):
     async def mock_health():
         return HealthResult(ok=False, detail="HTTP 401: Unauthorized")
+
     ctx["connector"].health_check = mock_health
 
 
@@ -2130,6 +2055,7 @@ def step_monday_boards_available(ctx):
 
     async def mock_query(q):
         from modulo.connectors.base import ConnectorResult
+
         if q.resource == "boards":
             return ConnectorResult(
                 records=[
@@ -2149,14 +2075,17 @@ def step_monday_board_available(ctx):
 
     async def mock_query(q):
         from modulo.connectors.base import ConnectorResult
+
         if q.resource == "board":
             return ConnectorResult(
-                records=[{
-                    "id": str(q.filters.get("board_id", "")),
-                    "name": "My Board",
-                    "columns": [{"id": "col1", "title": "Status", "type": "text"}],
-                    "groups": [{"id": "g1", "title": "Group 1"}],
-                }]
+                records=[
+                    {
+                        "id": str(q.filters.get("board_id", "")),
+                        "name": "My Board",
+                        "columns": [{"id": "col1", "title": "Status", "type": "text"}],
+                        "groups": [{"id": "g1", "title": "Group 1"}],
+                    }
+                ]
             )
         raise ValueError(f"Unsupported Monday.com resource: {q.resource!r}")
 
@@ -2169,6 +2098,7 @@ def step_monday_items_available(ctx):
 
     async def mock_query(q):
         from modulo.connectors.base import ConnectorResult
+
         if q.resource == "items":
             return ConnectorResult(
                 records=[
@@ -2188,6 +2118,7 @@ def step_monday_item_available(ctx):
 
     async def mock_query(q):
         from modulo.connectors.base import ConnectorResult
+
         if q.resource == "item":
             return ConnectorResult(
                 records=[{"id": str(q.filters.get("item_id", "")), "name": "Single Item", "column_values": []}]
@@ -2203,6 +2134,7 @@ def step_monday_users_available(ctx):
 
     async def mock_query(q):
         from modulo.connectors.base import ConnectorResult
+
         if q.resource == "users":
             return ConnectorResult(
                 records=[
@@ -2222,6 +2154,7 @@ def step_monday_workspaces_available(ctx):
 
     async def mock_query(q):
         from modulo.connectors.base import ConnectorResult
+
         if q.resource == "workspaces":
             return ConnectorResult(
                 records=[
@@ -2288,9 +2221,7 @@ def step_monday_configured(ctx):
     pass
 
 
-@when(
-    parsers.parse('I query resource "{resource}" with board_id "{board_id}"')
-)
+@when(parsers.parse('I query resource "{resource}" with board_id "{board_id}"'))
 def step_monday_query_with_board_id(resource, board_id, ctx):
     from modulo.connectors.base import ConnectorQuery
 
@@ -2306,9 +2237,7 @@ def step_monday_query_with_board_id(resource, board_id, ctx):
         ctx["query_error"] = str(exc)
 
 
-@when(
-    parsers.parse('I query resource "{resource}" with item_id "{item_id}"')
-)
+@when(parsers.parse('I query resource "{resource}" with item_id "{item_id}"'))
 def step_monday_query_with_item_id(resource, item_id, ctx):
     from modulo.connectors.base import ConnectorQuery
 
@@ -2324,11 +2253,7 @@ def step_monday_query_with_item_id(resource, item_id, ctx):
         ctx["query_error"] = str(exc)
 
 
-@when(
-    parsers.parse(
-        'I write resource "{resource}" with name "{name}" and board_id "{board_id}"'
-    )
-)
+@when(parsers.parse('I write resource "{resource}" with name "{name}" and board_id "{board_id}"'))
 def step_monday_create_item(resource, name, board_id, ctx):
     from modulo.connectors.base import ConnectorPayload
 
@@ -2347,11 +2272,7 @@ def step_monday_create_item(resource, name, board_id, ctx):
         ctx["query_error"] = str(exc)
 
 
-@when(
-    parsers.parse(
-        'I write resource "{resource}" for item "{item_id}" with column values {column_values}'
-    )
-)
+@when(parsers.parse('I write resource "{resource}" for item "{item_id}" with column values {column_values}'))
 def step_monday_update_column_values(resource, item_id, column_values, ctx):
     from modulo.connectors.base import ConnectorPayload
 
@@ -2370,11 +2291,7 @@ def step_monday_update_column_values(resource, item_id, column_values, ctx):
         ctx["query_error"] = str(exc)
 
 
-@when(
-    parsers.parse(
-        'I write resource "{resource}" for item "{item_id}" with column_id "{col_id}" and value {value}'
-    )
-)
+@when(parsers.parse('I write resource "{resource}" for item "{item_id}" with column_id "{col_id}" and value {value}'))
 def step_monday_change_column_value(resource, item_id, col_id, value, ctx):
     from modulo.connectors.base import ConnectorPayload
 
@@ -2393,11 +2310,7 @@ def step_monday_change_column_value(resource, item_id, col_id, value, ctx):
         ctx["query_error"] = str(exc)
 
 
-@when(
-    parsers.parse(
-        'I write resource "{resource}" for item "{item_id}" with body "{body}"'
-    )
-)
+@when(parsers.parse('I write resource "{resource}" for item "{item_id}" with body "{body}"'))
 def step_monday_add_update(resource, item_id, body, ctx):
     from modulo.connectors.base import ConnectorPayload
 
@@ -2420,9 +2333,7 @@ def step_monday_add_update(resource, item_id, body, ctx):
 def step_monday_users_metadata(ctx):
     result = ctx["query_result"]
     for rec in result.records:
-        assert "id" in rec and "name" in rec and "email" in rec, (
-            f"Record missing user fields: {rec}"
-        )
+        assert "id" in rec and "name" in rec and "email" in rec, f"Record missing user fields: {rec}"
 
 
 # ============================================================================
@@ -2479,9 +2390,7 @@ def step_trello_connector(ctx):
                 card_id = q.filters.get("card_id", "")
                 if not card_id:
                     raise ValueError("Trello card query requires 'card_id' filter")
-                return ConnectorResult(
-                    records=[{"id": card_id, "name": "Single Card", "desc": "A card"}]
-                )
+                return ConnectorResult(records=[{"id": card_id, "name": "Single Card", "desc": "A card"}])
             case "members":
                 board_id = q.filters.get("board_id", "")
                 if not board_id:
@@ -2529,6 +2438,7 @@ def step_trello_connector(ctx):
 def step_trello_health_valid(ctx):
     async def mock_health():
         return HealthResult(ok=True, detail="Test User")
+
     ctx["connector"].health_check = mock_health
 
 
@@ -2536,6 +2446,7 @@ def step_trello_health_valid(ctx):
 def step_trello_health_401(ctx):
     async def mock_health():
         return HealthResult(ok=False, detail="HTTP 401: Unauthorized")
+
     ctx["connector"].health_check = mock_health
 
 
@@ -2545,6 +2456,7 @@ def step_trello_boards_available(ctx):
 
     async def mock_query(q):
         from modulo.connectors.base import ConnectorResult
+
         if q.resource == "boards":
             return ConnectorResult(
                 records=[
@@ -2564,6 +2476,7 @@ def step_trello_lists_available(ctx):
 
     async def mock_query(q):
         from modulo.connectors.base import ConnectorResult
+
         if q.resource == "lists":
             return ConnectorResult(
                 records=[
@@ -2583,6 +2496,7 @@ def step_trello_cards_available(ctx):
 
     async def mock_query(q):
         from modulo.connectors.base import ConnectorResult
+
         if q.resource == "cards":
             return ConnectorResult(
                 records=[
@@ -2602,6 +2516,7 @@ def step_trello_single_card(ctx):
 
     async def mock_query(q):
         from modulo.connectors.base import ConnectorResult
+
         if q.resource == "card":
             return ConnectorResult(
                 records=[{"id": q.filters.get("card_id", ""), "name": "Single Card", "desc": "A card"}]
@@ -2645,9 +2560,7 @@ def step_trello_configured(ctx):
     pass
 
 
-@when(
-    parsers.parse('I query resource "{resource}" with board_id "{board_id}"')
-)
+@when(parsers.parse('I query resource "{resource}" with board_id "{board_id}"'))
 def step_trello_query_with_board_id(resource, board_id, ctx):
     from modulo.connectors.base import ConnectorQuery
 
@@ -2663,9 +2576,7 @@ def step_trello_query_with_board_id(resource, board_id, ctx):
         ctx["query_error"] = str(exc)
 
 
-@when(
-    parsers.parse('I query resource "{resource}" with card_id "{card_id}"')
-)
+@when(parsers.parse('I query resource "{resource}" with card_id "{card_id}"'))
 def step_trello_query_with_card_id(resource, card_id, ctx):
     from modulo.connectors.base import ConnectorQuery
 
@@ -2681,11 +2592,7 @@ def step_trello_query_with_card_id(resource, card_id, ctx):
         ctx["query_error"] = str(exc)
 
 
-@when(
-    parsers.parse(
-        'I write resource "{resource}" with name "{name}" and list_id "{list_id}"'
-    )
-)
+@when(parsers.parse('I write resource "{resource}" with name "{name}" and list_id "{list_id}"'))
 def step_trello_create_card(resource, name, list_id, ctx):
     from modulo.connectors.base import ConnectorPayload
 
@@ -2704,11 +2611,7 @@ def step_trello_create_card(resource, name, list_id, ctx):
         ctx["query_error"] = str(exc)
 
 
-@when(
-    parsers.parse(
-        'I write resource "{resource}" for card "{card_id}" with text "{text}"'
-    )
-)
+@when(parsers.parse('I write resource "{resource}" for card "{card_id}" with text "{text}"'))
 def step_trello_add_comment(resource, card_id, text, ctx):
     from modulo.connectors.base import ConnectorPayload
 
@@ -2738,18 +2641,14 @@ def step_trello_health_not_ok(ctx):
 def step_trello_boards_metadata(ctx):
     result = ctx["query_result"]
     for rec in result.records:
-        assert "id" in rec and "name" in rec, (
-            f"Record missing board metadata: {rec}"
-        )
+        assert "id" in rec and "name" in rec, f"Record missing board metadata: {rec}"
 
 
 @then("the records contain list metadata")
 def step_trello_lists_metadata(ctx):
     result = ctx["query_result"]
     for rec in result.records:
-        assert "id" in rec and "name" in rec, (
-            f"Record missing list metadata: {rec}"
-        )
+        assert "id" in rec and "name" in rec, f"Record missing list metadata: {rec}"
 
 
 @then("the record contains card fields")
@@ -2757,9 +2656,7 @@ def step_trello_card_fields(ctx):
     result = ctx["query_result"]
     assert len(result.records) > 0
     rec = result.records[0]
-    assert "id" in rec and "name" in rec, (
-        f"Record missing card fields: {rec}"
-    )
+    assert "id" in rec and "name" in rec, f"Record missing card fields: {rec}"
 
 
 # ============================================================================
@@ -2819,9 +2716,7 @@ def step_asana_connector(ctx):
                 project_id = q.filters.get("project_id", "")
                 if not project_id:
                     raise ValueError("Asana project query requires 'project_id' filter")
-                return ConnectorResult(
-                    records=[{"gid": project_id, "name": "Project Alpha", "notes": "A project"}]
-                )
+                return ConnectorResult(records=[{"gid": project_id, "name": "Project Alpha", "notes": "A project"}])
             case "tasks":
                 project_id = q.filters.get("project_id", "")
                 if not project_id:
@@ -2946,9 +2841,7 @@ def step_shortcut_connector(ctx):
                 project_id = q.filters.get("project_id", "")
                 if not project_id:
                     raise ValueError("Shortcut project query requires 'project_id' filter")
-                return ConnectorResult(
-                    records=[{"id": int(project_id), "name": "Single Project"}]
-                )
+                return ConnectorResult(records=[{"id": int(project_id), "name": "Single Project"}])
             case "epics":
                 return ConnectorResult(
                     records=[
@@ -2961,9 +2854,7 @@ def step_shortcut_connector(ctx):
                 epic_id = q.filters.get("epic_id", "")
                 if not epic_id:
                     raise ValueError("Shortcut epic query requires 'epic_id' filter")
-                return ConnectorResult(
-                    records=[{"id": int(epic_id), "name": "Single Epic"}]
-                )
+                return ConnectorResult(records=[{"id": int(epic_id), "name": "Single Epic"}])
             case "workflows":
                 return ConnectorResult(
                     records=[
@@ -3031,6 +2922,7 @@ def step_shortcut_connector(ctx):
 def step_asana_health_valid(ctx):
     async def mock_health():
         return HealthResult(ok=True, detail="Test User")
+
     ctx["connector"].health_check = mock_health
 
 
@@ -3038,6 +2930,7 @@ def step_asana_health_valid(ctx):
 def step_asana_health_401(ctx):
     async def mock_health():
         return HealthResult(ok=False, detail="HTTP 401: Unauthorized")
+
     ctx["connector"].health_check = mock_health
 
 
@@ -3045,6 +2938,7 @@ def step_asana_health_401(ctx):
 def step_shortcut_health_valid(ctx):
     async def mock_health():
         return HealthResult(ok=True, detail="testuser")
+
     ctx["connector"].health_check = mock_health
 
 
@@ -3052,6 +2946,7 @@ def step_shortcut_health_valid(ctx):
 def step_shortcut_health_401(ctx):
     async def mock_health():
         return HealthResult(ok=False, detail="HTTP 401: Unauthorized")
+
     ctx["connector"].health_check = mock_health
 
 
@@ -3061,6 +2956,7 @@ def step_asana_workspaces_available(ctx):
 
     async def mock_query(q):
         from modulo.connectors.base import ConnectorResult
+
         if q.resource == "workspaces":
             return ConnectorResult(
                 records=[
@@ -3080,6 +2976,7 @@ def step_shortcut_stories_available(ctx):
 
     async def mock_query(q):
         from modulo.connectors.base import ConnectorResult
+
         if q.resource == "stories":
             return ConnectorResult(
                 records=[
@@ -3099,6 +2996,7 @@ def step_asana_projects_available(ctx):
 
     async def mock_query(q):
         from modulo.connectors.base import ConnectorResult
+
         if q.resource == "projects":
             return ConnectorResult(
                 records=[
@@ -3118,6 +3016,7 @@ def step_shortcut_single_story(ctx):
 
     async def mock_query(q):
         from modulo.connectors.base import ConnectorResult
+
         if q.resource == "story":
             return ConnectorResult(
                 records=[
@@ -3139,6 +3038,7 @@ def step_shortcut_projects_available(ctx):
 
     async def mock_query(q):
         from modulo.connectors.base import ConnectorResult
+
         if q.resource == "projects":
             return ConnectorResult(
                 records=[
@@ -3158,6 +3058,7 @@ def step_asana_single_project(ctx):
 
     async def mock_query(q):
         from modulo.connectors.base import ConnectorResult
+
         if q.resource == "project":
             return ConnectorResult(
                 records=[{"gid": q.filters.get("project_id", ""), "name": "Project Alpha", "notes": "A project"}]
@@ -3173,6 +3074,7 @@ def step_asana_tasks_available(ctx):
 
     async def mock_query(q):
         from modulo.connectors.base import ConnectorResult
+
         if q.resource == "tasks":
             return ConnectorResult(
                 records=[
@@ -3192,6 +3094,7 @@ def step_shortcut_epics_available(ctx):
 
     async def mock_query(q):
         from modulo.connectors.base import ConnectorResult
+
         if q.resource == "epics":
             return ConnectorResult(
                 records=[
@@ -3211,6 +3114,7 @@ def step_asana_sections_available(ctx):
 
     async def mock_query(q):
         from modulo.connectors.base import ConnectorResult
+
         if q.resource == "sections":
             return ConnectorResult(
                 records=[
@@ -3312,9 +3216,7 @@ def step_shortcut_configured(ctx):
     pass
 
 
-@when(
-    parsers.parse('I query resource "{resource}" with workspace "{workspace}"')
-)
+@when(parsers.parse('I query resource "{resource}" with workspace "{workspace}"'))
 def step_asana_query_with_workspace(resource, workspace, ctx):
     from modulo.connectors.base import ConnectorQuery
 
@@ -3330,9 +3232,7 @@ def step_asana_query_with_workspace(resource, workspace, ctx):
         ctx["query_error"] = str(exc)
 
 
-@when(
-    parsers.parse('I query resource "{resource}" with project_id "{project_id}"')
-)
+@when(parsers.parse('I query resource "{resource}" with project_id "{project_id}"'))
 def step_asana_query_with_project_id(resource, project_id, ctx):
     from modulo.connectors.base import ConnectorQuery
 
@@ -3348,9 +3248,7 @@ def step_asana_query_with_project_id(resource, project_id, ctx):
         ctx["query_error"] = str(exc)
 
 
-@when(
-    parsers.parse('I query resource "{resource}" with story_id "{story_id}"')
-)
+@when(parsers.parse('I query resource "{resource}" with story_id "{story_id}"'))
 def step_shortcut_query_with_story_id(resource, story_id, ctx):
     from modulo.connectors.base import ConnectorQuery
 
@@ -3366,11 +3264,7 @@ def step_shortcut_query_with_story_id(resource, story_id, ctx):
         ctx["query_error"] = str(exc)
 
 
-@when(
-    parsers.parse(
-        'I write resource "{resource}" with name "{name}" and project "{project}"'
-    )
-)
+@when(parsers.parse('I write resource "{resource}" with name "{name}" and project "{project}"'))
 def step_asana_create_task(resource, name, project, ctx):
     from modulo.connectors.base import ConnectorPayload
 
@@ -3389,11 +3283,7 @@ def step_asana_create_task(resource, name, project, ctx):
         ctx["query_error"] = str(exc)
 
 
-@when(
-    parsers.parse(
-        'I write resource "{resource}" with name "{name}" and project_id "{project_id}"'
-    )
-)
+@when(parsers.parse('I write resource "{resource}" with name "{name}" and project_id "{project_id}"'))
 def step_shortcut_create_story(resource, name, project_id, ctx):
     from modulo.connectors.base import ConnectorPayload
 
@@ -3412,11 +3302,7 @@ def step_shortcut_create_story(resource, name, project_id, ctx):
         ctx["query_error"] = str(exc)
 
 
-@when(
-    parsers.parse(
-        'I write resource "{resource}" for task "{task_id}" with text "{text}"'
-    )
-)
+@when(parsers.parse('I write resource "{resource}" for task "{task_id}" with text "{text}"'))
 def step_asana_add_comment(resource, task_id, text, ctx):
     from modulo.connectors.base import ConnectorPayload
 
@@ -3435,11 +3321,7 @@ def step_asana_add_comment(resource, task_id, text, ctx):
         ctx["query_error"] = str(exc)
 
 
-@when(
-    parsers.parse(
-        'I write resource "{resource}" for story "{story_id}" with new name "{name}"'
-    )
-)
+@when(parsers.parse('I write resource "{resource}" for story "{story_id}" with new name "{name}"'))
 def step_shortcut_update_story(resource, story_id, name, ctx):
     from modulo.connectors.base import ConnectorPayload
 
@@ -3462,18 +3344,14 @@ def step_shortcut_update_story(resource, story_id, name, ctx):
 def step_asana_workspace_metadata(ctx):
     result = ctx["query_result"]
     for rec in result.records:
-        assert "gid" in rec and "name" in rec, (
-            f"Record missing workspace metadata: {rec}"
-        )
+        assert "gid" in rec and "name" in rec, f"Record missing workspace metadata: {rec}"
 
 
 @then("the records contain project metadata")
 def step_asana_project_metadata(ctx):
     result = ctx["query_result"]
     for rec in result.records:
-        assert "gid" in rec and "name" in rec, (
-            f"Record missing project metadata: {rec}"
-        )
+        assert "gid" in rec and "name" in rec, f"Record missing project metadata: {rec}"
 
 
 @then("the record contains project fields")
@@ -3481,25 +3359,17 @@ def step_asana_project_fields(ctx):
     result = ctx["query_result"]
     assert len(result.records) > 0
     rec = result.records[0]
-    assert "gid" in rec and "name" in rec, (
-        f"Record missing project fields: {rec}"
-    )
+    assert "gid" in rec and "name" in rec, f"Record missing project fields: {rec}"
 
 
 @then("the records contain section metadata")
 def step_asana_section_metadata(ctx):
     result = ctx["query_result"]
     for rec in result.records:
-        assert "gid" in rec and "name" in rec, (
-            f"Record missing section metadata: {rec}"
-        )
+        assert "gid" in rec and "name" in rec, f"Record missing section metadata: {rec}"
 
 
-@when(
-    parsers.parse(
-        'I write resource "{resource}" for story "{story_id}" with text "{text}"'
-    )
-)
+@when(parsers.parse('I write resource "{resource}" for story "{story_id}" with text "{text}"'))
 def step_shortcut_add_comment(resource, story_id, text, ctx):
     from modulo.connectors.base import ConnectorPayload
 
@@ -3522,9 +3392,7 @@ def step_shortcut_add_comment(resource, story_id, text, ctx):
 def step_shortcut_story_metadata(ctx):
     result = ctx["query_result"]
     for rec in result.records:
-        assert "id" in rec and "name" in rec, (
-            f"Record missing story metadata: {rec}"
-        )
+        assert "id" in rec and "name" in rec, f"Record missing story metadata: {rec}"
 
 
 @then("the record contains story fields")
@@ -3532,9 +3400,7 @@ def step_shortcut_story_fields(ctx):
     result = ctx["query_result"]
     assert len(result.records) > 0
     rec = result.records[0]
-    assert "id" in rec and "name" in rec, (
-        f"Record missing story fields: {rec}"
-    )
+    assert "id" in rec and "name" in rec, f"Record missing story fields: {rec}"
 
 
 # ============================================================================
@@ -3583,20 +3449,22 @@ def step_youtrack_connector(ctx):
         match q.resource:
             case "issues":
                 query_filter = q.filters.get("query", "")
-                records = [
-                    {"id": "1-1", "idReadable": "PRJ-1", "summary": "Bug found"},
-                ] if query_filter else [
-                    {"id": "1-1", "idReadable": "PRJ-1", "summary": "First issue"},
-                    {"id": "1-2", "idReadable": "PRJ-2", "summary": "Second issue"},
-                ]
+                records = (
+                    [
+                        {"id": "1-1", "idReadable": "PRJ-1", "summary": "Bug found"},
+                    ]
+                    if query_filter
+                    else [
+                        {"id": "1-1", "idReadable": "PRJ-1", "summary": "First issue"},
+                        {"id": "1-2", "idReadable": "PRJ-2", "summary": "Second issue"},
+                    ]
+                )
                 return ConnectorResult(records=records, total=len(records))
             case "issue":
                 issue_id = q.filters.get("issue_id", "")
                 if not issue_id:
                     raise ValueError("YouTrack issue query requires 'issue_id' filter")
-                return ConnectorResult(
-                    records=[{"id": "1-1", "idReadable": issue_id, "summary": "Test issue"}]
-                )
+                return ConnectorResult(records=[{"id": "1-1", "idReadable": issue_id, "summary": "Test issue"}])
             case "projects":
                 return ConnectorResult(
                     records=[
@@ -3743,9 +3611,7 @@ def step_confluence_connector(ctx):
                 if not page_id:
                     raise ValueError("Confluence page query requires 'page_id' filter")
                 return ConnectorResult(
-                    records=[
-                        {"id": page_id, "title": "Single Page", "spaceId": "s1", "version": {"number": 2}}
-                    ]
+                    records=[{"id": page_id, "title": "Single Page", "spaceId": "s1", "version": {"number": 2}}]
                 )
             case "spaces":
                 space_type = q.filters.get("type", "global")
@@ -3819,6 +3685,7 @@ def step_confluence_connector(ctx):
     ctx["connector"] = mock_connector
     ctx["query_error"] = None
 
+
 @given("a Google Docs connector with valid OAuth token")
 def step_google_docs_connector(ctx):
     from unittest.mock import AsyncMock
@@ -3861,9 +3728,7 @@ def step_google_docs_connector(ctx):
                 file_id = q.filters.get("file_id", "")
                 if not file_id:
                     raise ValueError("Google Docs file query requires 'file_id' filter")
-                return ConnectorResult(
-                    records=[{"id": file_id, "name": "Report.pdf", "mimeType": "application/pdf"}]
-                )
+                return ConnectorResult(records=[{"id": file_id, "name": "Report.pdf", "mimeType": "application/pdf"}])
             case _:
                 raise ValueError(f"Unsupported Google Docs resource: {q.resource!r}")
 
@@ -3900,9 +3765,7 @@ def step_google_docs_connector(ctx):
     ctx["query_error"] = None
 
 
-@when(
-    parsers.parse('I query YouTrack resource "{resource}"')
-)
+@when(parsers.parse('I query YouTrack resource "{resource}"'))
 def step_youtrack_query_resource(resource, ctx):
     from modulo.connectors.base import ConnectorQuery
 
@@ -3938,6 +3801,7 @@ def step_confluence_query_pages(space_id, ctx):
 def step_notion_health_401(ctx):
     async def mock_health():
         return HealthResult(ok=False, detail="HTTP 401: Unauthorized")
+
     ctx["connector"].health_check = mock_health
 
 
@@ -3945,6 +3809,7 @@ def step_notion_health_401(ctx):
 def step_google_docs_health_valid(ctx):
     async def mock_health():
         return HealthResult(ok=True)
+
     ctx["connector"].health_check = mock_health
 
 
@@ -3952,12 +3817,11 @@ def step_google_docs_health_valid(ctx):
 def step_google_docs_health_401(ctx):
     async def mock_health():
         return HealthResult(ok=False, detail="HTTP 401: Unauthorized")
+
     ctx["connector"].health_check = mock_health
 
 
-@when(
-    parsers.parse('I query resource "{resource}" with database_id "{db_id}"')
-)
+@when(parsers.parse('I query resource "{resource}" with database_id "{db_id}"'))
 def step_notion_query_with_database_id(resource, db_id, ctx):
     from modulo.connectors.base import ConnectorQuery
 
@@ -3995,6 +3859,7 @@ def step_google_docs_documents_available(ctx):
 
     async def mock_query(q):
         from modulo.connectors.base import ConnectorResult
+
         if q.resource == "documents":
             return ConnectorResult(
                 records=[
@@ -4015,10 +3880,9 @@ def step_google_docs_single_document(ctx):
 
     async def mock_query(q):
         from modulo.connectors.base import ConnectorResult
+
         if q.resource == "document":
-            return ConnectorResult(
-                records=[{"documentId": "d1", "title": "My Document", "body": {"content": []}}]
-            )
+            return ConnectorResult(records=[{"documentId": "d1", "title": "My Document", "body": {"content": []}}])
         raise ValueError(f"Unsupported resource: {q.resource!r}")
 
     connector.query = mock_query
@@ -4030,6 +3894,7 @@ def step_google_docs_files_available(ctx):
 
     async def mock_query(q):
         from modulo.connectors.base import ConnectorResult
+
         if q.resource == "files":
             return ConnectorResult(
                 records=[
@@ -4049,10 +3914,9 @@ def step_google_docs_single_file(ctx):
 
     async def mock_query(q):
         from modulo.connectors.base import ConnectorResult
+
         if q.resource == "file":
-            return ConnectorResult(
-                records=[{"id": "f1", "name": "Report.pdf", "mimeType": "application/pdf"}]
-            )
+            return ConnectorResult(records=[{"id": "f1", "name": "Report.pdf", "mimeType": "application/pdf"}])
         raise ValueError(f"Unsupported resource: {q.resource!r}")
 
     connector.query = mock_query
@@ -4096,9 +3960,7 @@ def step_google_docs_configured(ctx):
     pass
 
 
-@when(
-    parsers.parse('I query resource "{resource}" with document_id "{document_id}"')
-)
+@when(parsers.parse('I query resource "{resource}" with document_id "{document_id}"'))
 def step_google_docs_query_with_document_id(resource, document_id, ctx):
     from modulo.connectors.base import ConnectorQuery
 
@@ -4114,9 +3976,7 @@ def step_google_docs_query_with_document_id(resource, document_id, ctx):
         ctx["query_error"] = str(exc)
 
 
-@when(
-    parsers.parse('I query YouTrack resource "{resource}" with query "{query_text}"')
-)
+@when(parsers.parse('I query YouTrack resource "{resource}" with query "{query_text}"'))
 def step_youtrack_query_issues(resource, query_text, ctx):
     from modulo.connectors.base import ConnectorQuery
 
@@ -4148,9 +4008,7 @@ def step_confluence_query_spaces(space_type, ctx):
         ctx["query_error"] = str(exc)
 
 
-@when(
-    parsers.parse('I query resource "{resource}" with file_id "{file_id}"')
-)
+@when(parsers.parse('I query resource "{resource}" with file_id "{file_id}"'))
 def step_google_docs_query_with_file_id(resource, file_id, ctx):
     from modulo.connectors.base import ConnectorQuery
 
@@ -4166,9 +4024,7 @@ def step_google_docs_query_with_file_id(resource, file_id, ctx):
         ctx["query_error"] = str(exc)
 
 
-@when(
-    parsers.parse('I query resource "{resource}" with page_id "{page_id}"')
-)
+@when(parsers.parse('I query resource "{resource}" with page_id "{page_id}"'))
 def step_notion_query_with_page_id(resource, page_id, ctx):
     from modulo.connectors.base import ConnectorQuery
 
@@ -4200,9 +4056,7 @@ def step_confluence_query_content(cql, ctx):
         ctx["query_error"] = str(exc)
 
 
-@when(
-    parsers.parse('I query YouTrack resource "{resource}" with issue_id "{issue_id}"')
-)
+@when(parsers.parse('I query YouTrack resource "{resource}" with issue_id "{issue_id}"'))
 def step_youtrack_query_issue(resource, issue_id, ctx):
     from modulo.connectors.base import ConnectorQuery
 
@@ -4234,9 +4088,7 @@ def step_confluence_query_children(page_id, ctx):
         ctx["query_error"] = str(exc)
 
 
-@when(
-    parsers.parse('I query YouTrack resource "{resource}" without issue_id')
-)
+@when(parsers.parse('I query YouTrack resource "{resource}" without issue_id'))
 def step_youtrack_query_without_id(resource, ctx):
     from modulo.connectors.base import ConnectorQuery
 
@@ -4268,9 +4120,7 @@ def step_confluence_query_labels(page_id, ctx):
         ctx["query_error"] = str(exc)
 
 
-@when(
-    parsers.parse('I query resource "{resource}" without database_id filter')
-)
+@when(parsers.parse('I query resource "{resource}" without database_id filter'))
 def step_notion_query_without_database_id(resource, ctx):
     from modulo.connectors.base import ConnectorQuery
 
@@ -4286,12 +4136,7 @@ def step_notion_query_without_database_id(resource, ctx):
         ctx["query_error"] = str(exc)
 
 
-@when(
-    parsers.parse(
-        'I write YouTrack resource "{resource}" with summary "{summary}"'
-        ' and project "{project}"'
-    )
-)
+@when(parsers.parse('I write YouTrack resource "{resource}" with summary "{summary}" and project "{project}"'))
 def step_youtrack_write_issue(resource, summary, project, ctx):
     from modulo.connectors.base import ConnectorPayload
 
@@ -4329,12 +4174,7 @@ def step_confluence_create_page(space_id, title, ctx):
         ctx["query_error"] = str(exc)
 
 
-@when(
-    parsers.parse(
-        'I write Notion resource "{resource}" with database_id "{db_id}"'
-        ' and title "{title}"'
-    )
-)
+@when(parsers.parse('I write Notion resource "{resource}" with database_id "{db_id}" and title "{title}"'))
 def step_notion_write_page(resource, db_id, title, ctx):
     from modulo.connectors.base import ConnectorPayload
 
@@ -4356,11 +4196,7 @@ def step_notion_write_page(resource, db_id, title, ctx):
         ctx["query_error"] = str(exc)
 
 
-@when(
-    parsers.parse(
-        'I write resource "{resource}" with title "{title}"'
-    )
-)
+@when(parsers.parse('I write resource "{resource}" with title "{title}"'))
 def step_google_docs_write_document(resource, title, ctx):
     from modulo.connectors.base import ConnectorPayload
 
@@ -4395,11 +4231,7 @@ def step_confluence_add_label(page_id, label, ctx):
         ctx["query_error"] = str(exc)
 
 
-@when(
-    parsers.parse(
-        'I write resource "{resource}" for document "{document_id}" with text "{text}"'
-    )
-)
+@when(parsers.parse('I write resource "{resource}" for document "{document_id}" with text "{text}"'))
 def step_google_docs_write_document_update(resource, document_id, text, ctx):
     from modulo.connectors.base import ConnectorPayload
 
@@ -4415,12 +4247,7 @@ def step_google_docs_write_document_update(resource, document_id, text, ctx):
         ctx["query_error"] = str(exc)
 
 
-@when(
-    parsers.parse(
-        'I write YouTrack resource "{resource}" with issue_id "{issue_id}"'
-        ' and updated fields'
-    )
-)
+@when(parsers.parse('I write YouTrack resource "{resource}" with issue_id "{issue_id}" and updated fields'))
 def step_youtrack_update_issue(resource, issue_id, ctx):
     from modulo.connectors.base import ConnectorPayload
 
@@ -4439,12 +4266,7 @@ def step_youtrack_update_issue(resource, issue_id, ctx):
         ctx["query_error"] = str(exc)
 
 
-@when(
-    parsers.parse(
-        'I write YouTrack resource "{resource}" with issue_id "{issue_id}"'
-        ' and text "{text}"'
-    )
-)
+@when(parsers.parse('I write YouTrack resource "{resource}" with issue_id "{issue_id}" and text "{text}"'))
 def step_youtrack_write_comment(resource, issue_id, text, ctx):
     from modulo.connectors.base import ConnectorPayload
 
@@ -4467,9 +4289,7 @@ def step_youtrack_write_comment(resource, issue_id, text, ctx):
 def step_notion_database_metadata(ctx):
     result = ctx["query_result"]
     for rec in result.records:
-        assert "id" in rec and "object" in rec, (
-            f"Record missing database metadata: {rec}"
-        )
+        assert "id" in rec and "object" in rec, f"Record missing database metadata: {rec}"
 
 
 @then("the record contains database fields")
@@ -4477,9 +4297,7 @@ def step_notion_database_fields(ctx):
     result = ctx["query_result"]
     assert len(result.records) > 0
     rec = result.records[0]
-    assert "id" in rec and "title" in rec, (
-        f"Record missing database fields: {rec}"
-    )
+    assert "id" in rec and "title" in rec, f"Record missing database fields: {rec}"
 
 
 @then("the record contains Notion page fields")
@@ -4487,9 +4305,7 @@ def step_notion_page_fields(ctx):
     result = ctx["query_result"]
     assert len(result.records) > 0
     rec = result.records[0]
-    assert "id" in rec and "properties" in rec, (
-        f"Record missing Notion page fields: {rec}"
-    )
+    assert "id" in rec and "properties" in rec, f"Record missing Notion page fields: {rec}"
 
 
 @then("the records contain page metadata")
@@ -4525,9 +4341,7 @@ def step_confluence_label_metadata(ctx):
 def step_google_docs_document_metadata(ctx):
     result = ctx["query_result"]
     for rec in result.records:
-        assert "id" in rec and "name" in rec, (
-            f"Record missing document metadata: {rec}"
-        )
+        assert "id" in rec and "name" in rec, f"Record missing document metadata: {rec}"
 
 
 @then("the record contains document fields")
@@ -4535,9 +4349,7 @@ def step_google_docs_document_fields(ctx):
     result = ctx["query_result"]
     assert len(result.records) > 0
     rec = result.records[0]
-    assert "documentId" in rec and "title" in rec, (
-        f"Record missing document fields: {rec}"
-    )
+    assert "documentId" in rec and "title" in rec, f"Record missing document fields: {rec}"
 
 
 @then("the record contains file metadata")
@@ -4545,9 +4357,7 @@ def step_google_docs_file_metadata(ctx):
     result = ctx["query_result"]
     assert len(result.records) > 0
     rec = result.records[0]
-    assert "id" in rec and "name" in rec and "mimeType" in rec, (
-        f"Record missing file metadata: {rec}"
-    )
+    assert "id" in rec and "name" in rec and "mimeType" in rec, f"Record missing file metadata: {rec}"
 
 
 # ============================================================================
@@ -4746,11 +4556,7 @@ def step_datadog_search_logs(ctx):
         ctx["query_error"] = str(exc)
 
 
-@when(
-    parsers.parse(
-        'the connector writes an event with title "{title}" and text "{text}"'
-    )
-)
+@when(parsers.parse('the connector writes an event with title "{title}" and text "{text}"'))
 def step_datadog_write_event(title, text, ctx):
     from modulo.connectors.base import ConnectorPayload
 
@@ -4766,11 +4572,7 @@ def step_datadog_write_event(title, text, ctx):
         ctx["query_error"] = str(exc)
 
 
-@when(
-    parsers.parse(
-        'the connector creates a monitor with type "{monitor_type}"'
-    )
-)
+@when(parsers.parse('the connector creates a monitor with type "{monitor_type}"'))
 def step_datadog_create_monitor(monitor_type, ctx):
     from modulo.connectors.base import ConnectorPayload
 
@@ -4980,10 +4782,7 @@ async def step_initialise_with_instance(ctx):
 
 @then("a ConnectorDecryptError is raised with the connector ID")
 def step_decrypt_error_raised(ctx):
-    assert ctx.get("decrypt_error_raised") is True, (
-        "Expected ConnectorDecryptError but none was raised"
-    )
+    assert ctx.get("decrypt_error_raised") is True, "Expected ConnectorDecryptError but none was raised"
     assert ctx["decrypt_error_connector_id"] == ctx["connector_id"], (
-        f"ConnectorDecryptError connector_id mismatch: "
-        f"{ctx['decrypt_error_connector_id']} != {ctx['connector_id']}"
+        f"ConnectorDecryptError connector_id mismatch: {ctx['decrypt_error_connector_id']} != {ctx['connector_id']}"
     )

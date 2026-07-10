@@ -333,8 +333,7 @@ async def _create_org(db_engine: AsyncEngine, name: str) -> uuid.UUID:
     async with db_engine.connect() as conn, conn.begin():
         await conn.execute(
             text(
-                "INSERT INTO organisations (id, name, slug, settings_json) "
-                "VALUES (:id, :name, :slug, '{}'::json)",
+                "INSERT INTO organisations (id, name, slug, settings_json) VALUES (:id, :name, :slug, '{}'::json)",
             ),
             {
                 "id": str(org_id),
@@ -497,28 +496,34 @@ async def test_orm_tenant_filter_select_update_delete(monkeypatch: pytest.Monkey
 
     # Seed data: 2 items per org
     async with factory() as session, session.begin():
-        session.add_all([
-            _Item(organisation_id=org_a, name="a-1"),
-            _Item(organisation_id=org_a, name="a-2"),
-            _Item(organisation_id=org_b, name="b-1"),
-            _Item(organisation_id=org_b, name="b-2"),
-        ])
+        session.add_all(
+            [
+                _Item(organisation_id=org_a, name="a-1"),
+                _Item(organisation_id=org_a, name="a-2"),
+                _Item(organisation_id=org_b, name="b-1"),
+                _Item(organisation_id=org_b, name="b-2"),
+            ]
+        )
 
     # Test SELECT filtering: with org_a context, only org_a rows visible
     async with factory() as session, session.begin():
         session.info["org_id"] = org_a
-        result = (await session.scalars(
-            select(_Item).where(_Item.name.in_(["a-1", "b-1"])),
-        )).all()
+        result = (
+            await session.scalars(
+                select(_Item).where(_Item.name.in_(["a-1", "b-1"])),
+            )
+        ).all()
         names = {r.name for r in result}
         assert names == {"a-1"}, f"Expected only 'a-1', got {names}"
 
     # Test SELECT filtering: with org_b context, only org_b rows visible
     async with factory() as session, session.begin():
         session.info["org_id"] = org_b
-        result = (await session.scalars(
-            select(_Item).where(_Item.name.in_(["a-1", "b-1"])),
-        )).all()
+        result = (
+            await session.scalars(
+                select(_Item).where(_Item.name.in_(["a-1", "b-1"])),
+            )
+        ).all()
         names = {r.name for r in result}
         assert names == {"b-1"}, f"Expected only 'b-1', got {names}"
 
@@ -535,9 +540,15 @@ async def test_orm_tenant_filter_select_update_delete(monkeypatch: pytest.Monkey
         )
 
     async with factory() as session, session.begin():
-        result = (await session.execute(
-            text("SELECT name FROM tenant_items WHERE name LIKE '%updated'"),
-        )).scalars().all()
+        result = (
+            (
+                await session.execute(
+                    text("SELECT name FROM tenant_items WHERE name LIKE '%updated'"),
+                )
+            )
+            .scalars()
+            .all()
+        )
         assert len(result) == 1, f"Expected 1 updated item, got {len(result)}"
 
     # Test DELETE filtering: only org_b's row deleted
@@ -548,9 +559,15 @@ async def test_orm_tenant_filter_select_update_delete(monkeypatch: pytest.Monkey
         )
 
     async with factory() as session, session.begin():
-        result = (await session.execute(
-            text("SELECT name FROM tenant_items ORDER BY name"),
-        )).scalars().all()
+        result = (
+            (
+                await session.execute(
+                    text("SELECT name FROM tenant_items ORDER BY name"),
+                )
+            )
+            .scalars()
+            .all()
+        )
         assert "b-2" not in result, "b-2 should have been deleted"
         assert "a-1-updated" in result, "a-1-updated should remain"
 

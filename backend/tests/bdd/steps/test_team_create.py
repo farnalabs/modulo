@@ -120,4 +120,3 @@ def response_contains_team_fields(request) -> None:
 def team_has_zero_members(request) -> None:
     data = request.node._resp.json()
     assert data.get("member_count", 0) == 0
-

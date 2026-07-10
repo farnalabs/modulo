@@ -75,11 +75,7 @@ async def list_model_backends(
         items_stmt = select(ModelBackend).order_by(ModelBackend.created_at.desc()).offset(offset).limit(page_size)
         if excluded_tiers:
             items_stmt = items_stmt.where(~ModelBackend.tier.in_(excluded_tiers))
-        items = list(
-            (
-                await session.execute(items_stmt)
-            ).scalars()
-        )
+        items = list((await session.execute(items_stmt)).scalars())
     except ProgrammingError:
         return PageResult(items=[], total=0, page=page, page_size=page_size)
     return PageResult(items=items, total=total, page=page, page_size=page_size)

@@ -127,6 +127,7 @@ def _get_registry() -> Any | None:
             _redis_registry = _SENTINEL  # don't retry
     return _redis_registry if _redis_registry is not _SENTINEL else None
 
+
 # ── Action rate limiter ──────────────────────────────────────────────────
 
 
@@ -153,7 +154,9 @@ _rate_limiters: dict[str, ActionRateLimiter] = {}
 
 class CreateSessionRequest(BaseModel):
     provider: str | None = Field(None, description="LLM provider (e.g. openai, anthropic). Auto-detected if omitted.")
-    model: str | None = Field(None, description="Model ID (e.g. gpt-4o, claude-sonnet-4-20250514). Auto-detected if omitted.")
+    model: str | None = Field(
+        None, description="Model ID (e.g. gpt-4o, claude-sonnet-4-20250514). Auto-detected if omitted."
+    )
     context_window_tokens: int = Field(..., ge=1024, le=1_000_000)
     name: str | None = None
 
@@ -176,10 +179,14 @@ class StreamRequest(BaseModel):
     provider: str = Field(..., description="LLM provider")
     model: str = Field(..., description="Model ID")
     context_window_tokens: int | None = Field(
-        None, ge=1024, le=1_000_000,
+        None,
+        ge=1024,
+        le=1_000_000,
         description="Override context window (defaults to session value)",
     )
-    api_key: str | None = Field(None, description="Optional API key override. Auto-resolved from model backends if omitted.")
+    api_key: str | None = Field(
+        None, description="Optional API key override. Auto-resolved from model backends if omitted."
+    )
     mcp_api_key: str | None = Field(None, description="MCP API key for tool execution.")
     page_context: str | None = Field(None, description="Current page context for Remy's context-awareness.")
     system_prompt: str | None = Field(None, description="System prompt override.")
@@ -325,18 +332,18 @@ async def _call_mcp_tool(
         except httpx.TimeoutException:
             logger.warning("MCP tool %r timed out (attempt %d/3)", tool_name, attempt + 1)
             last_exc = None
-            await asyncio.sleep(2 ** attempt)
+            await asyncio.sleep(2**attempt)
         except httpx.HTTPStatusError as e:
             if e.response.status_code in (502, 503, 504):
                 logger.warning("MCP tool %r returned %d (attempt %d/3)", tool_name, e.response.status_code, attempt + 1)
                 last_exc = e
-                await asyncio.sleep(2 ** attempt)
+                await asyncio.sleep(2**attempt)
                 continue
             raise
         except httpx.RequestError as e:
             logger.warning("MCP tool %r request failed (attempt %d/3): %s", tool_name, attempt + 1, e)
             last_exc = e
-            await asyncio.sleep(2 ** attempt)
+            await asyncio.sleep(2**attempt)
     raise HTTPException(
         status_code=status.HTTP_502_BAD_GATEWAY,
         detail=f"MCP tool call '{tool_name}' failed after 3 attempts.",
@@ -358,9 +365,7 @@ def _reconstruct_tool_calls(buffers: dict[int, dict[str, Any]]) -> list[dict[str
 
 async def _reconstruct_messages(session: AsyncSession, session_id: uuid.UUID) -> list[BaseMessage]:
     result = await session.execute(
-        select(ChatMessage)
-        .where(ChatMessage.session_id == session_id)
-        .order_by(ChatMessage.created_at.asc())
+        select(ChatMessage).where(ChatMessage.session_id == session_id).order_by(ChatMessage.created_at.asc())
     )
     db_messages = result.scalars().all()
     return [_message_to_langchain(m) for m in db_messages]
@@ -519,17 +524,19 @@ def _get_all_tool_definitions(include_ui_tools: bool = True) -> list[dict[str, A
     tools: list[dict[str, Any]] = []
     if include_ui_tools:
         for name, schema in _UI_TOOLS.items():
-            tools.append({
-                "type": "function",
-                "function": {
-                    "name": name,
-                    "description": schema["description"],
-                    "parameters": {
-                        "type": "object",
-                        "properties": schema["parameters"],
+            tools.append(
+                {
+                    "type": "function",
+                    "function": {
+                        "name": name,
+                        "description": schema["description"],
+                        "parameters": {
+                            "type": "object",
+                            "properties": schema["parameters"],
+                        },
                     },
-                },
-            })
+                }
+            )
     tools.extend(get_mcp_tool_definitions())
     return tools
 
@@ -610,10 +617,12 @@ async def create_session(
 
             if provider is None or model is None:
                 mb_result = await session.execute(
-                    select(ModelBackend).where(
+                    select(ModelBackend)
+                    .where(
                         ModelBackend.organisation_id == principal.organisation_id,
                         ModelBackend.credentials_ciphertext.is_not(None),
-                    ).limit(1)
+                    )
+                    .limit(1)
                 )
                 mb = mb_result.scalar_one_or_none()
                 if mb:
@@ -911,7 +920,10 @@ async def stream_chat(
                     async with db_session.begin():
                         await set_rls_org(db_session, principal.organisation_id)
                         resolved = await _resolve_api_key(
-                            req.provider, principal.organisation_id, db_session, settings.fernet_key,
+                            req.provider,
+                            principal.organisation_id,
+                            db_session,
+                            settings.fernet_key,
                         )
                     if resolved is None:
                         msg = (
@@ -930,7 +942,7 @@ async def stream_chat(
                     return
 
                 # 3. Construct system prompt from config + skills
-                supports_tools = getattr(backend, 'supports_tools', False)
+                supports_tools = getattr(backend, "supports_tools", False)
                 async with db_session.begin():
                     await set_rls_org(db_session, principal.organisation_id)
                     skill_loader = SkillLoader(db_session)
@@ -986,7 +998,7 @@ async def stream_chat(
                     tool_call_buffers: dict[int, dict[str, Any]] = {}
 
                     tools_param = None
-                    if getattr(backend, 'supports_tools', False):
+                    if getattr(backend, "supports_tools", False):
                         await build_tool_registry()
                         tools_param = _get_all_tool_definitions(
                             include_ui_tools=await _is_ui_driving_enabled(principal.organisation_id, db_session),
@@ -1052,10 +1064,15 @@ async def stream_chat(
                                     auto_name = name_seed + ("..." if len(req.content) > 40 else "")
                                 elif msg_count >= 10:
                                     # After 10 messages: use first user message prefix
-                                    first_msg_q = select(ChatMessage.content).where(
-                                        ChatMessage.session_id == session_id,
-                                        ChatMessage.role == "user",
-                                    ).order_by(ChatMessage.created_at.asc()).limit(1)
+                                    first_msg_q = (
+                                        select(ChatMessage.content)
+                                        .where(
+                                            ChatMessage.session_id == session_id,
+                                            ChatMessage.role == "user",
+                                        )
+                                        .order_by(ChatMessage.created_at.asc())
+                                        .limit(1)
+                                    )
                                     first_msg = (await db_session.execute(first_msg_q)).scalar() or ""
                                     name_seed = first_msg[:30].strip()
                                     auto_name = f"{name_seed}... ({msg_count} msgs)" if first_msg else None
@@ -1095,20 +1112,28 @@ async def stream_chat(
                                     mcp_api_key=req.mcp_api_key,
                                     base_url=mcp_base_url,
                                 )
-                                tool_results.append({
-                                    "tool_call_id": tc["id"], "tool_name": tc["name"],
-                                    "success": True, "result": result,
-                                })
+                                tool_results.append(
+                                    {
+                                        "tool_call_id": tc["id"],
+                                        "tool_name": tc["name"],
+                                        "success": True,
+                                        "result": result,
+                                    }
+                                )
                                 yield f"event: tool_call\ndata: {json.dumps(tool_results[-1])}\n\n"
                             except HTTPException:
                                 raise
                             except Exception as exc:
                                 logger.exception("MCP tool call failed: %r", tc["name"])
                                 err_msg = f"{type(exc).__name__}: {exc}"[:200]
-                                tool_results.append({
-                                    "tool_call_id": tc["id"], "tool_name": tc["name"],
-                                    "success": False, "error": err_msg,
-                                })
+                                tool_results.append(
+                                    {
+                                        "tool_call_id": tc["id"],
+                                        "tool_name": tc["name"],
+                                        "success": False,
+                                        "error": err_msg,
+                                    }
+                                )
                                 yield f"event: tool_call\ndata: {json.dumps(tool_results[-1])}\n\n"
 
                     # Handle get_manifest calls server-side
@@ -1117,6 +1142,7 @@ async def stream_chat(
 
                     for tc in manifest_calls:
                         from modulo.core.manifest import get_manifest
+
                         manifest = get_manifest()
                         path = tc["args"].get("path")
                         if path:
@@ -1137,23 +1163,27 @@ async def stream_chat(
                                 "elements": manifest.get("elements", {}),
                                 "sidebar_groups": manifest.get("sidebar_groups", {}),
                             }
-                        tool_results.append({
-                            "tool_call_id": tc["id"],
-                            "tool_name": "get_manifest",
-                            "success": True,
-                            "result": result,
-                        })
+                        tool_results.append(
+                            {
+                                "tool_call_id": tc["id"],
+                                "tool_name": "get_manifest",
+                                "success": True,
+                                "result": result,
+                            }
+                        )
                         yield f"event: tool_call\ndata: {json.dumps(tool_results[-1])}\n\n"
 
                     # Handle UI tools
                     if ui_tool_calls and not await _is_ui_driving_enabled(principal.organisation_id, db_session):
                         for tc in ui_tool_calls:
-                            tool_results.append({
-                                "tool_call_id": tc["id"],
-                                "tool_name": tc["name"],
-                                "success": False,
-                                "error": "UI driving is disabled by your organisation.",
-                            })
+                            tool_results.append(
+                                {
+                                    "tool_call_id": tc["id"],
+                                    "tool_name": tc["name"],
+                                    "success": False,
+                                    "error": "UI driving is disabled by your organisation.",
+                                }
+                            )
                             yield f"event: tool_call\ndata: {json.dumps(tool_results[-1])}\n\n"
                     elif ui_tool_calls:
                         async with db_session.begin():
@@ -1189,7 +1219,9 @@ async def stream_chat(
                             elif perm in ("requires_approval", "nogo_requires_approval"):
                                 page_path = req.page_context or ""
                                 if not await _is_approved_for_session(
-                                    session_id_str, tc["name"], page_path,
+                                    session_id_str,
+                                    tc["name"],
+                                    page_path,
                                 ):
                                     if perm == "nogo_requires_approval":
                                         tc["_nogo"] = True
@@ -1199,17 +1231,21 @@ async def stream_chat(
 
                         if pending_permission_calls:
                             req_id = str(uuid.uuid4())
-                            yield f"event: permission_request\ndata: {json.dumps({
-                                'request_id': req_id,
-                                'tools': [
+                            yield f"event: permission_request\ndata: {
+                                json.dumps(
                                     {
-                                        'name': tc['name'],
-                                        'args': tc['args'],
-                                        **({'nogo': True} if tc.get('_nogo') else {}),
+                                        'request_id': req_id,
+                                        'tools': [
+                                            {
+                                                'name': tc['name'],
+                                                'args': tc['args'],
+                                                **({'nogo': True} if tc.get('_nogo') else {}),
+                                            }
+                                            for tc in pending_permission_calls
+                                        ],
                                     }
-                                    for tc in pending_permission_calls
-                                ],
-                            })}\n\n"
+                                )
+                            }\n\n"
 
                             # Register permission request — Redis pub/sub for cross-worker,
                             # in-memory Event for local fast-path
@@ -1218,7 +1254,8 @@ async def stream_chat(
                             _pending_permissions[req_id] = (event, session_id_str)
                             if registry is not None:
                                 await registry.set_permission_request(
-                                    req_id, session_id_str,
+                                    req_id,
+                                    session_id_str,
                                     [{"name": tc["name"], "args": tc["args"]} for tc in pending_permission_calls],
                                 )
                             try:
@@ -1233,7 +1270,9 @@ async def stream_chat(
                                     if decision["action"] == "approve_for_session":
                                         for tc in pending_permission_calls:
                                             await _set_session_approval(
-                                                session_id_str, tc["name"], req.page_context or "",
+                                                session_id_str,
+                                                tc["name"],
+                                                req.page_context or "",
                                             )
                             except TimeoutError:
                                 pass
@@ -1257,9 +1296,13 @@ async def stream_chat(
                                 )
                                 break
 
-                            yield f"event: ui_command_batch\ndata: {json.dumps({
-                                'commands': approved_calls,
-                            })}\n\n"
+                            yield f"event: ui_command_batch\ndata: {
+                                json.dumps(
+                                    {
+                                        'commands': approved_calls,
+                                    }
+                                )
+                            }\n\n"
 
                             registry = _get_registry()
                             event = asyncio.Event()
@@ -1286,33 +1329,41 @@ async def stream_chat(
                                     extra={"approved": len(approved_calls), "results": len(results)},
                                 )
                             for ac, r in zip(approved_calls, results, strict=False):
-                                tool_results.append({
-                                    "tool_call_id": ac["id"],
-                                    "tool_name": r.get("name", ""),
-                                    "success": r.get("success", False),
-                                    "result": r.get("result"),
-                                    "error": r.get("error"),
-                                })
+                                tool_results.append(
+                                    {
+                                        "tool_call_id": ac["id"],
+                                        "tool_name": r.get("name", ""),
+                                        "success": r.get("success", False),
+                                        "result": r.get("result"),
+                                        "error": r.get("error"),
+                                    }
+                                )
                                 yield f"event: tool_call\ndata: {json.dumps(tool_results[-1])}\n\n"
 
                             if results and all(r.get("error") == "cancelled_by_user" for r in results):
                                 skipped = len(results)
                                 s = "s" if skipped != 1 else ""
                                 summary = f"Action cancelled by user. {skipped} action{s} skipped."
-                                yield f"event: abort_summary\ndata: {json.dumps({
-                                    'completed': 0, 'skipped': skipped, 'summary': summary,
-                                })}\n\n"
+                                yield f"event: abort_summary\ndata: {
+                                    json.dumps(
+                                        {
+                                            'completed': 0,
+                                            'skipped': skipped,
+                                            'summary': summary,
+                                        }
+                                    )
+                                }\n\n"
                                 break
 
                     # Add to conversation for next LLM turn
-                    langchain_messages.append(
-                        AIMessage(content=full_content, tool_calls=tool_calls)
-                    )
+                    langchain_messages.append(AIMessage(content=full_content, tool_calls=tool_calls))
                     for tr in tool_results:
-                        langchain_messages.append(ToolMessage(
-                            content=json.dumps(tr.get("result", tr.get("error", ""))),
-                            tool_call_id=tr["tool_call_id"],
-                        ))
+                        langchain_messages.append(
+                            ToolMessage(
+                                content=json.dumps(tr.get("result", tr.get("error", ""))),
+                                tool_call_id=tr["tool_call_id"],
+                            )
+                        )
 
                     # Save to DB
                     async with db_session.begin():
@@ -1359,11 +1410,7 @@ async def stream_chat(
             )
         except SQLAlchemyError:
             logger.exception("remy.database_error")
-            yield (
-                "event: error\ndata: "
-                + json.dumps({"detail": "Database error. Please try again later."})
-                + "\n\n"
-            )
+            yield ("event: error\ndata: " + json.dumps({"detail": "Database error. Please try again later."}) + "\n\n")
         except Exception:
             logger.exception("Remy streaming error")
             yield f"event: error\ndata: {json.dumps({'detail': 'An unexpected error occurred. Please try again.'})}\n\n"
@@ -1608,14 +1655,16 @@ async def get_audit_trail(
         for m in messages:
             tr = m.tool_results_json or {}
             snapshot = tr.get("result", {}).get("snapshotBefore", {}) if isinstance(tr.get("result"), dict) else {}
-            trail.append({
-                "timestamp": m.created_at.isoformat() if m.created_at else None,
-                "action": tr.get("tool_name", ""),
-                "args": tr.get("result", {}).get("args", {}) if isinstance(tr.get("result"), dict) else {},
-                "url": snapshot.get("url", ""),
-                "success": tr.get("success", False),
-                "error": tr.get("error"),
-            })
+            trail.append(
+                {
+                    "timestamp": m.created_at.isoformat() if m.created_at else None,
+                    "action": tr.get("tool_name", ""),
+                    "args": tr.get("result", {}).get("args", {}) if isinstance(tr.get("result"), dict) else {},
+                    "url": snapshot.get("url", ""),
+                    "success": tr.get("success", False),
+                    "error": tr.get("error"),
+                }
+            )
 
         return {"items": trail}
     except ProgrammingError:

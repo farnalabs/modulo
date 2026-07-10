@@ -40,7 +40,7 @@ def _compute_delay(attempt: int, response: httpx.Response | None = None) -> floa
         if retry_after is not None:
             return min(retry_after, _MAX_DELAY)
     jitter = random.uniform(0, 1)
-    return min(_BASE_DELAY * (2 ** attempt) + jitter, _MAX_DELAY)
+    return min(_BASE_DELAY * (2**attempt) + jitter, _MAX_DELAY)
 
 
 class JiraConnector(ConnectorBase):
@@ -254,7 +254,8 @@ class JiraConnector(ConnectorBase):
                     raise ValueError("Jira transition requires 'transition_id' in data")
                 transition_id = payload.data["transition_id"]
                 r = await self._call_api(
-                    "POST", f"/issue/{issue_key}/transitions",
+                    "POST",
+                    f"/issue/{issue_key}/transitions",
                     json={"transition": {"id": transition_id}},
                 )
                 return {"issue_key": issue_key, "transitioned": True}

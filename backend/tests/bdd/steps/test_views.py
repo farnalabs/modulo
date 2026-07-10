@@ -147,9 +147,7 @@ def _delete_view(ctx: dict[str, Any], client: Any) -> None:
 def _check_response_status(status: int, ctx: dict[str, Any]) -> None:
     resp = ctx.get("response")
     assert resp is not None, "No response stored in context"
-    assert resp.status_code == status, (
-        f"Expected status {status}, got {resp.status_code}: {resp.text[:200]}"
-    )
+    assert resp.status_code == status, f"Expected status {status}, got {resp.status_code}: {resp.text[:200]}"
 
 
 @then(parsers.parse('the response contains a view with name "{expected}"'))

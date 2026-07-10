@@ -545,7 +545,8 @@ class TestRevertToManual:
         with (
             patch("modulo.api.routes.pipelines.get_snapshot_detail", return_value=snapshot),
             patch("modulo.api.routes.pipelines._save_graph", side_effect=IntegrityError("stmt", "params", "orig")),
-            patch("modulo.api.routes.pipelines.append_audit_event", AsyncMock()),pytest.raises(HTTPException) as excinfo
+            patch("modulo.api.routes.pipelines.append_audit_event", AsyncMock()),
+            pytest.raises(HTTPException) as excinfo,
         ):
             await revert_node_to_manual_endpoint(
                 pipeline_id=PIPELINE_ID,
@@ -566,7 +567,8 @@ class TestRevertToManual:
         with (
             patch("modulo.api.routes.pipelines.get_snapshot_detail", return_value=snapshot),
             patch("modulo.api.routes.pipelines._save_graph", side_effect=ProgrammingError("stmt", "params", "orig")),
-            patch("modulo.api.routes.pipelines.append_audit_event", AsyncMock()),pytest.raises(HTTPException) as excinfo
+            patch("modulo.api.routes.pipelines.append_audit_event", AsyncMock()),
+            pytest.raises(HTTPException) as excinfo,
         ):
             await revert_node_to_manual_endpoint(
                 pipeline_id=PIPELINE_ID,
@@ -587,7 +589,8 @@ class TestRevertToManual:
         with (
             patch("modulo.api.routes.pipelines.get_snapshot_detail", return_value=snapshot),
             patch("modulo.api.routes.pipelines._save_graph", side_effect=SQLAlchemyError("stmt", "params", "orig")),
-            patch("modulo.api.routes.pipelines.append_audit_event", AsyncMock()),pytest.raises(HTTPException) as excinfo
+            patch("modulo.api.routes.pipelines.append_audit_event", AsyncMock()),
+            pytest.raises(HTTPException) as excinfo,
         ):
             await revert_node_to_manual_endpoint(
                 pipeline_id=PIPELINE_ID,
@@ -608,7 +611,8 @@ class TestRevertToManual:
         with (
             patch("modulo.api.routes.pipelines.get_snapshot_detail", return_value=snapshot),
             patch("modulo.api.routes.pipelines._save_graph", side_effect=ValueError("unexpected")),
-            patch("modulo.api.routes.pipelines.append_audit_event", AsyncMock()),pytest.raises(HTTPException) as excinfo
+            patch("modulo.api.routes.pipelines.append_audit_event", AsyncMock()),
+            pytest.raises(HTTPException) as excinfo,
         ):
             await revert_node_to_manual_endpoint(
                 pipeline_id=PIPELINE_ID,

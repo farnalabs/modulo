@@ -28,12 +28,20 @@ _log = logging.getLogger(__name__)
 _JWKS_CACHE_TTL = 3600  # 1 hour
 _jwks_cache: dict[str, tuple[float, list[dict[str, Any]]]] = {}
 
-_ACCEPTABLE_JWT_ALGORITHMS = frozenset({
-    "RS256", "RS384", "RS512",
-    "ES256", "ES384", "ES512",
-    "PS256", "PS384", "PS512",
-    "EdDSA",
-})
+_ACCEPTABLE_JWT_ALGORITHMS = frozenset(
+    {
+        "RS256",
+        "RS384",
+        "RS512",
+        "ES256",
+        "ES384",
+        "ES512",
+        "PS256",
+        "PS384",
+        "PS512",
+        "EdDSA",
+    }
+)
 
 
 class OidcVerifyError(Exception):

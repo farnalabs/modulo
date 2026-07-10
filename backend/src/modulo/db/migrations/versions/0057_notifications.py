@@ -20,7 +20,13 @@ def upgrade() -> None:
     op.create_table(
         "notifications",
         sa.Column("id", sa.Uuid(), primary_key=True, server_default=sa.text("gen_random_uuid()")),
-        sa.Column("organisation_id", sa.Uuid(), sa.ForeignKey("organisations.id", ondelete="CASCADE"), nullable=False, index=True),
+        sa.Column(
+            "organisation_id",
+            sa.Uuid(),
+            sa.ForeignKey("organisations.id", ondelete="CASCADE"),
+            nullable=False,
+            index=True,
+        ),
         sa.Column("scope", sa.String(20), nullable=False),
         sa.Column("target_user_id", sa.Uuid(), sa.ForeignKey("accounts.id", ondelete="SET NULL"), nullable=True),
         sa.Column("level", sa.String(20), nullable=False),
@@ -35,16 +41,26 @@ def upgrade() -> None:
         sa.Column("updated_at", sa.DateTime(timezone=True), server_default=sa.func.current_timestamp(), nullable=False),
         sa.CheckConstraint("scope IN ('user', 'org', 'admin')", name="ck_notifications_scope"),
         sa.CheckConstraint("level IN ('debug', 'info', 'warning', 'error')", name="ck_notifications_level"),
-        sa.CheckConstraint("dismiss_strategy IN ('user_only', 'org_admin', 'any_scope')", name="ck_notifications_dismiss_strategy"),
+        sa.CheckConstraint(
+            "dismiss_strategy IN ('user_only', 'org_admin', 'any_scope')", name="ck_notifications_dismiss_strategy"
+        ),
     )
 
     op.create_table(
         "dismissals",
         sa.Column("id", sa.Uuid(), primary_key=True, server_default=sa.text("gen_random_uuid()")),
-        sa.Column("notification_id", sa.Uuid(), sa.ForeignKey("notifications.id", ondelete="CASCADE"), nullable=False, index=True),
+        sa.Column(
+            "notification_id",
+            sa.Uuid(),
+            sa.ForeignKey("notifications.id", ondelete="CASCADE"),
+            nullable=False,
+            index=True,
+        ),
         sa.Column("dismissed_by_user_id", sa.Uuid(), sa.ForeignKey("accounts.id", ondelete="CASCADE"), nullable=False),
         sa.Column("dismiss_scope", sa.String(20), nullable=False),
-        sa.Column("dismissed_at", sa.DateTime(timezone=True), server_default=sa.func.current_timestamp(), nullable=False),
+        sa.Column(
+            "dismissed_at", sa.DateTime(timezone=True), server_default=sa.func.current_timestamp(), nullable=False
+        ),
         sa.CheckConstraint("dismiss_scope IN ('self', 'scope')", name="ck_dismissals_scope"),
         sa.UniqueConstraint("notification_id", "dismissed_by_user_id", name="uq_dismissal_user_notification"),
     )

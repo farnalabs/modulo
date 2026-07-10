@@ -23,8 +23,19 @@ def test_no_module_level_side_effects():
             continue
         for node in tree.body:
             # Skip imports, defs, classes, assignments, type aliases, decorators
-            if isinstance(node, (ast.Import, ast.ImportFrom, ast.FunctionDef, ast.AsyncFunctionDef,
-                                 ast.ClassDef, ast.Assign, ast.AnnAssign, ast.AugAssign)):
+            if isinstance(
+                node,
+                (
+                    ast.Import,
+                    ast.ImportFrom,
+                    ast.FunctionDef,
+                    ast.AsyncFunctionDef,
+                    ast.ClassDef,
+                    ast.Assign,
+                    ast.AnnAssign,
+                    ast.AugAssign,
+                ),
+            ):
                 continue
             # Skip if __name__ == '__main__' guard
             if isinstance(node, ast.If):
@@ -43,6 +54,5 @@ def test_no_module_level_side_effects():
                         violations.append(f"  {path.relative_to(SRC)}:{node.lineno}  Module-level call '{func.id}()'")
     assert not violations, (
         f"Found {len(violations)} module-level function call(s) that execute on import.\n"
-        "Wrap in a lazy function or guard with if __name__ == '__main__'.\n"
-        + "\n".join(violations)
+        "Wrap in a lazy function or guard with if __name__ == '__main__'.\n" + "\n".join(violations)
     )

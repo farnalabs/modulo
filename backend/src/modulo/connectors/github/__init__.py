@@ -130,7 +130,9 @@ class GitHubConnector(ConnectorBase):
                         raise ValueError("GitHub API returned 304 Not Modified — resource unchanged")
                     if r.status_code in _RETRYABLE_STATUSES and attempt < _MAX_RETRIES:
                         retry_after = _parse_retry_after(r)
-                        delay = min(retry_after, _MAX_DELAY) if retry_after else min(_BASE_DELAY * (2 ** attempt), _MAX_DELAY)
+                        delay = (
+                            min(retry_after, _MAX_DELAY) if retry_after else min(_BASE_DELAY * (2**attempt), _MAX_DELAY)
+                        )
                         await asyncio.sleep(self._jitter(delay))
                         continue
                     r.raise_for_status()
@@ -138,23 +140,22 @@ class GitHubConnector(ConnectorBase):
             except httpx.HTTPStatusError as exc:
                 if exc.response.status_code in _RETRYABLE_STATUSES and attempt < _MAX_RETRIES:
                     retry_after = _parse_retry_after(exc.response)
-                    delay = min(retry_after, _MAX_DELAY) if retry_after else min(_BASE_DELAY * (2 ** attempt), _MAX_DELAY)
+                    delay = min(retry_after, _MAX_DELAY) if retry_after else min(_BASE_DELAY * (2**attempt), _MAX_DELAY)
                     await asyncio.sleep(self._jitter(delay))
                     continue
                 raise ValueError(f"GitHub API HTTP {exc.response.status_code}: {exc.response.text[:200]}") from exc
             except httpx.TimeoutException as exc:
                 if attempt < _MAX_RETRIES:
-                    delay = min(_BASE_DELAY * (2 ** attempt), _MAX_DELAY)
+                    delay = min(_BASE_DELAY * (2**attempt), _MAX_DELAY)
                     await asyncio.sleep(self._jitter(delay))
                     continue
                 raise ValueError("GitHub API timeout") from exc
             except httpx.ConnectError as exc:
                 if attempt < _MAX_RETRIES:
-                    delay = min(_BASE_DELAY * (2 ** attempt), _MAX_DELAY)
+                    delay = min(_BASE_DELAY * (2**attempt), _MAX_DELAY)
                     await asyncio.sleep(self._jitter(delay))
                     continue
                 raise ValueError("GitHub API connection error") from exc
-
 
     async def _parse_json(self, response: httpx.Response) -> Any:
         """Parse JSON response, wrapping decode errors as ValueError."""
@@ -244,7 +245,8 @@ class GitHubConnector(ConnectorBase):
                 owner_repo = self._require_filter(q.filters, "repo", "pr_commits")
                 pull_number = self._require_filter(q.filters, "pull_number", "pr_commits")
                 r = await self._call_api(
-                    "GET", f"/repos/{owner_repo}/pulls/{pull_number}/commits",
+                    "GET",
+                    f"/repos/{owner_repo}/pulls/{pull_number}/commits",
                     params={"per_page": q.limit},
                 )
                 commits: list[dict[str, Any]] = await self._parse_json(r)
@@ -253,7 +255,8 @@ class GitHubConnector(ConnectorBase):
                 owner_repo = self._require_filter(q.filters, "repo", "pr_files")
                 pull_number = self._require_filter(q.filters, "pull_number", "pr_files")
                 r = await self._call_api(
-                    "GET", f"/repos/{owner_repo}/pulls/{pull_number}/files",
+                    "GET",
+                    f"/repos/{owner_repo}/pulls/{pull_number}/files",
                     params={"per_page": q.limit},
                 )
                 files: list[dict[str, Any]] = await self._parse_json(r)
@@ -296,7 +299,8 @@ class GitHubConnector(ConnectorBase):
                 owner_repo = self._require_filter(q.filters, "repo", "issue_comments")
                 issue_number = self._require_filter(q.filters, "issue_number", "issue_comments")
                 r = await self._call_api(
-                    "GET", f"/repos/{owner_repo}/issues/{issue_number}/comments",
+                    "GET",
+                    f"/repos/{owner_repo}/issues/{issue_number}/comments",
                     params={"per_page": q.limit},
                 )
                 comments: list[dict[str, Any]] = await self._parse_json(r)
@@ -306,7 +310,8 @@ class GitHubConnector(ConnectorBase):
                 owner_repo = self._require_filter(q.filters, "repo", "issue_events")
                 issue_number = self._require_filter(q.filters, "issue_number", "issue_events")
                 r = await self._call_api(
-                    "GET", f"/repos/{owner_repo}/issues/{issue_number}/events",
+                    "GET",
+                    f"/repos/{owner_repo}/issues/{issue_number}/events",
                     params={"per_page": q.limit},
                 )
                 events: list[dict[str, Any]] = await self._parse_json(r)
@@ -322,7 +327,8 @@ class GitHubConnector(ConnectorBase):
                 owner_repo = self._require_filter(q.filters, "repo", "timeline")
                 issue_number = self._require_filter(q.filters, "issue_number", "timeline")
                 r = await self._call_api(
-                    "GET", f"/repos/{owner_repo}/issues/{issue_number}/timeline",
+                    "GET",
+                    f"/repos/{owner_repo}/issues/{issue_number}/timeline",
                     params={"per_page": q.limit},
                 )
                 timeline: list[dict[str, Any]] = await self._parse_json(r)
@@ -379,7 +385,8 @@ class GitHubConnector(ConnectorBase):
                 owner_repo = self._require_write_filter(payload.data, "repo", "issue_comment")
                 issue_number = self._require_write_filter(payload.data, "issue_number", "issue_comment")
                 r = await self._call_api(
-                    "POST", f"/repos/{owner_repo}/issues/{issue_number}/comments",
+                    "POST",
+                    f"/repos/{owner_repo}/issues/{issue_number}/comments",
                     json={"body": self._require_write_filter(payload.data, "body", "issue_comment")},
                 )
                 return await self._parse_json(r)
@@ -387,7 +394,8 @@ class GitHubConnector(ConnectorBase):
                 owner_repo = self._require_write_filter(payload.data, "repo", "issue_label")
                 issue_number = self._require_write_filter(payload.data, "issue_number", "issue_label")
                 r = await self._call_api(
-                    "POST", f"/repos/{owner_repo}/issues/{issue_number}/labels",
+                    "POST",
+                    f"/repos/{owner_repo}/issues/{issue_number}/labels",
                     json={"labels": self._require_write_filter(payload.data, "labels", "issue_label")},
                 )
                 return await self._parse_json(r)
@@ -395,7 +403,8 @@ class GitHubConnector(ConnectorBase):
                 owner_repo = self._require_write_filter(payload.data, "repo", "issue_reaction")
                 issue_number = self._require_write_filter(payload.data, "issue_number", "issue_reaction")
                 r = await self._call_api(
-                    "POST", f"/repos/{owner_repo}/issues/{issue_number}/reactions",
+                    "POST",
+                    f"/repos/{owner_repo}/issues/{issue_number}/reactions",
                     json={"content": self._require_write_filter(payload.data, "content", "issue_reaction")},
                     headers={"Accept": "application/vnd.github.squirrel-girl-preview+json"},
                 )
@@ -441,7 +450,8 @@ class GitHubConnector(ConnectorBase):
                 pull_number = self._require_write_filter(payload.data, "pull_number", "pr_comment")
                 body_value = self._require_write_filter(payload.data, "body", "pr_comment")
                 r = await self._call_api(
-                    "POST", f"/repos/{owner_repo}/pulls/{pull_number}/comments",
+                    "POST",
+                    f"/repos/{owner_repo}/pulls/{pull_number}/comments",
                     json={"body": body_value},
                 )
                 return await self._parse_json(r)

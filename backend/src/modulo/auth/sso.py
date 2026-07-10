@@ -158,20 +158,24 @@ async def apply_group_mappings(
 
 async def _lookup_provider_by_client_id(session: AsyncSession, client_id: str, org_id: uuid.UUID) -> SsoProvider | None:
     result = await session.execute(
-        select(SsoProvider).where(
+        select(SsoProvider)
+        .where(
             SsoProvider.client_id == client_id,
             SsoProvider.organisation_id == org_id,
-        ).limit(1)
+        )
+        .limit(1)
     )
     return result.scalar_one_or_none()
 
 
 async def _lookup_provider_by_entity_id(session: AsyncSession, entity_id: str, org_id: uuid.UUID) -> SsoProvider | None:
     result = await session.execute(
-        select(SsoProvider).where(
+        select(SsoProvider)
+        .where(
             SsoProvider.entity_id == entity_id,
             SsoProvider.organisation_id == org_id,
-        ).limit(1)
+        )
+        .limit(1)
     )
     return result.scalar_one_or_none()
 
@@ -251,7 +255,9 @@ async def oidc_process_callback(
     """Exchange auth code for tokens, JIT provision account, return JWT pair."""
     state_data = verify_state(state, settings.secret_key)
     if not state_data:
-        _log.warning("sso.csrf_state_mismatch", extra={"state_prefix": state[:20] + "..." if len(state) > 20 else state})
+        _log.warning(
+            "sso.csrf_state_mismatch", extra={"state_prefix": state[:20] + "..." if len(state) > 20 else state}
+        )
         raise ValueError("Invalid state parameter — possible CSRF")
 
     provider_id = state_data.split(":", 1)[0] if ":" in state_data else state_data

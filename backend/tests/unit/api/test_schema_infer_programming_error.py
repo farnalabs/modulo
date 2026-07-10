@@ -120,7 +120,10 @@ class TestSchemaInferProgrammingError:
 
     def test_generate_unexpected_error_returns_500(self, working_client: TestClient) -> None:
         with (
-            patch("modulo.api.routes.schemas.list_model_backends", return_value=MagicMock(items=[_make_mock_model_backend()], total=1, page=1, page_size=1)),
+            patch(
+                "modulo.api.routes.schemas.list_model_backends",
+                return_value=MagicMock(items=[_make_mock_model_backend()], total=1, page=1, page_size=1),
+            ),
             patch("modulo.api.routes.schemas.set_rls_org"),
             patch("modulo.api.routes.schemas.create_secrets_backend", side_effect=ValueError("bad fernet key")),
         ):
@@ -132,10 +135,17 @@ class TestSchemaInferProgrammingError:
 
     def test_infer_unexpected_error_returns_500(self, working_client: TestClient) -> None:
         with (
-            patch("modulo.api.routes.schemas.get_connector_instance", return_value=MagicMock(
-                connector_type_id="github", name="test-connector",
-            )),
-            patch("modulo.api.routes.schemas.list_model_backends", return_value=MagicMock(items=[_make_mock_model_backend()], total=1, page=1, page_size=1)),
+            patch(
+                "modulo.api.routes.schemas.get_connector_instance",
+                return_value=MagicMock(
+                    connector_type_id="github",
+                    name="test-connector",
+                ),
+            ),
+            patch(
+                "modulo.api.routes.schemas.list_model_backends",
+                return_value=MagicMock(items=[_make_mock_model_backend()], total=1, page=1, page_size=1),
+            ),
             patch("modulo.api.routes.schemas.set_rls_org"),
             patch("modulo.api.routes.schemas.create_secrets_backend", side_effect=ValueError("bad fernet key")),
         ):

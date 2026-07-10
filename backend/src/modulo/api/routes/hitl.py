@@ -655,9 +655,7 @@ async def list_run_pending_gates(
             detail="An unexpected error occurred",
         ) from e
 
-    return PendingGatesResponse(
-        gates=[_gate_to_response(g, pipeline_name=pipeline_name) for g in gates]
-    )
+    return PendingGatesResponse(gates=[_gate_to_response(g, pipeline_name=pipeline_name) for g in gates])
 
 
 @router.get(

@@ -89,7 +89,9 @@ class CircleCIConnector(CIRunnerBase):
                 return HealthResult(ok=False, detail="Authentication failed: invalid or expired token")
             return HealthResult(ok=False, detail=f"HTTP {r.status_code}: {r.text[:200]}")
         except httpx.HTTPStatusError as exc:
-            return HealthResult(ok=False, detail=f"CircleCI API HTTP {exc.response.status_code}: {exc.response.text[:200]}")
+            return HealthResult(
+                ok=False, detail=f"CircleCI API HTTP {exc.response.status_code}: {exc.response.text[:200]}"
+            )
         except httpx.TimeoutException:
             return HealthResult(ok=False, detail="CircleCI API timeout")
         except httpx.ConnectError:

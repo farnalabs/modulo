@@ -1,6 +1,6 @@
 # ADR 007 — Remy UI Commands: Frontend-Mediated Browser Automation
 
-**Date**: 2026-07-03  
+**Date**: 2026-07-03
 **Status**: Active
 
 ---

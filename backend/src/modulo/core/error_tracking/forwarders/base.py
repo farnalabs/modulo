@@ -19,5 +19,4 @@ class BaseForwarder(ABC):
         error_group: Any,
         error_event: Any,
         config: dict[str, Any],
-    ) -> bool:
-        ...
+    ) -> bool: ...

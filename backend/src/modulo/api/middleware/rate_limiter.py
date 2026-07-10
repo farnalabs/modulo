@@ -41,7 +41,9 @@ def _create_registry(settings: Settings) -> RateLimiterRegistry:
         try:
             from redis.asyncio import Redis
 
-            client: Any = Redis.from_url(settings.redis_url, decode_responses=False, socket_connect_timeout=5, socket_timeout=10)
+            client: Any = Redis.from_url(
+                settings.redis_url, decode_responses=False, socket_connect_timeout=5, socket_timeout=10
+            )
             _redis_clients.add(client)
             registry = RateLimiterRegistry(redis_client=client)
             redis_available = True
@@ -67,10 +69,10 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
     """
 
     RULES: ClassVar[list[tuple[str, int, int]]] = [
-        ("/api/v1/runs", 60, 60),         # PRD §7.18: POST /api/v1/runs — 60/min
-        ("/api/v1/triggers", 100, 60),    # PRD §7.18: webhook POST — 100/min
-        ("/api/v1/errors/ingest", 10, 60), # PRD §7.18: error ingest — 10/min per session
-        ("/mcp", 200, 60),                # PRD §7.18: general MCP tools — 200/min
+        ("/api/v1/runs", 60, 60),  # PRD §7.18: POST /api/v1/runs — 60/min
+        ("/api/v1/triggers", 100, 60),  # PRD §7.18: webhook POST — 100/min
+        ("/api/v1/errors/ingest", 10, 60),  # PRD §7.18: error ingest — 10/min per session
+        ("/mcp", 200, 60),  # PRD §7.18: general MCP tools — 200/min
         # NOTE: MCP trigger_pipeline tool has a separate 60/min limit enforced
         # in mcp_server.py at the application level since all MCP tools share
         # the same HTTP path. HITL review endpoints (20/min per PRD §7.18)
@@ -197,7 +199,9 @@ def get_auth_rate_limiter(settings: Settings | None = None) -> AuthRateLimiterCl
         try:
             from redis.asyncio import Redis
 
-            client: Any = Redis.from_url(resolved.redis_url, decode_responses=False, socket_connect_timeout=5, socket_timeout=10)
+            client: Any = Redis.from_url(
+                resolved.redis_url, decode_responses=False, socket_connect_timeout=5, socket_timeout=10
+            )
             _redis_clients.add(client)
             _auth_rate_limiter = AuthRateLimiterCls(
                 redis_client=client,

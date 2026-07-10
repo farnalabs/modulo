@@ -419,7 +419,9 @@ async def retry_all_failed_deliveries(
                             .values(auto_disabled=True, disabled_at=datetime.now(UTC))
                         )
             except ProgrammingError:
-                logger.warning("notifications.delivery_table_missing", extra={"route": "retry_all_failed_deliveries.record"})
+                logger.warning(
+                    "notifications.delivery_table_missing", extra={"route": "retry_all_failed_deliveries.record"}
+                )
                 logger.exception("notifications.delivery_table_missing")
                 raise HTTPException(
                     status_code=status.HTTP_501_NOT_IMPLEMENTED,
@@ -465,7 +467,9 @@ async def retry_all_failed_deliveries(
                             .values(auto_disabled=True, disabled_at=datetime.now(UTC))
                         )
             except ProgrammingError:
-                logger.warning("notifications.delivery_table_missing", extra={"route": "retry_all_failed_deliveries.error_record"})
+                logger.warning(
+                    "notifications.delivery_table_missing", extra={"route": "retry_all_failed_deliveries.error_record"}
+                )
                 logger.exception("notifications.delivery_table_missing")
                 raise HTTPException(
                     status_code=status.HTTP_501_NOT_IMPLEMENTED,
@@ -600,7 +604,9 @@ async def get_webhook(
             if ep is None or ep.organisation_id != principal.organisation_id:
                 raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Webhook not found")
     except ProgrammingError:
-        logger.warning("notifications.endpoint_table_missing", extra={"route": "get_webhook", "webhook_id": str(webhook_id)})
+        logger.warning(
+            "notifications.endpoint_table_missing", extra={"route": "get_webhook", "webhook_id": str(webhook_id)}
+        )
         logger.exception("notifications.endpoint_table_missing")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
@@ -615,7 +621,9 @@ async def get_webhook(
     except HTTPException:
         raise
     except Exception:
-        logger.exception("notifications.unexpected_error", extra={"route": "get_webhook", "webhook_id": str(webhook_id)})
+        logger.exception(
+            "notifications.unexpected_error", extra={"route": "get_webhook", "webhook_id": str(webhook_id)}
+        )
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="An unexpected error occurred.",
@@ -651,7 +659,9 @@ async def update_webhook(
 
             await session.flush()
     except ProgrammingError:
-        logger.warning("notifications.endpoint_table_missing", extra={"route": "update_webhook", "webhook_id": str(webhook_id)})
+        logger.warning(
+            "notifications.endpoint_table_missing", extra={"route": "update_webhook", "webhook_id": str(webhook_id)}
+        )
         logger.exception("notifications.endpoint_table_missing")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
@@ -666,7 +676,9 @@ async def update_webhook(
     except HTTPException:
         raise
     except Exception:
-        logger.exception("notifications.unexpected_error", extra={"route": "update_webhook", "webhook_id": str(webhook_id)})
+        logger.exception(
+            "notifications.unexpected_error", extra={"route": "update_webhook", "webhook_id": str(webhook_id)}
+        )
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="An unexpected error occurred.",
@@ -690,7 +702,9 @@ async def delete_webhook(
                 raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Webhook not found")
             await session.delete(ep)
     except ProgrammingError:
-        logger.warning("notifications.endpoint_table_missing", extra={"route": "delete_webhook", "webhook_id": str(webhook_id)})
+        logger.warning(
+            "notifications.endpoint_table_missing", extra={"route": "delete_webhook", "webhook_id": str(webhook_id)}
+        )
         logger.exception("notifications.endpoint_table_missing")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
@@ -705,7 +719,9 @@ async def delete_webhook(
     except HTTPException:
         raise
     except Exception:
-        logger.exception("notifications.unexpected_error", extra={"route": "delete_webhook", "webhook_id": str(webhook_id)})
+        logger.exception(
+            "notifications.unexpected_error", extra={"route": "delete_webhook", "webhook_id": str(webhook_id)}
+        )
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="An unexpected error occurred.",
@@ -730,7 +746,9 @@ async def test_webhook(
             if ep is None or ep.organisation_id != principal.organisation_id:
                 raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Webhook not found")
     except ProgrammingError:
-        logger.warning("notifications.endpoint_table_missing", extra={"route": "test_webhook", "webhook_id": str(webhook_id)})
+        logger.warning(
+            "notifications.endpoint_table_missing", extra={"route": "test_webhook", "webhook_id": str(webhook_id)}
+        )
         logger.exception("notifications.endpoint_table_missing")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
@@ -745,7 +763,9 @@ async def test_webhook(
     except HTTPException:
         raise
     except Exception:
-        logger.exception("notifications.unexpected_error", extra={"route": "test_webhook", "webhook_id": str(webhook_id)})
+        logger.exception(
+            "notifications.unexpected_error", extra={"route": "test_webhook", "webhook_id": str(webhook_id)}
+        )
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="An unexpected error occurred.",
@@ -809,7 +829,9 @@ async def re_enable_webhook(
             ep.consecutive_dead_letter_count = 0
             await session.flush()
     except ProgrammingError:
-        logger.warning("notifications.endpoint_table_missing", extra={"route": "re_enable_webhook", "webhook_id": str(webhook_id)})
+        logger.warning(
+            "notifications.endpoint_table_missing", extra={"route": "re_enable_webhook", "webhook_id": str(webhook_id)}
+        )
         logger.exception("notifications.endpoint_table_missing")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
@@ -824,7 +846,9 @@ async def re_enable_webhook(
     except HTTPException:
         raise
     except Exception:
-        logger.exception("notifications.unexpected_error", extra={"route": "re_enable_webhook", "webhook_id": str(webhook_id)})
+        logger.exception(
+            "notifications.unexpected_error", extra={"route": "re_enable_webhook", "webhook_id": str(webhook_id)}
+        )
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="An unexpected error occurred.",
@@ -884,7 +908,9 @@ async def list_deliveries(
             )
             total = count_result.scalar() or 0
     except ProgrammingError:
-        logger.warning("notifications.delivery_table_missing", extra={"route": "list_deliveries", "webhook_id": str(webhook_id)})
+        logger.warning(
+            "notifications.delivery_table_missing", extra={"route": "list_deliveries", "webhook_id": str(webhook_id)}
+        )
         logger.exception("notifications.delivery_table_missing")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
@@ -899,7 +925,9 @@ async def list_deliveries(
     except HTTPException:
         raise
     except Exception:
-        logger.exception("notifications.unexpected_error", extra={"route": "list_deliveries", "webhook_id": str(webhook_id)})
+        logger.exception(
+            "notifications.unexpected_error", extra={"route": "list_deliveries", "webhook_id": str(webhook_id)}
+        )
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="An unexpected error occurred.",
@@ -955,14 +983,20 @@ async def retry_delivery(
 
             delivery = await session.get(NotificationDeliveryLog, delivery_id)
     except ProgrammingError:
-        logger.warning("notifications.delivery_table_missing", extra={"route": "retry_delivery", "webhook_id": str(webhook_id), "delivery_id": str(delivery_id)})
+        logger.warning(
+            "notifications.delivery_table_missing",
+            extra={"route": "retry_delivery", "webhook_id": str(webhook_id), "delivery_id": str(delivery_id)},
+        )
         logger.exception("notifications.delivery_table_missing")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Notifications are not available. Run database migrations to enable this feature.",
         ) from None
     except SQLAlchemyError:
-        logger.exception("notifications.db_error", extra={"route": "retry_delivery", "webhook_id": str(webhook_id), "delivery_id": str(delivery_id)})
+        logger.exception(
+            "notifications.db_error",
+            extra={"route": "retry_delivery", "webhook_id": str(webhook_id), "delivery_id": str(delivery_id)},
+        )
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database error. Please try again later.",
@@ -970,7 +1004,10 @@ async def retry_delivery(
     except HTTPException:
         raise
     except Exception:
-        logger.exception("notifications.unexpected_error", extra={"route": "retry_delivery", "webhook_id": str(webhook_id), "delivery_id": str(delivery_id)})
+        logger.exception(
+            "notifications.unexpected_error",
+            extra={"route": "retry_delivery", "webhook_id": str(webhook_id), "delivery_id": str(delivery_id)},
+        )
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="An unexpected error occurred.",
@@ -1046,14 +1083,28 @@ async def retry_delivery(
                             .values(auto_disabled=True, disabled_at=datetime.now(UTC))
                         )
         except ProgrammingError:
-            logger.warning("notifications.delivery_table_missing", extra={"route": "retry_delivery.record", "webhook_id": str(webhook_id), "delivery_id": str(delivery_id)})
+            logger.warning(
+                "notifications.delivery_table_missing",
+                extra={
+                    "route": "retry_delivery.record",
+                    "webhook_id": str(webhook_id),
+                    "delivery_id": str(delivery_id),
+                },
+            )
             logger.exception("notifications.delivery_table_missing")
             raise HTTPException(
                 status_code=status.HTTP_501_NOT_IMPLEMENTED,
                 detail="Notification delivery logging is not available. Run database migrations to enable it.",
             ) from None
         except SQLAlchemyError:
-            logger.exception("notifications.db_error", extra={"route": "retry_delivery.record", "webhook_id": str(webhook_id), "delivery_id": str(delivery_id)})
+            logger.exception(
+                "notifications.db_error",
+                extra={
+                    "route": "retry_delivery.record",
+                    "webhook_id": str(webhook_id),
+                    "delivery_id": str(delivery_id),
+                },
+            )
             raise HTTPException(
                 status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
                 detail="Database error. Please try again later.",
@@ -1097,14 +1148,28 @@ async def retry_delivery(
                         .values(auto_disabled=True, disabled_at=datetime.now(UTC))
                     )
         except ProgrammingError:
-            logger.warning("notifications.delivery_table_missing", extra={"route": "retry_delivery.error_record", "webhook_id": str(webhook_id), "delivery_id": str(delivery_id)})
+            logger.warning(
+                "notifications.delivery_table_missing",
+                extra={
+                    "route": "retry_delivery.error_record",
+                    "webhook_id": str(webhook_id),
+                    "delivery_id": str(delivery_id),
+                },
+            )
             logger.exception("notifications.delivery_table_missing")
             raise HTTPException(
                 status_code=status.HTTP_501_NOT_IMPLEMENTED,
                 detail="Notification delivery logging is not available. Run database migrations to enable it.",
             ) from None
         except SQLAlchemyError:
-            logger.exception("notifications.db_error", extra={"route": "retry_delivery.error_record", "webhook_id": str(webhook_id), "delivery_id": str(delivery_id)})
+            logger.exception(
+                "notifications.db_error",
+                extra={
+                    "route": "retry_delivery.error_record",
+                    "webhook_id": str(webhook_id),
+                    "delivery_id": str(delivery_id),
+                },
+            )
             raise HTTPException(
                 status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
                 detail="Database error. Please try again later.",
@@ -1119,7 +1184,10 @@ async def retry_delivery(
     except HTTPException:
         raise
     except Exception:
-        logger.exception("notifications.unexpected_error", extra={"route": "retry_delivery", "webhook_id": str(webhook_id), "delivery_id": str(delivery_id)})
+        logger.exception(
+            "notifications.unexpected_error",
+            extra={"route": "retry_delivery", "webhook_id": str(webhook_id), "delivery_id": str(delivery_id)},
+        )
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="An unexpected error occurred.",

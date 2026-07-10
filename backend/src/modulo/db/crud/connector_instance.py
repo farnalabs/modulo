@@ -94,18 +94,11 @@ async def list_connector_instances(
         return PageResult(items=[], total=0, page=page, page_size=page_size)
     try:
         items_stmt = (
-            select(ConnectorInstance)
-            .order_by(ConnectorInstance.created_at.desc())
-            .offset(offset)
-            .limit(page_size)
+            select(ConnectorInstance).order_by(ConnectorInstance.created_at.desc()).offset(offset).limit(page_size)
         )
         if excluded_tiers:
             items_stmt = items_stmt.where(~ConnectorInstance.tier.in_(excluded_tiers))
-        items = list(
-            (
-                await session.execute(items_stmt)
-            ).scalars()
-        )
+        items = list((await session.execute(items_stmt)).scalars())
     except ProgrammingError:
         return PageResult(items=[], total=0, page=page, page_size=page_size)
     return PageResult(items=items, total=total, page=page, page_size=page_size)

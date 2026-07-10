@@ -69,7 +69,9 @@ class TeamCityConnector(ConnectorBase):
                 return HealthResult(ok=False, detail="Authentication failed: invalid token")
             return HealthResult(ok=False, detail=f"HTTP {r.status_code}: {r.text[:200]}")
         except httpx.HTTPStatusError as exc:
-            return HealthResult(ok=False, detail=f"TeamCity API HTTP {exc.response.status_code}: {exc.response.text[:200]}")
+            return HealthResult(
+                ok=False, detail=f"TeamCity API HTTP {exc.response.status_code}: {exc.response.text[:200]}"
+            )
         except httpx.TimeoutException:
             return HealthResult(ok=False, detail="TeamCity API timeout")
         except httpx.ConnectError:
@@ -163,18 +165,20 @@ class TeamCityConnector(ConnectorBase):
                 href = b.get("href", "")
                 bt = b.get("buildType")
                 build_type_id = bt.get("buildTypeId", bt.get("id", "")) if bt else ""
-                runs.append(CIRun(
-                    id=str(b.get("id", "")),
-                    pipeline_id=build_type_id,
-                    status=run_status,
-                    url=f"{self._base_url}{href}" if href else "",
-                    branch=b.get("branchName", ""),
-                    commit_sha=b.get("revision", ""),
-                    created_at=str(b.get("startDate", "")),
-                    updated_at=str(b.get("finishDate", "")),
-                    duration_seconds=b.get("duration", None),
-                    triggered_by="",
-                ))
+                runs.append(
+                    CIRun(
+                        id=str(b.get("id", "")),
+                        pipeline_id=build_type_id,
+                        status=run_status,
+                        url=f"{self._base_url}{href}" if href else "",
+                        branch=b.get("branchName", ""),
+                        commit_sha=b.get("revision", ""),
+                        created_at=str(b.get("startDate", "")),
+                        updated_at=str(b.get("finishDate", "")),
+                        duration_seconds=b.get("duration", None),
+                        triggered_by="",
+                    )
+                )
             if status:
                 runs = [r for r in runs if r.status == status]
             return runs

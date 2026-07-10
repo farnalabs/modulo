@@ -67,9 +67,7 @@ def post_deletion_request(client, request):
                 "token": _DELETION_TOKEN,
                 "token_expires_at": _TOKEN_EXPIRES,
                 "export": {
-                    "organisation": [
-                        {"id": str(_ORG_ID), "name": "Test Org", "slug": "test-org", "status": "active"}
-                    ],
+                    "organisation": [{"id": str(_ORG_ID), "name": "Test Org", "slug": "test-org", "status": "active"}],
                     "users": [{"id": str(_USER_ID), "email": "admin@test.com"}],
                     "pipelines": [],
                     "runs": [],
