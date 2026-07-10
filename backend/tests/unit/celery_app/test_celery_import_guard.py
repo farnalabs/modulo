@@ -105,7 +105,7 @@ class TestCleanupJobGuard:
         """webhook_dedup_cleanup module should load without errors."""
         import modulo.core.cleanup_jobs.webhook_dedup_cleanup as wc
 
-        assert wc.get_celery_app is not None
+        assert wc.WebhookDedupCleanupTask is not None
 
 
 class TestReportSchedulerGuard:
