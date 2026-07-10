@@ -55,7 +55,7 @@
           type="submit"
           :disabled="loading"
           variant="default"
-          class="btn-glow w-full border-primary/30 hover:border-primary/60 px-4 py-2.5"
+           class="w-full border-primary/30 hover:border-primary/60 px-4 py-2.5"
           data-testid="login-submit"
         >
           {{ loading ? $t('common.signing_in') : $t('common.sign_in') }}
@@ -103,4 +103,3 @@ async function login() {
   }
 }
 </script>
-

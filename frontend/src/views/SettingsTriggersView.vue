@@ -10,7 +10,7 @@
       <Button
         data-testid="settings-triggers-create"
         variant="default"
-        class="btn-glow border-primary/30 hover:border-primary/60"
+           class="border-primary/30 hover:border-primary/60"
         @click="openCreateDialog"
       >
         Create Trigger
@@ -690,4 +690,3 @@ async function loadAll() {
 
 onMounted(() => { planStore.fetchPlan(); loadAll() })
 </script>
-

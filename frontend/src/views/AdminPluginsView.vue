@@ -8,7 +8,7 @@
         </div>
         <Button
           variant="default"
-          class="btn-glow border-primary/30 hover:border-primary/60"
+           class="border-primary/30 hover:border-primary/60"
           data-testid="admin-plugins-refresh"
           @click="loadPlugins"
         >
@@ -245,4 +245,3 @@ async function loadPlugins() {
 
 onMounted(loadPlugins)
 </script>
-
