@@ -17,7 +17,7 @@ import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy.exc import IntegrityError, ProgrammingError, SQLAlchemyError
 
-from modulo.api.dependencies import _get_engine, get_db_session
+from modulo.api.dependencies import _get_engine, get_db_session, get_plan_context
 from modulo.api.main import app
 from modulo.auth.dependencies import get_current_user
 from modulo.auth.jwt import AuthenticatedPrincipal
@@ -36,6 +36,13 @@ def _make_settings() -> Settings:
         fernet_key=_VALID_32,
         modulo_admin_password="testpass",
     )
+
+
+def _allow_all_plan():
+    """Return a PlanContext that allows all features (no enterprise gating)."""
+    ctx = MagicMock()
+    ctx.feature_enabled = MagicMock(return_value=True)
+    return ctx
 
 
 def _make_session_raising(exc_class: type[Exception]) -> AsyncMock:
@@ -63,6 +70,7 @@ def admin_client() -> TestClient:
         account_id=_USER_ID,
         org_role="admin",
     )
+    app.dependency_overrides[get_plan_context] = _allow_all_plan
     client = TestClient(app)
     yield client
     app.dependency_overrides.clear()
