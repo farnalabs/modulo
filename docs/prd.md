@@ -521,14 +521,27 @@ This replaces the previous "LLM driveability" stretch goal with a standards-base
 | `get_run_status` | `GET /api/v1/runs/{id}` | Summary by default; `detail: true` for per-node breakdown |
 | `get_run_output` | `GET /api/v1/runs/{id}/nodes/{node_id}/output` | Retrieve output of a specific completed node |
 | `cancel_run` | `POST /api/v1/runs/{id}/cancel` | Cancel a running or queued run |
-| `review_hitl` | `POST /runs/{id}/hitl/{gate_id}/review` | Unified HITL action: `action` = `claim` \| `approve` \| `reject`; `approve`/`reject` require `claim_token`; `reject` requires `reason`; marked `destructive: true` |
+| `review_hitl` | `POST /runs/{id}/hitl/{gate_id}/review` | Unified HITL action: `action` = `claim` \| `approve` \| `reject` \| `deliver_manual`; `approve`/`reject` require `claim_token`; `reject` requires `reason`; marked `destructive: true` |
 | `list_pipelines` | `GET /api/v1/pipelines` | Summary by default; paginated |
 | `list_pending_hitl` | `GET /api/v1/runs?status=awaiting_human` | All runs awaiting human action |
 | `browse_library` | `GET /api/v1/library` | Search and filter; paginated |
 | `copy_library_primitive` | `POST /api/v1/library/{slug}/copy` | Community (unverified) primitives: returns 403 via MCP — MCP clients cannot copy community primitives at all; only verified primitives may be copied via MCP. Browser-only: requires explicit user acknowledgement in the CopyToAdaptWizard (not a `confirm: true` API parameter — a UI gate). This prevents an autonomous LLM client from self-supplying `confirm: true` to bypass the warning. |
 | `get_trigger_events` | `GET /api/v1/triggers/{id}/events` | View trigger event log |
+| `create_pipeline` | `POST /api/v1/pipelines` | Operator role required. Creates a new pipeline definition with name, description, visibility, and default config. |
+| `update_pipeline_graph` | `PUT /api/v1/pipelines/{id}/graph` | Operator role required. Replaces the node/edge graph of a pipeline. |
+| `create_model_backend` | `POST /api/v1/model-backends` | Operator role required. Registers a new LLM provider. API key is provided via a one-time browser setup URL returned by the tool — the key never transits the LLM context. |
+| `list_runs` | `GET /api/v1/runs` | List runs with cursor-based pagination, optional pipeline_id/status filters. |
+| `list_triggers` | `GET /api/v1/triggers` | List trigger configurations, optional pipeline_id filter. |
+| `get_run_evals` | `GET /api/v1/runs/{id}/evals` | Get eval results for a completed run. |
+| `list_eval_definitions` | `GET /api/v1/eval-definitions` | List eval configurations, optional pipeline_id filter. |
+| `search_library` | `GET /api/v1/library` | Search the library with type filter, text search, cursor pagination. (Renamed from `browse_library`; old name preserved as alias.) |
+| `search_documentation` | `GET /api/v1/docs/search` | Search product documentation with free-text query. (Renamed from `get_documentation`; old name preserved as alias.) |
+| `list_trigger_events` | `GET /api/v1/triggers/{id}/events` | View trigger event log. (Renamed from `get_trigger_events`; old name preserved as alias.) |
+| `get_integration_status` | `GET /api/v1/integrations/status` | Health status of all connectors, model backends, and triggers. |
+| `get_org_config` | `GET /api/v1/admin/config` | Org-level configuration, filterable by section (remy, plan, rate_limits). |
+| `get_available_features` | `GET /api/v1/features` | List product features enabled on the current plan tier. |
 
-**`review_hitl` detail**: the claim step returns a `claim_token` (alpha: cryptographically random opaque string with 15-min TTL; v1: short-lived JWT scoped to `run_id + gate_id + client_id`). Subsequent `approve` or `reject` calls must include this token. This prevents replay across clients and enforces that the reviewing client inspected the gate context before acting.
+**`review_hitl` detail**: the claim step returns a `claim_token` (alpha: cryptographically random opaque string with 15-min TTL; v1: short-lived JWT scoped to `run_id + gate_id + client_id`). Subsequent `approve` or `reject` calls must include this token. The `deliver_manual` action allows supplying an output dict directly — useful for MCP clients that want to provide human-authored content through a gate. The `reject` action accepts an optional `reason` string for audit trail purposes. This prevents replay across clients and enforces that the reviewing client inspected the gate context before acting.
 
 **HITL `human_only` flag**: each HITL gate definition carries a `human_only: boolean` field (default: `false`). When `true`, calling `review_hitl` with `action: approve` via MCP returns 403. This allows pipeline authors to explicitly block LLM autonomous approval for gates that require human judgement. The flag is visible in the gate context resource at `modulo://runs/{id}/hitl/{gate_id}` so the LLM client understands why the action is rejected.
 
@@ -536,7 +549,7 @@ This replaces the previous "LLM driveability" stretch goal with a standards-base
 
 **MCP resource content annotation**: resources that contain agent-generated content (e.g. `modulo://runs/{id}/nodes/{node_id}/output`) are annotated with `content_type: agent_output` in the resource description. LLM clients should treat this content as untrusted and potentially containing prompt injection attempts. Modulo documents this in the MCP resource manifest; enforcement is the client's responsibility.
 
-**MCP write scope boundary**: pipeline creation and editing are browser-UI operations in alpha and v1. MCP clients can read pipeline definitions and trigger runs, but cannot create or modify pipelines via MCP. This boundary is explicit and documented. MCP write operations beyond run triggering and HITL review are deferred to v2, when the security model for remote pipeline authoring is defined.
+**MCP write scope boundary**: write operations beyond run triggering and HITL review are restricted to clients authenticated with the `operator` role. MCP clients with `runner`-role credentials can trigger runs and review HITL gates, but cannot create or modify pipelines, manage model backends, or perform other administrative operations. The `operator` role is assigned at API key creation time (see §5.2). This role-based boundary replaces the earlier browser-only restriction — the `operator` scope gate (`check_tool_scope`) is enforced at the tool handler level for every write operation.
 
 #### MCP Authentication
 
