@@ -75,9 +75,7 @@ class FernetSecretsBackend(SecretsBackend):
 
         org_id = await self._read_org_id_from_session()
         result = await asyncio.wait_for(
-            self._session.execute(
-                select(Secret).where(Secret.key == key, Secret.organisation_id == org_id).limit(1)
-            ),
+            self._session.execute(select(Secret).where(Secret.key == key, Secret.organisation_id == org_id).limit(1)),
             timeout=_DB_TIMEOUT,
         )
         row = result.scalar_one_or_none()
@@ -129,7 +127,9 @@ class FernetSecretsBackend(SecretsBackend):
             )
             org_id_str = result.scalar()
         except (OperationalError, ProgrammingError):
-            logger.debug("FernetSecretsBackend: current_setting not available (non-Postgres backend), falling back to session.info")
+            logger.debug(
+                "FernetSecretsBackend: current_setting not available (non-Postgres backend), falling back to session.info"
+            )
 
         if not org_id_str:
             info = getattr(self._session, "info", {})
@@ -144,9 +144,7 @@ class FernetSecretsBackend(SecretsBackend):
         try:
             self._org_id = uuid.UUID(str(org_id_str))
         except (ValueError, AttributeError) as exc:
-            raise RuntimeError(
-                f"FernetSecretsBackend: invalid organisation_id format: {org_id_str!r}"
-            ) from exc
+            raise RuntimeError(f"FernetSecretsBackend: invalid organisation_id format: {org_id_str!r}") from exc
         return self._org_id
 
     async def set_secret(self, key: str, value: str) -> None:
@@ -161,10 +159,7 @@ class FernetSecretsBackend(SecretsBackend):
         for attempt in range(2):
             try:
                 stmt = (
-                    select(Secret)
-                    .where(Secret.key == key, Secret.organisation_id == org_id)
-                    .limit(1)
-                    .with_for_update()
+                    select(Secret).where(Secret.key == key, Secret.organisation_id == org_id).limit(1).with_for_update()
                 )
                 result = await asyncio.wait_for(self._session.execute(stmt), timeout=_DB_TIMEOUT)
                 existing = result.scalar_one_or_none()

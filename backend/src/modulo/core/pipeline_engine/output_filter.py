@@ -130,6 +130,4 @@ def filter_payload_for_injection(payload: ConnectorPayload) -> None:
     for value in _string_values(payload):
         result = filter_output_for_injection(value)
         if not result.passed:
-            raise OutputRejectedError(
-                f"{result.reason} (resource: {payload.resource!r})"
-            )
+            raise OutputRejectedError(f"{result.reason} (resource: {payload.resource!r})")

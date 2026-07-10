@@ -186,9 +186,7 @@ async def export_chain_endpoint(
     page_size: int = Query(100, ge=1, le=1000),
     event_type: str | None = Query(None, max_length=64, description="Filter by event type"),
     actor_user_id: str | None = Query(None, max_length=64, alias="user_id", description="Filter by actor user ID"),
-    resource_type: str | None = Query(
-        None, max_length=64, alias="entity_type", description="Filter by resource type"
-    ),
+    resource_type: str | None = Query(None, max_length=64, alias="entity_type", description="Filter by resource type"),
     from_date: str | None = Query(None, max_length=32, description="Filter by start date (ISO 8601)"),
     to_date: str | None = Query(None, max_length=32, description="Filter by end date (ISO 8601)"),
     session: AsyncSession = Depends(get_db_session),

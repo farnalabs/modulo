@@ -4,6 +4,7 @@ Revision ID: 0076_merge_node_observations
 Revises: 0065_merge_add_schema_deprecation, 0073_node_observations
 Create Date: 2026-07-04
 """
+
 from collections.abc import Sequence
 
 revision: str = "0076_merge_node_observations"

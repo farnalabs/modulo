@@ -180,10 +180,7 @@ def _export_checkpoints_sync(raw_url: str) -> list[dict[str, Any]]:
         raise RuntimeError("psycopg library is not available")
     rows: list[dict[str, Any]] = []
     with psycopg.connect(raw_url, row_factory=dict_row, connect_timeout=10) as conn, conn.cursor() as cur:
-        cur.execute(
-            "SELECT * FROM checkpoints "
-            "ORDER BY organisation_id, thread_id, checkpoint_ns, checkpoint_id"
-        )
+        cur.execute("SELECT * FROM checkpoints ORDER BY organisation_id, thread_id, checkpoint_ns, checkpoint_id")
         for row in cur:
             serialised: dict[str, Any] = {}
             for key, val in row.items():
@@ -389,8 +386,7 @@ def _re_encrypt_credentials_sync(
                         plaintext = old_fernet.decrypt(old_ct)
                     except InvalidToken as exc:
                         raise RuntimeError(
-                            f"Failed to decrypt {table} row {row.get('id', '?')}: "
-                            "--previous-fernet-key may be wrong"
+                            f"Failed to decrypt {table} row {row.get('id', '?')}: --previous-fernet-key may be wrong"
                         ) from exc
                     new_ct = new_fernet.encrypt(plaintext)
                     try:
@@ -575,9 +571,7 @@ def restore(backup_dir: Path, db_url: str | None, yes: bool, previous_fernet_key
             for filename, expected_hash in checksums.items():
                 file_path = backup_dir / filename
                 if not file_path.exists():
-                    raise click.ClickException(
-                        f"Backup file {filename} listed in manifest but not found on disk"
-                    )
+                    raise click.ClickException(f"Backup file {filename} listed in manifest but not found on disk")
                 actual_hash = _file_checksum(file_path)
                 if actual_hash != expected_hash:
                     raise click.ClickException(
@@ -585,7 +579,12 @@ def restore(backup_dir: Path, db_url: str | None, yes: bool, previous_fernet_key
                     )
             click.echo("  All file checksums verified")
 
-        for json_name in ("checkpoint_blobs.json", "checkpoints.json", "checkpoint_writes.json", "credentials_references.json"):
+        for json_name in (
+            "checkpoint_blobs.json",
+            "checkpoints.json",
+            "checkpoint_writes.json",
+            "credentials_references.json",
+        ):
             json_path = backup_dir / json_name
             if json_path.exists():
                 try:

@@ -49,6 +49,7 @@ def _get_hub() -> RuntimeProviderHub:
     settings = get_settings()
     return create_default_hub(max_local_concurrency=settings.modulo_max_local_concurrency)
 
+
 # ---------------------------------------------------------------------------
 # Schemas
 # ---------------------------------------------------------------------------

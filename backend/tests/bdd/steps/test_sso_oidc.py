@@ -30,27 +30,29 @@ def _oidc_settings(license_key: str = "test-license-key") -> Settings:
         modulo_admin_password="testpass",
         modulo_license_key=license_key,
         modulo_csrf_enabled=False,
-        modulo_oidc_providers=json.dumps([
-            {
-                "provider_id": "google",
-                "client_id": "google-client-id",
-                "client_secret": "google-client-secret",
-                "discovery_url": "https://accounts.google.com/.well-known/openid-configuration",
-            },
-            {
-                "provider_id": "github",
-                "client_id": "github-client-id",
-                "client_secret": "github-client-secret",
-                "discovery_url": "https://token.actions.githubusercontent.com/.well-known/openid-configuration",
-            },
-        ]),
+        modulo_oidc_providers=json.dumps(
+            [
+                {
+                    "provider_id": "google",
+                    "client_id": "google-client-id",
+                    "client_secret": "google-client-secret",
+                    "discovery_url": "https://accounts.google.com/.well-known/openid-configuration",
+                },
+                {
+                    "provider_id": "github",
+                    "client_id": "github-client-id",
+                    "client_secret": "github-client-secret",
+                    "discovery_url": "https://token.actions.githubusercontent.com/.well-known/openid-configuration",
+                },
+            ]
+        ),
     )
 
 
 def _make_id_token(email: str, name: str, sub: str = "abc123") -> str:
-    payload = base64.urlsafe_b64encode(
-        json.dumps({"email": email, "name": name, "sub": sub}).encode()
-    ).rstrip(b"=").decode()
+    payload = (
+        base64.urlsafe_b64encode(json.dumps({"email": email, "name": name, "sub": sub}).encode()).rstrip(b"=").decode()
+    )
     return f"eyJhbGciOiJSUzI1NiJ9.{payload}.signature"
 
 
@@ -245,9 +247,7 @@ def redirected_to_provider(request: Any) -> None:
 def redirect_has_auth_endpoint(request: Any) -> None:
     resp = request.node._resp
     location = resp.headers.get("location", "")
-    assert "accounts.google.com" in location, (
-        f"Expected Google auth endpoint in redirect, got {location}"
-    )
+    assert "accounts.google.com" in location, f"Expected Google auth endpoint in redirect, got {location}"
 
 
 @then("the redirect URL contains access and refresh tokens")
@@ -265,9 +265,7 @@ def new_user_provisioned(ctx: dict[str, Any], request: Any) -> None:
     mock_jit.assert_awaited_once()
     call_kwargs = mock_jit.await_args[1] if mock_jit.await_args else {}
     email_arg = mock_jit.call_args[0][2] if mock_jit.call_args else call_kwargs.get("email", "")
-    assert email_arg == ctx.get("expected_email", ""), (
-        f"Expected JIT for {ctx.get('expected_email')}, got {email_arg}"
-    )
+    assert email_arg == ctx.get("expected_email", ""), f"Expected JIT for {ctx.get('expected_email')}, got {email_arg}"
 
 
 @then("no duplicate account was created")
@@ -286,6 +284,4 @@ def error_detail_mentions(text: str, request: Any) -> None:
     resp = request.node._resp
     body = resp.json()
     detail = body.get("detail", "")
-    assert text.lower() in detail.lower(), (
-        f"Expected detail to mention '{text}', got '{detail}'"
-    )
+    assert text.lower() in detail.lower(), f"Expected detail to mention '{text}', got '{detail}'"

@@ -49,10 +49,13 @@ class RemyConfig(BaseModel):
     auto_execute_threshold: float = 0.8
     rate_limit_max_actions: int = 15
     rate_limit_window_seconds: int = 60
-    allowed_selectors: list[str] = Field(default_factory=list,
-        description="If non-empty, Remy can only interact with elements matching these CSS selectors or data-testid prefixes")  # noqa: E501
-    allowed_page_patterns: list[str] = Field(default_factory=list,
-        description="If non-empty, Remy can only navigate to pages matching these URL patterns")
+    allowed_selectors: list[str] = Field(
+        default_factory=list,
+        description="If non-empty, Remy can only interact with elements matching these CSS selectors or data-testid prefixes",
+    )
+    allowed_page_patterns: list[str] = Field(
+        default_factory=list, description="If non-empty, Remy can only navigate to pages matching these URL patterns"
+    )
     context_sources: dict[str, str] = Field(
         default_factory=lambda: {
             "page_context": "always_on",
@@ -69,7 +72,22 @@ class RemyConfig(BaseModel):
 _CONFIG_KEY_PREFIX = "remy_config:"
 
 PERMISSION_MODE_PRESETS: dict[str, dict[str, str]] = {
-    "full_auto": dict.fromkeys(["navigate", "click", "fill", "select", "extract", "extract_all", "get_page_interactables", "wait", "go_back", "get_url", "press"], "always_allowed"),
+    "full_auto": dict.fromkeys(
+        [
+            "navigate",
+            "click",
+            "fill",
+            "select",
+            "extract",
+            "extract_all",
+            "get_page_interactables",
+            "wait",
+            "go_back",
+            "get_url",
+            "press",
+        ],
+        "always_allowed",
+    ),
     "safe": {
         "press": "requires_approval",
     },

@@ -98,9 +98,7 @@ async def get_dashboard_notifications(
 
     dismissal_alias = aliased(Dismissal)
     dismissed_subq = (
-        select(dismissal_alias.notification_id)
-        .where(dismissal_alias.dismissed_by_user_id == user_id)
-        .subquery()
+        select(dismissal_alias.notification_id).where(dismissal_alias.dismissed_by_user_id == user_id).subquery()
     )
 
     q = (
@@ -204,11 +202,7 @@ async def count_notifications_for_user(
         q = q.where(Notification.category == category)
 
     if status_filter == "active":
-        dismissed_subq = (
-            select(Dismissal.notification_id)
-            .where(Dismissal.dismissed_by_user_id == user_id)
-            .subquery()
-        )
+        dismissed_subq = select(Dismissal.notification_id).where(Dismissal.dismissed_by_user_id == user_id).subquery()
         q = q.where(Notification.id.notin_(select(dismissed_subq.c.notification_id)))
     elif status_filter == "dismissed_self":
         q = q.where(
@@ -310,11 +304,7 @@ async def get_unread_count(
     min_rank = LEVEL_RANK.get(min_level, 1)
     allowed_levels = [lvl for lvl, rnk in LEVEL_RANK.items() if rnk >= min_rank]
 
-    dismissed_subq = (
-        select(Dismissal.notification_id)
-        .where(Dismissal.dismissed_by_user_id == user_id)
-        .subquery()
-    )
+    dismissed_subq = select(Dismissal.notification_id).where(Dismissal.dismissed_by_user_id == user_id).subquery()
 
     q = select(func.count(Notification.id)).where(
         Notification.organisation_id == org_id,

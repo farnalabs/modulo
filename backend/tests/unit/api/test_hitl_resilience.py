@@ -68,7 +68,10 @@ class TestClaimGateSQLAlchemyError:
 
 
 class TestClaimGateNotTeamMemberError:
-    @patch("modulo.api.routes.hitl.HITLManager.claim", new=AsyncMock(side_effect=NotTeamMemberError(_RUN_ID, "gate-1", _ORG_ID, _USER_ID)))
+    @patch(
+        "modulo.api.routes.hitl.HITLManager.claim",
+        new=AsyncMock(side_effect=NotTeamMemberError(_RUN_ID, "gate-1", _ORG_ID, _USER_ID)),
+    )
     def test_claim_gate_returns_403_for_non_team_member(self, client: TestClient) -> None:
         resp = client.post(
             f"/api/v1/runs/{_RUN_ID}/hitl/gate-1/claim",
@@ -134,7 +137,10 @@ class TestSubmitManualSQLAlchemyError:
 
 
 class TestSubmitManualNotTeamMemberError:
-    @patch("modulo.api.routes.hitl.HITLManager.approve", new=AsyncMock(side_effect=NotTeamMemberError(_RUN_ID, "gate-1", _ORG_ID, _USER_ID)))
+    @patch(
+        "modulo.api.routes.hitl.HITLManager.approve",
+        new=AsyncMock(side_effect=NotTeamMemberError(_RUN_ID, "gate-1", _ORG_ID, _USER_ID)),
+    )
     def test_submit_manual_returns_403_for_non_team_member(self, client: TestClient) -> None:
         resp = client.post(
             f"/api/v1/runs/{_RUN_ID}/manual/gate-1/submit",

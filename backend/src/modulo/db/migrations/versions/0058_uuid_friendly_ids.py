@@ -21,7 +21,8 @@ def upgrade() -> None:
 
     # Backfill run_number sequentially per organisation_id
     conn = op.get_bind()
-    conn.execute(text("""
+    conn.execute(
+        text("""
         UPDATE runs SET run_number = (
             SELECT rn FROM (
                 SELECT id, ROW_NUMBER() OVER (PARTITION BY organisation_id ORDER BY created_at) AS rn
@@ -29,7 +30,8 @@ def upgrade() -> None:
             ) numbered
             WHERE numbered.id = runs.id
         )
-    """))
+    """)
+    )
 
     # Make run_number non-nullable now
     op.alter_column("runs", "run_number", nullable=False)
@@ -41,7 +43,8 @@ def upgrade() -> None:
     op.add_column("chat_sessions", sa.Column("session_number", sa.Integer(), nullable=True))
 
     # Backfill session_number sequentially per user_id
-    conn.execute(text("""
+    conn.execute(
+        text("""
         UPDATE chat_sessions SET session_number = (
             SELECT rn FROM (
                 SELECT id, ROW_NUMBER() OVER (PARTITION BY user_id ORDER BY created_at) AS rn
@@ -49,7 +52,8 @@ def upgrade() -> None:
             ) numbered
             WHERE numbered.id = chat_sessions.id
         )
-    """))
+    """)
+    )
 
     # Make session_number non-nullable now
     op.alter_column("chat_sessions", "session_number", nullable=False)

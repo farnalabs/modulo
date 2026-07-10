@@ -16,7 +16,6 @@ except (FileNotFoundError, OSError):
     pass
 
 
-
 @given(parsers.parse('I am authenticated as an approver in org "{org}"'))
 def i_am_approver_in_org(org: str, request):
     request.node._org = org

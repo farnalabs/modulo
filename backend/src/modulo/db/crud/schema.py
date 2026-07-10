@@ -142,11 +142,7 @@ async def delete_schema(
             await session.execute(
                 select(func.count())
                 .select_from(PipelineSnapshot)
-                .where(
-                    cast(PipelineSnapshot.schema_pins_json, String).contains(
-                        str(schema_id)
-                    )
-                )
+                .where(cast(PipelineSnapshot.schema_pins_json, String).contains(str(schema_id)))
             )
         ).scalar_one()
         if pipelines_with_ref:
@@ -159,9 +155,7 @@ async def delete_schema(
                 .where(
                     LibraryPrimitive.primitive_type == "schema",
                     LibraryPrimitive.source == "local",
-                    cast(LibraryPrimitive.content_json, String).contains(
-                        str(schema_id)
-                    ),
+                    cast(LibraryPrimitive.content_json, String).contains(str(schema_id)),
                 )
             )
         ).scalar_one()

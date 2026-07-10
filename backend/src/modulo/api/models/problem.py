@@ -139,10 +139,7 @@ def problem_from_validation_error(
     request: Request,
     errors: list[dict[str, Any]],
 ) -> ProblemDetail:
-    detail = "; ".join(
-        f"{'.'.join(str(p) for p in e.get('loc', []))}: {e.get('msg', '')}"
-        for e in errors
-    )
+    detail = "; ".join(f"{'.'.join(str(p) for p in e.get('loc', []))}: {e.get('msg', '')}" for e in errors)
     return ProblemDetail.from_type(
         problem_type=ProblemType.VALIDATION_ERROR,
         detail=detail or "Request validation failed",

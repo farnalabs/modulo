@@ -43,9 +43,7 @@ class RemyRedisRegistry:
 
     # ── Permission request state ───────────────────────────────────────────
 
-    async def set_permission_request(
-        self, request_id: str, session_id: str, tools: list[dict], ttl: int = 120
-    ) -> None:
+    async def set_permission_request(self, request_id: str, session_id: str, tools: list[dict], ttl: int = 120) -> None:
         r = await self._get_redis()
         if r is None:
             return

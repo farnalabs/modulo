@@ -60,12 +60,8 @@ def _add(
     samples.append(ScanSample(connector_id, ct, resource, records, sample_count, error))
 
 
-async def _query_with_timeout(
-    connector: ConnectorBase, query: ConnectorQuery
-) -> Any:
-    return await asyncio.wait_for(
-        connector.query(query), timeout=_QUERY_TIMEOUT
-    )
+async def _query_with_timeout(connector: ConnectorBase, query: ConnectorQuery) -> Any:
+    return await asyncio.wait_for(connector.query(query), timeout=_QUERY_TIMEOUT)
 
 
 async def _sample_connector(connector_id: uuid.UUID, connector: ConnectorBase) -> list[ScanSample]:
@@ -82,9 +78,7 @@ async def _sample_connector(connector_id: uuid.UUID, connector: ConnectorBase) -
         case ConnectorType.GITHUB:
             repos: list[dict[str, Any]] = []
             try:
-                r = await _query_with_timeout(
-                    connector, ConnectorQuery(resource="repos", limit=_SAMPLE_LIMIT)
-                )
+                r = await _query_with_timeout(connector, ConnectorQuery(resource="repos", limit=_SAMPLE_LIMIT))
                 repos = r.records
                 _add(samples, connector_id, ct, "repos", repos, len(repos))
             except Exception as exc:
@@ -113,9 +107,7 @@ async def _sample_connector(connector_id: uuid.UUID, connector: ConnectorBase) -
         case ConnectorType.GITLAB:
             projects: list[dict[str, Any]] = []
             try:
-                r = await _query_with_timeout(
-                    connector, ConnectorQuery(resource="projects", limit=_SAMPLE_LIMIT)
-                )
+                r = await _query_with_timeout(connector, ConnectorQuery(resource="projects", limit=_SAMPLE_LIMIT))
                 projects = r.records
                 _add(samples, connector_id, ct, "projects", projects, len(projects))
             except Exception as exc:
@@ -157,9 +149,7 @@ async def _sample_connector(connector_id: uuid.UUID, connector: ConnectorBase) -
 
         case ConnectorType.LINEAR:
             try:
-                r = await _query_with_timeout(
-                    connector, ConnectorQuery(resource="search", filters={"query": ""})
-                )
+                r = await _query_with_timeout(connector, ConnectorQuery(resource="search", filters={"query": ""}))
                 _add(
                     samples,
                     connector_id,

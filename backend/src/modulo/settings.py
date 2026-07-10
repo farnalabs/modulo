@@ -169,9 +169,7 @@ class Settings(BaseSettings):
     @classmethod
     def _validate_monitor_domains(cls, v: str) -> str:
         if ";" in v:
-            raise ValueError(
-                "MODULO_MONITOR_DOMAINS must not contain semicolons (would break CSP)"
-            )
+            raise ValueError("MODULO_MONITOR_DOMAINS must not contain semicolons (would break CSP)")
         return v
 
     @field_validator("modulo_db")
@@ -208,7 +206,7 @@ class Settings(BaseSettings):
     def _fix_database_url(self) -> "Settings":
         url = self.database_url
         if url.startswith("postgres://"):
-            url = "postgresql+asyncpg://" + url[len("postgres://"):]
+            url = "postgresql+asyncpg://" + url[len("postgres://") :]
         url = url.replace("?sslmode=disable", "?ssl=disable")
         if url != self.database_url:
             self.database_url = url

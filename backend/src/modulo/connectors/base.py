@@ -83,10 +83,16 @@ class ConnectorType(StrEnum):
             case ConnectorType.FILESYSTEM:
                 return frozenset({Capability.READ, Capability.WRITE})
             case ConnectorType.GITHUB:
-                return frozenset({
-                    Capability.READ, Capability.WRITE, Capability.GIT_PUSH, Capability.CREATE_PR,
-                    Capability.ISSUE_READ, Capability.ISSUE_WRITE,
-                })
+                return frozenset(
+                    {
+                        Capability.READ,
+                        Capability.WRITE,
+                        Capability.GIT_PUSH,
+                        Capability.CREATE_PR,
+                        Capability.ISSUE_READ,
+                        Capability.ISSUE_WRITE,
+                    }
+                )
             case ConnectorType.BITBUCKET:
                 return frozenset({Capability.READ, Capability.WRITE, Capability.GIT_PUSH, Capability.CREATE_PR})
             case ConnectorType.CI_RUNNER:
@@ -101,11 +107,18 @@ class ConnectorType(StrEnum):
             case ConnectorType.GITEA:
                 return frozenset({Capability.READ, Capability.WRITE, Capability.GIT_PUSH, Capability.CREATE_PR})
             case ConnectorType.GITLAB:
-                return frozenset({
-                    Capability.READ, Capability.WRITE, Capability.GIT_PUSH, Capability.CREATE_PR,
-                    Capability.ISSUE_READ, Capability.ISSUE_WRITE, Capability.ISSUE_SEARCH,
-                    Capability.TRIGGER_RUN,
-                })
+                return frozenset(
+                    {
+                        Capability.READ,
+                        Capability.WRITE,
+                        Capability.GIT_PUSH,
+                        Capability.CREATE_PR,
+                        Capability.ISSUE_READ,
+                        Capability.ISSUE_WRITE,
+                        Capability.ISSUE_SEARCH,
+                        Capability.TRIGGER_RUN,
+                    }
+                )
             case ConnectorType.AZURE_REPOS:
                 return frozenset({Capability.READ, Capability.WRITE, Capability.GIT_PUSH, Capability.CREATE_PR})
             case ConnectorType.JIRA:
@@ -165,9 +178,13 @@ class ConnectorType(StrEnum):
                     }
                 )
             case ConnectorType.AZURE_KEY_VAULT:
-                return frozenset({
-                    Capability.SECRETS_MANAGEMENT, Capability.READ, Capability.WRITE,
-                })
+                return frozenset(
+                    {
+                        Capability.SECRETS_MANAGEMENT,
+                        Capability.READ,
+                        Capability.WRITE,
+                    }
+                )
             case ConnectorType.AZURE_PIPELINES:
                 return frozenset(
                     {
@@ -180,51 +197,93 @@ class ConnectorType(StrEnum):
             case ConnectorType.DATADOG:
                 return frozenset({Capability.MONITORING, Capability.OBSERVABILITY, Capability.READ, Capability.WRITE})
             case ConnectorType.SENTRY:
-                return frozenset({
-                    Capability.MONITORING, Capability.INCIDENT_MANAGEMENT,
-                    Capability.READ, Capability.WRITE,
-                })
+                return frozenset(
+                    {
+                        Capability.MONITORING,
+                        Capability.INCIDENT_MANAGEMENT,
+                        Capability.READ,
+                        Capability.WRITE,
+                    }
+                )
             case ConnectorType.PAGERDUTY:
-                return frozenset({
-                    Capability.INCIDENT_MANAGEMENT, Capability.MONITORING,
-                    Capability.READ, Capability.WRITE,
-                })
+                return frozenset(
+                    {
+                        Capability.INCIDENT_MANAGEMENT,
+                        Capability.MONITORING,
+                        Capability.READ,
+                        Capability.WRITE,
+                    }
+                )
             case ConnectorType.GRAFANA:
-                return frozenset({
-                    Capability.MONITORING, Capability.OBSERVABILITY,
-                    Capability.READ, Capability.WRITE,
-                })
+                return frozenset(
+                    {
+                        Capability.MONITORING,
+                        Capability.OBSERVABILITY,
+                        Capability.READ,
+                        Capability.WRITE,
+                    }
+                )
             case ConnectorType.MICROSOFT_TEAMS:
-                return frozenset({
-                    Capability.COLLABORATION, Capability.MESSAGING, Capability.NOTIFICATION,
-                    Capability.READ, Capability.WRITE,
-                })
+                return frozenset(
+                    {
+                        Capability.COLLABORATION,
+                        Capability.MESSAGING,
+                        Capability.NOTIFICATION,
+                        Capability.READ,
+                        Capability.WRITE,
+                    }
+                )
             case ConnectorType.DISCORD:
-                return frozenset({
-                    Capability.COLLABORATION, Capability.MESSAGING, Capability.NOTIFICATION,
-                })
+                return frozenset(
+                    {
+                        Capability.COLLABORATION,
+                        Capability.MESSAGING,
+                        Capability.NOTIFICATION,
+                    }
+                )
             case ConnectorType.OPSGENIE:
-                return frozenset({
-                    Capability.INCIDENT_MANAGEMENT, Capability.MONITORING, Capability.NOTIFICATION,
-                })
+                return frozenset(
+                    {
+                        Capability.INCIDENT_MANAGEMENT,
+                        Capability.MONITORING,
+                        Capability.NOTIFICATION,
+                    }
+                )
             case ConnectorType.SONARQUBE:
-                return frozenset({
-                    Capability.READ, Capability.WRITE, Capability.MONITORING, Capability.OBSERVABILITY,
-                })
+                return frozenset(
+                    {
+                        Capability.READ,
+                        Capability.WRITE,
+                        Capability.MONITORING,
+                        Capability.OBSERVABILITY,
+                    }
+                )
             case ConnectorType.CODECLIMATE:
                 return frozenset({Capability.MONITORING, Capability.OBSERVABILITY})
             case ConnectorType.SNYK:
-                return frozenset({
-                    Capability.READ, Capability.VULNERABILITY_SCANNING, Capability.MONITORING,
-                })
+                return frozenset(
+                    {
+                        Capability.READ,
+                        Capability.VULNERABILITY_SCANNING,
+                        Capability.MONITORING,
+                    }
+                )
             case ConnectorType.TRIVY:
-                return frozenset({
-                    Capability.READ, Capability.VULNERABILITY_SCANNING, Capability.MONITORING,
-                })
+                return frozenset(
+                    {
+                        Capability.READ,
+                        Capability.VULNERABILITY_SCANNING,
+                        Capability.MONITORING,
+                    }
+                )
             case ConnectorType.ONEPASSWORD:
-                return frozenset({
-                    Capability.SECRETS_MANAGEMENT, Capability.READ, Capability.WRITE,
-                })
+                return frozenset(
+                    {
+                        Capability.SECRETS_MANAGEMENT,
+                        Capability.READ,
+                        Capability.WRITE,
+                    }
+                )
             case ConnectorType.NPM:
                 return frozenset({Capability.PACKAGE_MANAGEMENT, Capability.READ})
             case ConnectorType.PYPI:

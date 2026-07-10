@@ -160,13 +160,15 @@ async def polling_trigger(seeded_db: AsyncSession) -> dict[str, Any]:
 
 
 def _make_polling_config_json() -> str:
-    return json.dumps({
-        "connector_instance_id": str(_CI_ID),
-        "poll_query": "select * from issues",
-        "condition_expression": "[?status==`open`]",
-        "poll_interval_seconds": 60,
-        "snapshot_id": str(_SNAPSHOT_ID),
-    })
+    return json.dumps(
+        {
+            "connector_instance_id": str(_CI_ID),
+            "poll_query": "select * from issues",
+            "condition_expression": "[?status==`open`]",
+            "poll_interval_seconds": 60,
+            "snapshot_id": str(_SNAPSHOT_ID),
+        }
+    )
 
 
 # ---------------------------------------------------------------------------

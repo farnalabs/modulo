@@ -250,7 +250,10 @@ def test_audit_list_long_event_type(client: TestClient) -> None:
 
 def test_audit_list_long_cursor(client: TestClient) -> None:
     with (
-        patch("modulo.api.routes.audit.list_audit_events", return_value={"items": [], "total": 0, "page": 1, "page_size": 20, "total_pages": 0}),
+        patch(
+            "modulo.api.routes.audit.list_audit_events",
+            return_value={"items": [], "total": 0, "page": 1, "page_size": 20, "total_pages": 0},
+        ),
         patch("modulo.api.routes.audit.set_rls_org"),
     ):
         resp = client.get("/api/v1/admin/audit?cursor=" + "x" * 300)

@@ -90,9 +90,7 @@ class SkillLoader:
     async def get_user_skills(self, user_id: uuid.UUID) -> list[SkillEntry]:
         return await self._get_skills(user_id=user_id, organisation_id=None)
 
-    def _append_skills_block(
-        self, parts: list[str], skills: list[SkillEntry], heading: str
-    ) -> None:
+    def _append_skills_block(self, parts: list[str], skills: list[SkillEntry], heading: str) -> None:
         if not skills:
             return
         parts.append(heading)
@@ -101,9 +99,7 @@ class SkillLoader:
 
     async def _build_user_profile(self, org_id: uuid.UUID, user_id: uuid.UUID) -> str | None:
         try:
-            acct_result = await self._session.execute(
-                select(Account).where(Account.id == user_id)
-            )
+            acct_result = await self._session.execute(select(Account).where(Account.id == user_id))
             account = acct_result.scalar_one_or_none()
             if not account:
                 return None
@@ -116,9 +112,7 @@ class SkillLoader:
             )
             membership = membership_result.scalar_one_or_none()
 
-            org_result = await self._session.execute(
-                select(Organisation).where(Organisation.id == org_id)
-            )
+            org_result = await self._session.execute(select(Organisation).where(Organisation.id == org_id))
             org = org_result.scalar_one_or_none()
 
             lines = [f"{_SECTION_USER_PROFILE}\n"]
@@ -286,8 +280,8 @@ class SkillLoader:
         if end_idx == -1:
             return None, markdown
 
-        frontmatter_text = stripped[len(_DELIMITER):end_idx].strip()
-        body = stripped[end_idx + len(_DELIMITER):].lstrip()
+        frontmatter_text = stripped[len(_DELIMITER) : end_idx].strip()
+        body = stripped[end_idx + len(_DELIMITER) :].lstrip()
 
         frontmatter: dict[str, Any] = {}
         for line in frontmatter_text.split("\n"):
@@ -301,9 +295,7 @@ class SkillLoader:
             value = value.strip()
 
             if value.startswith("[") and value.endswith("]"):
-                frontmatter[key] = [
-                    v.strip().strip("\"'") for v in value[1:-1].split(",") if v.strip()
-                ]
+                frontmatter[key] = [v.strip().strip("\"'") for v in value[1:-1].split(",") if v.strip()]
             elif value.lower() in ("true", "false"):
                 frontmatter[key] = value.lower() == "true"
             else:

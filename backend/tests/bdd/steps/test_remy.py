@@ -665,7 +665,7 @@ def update_remy_config_guidance(guidance: str, request, ctx) -> None:
 
 @when(
     parsers.re(
-        r'I update the Remy config access_list with user_ids (?P<user_ids_str>.+)',
+        r"I update the Remy config access_list with user_ids (?P<user_ids_str>.+)",
     )
 )
 def update_remy_config_access_list(user_ids_str: str, request, ctx) -> None:
@@ -678,7 +678,7 @@ def update_remy_config_defaults(provider: str, model: str, request, ctx) -> None
     _update_remy_config(request, ctx, {"default_provider": provider, "default_model": model})
 
 
-@when(parsers.re(r'I update the Remy config allowed_providers to (?P<providers_str>.+)'))
+@when(parsers.re(r"I update the Remy config allowed_providers to (?P<providers_str>.+)"))
 def update_remy_config_allowed_providers(providers_str: str, request, ctx) -> None:
     providers = json.loads(providers_str)
     _update_remy_config(request, ctx, {"allowed_providers": providers})
@@ -718,6 +718,7 @@ def _update_remy_config(request: Any, ctx: dict, updates: dict) -> None:
 
         from modulo.auth.dependencies import get_current_user
         from modulo.auth.jwt import AuthenticatedPrincipal
+
         app.dependency_overrides[get_current_user] = lambda: AuthenticatedPrincipal(
             username="testuser",
             organisation_id=ORG_ID,
@@ -790,7 +791,7 @@ def list_org_skills(request, ctx) -> None:
         request.node._resp = resp
 
 
-@when("I update the org skill name to \"code-review-v2\"")
+@when('I update the org skill name to "code-review-v2"')
 def update_org_skill(request, ctx) -> None:
     skill = next(iter(ctx.get("org_skills", {}).values()))
 
@@ -1102,7 +1103,7 @@ def config_has_system_prompt(prompt: str, request) -> None:
     assert data.get("system_prompt") == prompt
 
 
-@then(parsers.re(r'the config access_list includes user_ids (?P<user_ids_str>.+)'))
+@then(parsers.re(r"the config access_list includes user_ids (?P<user_ids_str>.+)"))
 def config_access_list_has_user_ids(user_ids_str: str, request) -> None:
     expected = json.loads(user_ids_str)
     data = request.node._resp.json()
@@ -1314,7 +1315,6 @@ def llm_emits_tool_call(tool_name: str, request, ctx, selector: str = "", value:
     if path:
         args["path"] = path
 
-
     # Simulate the permission check that happens in the streaming endpoint
 
     with (
@@ -1333,6 +1333,7 @@ def llm_emits_tool_call(tool_name: str, request, ctx, selector: str = "", value:
         if viewer_auth:
             from modulo.auth.dependencies import get_current_user
             from modulo.auth.jwt import AuthenticatedPrincipal
+
             app.dependency_overrides[get_current_user] = lambda: AuthenticatedPrincipal(
                 username="viewer",
                 organisation_id=ORG_ID,
@@ -1347,8 +1348,10 @@ def llm_emits_tool_call(tool_name: str, request, ctx, selector: str = "", value:
         ctx["last_tool_call"] = {"name": tool_name, "args": args}
 
         # Store the pending permission so we can respond to it later
-        if tool_name in ("click",) and selector and any(
-            p in selector.lower() for p in ["delete", "remove", "destroy", "archive"]
+        if (
+            tool_name in ("click",)
+            and selector
+            and any(p in selector.lower() for p in ["delete", "remove", "destroy", "archive"])
         ):
             ctx["requires_approval"] = True
         else:
@@ -1441,7 +1444,7 @@ def frontend_executes_navigate() -> None:
     pass
 
 
-@then("the URL changes to \"/admin/pipelines\"")
+@then('the URL changes to "/admin/pipelines"')
 def url_changes_to_pipelines() -> None:
     pass
 

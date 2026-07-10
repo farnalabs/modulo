@@ -60,4 +60,3 @@ AsyncSessionLocal = async_sessionmaker(
     autoflush=False,
     autobegin=False,
 )
-

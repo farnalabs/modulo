@@ -28,6 +28,7 @@ def _to_sync_url(url: str) -> str:
     url = url.replace("?sslmode=disable", "").replace("&sslmode=disable", "")
     return url.replace("?ssl=disable", "").replace("&ssl=disable", "")
 
+
 target_metadata = Base.metadata
 
 # Module-level Alembic setup — only safe when context is properly configured

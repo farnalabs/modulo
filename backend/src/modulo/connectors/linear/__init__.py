@@ -260,9 +260,7 @@ class LinearConnector(ConnectorBase):
                     if r.status_code in _RETRYABLE_STATUSES and attempt < _MAX_RETRIES:
                         retry_after = _parse_retry_after(r)
                         delay = (
-                            min(retry_after, _MAX_DELAY)
-                            if retry_after
-                            else min(_BASE_DELAY * (2**attempt), _MAX_DELAY)
+                            min(retry_after, _MAX_DELAY) if retry_after else min(_BASE_DELAY * (2**attempt), _MAX_DELAY)
                         )
                         await asyncio.sleep(delay)
                         continue
@@ -270,17 +268,11 @@ class LinearConnector(ConnectorBase):
             except httpx.HTTPStatusError as exc:
                 if exc.response.status_code in _RETRYABLE_STATUSES and attempt < _MAX_RETRIES:
                     retry_after = _parse_retry_after(exc.response)
-                    delay = (
-                        min(retry_after, _MAX_DELAY)
-                        if retry_after
-                        else min(_BASE_DELAY * (2**attempt), _MAX_DELAY)
-                    )
+                    delay = min(retry_after, _MAX_DELAY) if retry_after else min(_BASE_DELAY * (2**attempt), _MAX_DELAY)
                     await asyncio.sleep(delay)
                     last_exc = exc
                     continue
-                raise ValueError(
-                    f"Linear API HTTP {exc.response.status_code}: {exc.response.text[:200]}"
-                ) from exc
+                raise ValueError(f"Linear API HTTP {exc.response.status_code}: {exc.response.text[:200]}") from exc
             except httpx.TimeoutException as exc:
                 if attempt < _MAX_RETRIES:
                     delay = min(_BASE_DELAY * (2**attempt), _MAX_DELAY)

@@ -362,9 +362,7 @@ def refresh_again_same_token(request: Any, ctx: dict[str, Any], token_client: Te
 def error_suspected_theft(request: Any) -> None:
     body = request.node.response.json()
     detail = body.get("detail", "")
-    assert "theft" in detail.lower() or "revoked" in detail.lower(), (
-        f"Expected theft-related error, got: {detail}"
-    )
+    assert "theft" in detail.lower() or "revoked" in detail.lower(), f"Expected theft-related error, got: {detail}"
 
 
 # ===========================================================================
@@ -372,7 +370,7 @@ def error_suspected_theft(request: Any) -> None:
 # ===========================================================================
 
 
-@when(parsers.parse('I POST /api/auth/logout with my refresh token'))
+@when(parsers.parse("I POST /api/auth/logout with my refresh token"))
 def logout(request: Any, ctx: dict[str, Any], token_client: TestClient) -> None:
     refresh_token = ctx.get("login_refresh_token")
     with patch("modulo.api.routes.auth.blacklist_family", new=AsyncMock(return_value=True)):
@@ -392,5 +390,3 @@ def refresh_rejected_after_logout(request: Any, ctx: dict[str, Any], token_clien
             json={"refresh_token": refresh_token},
         )
         assert resp.status_code == 401, f"Expected 401, got {resp.status_code}: {resp.text}"
-
-

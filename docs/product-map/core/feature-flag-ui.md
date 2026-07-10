@@ -215,7 +215,7 @@ Feature flag inspection dashboard at `/admin/feature-flags` listing all known fl
 - [x] Frontend tests for error/loading/empty states in AdminFeatureFlagsView added
 - [x] planStore unit tests exist at frontend/src/__tests__/planStore.spec.ts
 
-## QA History (index 351 — cross-cutting) 
+## QA History (index 351 — cross-cutting)
 
 ### Findings fixed
 

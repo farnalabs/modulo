@@ -147,9 +147,7 @@ class ClaimExpiryJob:
                 # 4. Batch-reset affected runs back to awaiting_human
                 run_ids = list({entry["run_id"] for entry in expired})
                 await session.execute(
-                    update(Run)
-                    .where(Run.id.in_(run_ids), Run.status == "claimed")
-                    .values(status="awaiting_human")
+                    update(Run).where(Run.id.in_(run_ids), Run.status == "claimed").values(status="awaiting_human")
                 )
 
                 # 5. Log audit events for each expired claim.

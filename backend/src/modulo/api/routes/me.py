@@ -62,19 +62,14 @@ async def get_user_settings(
     session: AsyncSession = Depends(get_db_session),
 ) -> dict[str, Any]:
     try:
-
         async with session.begin():
             account = await get_account_by_id(session, current_user.account_id)
     except ProgrammingError:
-
         logger.exception("routes.me")
 
         raise HTTPException(
-
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-
             detail="This feature is not available. Run database migrations to enable it.",
-
         )
 
     if account is None:
@@ -94,19 +89,14 @@ async def update_user_settings(
 ) -> dict[str, Any]:
     if req is None:
         try:
-
             async with session.begin():
                 account = await get_account_by_id(session, current_user.account_id)
         except ProgrammingError:
-
             logger.exception("routes.me")
 
             raise HTTPException(
-
                 status_code=status.HTTP_501_NOT_IMPLEMENTED,
-
                 detail="This feature is not available. Run database migrations to enable it.",
-
             )
 
         if account is None:
@@ -118,22 +108,17 @@ async def update_user_settings(
     if req.locale is not None:
         prefs["locale"] = req.locale
     try:
-
         async with session.begin():
             return await update_account_preferences(session, current_user.account_id, prefs)
 
-
     except ProgrammingError:
-
         logger.exception("routes.me")
 
         raise HTTPException(
-
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-
             detail="This feature is not available. Run database migrations to enable it.",
-
         )
+
 
 class PasswordChangeRequest(BaseModel):
     current_password: str = Field(min_length=1)
@@ -148,7 +133,6 @@ async def change_password(
     session: AsyncSession = Depends(get_db_session),
 ) -> dict[str, str]:
     try:
-
         async with session.begin():
             account = await get_account_by_id(session, current_user.account_id)
             if account is None:
@@ -172,18 +156,17 @@ async def change_password(
                 except HTTPException:
                     raise
                 except Exception:
-                    logging.getLogger(__name__).warning("Failed to blacklist previous token family during password change for account %s", current_user.account_id)
+                    logging.getLogger(__name__).warning(
+                        "Failed to blacklist previous token family during password change for account %s",
+                        current_user.account_id,
+                    )
 
     except ProgrammingError:
-
         logger.exception("routes.me")
 
         raise HTTPException(
-
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-
             detail="This feature is not available. Run database migrations to enable it.",
-
         )
 
     return {"detail": "Password changed successfully"}
@@ -199,19 +182,14 @@ async def list_user_skills(
     session: AsyncSession = Depends(get_db_session),
 ) -> list[SkillResponse]:
     try:
-
         async with session.begin():
             skills = await get_user_skills(session, current_user.account_id)
     except ProgrammingError:
-
         logger.exception("routes.me")
 
         raise HTTPException(
-
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-
             detail="This feature is not available. Run database migrations to enable it.",
-
         )
 
     return [_skill_to_response(s) for s in skills]
@@ -225,7 +203,6 @@ async def create_user_skill(
     session: AsyncSession = Depends(get_db_session),
 ) -> SkillResponse:
     try:
-
         async with session.begin():
             skill = RemySkill(
                 id=uuid.uuid4(),
@@ -240,15 +217,11 @@ async def create_user_skill(
             session.add(skill)
             await session.flush()
     except ProgrammingError:
-
         logger.exception("routes.me")
 
         raise HTTPException(
-
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-
             detail="This feature is not available. Run database migrations to enable it.",
-
         )
 
     return _skill_to_response(skill)
@@ -263,7 +236,6 @@ async def update_user_skill(
     session: AsyncSession = Depends(get_db_session),
 ) -> SkillResponse:
     try:
-
         async with session.begin():
             skill = await get_user_skill_or_404(session, current_user.account_id, skill_id)
             if req.name is not None:
@@ -278,15 +250,11 @@ async def update_user_skill(
                 skill.active = req.active
             await session.flush()
     except ProgrammingError:
-
         logger.exception("routes.me")
 
         raise HTTPException(
-
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-
             detail="This feature is not available. Run database migrations to enable it.",
-
         )
 
     return _skill_to_response(skill)
@@ -300,26 +268,20 @@ async def delete_user_skill(
     session: AsyncSession = Depends(get_db_session),
 ) -> None:
     try:
-
         async with session.begin():
             skill = await get_user_skill_or_404(session, current_user.account_id, skill_id)
             await session.delete(skill)
 
-
     # ── User-level Context Sources ─────────────────────────────────────────
 
-
     except ProgrammingError:
-
         logger.exception("routes.me")
 
         raise HTTPException(
-
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-
             detail="This feature is not available. Run database migrations to enable it.",
-
         )
+
 
 class ContextSourceModeUpdate(BaseModel):
     source_mode: str = Field(..., pattern=r"^(always_on|tool|off)$")
@@ -332,25 +294,16 @@ async def get_user_context_sources(
     session: AsyncSession = Depends(get_db_session),
 ) -> list[ContextSourceResponseItem]:
     try:
-
         async with session.begin():
             service = RemyContextSourceService(session)
-            config = await service.get_effective_config(
-                current_user.organisation_id, current_user.account_id
-            )
-            user_overrides = await service.get_user_overrides(
-                current_user.organisation_id, current_user.account_id
-            )
+            config = await service.get_effective_config(current_user.organisation_id, current_user.account_id)
+            user_overrides = await service.get_user_overrides(current_user.organisation_id, current_user.account_id)
     except ProgrammingError:
-
         logger.exception("routes.me")
 
         raise HTTPException(
-
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-
             detail="This feature is not available. Run database migrations to enable it.",
-
         )
 
     return service.build_effective_items(config.context_sources, user_overrides)
@@ -365,7 +318,6 @@ async def set_user_context_source(
     session: AsyncSession = Depends(get_db_session),
 ) -> list[ContextSourceResponseItem]:
     try:
-
         async with session.begin():
             service = RemyContextSourceService(session)
             await service.set_user_override(
@@ -374,22 +326,14 @@ async def set_user_context_source(
                 source_key,
                 req.source_mode,
             )
-            config = await service.get_effective_config(
-                current_user.organisation_id, current_user.account_id
-            )
-            user_overrides = await service.get_user_overrides(
-                current_user.organisation_id, current_user.account_id
-            )
+            config = await service.get_effective_config(current_user.organisation_id, current_user.account_id)
+            user_overrides = await service.get_user_overrides(current_user.organisation_id, current_user.account_id)
     except ProgrammingError:
-
         logger.exception("routes.me")
 
         raise HTTPException(
-
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-
             detail="This feature is not available. Run database migrations to enable it.",
-
         )
 
     return service.build_effective_items(config.context_sources, user_overrides)
@@ -402,25 +346,16 @@ async def reset_user_context_sources(
     session: AsyncSession = Depends(get_db_session),
 ) -> list[ContextSourceResponseItem]:
     try:
-
         async with session.begin():
             service = RemyContextSourceService(session)
-            await service.reset_user_overrides(
-                current_user.organisation_id, current_user.account_id
-            )
-            config = await service.get_effective_config(
-                current_user.organisation_id, current_user.account_id
-            )
+            await service.reset_user_overrides(current_user.organisation_id, current_user.account_id)
+            config = await service.get_effective_config(current_user.organisation_id, current_user.account_id)
     except ProgrammingError:
-
         logger.exception("routes.me")
 
         raise HTTPException(
-
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-
             detail="This feature is not available. Run database migrations to enable it.",
-
         )
 
     return service.build_effective_items(config.context_sources, {})

@@ -38,10 +38,7 @@ _alert_engine_lock = asyncio.Lock()
 
 def _normalize_stacktrace(stacktrace: str) -> str:
     lines = stacktrace.strip().split("\n")[:5]
-    return "\n".join(
-        _STACKTRACE_FILE_RE.sub("", line).strip()
-        for line in lines
-    )
+    return "\n".join(_STACKTRACE_FILE_RE.sub("", line).strip() for line in lines)
 
 
 class FingerprintError(Exception):
@@ -261,7 +258,6 @@ async def _dispatch_forwarders(
     per_org_configs: dict[str, dict[str, Any]] = {}
     if session is not None:
         try:
-
             async with session.begin():
                 result = await session.execute(
                     select(ErrorForwarderConfig).where(
@@ -274,7 +270,6 @@ async def _dispatch_forwarders(
                         per_org_configs[row.forwarder_type] = row.config_json
 
         except ProgrammingError:
-
             logger.exception("core.error_tracking")
 
             raise

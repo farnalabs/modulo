@@ -303,10 +303,10 @@ async def logout(
                     if not blacklisted:
                         _log.warning("logout.family_not_found", extra={"family_id": family_id_val})
             except IntegrityError:
-                        raise HTTPException(
-                                    status_code=status.HTTP_409_CONFLICT,
-                                    detail="A resource with this value already exists",
-                        )
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail="A resource with this value already exists",
+                )
             except ProgrammingError:
                 _log.warning("logout.programming_error")
                 raise HTTPException(

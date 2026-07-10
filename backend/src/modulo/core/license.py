@@ -79,8 +79,7 @@ class LicenseValidation:
     error: str | None = None
 
 
-class LicenseError(ValueError):
-    ...
+class LicenseError(ValueError): ...
 
 
 def _decode_license_key(key: str) -> tuple[bytes, bytes]:

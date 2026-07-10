@@ -63,7 +63,9 @@ class SharePointConnector(ConnectorBase):
             display_name = site_info.get("displayName", "")
             return HealthResult(ok=True, detail=display_name)
         except httpx.HTTPStatusError as exc:
-            return HealthResult(ok=False, detail=f"SharePoint API HTTP {exc.response.status_code}: {exc.response.text[:200]}")
+            return HealthResult(
+                ok=False, detail=f"SharePoint API HTTP {exc.response.status_code}: {exc.response.text[:200]}"
+            )
         except httpx.TimeoutException:
             return HealthResult(ok=False, detail="SharePoint API timeout")
         except httpx.ConnectError:
@@ -127,9 +129,7 @@ class SharePointConnector(ConnectorBase):
                     path = q.filters.get("path")
                     if not site_id or not drive_id or not path:
                         raise ValueError("SharePoint file query requires 'site_id', 'drive_id', and 'path' filters")
-                    r = await client.get(
-                        f"/sites/{site_id}/drives/{drive_id}/root:/{path.strip('/')}:/content"
-                    )
+                    r = await client.get(f"/sites/{site_id}/drives/{drive_id}/root:/{path.strip('/')}:/content")
                     r.raise_for_status()
                     content = r.text
                     return ConnectorResult(records=[{"path": path, "content": content}])

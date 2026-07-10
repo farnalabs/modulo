@@ -250,9 +250,7 @@ async def fire_polling_trigger(
         )
         connector_instance = conn_result.scalar_one_or_none()
         if connector_instance is None:
-            _log.warning(
-                "Connector instance %s not found for polling trigger %s", connector_instance_id, trigger_id
-            )
+            _log.warning("Connector instance %s not found for polling trigger %s", connector_instance_id, trigger_id)
             await _log_poll_event(
                 session,
                 trigger=trigger,
@@ -417,9 +415,7 @@ async def _update_next_fire_no_last(session: AsyncSession, trigger: Trigger) -> 
     interval = max(int(config.get("poll_interval_seconds") or 60), 1)
     now = datetime.datetime.now(datetime.UTC)
     next_fire = now + datetime.timedelta(seconds=interval)
-    await session.execute(
-        update(Trigger).where(Trigger.id == trigger.id).values(next_fire_at=next_fire)
-    )
+    await session.execute(update(Trigger).where(Trigger.id == trigger.id).values(next_fire_at=next_fire))
 
 
 def _validate_poll_config(config: dict[str, Any]) -> None:

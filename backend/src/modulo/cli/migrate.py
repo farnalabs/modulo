@@ -488,9 +488,7 @@ def import_org(
 ) -> None:
     """Import organisation data from a JSONL bundle with conflict resolution."""
     parsed_org_id = _parse_uuid(org_id, "organisation ID")
-    asyncio.run(
-        _async_import_org(ctx, parsed_org_id, input_path, on_conflict, pipelines_only, users_only)
-    )
+    asyncio.run(_async_import_org(ctx, parsed_org_id, input_path, on_conflict, pipelines_only, users_only))
 
 
 async def _async_import_org(
@@ -513,9 +511,7 @@ async def _async_import_org(
     click.echo(f"Loaded {len(records)} records from {input_path}")
 
     if _meta.get("export_hash") and not _verify_export(_meta, records):
-        raise click.ClickException(
-            "Import aborted: hash verification failed — file may be corrupted"
-        )
+        raise click.ClickException("Import aborted: hash verification failed — file may be corrupted")
 
     try:
         async with AsyncSessionLocal() as session:

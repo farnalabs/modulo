@@ -203,9 +203,7 @@ async def export_pipeline_bundle(
 
         # Edges
         edge_result = await session.execute(
-            select(PipelineEdge)
-            .where(PipelineEdge.pipeline_id == pipeline_id)
-            .order_by(PipelineEdge.created_at)
+            select(PipelineEdge).where(PipelineEdge.pipeline_id == pipeline_id).order_by(PipelineEdge.created_at)
         )
         edges = list(edge_result.scalars())
         edges_list = [
@@ -294,20 +292,24 @@ async def resolve_schema(
         # Try matching by same definition structure — batch load all schema versions
         if definition:
             all_schemas = (
-                await session.execute(select(Schema).where(Schema.organisation_id == org_id))
-            ).scalars().all()
+                (await session.execute(select(Schema).where(Schema.organisation_id == org_id))).scalars().all()
+            )
             schema_ids = [s.id for s in all_schemas]
             if schema_ids:
                 all_svs = (
-                    await session.execute(
-                        select(SchemaVersion)
-                        .where(
-                            SchemaVersion.schema_id.in_(schema_ids),
-                            SchemaVersion.published.is_(True),
+                    (
+                        await session.execute(
+                            select(SchemaVersion)
+                            .where(
+                                SchemaVersion.schema_id.in_(schema_ids),
+                                SchemaVersion.published.is_(True),
+                            )
+                            .order_by(SchemaVersion.schema_id, SchemaVersion.version_number.desc())
                         )
-                        .order_by(SchemaVersion.schema_id, SchemaVersion.version_number.desc())
                     )
-                ).scalars().all()
+                    .scalars()
+                    .all()
+                )
 
                 published: dict[uuid.UUID, SchemaVersion] = {}
                 for sv in all_svs:
@@ -539,7 +541,10 @@ async def materialize_import(
 
     logger.info(
         "Materializing import: pipeline='%s' (%d agents, %d schemas, %d edges)",
-        pname, len(agents_data), len(schemas_data), len(edges_data),
+        pname,
+        len(agents_data),
+        len(schemas_data),
+        len(edges_data),
     )
 
     # --- Step 1: Create any schemas that don't exist locally ---
@@ -589,8 +594,8 @@ async def materialize_import(
             if existing_sv and existing_sv.definition_json != definition:
                 if existing_schema_names is None:
                     all_existing = (
-                        await session.execute(select(Schema).where(Schema.organisation_id == org_id))
-                    ).scalars().all()
+                        (await session.execute(select(Schema).where(Schema.organisation_id == org_id))).scalars().all()
+                    )
                     existing_schema_names = {s.name for s in all_existing}
                 sname = suggest_import_name(existing_schema_names, sname, suffix="(imported)")
                 existing_schema_names.add(sname)
@@ -645,13 +650,11 @@ async def materialize_import(
         output_schema_id_str = ad.get("output_schema_id", "")
         resolved_input_id = schema_id_map.get(input_schema_id_str)
         resolved_output_id = schema_id_map.get(output_schema_id_str)
-        resolved_input_version = (
-            schema_version_map.get(input_schema_id_str)
-            or ad.get("input_schema_version", DEFAULT_SCHEMA_VERSION)
+        resolved_input_version = schema_version_map.get(input_schema_id_str) or ad.get(
+            "input_schema_version", DEFAULT_SCHEMA_VERSION
         )
-        resolved_output_version = (
-            schema_version_map.get(output_schema_id_str)
-            or ad.get("output_schema_version", DEFAULT_SCHEMA_VERSION)
+        resolved_output_version = schema_version_map.get(output_schema_id_str) or ad.get(
+            "output_schema_version", DEFAULT_SCHEMA_VERSION
         )
 
         export_mb_id = ad.get("model_backend_id", "")
@@ -806,7 +809,11 @@ async def materialize_import(
 
     logger.info(
         "Imported pipeline '%s' (id=%s) with %d agents, %d edges, %d schemas",
-        pname, pipeline.id, len(agents_data), len(edges_data), len(schemas_data),
+        pname,
+        pipeline.id,
+        len(agents_data),
+        len(edges_data),
+        len(schemas_data),
     )
 
     return {

@@ -8,9 +8,7 @@ from modulo.db.models.base import OrgScoped
 
 class PrimitiveRating(OrgScoped):
     __tablename__ = "primitive_ratings"
-    __table_args__ = (
-        UniqueConstraint("organisation_id", "primitive_id", "account_id", name="uq_ratings_per_user"),
-    )
+    __table_args__ = (UniqueConstraint("organisation_id", "primitive_id", "account_id", name="uq_ratings_per_user"),)
 
     primitive_id: Mapped[uuid.UUID] = mapped_column(
         Uuid(),

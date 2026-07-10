@@ -113,9 +113,9 @@ class TestSendEmail:
     def test_send_email_smtp_failure(self):
         settings = MockSettings()
         with patch("modulo.core.email_service.smtplib.SMTP") as mock_smtp:
-            mock_smtp.return_value.__enter__.return_value.send_message.side_effect = (
-                __import__("smtplib").SMTPException("Connection refused")
-            )
+            mock_smtp.return_value.__enter__.return_value.send_message.side_effect = __import__(
+                "smtplib"
+            ).SMTPException("Connection refused")
 
             with pytest.raises(EmailSendingError, match="Connection refused"):
                 send_email(

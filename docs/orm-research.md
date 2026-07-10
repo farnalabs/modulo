@@ -1,6 +1,6 @@
 # ORM Research — Async, Multi-Backend, UUID/JSON/RLS
 
-> Compiled: 26 June 2026  
+> Compiled: 26 June 2026
 > Sources: PyPI JSON API, GitHub REST API, ORM documentation
 
 ---

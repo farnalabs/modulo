@@ -28,9 +28,7 @@ def team_exists(name: str, ctx) -> None:
     ctx["teams"][name] = {"id": str(uuid.uuid4()), "name": name}
 
 
-@given(
-    parsers.parse('pipeline "{name}" is owned by team "{team_name}" with visibility "{visibility}"')
-)
+@given(parsers.parse('pipeline "{name}" is owned by team "{team_name}" with visibility "{visibility}"'))
 def pipeline_owned_by_team(name: str, team_name: str, visibility: str, ctx) -> None:
     team_id = ctx["teams"].get(team_name, {}).get("id", str(uuid.uuid4()))
     ctx["pipelines"][name] = {
@@ -41,9 +39,7 @@ def pipeline_owned_by_team(name: str, team_name: str, visibility: str, ctx) -> N
     }
 
 
-@given(
-    parsers.parse('connector "{name}" is owned by team "{team_name}" with visibility "{visibility}"')
-)
+@given(parsers.parse('connector "{name}" is owned by team "{team_name}" with visibility "{visibility}"'))
 def connector_owned_by_team(name: str, team_name: str, visibility: str, ctx) -> None:
     team_id = ctx["teams"].get(team_name, {}).get("id", str(uuid.uuid4()))
     ctx["connectors"][name] = {
@@ -63,9 +59,7 @@ def request_pipeline_list(request, ctx) -> None:
     request.node._resp = resp
 
 
-@when(
-    parsers.parse('I request GET /api/connectors/{connector_name}')
-)
+@when(parsers.parse("I request GET /api/connectors/{connector_name}"))
 def request_connector(connector_name: str, request, ctx) -> None:
     connector = ctx["connectors"].get(connector_name)
     if connector:
@@ -91,9 +85,7 @@ def delete_pipeline(name: str, request, ctx) -> None:
     request.node._resp = resp
 
 
-@when(
-    parsers.parse('I reassign pipeline "{pipeline_name}" to team "{team_name}"')
-)
+@when(parsers.parse('I reassign pipeline "{pipeline_name}" to team "{team_name}"'))
 def reassign_pipeline(pipeline_name: str, team_name: str, request, ctx) -> None:
     pipeline = ctx["pipelines"].get(pipeline_name)
     team = ctx["teams"].get(team_name)
@@ -108,9 +100,7 @@ def reassign_pipeline(pipeline_name: str, team_name: str, request, ctx) -> None:
     request.node._resp = resp
 
 
-@when(
-    parsers.parse('I bulk reassign all resources from team "{team_name}" to org-wide')
-)
+@when(parsers.parse('I bulk reassign all resources from team "{team_name}" to org-wide'))
 def bulk_reassign(team_name: str, request, ctx) -> None:
     team = ctx["teams"].get(team_name)
     if team:
@@ -124,9 +114,7 @@ def bulk_reassign(team_name: str, request, ctx) -> None:
     request.node._resp = resp
 
 
-@when(
-    parsers.parse('I request GET /api/pipelines/{pipeline_name}')
-)
+@when(parsers.parse("I request GET /api/pipelines/{pipeline_name}"))
 def request_pipeline(pipeline_name: str, request, ctx) -> None:
     pipeline = ctx["pipelines"].get(pipeline_name)
     org_role = ctx.get("org_role", "admin")
@@ -152,11 +140,8 @@ def response_contains_pipeline(name: str, request) -> None:
     assert name in names, f"Expected pipeline '{name}' in response, got {names}"
 
 
-@then(
-    parsers.parse('pipeline "{name}" has owner_team_id null')
-)
+@then(parsers.parse('pipeline "{name}" has owner_team_id null'))
 def pipeline_owner_team_id_null(name: str, request, ctx) -> None:
     pipeline = ctx["pipelines"].get(name)
     assert pipeline is not None
     assert pipeline.get("owner_team_id") is None
-

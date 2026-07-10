@@ -101,13 +101,17 @@ async def register_oauth_client(
                 account_id=principal.account_id,
             )
     except ProgrammingError:
-        _log.warning("mcp_oauth.register_oauth_client.programming_error", extra={"org_id": str(principal.organisation_id)})
+        _log.warning(
+            "mcp_oauth.register_oauth_client.programming_error", extra={"org_id": str(principal.organisation_id)}
+        )
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
         )
     except SQLAlchemyError:
-        _log.warning("mcp_oauth.register_oauth_client.sqlalchemy_error", extra={"org_id": str(principal.organisation_id)})
+        _log.warning(
+            "mcp_oauth.register_oauth_client.sqlalchemy_error", extra={"org_id": str(principal.organisation_id)}
+        )
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database error occurred. Please try again.",
@@ -115,7 +119,9 @@ async def register_oauth_client(
     except HTTPException:
         raise
     except Exception as e:
-        _log.exception("mcp_oauth.register_oauth_client.unexpected_error", extra={"org_id": str(principal.organisation_id)})
+        _log.exception(
+            "mcp_oauth.register_oauth_client.unexpected_error", extra={"org_id": str(principal.organisation_id)}
+        )
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="An unexpected error occurred",
@@ -153,7 +159,9 @@ async def list_oauth_clients_endpoint(
     except HTTPException:
         raise
     except Exception as e:
-        _log.exception("mcp_oauth.list_oauth_clients.unexpected_error", extra={"org_id": str(principal.organisation_id)})
+        _log.exception(
+            "mcp_oauth.list_oauth_clients.unexpected_error", extra={"org_id": str(principal.organisation_id)}
+        )
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="An unexpected error occurred",
@@ -178,13 +186,19 @@ async def remove_oauth_client(
             await set_rls_org(session, principal.organisation_id)
             deleted = await delete_oauth_client(session, client_id=client_id, org_id=principal.organisation_id)
     except ProgrammingError:
-        _log.warning("mcp_oauth.remove_oauth_client.programming_error", extra={"client_id": client_id, "org_id": str(principal.organisation_id)})
+        _log.warning(
+            "mcp_oauth.remove_oauth_client.programming_error",
+            extra={"client_id": client_id, "org_id": str(principal.organisation_id)},
+        )
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
         )
     except SQLAlchemyError:
-        _log.warning("mcp_oauth.remove_oauth_client.sqlalchemy_error", extra={"client_id": client_id, "org_id": str(principal.organisation_id)})
+        _log.warning(
+            "mcp_oauth.remove_oauth_client.sqlalchemy_error",
+            extra={"client_id": client_id, "org_id": str(principal.organisation_id)},
+        )
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database error occurred. Please try again.",
@@ -192,7 +206,10 @@ async def remove_oauth_client(
     except HTTPException:
         raise
     except Exception as e:
-        _log.exception("mcp_oauth.remove_oauth_client.unexpected_error", extra={"client_id": client_id, "org_id": str(principal.organisation_id)})
+        _log.exception(
+            "mcp_oauth.remove_oauth_client.unexpected_error",
+            extra={"client_id": client_id, "org_id": str(principal.organisation_id)},
+        )
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="An unexpected error occurred",

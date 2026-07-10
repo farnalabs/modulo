@@ -5,6 +5,7 @@ Exit code 0 = all covered. Exit code 1 = some feature files lack coverage.
 Usage:
     uv run python check-bdd-coverage.py
 """
+
 import re
 import sys
 from pathlib import Path

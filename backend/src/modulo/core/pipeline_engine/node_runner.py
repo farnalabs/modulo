@@ -87,7 +87,9 @@ def _evaluate_eval_condition(score: float, threshold: float, operator: str) -> b
         case "neq":
             return score != threshold
         case _:
-            _log.warning("hitl_gate.unknown_operator", extra={"operator": operator, "score": score, "threshold": threshold})
+            _log.warning(
+                "hitl_gate.unknown_operator", extra={"operator": operator, "score": score, "threshold": threshold}
+            )
             return False
 
 
@@ -306,9 +308,7 @@ def make_hitl_gate_fn(
                             await set_rls_org(session, org_id)
                             for eval_def in eval_definitions:
                                 eval_result = eval_results_by_name[eval_def.name]
-                                node_uuid: uuid.UUID | None = (
-                                    uuid.UUID(eval_def.node_id) if eval_def.node_id else None
-                                )
+                                node_uuid: uuid.UUID | None = uuid.UUID(eval_def.node_id) if eval_def.node_id else None
                                 db_result = EvalResultModel(
                                     organisation_id=org_id,
                                     run_id=_run_id,

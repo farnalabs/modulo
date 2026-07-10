@@ -5,6 +5,7 @@ Revises: 0078_merge_error_tracking
 Create Date: 2026-07-05 14:30:00.000000
 
 """
+
 from collections.abc import Sequence
 
 from alembic import op
@@ -17,9 +18,7 @@ depends_on: str | Sequence[str] | None = None
 
 
 def upgrade() -> None:
-    op.execute(
-        "ALTER TABLE model_backends DROP CONSTRAINT IF EXISTS ck_model_backends_provider"
-    )
+    op.execute("ALTER TABLE model_backends DROP CONSTRAINT IF EXISTS ck_model_backends_provider")
     op.execute(
         "ALTER TABLE model_backends ADD CONSTRAINT ck_model_backends_provider "
         "CHECK (provider IN ("
@@ -33,9 +32,7 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    op.execute(
-        "ALTER TABLE model_backends DROP CONSTRAINT IF EXISTS ck_model_backends_provider"
-    )
+    op.execute("ALTER TABLE model_backends DROP CONSTRAINT IF EXISTS ck_model_backends_provider")
     op.execute(
         "ALTER TABLE model_backends ADD CONSTRAINT ck_model_backends_provider "
         "CHECK (provider IN ("

@@ -271,9 +271,6 @@ def _request_adapt(client, community_primitive_id: str, ctx: dict[str, Any]) -> 
     ctx["response"] = client.post(f"/api/v1/libraries/{community_primitive_id}/adapt", json={})
 
 
-
-
-
 @then("a new library primitive is created in the org")
 def _new_primitive_created(ctx: dict[str, Any]) -> None:
     data = ctx["response"].json()
@@ -342,9 +339,6 @@ def _new_primitive_has_team(ctx: dict[str, Any]) -> None:
 @when(parsers.parse("the user sends POST /api/v1/libraries/{primitive_id}/adapt"))
 def _request_adapt_by_id(client, primitive_id: str, ctx: dict[str, Any]) -> None:
     ctx["response"] = client.post(f"/api/v1/libraries/{primitive_id}/adapt", json={})
-
-
-
 
 
 # ============================================================================

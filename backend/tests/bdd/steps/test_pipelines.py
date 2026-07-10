@@ -96,7 +96,6 @@ def patches():
 # ===================================================================
 
 
-
 @given(parsers.parse('org "{org}" has pipeline "{name}"'))
 def org_has_pipeline(org: str, name: str, request: pytest.FixtureRequest) -> None:
     """Store a mock Pipeline on the request node for later steps to use.
@@ -906,9 +905,7 @@ def human_approves_gate(request: pytest.FixtureRequest) -> None:
 def check_error_code(request: pytest.FixtureRequest, error_code: str) -> None:
     mock_run = getattr(request.node, "_mock_run", None)
     if mock_run is not None and hasattr(mock_run, "error_detail"):
-        assert mock_run.error_detail == error_code, (
-            f"Expected error_code {error_code!r}, got {mock_run.error_detail!r}"
-        )
+        assert mock_run.error_detail == error_code, f"Expected error_code {error_code!r}, got {mock_run.error_detail!r}"
     else:
         stored = getattr(request.node, "_error_code", None)
         assert stored == error_code, f"Expected error_code {error_code!r}, got {stored!r}"
@@ -916,9 +913,7 @@ def check_error_code(request: pytest.FixtureRequest, error_code: str) -> None:
 
 @then("execution resumes from the interrupted node")
 def resumes_from_interrupted(request: pytest.FixtureRequest) -> None:
-    assert request.node._run_status == "running", (
-        f"Expected running, got {request.node._run_status}"
-    )
+    assert request.node._run_status == "running", f"Expected running, got {request.node._run_status}"
 
 
 # ===================================================================
@@ -1013,9 +1008,7 @@ def human_output_provided(request: pytest.FixtureRequest) -> None:
 
 @then("the node executes successfully")
 def node_executes_successfully(request: pytest.FixtureRequest) -> None:
-    assert request.node._run_status == "running", (
-        f"Expected running, got {request.node._run_status}"
-    )
+    assert request.node._run_status == "running", f"Expected running, got {request.node._run_status}"
 
 
 @then("an artifact is recorded")
@@ -1025,9 +1018,7 @@ def artifact_recorded(request: pytest.FixtureRequest) -> None:
 
 @then("the run pauses for human input")
 def run_pauses_for_human(request: pytest.FixtureRequest) -> None:
-    assert request.node._run_status == "awaiting_human", (
-        f"Expected awaiting_human, got {request.node._run_status}"
-    )
+    assert request.node._run_status == "awaiting_human", f"Expected awaiting_human, got {request.node._run_status}"
 
 
 @then("the manual output is available in artifacts")
@@ -1038,9 +1029,7 @@ def manual_output_in_artifacts(request: pytest.FixtureRequest) -> None:
 
 @then("the run continues")
 def run_continues(request: pytest.FixtureRequest) -> None:
-    assert request.node._run_status == "running", (
-        f"Expected running, got {request.node._run_status}"
-    )
+    assert request.node._run_status == "running", f"Expected running, got {request.node._run_status}"
 
 
 @then('the run status becomes "waiting_for_approval"')
@@ -1130,11 +1119,7 @@ def variant_group_exists(name: str, pipeline_name: str, request: pytest.FixtureR
     request.node._variant_group_name = name
 
 
-@given(
-    parsers.parse(
-        'a variant group "{name}" exists for pipeline "{pipeline_name}" at max concurrency'
-    )
-)
+@given(parsers.parse('a variant group "{name}" exists for pipeline "{pipeline_name}" at max concurrency'))
 def variant_group_at_max_concurrency(name: str, pipeline_name: str, request: pytest.FixtureRequest) -> None:
     from tests.bdd.conftest import make_mock_pipeline
 
@@ -1312,11 +1297,7 @@ def active_cron_trigger_exists(pipeline_name: str, request: pytest.FixtureReques
     request.node._cron_expression = "0 6 * * *"
 
 
-@given(
-    parsers.parse(
-        'an active cron trigger exists for pipeline "{pipeline_name}" with expression "{expression}"'
-    )
-)
+@given(parsers.parse('an active cron trigger exists for pipeline "{pipeline_name}" with expression "{expression}"'))
 def active_cron_trigger_with_expression(pipeline_name: str, expression: str, request: pytest.FixtureRequest) -> None:
     request.node._trigger_id = uuid.uuid5(uuid.NAMESPACE_DNS, f"cron-{pipeline_name}-{expression}")
     request.node._trigger_type = "cron"
@@ -1452,11 +1433,7 @@ def check_future_fire_times(request: pytest.FixtureRequest, count: int) -> None:
 # ===================================================================
 
 
-@given(
-    parsers.parse(
-        'org "{org}" has pipeline "{pipeline_name}" with webhook secret "{secret}"'
-    )
-)
+@given(parsers.parse('org "{org}" has pipeline "{pipeline_name}" with webhook secret "{secret}"'))
 def pipeline_with_webhook_secret(org: str, pipeline_name: str, secret: str, request: pytest.FixtureRequest) -> None:
     from tests.bdd.conftest import make_mock_pipeline
 

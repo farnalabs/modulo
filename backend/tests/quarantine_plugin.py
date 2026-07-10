@@ -64,6 +64,7 @@ def pytest_collection_modifyitems(config, items):
 
     if expired:
         import warnings
+
         for test_id, expiry_str, reason in expired:
             warnings.warn(
                 f"QUARANTINE EXPIRED: {test_id} expired {expiry_str} — {reason}. "

@@ -105,9 +105,7 @@ async def when_query_reports(trivy_connector, resource, limit):
 @when(parsers.parse('I query Trivy resource "report" with digest "{digest}"'))
 async def when_query_report_digest(trivy_connector, resource, digest):
     global _last_query_result
-    _last_query_result = await trivy_connector.query(
-        ConnectorQuery(resource=resource, filters={"digest": digest})
-    )
+    _last_query_result = await trivy_connector.query(ConnectorQuery(resource=resource, filters={"digest": digest}))
     return _last_query_result
 
 
@@ -138,9 +136,7 @@ async def when_query_generic(trivy_connector, resource):
 @when(parsers.parse('I write Trivy resource "scan" with image "{image}"'))
 async def when_write_scan_image(trivy_connector, resource, image):
     global _last_write_result
-    _last_write_result = await trivy_connector.write(
-        ConnectorPayload(resource=resource, data={"image": image})
-    )
+    _last_write_result = await trivy_connector.write(ConnectorPayload(resource=resource, data={"image": image}))
     return _last_write_result
 
 

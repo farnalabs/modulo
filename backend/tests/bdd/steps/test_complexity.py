@@ -170,9 +170,7 @@ def step_scanner_sample_connector(ctx):
 
     loop = asyncio.new_event_loop()
     try:
-        samples = loop.run_until_complete(
-            _sample_connector(connector_id, connector)
-        )
+        samples = loop.run_until_complete(_sample_connector(connector_id, connector))
         ctx["scan_samples"] = samples
     finally:
         loop.close()
@@ -239,6 +237,4 @@ def step_draft_has_no_nodes(ctx):
 def step_draft_has_automation_suggestions(ctx):
     draft = ctx.get("pipeline_draft")
     assert draft is not None, "No draft generated"
-    assert len(draft.automation_suggestions) > 0, (
-        "Draft has no automation suggestions"
-    )
+    assert len(draft.automation_suggestions) > 0, "Draft has no automation suggestions"

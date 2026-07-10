@@ -307,6 +307,8 @@ async def get_run_stats_endpoint(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="An unexpected error occurred.",
         ) from None
+
+
 @router.get("/stats/heatmap", response_model=list[dict[str, Any]])
 async def get_run_heatmap_endpoint(
     year: int = Query(default=2026, ge=2020, le=2100),
@@ -344,6 +346,8 @@ async def get_run_heatmap_endpoint(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="An unexpected error occurred.",
         ) from None
+
+
 @router.get("/{run_id}", response_model=RunResponse)
 async def get_run_status(
     run_id: uuid.UUID,
@@ -493,9 +497,7 @@ def _build_fixture_map(
     inp = input_payload or {}
     out = outputs_json or {}
 
-    if isinstance(out, dict) and any(
-        isinstance(v, dict) and "input" in v and "output" in v for v in out.values()
-    ):
+    if isinstance(out, dict) and any(isinstance(v, dict) and "input" in v and "output" in v for v in out.values()):
         for _node_id, node_io in out.items():
             if isinstance(node_io, dict):
                 node_input = node_io.get("input", str(inp))
@@ -588,9 +590,8 @@ async def export_run_fixture(
                 raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Run not found")
 
             from modulo.db.models.pipeline_snapshot import PipelineSnapshot as SnapModel
-            snap_result = await session.execute(
-                select(SnapModel).where(SnapModel.id == run.snapshot_id)
-            )
+
+            snap_result = await session.execute(select(SnapModel).where(SnapModel.id == run.snapshot_id))
             snapshot = snap_result.scalar_one_or_none()
     except IntegrityError:
         raise HTTPException(
@@ -1092,14 +1093,15 @@ def _mask_prompt_text(text: str) -> str:
     password, key, credential) with bullet characters.
     """
     import re
+
     masked = text
     patterns = [
-        (r'(api_key["\']?\s*[:=]\s*["\']?)[^"\'}\s,]+', r'\1' + "\u2022\u2022\u2022\u2022\u2022\u2022"),
-        (r'(secret["\']?\s*[:=]\s*["\']?)[^"\'}\s,]+', r'\1' + "\u2022\u2022\u2022\u2022\u2022\u2022"),
-        (r'(token["\']?\s*[:=]\s*["\']?)[^"\'}\s,]+', r'\1' + "\u2022\u2022\u2022\u2022\u2022\u2022"),
-        (r'(password["\']?\s*[:=]\s*["\']?)[^"\'}\s,]+', r'\1' + "\u2022\u2022\u2022\u2022\u2022\u2022"),
-        (r'(credential["\']?\s*[:=]\s*["\']?)[^"\'}\s,]+', r'\1' + "\u2022\u2022\u2022\u2022\u2022\u2022"),
-        (r'(passwd["\']?\s*[:=]\s*["\']?)[^"\'}\s,]+', r'\1' + "\u2022\u2022\u2022\u2022\u2022\u2022"),
+        (r'(api_key["\']?\s*[:=]\s*["\']?)[^"\'}\s,]+', r"\1" + "\u2022\u2022\u2022\u2022\u2022\u2022"),
+        (r'(secret["\']?\s*[:=]\s*["\']?)[^"\'}\s,]+', r"\1" + "\u2022\u2022\u2022\u2022\u2022\u2022"),
+        (r'(token["\']?\s*[:=]\s*["\']?)[^"\'}\s,]+', r"\1" + "\u2022\u2022\u2022\u2022\u2022\u2022"),
+        (r'(password["\']?\s*[:=]\s*["\']?)[^"\'}\s,]+', r"\1" + "\u2022\u2022\u2022\u2022\u2022\u2022"),
+        (r'(credential["\']?\s*[:=]\s*["\']?)[^"\'}\s,]+', r"\1" + "\u2022\u2022\u2022\u2022\u2022\u2022"),
+        (r'(passwd["\']?\s*[:=]\s*["\']?)[^"\'}\s,]+', r"\1" + "\u2022\u2022\u2022\u2022\u2022\u2022"),
     ]
     for pattern, replacement in patterns:
         masked = re.sub(pattern, replacement, masked, flags=re.IGNORECASE)
@@ -1108,10 +1110,7 @@ def _mask_prompt_text(text: str) -> str:
 
 def _mask_message_list(messages: list[dict[str, str]]) -> list[dict[str, str]]:
     """Apply sensitive masking to all message content."""
-    return [
-        {"role": m["role"], "content": _mask_prompt_text(m["content"])}
-        for m in messages
-    ]
+    return [{"role": m["role"], "content": _mask_prompt_text(m["content"])} for m in messages]
 
 
 def _estimate_tokens(text: str) -> int:
@@ -1257,9 +1256,7 @@ async def reveal_node_prompt(
 
             # Load snapshot to get graph definition.
             snapshot_id = run.snapshot_id
-            snapshot_result = await session.execute(
-                select(PipelineSnapshot).where(PipelineSnapshot.id == snapshot_id)
-            )
+            snapshot_result = await session.execute(select(PipelineSnapshot).where(PipelineSnapshot.id == snapshot_id))
             snapshot = snapshot_result.scalar_one_or_none()
         if snapshot is None:
             raise HTTPException(
@@ -1313,8 +1310,7 @@ async def reveal_node_prompt(
         # Apply masking to protect sensitive values.
         masked_messages = _mask_message_list(messages)
         full_prompt = "\n\n".join(
-            f"<{m['role'].upper()}>\n{m['content']}\n</{m['role'].upper()}>"
-            for m in masked_messages
+            f"<{m['role'].upper()}>\n{m['content']}\n</{m['role'].upper()}>" for m in masked_messages
         )
         token_count = _estimate_tokens(full_prompt)
 

@@ -16,9 +16,7 @@ depends_on: str | Sequence[str] | None = None
 
 
 def upgrade() -> None:
-    op.execute(
-        "ALTER TABLE agents ADD COLUMN IF NOT EXISTS is_executable BOOLEAN NOT NULL DEFAULT TRUE"
-    )
+    op.execute("ALTER TABLE agents ADD COLUMN IF NOT EXISTS is_executable BOOLEAN NOT NULL DEFAULT TRUE")
 
 
 def downgrade() -> None:

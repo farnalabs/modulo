@@ -120,9 +120,7 @@ async def request_org_deletion(
 
     Returns a dict with ``token``, ``token_expires_at``, and ``export`` keys.
     """
-    result = await session.execute(
-        select(Organisation).where(Organisation.id == org_id).with_for_update()
-    )
+    result = await session.execute(select(Organisation).where(Organisation.id == org_id).with_for_update())
     org = result.scalar_one_or_none()
     if org is None:
         raise ValueError("Organisation not found")
@@ -164,9 +162,7 @@ async def confirm_org_deletion(
     Before hard-deleting the org, terminal runs older than 30 days are
     batch-deleted. The remaining cascade is handled by Postgres FK constraints.
     """
-    result = await session.execute(
-        select(Organisation).where(Organisation.id == org_id).with_for_update()
-    )
+    result = await session.execute(select(Organisation).where(Organisation.id == org_id).with_for_update())
     org = result.scalar_one_or_none()
     if org is None:
         raise ValueError("Organisation not found")
@@ -200,9 +196,7 @@ async def cancel_org_deletion(
     The org must be in 'deleted' status with a valid deletion_token set.
     Clears the soft-delete fields and restores the organisation to active state.
     """
-    result = await session.execute(
-        select(Organisation).where(Organisation.id == org_id).with_for_update()
-    )
+    result = await session.execute(select(Organisation).where(Organisation.id == org_id).with_for_update())
     org = result.scalar_one_or_none()
     if org is None:
         raise ValueError("Organisation not found")
@@ -224,9 +218,7 @@ async def export_org_data(
     org_id: uuid.UUID,
 ) -> dict[str, Any]:
     """Return the export bundle for an org (captures live data if none exists)."""
-    result = await session.execute(
-        select(Organisation).where(Organisation.id == org_id).with_for_update()
-    )
+    result = await session.execute(select(Organisation).where(Organisation.id == org_id).with_for_update())
     org = result.scalar_one_or_none()
     if org is None:
         raise ValueError("Organisation not found")

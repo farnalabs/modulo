@@ -100,7 +100,9 @@ class JenkinsConnector(ConnectorBase):
                 return HealthResult(ok=False, detail="Authentication failed: invalid username or token")
             return HealthResult(ok=False, detail=f"HTTP {r.status_code}: {r.text[:200]}")
         except httpx.HTTPStatusError as exc:
-            return HealthResult(ok=False, detail=f"Jenkins API HTTP {exc.response.status_code}: {exc.response.text[:200]}")
+            return HealthResult(
+                ok=False, detail=f"Jenkins API HTTP {exc.response.status_code}: {exc.response.text[:200]}"
+            )
         except httpx.TimeoutException:
             return HealthResult(ok=False, detail="Jenkins API timeout")
         except httpx.ConnectError:

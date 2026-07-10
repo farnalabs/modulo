@@ -4,6 +4,7 @@ Revision ID: 0056_modulo_source
 Revises: 0055_error_forwarder_configs
 Create Date: 2026-07-01
 """
+
 from collections.abc import Sequence
 
 from alembic import op

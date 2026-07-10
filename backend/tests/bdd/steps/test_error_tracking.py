@@ -89,7 +89,9 @@ def _serialize_group_detail(g, event=None):
             "version": event.version,
             "breadcrumbs": None,
             "created_at": event.created_at.isoformat() if event.created_at else "",
-        } if event else None,
+        }
+        if event
+        else None,
         "assigned_to": str(g.assigned_to) if g.assigned_to else None,
     }
 

@@ -172,10 +172,34 @@ async def list_model_backends_endpoint(
 
 
 _VALID_PROVIDERS = {
-    "ai21", "anthropic", "azure_openai", "bedrock", "cohere", "custom", "deepseek",
-    "fireworks", "gemini", "grok", "groq", "jan", "llamacpp", "lm_studio",
-    "localai", "mistral", "ollama", "opencode", "openai", "openrouter", "perplexity",
-    "qwen", "replicate", "tgi", "togetherai", "vertexai", "vllm", "watsonx",
+    "ai21",
+    "anthropic",
+    "azure_openai",
+    "bedrock",
+    "cohere",
+    "custom",
+    "deepseek",
+    "fireworks",
+    "gemini",
+    "grok",
+    "groq",
+    "jan",
+    "llamacpp",
+    "lm_studio",
+    "localai",
+    "mistral",
+    "ollama",
+    "opencode",
+    "openai",
+    "openrouter",
+    "perplexity",
+    "qwen",
+    "replicate",
+    "tgi",
+    "togetherai",
+    "vertexai",
+    "vllm",
+    "watsonx",
 }
 
 
@@ -217,10 +241,12 @@ async def create_model_backend_endpoint(
 
             existing = (
                 await session.execute(
-                    select(ModelBackend).where(
+                    select(ModelBackend)
+                    .where(
                         ModelBackend.organisation_id == principal.organisation_id,
                         ModelBackend.name == req.name,
-                    ).with_for_update()
+                    )
+                    .with_for_update()
                 )
             ).scalar_one_or_none()
             if existing is not None:

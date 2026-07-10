@@ -265,7 +265,7 @@ def step_status_401(pipeline_response) -> None:
 
 
 @when(
-    parsers.parse('a viewer tries to create a pipeline named {name}'),
+    parsers.parse("a viewer tries to create a pipeline named {name}"),
     target_fixture="create_response",
 )
 def step_viewer_create_pipeline(name: str, client):
@@ -312,9 +312,7 @@ def step_rls_outside_tx(mock_session):
 def step_runtime_error(rls_error) -> None:
     assert rls_error is not None, "Expected RuntimeError but none was raised"
     assert isinstance(rls_error, RuntimeError), f"Expected RuntimeError, got {type(rls_error).__name__}"
-    assert "requires an active transaction" in str(rls_error), (
-        f"Unexpected error message: {rls_error}"
-    )
+    assert "requires an active transaction" in str(rls_error), f"Unexpected error message: {rls_error}"
 
 
 # -- Scenario: set_rls_user_context requires active transaction --------------

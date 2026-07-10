@@ -50,7 +50,9 @@ def step_npm_connector(ctx):
                 if not version:
                     raise ValueError("npm package_version query requires 'version' in filters")
                 return ConnectorResult(
-                    records=[{"name": pkg, "version": version, "dist": {"tarball": "https://registry.npmjs.org/pkg.tgz"}}],
+                    records=[
+                        {"name": pkg, "version": version, "dist": {"tarball": "https://registry.npmjs.org/pkg.tgz"}}
+                    ],
                     total=1,
                 )
             case "search":
@@ -129,9 +131,7 @@ def step_npm_health_check(ctx):
         ctx["query_error"] = str(exc)
 
 
-@when(
-    parsers.parse('I query npm resource "{resource}" with package "{pkg}"')
-)
+@when(parsers.parse('I query npm resource "{resource}" with package "{pkg}"'))
 def step_npm_query_package(resource, pkg, ctx):
     q = ConnectorQuery(resource=resource, filters={"package": pkg})
     try:
@@ -143,9 +143,7 @@ def step_npm_query_package(resource, pkg, ctx):
         ctx["query_error"] = str(exc)
 
 
-@when(
-    parsers.parse('I query npm resource "{resource}" with package "{pkg}" and version "{version}"')
-)
+@when(parsers.parse('I query npm resource "{resource}" with package "{pkg}" and version "{version}"'))
 def step_npm_query_version(resource, pkg, version, ctx):
     q = ConnectorQuery(resource=resource, filters={"package": pkg, "version": version})
     try:
@@ -157,9 +155,7 @@ def step_npm_query_version(resource, pkg, version, ctx):
         ctx["query_error"] = str(exc)
 
 
-@when(
-    parsers.parse('I query npm resource "{resource}" with text "{text}" and limit {limit:d}')
-)
+@when(parsers.parse('I query npm resource "{resource}" with text "{text}" and limit {limit:d}'))
 def step_npm_query_search(resource, text, limit, ctx):
     q = ConnectorQuery(resource=resource, filters={"text": text}, limit=limit)
     try:
@@ -171,9 +167,7 @@ def step_npm_query_search(resource, text, limit, ctx):
         ctx["query_error"] = str(exc)
 
 
-@when(
-    parsers.parse('I query npm resource "{resource}" with text "{text}" and from {from_offset:d}')
-)
+@when(parsers.parse('I query npm resource "{resource}" with text "{text}" and from {from_offset:d}'))
 def step_npm_query_search_offset(resource, text, from_offset, ctx):
     q = ConnectorQuery(resource=resource, filters={"text": text, "from": from_offset})
     try:
@@ -185,9 +179,7 @@ def step_npm_query_search_offset(resource, text, from_offset, ctx):
         ctx["query_error"] = str(exc)
 
 
-@when(
-    parsers.parse('I query npm resource "{resource}" with scope "{scope}"')
-)
+@when(parsers.parse('I query npm resource "{resource}" with scope "{scope}"'))
 def step_npm_query_scope(resource, scope, ctx):
     q = ConnectorQuery(resource=resource, filters={"scope": scope})
     try:
@@ -199,9 +191,7 @@ def step_npm_query_scope(resource, scope, ctx):
         ctx["query_error"] = str(exc)
 
 
-@when(
-    parsers.parse('I write to npm resource "{resource}"')
-)
+@when(parsers.parse('I write to npm resource "{resource}"'))
 def step_npm_write(resource, ctx):
     payload = ConnectorPayload(resource=resource, data={})
     try:

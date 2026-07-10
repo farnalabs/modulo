@@ -81,9 +81,7 @@ async def list_notification_rules(
             rules = list(result.scalars().all())
 
             count_result = await session.execute(
-                select(func.count(ErrorNotificationRule.id)).where(
-                    ErrorNotificationRule.organisation_id == org_id
-                )
+                select(func.count(ErrorNotificationRule.id)).where(ErrorNotificationRule.organisation_id == org_id)
             )
             total = count_result.scalar_one() or 0
     except HTTPException:
@@ -133,9 +131,7 @@ async def create_notification_rule(
             await set_rls_org(session, org_id)
 
             count_result = await session.execute(
-                select(func.count(ErrorNotificationRule.id)).where(
-                    ErrorNotificationRule.organisation_id == org_id
-                )
+                select(func.count(ErrorNotificationRule.id)).where(ErrorNotificationRule.organisation_id == org_id)
             )
             current_count = count_result.scalar_one() or 0
 

@@ -261,6 +261,3 @@ def system_admin_client(mock_session: AsyncMock) -> Generator[TestClient, None, 
         org_role="admin",
         is_system_admin=True,
     )
-
-
-

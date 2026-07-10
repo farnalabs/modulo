@@ -563,9 +563,7 @@ async def verify_registry_primitive_v2(
             sort_keys=True,
         ).encode()
 
-        sig_b64 = base64.b64encode(
-            bytes.fromhex(entry.ed25519_signature_hex)
-        ).decode()
+        sig_b64 = base64.b64encode(bytes.fromhex(entry.ed25519_signature_hex)).decode()
 
         verified = crypto_pem_verify(public_key_pem, payload_bytes, sig_b64)
         trust_anchor_verified = verify_trust_anchor(public_key_pem, sig_b64)
@@ -596,7 +594,8 @@ async def verify_registry_primitive_v2(
         except SQLAlchemyError:
             _log.warning(
                 "DB error in verify_registry_primitive_v2: public_key_hex path, slug=%s, fp=%s",
-                slug, entry.signing_key_fingerprint,
+                slug,
+                entry.signing_key_fingerprint,
             )
             raise HTTPException(
                 status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -606,7 +605,8 @@ async def verify_registry_primitive_v2(
             raise
         except Exception as e:
             _log.exception(
-                "registry.verify_primitive.unexpected_error", extra={"slug": slug, "fp": entry.signing_key_fingerprint},
+                "registry.verify_primitive.unexpected_error",
+                extra={"slug": slug, "fp": entry.signing_key_fingerprint},
             )
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,

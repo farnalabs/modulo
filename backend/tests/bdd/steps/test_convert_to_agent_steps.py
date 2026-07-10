@@ -74,7 +74,7 @@ def assign_schema_to_node(schema_name: str, ctx, client, request):
     request.node._resp = resp
 
 
-@when(parsers.parse('I bind the {connector_name} connector for artifact access'))
+@when(parsers.parse("I bind the {connector_name} connector for artifact access"))
 def bind_connector(connector_name: str, ctx, client, request):
     connector_id = uuid.uuid5(ctx["pipeline"].id, connector_name)
     ctx["connector_id"] = connector_id
@@ -83,10 +83,12 @@ def bind_connector(connector_name: str, ctx, client, request):
         patch(
             "modulo.api.routes.pipelines.replace_pipeline_graph",
             return_value={
-                "nodes": [{
-                    "id": ctx["node_id"],
-                    "connector_binding": {"type": connector_name, "instance_id": str(connector_id)},
-                }],
+                "nodes": [
+                    {
+                        "id": ctx["node_id"],
+                        "connector_binding": {"type": connector_name, "instance_id": str(connector_id)},
+                    }
+                ],
                 "edges": [],
             },
         ),
@@ -94,10 +96,12 @@ def bind_connector(connector_name: str, ctx, client, request):
         resp = client.patch(
             f"/api/v1/pipelines/{ctx['pipeline'].id}/graph",
             json={
-                "nodes": [{
-                    "id": ctx["node_id"],
-                    "connector_binding": {"type": connector_name, "instance_id": str(connector_id)},
-                }],
+                "nodes": [
+                    {
+                        "id": ctx["node_id"],
+                        "connector_binding": {"type": connector_name, "instance_id": str(connector_id)},
+                    }
+                ],
                 "edges": [],
             },
         )
@@ -122,7 +126,5 @@ def node_executes_as_agent(node_id: str, ctx, request):
         nodes = data.get("nodes", [data])
         target = next((n for n in nodes if n.get("id") == node_id), None)
         if target:
-            assert target.get("node_type") == "agent", (
-                f"Expected node_type 'agent', got {target.get('node_type')}"
-            )
+            assert target.get("node_type") == "agent", f"Expected node_type 'agent', got {target.get('node_type')}"
     ctx["is_agent"] = True

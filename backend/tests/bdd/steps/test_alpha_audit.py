@@ -55,13 +55,13 @@ def append_key_event(event_type: str, version: str, request):
     request.node._last_event = event
 
 
-@then('the chain has {count:d} events')
+@then("the chain has {count:d} events")
 def chain_has_events(count: int, request):
     events = getattr(request.node, "_appended_events", [])
     assert len(events) == count
 
 
-@then('the event has a valid SHA-256 hash')
+@then("the event has a valid SHA-256 hash")
 def event_has_hash(request):
     event = getattr(request.node, "_last_event", None)
     assert event is not None

@@ -44,12 +44,12 @@ from modulo.core.eval_engine import (
 )
 from modulo.core.graph_validator import GraphValidator
 from modulo.core.hitl_manager import HITLManager
+from modulo.core.model_backend_hub import ModelBackendHub
 from modulo.core.pipeline_engine.decorator import (
     RunCancelledError,
     set_cancellation_check,
     set_model_backend_hub,
 )
-from modulo.core.model_backend_hub import ModelBackendHub
 from modulo.core.pipeline_engine.event_broker import RunEventBroker, get_registry
 from modulo.core.pipeline_engine.graph_cache import build_graph_from_json, get_or_compile
 from modulo.core.pipeline_engine.modulo_saver import ModuloPostgresSaver
@@ -143,8 +143,6 @@ def _map_lg_event(
         error = data.get("error", "") if isinstance(data, dict) else ""
         return "node_failed", {"node_id": name, "error": str(error)}
     return None
-
-
 
 
 @asynccontextmanager
@@ -291,16 +289,24 @@ class PipelineExecutor:
         try:
             async with self._session_factory() as session, session.begin():
                 await set_rls_org(session, org_id)
-                backend_rows = (await session.execute(
-                    select(ModelBackend).where(
-                        ModelBackend.organisation_id == org_id,
-                        ModelBackend.status == "active",
+                backend_rows = (
+                    (
+                        await session.execute(
+                            select(ModelBackend).where(
+                                ModelBackend.organisation_id == org_id,
+                                ModelBackend.status == "active",
+                            )
+                        )
                     )
-                )).scalars().all()
+                    .scalars()
+                    .all()
+                )
                 if isinstance(backend_rows, list) and backend_rows:
                     from modulo.settings import get_settings
+
                     _settings = get_settings()
                     from modulo.core.secrets_backend import create_secrets_backend
+
                     secrets_backend = create_secrets_backend(
                         fernet_key=_settings.fernet_key,
                         session=session,
@@ -319,6 +325,7 @@ class PipelineExecutor:
         run_id: uuid.UUID,
     ) -> Callable[[], Awaitable[bool]]:
         """Build a DB-backed cancellation check closure for a run."""
+
         async def _check() -> bool:
             try:
                 return await asyncio.wait_for(
@@ -331,6 +338,7 @@ class PipelineExecutor:
                     extra={"run_id": str(run_id)},
                 )
                 return False
+
         return _check
 
     async def _do_db_cancellation_check(
@@ -434,9 +442,7 @@ class PipelineExecutor:
         config = {"configurable": {"thread_id": thread_id}}
         node_ids = {str(n["id"]) for n in graph_json.get("nodes", [])}
         node_token_budgets: dict[str, int] = {
-            str(n["id"]): n["token_budget"]
-            for n in graph_json.get("nodes", [])
-            if n.get("token_budget") is not None
+            str(n["id"]): n["token_budget"] for n in graph_json.get("nodes", []) if n.get("token_budget") is not None
         }
 
         if not self._checkpointer_conn_string:
@@ -464,7 +470,12 @@ class PipelineExecutor:
                 compiled.checkpointer = saver
                 await compiled.aupdate_state(config, {"_hitl_decision": resume_data})
                 final_status, error_code, _, node_token_usage = await self._stream_graph(
-                    compiled, None, config, node_ids, broker, run_id,
+                    compiled,
+                    None,
+                    config,
+                    node_ids,
+                    broker,
+                    run_id,
                     pipeline_id=pipeline_id,
                     org_id=org_id,
                     guard=guard,
@@ -506,7 +517,9 @@ class PipelineExecutor:
                     _log.exception("audit.eval_blocked_failed", extra={"run_id": str(run_id)})
 
         total_tokens, total_cost, _ = self._compute_token_costs(
-            node_token_usage, self._INPUT_TOKEN_RATE, self._OUTPUT_TOKEN_RATE,
+            node_token_usage,
+            self._INPUT_TOKEN_RATE,
+            self._OUTPUT_TOKEN_RATE,
         )
 
         async with self._session_factory() as session, session.begin():
@@ -631,7 +644,12 @@ class PipelineExecutor:
                 ) as saver:
                     compiled.checkpointer = saver
                     final_status, error_code, error_detail, node_token_usage = await self._stream_graph(
-                        compiled, initial_state, config, node_ids, broker, run_id,
+                        compiled,
+                        initial_state,
+                        config,
+                        node_ids,
+                        broker,
+                        run_id,
                         pipeline_id=pipeline_id,
                         org_id=org_id,
                         completed_node_outputs=completed_node_outputs,
@@ -640,7 +658,12 @@ class PipelineExecutor:
                     )
             else:
                 final_status, error_code, error_detail, node_token_usage = await self._stream_graph(
-                    compiled, initial_state, config, node_ids, broker, run_id,
+                    compiled,
+                    initial_state,
+                    config,
+                    node_ids,
+                    broker,
+                    run_id,
                     pipeline_id=pipeline_id,
                     org_id=org_id,
                     completed_node_outputs=completed_node_outputs,
@@ -746,7 +769,9 @@ class PipelineExecutor:
 
         # Compute aggregate token/cost data from per-node usage.
         total_tokens, total_cost_usd_val, node_token_usage = self._compute_token_costs(
-            node_token_usage, self._INPUT_TOKEN_RATE, self._OUTPUT_TOKEN_RATE,
+            node_token_usage,
+            self._INPUT_TOKEN_RATE,
+            self._OUTPUT_TOKEN_RATE,
         )
 
         # Mark complete/failed/cancelled/awaiting_human.
@@ -779,13 +804,10 @@ class PipelineExecutor:
         with a pass_threshold, aggregates their results, and returns
         SuiteEvalResult for each suite.
         """
-        stmt = (
-            select(EvalDefinition)
-            .where(
-                EvalDefinition.pipeline_id == pipeline_id,
-                EvalDefinition.suite_id.isnot(None),
-                EvalDefinition.pass_threshold.isnot(None),
-            )
+        stmt = select(EvalDefinition).where(
+            EvalDefinition.pipeline_id == pipeline_id,
+            EvalDefinition.suite_id.isnot(None),
+            EvalDefinition.pass_threshold.isnot(None),
         )
         result = await session.execute(stmt)
         suite_defs = result.scalars().all()
@@ -929,7 +951,9 @@ class PipelineExecutor:
                                 node_budget = node_token_budgets.get(node_name)
                                 if node_budget is not None and node_data["total_tokens"] > node_budget:
                                     raise RunawayRunError(
-                                        "token_budget", node_data["total_tokens"], node_budget,
+                                        "token_budget",
+                                        node_data["total_tokens"],
+                                        node_budget,
                                     )
 
             broker.publish("run_completed", {})

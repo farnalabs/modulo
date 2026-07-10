@@ -35,8 +35,6 @@ class ErrorGroup(OrgScoped):
     sample_event_id: Mapped[uuid.UUID | None] = mapped_column(
         Uuid(), ForeignKey("error_events.id", ondelete="SET NULL")
     )
-    sample_event: Mapped[ErrorEvent | None] = relationship(
-        "ErrorEvent", foreign_keys=[sample_event_id], lazy="joined"
-    )
+    sample_event: Mapped[ErrorEvent | None] = relationship("ErrorEvent", foreign_keys=[sample_event_id], lazy="joined")
     assigned_to: Mapped[uuid.UUID | None] = mapped_column(Uuid(), ForeignKey("accounts.id", ondelete="SET NULL"))
     resolved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))

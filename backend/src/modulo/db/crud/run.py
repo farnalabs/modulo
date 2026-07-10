@@ -42,9 +42,7 @@ async def create_run(
     run_id = uuid.uuid4()
     thread_id = f"{org_id}:{run_id}"
     max_rn = await session.execute(
-        select(func.coalesce(func.max(Run.run_number), 0)).where(
-            Run.organisation_id == org_id
-        ).with_for_update()
+        select(func.coalesce(func.max(Run.run_number), 0)).where(Run.organisation_id == org_id).with_for_update()
     )
     next_run_number = max_rn.scalar_one() + 1
 

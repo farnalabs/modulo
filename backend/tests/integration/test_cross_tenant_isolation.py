@@ -34,8 +34,7 @@ async def _seed_org(db_engine: AsyncEngine, name: str) -> uuid.UUID:
     async with db_engine.connect() as conn, conn.begin():
         await conn.execute(
             text(
-                "INSERT INTO organisations (id, name, slug, settings_json) "
-                "VALUES (:id, :name, :slug, '{}'::json)",
+                "INSERT INTO organisations (id, name, slug, settings_json) VALUES (:id, :name, :slug, '{}'::json)",
             ),
             {
                 "id": str(org_id),
@@ -76,7 +75,10 @@ async def _seed_user(db_engine: AsyncEngine, org_id: uuid.UUID, email: str) -> u
 
 
 async def _seed_pipeline(
-    db_engine: AsyncEngine, org_id: uuid.UUID, user_id: uuid.UUID, name: str,
+    db_engine: AsyncEngine,
+    org_id: uuid.UUID,
+    user_id: uuid.UUID,
+    name: str,
 ) -> uuid.UUID:
     pipeline_id = uuid.uuid4()
     async with db_engine.connect() as conn, conn.begin():
@@ -106,7 +108,8 @@ async def _seed_pipeline(
 
 @pytest_asyncio.fixture
 async def integration_client(
-    db_url: str, db_engine: AsyncEngine,
+    db_url: str,
+    db_engine: AsyncEngine,
 ) -> AsyncClient:
     from modulo.api.dependencies import _get_engine, get_db_session
     from modulo.api.main import app
@@ -186,14 +189,18 @@ async def user_b(db_engine: AsyncEngine, org_b: uuid.UUID) -> uuid.UUID:
 
 @pytest_asyncio.fixture(scope="module")
 async def pipeline_a(
-    db_engine: AsyncEngine, org_a: uuid.UUID, user_a: uuid.UUID,
+    db_engine: AsyncEngine,
+    org_a: uuid.UUID,
+    user_a: uuid.UUID,
 ) -> uuid.UUID:
     return await _seed_pipeline(db_engine, org_a, user_a, "CrossTenant-PipelineA")
 
 
 @pytest_asyncio.fixture(scope="module")
 async def pipeline_b(
-    db_engine: AsyncEngine, org_b: uuid.UUID, user_b: uuid.UUID,
+    db_engine: AsyncEngine,
+    org_b: uuid.UUID,
+    user_b: uuid.UUID,
 ) -> uuid.UUID:
     return await _seed_pipeline(db_engine, org_b, user_b, "CrossTenant-PipelineB")
 
@@ -312,9 +319,7 @@ class TestOrgAdminCrossOrgForbidden:
                 "org_role": "runner",
             },
         )
-        assert resp.status_code == 403, (
-            f"Expected 403, got {resp.status_code}: {resp.text}"
-        )
+        assert resp.status_code == 403, f"Expected 403, got {resp.status_code}: {resp.text}"
 
 
 # ===================================================================
@@ -358,9 +363,7 @@ class TestCrossOrgSingleResourceFetch:
             f"/api/v1/pipelines/{pipeline_a}",
             headers={"Authorization": f"Bearer {token}"},
         )
-        assert resp.status_code == 200, (
-            f"Expected 200 for own org pipeline fetch, got {resp.status_code}: {resp.text}"
-        )
+        assert resp.status_code == 200, f"Expected 200 for own org pipeline fetch, got {resp.status_code}: {resp.text}"
         data = resp.json()
         assert data["id"] == str(pipeline_a)
 
@@ -395,9 +398,7 @@ class TestSystemAdminExplicitOrgParam:
                 "org_role": "operator",
             },
         )
-        assert resp.status_code == 201, (
-            f"Expected 201, got {resp.status_code}: {resp.text}"
-        )
+        assert resp.status_code == 201, f"Expected 201, got {resp.status_code}: {resp.text}"
         data = resp.json()
         assert data["email"] == "sysadmin-created@test.local"
         assert data["org_role"] == "operator"

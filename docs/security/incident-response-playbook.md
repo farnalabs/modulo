@@ -285,7 +285,7 @@ See §6 for the full process. Minimum steps:
 |-----------|---------|
 | Severity | **Critical** |
 | Detection | Failed login spike, unexpected IdP admin user added, session replay from unknown IPs |
-| Containment | Disable IdP provider, revoke all sessions | 
+| Containment | Disable IdP provider, revoke all sessions |
 | Eradication | Rotate `OIDC_CLIENT_SECRET`, validate IdP config |
 | Prevention | Enforce IdP-initiated SSO validation per `backend/security/sso.md` |
 

@@ -281,9 +281,7 @@ class MondayConnector(ConnectorBase):
                 column_id = payload.data.get("column_id")
                 value = payload.data.get("value")
                 if item_id is None or column_id is None or value is None:
-                    raise ValueError(
-                        "Monday column_value write requires 'item_id', 'column_id', and 'value' in data"
-                    )
+                    raise ValueError("Monday column_value write requires 'item_id', 'column_id', and 'value' in data")
                 data = await self._graphql(
                     _CHANGE_SIMPLE_COLUMN_VALUE_MUTATION,
                     {"item_id": item_id, "column_id": column_id, "value": value},

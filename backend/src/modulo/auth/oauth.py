@@ -242,7 +242,6 @@ async def consume_authorization_code(
     await validate_client_secret(session, client_id, client_secret)
 
     try:
-
         async with session.begin():
             result = await session.execute(
                 select(OAuthAuthorizationCode).where(OAuthAuthorizationCode.code == code).with_for_update()
@@ -266,15 +265,11 @@ async def consume_authorization_code(
             auth_code.used = True
             await session.flush()
     except ProgrammingError:
-
         logger.exception("auth.oauth")
 
         raise HTTPException(
-
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-
             detail="This feature is not available. Run database migrations to enable it.",
-
         )
 
     return auth_code
@@ -380,11 +375,13 @@ async def _get_token_family(
     except ValueError:
         raise InvalidGrantError(f"Invalid token family ID: '{family_id}'") from None
     result = await session.execute(
-        select(OAuthTokenFamily).where(
+        select(OAuthTokenFamily)
+        .where(
             OAuthTokenFamily.family_id == fid,
             OAuthTokenFamily.client_id == client_id,
             OAuthTokenFamily.organisation_id == org_id,
-        ).with_for_update()
+        )
+        .with_for_update()
     )
     return result.scalar_one_or_none()
 

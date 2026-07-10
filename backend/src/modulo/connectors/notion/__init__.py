@@ -71,7 +71,9 @@ class NotionConnector(ConnectorBase):
             results = body.get("results", [])
             return HealthResult(ok=True, detail=f"{len(results)} users accessible")
         except httpx.HTTPStatusError as exc:
-            return HealthResult(ok=False, detail=f"Notion API HTTP {exc.response.status_code}: {exc.response.text[:200]}")
+            return HealthResult(
+                ok=False, detail=f"Notion API HTTP {exc.response.status_code}: {exc.response.text[:200]}"
+            )
         except httpx.TimeoutException:
             return HealthResult(ok=False, detail="Notion API timeout")
         except httpx.ConnectError:
@@ -220,6 +222,4 @@ class NotionConnector(ConnectorBase):
                     return r.json()
 
                 case _:
-                    raise ValueError(
-                        f"Unsupported Notion write resource: {payload.resource!r}"
-                    )
+                    raise ValueError(f"Unsupported Notion write resource: {payload.resource!r}")

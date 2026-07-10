@@ -36,14 +36,16 @@ from modulo.db.models.pipeline_snapshot import PipelineSnapshot
 from modulo.db.models.schema import SchemaVersion
 
 _SKIPPED_EDGE_TYPES = frozenset({"reject", "kickback"})
-_JSON_TYPE_MAP: MappingProxyType[str, type | tuple[type, ...]] = MappingProxyType({
-    "string": str,
-    "number": (int, float),
-    "integer": int,
-    "boolean": bool,
-    "object": dict,
-    "array": list,
-})
+_JSON_TYPE_MAP: MappingProxyType[str, type | tuple[type, ...]] = MappingProxyType(
+    {
+        "string": str,
+        "number": (int, float),
+        "integer": int,
+        "boolean": bool,
+        "object": dict,
+        "array": list,
+    }
+)
 
 
 class GraphValidator:
@@ -566,9 +568,7 @@ class GraphValidator:
             val = input_payload[field_name]
             type_map_entry = _JSON_TYPE_MAP.get(expected_type, object) if expected_type else object
             is_bool = isinstance(val, bool)
-            matches = isinstance(val, type_map_entry) and not (
-                is_bool and expected_type in ("integer", "number")
-            )
+            matches = isinstance(val, type_map_entry) and not (is_bool and expected_type in ("integer", "number"))
             if expected_type and not matches:
                 actual_type = type(val).__name__
                 result.error(

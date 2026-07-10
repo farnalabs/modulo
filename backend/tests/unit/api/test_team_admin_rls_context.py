@@ -98,9 +98,7 @@ def _override_session(session: AsyncMock) -> None:
 class TestAdminTeamRlsUserContext:
     """Verifies set_rls_user_context is called on all 4 admin team routes."""
 
-    def test_admin_create_team_calls_set_rls_user_context(
-        self, admin_client: TestClient
-    ) -> None:
+    def test_admin_create_team_calls_set_rls_user_context(self, admin_client: TestClient) -> None:
         session = _make_session()
         _override_session(session)
         team = _make_team()
@@ -117,9 +115,7 @@ class TestAdminTeamRlsUserContext:
         assert mock_rls_user.call_count >= 1
         mock_rls_user.assert_any_call(session, _USER_ID, "admin")
 
-    def test_admin_list_teams_calls_set_rls_user_context(
-        self, admin_client: TestClient
-    ) -> None:
+    def test_admin_list_teams_calls_set_rls_user_context(self, admin_client: TestClient) -> None:
         session = _make_session()
         _override_session(session)
 
@@ -140,9 +136,7 @@ class TestAdminTeamRlsUserContext:
         assert mock_rls_user.call_count >= 1
         mock_rls_user.assert_any_call(session, _USER_ID, "admin")
 
-    def test_admin_update_team_calls_set_rls_user_context(
-        self, admin_client: TestClient
-    ) -> None:
+    def test_admin_update_team_calls_set_rls_user_context(self, admin_client: TestClient) -> None:
         session = _make_session()
         _override_session(session)
         team = _make_team()
@@ -159,9 +153,7 @@ class TestAdminTeamRlsUserContext:
         assert mock_rls_user.call_count >= 1
         mock_rls_user.assert_any_call(session, _USER_ID, "admin")
 
-    def test_admin_delete_team_calls_set_rls_user_context(
-        self, admin_client: TestClient
-    ) -> None:
+    def test_admin_delete_team_calls_set_rls_user_context(self, admin_client: TestClient) -> None:
         session = _make_session()
         _override_session(session)
 

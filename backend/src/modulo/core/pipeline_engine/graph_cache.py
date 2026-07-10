@@ -143,9 +143,7 @@ def _make_conditional_router(
 _CONCAT_KEYS: frozenset[str] = frozenset({"artifacts", "_hitl_gates", "_run_context_write_log"})
 
 
-def _pipeline_state_reducer(
-    current: dict[str, Any], update: dict[str, Any]
-) -> dict[str, Any]:
+def _pipeline_state_reducer(current: dict[str, Any], update: dict[str, Any]) -> dict[str, Any]:
     """Merge a single state update, concatenating list-valued keys for parallel writes."""
     result = dict(current)
     for k, v in update.items():

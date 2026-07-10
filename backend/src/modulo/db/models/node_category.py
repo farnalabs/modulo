@@ -10,9 +10,7 @@ from modulo.db.models.base import OrgScoped
 
 class NodeCategory(OrgScoped):
     __tablename__ = "node_categories"
-    __table_args__ = (
-        UniqueConstraint("organisation_id", "name", name="uq_node_categories_org_name"),
-    )
+    __table_args__ = (UniqueConstraint("organisation_id", "name", name="uq_node_categories_org_name"),)
 
     name: Mapped[str] = mapped_column(String(100), nullable=False)
     description: Mapped[str | None] = mapped_column(Text, nullable=True)

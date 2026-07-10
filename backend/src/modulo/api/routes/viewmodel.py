@@ -229,10 +229,7 @@ async def me(
             org_name="Modulo",
             settings={},
         ),
-        team_memberships=[
-            TeamMembershipInfo(team_id=m.team_id, team_role=m.role)
-            for m in memberships
-        ],
+        team_memberships=[TeamMembershipInfo(team_id=m.team_id, team_role=m.role) for m in memberships],
         team_memberships_truncated=False,
         org_role=current_user.org_role,
         is_system_admin=current_user.is_system_admin,
@@ -300,8 +297,7 @@ async def viewmodel_current(
                 )
                 if user_team_ids:
                     hitl_query = hitl_query.where(
-                        HitlClaim.required_team_id.is_(None)
-                        | HitlClaim.required_team_id.in_(user_team_ids)
+                        HitlClaim.required_team_id.is_(None) | HitlClaim.required_team_id.in_(user_team_ids)
                     )
                 else:
                     hitl_query = hitl_query.where(HitlClaim.required_team_id.is_(None))
@@ -375,19 +371,14 @@ async def viewmodel_current(
             settings=org.settings_json if org else {},
         ),
         org_role=current_user.org_role or "",
-        team_memberships=[
-            TeamMembershipInfo(team_id=m.team_id, team_role=m.role)
-            for m in memberships
-        ],
+        team_memberships=[TeamMembershipInfo(team_id=m.team_id, team_role=m.role) for m in memberships],
         team_memberships_truncated=False,
         preferences=account.preferences,
         feature_flags=feature_flags,
         plan=PlanInfo(
             tier=_resolve_tier(settings, org=org),
             daily_spend_limit=(
-                float(org.daily_spend_limit)
-                if org is not None and org.daily_spend_limit is not None
-                else None
+                float(org.daily_spend_limit) if org is not None and org.daily_spend_limit is not None else None
             ),
         ),
         pipelines=[PipelineSummary.model_validate(p) for p in (pipelines_page.items if pipelines_page else [])],

@@ -1007,7 +1007,8 @@ class TestCreateGroup:
                 return_value=None,
             ),
             patch(
-                "modulo.db.crud.user.list_users_for_org", create=True,
+                "modulo.db.crud.user.list_users_for_org",
+                create=True,
                 return_value=[_MOCK_USER],
             ),
             patch(

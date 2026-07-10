@@ -324,9 +324,7 @@ def run_routes_to(target: str, ctx):
     router = _make_gate_kickback_router(normal_target, reject_target)
     decision = ctx.get("state", {}).get("_hitl_decision", {})
     result = router({"_hitl_decision": decision})
-    assert result == target, (
-        f"Expected route to {target!r}, got {result!r}"
-    )
+    assert result == target, f"Expected route to {target!r}, got {result!r}"
 
 
 @then('the gate artifact shows action "rejected"')

@@ -4,6 +4,7 @@ Revision ID: 0053_dashboard_perf_indexes
 Revises: 0052_composite_bindings
 Create Date: 2026-07-01 12:00:00.000000
 """
+
 from collections.abc import Sequence
 
 from alembic import op

@@ -166,9 +166,7 @@ async def get_remy_config(
             default_provider=value.get("default_provider", "anthropic"),
             default_model=value.get("default_model", "claude-sonnet-4-20250514"),
             default_context_window=value.get("default_context_window", 200000),
-            allowed_providers=value.get(
-                "allowed_providers", ["anthropic", "openai", "gemini", "deepseek", "groq"]
-            ),
+            allowed_providers=value.get("allowed_providers", ["anthropic", "openai", "gemini", "deepseek", "groq"]),
             allowed_models=value.get("allowed_models", []),
         )
     except ProgrammingError:
@@ -206,10 +204,7 @@ async def get_available_providers(
             for k in sorted(native_ids)
         ]
         custom_types = [
-            AvailableProviderInfo(
-                id=v.value,
-                label=_PROVIDER_LABELS.get(v.value, v.name.replace("_", " ").title())
-            )
+            AvailableProviderInfo(id=v.value, label=_PROVIDER_LABELS.get(v.value, v.name.replace("_", " ").title()))
             for v in ModelBackendProvider
             if v.value not in native_ids
         ]
@@ -278,9 +273,7 @@ async def update_remy_config(
             default_provider=current.get("default_provider", "anthropic"),
             default_model=current.get("default_model", "claude-sonnet-4-20250514"),
             default_context_window=current.get("default_context_window", 200000),
-            allowed_providers=current.get(
-                "allowed_providers", ["anthropic", "openai", "gemini", "deepseek", "groq"]
-            ),
+            allowed_providers=current.get("allowed_providers", ["anthropic", "openai", "gemini", "deepseek", "groq"]),
             allowed_models=current.get("allowed_models", []),
         )
     except ProgrammingError:
@@ -551,9 +544,7 @@ async def set_org_context_source(
             )
 
             service = RemyContextSourceService(session)
-            await service.set_org_default(
-                principal.organisation_id, source_key, req.source_mode
-            )
+            await service.set_org_default(principal.organisation_id, source_key, req.source_mode)
             return await service.get_org_defaults(principal.organisation_id)
     except ProgrammingError:
         raise HTTPException(
@@ -630,9 +621,7 @@ async def get_user_skills(session: AsyncSession, user_id: uuid.UUID) -> list[Rem
     return list(result.scalars())
 
 
-async def get_user_skill_or_404(
-    session: AsyncSession, user_id: uuid.UUID, skill_id: uuid.UUID
-) -> RemySkill:
+async def get_user_skill_or_404(session: AsyncSession, user_id: uuid.UUID, skill_id: uuid.UUID) -> RemySkill:
     skill = await session.get(RemySkill, skill_id)
     if skill is None or skill.user_id != user_id or skill.organisation_id is not None:
         raise HTTPException(

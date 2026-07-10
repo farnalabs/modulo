@@ -174,7 +174,8 @@ class BrokerRegistry:
         """Remove brokers that have been closed or are older than max_age_seconds."""
         now = time.monotonic()
         stale = [
-            run_id for run_id, broker in list(self._brokers.items())
+            run_id
+            for run_id, broker in list(self._brokers.items())
             if not broker.is_closed and now - broker._created_at > max_age_seconds
         ]
         for run_id in stale:

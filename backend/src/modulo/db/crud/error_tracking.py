@@ -71,10 +71,12 @@ async def upsert_error_group(
     sample_event_id: uuid.UUID | None = None,
 ) -> ErrorGroup:
     result = await session.execute(
-        select(ErrorGroup).where(
+        select(ErrorGroup)
+        .where(
             ErrorGroup.organisation_id == org_id,
             ErrorGroup.fingerprint == fingerprint,
-        ).with_for_update()
+        )
+        .with_for_update()
     )
     group = result.scalar_one_or_none()
     if group is None:

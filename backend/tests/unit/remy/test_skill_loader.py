@@ -385,7 +385,9 @@ class TestSkillLoaderBuildSystemPrompt:
         user_id: uuid.UUID,
     ) -> None:
         prompt = await self._run(
-            loader, org_id, user_id,
+            loader,
+            org_id,
+            user_id,
             config_kwargs={"system_prompt": "You are helpful."},
             include_ui_tools_text=True,
             ui_tools_text_fn=lambda: "# Browser Tools Available (Text Mode)\n**navigate**(path: 'url')\n",

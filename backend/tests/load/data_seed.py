@@ -93,16 +93,29 @@ def seed_pipelines(client: SeedClient, count: int = 5) -> list[dict[str, Any]]:
     """Create *count* test pipelines with varying configurations."""
     pipelines = []
     configs = [
-        {"name": "Load Test - Simple Agent", "description": "Single-agent pipeline for load testing",
-         "max_concurrent_runs": 10},
-        {"name": "Load Test - Sequential Chain", "description": "Multi-agent sequential chain",
-         "max_concurrent_runs": 5},
-        {"name": "Load Test - HITL Gate", "description": "Pipeline with human-in-the-loop gate",
-         "max_concurrent_runs": 3, "default_autonomy_level": "manual_approval"},
-        {"name": "Load Test - High Concurrency", "description": "High-concurrency pipeline",
-         "max_concurrent_runs": 25},
-        {"name": "Load Test - Long Running", "description": "Long timeout pipeline for stress testing",
-         "node_timeout_seconds": 600, "lock_wait_timeout_seconds": 600},
+        {
+            "name": "Load Test - Simple Agent",
+            "description": "Single-agent pipeline for load testing",
+            "max_concurrent_runs": 10,
+        },
+        {
+            "name": "Load Test - Sequential Chain",
+            "description": "Multi-agent sequential chain",
+            "max_concurrent_runs": 5,
+        },
+        {
+            "name": "Load Test - HITL Gate",
+            "description": "Pipeline with human-in-the-loop gate",
+            "max_concurrent_runs": 3,
+            "default_autonomy_level": "manual_approval",
+        },
+        {"name": "Load Test - High Concurrency", "description": "High-concurrency pipeline", "max_concurrent_runs": 25},
+        {
+            "name": "Load Test - Long Running",
+            "description": "Long timeout pipeline for stress testing",
+            "node_timeout_seconds": 600,
+            "lock_wait_timeout_seconds": 600,
+        },
     ]
 
     for i in range(count):

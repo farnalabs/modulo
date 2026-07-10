@@ -81,7 +81,9 @@ class AzureReposConnector(ConnectorBase):
             display_name = profile.get("displayName", "")
             return HealthResult(ok=True, detail=display_name)
         except httpx.HTTPStatusError as exc:
-            return HealthResult(ok=False, detail=f"Azure Repos API HTTP {exc.response.status_code}: {exc.response.text[:200]}")
+            return HealthResult(
+                ok=False, detail=f"Azure Repos API HTTP {exc.response.status_code}: {exc.response.text[:200]}"
+            )
         except httpx.TimeoutException:
             return HealthResult(ok=False, detail="Azure Repos API timeout")
         except httpx.ConnectError:

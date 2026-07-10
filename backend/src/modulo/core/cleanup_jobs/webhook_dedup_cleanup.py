@@ -20,8 +20,7 @@ except ImportError:
         from celery import Task
     else:
         raise ImportError(
-            "Celery is required for modulo.cleanup.webhook_dedup. "
-            "Install it with: pip install celery"
+            "Celery is required for modulo.cleanup.webhook_dedup. Install it with: pip install celery"
         ) from None
 
 _log = logging.getLogger(__name__)
@@ -49,10 +48,7 @@ async def cleanup_old_webhook_events(
     cutoff = datetime.now(UTC) - timedelta(days=retention_days)
 
     result = await db_session.execute(
-        select(TriggerEvent.id)
-        .where(TriggerEvent.created_at < cutoff)
-        .order_by(TriggerEvent.id)
-        .limit(BATCH_SIZE)
+        select(TriggerEvent.id).where(TriggerEvent.created_at < cutoff).order_by(TriggerEvent.id).limit(BATCH_SIZE)
     )
     ids = result.scalars().all()
     if not ids:

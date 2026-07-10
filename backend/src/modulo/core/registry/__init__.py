@@ -444,7 +444,11 @@ def get_registry_primitive(slug: str) -> RegistryEntry | None:
 
 
 def _validate_registry_inputs(
-    author: str, name: str, primitive_type: str, tags: list[str], content_json: dict[str, Any],
+    author: str,
+    name: str,
+    primitive_type: str,
+    tags: list[str],
+    content_json: dict[str, Any],
 ) -> None:
     """Validate registry metadata inputs and content serializability."""
     if not author or not author.strip():
@@ -547,8 +551,13 @@ def verify_primitive_signature(
         return False
 
     payload = _entry_payload(
-        entry.author, entry.name, entry.version,
-        entry.primitive_type, entry.description, entry.tags, entry.content_json,
+        entry.author,
+        entry.name,
+        entry.version,
+        entry.primitive_type,
+        entry.description,
+        entry.tags,
+        entry.content_json,
     )
     return verify_manifest(payload, entry.ed25519_signature_hex, pubkey)
 

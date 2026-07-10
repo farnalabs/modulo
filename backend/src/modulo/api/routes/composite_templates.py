@@ -106,7 +106,10 @@ async def list_composite_templates_endpoint(
         async with session.begin():
             await set_rls_org(session, principal.organisation_id)
             result = await list_composite_templates(
-                session, org_id=principal.organisation_id, page=page, page_size=page_size,
+                session,
+                org_id=principal.organisation_id,
+                page=page,
+                page_size=page_size,
             )
     except ProgrammingError:
         raise HTTPException(
@@ -321,9 +324,13 @@ async def save_composite_editor_endpoint(
             graph = dict(template.sub_pipeline_graph_json) if template.sub_pipeline_graph_json else {}
             graph["nodes"] = req.nodes
             graph["edges"] = req.edges
-            template = await update_composite_template(session, template_id, {
-                "sub_pipeline_graph_json": graph,
-            })
+            template = await update_composite_template(
+                session,
+                template_id,
+                {
+                    "sub_pipeline_graph_json": graph,
+                },
+            )
     except ProgrammingError:
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,

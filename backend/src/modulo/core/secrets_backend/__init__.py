@@ -124,8 +124,7 @@ def create_secrets_backend(
         case "vault" | "aws":
             if not _check_external_secrets_licensed():
                 logger.warning(
-                    "External secrets backend %r requires a valid license key. "
-                    "Falling back to 'fernet' backend.",
+                    "External secrets backend %r requires a valid license key. Falling back to 'fernet' backend.",
                     name,
                 )
                 from modulo.core.secrets_backend.fernet import FernetSecretsBackend
@@ -138,10 +137,9 @@ def create_secrets_backend(
                 from modulo.core.secrets_backend.vault import VaultSecretsBackend
 
                 return VaultSecretsBackend()
-            else:
-                from modulo.core.secrets_backend.aws import AWSSecretsManagerBackend
+            from modulo.core.secrets_backend.aws import AWSSecretsManagerBackend
 
-                return AWSSecretsManagerBackend()
+            return AWSSecretsManagerBackend()
         case _:
             msg = f"Unknown MODULO_SECRETS_BACKEND: {name!r}. Must be one of: 'fernet', 'vault', 'aws'."
             raise ValueError(msg)

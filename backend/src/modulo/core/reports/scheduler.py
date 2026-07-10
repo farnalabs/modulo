@@ -51,8 +51,6 @@ except ImportError:
     Scheduler = object  # type: ignore[misc]
 
 
-
-
 _log = logging.getLogger(__name__)
 
 _ENGINE: AsyncEngine | None = None
@@ -246,13 +244,11 @@ async def _fire_scheduled_report(
         except (ValueError, TypeError, KeyError) as exc:
             _log.error(
                 "Invalid cron expression '%s' for report %s: %s",
-                report.cron_expression, report_id, exc,
+                report.cron_expression,
+                report_id,
+                exc,
             )
-            await session.execute(
-                update(ScheduledReport)
-                .where(ScheduledReport.id == report_id)
-                .values(active=False)
-            )
+            await session.execute(update(ScheduledReport).where(ScheduledReport.id == report_id).values(active=False))
             return {"status": "failed", "reason": f"invalid_cron: {exc}"}
 
         await session.execute(
@@ -329,43 +325,56 @@ async def _deliver_to_urls(
                         retry_after = _parse_retry_after(resp)
                         _log.warning(
                             "Delivery to %s rate-limited (429), retrying after %.0fs (attempt %d/%d)",
-                            url, retry_after, attempt + 1, _REPORT_MAX_RETRIES,
+                            url,
+                            retry_after,
+                            attempt + 1,
+                            _REPORT_MAX_RETRIES,
                         )
                         await asyncio.sleep(retry_after)
                         continue
                     if resp.status_code >= 500:
                         _log.warning(
                             "Delivery to %s returned %d, retrying (attempt %d/%d)",
-                            url, resp.status_code, attempt + 1, _REPORT_MAX_RETRIES,
+                            url,
+                            resp.status_code,
+                            attempt + 1,
+                            _REPORT_MAX_RETRIES,
                         )
-                        delay = min(_REPORT_BACKOFF_BASE ** attempt, _REPORT_MAX_BACKOFF)
+                        delay = min(_REPORT_BACKOFF_BASE**attempt, _REPORT_MAX_BACKOFF)
                         await asyncio.sleep(delay)
                         continue
-                    result.update({
-                        "status": "failed",
-                        "status_code": resp.status_code,
-                        "error": resp.text[:200],
-                    })
+                    result.update(
+                        {
+                            "status": "failed",
+                            "status_code": resp.status_code,
+                            "error": resp.text[:200],
+                        }
+                    )
                     break
                 except (httpx.RequestError, TypeError) as exc:
                     _log.warning(
                         "Delivery to %s failed: %s (attempt %d/%d)",
-                        url, exc, attempt + 1, _REPORT_MAX_RETRIES,
+                        url,
+                        exc,
+                        attempt + 1,
+                        _REPORT_MAX_RETRIES,
                     )
                     last_resp_or_exc = exc
                     if attempt < _REPORT_MAX_RETRIES - 1:
-                        delay = min(_REPORT_BACKOFF_BASE ** attempt, _REPORT_MAX_BACKOFF)
+                        delay = min(_REPORT_BACKOFF_BASE**attempt, _REPORT_MAX_BACKOFF)
                         await asyncio.sleep(delay)
             else:
                 if isinstance(last_resp_or_exc, Exception):
                     result.update({"status": "failed", "status_code": None, "error": str(last_resp_or_exc)})
                 elif last_resp_or_exc is not None:
                     err_text = getattr(last_resp_or_exc, "text", None) or "max_retries_exceeded"
-                    result.update({
-                        "status": "failed",
-                        "status_code": last_resp_or_exc.status_code,
-                        "error": err_text[:200],
-                    })
+                    result.update(
+                        {
+                            "status": "failed",
+                            "status_code": last_resp_or_exc.status_code,
+                            "error": err_text[:200],
+                        }
+                    )
                 else:
                     result.update({"status": "failed", "error": "max_retries_exceeded"})
             results.append(result)

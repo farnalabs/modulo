@@ -34,7 +34,6 @@ def downgrade() -> None:
         "ck_library_primitives_type",
         "library_primitives",
         sa.text(
-            "primitive_type IN ('schema', 'workflow', 'agent', 'integration', "
-            "'test_fixture', 'pipeline_template')"
+            "primitive_type IN ('schema', 'workflow', 'agent', 'integration', 'test_fixture', 'pipeline_template')"
         ),
     )

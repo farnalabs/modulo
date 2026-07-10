@@ -58,21 +58,21 @@ _cancellation_check_cv: ContextVar[Callable[[], Awaitable[bool]] | None] = Conte
 )
 
 # ModelBackendHub for the current run — provides model backends to make_node_fn.
-_model_backend_hub_cv: ContextVar[Any | None] = ContextVar(
-    "_model_backend_hub", default=None
-)
+_model_backend_hub_cv: ContextVar[Any | None] = ContextVar("_model_backend_hub", default=None)
 
 
 # Canonical write-log key in LangGraph state.
 _RUN_CONTEXT_WRITE_LOG_KEY = "_run_context_write_log"
 
 # Keys in run_context that context-setter agents may NOT modify.
-_RESERVED_RUN_CONTEXT_KEYS = frozenset({
-    "cancelled",
-    "input",
-    "_pipeline_default_autonomy",
-    "_run_context_write_log",
-})
+_RESERVED_RUN_CONTEXT_KEYS = frozenset(
+    {
+        "cancelled",
+        "input",
+        "_pipeline_default_autonomy",
+        "_run_context_write_log",
+    }
+)
 
 
 def get_model_backend_hub() -> Any | None:

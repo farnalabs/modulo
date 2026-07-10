@@ -56,17 +56,24 @@ ADMIN_PASSWORD = os.environ.get("ADMIN_PASSWORD", DEFAULT_ADMIN_PASSWORD)
 # Custom event tracking helpers
 # ---------------------------------------------------------------------------
 
+
 def _fire_event(
     request_type: str, name: str, start: float, exception: Exception | None = None, length: int = 0
 ) -> None:
     elapsed = int((time.time() - start) * 1000)
     if exception is None:
         events.request_success.fire(
-            request_type=request_type, name=name, response_time=elapsed, response_length=length,
+            request_type=request_type,
+            name=name,
+            response_time=elapsed,
+            response_length=length,
         )
     else:
         events.request_failure.fire(
-            request_type=request_type, name=name, response_time=elapsed, exception=exception,
+            request_type=request_type,
+            name=name,
+            response_time=elapsed,
+            exception=exception,
         )
 
 
@@ -84,6 +91,7 @@ def _waitlist_ready() -> bool:
 # ---------------------------------------------------------------------------
 # Base load user (shared on_start)
 # ---------------------------------------------------------------------------
+
 
 class BaseLoadUser(HttpUser):
     abstract = True
@@ -105,8 +113,10 @@ def _close_ws(ws: Any) -> None:
 # PipelineRunUser (weight: 3, ramp 1->50)
 # ---------------------------------------------------------------------------
 
+
 class PipelineRunUser(BaseLoadUser):
     """Simulates pipeline creation, run triggering, and completion polling."""
+
     weight = 3
     wait_time = between(5, 15)
 
@@ -134,8 +144,10 @@ class PipelineRunUser(BaseLoadUser):
 # HitlReviewUser (weight: 2, ramp 1->20)
 # ---------------------------------------------------------------------------
 
+
 class HitlReviewUser(BaseLoadUser):
     """Simulates human-in-the-loop review workflow."""
+
     weight = 2
     wait_time = between(2, 8)
 
@@ -172,8 +184,10 @@ class HitlReviewUser(BaseLoadUser):
 # WebSocketUser (weight: 1, ramp 1->10)
 # ---------------------------------------------------------------------------
 
+
 class WebSocketUser(BaseLoadUser):
     """Simulates WebSocket event stream subscribers."""
+
     weight = 1
     wait_time = between(10, 30)
 
@@ -232,6 +246,7 @@ class WebSocketUser(BaseLoadUser):
 # ---------------------------------------------------------------------------
 # Events
 # ---------------------------------------------------------------------------
+
 
 @events.init.add_listener
 def on_locust_init(environment, **_kwargs):

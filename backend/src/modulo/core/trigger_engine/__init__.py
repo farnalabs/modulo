@@ -142,9 +142,7 @@ def _verify_timestamp(modulo_timestamp: str | None) -> int:
     try:
         ts = int(modulo_timestamp)
     except (ValueError, TypeError):
-        raise TimestampExpiredError(
-            f"X-Modulo-Timestamp is not a valid integer: {modulo_timestamp!r}"
-        ) from None
+        raise TimestampExpiredError(f"X-Modulo-Timestamp is not a valid integer: {modulo_timestamp!r}") from None
     now = time.time()
     if abs(now - ts) > _REPLAY_WINDOW_SECONDS:
         raise TimestampExpiredError("X-Modulo-Timestamp is outside the ±300s replay window")
@@ -338,10 +336,12 @@ class TriggerEngine:
 
         # Load trigger
         trigger_result = await session.execute(
-            select(Trigger).where(
+            select(Trigger)
+            .where(
                 Trigger.id == event.trigger_id,
                 Trigger.organisation_id == org_id,
-            ).with_for_update()
+            )
+            .with_for_update()
         )
         trigger = trigger_result.scalar_one_or_none()
         if trigger is None:

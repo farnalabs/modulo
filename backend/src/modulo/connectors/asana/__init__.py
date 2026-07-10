@@ -97,15 +97,11 @@ class AsanaConnector(ConnectorBase):
                         params["workspace"] = q.filters["workspace"]
                     project_id = q.filters.get("project_id")
                     if project_id:
-                        r = await client.get(
-                            f"/projects/{project_id}/tasks", params=params
-                        )
+                        r = await client.get(f"/projects/{project_id}/tasks", params=params)
                     elif "workspace" in q.filters:
                         r = await client.get("/tasks", params=params)
                     else:
-                        raise ValueError(
-                            "Asana tasks query requires 'project_id' or 'workspace' filter"
-                        )
+                        raise ValueError("Asana tasks query requires 'project_id' or 'workspace' filter")
                     r.raise_for_status()
                     body = r.json()
                     records = body.get("data", [])
@@ -124,9 +120,7 @@ class AsanaConnector(ConnectorBase):
                 case "sections":
                     project_id = q.filters.get("project_id")
                     if not project_id:
-                        raise ValueError(
-                            "Asana sections query requires 'project_id' filter"
-                        )
+                        raise ValueError("Asana sections query requires 'project_id' filter")
                     r = await client.get(f"/projects/{project_id}/sections")
                     r.raise_for_status()
                     body = r.json()
@@ -167,9 +161,7 @@ class AsanaConnector(ConnectorBase):
                     task_id = payload.data.get("id")
                     if not task_id:
                         raise ValueError("Asana task_update requires 'id' in data")
-                    r = await client.put(
-                        f"/tasks/{task_id}", json={"data": payload.data}
-                    )
+                    r = await client.put(f"/tasks/{task_id}", json={"data": payload.data})
                     r.raise_for_status()
                     body = r.json()
                     updated: dict[str, Any] = body.get("data", {})
@@ -212,6 +204,4 @@ class AsanaConnector(ConnectorBase):
                     return comment
 
                 case _:
-                    raise ValueError(
-                        f"Unsupported Asana write resource: {payload.resource!r}"
-                    )
+                    raise ValueError(f"Unsupported Asana write resource: {payload.resource!r}")

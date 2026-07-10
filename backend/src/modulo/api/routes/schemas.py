@@ -689,15 +689,22 @@ async def infer_schema_endpoint(
                 )
 
             # Connector-types currently supported for schema inference
-            _SUPPORTED_INFERENCE_TYPES = frozenset({
-                "github", "gitlab", "jira", "linear", "slack",
-                "notion", "confluence",
-            })
+            _SUPPORTED_INFERENCE_TYPES = frozenset(
+                {
+                    "github",
+                    "gitlab",
+                    "jira",
+                    "linear",
+                    "slack",
+                    "notion",
+                    "confluence",
+                }
+            )
             if ci.connector_type_id not in _SUPPORTED_INFERENCE_TYPES:
                 raise HTTPException(
                     status_code=status.HTTP_400_BAD_REQUEST,
                     detail=f"Connector type '{ci.connector_type_id}' does not support schema inference. "
-                           f"Supported types: {', '.join(sorted(_SUPPORTED_INFERENCE_TYPES))}",
+                    f"Supported types: {', '.join(sorted(_SUPPORTED_INFERENCE_TYPES))}",
                 )
 
             mbs = await list_model_backends(session, page_size=1)
@@ -810,7 +817,6 @@ async def infer_schema_endpoint(
 
     try:
         try:
-
             async with session.begin():
                 await append_audit_event(
                     session,
@@ -827,15 +833,11 @@ async def infer_schema_endpoint(
                     },
                 )
         except ProgrammingError:
-
             logger.exception("routes.schemas")
 
             raise HTTPException(
-
                 status_code=status.HTTP_501_NOT_IMPLEMENTED,
-
                 detail="This feature is not available. Run database migrations to enable it.",
-
             )
 
     except Exception:
@@ -959,7 +961,6 @@ async def generate_schema_endpoint(
 
     try:
         try:
-
             async with session.begin():
                 await append_audit_event(
                     session,
@@ -975,15 +976,11 @@ async def generate_schema_endpoint(
                     },
                 )
         except ProgrammingError:
-
             logger.exception("routes.schemas")
 
             raise HTTPException(
-
                 status_code=status.HTTP_501_NOT_IMPLEMENTED,
-
                 detail="This feature is not available. Run database migrations to enable it.",
-
             )
 
     except HTTPException:
@@ -1304,6 +1301,5 @@ async def import_schema_endpoint(
         fields=fields,
     )
 
+
 # TEST_MARKER - remove me
-
-

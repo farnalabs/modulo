@@ -43,11 +43,7 @@ class DockerRuntimeProvider(RuntimeProvider):
         create_timeout: int = 120,
         start_timeout: int = 30,
     ) -> None:
-        self._docker_host = (
-            docker_host
-            or os.environ.get("MODULO_DOCKER_HOST")
-            or os.environ.get("DOCKER_HOST")
-        )
+        self._docker_host = docker_host or os.environ.get("MODULO_DOCKER_HOST") or os.environ.get("DOCKER_HOST")
         self._default_image = default_image
         self._create_timeout = create_timeout
         self._start_timeout = start_timeout
@@ -151,9 +147,7 @@ class DockerRuntimeProvider(RuntimeProvider):
         start = time.monotonic()
         try:
             if timeout is not None:
-                stdout_bytes, stderr_bytes, exit_code = await asyncio.wait_for(
-                    _run_exec(), timeout=timeout
-                )
+                stdout_bytes, stderr_bytes, exit_code = await asyncio.wait_for(_run_exec(), timeout=timeout)
             else:
                 stdout_bytes, stderr_bytes, exit_code = await _run_exec()
             duration = int((time.monotonic() - start) * 1000)

@@ -15,6 +15,7 @@ if TYPE_CHECKING:
 def __getattr__(name: str) -> object:
     if name == "RedisEventBroker":
         from modulo.core.events.redis_broker import RedisEventBroker
+
         return RedisEventBroker
     msg = f"module {__name__!r} has no attribute {name!r}"
     raise AttributeError(msg)

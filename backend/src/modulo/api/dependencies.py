@@ -27,6 +27,8 @@ from modulo.core.feature_flags import PlanContext
 from modulo.settings import Settings, get_settings
 
 logger = logging.getLogger(__name__)
+
+
 def require_feature(feature_name: str):
     """FastAPI dependency factory — blocks access if the named feature is not enabled on the current plan.
 
@@ -144,33 +146,25 @@ async def get_plan_context(
     org = None
     if current_user.organisation_id is not None:
         try:
-
             async with session.begin():
                 org = await get_organisation(session, current_user.organisation_id)
         except ProgrammingError:
-
             logger.exception("api.dependencies")
 
             raise HTTPException(
-
                 status_code=status.HTTP_501_NOT_IMPLEMENTED,
-
                 detail="This feature is not available. Run database migrations to enable it.",
-
             )
 
         except (TypeError, AttributeError):
-
             logger.warning("Session does not support async begin() — returning CommunityTier")
 
             return CommunityTier()
 
     try:
-
         return await resolve_plan_context(settings, session, org=org)
 
     except (TypeError, AttributeError):
-
         logger.warning("Session does not support resolve_plan_context — returning CommunityTier")
 
         return CommunityTier()

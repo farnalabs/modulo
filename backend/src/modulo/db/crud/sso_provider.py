@@ -13,19 +13,21 @@ from modulo.db.models.sso_provider import SsoProvider
 
 logger = logging.getLogger(__name__)
 
-_UPDATABLE_SSO_FIELDS = frozenset({
-    "client_id",
-    "client_secret",
-    "discovery_url",
-    "metadata_url",
-    "metadata_xml",
-    "entity_id",
-    "scopes",
-    "enabled",
-    "name",
-    "auto_provision",
-    "default_role",
-})
+_UPDATABLE_SSO_FIELDS = frozenset(
+    {
+        "client_id",
+        "client_secret",
+        "discovery_url",
+        "metadata_url",
+        "metadata_xml",
+        "entity_id",
+        "scopes",
+        "enabled",
+        "name",
+        "auto_provision",
+        "default_role",
+    }
+)
 
 
 async def list_providers(session: AsyncSession) -> list[SsoProvider]:
@@ -113,11 +115,14 @@ async def update_provider(
 
     if "name" in updates and updates["name"] is not None:
         result = await session.execute(
-            select(SsoProvider).where(
+            select(SsoProvider)
+            .where(
                 SsoProvider.name == updates["name"],
                 SsoProvider.organisation_id == provider.organisation_id,
                 SsoProvider.id != provider_id,
-            ).with_for_update().limit(1)
+            )
+            .with_for_update()
+            .limit(1)
         )
         if result.scalar_one_or_none() is not None:
             raise ValueError(f"An SSO provider with name '{updates['name']}' already exists in this organisation")

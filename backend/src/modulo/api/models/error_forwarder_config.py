@@ -4,9 +4,15 @@ from datetime import datetime
 
 from pydantic import BaseModel, Field
 
-_SENSITIVE_KEYS = frozenset({
-    "dsn", "api_key", "access_token", "routing_key", "secret",
-})
+_SENSITIVE_KEYS = frozenset(
+    {
+        "dsn",
+        "api_key",
+        "access_token",
+        "routing_key",
+        "secret",
+    }
+)
 
 
 def _mask_sensitive(config: dict | None) -> dict:

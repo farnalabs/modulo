@@ -56,8 +56,8 @@ async def list_triggers(
             if trigger_type is not None:
                 q = q.where(Trigger.trigger_type == trigger_type)
 
-            count_q = select(func.count()).select_from(Trigger).where(
-                Trigger.organisation_id == principal.organisation_id
+            count_q = (
+                select(func.count()).select_from(Trigger).where(Trigger.organisation_id == principal.organisation_id)
             )
             if pipeline_id is not None:
                 count_q = count_q.where(Trigger.pipeline_id == pipeline_id)
@@ -448,7 +448,6 @@ async def test_polling_condition(
         poll_query=req.poll_query,
         condition_expression=req.condition_expression,
     )
-
 
 
 # ---------------------------------------------------------------------------

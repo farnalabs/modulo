@@ -148,19 +148,13 @@ def _parse_llm_response(raw: str) -> OptimizationResult:
             try:
                 parsed = json.loads(extracted)
             except json.JSONDecodeError as exc:
-                raise OptimizationFailedError(
-                    f"Failed to parse JSON from code-fenced response: {exc}"
-                ) from exc
+                raise OptimizationFailedError(f"Failed to parse JSON from code-fenced response: {exc}") from exc
         else:
-            raise OptimizationFailedError(
-                "LLM response is not valid JSON and contains no code-fenced block"
-            ) from None
+            raise OptimizationFailedError("LLM response is not valid JSON and contains no code-fenced block") from None
 
     if not isinstance(parsed, dict):
         _log.error("LLM response is valid JSON but not an object: got %s", type(parsed).__name__)
-        raise OptimizationFailedError(
-            f"LLM response is valid JSON but not an object: got {type(parsed).__name__}"
-        )
+        raise OptimizationFailedError(f"LLM response is valid JSON but not an object: got {type(parsed).__name__}")
 
     try:
         return OptimizationResult(
@@ -169,9 +163,7 @@ def _parse_llm_response(raw: str) -> OptimizationResult:
             analysis=parsed.get("analysis", ""),
         )
     except KeyError as exc:
-        raise OptimizationFailedError(
-            f"LLM response is missing required key: {exc}"
-        ) from exc
+        raise OptimizationFailedError(f"LLM response is missing required key: {exc}") from exc
 
 
 class PromptOptimizer:
@@ -253,6 +245,4 @@ class PromptOptimizer:
                 await asyncio.sleep(total_delay)
 
         _log.error("LLM call failed after %d attempts", _MAX_RETRIES)
-        raise OptimizationFailedError(
-            f"LLM call failed after {_MAX_RETRIES} attempts"
-        ) from last_exc
+        raise OptimizationFailedError(f"LLM call failed after {_MAX_RETRIES} attempts") from last_exc

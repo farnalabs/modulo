@@ -183,7 +183,7 @@ def create_stage_no_visibility(name: str, request: pytest.FixtureRequest, client
     request.node._created_stage = mock_stage
 
 
-@when(parsers.parse('I GET /api/stages/{name}'))
+@when(parsers.parse("I GET /api/stages/{name}"))
 def get_stage_by_name(name: str, request: pytest.FixtureRequest, client, patches, ctx) -> None:
     mock_stage = getattr(request.node, "_mock_stage", None) or getattr(request.node, "_created_stage", None)
     stage_id = ctx.get("stage_id") or (str(mock_stage.id) if mock_stage else name)
@@ -320,6 +320,4 @@ def response_owner_team_id_set(request) -> None:
 def response_owner_team_id_matches(request, ctx) -> None:
     body = request.node._resp.json()
     expected = ctx.get("team_id")
-    assert body.get("owner_team_id") == expected, (
-        f"Expected owner_team_id={expected}, got {body.get('owner_team_id')}"
-    )
+    assert body.get("owner_team_id") == expected, f"Expected owner_team_id={expected}, got {body.get('owner_team_id')}"

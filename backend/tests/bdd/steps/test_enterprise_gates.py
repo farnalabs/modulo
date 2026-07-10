@@ -104,6 +104,7 @@ def _setup_client(license_key: str, client: Any, ctx: dict[str, Any]) -> None:
 
     get_settings.cache_clear()
     from modulo.core.license import clear_license
+
     clear_license()
 
 
@@ -121,8 +122,10 @@ def valid_team_license(ctx: dict[str, Any]) -> None:
 def expired_team_license(ctx: dict[str, Any]) -> None:
     ctx["license_key"] = ""
     from modulo.core.license import clear_license
+
     clear_license()
     from modulo.settings import get_settings
+
     get_settings.cache_clear()
 
 
@@ -210,14 +213,10 @@ def error_detail_mentions(feature: str, request: Any) -> None:
     resp = request.node._resp
     body = resp.json()
     detail = body.get("detail", "")
-    assert feature.lower() in detail.lower(), (
-        f"Expected detail to mention '{feature}', got '{detail}'"
-    )
+    assert feature.lower() in detail.lower(), f"Expected detail to mention '{feature}', got '{detail}'"
 
 
-@then('the response does not contain 402 error')
+@then("the response does not contain 402 error")
 def response_no_402(request: Any) -> None:
     resp = request.node._resp
-    assert resp.status_code != 402, (
-        f"Expected non-402 status, got {resp.status_code}"
-    )
+    assert resp.status_code != 402, f"Expected non-402 status, got {resp.status_code}"

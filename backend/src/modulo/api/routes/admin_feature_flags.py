@@ -29,9 +29,7 @@ def _require_admin(principal: AuthenticatedPrincipal) -> None:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Admin access required")
 
 
-async def _resolve_tier(
-    settings: Settings, session: AsyncSession, current_user: AuthenticatedPrincipal
-) -> str:
+async def _resolve_tier(settings: Settings, session: AsyncSession, current_user: AuthenticatedPrincipal) -> str:
     """Resolve the effective tier for the current user's org.
 
     Resolution order:
@@ -88,6 +86,7 @@ async def _build_registry(
 ) -> FeatureFlagRegistry:
     tier = await _resolve_tier(settings, session, current_user)
     from modulo.core.license import get_license
+
     lic = get_license()
     has_key = bool(settings.modulo_license_key) or lic is not None
 
@@ -99,7 +98,9 @@ async def _build_registry(
 
     async with session.begin():
         return await FeatureFlagRegistry.from_db(
-            session, current_tier=tier, has_license_key=has_key,
+            session,
+            current_tier=tier,
+            has_license_key=has_key,
         )
 
 

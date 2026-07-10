@@ -77,7 +77,7 @@ fly ssh console --app app-modulo -C ".venv/bin/alembic current"
 After 1 week of successful operation:
 ```sh
 fly apps destroy modulo-app-db
-fly apps destroy modulo-demo-db  
+fly apps destroy modulo-demo-db
 fly apps destroy modulo-staging-db
 ```
 

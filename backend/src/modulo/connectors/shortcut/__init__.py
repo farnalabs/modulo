@@ -81,9 +81,7 @@ class ShortcutConnector(ConnectorBase):
             body: dict[str, Any] = r.json()
             return body
 
-    async def _get_list(
-        self, resource: str, params: dict[str, Any] | None = None
-    ) -> list[dict[str, Any]]:
+    async def _get_list(self, resource: str, params: dict[str, Any] | None = None) -> list[dict[str, Any]]:
         path = f"/{resource}"
         async with self._client() as client:
             r = await client.get(path, params=params)

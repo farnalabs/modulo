@@ -135,10 +135,12 @@ async def trigger_id(
     source_pipeline_id: uuid.UUID,
 ) -> uuid.UUID:
     tid = uuid.uuid4()
-    config_json = json.dumps({
-        "source_pipeline_id": str(source_pipeline_id),
-        "source_node_id": "extract",
-    })
+    config_json = json.dumps(
+        {
+            "source_pipeline_id": str(source_pipeline_id),
+            "source_node_id": "extract",
+        }
+    )
     async with db_engine.connect() as conn, conn.begin():
         await conn.execute(
             text(
@@ -251,10 +253,12 @@ class TestFireAgentSignalIntegration:
 
         # Create a trigger with concurrency limit 1.
         tight_tid = uuid.uuid4()
-        config_json = json.dumps({
-            "source_pipeline_id": str(source_pipeline_id),
-            "source_node_id": "extract",
-        })
+        config_json = json.dumps(
+            {
+                "source_pipeline_id": str(source_pipeline_id),
+                "source_node_id": "extract",
+            }
+        )
 
         async with factory() as session:
             async with session.begin():
@@ -326,9 +330,7 @@ class TestFireAgentSignalIntegration:
 
         assert len(rows) >= 1
         matching = [r for r in rows if r[0] == "concurrency_limit_reached"]
-        assert len(matching) == 1, (
-            f"Expected 'concurrency_limit_reached' event, got: {rows}"
-        )
+        assert len(matching) == 1, f"Expected 'concurrency_limit_reached' event, got: {rows}"
 
     async def test_no_matching_trigger_in_org_returns_empty(
         self,
@@ -367,10 +369,12 @@ class TestFireAgentSignalIntegration:
 
         pid_b = uuid.uuid4()
         pid_c = uuid.uuid4()
-        config_json = json.dumps({
-            "source_pipeline_id": str(source_pipeline_id),
-            "source_node_id": "extract",
-        })
+        config_json = json.dumps(
+            {
+                "source_pipeline_id": str(source_pipeline_id),
+                "source_node_id": "extract",
+            }
+        )
 
         async with factory() as session:
             async with session.begin():
@@ -420,11 +424,11 @@ class TestFireAgentSignalIntegration:
                 for pid in (pid_b, pid_c):
                     await session.execute(
                         text(
-                        "INSERT INTO triggers (id, organisation_id, "
-                        "pipeline_id, trigger_type, active, "
-                        "max_concurrent_runs, config_json, account_id) "
-                        "VALUES (:id, :oid, :pid, 'agent_signal', true, "
-                        "5, :config::json, :uid)",
+                            "INSERT INTO triggers (id, organisation_id, "
+                            "pipeline_id, trigger_type, active, "
+                            "max_concurrent_runs, config_json, account_id) "
+                            "VALUES (:id, :oid, :pid, 'agent_signal', true, "
+                            "5, :config::json, :uid)",
                         ),
                         {
                             "id": uuid.uuid4(),

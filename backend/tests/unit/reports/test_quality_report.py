@@ -343,9 +343,7 @@ class TestDeliverQualityReport:
         ):
             mock_client = AsyncMock()
             mock_client_cls.return_value.__aenter__.return_value = mock_client
-            mock_client.post = AsyncMock(
-                return_value=_mock_resp(is_success=False, status_code=500, text="error")
-            )
+            mock_client.post = AsyncMock(return_value=_mock_resp(is_success=False, status_code=500, text="error"))
 
             results = await deliver_quality_report(_REPORT_DELIVERY, recipient_config)
 
@@ -363,9 +361,7 @@ class TestDeliverQualityReport:
         ):
             mock_client = AsyncMock()
             mock_client_cls.return_value.__aenter__.return_value = mock_client
-            mock_client.post = AsyncMock(
-                return_value=_mock_resp(is_success=False, status_code=500, text="x" * 500)
-            )
+            mock_client.post = AsyncMock(return_value=_mock_resp(is_success=False, status_code=500, text="x" * 500))
 
             results = await deliver_quality_report(_REPORT_DELIVERY, recipient_config)
 

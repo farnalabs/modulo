@@ -1,4 +1,5 @@
 """Unit tests mirroring BDD sso_oidc.feature scenarios — OIDC login, callback, JIT provisioning, gating."""
+
 import base64
 import json
 import uuid

@@ -43,8 +43,7 @@ def upgrade() -> None:
         "ck_remy_context_sources_owner",
         "remy_context_sources",
         sa.text(
-            "(organisation_id IS NOT NULL AND user_id IS NULL) "
-            "OR (organisation_id IS NULL AND user_id IS NOT NULL)"
+            "(organisation_id IS NOT NULL AND user_id IS NULL) OR (organisation_id IS NULL AND user_id IS NOT NULL)"
         ),
     )
 

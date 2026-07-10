@@ -145,9 +145,7 @@ class ErrorTrackingLogHandler(logging.Handler):
             if record.exc_text:
                 stacktrace = record.exc_text
             elif record.exc_info:
-                stacktrace = "".join(
-                    tb_module.format_exception(*record.exc_info)
-                )
+                stacktrace = "".join(tb_module.format_exception(*record.exc_info))
 
             event_data: dict[str, Any] = {
                 "level": level,
@@ -169,11 +167,9 @@ class ErrorTrackingLogHandler(logging.Handler):
             async with factory() as session:
                 await set_rls_org(session, org_id)
                 try:
-
                     async with session.begin():
                         await service.ingest(session, org_id, event_data)
                 except ProgrammingError:
-
                     logger.exception("core.logging_config")
 
                     raise

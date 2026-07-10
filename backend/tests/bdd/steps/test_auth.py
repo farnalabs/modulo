@@ -140,8 +140,6 @@ def token_encodes_org_id(request: Any) -> None:
     assert payload["org_id"] is not None
 
 
-
-
 # -- Expired token scenario ------------------------------------------------
 
 
@@ -204,9 +202,7 @@ def step_compute_effective_team_role(request: Any) -> None:
 @then(parsers.parse('the effective role is "{expected}"'))
 def step_effective_role_is(expected: str, request: Any) -> None:
     actual = getattr(request.node, "effective_role", None)
-    assert actual == expected, (
-        f"Expected effective role {expected!r}, got {actual!r}"
-    )
+    assert actual == expected, f"Expected effective role {expected!r}, got {actual!r}"
 
 
 @given(parsers.parse('the role hierarchy for "{role}" is {level:d}'))
@@ -214,9 +210,7 @@ def step_role_hierarchy(role: str, level: int, request: Any) -> None:
     from modulo.auth.team_rbac import ORG_ROLE_HIERARCHY
 
     actual = ORG_ROLE_HIERARCHY.get(role, -1)
-    assert actual == level, (
-        f"Expected {role!r} level {level}, got {actual}"
-    )
+    assert actual == level, f"Expected {role!r} level {level}, got {actual}"
 
 
 @then("each level is strictly higher than the previous")
@@ -225,9 +219,7 @@ def step_hierarchy_strictly_increasing() -> None:
 
     levels = list(ORG_ROLE_HIERARCHY.values())
     for i in range(1, len(levels)):
-        assert levels[i] > levels[i - 1], (
-            f"Level {levels[i]} is not > {levels[i - 1]}"
-        )
+        assert levels[i] > levels[i - 1], f"Level {levels[i]} is not > {levels[i - 1]}"
 
 
 # ===========================================================================
@@ -267,9 +259,7 @@ def _make_key_response(status_code, **kwargs):
 
 
 @when(
-    parsers.parse(
-        'I POST /api/v1/api-keys with name "{name}" and role "{role}"'
-    ),
+    parsers.parse('I POST /api/v1/api-keys with name "{name}" and role "{role}"'),
 )
 def step_create_api_key(
     name: str,
@@ -316,11 +306,9 @@ def step_create_api_key(
 
 
 @when(
-    parsers.parse('I DELETE /api/v1/api-keys/{key_id}'),
+    parsers.parse("I DELETE /api/v1/api-keys/{key_id}"),
 )
-def step_revoke_api_key(
-    request: Any, ctx: dict[str, Any]
-) -> None:
+def step_revoke_api_key(request: Any, ctx: dict[str, Any]) -> None:
     """Revoke an API key via business logic."""
     from unittest.mock import AsyncMock, MagicMock
 
@@ -345,9 +333,7 @@ def step_revoke_api_key(
 
     loop = asyncio.new_event_loop()
     try:
-        revoked = loop.run_until_complete(
-            revoke_api_key(mock_session, key_id, ORG_ID)
-        )
+        revoked = loop.run_until_complete(revoke_api_key(mock_session, key_id, ORG_ID))
         ctx["api_key_revoked"] = revoked
         request.node._resp = _make_key_response(200, id=str(key_id), revoked=revoked)
     except Exception as exc:
@@ -358,9 +344,7 @@ def step_revoke_api_key(
 
 
 @when("I GET /api/v1/api-keys")
-def step_list_api_keys(
-    request: Any, ctx: dict[str, Any]
-) -> None:
+def step_list_api_keys(request: Any, ctx: dict[str, Any]) -> None:
     """List API keys via business logic."""
     from unittest.mock import AsyncMock, MagicMock
 
@@ -390,9 +374,7 @@ def step_list_api_keys(
 
     loop = asyncio.new_event_loop()
     try:
-        keys = loop.run_until_complete(
-            list_api_keys(mock_session, ORG_ID)
-        )
+        keys = loop.run_until_complete(list_api_keys(mock_session, ORG_ID))
         ctx["api_key_list"] = keys
         request.node._resp = _make_key_response(200, items=keys)
     except Exception as exc:
@@ -432,9 +414,7 @@ def step_response_contains_key(name: str, request: Any, ctx: dict[str, Any]) -> 
 
 
 @when("I make an authenticated request with the wrong API key")
-def step_wrong_api_key_request(
-    request: Any, ctx: dict[str, Any]
-) -> None:
+def step_wrong_api_key_request(request: Any, ctx: dict[str, Any]) -> None:
     """Validate an invalid API key — expect ApiKeyInvalidError."""
     from unittest.mock import AsyncMock, MagicMock
 
@@ -449,9 +429,7 @@ def step_wrong_api_key_request(
 
     loop = asyncio.new_event_loop()
     try:
-        loop.run_until_complete(
-            validate_api_key(mock_session, "mk_badkey_invalid")
-        )
+        loop.run_until_complete(validate_api_key(mock_session, "mk_badkey_invalid"))
         resp = _make_key_response(200)
         request.node._resp = resp
         request.node.response = resp
@@ -598,8 +576,6 @@ def step_rls_enforced(request: Any, expected: str) -> None:
 
 
 # -- Cross-org pipeline run is forbidden -----------------------------------
-
-
 
 
 @when(

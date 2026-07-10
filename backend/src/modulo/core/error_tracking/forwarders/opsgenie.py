@@ -58,9 +58,7 @@ class OpsGenieErrorForwarder(BaseForwarder):
                 "details": {
                     "fingerprint": error_group.fingerprint if error_group else "",
                     "count": (
-                        str(error_group.count)
-                        if error_group is not None and error_group.count is not None
-                        else "1"
+                        str(error_group.count) if error_group is not None and error_group.count is not None else "1"
                     ),
                     "version": version,
                 },

@@ -26,6 +26,7 @@ from modulo.settings import Settings
 def _reset_singleton() -> Generator[None, None, None]:
     """Reset the module-level _auth_rate_limiter before and after each test."""
     from modulo.api.middleware import rate_limiter as rl_mod
+
     saved = rl_mod._auth_rate_limiter
     rl_mod._auth_rate_limiter = None
     yield

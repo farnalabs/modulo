@@ -180,7 +180,15 @@ class ConnectorHub:
                     )
                     self._connectors[ci.id] = traced
                     self._acls[ci.id] = acl
-                except (TimeoutError, ConnectorDecryptError, ValueError, TypeError, KeyError, json.JSONDecodeError, OSError):
+                except (
+                    TimeoutError,
+                    ConnectorDecryptError,
+                    ValueError,
+                    TypeError,
+                    KeyError,
+                    json.JSONDecodeError,
+                    OSError,
+                ):
                     logger.warning(
                         "Skipping connector %s (%s)",
                         ci.id,
@@ -487,7 +495,7 @@ def _build_connector(
             return PagerDutyConnector(token=_get_cred(creds, "token", type_id))
         case "grafana":
             return GrafanaConnector(
-                token=_get_cred(creds, "token", type_id),                 base_url=config.get("base_url", _LOCALHOST_3000)
+                token=_get_cred(creds, "token", type_id), base_url=config.get("base_url", _LOCALHOST_3000)
             )
         case "microsoft_teams":
             return MicrosoftTeamsConnector(token=_get_cred(creds, "token", type_id))

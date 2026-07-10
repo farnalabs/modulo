@@ -318,7 +318,9 @@ class TestCreateUserSQLAlchemyError:
             patch("modulo.db.crud.account.get_account_by_email", side_effect=_SQLALCHEMY_ERROR),
             patch("modulo.api.routes.scim.set_rls_org"),
         ):
-            resp = client.post("/scim/v2/Users", json=_USER_CREATE_BODY, headers={"Authorization": f"Bearer {_SCIM_TOKEN}"})
+            resp = client.post(
+                "/scim/v2/Users", json=_USER_CREATE_BODY, headers={"Authorization": f"Bearer {_SCIM_TOKEN}"}
+            )
         _assert_503(resp)
 
 
@@ -338,7 +340,9 @@ class TestReplaceUserSQLAlchemyError:
             patch("modulo.api.routes.scim.scim_get_user", side_effect=_SQLALCHEMY_ERROR),
             patch("modulo.api.routes.scim.set_rls_org"),
         ):
-            resp = client.put(f"/scim/v2/Users/{_USER_ID}", json=_USER_CREATE_BODY, headers={"Authorization": f"Bearer {_SCIM_TOKEN}"})
+            resp = client.put(
+                f"/scim/v2/Users/{_USER_ID}", json=_USER_CREATE_BODY, headers={"Authorization": f"Bearer {_SCIM_TOKEN}"}
+            )
         _assert_503(resp)
 
 
@@ -348,7 +352,9 @@ class TestPatchUserSQLAlchemyError:
             patch("modulo.api.routes.scim.scim_get_user", side_effect=_SQLALCHEMY_ERROR),
             patch("modulo.api.routes.scim.set_rls_org"),
         ):
-            resp = client.patch(f"/scim/v2/Users/{_USER_ID}", json=_PATCH_BODY, headers={"Authorization": f"Bearer {_SCIM_TOKEN}"})
+            resp = client.patch(
+                f"/scim/v2/Users/{_USER_ID}", json=_PATCH_BODY, headers={"Authorization": f"Bearer {_SCIM_TOKEN}"}
+            )
         _assert_503(resp)
 
 
@@ -378,7 +384,9 @@ class TestCreateGroupSQLAlchemyError:
             patch("modulo.db.crud.team.get_team_by_name", side_effect=_SQLALCHEMY_ERROR),
             patch("modulo.api.routes.scim.set_rls_org"),
         ):
-            resp = client.post("/scim/v2/Groups", json=_GROUP_CREATE_BODY, headers={"Authorization": f"Bearer {_SCIM_TOKEN}"})
+            resp = client.post(
+                "/scim/v2/Groups", json=_GROUP_CREATE_BODY, headers={"Authorization": f"Bearer {_SCIM_TOKEN}"}
+            )
         _assert_503(resp)
 
 
@@ -398,7 +406,11 @@ class TestReplaceGroupSQLAlchemyError:
             patch("modulo.api.routes.scim.scim_get_group", side_effect=_SQLALCHEMY_ERROR),
             patch("modulo.api.routes.scim.set_rls_org"),
         ):
-            resp = client.put(f"/scim/v2/Groups/{_TEAM_ID}", json=_GROUP_CREATE_BODY, headers={"Authorization": f"Bearer {_SCIM_TOKEN}"})
+            resp = client.put(
+                f"/scim/v2/Groups/{_TEAM_ID}",
+                json=_GROUP_CREATE_BODY,
+                headers={"Authorization": f"Bearer {_SCIM_TOKEN}"},
+            )
         _assert_503(resp)
 
 
@@ -408,7 +420,9 @@ class TestPatchGroupSQLAlchemyError:
             patch("modulo.api.routes.scim.scim_get_group", side_effect=_SQLALCHEMY_ERROR),
             patch("modulo.api.routes.scim.set_rls_org"),
         ):
-            resp = client.patch(f"/scim/v2/Groups/{_TEAM_ID}", json=_PATCH_BODY, headers={"Authorization": f"Bearer {_SCIM_TOKEN}"})
+            resp = client.patch(
+                f"/scim/v2/Groups/{_TEAM_ID}", json=_PATCH_BODY, headers={"Authorization": f"Bearer {_SCIM_TOKEN}"}
+            )
         _assert_503(resp)
 
 
@@ -445,7 +459,9 @@ class TestCreateUserException:
             patch("modulo.db.crud.account.get_account_by_email", side_effect=ValueError("mock ValueError")),
             patch("modulo.api.routes.scim.set_rls_org"),
         ):
-            resp = client.post("/scim/v2/Users", json=_USER_CREATE_BODY, headers={"Authorization": f"Bearer {_SCIM_TOKEN}"})
+            resp = client.post(
+                "/scim/v2/Users", json=_USER_CREATE_BODY, headers={"Authorization": f"Bearer {_SCIM_TOKEN}"}
+            )
         _assert_500(resp)
 
 
@@ -465,7 +481,9 @@ class TestReplaceUserException:
             patch("modulo.api.routes.scim.scim_get_user", side_effect=ValueError("mock ValueError")),
             patch("modulo.api.routes.scim.set_rls_org"),
         ):
-            resp = client.put(f"/scim/v2/Users/{_USER_ID}", json=_USER_CREATE_BODY, headers={"Authorization": f"Bearer {_SCIM_TOKEN}"})
+            resp = client.put(
+                f"/scim/v2/Users/{_USER_ID}", json=_USER_CREATE_BODY, headers={"Authorization": f"Bearer {_SCIM_TOKEN}"}
+            )
         _assert_500(resp)
 
 
@@ -475,7 +493,9 @@ class TestPatchUserException:
             patch("modulo.api.routes.scim.scim_get_user", side_effect=ValueError("mock ValueError")),
             patch("modulo.api.routes.scim.set_rls_org"),
         ):
-            resp = client.patch(f"/scim/v2/Users/{_USER_ID}", json=_PATCH_BODY, headers={"Authorization": f"Bearer {_SCIM_TOKEN}"})
+            resp = client.patch(
+                f"/scim/v2/Users/{_USER_ID}", json=_PATCH_BODY, headers={"Authorization": f"Bearer {_SCIM_TOKEN}"}
+            )
         _assert_500(resp)
 
 
@@ -505,7 +525,9 @@ class TestCreateGroupException:
             patch("modulo.db.crud.team.get_team_by_name", side_effect=ValueError("mock ValueError")),
             patch("modulo.api.routes.scim.set_rls_org"),
         ):
-            resp = client.post("/scim/v2/Groups", json=_GROUP_CREATE_BODY, headers={"Authorization": f"Bearer {_SCIM_TOKEN}"})
+            resp = client.post(
+                "/scim/v2/Groups", json=_GROUP_CREATE_BODY, headers={"Authorization": f"Bearer {_SCIM_TOKEN}"}
+            )
         _assert_500(resp)
 
 
@@ -525,7 +547,11 @@ class TestReplaceGroupException:
             patch("modulo.api.routes.scim.scim_get_group", side_effect=ValueError("mock ValueError")),
             patch("modulo.api.routes.scim.set_rls_org"),
         ):
-            resp = client.put(f"/scim/v2/Groups/{_TEAM_ID}", json=_GROUP_CREATE_BODY, headers={"Authorization": f"Bearer {_SCIM_TOKEN}"})
+            resp = client.put(
+                f"/scim/v2/Groups/{_TEAM_ID}",
+                json=_GROUP_CREATE_BODY,
+                headers={"Authorization": f"Bearer {_SCIM_TOKEN}"},
+            )
         _assert_500(resp)
 
 
@@ -535,7 +561,9 @@ class TestPatchGroupException:
             patch("modulo.api.routes.scim.scim_get_group", side_effect=ValueError("mock ValueError")),
             patch("modulo.api.routes.scim.set_rls_org"),
         ):
-            resp = client.patch(f"/scim/v2/Groups/{_TEAM_ID}", json=_PATCH_BODY, headers={"Authorization": f"Bearer {_SCIM_TOKEN}"})
+            resp = client.patch(
+                f"/scim/v2/Groups/{_TEAM_ID}", json=_PATCH_BODY, headers={"Authorization": f"Bearer {_SCIM_TOKEN}"}
+            )
         _assert_500(resp)
 
 

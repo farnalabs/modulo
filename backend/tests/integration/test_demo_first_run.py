@@ -29,7 +29,10 @@ pytestmark = pytest.mark.integration
 # The onboarding route stores state at backend-root/.onboarding-state.json
 # which is 4 levels up from its own file (backend/src/modulo/api/routes/onboarding.py)
 _ONBOARDING_STATE_PATH = os.path.join(
-    os.path.dirname(__file__), "..", "..", ".onboarding-state.json",
+    os.path.dirname(__file__),
+    "..",
+    "..",
+    ".onboarding-state.json",
 )
 
 
@@ -182,8 +185,7 @@ async def test_seed_demo_data_creates_demo_user(db_engine: AsyncEngine, db_url: 
     async with db_engine.connect() as conn, conn.begin():
         await conn.execute(
             text(
-                "INSERT INTO organisations (id, name, slug, settings_json) "
-                "VALUES (:id, :name, :slug, '{}'::json)",
+                "INSERT INTO organisations (id, name, slug, settings_json) VALUES (:id, :name, :slug, '{}'::json)",
             ),
             {
                 "id": str(org_id),
@@ -193,6 +195,7 @@ async def test_seed_demo_data_creates_demo_user(db_engine: AsyncEngine, db_url: 
         )
 
     import modulo.api.dependencies as deps
+
     deps._engine = None
     deps._session_factory = None
 
@@ -242,6 +245,7 @@ async def test_seed_demo_data_no_org_no_crash(db_engine: AsyncEngine, db_url: st
     )
 
     import modulo.api.dependencies as deps
+
     deps._engine = None
     deps._session_factory = None
 
@@ -272,6 +276,7 @@ async def test_seed_demo_data_skipped_when_disabled(db_engine: AsyncEngine, db_u
         await conn.commit()
 
     import modulo.api.dependencies as deps
+
     deps._engine = None
     deps._session_factory = None
 
@@ -304,8 +309,7 @@ async def test_seed_demo_data_idempotent(db_engine: AsyncEngine, db_url: str) ->
     async with db_engine.connect() as conn, conn.begin():
         await conn.execute(
             text(
-                "INSERT INTO organisations (id, name, slug, settings_json) "
-                "VALUES (:id, :name, :slug, '{}'::json)",
+                "INSERT INTO organisations (id, name, slug, settings_json) VALUES (:id, :name, :slug, '{}'::json)",
             ),
             {
                 "id": str(org_id),
@@ -315,6 +319,7 @@ async def test_seed_demo_data_idempotent(db_engine: AsyncEngine, db_url: str) ->
         )
 
     import modulo.api.dependencies as deps
+
     deps._engine = None
     deps._session_factory = None
 
@@ -373,13 +378,15 @@ class TestDemoAuth:
 
     async def test_demo_user_invalid_password(self, demo_client: AsyncClient) -> None:
         resp = await demo_client.post(
-            "/api/v1/auth/login", json={"email": "demo", "password": "wrongpassword"},
+            "/api/v1/auth/login",
+            json={"email": "demo", "password": "wrongpassword"},
         )
         assert resp.status_code == 401
 
     async def test_demo_user_invalid_email(self, demo_client: AsyncClient) -> None:
         resp = await demo_client.post(
-            "/api/v1/auth/login", json={"email": "nonexistent", "password": "demo"},
+            "/api/v1/auth/login",
+            json={"email": "nonexistent", "password": "demo"},
         )
         assert resp.status_code == 401
 
@@ -405,8 +412,6 @@ class TestDemoAuth:
         data = resp.json()
         assert "access_token" in data
         assert "refresh_token" in data
-
-
 
 
 # ---------------------------------------------------------------------------

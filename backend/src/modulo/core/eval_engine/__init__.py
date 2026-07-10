@@ -408,7 +408,11 @@ class EvalEngine:
             return _result_from_dict(raw, run_id, eval_def.node_id or "", eval_def.id)
         except TypeError:
             _log.warning(
-                "%s eval %s %s returned non-dict: %s", log_prefix, eval_def.id, callable_name, type(raw).__name__,
+                "%s eval %s %s returned non-dict: %s",
+                log_prefix,
+                eval_def.id,
+                callable_name,
+                type(raw).__name__,
                 exc_info=True,
             )
             return _fail_result(

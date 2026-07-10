@@ -63,7 +63,9 @@ class ReviewFeedbackRequest(BaseModel):
     annotation: str | None = None
 
 
-def _serialise_record(r: Any, pipeline_name: str | None = None, producing_node_name: str | None = None) -> dict[str, Any]:
+def _serialise_record(
+    r: Any, pipeline_name: str | None = None, producing_node_name: str | None = None
+) -> dict[str, Any]:
     return {
         "id": str(r.id),
         "run_id": str(r.run_id) if r.run_id else None,
@@ -296,14 +298,14 @@ async def list_eval_proposals(
             node_name_map: dict[str, str] = {}
             run_ids = [r.run_id for r in items if r.run_id]
             if run_ids:
-                run_rows = await session.execute(
-                    select(Run.id, Run.snapshot_id).where(Run.id.in_(run_ids))
-                )
+                run_rows = await session.execute(select(Run.id, Run.snapshot_id).where(Run.id.in_(run_ids)))
                 rows = run_rows.all()
                 snapshot_ids = [r.snapshot_id for r in rows if r.snapshot_id]
                 if snapshot_ids:
                     snap_rows = await session.execute(
-                        select(PipelineSnapshot.id, PipelineSnapshot.graph_json).where(PipelineSnapshot.id.in_(snapshot_ids))
+                        select(PipelineSnapshot.id, PipelineSnapshot.graph_json).where(
+                            PipelineSnapshot.id.in_(snapshot_ids)
+                        )
                     )
                     snap_rows_result = snap_rows.all()
                     for snap_id, graph_json in snap_rows_result:
@@ -448,21 +450,21 @@ async def detect_eval_gap(
             record = await mgr.get_feedback_record(record_id)
 
             if record is None:
-                raise HTTPException(
-                    status_code=status.HTTP_404_NOT_FOUND, detail="Feedback record not found"
-                )
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Feedback record not found")
 
             eval_suite: list[EvalDefinition] = []
             if record.run_id:
-                run = (
-                    await session.execute(select(Run).where(Run.id == record.run_id))
-                ).scalar_one_or_none()
+                run = (await session.execute(select(Run).where(Run.id == record.run_id))).scalar_one_or_none()
                 if run is not None:
                     eval_defs = (
-                        await session.execute(
-                            select(EvalDefinition).where(EvalDefinition.pipeline_id == run.pipeline_id)
+                        (
+                            await session.execute(
+                                select(EvalDefinition).where(EvalDefinition.pipeline_id == run.pipeline_id)
+                            )
                         )
-                    ).scalars().all()
+                        .scalars()
+                        .all()
+                    )
                     eval_suite = list(eval_defs)
 
             is_gap = await mgr.detect_eval_gap(record, eval_suite=eval_suite)

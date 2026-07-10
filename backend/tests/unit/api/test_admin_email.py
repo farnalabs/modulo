@@ -91,14 +91,19 @@ class TestGetEmailSettings:
         import modulo.api.routes.admin_email as admin_email
         from modulo.db.models.organisation import Organisation
 
-        org = Organisation(id=ORG_ID, name="Test", slug="test", settings_json={
-            "email": {
-                "smtp_host": "smtp.example.com",
-                "smtp_port": 587,
-                "smtp_username": "user",
-                "email_from": "noreply@example.com",
-            }
-        })
+        org = Organisation(
+            id=ORG_ID,
+            name="Test",
+            slug="test",
+            settings_json={
+                "email": {
+                    "smtp_host": "smtp.example.com",
+                    "smtp_port": 587,
+                    "smtp_username": "user",
+                    "email_from": "noreply@example.com",
+                }
+            },
+        )
         original = admin_email.get_organisation
         admin_email.get_organisation = AsyncMock(return_value=org)
         try:

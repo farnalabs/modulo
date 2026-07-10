@@ -229,7 +229,10 @@ class TestObservabilityGetEndpoint:
 
     def test_get_returns_501_on_programming_error(self, free_client: TestClient) -> None:
         with (
-            patch("modulo.api.routes.observability._fetch_and_cache", side_effect=ProgrammingError("stmt", {}, "table not found")),
+            patch(
+                "modulo.api.routes.observability._fetch_and_cache",
+                side_effect=ProgrammingError("stmt", {}, "table not found"),
+            ),
         ):
             resp = free_client.get("/api/v1/settings/observability")
         assert resp.status_code == 501
@@ -288,7 +291,10 @@ class TestObservabilityPreviewEndpoint:
 
     def test_preview_returns_501_on_programming_error(self, free_client: TestClient) -> None:
         with (
-            patch("modulo.api.routes.observability._fetch_and_cache", side_effect=ProgrammingError("stmt", {}, "table not found")),
+            patch(
+                "modulo.api.routes.observability._fetch_and_cache",
+                side_effect=ProgrammingError("stmt", {}, "table not found"),
+            ),
         ):
             resp = free_client.get("/api/v1/settings/observability/preview")
         assert resp.status_code == 501
