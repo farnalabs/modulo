@@ -3,7 +3,7 @@
 import uuid
 from unittest.mock import AsyncMock, MagicMock, patch
 
-from modulo.api.mcp_server import get_trigger_events
+from modulo.api.mcp_server import list_trigger_events
 
 _PLACEHOLDER_ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
 _API_KEY = "mk_testprefix_testsecretkey1234567890abc"
@@ -61,7 +61,7 @@ class TestGetTriggerEventsAuth:
 
     @patch("modulo.api.mcp_server.validate_current_auth", return_value=False)
     async def test_returns_auth_error_on_revoked_token(self, mock_validate_auth: AsyncMock) -> None:
-        result = await get_trigger_events()
+        result = await list_trigger_events()
         assert result["error"] == "auth_expired"
         assert "revoked" in result.get("detail", "").lower() or "expired" in result.get("detail", "").lower()
 
@@ -82,7 +82,7 @@ class TestGetTriggerEventsAuth:
         mock_cm.__aexit__ = AsyncMock(return_value=False)
         mock_session.return_value = mock_cm
 
-        result = await get_trigger_events()
+        result = await list_trigger_events()
         assert result["error"] == "insufficient_scope"
 
 
@@ -142,7 +142,7 @@ class TestGetTriggerEventsSuccess:
         execute_result.scalars.return_value.all.return_value = [event1, event2]
         mock_sesh.execute = AsyncMock(return_value=execute_result)
 
-        result = await get_trigger_events()
+        result = await list_trigger_events()
 
         assert result["count"] == 2
         assert len(result["events"]) == 2
@@ -174,7 +174,7 @@ class TestGetTriggerEventsSuccess:
         execute_result.scalars.return_value.all.return_value = [event]
         mock_sesh.execute = AsyncMock(return_value=execute_result)
 
-        result = await get_trigger_events(trigger_id=str(target_trigger_id))
+        result = await list_trigger_events(trigger_id=str(target_trigger_id))
 
         assert result["count"] == 1
         assert result["events"][0]["trigger_id"] == str(target_trigger_id)
@@ -199,7 +199,7 @@ class TestGetTriggerEventsSuccess:
         execute_result.scalars.return_value.all.return_value = [event]
         mock_sesh.execute = AsyncMock(return_value=execute_result)
 
-        result = await get_trigger_events(pipeline_id=str(pipeline_id))
+        result = await list_trigger_events(pipeline_id=str(pipeline_id))
 
         assert result["count"] == 1
 
@@ -222,7 +222,7 @@ class TestGetTriggerEventsSuccess:
         execute_result.scalars.return_value.all.return_value = events
         mock_sesh.execute = AsyncMock(return_value=execute_result)
 
-        result = await get_trigger_events(limit=5)
+        result = await list_trigger_events(limit=5)
 
         assert result["count"] == 5
         assert result["limit"] == 5
@@ -244,7 +244,7 @@ class TestGetTriggerEventsSuccess:
         execute_result.scalars.return_value.all.return_value = []
         mock_sesh.execute = AsyncMock(return_value=execute_result)
 
-        result = await get_trigger_events(trigger_id=str(uuid.uuid4()))
+        result = await list_trigger_events(trigger_id=str(uuid.uuid4()))
 
         assert result["count"] == 0
         assert result["events"] == []

@@ -232,5 +232,5 @@ class TestBrowseLibrary:
 
         assert result == {
             "error": "internal_error",
-            "detail": "Failed to browse library",
+            "detail": "Failed to search library",
         }
