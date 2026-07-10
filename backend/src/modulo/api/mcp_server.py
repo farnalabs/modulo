@@ -2037,14 +2037,12 @@ async def _oauth_authorize(request: Request) -> JSONResponse:
             status_code=400,
         )
 
-    from sqlalchemy import select
-
     from modulo.auth.oauth import (
         create_authorization_code,
+        get_oauth_client_by_client_id,
         normalize_scopes,
         validate_client_scopes,
     )
-    from modulo.db.models.oauth_client import OAuthClient
 
     settings = get_settings()
     if not settings.modulo_public_url or settings.modulo_public_url == "http://localhost:8000":
@@ -2057,8 +2055,7 @@ async def _oauth_authorize(request: Request) -> JSONResponse:
         session_factory = _get_session_factory()
         async with session_factory() as s, s.begin():
             # Look up client by globally unique client_id.
-            client_result = await s.execute(select(OAuthClient).where(OAuthClient.client_id == client_id))
-            client = client_result.scalar_one_or_none()
+            client = await get_oauth_client_by_client_id(s, client_id)
             if client is None:
                 return JSONResponse(
                     {"error": "invalid_client", "detail": "Unknown client_id"},
