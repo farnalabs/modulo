@@ -24,6 +24,7 @@ EXPECTED_PROVIDERS = frozenset(
         "localai",
         "mistral",
         "ollama",
+        "opencode",
         "openai",
         "openrouter",
         "perplexity",
