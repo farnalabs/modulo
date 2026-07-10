@@ -3,6 +3,7 @@ import type { EventBusEvent } from '../types/events'
 
 vi.mock('@/lib/api/client', () => ({
   getAccessToken: vi.fn(() => 'test-token'),
+  getAuthHeaders: vi.fn(() => ({ Authorization: 'Bearer test-token' })),
 }))
 
 let pushEvent: (eventType: string, data: Record<string, unknown>) => void
