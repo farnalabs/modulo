@@ -16,6 +16,7 @@ full middleware → registry integration path (still with a mock registry).
 
 from __future__ import annotations
 
+import uuid
 from collections.abc import Generator
 from unittest.mock import AsyncMock, MagicMock
 
@@ -357,8 +358,8 @@ def _rate_limit_app(user_role: str = "admin") -> FastAPI:
     app.include_router(router)
     app.dependency_overrides[get_current_user] = lambda: AuthenticatedPrincipal(
         username=user_role,
-        organisation_id="00000000-0000-0000-0000-000000000001",
-        account_id="00000000-0000-0000-0000-000000000002",
+        organisation_id=uuid.UUID("00000000-0000-0000-0000-000000000001"),
+        account_id=uuid.UUID("00000000-0000-0000-0000-000000000002"),
         org_role=user_role,
     )
     _plan = MagicMock()
