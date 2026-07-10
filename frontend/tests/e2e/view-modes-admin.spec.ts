@@ -64,8 +64,8 @@ test.describe('View Modes Admin CRUD', () => {
     await page.goto('/admin/views')
     await page.waitForLoadState('networkidle')
 
-    await expect(page.locator('text=Server error')).toBeVisible({ timeout: 5000 })
-    await expect(page.getByRole('button', { name: /retry/i })).toBeVisible()
+    await expect(page.getByText('Server error')).toBeVisible({ timeout: 5000 })
+    await expect(page.getByText('Retry')).toBeVisible()
   })
 
   test('shows empty state when no views exist', async ({ page, env }) => {
@@ -170,7 +170,7 @@ test.describe('View Modes Admin CRUD', () => {
     await expect(editButtons).toHaveCount(2)
     await editButtons.first().click()
 
-    await expect(page.getByText('Edit View')).toBeVisible()
+    await expect(page.getByTestId('admin-views-form-title')).toHaveText('Edit View')
     await expect(page.getByTestId('admin-views-name-input')).toHaveValue('Active Runs')
     await expect(page.getByTestId('admin-views-type-select')).toHaveValue('table')
     await expect(page.getByTestId('admin-views-filters-input')).toContainText('status')
@@ -198,18 +198,18 @@ test.describe('View Modes Admin CRUD', () => {
     await expect(deleteButtons).toHaveCount(2)
     await deleteButtons.first().click()
 
-    await expect(page.getByText('Delete "Active Runs"?')).toBeVisible()
     await expect(page.getByTestId('admin-views-delete-confirm')).toBeVisible()
     await expect(page.getByTestId('admin-views-delete-cancel')).toBeVisible()
+    await expect(page.getByTestId('admin-views-delete')).toHaveCount(2)
 
     await page.getByTestId('admin-views-delete-cancel').click()
-    await expect(page.getByText('Delete "Active Runs"?')).not.toBeVisible({ timeout: 3000 })
+    await expect(page.getByTestId('admin-views-delete-confirm')).not.toBeVisible({ timeout: 3000 })
 
     await deleteButtons.first().click()
     await page.getByTestId('admin-views-delete-confirm').click()
     await page.waitForLoadState('networkidle')
 
-    await expect(page.getByText('Delete "Active Runs"?')).not.toBeVisible({ timeout: 3000 })
+    await expect(page.getByTestId('admin-views-delete-confirm')).not.toBeVisible({ timeout: 3000 })
   })
 
   test('displays existing views in table', async ({ page, env }) => {

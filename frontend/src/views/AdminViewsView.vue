@@ -21,7 +21,7 @@
 
     <template v-else>
       <div v-if="showForm" class="card p-6">
-        <h2 class="mb-4 text-base font-semibold">{{ editingId ? 'Edit View' : 'New View' }}</h2>
+        <h2 class="mb-4 text-base font-semibold" data-testid="admin-views-form-title">{{ editingId ? 'Edit View' : 'New View' }}</h2>
         <form class="space-y-4" @submit.prevent="handleSave">
           <div>
             <label class="mb-1 block text-sm font-medium">Name</label>
