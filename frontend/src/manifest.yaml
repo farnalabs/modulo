@@ -608,6 +608,39 @@ routes:
         <<: *community
         deprecated: false
 
+    /lifecycle-maps:
+        name: lifecycle-maps
+        breadcrumb: Lifecycle Maps
+        parent: /
+        product_map:
+        sidebar_group: lifecycle
+        sidebar_order: 1
+        type: list_page
+        <<: *community
+        deprecated: false
+
+    /lifecycle-maps/:id:
+        name: lifecycle-map-detail
+        breadcrumb: Lifecycle Map
+        parent: /lifecycle-maps
+        product_map:
+        sidebar_group:
+        sidebar_order:
+        type: detail_page
+        <<: *community
+        deprecated: false
+
+    /lifecycle-maps/new:
+        name: lifecycle-map-new
+        breadcrumb: New Map
+        parent: /lifecycle-maps
+        product_map:
+        sidebar_group:
+        sidebar_order:
+        type: form_page
+        <<: *community
+        deprecated: false
+
     /admin/my-profile:
         name: my-profile
         breadcrumb: My Profile
@@ -645,6 +678,12 @@ elements:
         dynamic_testid: false
 
 sidebar_groups:
+    lifecycle:
+        label: Lifecycle
+        order: 0
+        default_expanded: true
+        simple_mode: true
+        labelKey: components.SidebarNav.group_lifecycle
     core:
         label: Core
         order: 1

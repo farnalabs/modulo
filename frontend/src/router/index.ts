@@ -104,6 +104,8 @@ const SettingsErrorForwardersView = () => import('../views/SettingsErrorForwarde
 const SettingsMonitorConfigView = () => import('../views/SettingsMonitorConfigView.vue')
 const PipelineListView = () => import('../views/PipelineListView.vue')
 const ModelBackendSetupView = () => import('../views/setup/ModelBackendSetupView.vue')
+const LifecycleMapList = () => import('../views/lifecycle-map/LifecycleMapList.vue')
+const LifecycleMapView = () => import('../views/lifecycle-map/LifecycleMapView.vue')
 
 const router = createRouter({
   history: createWebHistory(),
@@ -415,6 +417,21 @@ const router = createRouter({
       meta: { breadcrumb: 'Complete Setup' },
     },
     {
+      path: '/lifecycle-maps',
+      name: 'lifecycle-maps',
+      component: LifecycleMapList,
+    },
+    {
+      path: '/lifecycle-maps/:id',
+      name: 'lifecycle-map-detail',
+      component: LifecycleMapView,
+    },
+    {
+      path: '/lifecycle-maps/new',
+      name: 'lifecycle-map-new',
+      redirect: '/lifecycle-maps',
+    },
+    {
       path: '/:pathMatch(.*)*',
       name: 'not-found',
       redirect: '/',
@@ -479,4 +496,3 @@ router.onError((err) => {
 })
 
 export default router
-
