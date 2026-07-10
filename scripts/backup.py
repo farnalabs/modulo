@@ -15,7 +15,6 @@ import tarfile
 import tempfile
 import uuid
 from datetime import datetime, timezone
-from pathlib import Path
 from typing import NamedTuple
 
 

@@ -13,7 +13,7 @@ url = url.replace("?sslmode=disable", "?ssl=disable")
 url = url.replace("&sslmode=disable", "")
 os.environ["DATABASE_URL"] = url
 if url != original:
-    print(f"Fixed DATABASE_URL scheme + stripped sslmode")
+    print("Fixed DATABASE_URL scheme + stripped sslmode")
 
 # Step 2: Create alembic_version table with VARCHAR(255)
 # Branch migration IDs exceed the default VARCHAR(32).
