@@ -1,7 +1,7 @@
 <template>
   <div class="min-h-screen bg-background">
     <header class="bg-card border-b border-border px-6 py-4">
-      <div class="max-w-6xl mx-auto flex items-center justify-between gap-3">
+      <div class="mx-auto flex items-center justify-between gap-3 max-w-6xl">
         <h1 class="text-2xl font-semibold tracking-tight text-foreground">Lifecycle Maps</h1>
         <div class="flex items-center gap-3">
           <div class="relative">
@@ -38,7 +38,7 @@
       </div>
     </header>
 
-    <main class="max-w-6xl mx-auto px-6 py-6 space-y-6">
+    <main class="page-wide">
       <div v-if="store.isLoading" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
         <div v-for="i in 6" :key="i" class="card p-5 animate-pulse">
           <div class="h-5 w-3/4 bg-muted rounded mb-2" />

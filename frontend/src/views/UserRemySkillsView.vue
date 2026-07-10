@@ -1,5 +1,5 @@
 ﻿<template>
-  <div data-theme="agent" class="mx-auto max-w-4xl space-y-6 p-6">
+  <div data-theme="agent" class="page-narrow">
       <TooltipProvider>
     <header class="flex items-center justify-between">
       <div>
@@ -196,4 +196,3 @@ async function toggleSkillActive(skill: SkillItem) {
 
 onMounted(() => { loadSkills() })
 </script>
-

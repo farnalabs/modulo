@@ -1,5 +1,5 @@
 ﻿<template>
-  <div class="mx-auto max-w-6xl space-y-6 p-6">
+  <div class="page-wide">
     <header>
       <h1 class="text-2xl font-semibold tracking-tight">{{ $t('views.SettingsRuntimeConfigView.runtime_configuration') }}</h1>
       <p class="mt-1 text-muted-foreground">
@@ -344,4 +344,3 @@ onBeforeUnmount(() => {
 })
 onMounted(loadConfig)
 </script>
-

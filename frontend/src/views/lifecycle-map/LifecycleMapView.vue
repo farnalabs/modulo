@@ -1,7 +1,7 @@
 <template>
   <div class="min-h-screen bg-background">
     <header class="bg-card border-b border-border px-6 py-4">
-      <div class="max-w-6xl mx-auto flex items-center justify-between gap-3">
+      <div class="mx-auto flex items-center justify-between gap-3 max-w-6xl">
         <div class="flex items-center gap-3">
           <router-link
             to="/lifecycle-maps"
@@ -41,7 +41,7 @@
       </div>
     </header>
 
-    <main class="max-w-6xl mx-auto px-6 py-6">
+    <main class="page-wide">
       <div v-if="isLoadingDetail" class="flex items-center justify-center py-20">
         <div class="h-8 w-8 animate-spin rounded-full border-4 border-primary border-t-transparent" />
       </div>
