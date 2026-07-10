@@ -1,7 +1,7 @@
 ﻿<template>
   <FeatureGate feature-name="webhook_trigger" required-tier="community" show-disabled>
 
-    <div data-theme="agent" class="mx-auto max-w-6xl space-y-6 p-6">
+    <div data-theme="agent" class="page-wide">
     <header class="flex items-center justify-between">
       <div>
         <h1 class="text-2xl font-semibold tracking-tight">Triggers</h1>

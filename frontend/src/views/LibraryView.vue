@@ -1,7 +1,7 @@
 <template>
   <div class="min-h-screen">
     <header class="bg-card border-b border-border px-6 py-4">
-      <div class="max-w-6xl mx-auto flex items-center justify-between gap-3">
+      <div class="mx-auto flex items-center justify-between gap-3 max-w-6xl">
         <h1 class="text-2xl font-semibold tracking-tight text-foreground">{{ $t('views.LibraryView.title') }}</h1>
         <div class="flex items-center gap-3">
           <Button
@@ -40,7 +40,7 @@
       </div>
     </header>
 
-    <main class="max-w-6xl mx-auto px-6 py-8 space-y-6">
+    <main class="page-wide">
       <div class="flex items-center gap-2 border-b border-border" role="tablist">
         <button
           type="button"
@@ -473,4 +473,3 @@ onMounted(() => {
   loadPrimitives()
 })
 </script>
-

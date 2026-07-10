@@ -1,5 +1,5 @@
 ﻿<template>
-  <div class="mx-auto max-w-6xl space-y-6 p-6">
+  <div class="page-wide">
     <header>
       <h1 class="text-2xl font-semibold tracking-tight">Notifications</h1>
       <p class="mt-1 text-muted-foreground">{{ $t('views.NotificationsPage.view_and_manage_your_notifications') }}</p>
@@ -175,4 +175,3 @@ async function onReviewLater(id: string) {
 
 onMounted(() => void loadNotifications());
 </script>
-

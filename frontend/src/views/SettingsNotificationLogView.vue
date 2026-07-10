@@ -1,5 +1,5 @@
 ﻿<template>
-  <div class="mx-auto max-w-6xl space-y-6 p-6">
+  <div class="page-wide">
     <header>
       <h1 class="text-2xl font-semibold tracking-tight">{{ $t('views.AdminNotificationDeliveryLogView.notification_delivery_log') }}</h1>
       <p class="mt-1 text-muted-foreground">{{ $t('views.SettingsNotificationLogView.delivery_history_for_all_webhook_notifications') }}</p>
@@ -231,4 +231,3 @@ function resetFilters() {
 
 onMounted(() => loadDeliveries(null))
 </script>
-

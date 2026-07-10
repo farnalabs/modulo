@@ -1,5 +1,5 @@
 ﻿<template>
-  <div class="mx-auto max-w-6xl space-y-6 p-6">
+  <div class="page-wide">
     <header>
       <h1 class="text-2xl font-semibold tracking-tight">{{ $t('views.TeamComparisonView.team_comparison') }}</h1>
       <p class="mt-1 text-muted-foreground">{{ $t('views.TeamComparisonView.sidebyside_eval_pass_rates_and_pipeline_metrics_across_teams') }}</p>
@@ -366,5 +366,3 @@ async function toggleExpand(teamId: string) {
 
 onMounted(() => loadData())
 </script>
-
-

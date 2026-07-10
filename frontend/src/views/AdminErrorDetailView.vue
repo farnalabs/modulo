@@ -1,6 +1,6 @@
 ﻿<template>
   <BackLink to="/admin/errors" label="Back to Error Dashboard" />
-  <div class="mx-auto max-w-6xl space-y-6 p-6">
+  <div class="page-wide">
     <header class="flex items-center justify-between">
       <div class="flex items-center gap-3">
         <button
@@ -333,5 +333,3 @@ onMounted(() => {
   loadUsers()
 })
 </script>
-
-
