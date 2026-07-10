@@ -402,11 +402,16 @@ def _tool_error(msg: str) -> dict[str, Any]:
     return {"error": "internal_error", "detail": msg}
 
 
-@mcp.tool(description="List pipelines in the organisation. Returns summaries.")
+def _tool_auth_error(msg: str) -> dict[str, Any]:
+    """Return an auth-expired error dict for revoked/expired credentials."""
+    return {"error": "auth_expired", "detail": msg}
+
+
+@mcp.tool(name="list_pipelines", description="List pipelines in the organisation. Returns summaries.")
 async def list_pipelines_tool(page: int = 1, page_size: int = 20) -> dict[str, Any]:
     try:
         if not await validate_current_auth():
-            return _tool_error("Token revoked or expired — re-authenticate")
+            return _tool_auth_error("Token revoked or expired — re-authenticate")
         org_id = _ctx_org_id_val()
         async with _session(org_id) as s:
             result = await list_pipelines(s, page=page, page_size=page_size)
@@ -433,7 +438,7 @@ async def create_pipeline(
 ) -> dict[str, Any]:
     try:
         if not await validate_current_auth():
-            return _tool_error("Token revoked or expired — re-authenticate")
+            return _tool_auth_error("Token revoked or expired — re-authenticate")
         check_tool_scope(_ctx_role_val(), "create_pipeline")
         from modulo.db.crud.pipeline import create_pipeline
 
@@ -483,12 +488,15 @@ async def update_pipeline_graph(
 ) -> dict[str, Any]:
     try:
         if not await validate_current_auth():
-            return _tool_error("Token revoked or expired — re-authenticate")
+            return _tool_auth_error("Token revoked or expired — re-authenticate")
         check_tool_scope(_ctx_role_val(), "update_pipeline_graph")
         from modulo.db.crud.pipeline import replace_pipeline_graph
 
         org_id = _ctx_org_id_val()
-        pid = uuid.UUID(pipeline_id)
+        try:
+            pid = uuid.UUID(pipeline_id)
+        except ValueError:
+            return {"error": "invalid_id", "field": "pipeline_id", "detail": f"Invalid UUID format: {pipeline_id}"}
 
         async with _session(org_id) as s:
             result = await replace_pipeline_graph(
@@ -531,14 +539,17 @@ async def trigger_pipeline(
 ) -> dict[str, Any]:
     try:
         if not await validate_current_auth():
-            return _tool_error("Token revoked or expired — re-authenticate")
+            return _tool_auth_error("Token revoked or expired — re-authenticate")
         check_tool_scope(_ctx_role_val(), "trigger_pipeline")
         from modulo.db.crud.pipeline import get_pipeline
         from modulo.db.crud.pipeline_snapshot import create_snapshot_from_live_graph
         from modulo.db.crud.run import create_run
 
         org_id = _ctx_org_id_val()
-        pid = uuid.UUID(pipeline_id)
+        try:
+            pid = uuid.UUID(pipeline_id)
+        except ValueError:
+            return {"error": "invalid_id", "field": "pipeline_id", "detail": f"Invalid UUID format: {pipeline_id}"}
         payload = input_payload or {}
 
         async with _session(org_id) as s:
@@ -575,9 +586,12 @@ async def trigger_pipeline(
 async def get_run_status(run_id: str, detail: bool = False) -> dict[str, Any]:
     try:
         if not await validate_current_auth():
-            return _tool_error("Token revoked or expired — re-authenticate")
+            return _tool_auth_error("Token revoked or expired — re-authenticate")
         org_id = _ctx_org_id_val()
-        rid = uuid.UUID(run_id)
+        try:
+            rid = uuid.UUID(run_id)
+        except ValueError:
+            return {"error": "invalid_id", "field": "run_id", "detail": f"Invalid UUID format: {run_id}"}
         async with _session(org_id) as s:
             run = await get_run(s, rid)
         if run is None:
@@ -595,6 +609,24 @@ async def get_run_status(run_id: str, detail: bool = False) -> dict[str, Any]:
             result["completed_at"] = run.completed_at.isoformat()
         if run.error_code:
             result["error_code"] = run.error_code
+        if detail:
+            token_usage = run.node_token_usage or {}
+            outputs_json = run.outputs_json or {}
+            node_ids: set[str] = set()
+            node_ids.update(token_usage.keys())
+            node_ids.update(outputs_json.keys())
+            nodes: list[dict[str, Any]] = []
+            for nid in sorted(node_ids):
+                usage = token_usage.get(nid, {})
+                t_in = usage.get("tokens_in", 0) if usage else 0
+                t_out = usage.get("tokens_out", 0) if usage else 0
+                nodes.append({
+                    "node_id": nid,
+                    "status": "completed" if nid in outputs_json else "processed",
+                    "tokens": t_in + t_out,
+                    "has_output": nid in outputs_json,
+                })
+            result["nodes"] = nodes
         return result
     except Exception:
         _log.exception("get_run_status failed")
@@ -611,12 +643,15 @@ async def get_run_status(run_id: str, detail: bool = False) -> dict[str, Any]:
 async def get_run_output(run_id: str, node_id: str) -> dict[str, Any]:
     try:
         if not await validate_current_auth():
-            return _tool_error("Token revoked or expired — re-authenticate")
+            return _tool_auth_error("Token revoked or expired — re-authenticate")
         check_tool_scope(_ctx_role_val(), "get_run_output")
         from modulo.api.routes.runs import _mask_output_value
 
         org_id = _ctx_org_id_val()
-        rid = uuid.UUID(run_id)
+        try:
+            rid = uuid.UUID(run_id)
+        except ValueError:
+            return {"error": "invalid_id", "field": "run_id", "detail": f"Invalid UUID format: {run_id}"}
         async with _session(org_id) as s:
             run = await get_run(s, rid)
         if run is None:
@@ -650,12 +685,15 @@ async def get_run_output(run_id: str, node_id: str) -> dict[str, Any]:
 async def cancel_run(run_id: str) -> dict[str, Any]:
     try:
         if not await validate_current_auth():
-            return _tool_error("Token revoked or expired — re-authenticate")
+            return _tool_auth_error("Token revoked or expired — re-authenticate")
         check_tool_scope(_ctx_role_val(), "cancel_run")
         from modulo.db.crud.run import request_cancellation
 
         org_id = _ctx_org_id_val()
-        rid = uuid.UUID(run_id)
+        try:
+            rid = uuid.UUID(run_id)
+        except ValueError:
+            return {"error": "invalid_id", "field": "run_id", "detail": f"Invalid UUID format: {run_id}"}
         async with _session(org_id) as s:
             run = await request_cancellation(s, rid)
         if run is None:
@@ -672,7 +710,7 @@ async def cancel_run(run_id: str) -> dict[str, Any]:
 async def list_pending_hitl(page: int = 1, page_size: int = 20) -> dict[str, Any]:
     try:
         if not await validate_current_auth():
-            return _tool_error("Token revoked or expired — re-authenticate")
+            return _tool_auth_error("Token revoked or expired — re-authenticate")
         check_tool_scope(_ctx_role_val(), "list_pending_hitl")
         from sqlalchemy import select
 
@@ -727,13 +765,16 @@ async def review_hitl(
     output: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     if not await validate_current_auth():
-        return _tool_error("Token revoked or expired — re-authenticate")
+        return _tool_auth_error("Token revoked or expired — re-authenticate")
 
     from sqlalchemy import select
 
     org_id = _ctx_org_id_val()
     key_id = _ctx_key_id.get(uuid.UUID("00000000-0000-0000-0000-000000000002"))
-    rid = uuid.UUID(run_id)
+    try:
+        rid = uuid.UUID(run_id)
+    except ValueError:
+        return {"error": "invalid_id", "field": "run_id", "detail": f"Invalid UUID format: {run_id}"}
     mgr = HITLManager()
 
     if action not in ("claim", "approve", "reject", "deliver_manual"):
@@ -826,6 +867,8 @@ async def review_hitl(
                 gate_id=gate_id,
                 org_id=org_id,
                 claim_token=claim_token or "",
+                actor_id=key_id,
+                reason=reason,
             )
             return {"status": "rejected", "gate_id": gate_id}
         except GateNotFoundError:
@@ -856,14 +899,17 @@ async def copy_library_primitive(
     primitive_id: str,
 ) -> dict[str, Any]:
     if not await validate_current_auth():
-        return _tool_error("Token revoked or expired — re-authenticate")
+        return _tool_auth_error("Token revoked or expired — re-authenticate")
     try:
         check_tool_scope(_ctx_role_val(), "copy_library_primitive")
     except MCPAuthorizationError as exc:
         return {"error": "insufficient_scope", "detail": str(exc)}
 
     org_id = _ctx_org_id_val()
-    pid = uuid.UUID(primitive_id)
+    try:
+        pid = uuid.UUID(primitive_id)
+    except ValueError:
+        return {"error": "invalid_id", "field": "primitive_id", "detail": f"Invalid UUID format: {primitive_id}"}
 
     async with _session(org_id) as s:
         try:
@@ -911,7 +957,7 @@ async def browse_library(
 ) -> dict[str, Any]:
     try:
         if not await validate_current_auth():
-            return _tool_error("Token revoked or expired — re-authenticate")
+            return _tool_auth_error("Token revoked or expired — re-authenticate")
         org_id = _ctx_org_id_val()
         async with _session(org_id) as s:
             result = await list_primitives(
@@ -960,7 +1006,7 @@ async def get_trigger_events(
 ) -> dict[str, Any]:
     try:
         if not await validate_current_auth():
-            return _tool_error("Token revoked or expired — re-authenticate")
+            return _tool_auth_error("Token revoked or expired — re-authenticate")
         check_tool_scope(_ctx_role_val(), "get_trigger_events")
         from sqlalchemy import select
 
@@ -977,11 +1023,17 @@ async def get_trigger_events(
             )
 
             if trigger_id is not None:
-                tid = uuid.UUID(trigger_id)
+                try:
+                    tid = uuid.UUID(trigger_id)
+                except ValueError:
+                    return {"error": "invalid_id", "field": "trigger_id", "detail": f"Invalid UUID format: {trigger_id}"}
                 q = q.where(TriggerEvent.trigger_id == tid)
 
             if pipeline_id is not None:
-                pid = uuid.UUID(pipeline_id)
+                try:
+                    pid = uuid.UUID(pipeline_id)
+                except ValueError:
+                    return {"error": "invalid_id", "field": "pipeline_id", "detail": f"Invalid UUID format: {pipeline_id}"}
                 q = q.join(Trigger, TriggerEvent.trigger_id == Trigger.id).where(
                     Trigger.pipeline_id == pid,
                 )
@@ -1027,7 +1079,7 @@ async def create_model_backend(
 ) -> dict[str, Any]:
     try:
         if not await validate_current_auth():
-            return _tool_error("Token revoked or expired — re-authenticate")
+            return _tool_auth_error("Token revoked or expired — re-authenticate")
         check_tool_scope(_ctx_role_val(), "create_model_backend")
 
         from cryptography.fernet import Fernet
@@ -1126,7 +1178,7 @@ def _is_sensitive_key(key: str) -> bool:
 async def get_documentation(query: str, section: str | None = None) -> dict[str, Any]:
     try:
         if not await validate_current_auth():
-            return _tool_error("Token revoked or expired — re-authenticate")
+            return _tool_auth_error("Token revoked or expired — re-authenticate")
         index = _get_doc_index()
         results = index.search(query, section=section)
         if not results:
@@ -1147,7 +1199,7 @@ async def get_documentation(query: str, section: str | None = None) -> dict[str,
 async def get_integration_status() -> dict[str, Any]:
     try:
         if not await validate_current_auth():
-            return _tool_error("Token revoked or expired — re-authenticate")
+            return _tool_auth_error("Token revoked or expired — re-authenticate")
         from sqlalchemy import func, select
 
         from modulo.db.models.connector_instance import ConnectorInstance
@@ -1212,7 +1264,7 @@ async def get_integration_status() -> dict[str, Any]:
 async def get_org_config(section: str | None = None) -> dict[str, Any]:
     try:
         if not await validate_current_auth():
-            return _tool_error("Token revoked or expired — re-authenticate")
+            return _tool_auth_error("Token revoked or expired — re-authenticate")
         from modulo.db.crud.system_config import list_config
 
         org_id = _ctx_org_id_val()
@@ -1258,7 +1310,7 @@ async def get_org_config(section: str | None = None) -> dict[str, Any]:
 async def get_available_features() -> dict[str, Any]:
     try:
         if not await validate_current_auth():
-            return _tool_error("Token revoked or expired — re-authenticate")
+            return _tool_auth_error("Token revoked or expired — re-authenticate")
         from modulo.core.feature_flags import resolve_plan_context
 
         org_id = _ctx_org_id_val()
@@ -1310,7 +1362,10 @@ async def resource_pipeline_runs(pipeline_id: str) -> str:
     from modulo.db.crud.run import list_runs
 
     org_id = _ctx_org_id_val()
-    pid = uuid.UUID(pipeline_id)
+    try:
+        pid = uuid.UUID(pipeline_id)
+    except ValueError:
+        return f"error: Invalid UUID format: {pipeline_id}"
     async with _session(org_id) as s:
         pipeline = await get_pipeline(s, pid)
         if pipeline is None:
@@ -1339,7 +1394,10 @@ async def resource_pipeline_detail(pipeline_id: str) -> str:
     from modulo.db.models.run import Run
 
     org_id = _ctx_org_id_val()
-    pid = uuid.UUID(pipeline_id)
+    try:
+        pid = uuid.UUID(pipeline_id)
+    except ValueError:
+        return f"error: Invalid UUID format: {pipeline_id}"
     async with _session(org_id) as s:
         pipeline = await get_pipeline(s, pid)
         if pipeline is None:
@@ -1381,7 +1439,10 @@ async def resource_run(run_id: str) -> str:
     if not await validate_current_auth():
         return "error: Token revoked or expired — re-authenticate"
     org_id = _ctx_org_id_val()
-    rid = uuid.UUID(run_id)
+    try:
+        rid = uuid.UUID(run_id)
+    except ValueError:
+        return f"error: Invalid UUID format: {run_id}"
     async with _session(org_id) as s:
         run = await get_run(s, rid)
     if run is None:
@@ -1408,7 +1469,10 @@ async def resource_hitl_gate(run_id: str, gate_id: str) -> str:
     from modulo.db.models.team import Team
 
     org_id = _ctx_org_id_val()
-    rid = uuid.UUID(run_id)
+    try:
+        rid = uuid.UUID(run_id)
+    except ValueError:
+        return f"error: Invalid UUID format: {run_id}"
     async with _session(org_id) as s:
         result = await s.execute(
             select(HitlClaim).where(
@@ -1467,7 +1531,10 @@ async def resource_schema_detail(schema_id: str, version: str) -> str:
     from modulo.db.models.schema import Schema, SchemaVersion
 
     org_id = _ctx_org_id_val()
-    sid = uuid.UUID(schema_id)
+    try:
+        sid = uuid.UUID(schema_id)
+    except ValueError:
+        return f"error: Invalid UUID format: {schema_id}"
     async with _session(org_id) as s:
         schema = await s.get(Schema, sid)
         if schema is None:

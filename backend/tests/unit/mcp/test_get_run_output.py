@@ -49,7 +49,7 @@ class TestGetRunOutputAuth:
     @patch("modulo.api.mcp_server.validate_current_auth", return_value=False)
     async def test_returns_auth_error_on_revoked_token(self, mock_validate_auth: AsyncMock) -> None:
         result = await get_run_output(run_id=str(uuid.uuid4()), node_id="node1")
-        assert result["error"] == "internal_error"
+        assert result["error"] == "auth_expired"
         assert "revoked" in result.get("detail", "").lower() or "expired" in result.get("detail", "").lower()
 
     @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)

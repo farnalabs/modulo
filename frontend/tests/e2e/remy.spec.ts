@@ -35,5 +35,6 @@ test.describe('Remy Admin Configuration', () => {
     await page.waitForLoadState('networkidle')
 
     await expect(page.locator('h1')).toContainText('Remy Configuration')
+    await expect(page.locator('text=Configured Providers').or(page.locator('text=Loading provider status...'))).toBeVisible({ timeout: 10000 })
   })
 })
