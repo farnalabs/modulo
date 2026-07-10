@@ -413,7 +413,7 @@ def _tool_auth_error(msg: str) -> dict[str, Any]:
     return {"error": "auth_expired", "detail": msg}
 
 
-@mcp.tool(name="list_pipelines", description="List pipelines in the organisation. Returns summaries.")
+@mcp.tool(name="list_pipelines", description="List pipelines in the organisation. Returns summaries. For raw text output, see the modulo://pipelines resource.")
 async def list_pipelines_tool(page: int = 1, page_size: int = 20) -> dict[str, Any]:
     try:
         if not await validate_current_auth():
@@ -854,10 +854,20 @@ async def list_pending_hitl(page: int = 1, page_size: int = 20) -> dict[str, Any
         if not await validate_current_auth():
             return _tool_auth_error("Token revoked or expired — re-authenticate")
         check_tool_scope(_ctx_role_val(), "list_pending_hitl")
-        from sqlalchemy import select
+        from sqlalchemy import func, select
 
         org_id = _ctx_org_id_val()
         async with _session(org_id) as s:
+            total_result = await s.execute(
+                select(func.count())
+                .select_from(HitlClaim)
+                .where(
+                    HitlClaim.organisation_id == org_id,
+                    HitlClaim.decision.is_(None),
+                )
+            )
+            total = total_result.scalar_one()
+
             offset = (page - 1) * page_size
             result = await s.execute(
                 select(HitlClaim)
@@ -870,7 +880,7 @@ async def list_pending_hitl(page: int = 1, page_size: int = 20) -> dict[str, Any
             )
             gates = list(result.scalars())
         return {
-            "pending_gates": [
+            "gates": [
                 {
                     "run_id": str(g.run_id),
                     "gate_id": g.gate_id,
@@ -880,7 +890,11 @@ async def list_pending_hitl(page: int = 1, page_size: int = 20) -> dict[str, Any
                     "required_team_id": str(g.required_team_id) if g.required_team_id else None,
                 }
                 for g in gates
-            ]
+            ],
+            "page": page,
+            "page_size": page_size,
+            "total": total,
+            "has_more": (page * page_size) < total,
         }
     except MCPAuthorizationError as exc:
         return {"error": "insufficient_scope", "detail": str(exc)}
@@ -1083,13 +1097,31 @@ async def copy_library_primitive(
 
 
 @mcp.tool(
+    name="browse_library",
     description=(
-        "Browse the library of primitives (schemas, agents, workflows, "
-        "pipeline templates, test fixtures). Supports filtering by type, "
-        "text search, and cursor-based pagination."
+        "[DEPRECATED — use search_library] "
+        "Browse/search the library of primitives."
     ),
 )
-async def browse_library(
+async def browse_library_alias(
+    primitive_type: str | None = None,
+    search: str | None = None,
+    cursor: str | None = None,
+    limit: int = 20,
+) -> dict[str, Any]:
+    return await search_library(primitive_type=primitive_type, search=search, cursor=cursor, limit=limit)
+
+
+@mcp.tool(
+    name="search_library",
+    description=(
+        "Search the library of primitives (schemas, agents, workflows, "
+        "pipeline templates, test fixtures). Supports filtering by type, "
+        "text search, and cursor-based pagination. "
+        "For text output, see the modulo://library resource."
+    ),
+)
+async def search_library(
     primitive_type: str | None = None,
     search: str | None = None,
     cursor: str | None = None,
@@ -1128,18 +1160,34 @@ async def browse_library(
             "has_more": result.has_more,
         }
     except Exception:
-        _log.exception("browse_library failed")
-        return _tool_error("Failed to browse library")
+        _log.exception("search_library failed")
+        return _tool_error("Failed to search library")
 
 
 @mcp.tool(
+    name="get_trigger_events",
     description=(
-        "Get recent trigger events for a given trigger or pipeline. "
+        "[DEPRECATED — use list_trigger_events] "
+        "Get recent trigger events for a given trigger or pipeline."
+    ),
+)
+async def get_trigger_events_alias(
+    trigger_id: str | None = None,
+    pipeline_id: str | None = None,
+    limit: int = 20,
+) -> dict[str, Any]:
+    return await list_trigger_events(trigger_id=trigger_id, pipeline_id=pipeline_id, limit=limit)
+
+
+@mcp.tool(
+    name="list_trigger_events",
+    description=(
+        "List recent trigger events for a given trigger or pipeline. "
         "Filter by trigger_id and/or pipeline_id. Returns events ordered "
         "by most recent first."
     ),
 )
-async def get_trigger_events(
+async def list_trigger_events(
     trigger_id: str | None = None,
     pipeline_id: str | None = None,
     limit: int = 20,
@@ -1147,7 +1195,7 @@ async def get_trigger_events(
     try:
         if not await validate_current_auth():
             return _tool_auth_error("Token revoked or expired — re-authenticate")
-        check_tool_scope(_ctx_role_val(), "get_trigger_events")
+        check_tool_scope(_ctx_role_val(), "list_trigger_events")
         from sqlalchemy import select
 
         from modulo.db.models.trigger import Trigger
@@ -1198,8 +1246,8 @@ async def get_trigger_events(
     except MCPAuthorizationError as exc:
         return {"error": "insufficient_scope", "detail": str(exc)}
     except Exception:
-        _log.exception("get_trigger_events failed")
-        return _tool_error("Failed to get trigger events")
+        _log.exception("list_trigger_events failed")
+        return _tool_error("Failed to list trigger events")
 
 
 @mcp.tool(
@@ -1257,7 +1305,7 @@ async def create_model_backend(
     provider: str,
     model_id: str,
     api_key: str,
-    default_params: str | None = None,
+    default_params: dict[str, Any] | None = None,
     visibility: str = "org",
 ) -> dict[str, Any]:
     try:
@@ -1273,13 +1321,6 @@ async def create_model_backend(
 
         ciphertext = Fernet(settings.fernet_key.encode()).encrypt(api_key.encode())
 
-        params: dict[str, Any] = {}
-        if default_params:
-            try:
-                params = json.loads(default_params)
-            except json.JSONDecodeError:
-                return {"error": "invalid_params", "detail": "default_params must be valid JSON"}
-
         async with _session(org_id) as s:
             mb = await db_create_model_backend(
                 s,
@@ -1290,7 +1331,7 @@ async def create_model_backend(
                 model_id=model_id,
                 credentials_ciphertext=ciphertext,
                 account_id=account_id,
-                default_params=params,
+                default_params=default_params,
                 visibility=visibility,
                 fallback_backend_ids=None,
             )
@@ -1354,12 +1395,24 @@ def _is_sensitive_key(key: str) -> bool:
 
 
 @mcp.tool(
+    name="get_documentation",
+    description=(
+        "[DEPRECATED — use search_documentation] "
+        "Search product documentation."
+    ),
+)
+async def get_documentation_alias(query: str, section: str | None = None) -> dict[str, Any]:
+    return await search_documentation(query=query, section=section)
+
+
+@mcp.tool(
+    name="search_documentation",
     description=(
         "Search product documentation for relevant sections. Supports free-text "
         "keyword search against PRD sections and FAQ entries. Returns Markdown-formatted results."
     ),
 )
-async def get_documentation(query: str, section: str | None = None) -> dict[str, Any]:
+async def search_documentation(query: str, section: str | None = None) -> dict[str, Any]:
     try:
         if not await validate_current_auth():
             return _tool_auth_error("Token revoked or expired — re-authenticate")
@@ -1370,13 +1423,16 @@ async def get_documentation(query: str, section: str | None = None) -> dict[str,
         formatted = index.format_results(results)
         return {"results": formatted, "count": len(results)}
     except Exception:
-        _log.exception("get_documentation failed")
+        _log.exception("search_documentation failed")
         return _tool_error("Failed to search documentation")
 
 
 @mcp.tool(
     description=(
-        "Get current health status of all connectors, model backends, and triggers. Returns a Markdown table."
+        "Get current health status of all connectors, model backends, and triggers. "
+        "Returns a Markdown table plus structured JSON fields. "
+        "For individual connector/model-backend details, see modulo://connectors "
+        "and modulo://model-backends resources."
     ),
 )
 async def get_integration_status() -> dict[str, Any]:
@@ -1404,22 +1460,34 @@ async def get_integration_status() -> dict[str, Any]:
             )
             trigger_count = trigger_count_result.scalar_one()
 
-        connector_lines = [
-            "| Name | Type | Status | Last Check | Error |",
-            "|------|------|--------|------------|-------|",
-        ]
+        connector_list: list[dict[str, Any]] = []
+        connector_lines = ["| Name | Type | Status | Last Check | Error |",
+                           "|------|------|--------|------------|-------|"]
         for c in connector_rows:
             last_check = c.last_health_check_at.isoformat() if c.last_health_check_at else "never"
             error = c.last_health_check_error or ""
             connector_lines.append(f"| {c.name} | {c.connector_type_id} | {c.status} | {last_check} | {error} |")
+            connector_list.append({
+                "name": c.name,
+                "type": c.connector_type_id,
+                "status": c.status,
+                "last_check": last_check,
+                "error": error,
+            })
 
-        backend_lines = [
-            "| Name | Provider | Model | Has Credentials | Status |",
-            "|------|----------|-------|-----------------|--------|",
-        ]
+        backend_list: list[dict[str, Any]] = []
+        backend_lines = ["| Name | Provider | Model | Has Credentials | Status |",
+                         "|------|----------|-------|-----------------|--------|"]
         for b in backend_rows:
             has_creds = "yes" if b.credentials_ciphertext else "no"
             backend_lines.append(f"| {b.name} | {b.provider} | {b.model_id} | {has_creds} | {b.status} |")
+            backend_list.append({
+                "name": b.name,
+                "provider": b.provider,
+                "model": b.model_id,
+                "has_credentials": bool(b.credentials_ciphertext),
+                "status": b.status,
+            })
 
         parts = [
             f"## Connectors ({len(connector_rows)})",
@@ -1430,10 +1498,18 @@ async def get_integration_status() -> dict[str, Any]:
             "",
             f"## Triggers\n\nTotal triggers: {trigger_count}",
         ]
-        return {"results": "\n".join(parts)}
+        return {
+            "results": "\n".join(parts),
+            "connectors": connector_list,
+            "model_backends": backend_list,
+            "trigger_count": trigger_count,
+        }
     except Exception:
         _log.exception("get_integration_status failed")
         return _tool_error("Failed to get integration status")
+
+
+_VALID_CONFIG_SECTIONS = {"remy", "plan", "rate_limits"}
 
 
 @mcp.tool(
@@ -1446,6 +1522,11 @@ async def get_org_config(section: str | None = None) -> dict[str, Any]:
     try:
         if not await validate_current_auth():
             return _tool_auth_error("Token revoked or expired — re-authenticate")
+        if section is not None and section not in _VALID_CONFIG_SECTIONS:
+            return {
+                "error": "invalid_section",
+                "detail": f"section must be one of: {', '.join(sorted(_VALID_CONFIG_SECTIONS))}",
+            }
         from modulo.db.crud.system_config import list_config
 
         org_id = _ctx_org_id_val()
@@ -1517,6 +1598,12 @@ async def get_available_features() -> dict[str, Any]:
     except Exception:
         _log.exception("get_available_features failed")
         return _tool_error("Failed to get available features")
+
+
+# Backward-compatible function references for renamed tools
+browse_library = browse_library_alias
+get_documentation = get_documentation_alias
+get_trigger_events = get_trigger_events_alias
 
 
 # ---------------------------------------------------------------------------
