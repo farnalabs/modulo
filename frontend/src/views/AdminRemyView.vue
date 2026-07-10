@@ -10,6 +10,7 @@
     <ErrorAlert v-else-if="loadError" :message="loadError" :on-retry="loadAll" />
 
     <template v-else>
+      <TooltipProvider>
       <!-- Configured Providers -->
       <div class="card p-4" data-testid="remy-providers">
         <h2 class="mb-3 text-base font-semibold">{{ $t('views.AdminRemyView.configured_providers') }}</h2>
@@ -706,6 +707,7 @@
         </div>
       </div>
 
+      </TooltipProvider>
     </template>
   </div>
 </template>
@@ -719,6 +721,7 @@ import ErrorAlert from '../components/shared/ErrorAlert.vue'
 import RemySkillDialog from '../components/remy/RemySkillDialog.vue'
 import AccessEntitySelector from '../components/remy/AccessEntitySelector.vue'
 import {
+  TooltipProvider,
   Tooltip,
   TooltipTrigger,
   TooltipContent,
@@ -818,7 +821,7 @@ async function saveAccessList() {
 }
 
 // Model config
-const allProviders = computed(() => availableProviders.value.native.map(p => p.id))
+const allProviders = computed(() => (availableProviders.value.native ?? []).map(p => p.id))
 
 const modelConfig = reactive({
   defaultProvider: 'anthropic',
@@ -1220,11 +1223,11 @@ async function loadProviders() {
     }
     const backends = (data?.items ?? []) as { provider: string; has_credentials: boolean }[]
     const configuredProviders = new Set(backends.map(b => b.provider))
-    providerStatus.value = availableProviders.value.native.map(p => ({
+    providerStatus.value = (availableProviders.value.native ?? []).map(p => ({
       ...p,
       configured: configuredProviders.has(p.id),
     }))
-    customProviderStatus.value = availableProviders.value.customTypes.map(p => ({
+    customProviderStatus.value = (availableProviders.value.customTypes ?? []).map(p => ({
       ...p,
       configured: configuredProviders.has(p.id),
     }))
