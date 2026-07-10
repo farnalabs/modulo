@@ -372,6 +372,7 @@ class HITLManager:
         org_id: uuid.UUID,
         claim_token: str,
         actor_id: uuid.UUID | None = None,
+        reason: str | None = None,
     ) -> HitlClaim:
         """Record rejection and log a ``hitl.output_rejected`` audit event.
 
@@ -386,12 +387,15 @@ class HITLManager:
             decision=_DECISION_REJECTED,
         )
 
+        extra: dict[str, Any] = {}
+        if reason is not None:
+            extra["reason"] = reason
         await self._log_audit_and_deliver(
             session,
             gate,
             org_id=org_id,
             actor_id=actor_id,
-            events=[("hitl.output_rejected", self._base_audit_payload(gate))],
+            events=[("hitl.output_rejected", self._base_audit_payload(gate, **extra))],
         )
 
         return gate

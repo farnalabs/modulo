@@ -191,7 +191,7 @@ class TestBrowseLibrary:
             result = await browse_library()
 
         assert result == {
-            "error": "internal_error",
+            "error": "auth_expired",
             "detail": "Token revoked or expired — re-authenticate",
         }
 
