@@ -15,7 +15,7 @@ from modulo.db.models.trigger_event import TriggerEvent
 from modulo.settings import get_settings
 
 try:
-    from celery import Task  # type: ignore[import-untyped]
+    from celery import Task
 except ImportError:
     import typing
 
@@ -72,18 +72,6 @@ async def cleanup_old_webhook_events(
 # Celery task — wraps cleanup_old_webhook_events for Celery beat
 # ---------------------------------------------------------------------------
 
-CELERY_APP_GLOBAL: Any = None
-
-
-def get_celery_app() -> Any:
-    global CELERY_APP_GLOBAL
-    if CELERY_APP_GLOBAL is None:
-        from modulo.celery_app import get_celery_app as _get_celery_app
-
-        CELERY_APP_GLOBAL = _get_celery_app()
-    return CELERY_APP_GLOBAL
-
-
 if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncEngine
 
@@ -137,7 +125,7 @@ async def _run_cleanup() -> dict[str, Any]:
 _CLEANUP_INTERVAL_SECONDS = 3600  # run once per hour
 
 
-async def cleanup_scheduler_loop(factory: async_sessionmaker) -> None:
+async def cleanup_scheduler_loop(factory: async_sessionmaker[AsyncSession]) -> None:
     """Periodic background loop that purges old webhook trigger events.
 
     Runs every ``_CLEANUP_INTERVAL_SECONDS`` with exponential backoff on
