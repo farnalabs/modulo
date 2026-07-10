@@ -1294,17 +1294,17 @@ async def list_triggers(
 
 
 @mcp.tool(
-    description="Create a new model backend (API key + provider configuration). "
-    "Use this to register a new LLM provider so the org can use it in pipelines and Remy chat. "
-    "Common providers include: openai, anthropic, gemini, deepseek, groq, opencode. "
-    "The API key is encrypted at rest and never exposed in responses.",
+    description="Create a new model backend (provider configuration). "
+    "The API key is NOT sent through this tool — instead, a one-time setup URL is returned. "
+    "Open the URL in your browser to provide the API key directly. "
+    "This keeps the secret out of the LLM context and MCP transport logs. "
+    "Common providers include: openai, anthropic, gemini, deepseek, groq, opencode.",
 )
 async def create_model_backend(
     name: str,
     display_name: str,
     provider: str,
     model_id: str,
-    api_key: str,
     default_params: dict[str, Any] | None = None,
     visibility: str = "org",
 ) -> dict[str, Any]:
@@ -1313,13 +1313,10 @@ async def create_model_backend(
             return _tool_auth_error("Token revoked or expired — re-authenticate")
         check_tool_scope(_ctx_role_val(), "create_model_backend")
 
-        from cryptography.fernet import Fernet
+        from modulo.core.mcp_setup_handoff import create_handoff
 
         org_id = _ctx_org_id_val()
         account_id = _ctx_user_id_val()
-        settings = get_settings()
-
-        ciphertext = Fernet(settings.fernet_key.encode()).encrypt(api_key.encode())
 
         async with _session(org_id) as s:
             mb = await db_create_model_backend(
@@ -1329,11 +1326,18 @@ async def create_model_backend(
                 display_name=display_name,
                 provider=provider,
                 model_id=model_id,
-                credentials_ciphertext=ciphertext,
+                credentials_ciphertext=b"",
                 account_id=account_id,
-                default_params=default_params,
+                default_params=default_params or {},
                 visibility=visibility,
                 fallback_backend_ids=None,
+            )
+            handoff = await create_handoff(
+                s,
+                org_id=org_id,
+                resource_type="model-backend",
+                resource_id=mb.id,
+                created_by=account_id,
             )
 
         return {
@@ -1342,9 +1346,9 @@ async def create_model_backend(
             "display_name": mb.display_name,
             "provider": mb.provider,
             "model_id": mb.model_id,
-            "has_credentials": True,
+            "status": "pending_setup",
             "visibility": mb.visibility,
-            "created_at": mb.created_at.isoformat() if mb.created_at else None,
+            **handoff,
         }
     except MCPAuthorizationError as exc:
         return {"error": "insufficient_scope", "detail": str(exc)}
