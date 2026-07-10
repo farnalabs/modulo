@@ -24,7 +24,18 @@ test.describe('First-Run Golden Path', () => {
 
     // Run status poll: start queued, then running, then complete
     let pollCount = 0
+    await page.route('**/api/v1/runs/*/io', async (route) => {
+      return route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({
+        outputs_json: {
+          'node-1': { input: {}, output: 'Hello world' },
+          'node-2': { input: {}, output: 'Processed: Hello world' },
+          'node-3': { input: {}, output: 'Final result: Processed: Hello world' },
+        },
+      }) })
+    })
     await page.route('**/api/v1/runs/*', async (route) => {
+      const url = route.request().url()
+      if (url.includes('/io')) return route.fallback()
       pollCount++
       const statuses = ['queued', 'running', 'running', 'complete']
       const idx = Math.min(pollCount, statuses.length - 1)
@@ -32,11 +43,11 @@ test.describe('First-Run Golden Path', () => {
         id: RUN_ID, pipeline_id: '1', status: statuses[idx],
         created_at: new Date(Date.now() - 60000).toISOString(),
         completed_at: statuses[idx] === 'complete' ? new Date().toISOString() : null,
-        nodes: [
-          { id: 'node-1', name: 'Input', type: 'input', status: 'complete', output: { text: 'Hello world' } },
-          { id: 'node-2', name: 'Process', type: 'llm', status: 'complete', output: { text: 'Processed: Hello world' } },
-          { id: 'node-3', name: 'Output', type: 'output', status: 'complete', output: { text: 'Final result: Processed: Hello world' } },
-        ],
+        node_token_usage: {
+          'node-1': { input_tokens: 10, output_tokens: 5, total_tokens: 15, cost_usd: 0.0001 },
+          'node-2': { input_tokens: 50, output_tokens: 20, total_tokens: 70, cost_usd: 0.0005 },
+          'node-3': { input_tokens: 20, output_tokens: 10, total_tokens: 30, cost_usd: 0.0002 },
+        },
       }) })
     })
 
