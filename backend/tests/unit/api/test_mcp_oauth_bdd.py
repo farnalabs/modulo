@@ -282,13 +282,13 @@ class TestTokenExchangeEndpoint:
             patch.object(RateLimiterRegistry, "check", AsyncMock(return_value=True)),
             patch("modulo.api.mcp_server._get_session_factory") as mock_sf,
             patch("modulo.api.mcp_server.get_settings", return_value=_make_settings()),
-            patch("modulo.auth.oauth.get_oauth_client_by_client_id") as mock_get,
+            patch("modulo.auth.oauth.validate_client_secret") as mock_validate,
             patch("modulo.auth.oauth.consume_authorization_code") as mock_consume,
             patch("modulo.auth.oauth.create_oauth_token_family") as mock_create_family,
             patch("modulo.auth.oauth.create_oauth_access_token") as mock_create_token,
         ):
             mock_sf.return_value = _make_mock_session_factory()
-            mock_get.return_value = _make_mock_client()
+            mock_validate.return_value = _make_mock_client()
             mock_consume.return_value = _make_mock_auth_code()
             mock_create_family.return_value = ("family_uuid", 0)
             mock_create_token.return_value = "jwt_access_token_abc"
