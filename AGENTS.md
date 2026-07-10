@@ -49,15 +49,6 @@ The root `AGENTS.md` has the full non-negotiable rule under **Agent Isolation: A
 3. After finishing a review, toggle its checkbox and add the date + outcome.
 4. Do not start QA #N+1 until QA #N is complete.
 
----
-
-## Definition of Done
-
-### Manifest updated
-- [ ] **Manifest updated** — if the delivery adds or modifies a page route, the corresponding entry in `frontend/src/manifest.yaml` was created or updated
-
----
-
 ## Task Tracker
 
 The authoritative task list lives at `../harness/delivery/delivery-plan.json`. Do not edit it directly — use the task script:
@@ -700,3 +691,147 @@ If a UI element needs multi-line text (like a textarea placeholder with multiple
 ### Ops / Database (Fly Postgres)
 
 - **Unmanaged Fly Postgres (`fly postgres create`) does NOT auto-restart on crash.** When PostgreSQL on a Flex Postgres machine crashes (e.g. OOM, disk full, segfault), the monitoring agent and `repmgrd` keep running but the `postgres` process stays down. There is no systemd unit to restart it. To recover: SSH into the DB machine (`fly ssh console --app <db-app>`) and run `su - postgres -c '/usr/lib/postgresql/17/bin/pg_ctl start -D /data/postgresql'`. Consider adding a cron job or health check that restarts PostgreSQL if the process is missing. For production-critical DBs, migrate to Managed Postgres (`fly mpg create`).
+
+
+---
+
+## Product Map / Feature Graph
+
+A product map lives at `docs/product-map/` — one Markdown file per feature,
+each with YAML frontmatter that forms a queryable graph:
+
+| Frontmatter field | Edge type | Purpose |
+|---|---|---|
+| `id` | Node ID | Unique identifier (e.g. `feat-auth-scim`) |
+| `prd` | → PRD | Links to PRD section (§X.Y) |
+| `delivery-tasks` | → Delivery | Links to delivery-plan task IDs |
+| `bdd` | → Tests | Links to Gherkin `.feature` files |
+| `code` | → Code | Links to source directories/files |
+| `unit-tests` | → Tests | Links to unit test files |
+| `depends-on` | → Feature | Prerequisite features (DAG edges) |
+| `status` | Coverage | `covered` / `partial` / `gap` |
+
+Each entry lists expected behaviours as checkboxes — happy paths, edge cases,
+error messages, boundaries — and a "Known Gaps" section.
+
+### Graph tools
+
+| Tool | Purpose |
+|---|---|
+| `tools/graph-validate.ps1` | Checks all refs resolve, no orphaned entries, every node has required fields. Exit code 0 = clean. Use `-Fix` to auto-regenerate `_index.md`. |
+| `graph-query.ps1` | **Does not currently exist on disk**. Do not attempt to invoke it; query the product map with Grep/Read instead. |
+
+### When to update
+
+- **After delivery**: when a task completes, add or update the feature entry
+- **After QA-iterate**: append new edge cases and findings
+- **On discovery**: add undocumented behaviours or edge cases
+
+### Two QA loops
+
+| Skill | Scope | Iterates |
+|---|---|---|
+| `improve-codebase` | Per-directory, intra-module | 32 code directories |
+| `improve-architecture` | Per-feature, cross-cutting | Product map entries |
+
+## Definition of Done
+
+### 1. Code is correct
+- All tests pass: pytest, ruff, mypy, vue-tsc, npm run lint
+- No dead code, no silent fallbacks, specific error messages
+- RLS enforced on every new API route and MCP tool handler
+- All user-facing strings use $t() / t()
+
+### 2. PRD is accurate
+- Update PRD if behaviour changed. Preserve section numbering.
+
+### 3. Product map is populated
+- Run populate-product-map.ps1 after delivery
+- Run generate-behaviours for comprehensive behaviour checkboxes
+- graph-validate.ps1 exits 0
+
+### 4. BDD tests exist at the right level
+- New API route: 1 BDD scenario + unit test for error path
+- New component: smoke test + Playwright for critical flows
+- Concurrency-sensitive code: integration test
+
+### 5. Website docs are current
+- Check Website/modulo-website/src/docs/ for relevant page
+
+### 6. Graph integrity
+- graph-validate.ps1 passes with zero errors
+
+### 7. Frontend/MCP access exists
+- Every feature has frontend view or MCP tool handler
+
+### 8. Committed to main
+- All changes committed to main, status clean, no dangling branches
+
+## Architecture Decision Records
+
+ADRs are at `docs/adr/`. Check for new ADRs before making architectural changes.
+
+---
+
+## Lessons Learned
+
+### Feature Gating: All enterprise-gated views must use FeatureGate wrapper
+
+Every frontend route that requires an enterprise feature must wrap its content in FeatureGate. Route guards alone cause crashes, confusing redirects, or silent blanks.
+
+### Gated features should show disabled content, not a lock wall
+
+Ungate views when possible. Show functionality disabled with upgrade prompts rather than a wall.
+
+### Button disabled attribute with reka-ui Primitive
+
+Always declare `disabled` as an explicit prop on Button. Fallthrough attrs dont reach the rendered button element due to Primitive's inheritAttrs: false.
+
+### Tailwind CSS color variables must use hsl() wrapper
+
+CSS vars storing HSL triplets need hsl() wrapper in tailwind.config.cjs or Tailwind generates invalid CSS.
+
+### New backend routes must handle missing DB tables gracefully
+
+Catch ProgrammingError and return 501 Not Implemented instead of 500.
+
+### Status badge displays must capitalize API values
+
+Add class=capitalize to status displays — API values come lowercase.
+
+### Every env var displayed in Runtime Config must be checked for sensitivity
+
+Mask credentials in admin_runtime_config.py. Keep sensitive_mask.py in sync.
+
+### Backend API error handling: all DB-backed routes must catch ProgrammingError
+
+Every async with session.begin(): block needs try/except ProgrammingError returning 501.
+
+### PostgreSQL-specific SQL functions must be avoided in raw queries
+
+Use Python-side datetime arithmetic instead of date_trunc() etc. for SQLite compat.
+
+### Action buttons must provide visual feedback and use API response to update state
+
+Show loading, success, error states. Replace entire array entry with API response.
+
+### DB migration mismatch between code and deployment
+
+Test against deployed env. Check column existence before assuming routes work.
+
+### Pre-commit checks: use devtools/harness/tools/pre-commit-checks.ps1
+
+Enforces formatApiError usage, capitalize on status, hardcoded text checks, fly deploy misuse, missing FeatureGate.
+
+### i18n / Internationalization: architecture
+
+All user-facing strings must use $t() or t(). Frontend-only translation, locale persistence in localStorage + backend prefs, vue-i18n v11 with composition API.
+
+### POST body parameter named body can trigger FastAPI collision
+
+Name request body params `req` or `payload`, never `body`. Semgrep rule flags these.
+
+### Systemic patterns from QA sweeps deserve semgrep rules
+
+Fix existing instances via sweep, write semgrep rule, run against full codebase. Done for ProgrammingError catch, bare except, CancelledError guard.
+
