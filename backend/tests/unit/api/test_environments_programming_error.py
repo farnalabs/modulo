@@ -17,11 +17,10 @@ import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy.exc import IntegrityError, ProgrammingError, SQLAlchemyError
 
-from modulo.api.dependencies import _get_engine, get_db_session, get_plan_context
+from modulo.api.dependencies import _get_engine, get_db_session
 from modulo.api.main import app
 from modulo.auth.dependencies import get_current_user
 from modulo.auth.jwt import AuthenticatedPrincipal
-from modulo.core.feature_flags import CommunityTier
 from modulo.settings import Settings, get_settings
 
 _VALID_32 = "a" * 32
@@ -64,7 +63,6 @@ def admin_client() -> TestClient:
         account_id=_USER_ID,
         org_role="admin",
     )
-    app.dependency_overrides[get_plan_context] = lambda: CommunityTier()
     client = TestClient(app)
     yield client
     app.dependency_overrides.clear()

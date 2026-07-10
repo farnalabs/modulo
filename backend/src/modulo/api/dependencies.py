@@ -159,9 +159,9 @@ async def get_plan_context(
 
             )
 
-        except Exception:
+        except (TypeError, AttributeError):
 
-            logger.warning("Failed to resolve org for plan context, falling back to CommunityTier")
+            logger.warning("Session does not support async begin() — returning CommunityTier")
 
             return CommunityTier()
 
