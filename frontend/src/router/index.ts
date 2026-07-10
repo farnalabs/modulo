@@ -103,6 +103,7 @@ const SettingsEmailView = () => import('../views/SettingsEmailView.vue')
 const SettingsErrorForwardersView = () => import('../views/SettingsErrorForwardersView.vue')
 const SettingsMonitorConfigView = () => import('../views/SettingsMonitorConfigView.vue')
 const PipelineListView = () => import('../views/PipelineListView.vue')
+const ModelBackendSetupView = () => import('../views/setup/ModelBackendSetupView.vue')
 
 const router = createRouter({
   history: createWebHistory(),
@@ -406,6 +407,12 @@ const router = createRouter({
       name: 'composite-editor',
       component: CompositeEditorView,
       meta: { breadcrumb: 'Composite Editor', parent: 'library' },
+    },
+    {
+      path: '/setup/model-backend/:id',
+      name: 'ModelBackendSetup',
+      component: ModelBackendSetupView,
+      meta: { breadcrumb: 'Complete Setup' },
     },
     {
       path: '/:pathMatch(.*)*',
