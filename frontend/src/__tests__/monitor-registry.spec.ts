@@ -14,7 +14,7 @@ function createFullBackend(overrides: Partial<MonitorBackend> = {}): MonitorBack
     setUser: vi.fn(),
     setTags: vi.fn(),
     dispose: vi.fn(),
-    captureRawError: vi.fn(),
+  
     ...overrides,
   }
 }
@@ -52,17 +52,8 @@ describe('MonitorBackendRegistry', () => {
 
       registry.captureError({ level: 'error', message: 'test' })
 
-      expect(a.captureError).toHaveBeenCalledWith({ level: 'error', message: 'test' })
-      expect(b.captureError).toHaveBeenCalledWith({ level: 'error', message: 'test' })
-    })
-
-    it('dispatches captureRawError when rawError is provided', () => {
-      const a = createFullBackend()
-      registry.add(a)
-
-      registry.captureError({ level: 'error', message: 'test' }, new Error('raw'))
-
-      expect(a.captureRawError).toHaveBeenCalledWith(expect.any(Error), undefined)
+      expect(a.captureError).toHaveBeenCalledWith({ level: 'error', message: 'test' }, undefined, undefined)
+      expect(b.captureError).toHaveBeenCalledWith({ level: 'error', message: 'test' }, undefined, undefined)
     })
 
     it('catches backend errors and logs a warning', () => {
