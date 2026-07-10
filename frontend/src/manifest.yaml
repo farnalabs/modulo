@@ -597,6 +597,32 @@ routes:
         <<: *team
         deprecated: false
 
+    /lifecycle-maps:
+        name: lifecycle-maps
+        breadcrumb: Lifecycle Maps
+        parent: /
+        product_map:
+        sidebar_group: core
+        sidebar_order: 9
+        type: list_page
+        <<: *community
+        deprecated: false
+        exact: true
+
+    /lifecycle-maps/:id/editor:
+        name: lifecycle-map-editor
+        breadcrumb: Lifecycle Map Editor
+        parent: /lifecycle-maps
+        product_map:
+        sidebar_group:
+        sidebar_order:
+        type: form_page
+        pattern: /lifecycle-maps/:id/editor
+        dynamic_params:
+        -   id
+        <<: *community
+        deprecated: false
+
     /feedback/inbox:
         name: feedback-inbox
         breadcrumb: Feedback Inbox

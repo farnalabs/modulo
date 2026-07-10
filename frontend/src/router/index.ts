@@ -103,6 +103,8 @@ const SettingsEmailView = () => import('../views/SettingsEmailView.vue')
 const SettingsErrorForwardersView = () => import('../views/SettingsErrorForwardersView.vue')
 const SettingsMonitorConfigView = () => import('../views/SettingsMonitorConfigView.vue')
 const PipelineListView = () => import('../views/PipelineListView.vue')
+const LifecycleMapsView = () => import('../views/lifecycle-map/LifecycleMapsView.vue')
+const LifecycleMapEditorView = () => import('../views/lifecycle-map/LifecycleMapEditorView.vue')
 const ModelBackendSetupView = () => import('../views/setup/ModelBackendSetupView.vue')
 const LifecycleMapList = () => import('../views/lifecycle-map/LifecycleMapList.vue')
 const LifecycleMapView = () => import('../views/lifecycle-map/LifecycleMapView.vue')
@@ -409,6 +411,17 @@ const router = createRouter({
       name: 'composite-editor',
       component: CompositeEditorView,
       meta: { breadcrumb: 'Composite Editor', parent: 'library' },
+    },
+    {
+      path: '/lifecycle-maps',
+      name: 'lifecycle-maps',
+      component: LifecycleMapsView,
+    },
+    {
+      path: '/lifecycle-maps/:id/editor',
+      name: 'lifecycle-map-editor',
+      component: LifecycleMapEditorView,
+      meta: { breadcrumb: 'Lifecycle Map Editor', parent: 'lifecycle-maps' },
     },
     {
       path: '/setup/model-backend/:id',
