@@ -10,7 +10,6 @@
     <ErrorAlert v-else-if="loadError" :message="loadError" :on-retry="loadAll" />
 
     <template v-else>
-      <TooltipProvider>
       <!-- Configured Providers -->
       <div class="card p-4" data-testid="remy-providers">
         <h2 class="mb-3 text-base font-semibold">{{ $t('views.AdminRemyView.configured_providers') }}</h2>
@@ -54,7 +53,7 @@
               <router-link :to="{ name: 'admin-model-backends' }" class="underline hover:text-foreground">{{ $t('views.AdminRemyView.manage_model_backends') }}</router-link>
             </TooltipTrigger>
             <TooltipContent side="top">
-              <p>{{ $t('views.AdminRemyView.add_edit_or_remove_api_keys_for_llm_providers') }}</p>
+              <p>Add, edit, or remove API keys for LLM providers.</p>
             </TooltipContent>
           </Tooltip>
         </div>
@@ -142,7 +141,7 @@
                 <label class="mb-1 block text-sm font-medium cursor-help">{{ $t('views.AdminRemyView.org_roles') }}</label>
               </TooltipTrigger>
               <TooltipContent side="right" class="max-w-xs">
-                <p>{{ $t('views.AdminRemyView.users_with_the_selected_organisation_roles_will_have_access_') }}</p>
+                <p>Users with the selected organisation roles will have access to Remy.</p>
               </TooltipContent>
             </Tooltip>
             <div class="flex flex-wrap gap-4">
@@ -179,7 +178,7 @@
                 </Button>
             </TooltipTrigger>
             <TooltipContent side="top">
-              <p>{{ $t('views.AdminRemyView.save_current_access_list_configuration') }}</p>
+              <p>Save the current access list configuration.</p>
             </TooltipContent>
           </Tooltip>
         </div>
@@ -262,7 +261,7 @@
                 </Button>
               </TooltipTrigger>
               <TooltipContent side="top">
-                <p>{{ $t('views.AdminRemyView.save_default_model_provider_and_allowed_model_configuration') }}</p>
+                <p>Save the default model provider and allowed model configuration.</p>
               </TooltipContent>
             </Tooltip>
         </div>
@@ -296,7 +295,7 @@
                 </Button>
               </TooltipTrigger>
               <TooltipContent side="top">
-                <p>{{ $t('views.AdminRemyView.save_the_base_system_prompt_that_guides_remys_behaviour') }}</p>
+                <p>Save the base system prompt that guides Remy's behaviour.</p>
               </TooltipContent>
             </Tooltip>
         </div>
@@ -330,7 +329,7 @@
                 </Button>
               </TooltipTrigger>
               <TooltipContent side="top">
-                <p>{{ $t('views.AdminRemyView.save_extra_instructions_appended_to_the_system_prompt') }}</p>
+                <p>Save extra instructions appended to the system prompt.</p>
               </TooltipContent>
             </Tooltip>
         </div>
@@ -629,7 +628,7 @@
                       <span class="font-medium cursor-help">{{ src.label }}</span>
                     </TooltipTrigger>
                     <TooltipContent side="top" class="max-w-xs">
-                      <p>{{ $t('views.AdminRemyView.' + src.descKey) }}</p>
+                      <p>{{ src.label }}</p>
                     </TooltipContent>
                   </Tooltip>
                 </td>
@@ -707,7 +706,6 @@
         </div>
       </div>
 
-      </TooltipProvider>
     </template>
   </div>
 </template>
@@ -721,7 +719,6 @@ import ErrorAlert from '../components/shared/ErrorAlert.vue'
 import RemySkillDialog from '../components/remy/RemySkillDialog.vue'
 import AccessEntitySelector from '../components/remy/AccessEntitySelector.vue'
 import {
-  TooltipProvider,
   Tooltip,
   TooltipTrigger,
   TooltipContent,
