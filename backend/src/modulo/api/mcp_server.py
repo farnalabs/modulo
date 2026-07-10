@@ -23,8 +23,10 @@ from typing import Any
 
 from jose import JWTError
 from mcp.server.fastmcp import FastMCP
+from sqlalchemy.exc import ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from starlette.applications import Starlette
+from starlette.exceptions import HTTPException as StarletteHTTPException
 from starlette.middleware import Middleware
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
@@ -415,7 +417,10 @@ def _tool_auth_error(msg: str) -> dict[str, Any]:
 
 @mcp.tool(
     name="list_pipelines",
-    description="List pipelines in the organisation. Returns summaries. For raw text output, see the modulo://pipelines resource.",
+    description=(
+        "List pipelines in the organisation. Returns summaries. "
+        "For raw text output, see the modulo://pipelines resource."
+    ),
 )
 async def list_pipelines_tool(page: int = 1, page_size: int = 20) -> dict[str, Any]:
     try:
@@ -2032,12 +2037,14 @@ async def _oauth_authorize(request: Request) -> JSONResponse:
             status_code=400,
         )
 
+    from sqlalchemy import select
+
     from modulo.auth.oauth import (
         create_authorization_code,
-        get_oauth_client_by_client_id,
         normalize_scopes,
         validate_client_scopes,
     )
+    from modulo.db.models.oauth_client import OAuthClient
 
     settings = get_settings()
     if not settings.modulo_public_url or settings.modulo_public_url == "http://localhost:8000":
@@ -2046,37 +2053,60 @@ async def _oauth_authorize(request: Request) -> JSONResponse:
             status_code=500,
         )
 
-    session_factory = _get_session_factory()
-    async with session_factory() as s, s.begin():
-        client = await get_oauth_client_by_client_id(s, client_id)
-        if client is None:
-            return JSONResponse(
-                {"error": "invalid_client", "detail": "Unknown client_id"},
-                status_code=400,
-            )
+    try:
+        session_factory = _get_session_factory()
+        async with session_factory() as s, s.begin():
+            # Look up client by globally unique client_id.
+            client_result = await s.execute(select(OAuthClient).where(OAuthClient.client_id == client_id))
+            client = client_result.scalar_one_or_none()
+            if client is None:
+                return JSONResponse(
+                    {"error": "invalid_client", "detail": "Unknown client_id"},
+                    status_code=400,
+                )
 
-        allowed_uris = client.redirect_uris.split()
-        if redirect_uri not in allowed_uris:
-            return JSONResponse(
-                {"error": "invalid_client", "detail": "redirect_uri not allowed"},
-                status_code=400,
-            )
+            allowed_uris = client.redirect_uris.split()
+            if redirect_uri not in allowed_uris:
+                return JSONResponse(
+                    {"error": "invalid_client", "detail": "redirect_uri not allowed"},
+                    status_code=400,
+                )
 
-        try:
-            requested_scopes = normalize_scopes(scope)
-            valid_scopes = validate_client_scopes(client, requested_scopes)
-        except Exception as exc:
-            return JSONResponse(
-                {"error": "invalid_scope", "detail": str(exc)},
-                status_code=400,
-            )
+            try:
+                requested_scopes = normalize_scopes(scope)
+                valid_scopes = validate_client_scopes(client, requested_scopes)
+            except Exception as exc:
+                return JSONResponse(
+                    {"error": "invalid_scope", "detail": str(exc)},
+                    status_code=400,
+                )
 
-        code = await create_authorization_code(
-            s,
-            client_id=client_id,
-            org_id=client.organisation_id,
-            scopes=" ".join(valid_scopes),
-            redirect_uri=redirect_uri,
+            # Set RLS context for the client's org before creating records.
+            await set_rls_org(s, client.organisation_id)
+            code = await create_authorization_code(
+                s,
+                client_id=client_id,
+                org_id=client.organisation_id,
+                scopes=" ".join(valid_scopes),
+                redirect_uri=redirect_uri,
+            )
+    except ProgrammingError:
+        _log.warning("mcp_oauth.authorize.programming_error", extra={"client_id": client_id})
+        return JSONResponse(
+            {"error": "server_error", "detail": "Feature is not available. Run database migrations to enable it."},
+            status_code=501,
+        )
+    except SQLAlchemyError:
+        _log.warning("mcp_oauth.authorize.sqlalchemy_error", extra={"client_id": client_id})
+        return JSONResponse(
+            {"error": "temporarily_unavailable", "detail": "Database error occurred. Please try again."},
+            status_code=503,
+        )
+    except Exception:
+        _log.exception("mcp_oauth.authorize.unexpected_error", extra={"client_id": client_id})
+        return JSONResponse(
+            {"error": "server_error", "detail": "An unexpected error occurred"},
+            status_code=500,
         )
 
     return JSONResponse({"code": code, "state": state})
@@ -2111,16 +2141,31 @@ async def _oauth_token(request: Request) -> JSONResponse:
         )
 
     from modulo.auth.oauth import (
+        InvalidClientError,
+        InvalidGrantError,
         consume_authorization_code,
         create_oauth_access_token,
         create_oauth_token_family,
-        get_oauth_client_by_client_id,
+        validate_client_secret,
     )
 
     settings = get_settings()
-    session_factory = _get_session_factory()
-    async with session_factory() as s, s.begin():
-        try:
+    if not settings.modulo_public_url or settings.modulo_public_url == "http://localhost:8000":
+        return JSONResponse(
+            {"error": "server_error", "detail": "MODULO_PUBLIC_URL must be configured"},
+            status_code=500,
+        )
+
+    try:
+        session_factory = _get_session_factory()
+        async with session_factory() as s, s.begin():
+            # Step 1: Validate client credentials to discover org_id.
+            client = await validate_client_secret(s, client_id, client_secret)
+
+            # Step 2: Set RLS context for the client's org.
+            await set_rls_org(s, client.organisation_id)
+
+            # Step 3: Consume the authorization code.
             auth_code = await consume_authorization_code(
                 s,
                 code=code,
@@ -2128,44 +2173,66 @@ async def _oauth_token(request: Request) -> JSONResponse:
                 redirect_uri=redirect_uri,
                 client_secret=client_secret,
             )
-        except Exception:
-            _log.exception("oauth.token_exchange_failed")
-            return JSONResponse(
-                {"error": "invalid_grant", "detail": "Authorization code exchange failed"},
-                status_code=400,
+
+            # Step 4: Create a new token family.
+            family_id, sequence = await create_oauth_token_family(
+                s,
+                client_id=client_id,
+                org_id=client.organisation_id,
             )
 
-        client = await get_oauth_client_by_client_id(s, client_id)
-        if client is None:
-            return JSONResponse(
-                {"error": "invalid_client", "detail": "Client not found"},
-                status_code=400,
+            scopes_list = auth_code.scopes.split()
+            access_token = create_oauth_access_token(
+                client_id,
+                settings.secret_key,
+                organisation_id=str(client.organisation_id),
+                scopes=scopes_list,
+                token_family=family_id,
+                token_sequence=sequence,
             )
 
-        family_id, sequence = await create_oauth_token_family(
-            s,
-            client_id=client_id,
-            org_id=client.organisation_id,
+        return JSONResponse(
+            {
+                "access_token": access_token,
+                "token_type": "Bearer",
+                "expires_in": 3600,
+                "scope": " ".join(scopes_list),
+            }
         )
-
-        scopes_list = auth_code.scopes.split()
-        access_token = create_oauth_access_token(
-            client_id,
-            settings.secret_key,
-            organisation_id=str(client.organisation_id),
-            scopes=scopes_list,
-            token_family=family_id,
-            token_sequence=sequence,
+    except (InvalidGrantError, InvalidClientError):
+        return JSONResponse(
+            {"error": "invalid_grant", "detail": "Authorization code exchange failed"},
+            status_code=400,
         )
-
-    return JSONResponse(
-        {
-            "access_token": access_token,
-            "token_type": "Bearer",
-            "expires_in": 3600,
-            "scope": " ".join(scopes_list),
-        }
-    )
+    except StarletteHTTPException as e:
+        return JSONResponse(
+            {"error": "server_error" if e.status_code >= 500 else "invalid_request", "detail": e.detail},
+            status_code=e.status_code,
+        )
+    except ProgrammingError:
+        _log.warning(
+            "mcp_oauth.token.programming_error",
+            extra={"client_id": client_id},
+        )
+        return JSONResponse(
+            {"error": "server_error", "detail": "Feature is not available. Run database migrations to enable it."},
+            status_code=501,
+        )
+    except SQLAlchemyError:
+        _log.warning(
+            "mcp_oauth.token.sqlalchemy_error",
+            extra={"client_id": client_id},
+        )
+        return JSONResponse(
+            {"error": "temporarily_unavailable", "detail": "Database error occurred. Please try again."},
+            status_code=503,
+        )
+    except Exception:
+        _log.exception("mcp_oauth.token.unexpected_error", extra={"client_id": client_id})
+        return JSONResponse(
+            {"error": "server_error", "detail": "An unexpected error occurred"},
+            status_code=500,
+        )
 
 
 # ---------------------------------------------------------------------------

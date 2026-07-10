@@ -124,12 +124,12 @@ OAuth 2.0 authorization code grant for MCP client authentication, with client re
 - [x] POST /api/v1/mcp/oauth/clients returns 503 on SQLAlchemyError (DB connection failure)
 - [x] GET /api/v1/mcp/oauth/clients returns 503 on SQLAlchemyError
 - [x] DELETE /api/v1/mcp/oauth/clients/{id} returns 503 on SQLAlchemyError
-- [ ] _oauth_authorize catches JSON decode error → 400 invalid_request
-- [ ] _oauth_token catches JSON decode error → 400 invalid_request
-- [ ] _oauth_authorize broad except Exception → 400 with error detail
-- [ ] _oauth_token broad except Exception → 400 invalid_grant
-- [ ] McpAuthMiddleware OAuth path catches JWTError → 401
-- [ ] McpAuthMiddleware OAuth path catches Exception on family check → 401
+- [x] _oauth_authorize catches JSON decode error → 400 invalid_request
+- [x] _oauth_token catches JSON decode error → 400 invalid_request
+- [x] _oauth_authorize returns 501 on ProgrammingError, 503 on SQLAlchemyError, 500 on unexpected
+- [x] _oauth_token returns 501 on ProgrammingError, 503 on SQLAlchemyError, 500 on unexpected (fixed: broad except Exception no longer swallows 501)
+- [x] McpAuthMiddleware OAuth path catches JWTError → 401
+- [x] McpAuthMiddleware OAuth path catches Exception on family check → 401
 
 ## Additional Edge Cases
 - [x] client_secret never stored in plaintext — only SHA-256 hash persisted
@@ -140,22 +140,25 @@ OAuth 2.0 authorization code grant for MCP client authentication, with client re
 - [x] Invalid/expired authorization codes handled in consume_authorization_code
 - [x] Code-to-client binding prevents cross-client consumption
 - [x] redirect_uri consistency enforced between authorize and token exchange
-- [ ] Client deletion cascades to auth codes and token families — verified in test
-- [ ] MODULO_PUBLIC_URL checked in both authorize and CRUD routes
+- [x] RLS context set in _oauth_authorize and _oauth_token protocol handlers before creating records (fixed)
+- [x] Client deletion cascades to auth codes and token families — verified in test
+- [x] MODULO_PUBLIC_URL checked in both authorize and CRUD routes
 - [ ] State parameter echoed but not validated server-side — potential CSRF gap
 - [ ] Code challenge_method accepted but not stored or validated (PKCE unimplemented)
 
 ## Resilience & Integration Robustness
-- [ ] Database session management: all CRUD routes use `async with session.begin()` for atomicity
-- [ ] Broad except Exception in protocol endpoints prevents crash but may mask errors
+- [x] Database session management: all CRUD routes use `async with session.begin()` for atomicity
+- [x] Broad except in _oauth_authorize and _oauth_token now mapped to proper error codes (501/503/500) instead of masking
 - [ ] No timeout on authorization code expiry enforcement (10-min TTL inherent, not externally configurable)
 - [ ] Rate limiting via RateLimiterMiddleware applied to token exchange endpoint
 - [ ] OAuth token family blacklist checked on every middleware validation
-- [ ] Session factory failure in _oauth_authorize/_oauth_token would propagate as 500
+- [x] Session factory failure in _oauth_authorize/_oauth_token caught and mapped to 500
 - [ ] McpAuthMiddleware OAuth path has no unit test coverage
+- [x] RLS context set on sessions in protocol handlers before creating auth codes and token families
 
 ## QA History
 - 2026-07-05: Cross-cutting QA (index 159): Fixed status covered→partial. Added ProgrammingError→501 and SQLAlchemyError→503 catches to all 3 CRUD routes with _log.warning calls. Added Error Handling section (12 checkboxes), Additional Edge Cases section (12 checkboxes), Resilience & Integration Robustness section (7 checkboxes). Added QA History section. Documented PKCE gap: BDD scenarios pass via mocked step definitions, not real implementation. Documented refresh_token gap: grant_type unimplemented, BDD scenarios marked xfail. Created website docs stub at Website/modulo-website/src/docs/mcp-oauth.md. Status: partial.
+- 2026-07-10: Cross-cutting QA (index 361): Fixed RLS context missing in _oauth_authorize and _oauth_token protocol handlers — both now call set_rls_org() before creating auth codes/token families. Fixed broad except Exception in _oauth_token that silently swallowed ProgrammingError→501 (consume_authorization_code's migration-not-run error was converted to opaque 400 invalid_grant). Added outer error handling with proper 501/503/500 codes to both protocol handlers. Added missing SQLAlchemy imports. Added RLS to Additional Edge Cases (checked). Updated Error Handling checkboxes (now all [x]). Updated Resilience & Integration Robustness checkboxes. Status: partial.
 
 ## Remaining Gaps
 
