@@ -2,6 +2,8 @@
 
 from typing import Any, cast
 
+import xmlrpc.client  # noqa: I001 — stdlib import after defusedxml monkey-patch
+
 import defusedxml.xmlrpc
 import httpx
 
@@ -98,7 +100,7 @@ class PyPIConnector(ConnectorBase):
             raise ValueError("PyPI search query requires 'text' in filters")
         spec = {"name": text, "summary": text}
         operator = q.filters.get("operator", "and")
-        xml_body = defusedxml.xmlrpc.dumps((spec, operator), "search")
+        xml_body = xmlrpc.client.dumps((spec, operator), "search")
 
         async with httpx.AsyncClient(
             base_url=_API_BASE,
@@ -106,7 +108,7 @@ class PyPIConnector(ConnectorBase):
         ) as c:
             resp = await c.post("/", content=xml_body, headers={"Content-Type": "text/xml"})
             resp.raise_for_status()
-            results: list[dict[str, Any]] = cast("list[dict[str, Any]]", defusedxml.xmlrpc.loads(resp.text)[0][0])
+            results: list[dict[str, Any]] = cast("list[dict[str, Any]]", xmlrpc.client.loads(resp.text)[0][0])
         records = []
         for r in results:
             records.append(
