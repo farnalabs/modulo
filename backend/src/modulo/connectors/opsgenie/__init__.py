@@ -190,7 +190,7 @@ class OpsgenieConnector(ConnectorBase):
         )
 
     async def _query_on_calls(self, c: httpx.AsyncClient, q: ConnectorQuery) -> ConnectorResult:
-        schedule_id = q.filters.get("schedule_id")
+        schedule_id = q.filters.get("schedule_id") or q.cursor
         if not schedule_id:
             raise ValueError("Opsgenie on_calls query requires 'schedule_id' in filters or cursor")
         identifier = cast(str, schedule_id)
