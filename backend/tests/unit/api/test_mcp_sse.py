@@ -223,7 +223,7 @@ class TestHandlerPerEventAuth:
         mock_validate_auth: AsyncMock,
     ) -> None:
         result = await list_pipelines_tool(page=1, page_size=20)
-        assert result["error"] == "internal_error"
+        assert result["error"] == "auth_expired"
         assert "revoked" in result.get("detail", "").lower() or "expired" in result.get("detail", "").lower()
         mock_validate_auth.assert_called_once()
 
@@ -235,7 +235,7 @@ class TestHandlerPerEventAuth:
         mock_validate_auth: AsyncMock,
     ) -> None:
         result = await trigger_pipeline(pipeline_id=str(uuid.uuid4()))
-        assert result["error"] == "internal_error"
+        assert result["error"] == "auth_expired"
         mock_validate_auth.assert_called_once()
 
     @patch("modulo.api.mcp_server.validate_current_auth", return_value=False)
@@ -246,7 +246,7 @@ class TestHandlerPerEventAuth:
         mock_validate_auth: AsyncMock,
     ) -> None:
         result = await get_run_status(run_id=str(uuid.uuid4()))
-        assert result["error"] == "internal_error"
+        assert result["error"] == "auth_expired"
         mock_validate_auth.assert_called_once()
 
     @patch("modulo.api.mcp_server.validate_current_auth", return_value=False)
@@ -257,7 +257,7 @@ class TestHandlerPerEventAuth:
         mock_validate_auth: AsyncMock,
     ) -> None:
         result = await list_pending_hitl(page=1, page_size=20)
-        assert result["error"] == "internal_error"
+        assert result["error"] == "auth_expired"
         mock_validate_auth.assert_called_once()
 
     @patch("modulo.api.mcp_server.validate_current_auth", return_value=False)
@@ -267,7 +267,7 @@ class TestHandlerPerEventAuth:
             gate_id="gate1",
             action="claim",
         )
-        assert result["error"] == "internal_error"
+        assert result["error"] == "auth_expired"
         mock_validate_auth.assert_called_once()
 
     @patch("modulo.api.mcp_server.validate_current_auth", return_value=False)
@@ -276,7 +276,7 @@ class TestHandlerPerEventAuth:
         mock_validate_auth: AsyncMock,
     ) -> None:
         result = await copy_library_primitive(primitive_id=str(uuid.uuid4()))
-        assert result["error"] == "internal_error"
+        assert result["error"] == "auth_expired"
         mock_validate_auth.assert_called_once()
 
     @patch("modulo.api.mcp_server.validate_current_auth", return_value=False)
@@ -287,7 +287,7 @@ class TestHandlerPerEventAuth:
         mock_validate_auth: AsyncMock,
     ) -> None:
         result = await get_run_output(run_id=str(uuid.uuid4()), node_id="node1")
-        assert result["error"] == "internal_error"
+        assert result["error"] == "auth_expired"
         mock_validate_auth.assert_called_once()
 
     @patch("modulo.api.mcp_server.validate_current_auth", return_value=False)
