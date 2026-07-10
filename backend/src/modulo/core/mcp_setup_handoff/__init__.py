@@ -9,6 +9,7 @@ Flow:
 Future tools: call create_handoff() and consume_handoff().
 """
 
+import hashlib
 import secrets
 import uuid
 from datetime import UTC, datetime, timedelta
@@ -28,7 +29,6 @@ def _generate_token() -> str:
 
 
 def _hash_token(token: str) -> str:
-    import hashlib
     return hashlib.sha256(token.encode()).hexdigest()
 
 
@@ -57,7 +57,7 @@ async def create_handoff(
 
     settings = get_settings()
     base_url = settings.modulo_public_url.rstrip("/")
-    setup_url = f"{base_url}/setup/{resource_type}?token={raw_token}"
+    setup_url = f"{base_url}/setup/{resource_type}/{resource_id}?token={raw_token}"
 
     return {
         "setup_url": setup_url,
