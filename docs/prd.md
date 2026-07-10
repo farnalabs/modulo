@@ -1057,9 +1057,15 @@ Each gate carries:
 
 #### Long-Running Pipeline Retention
 Pipelines paused at HITL may persist for days or weeks. LangGraph checkpoints accumulate:
-- **Run retention**: configurable TTL after run reaches terminal state (default: 90 days). **Retention job**: runs nightly (01:00 UTC). Query: runs where `terminal_reached_at < NOW() - retention_days * interval '1 day'`. Action: delete LangGraph checkpoint blobs (`langgraph.*` schema rows for the run's thread ID); retain `runs` metadata row and `audit_events`. Runs configured for purge (rather than archive) also delete the `runs` metadata row. Processes in batches of 500 to avoid long-running transactions. Advisory lock `'run_retention_job'`. Job failure is logged as OTel error span; does not affect active runs.
+- **Run retention**: configurable TTL after run reaches terminal state (default: 90 days). **Retention job** (`cleanup_old_runs`): processes in batches of 500. Query: runs where `created_at < NOW() - retention_days * interval '1 day'` and `status IN (complete, failed, eval_failed, cancelled)`. Action: delete the entire `runs` metadata row (LangGraph checkpoint blobs cascade on delete). Job failure is logged to the application logger; does not affect active runs.
 - **HITL overdue warning**: configurable per-gate. If a run remains in `awaiting_human` beyond N hours, a new notification fires and the UI surfaces a warning badge.
 - **Admin purge action**: admins can force-terminate and archive stale runs.
+
+##### Run Payload Retention
+When `retain_payload` is enabled on a run, the run's `input_payload` and `outputs_json` columns are retained past the run's lifecycle. The **payload retention job** (`cleanup_retained_payloads`) nulls these columns for runs older than the retention period (default: 30 days) in terminal states. Processes in batches of 500.
+
+##### TriggerEvent Log Cleanup
+The `TriggerEvent` log accumulates records for every webhook trigger activation. The **trigger event cleanup job** (`cleanup_old_webhook_events`) deletes events older than the retention period (default: 30 days) in batches of 1000. Runs on a scheduled loop (`cleanup_scheduler_loop`, every 60 minutes) and as a Celery periodic task. Failure of the cleanup job does not block webhook processing — stale events cause no functional harm beyond table bloat.
 
 ### 8.9 Error Handling
 
