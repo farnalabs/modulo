@@ -815,7 +815,7 @@ async function saveAccessList() {
   const err = await putConfig({
     access_list: { user_ids: userIds, team_ids: teamIds, org_roles: accessList.selectedRoles },
   })
-  if (err) accessError.value = `Failed to save access list: ${formatApiError(err)}`
+  if (err) accessError.value = `Failed to save access list: ${err}`
   accessSaving.value = false
   configSaving.value = false
 }
@@ -850,7 +850,7 @@ async function saveModelConfig() {
     allowed_providers: modelConfig.allowedProviders,
     allowed_models: allowedModels,
   })
-  if (err) modelError.value = `Failed to save model config: ${formatApiError(err)}`
+  if (err) modelError.value = `Failed to save model config: ${err}`
   modelSaving.value = false
   configSaving.value = false
 }
@@ -866,7 +866,7 @@ async function saveSystemPrompt() {
   promptSaving.value = true
   promptError.value = null
   const err = await putConfig({ system_prompt: systemPrompt.value })
-  if (err) promptError.value = `Failed to save system prompt: ${formatApiError(err)}`
+  if (err) promptError.value = `Failed to save system prompt: ${err}`
   promptSaving.value = false
   configSaving.value = false
 }
@@ -902,28 +902,28 @@ function getDefaultPerms(): Record<string, string> {
 
 function applyModePreset() {
   if (toolPermMode.value === 'custom') return
-  const defaults = getDefaultPerms()
+  const perms = getDefaultPerms()
   if (toolPermMode.value === 'locked_down') {
-    Object.keys(defaults).forEach(k => {
-      if (['navigate', 'extract', 'extract_all', 'get_page_interactables', 'wait', 'get_url'].includes(k)) {
-        defaults[k] = 'always_allowed'
-      } else {
-        defaults[k] = 'requires_approval'
-      }
-    })
+    const alwaysAllowed = new Set(['navigate', 'extract', 'extract_all', 'get_page_interactables', 'wait', 'get_url'])
+    for (const key of Object.keys(perms)) {
+      perms[key] = alwaysAllowed.has(key) ? 'always_allowed' : 'requires_approval'
+    }
   }
-  toolPerms.value = { ...defaults }
+  toolPerms.value = { ...perms }
 }
 
 async function saveToolPerms() {
+  if (configSaving.value) return
+  configSaving.value = true
   toolPermSaving.value = true
   toolPermError.value = null
   const err = await putConfig({
     permission_mode: toolPermMode.value,
     tool_permissions: toolPerms.value,
   })
-  if (err) toolPermError.value = `Failed to save: ${formatApiError(err)}`
+  if (err) toolPermError.value = `Failed to save: ${err}`
   toolPermSaving.value = false
+  configSaving.value = false
 }
 
 function loadPermsFromConfig(cfg: any) {
@@ -972,7 +972,7 @@ async function saveSafetyConfig() {
     allowed_selectors: allowedSelectors,
     allowed_page_patterns: allowedPagePatterns,
   })
-  if (err) safetyError.value = `Failed to save safety config: ${formatApiError(err)}`
+  if (err) safetyError.value = `Failed to save safety config: ${err}`
   safetySaving.value = false
   configSaving.value = false
 }
@@ -987,19 +987,10 @@ async function saveGuidance() {
   configSaving.value = true
   guidanceSaving.value = true
   guidanceError.value = null
-  try {
-    const { error: err } = await (api as any).PUT('/api/v1/admin/remy/config', {
-      body: { additional_guidance: guidance.value },
-    })
-    if (err) {
-      guidanceError.value = `Failed to save guidance: ${formatApiError(err)}`
-    }
-  } catch (e: unknown) {
-    guidanceError.value = `Failed to save guidance: ${formatApiError(e)}`
-  } finally {
-    guidanceSaving.value = false
-    configSaving.value = false
-  }
+  const err = await putConfig({ additional_guidance: guidance.value })
+  if (err) guidanceError.value = `Failed to save guidance: ${err}`
+  guidanceSaving.value = false
+  configSaving.value = false
 }
 
 async function loadContextSources() {
@@ -1026,6 +1017,8 @@ async function loadContextSources() {
 }
 
 async function saveContextSource(sourceKey: string) {
+  if (configSaving.value) return
+  configSaving.value = true
   contextSaving.value = true
   contextError.value = null
   try {
@@ -1036,17 +1029,18 @@ async function saveContextSource(sourceKey: string) {
     })
     if (err) {
       contextError.value = `Failed to save source: ${formatApiError(err)}`
-      await loadContextSources()
     }
   } catch (e: unknown) {
     contextError.value = `Failed to save source: ${formatApiError(e)}`
-    await loadContextSources()
   } finally {
     contextSaving.value = false
+    configSaving.value = false
   }
 }
 
 async function saveSkillSourceMode(skill: SkillItem) {
+  if (configSaving.value) return
+  configSaving.value = true
   skillModeSaving.value[skill.id] = true
   try {
     const mode = skillModes.value[skill.id] || 'tool'
@@ -1061,6 +1055,7 @@ async function saveSkillSourceMode(skill: SkillItem) {
     contextError.value = `Failed to save skill source mode: ${formatApiError(e)}`
   } finally {
     skillModeSaving.value[skill.id] = false
+    configSaving.value = false
   }
 }
 
@@ -1090,12 +1085,16 @@ async function loadUsers() {
     })
     if (err) {
       console.warn('Failed to load users', err)
-    } else if (data) {
+      users.value = []
+      return
+    }
+    if (data) {
       users.value = (data as { items: Array<{ id: string; display_name: string; email: string }> }).items || []
       users.value.sort((a, b) => a.display_name.localeCompare(b.display_name))
     }
-  } catch (e) {
+  } catch (e: unknown) {
     console.warn('Failed to load users', e)
+    users.value = []
   }
 }
 
@@ -1106,7 +1105,10 @@ async function loadTeams() {
     })
     if (err) {
       console.warn('Failed to load teams', err)
-    } else if (data) {
+      teams.value = []
+      return
+    }
+    if (data) {
       const items = (data as { items: Array<{ id: string; name: string; member_count: number }> }).items || []
       teams.value = items.map(t => ({
         ...t,
@@ -1114,8 +1116,9 @@ async function loadTeams() {
       }))
       teams.value.sort((a, b) => a.name.localeCompare(b.name))
     }
-  } catch (e) {
+  } catch (e: unknown) {
     console.warn('Failed to load teams', e)
+    teams.value = []
   }
 }
 
@@ -1157,7 +1160,6 @@ async function loadSkills() {
   } catch (e: unknown) {
     skillError.value = `Failed to load skills: ${formatApiError(e)}`
   }
-  initSkillModes()
 }
 
 function initSkillModes() {
@@ -1171,7 +1173,11 @@ function initSkillModes() {
 async function loadConfig() {
   try {
     const { data, error: err } = await (api as any).GET('/api/v1/admin/remy/config')
-    if (!err && data) {
+    if (err) {
+      loadError.value = `Failed to load Remy config: ${formatApiError(err)}`
+      return
+    }
+    if (data) {
       const cfg = data as {
         access_list?: { user_ids?: string[]; team_ids?: string[]; org_roles?: string[] }
         default_provider?: string
@@ -1181,6 +1187,15 @@ async function loadConfig() {
         allowed_models?: string[]
         system_prompt?: string
         additional_guidance?: string
+        permission_mode?: string
+        tool_permissions?: Record<string, string>
+        rate_limit_max_actions?: number
+        rate_limit_window_seconds?: number
+        auto_execute_threshold?: number
+        nogo_page_patterns?: string[]
+        nogo_selector_patterns?: string[]
+        allowed_selectors?: string[]
+        allowed_page_patterns?: string[]
       }
       const acl = cfg.access_list || {}
       accessList.userIds = acl.user_ids || []
@@ -1204,11 +1219,16 @@ async function loadConfig() {
 async function loadAvailableProviders() {
   try {
     const { data, error: err } = await (api as any).GET('/api/v1/admin/remy/available-providers')
-    if (!err && data) {
+    if (err) {
+      console.warn('Failed to load available providers', err)
+      return
+    }
+    if (data) {
       availableProviders.value = data as { native: ProviderInfo[]; customTypes: ProviderInfo[] }
     }
-  } catch (e) {
+  } catch (e: unknown) {
     console.warn('Failed to load available providers', e)
+    availableProviders.value = { native: [], customTypes: [] }
   }
 }
 
@@ -1219,6 +1239,9 @@ async function loadProviders() {
       params: { query: { page_size: 100 } },
     })
     if (err) {
+      console.warn('Failed to load providers', err)
+      providerStatus.value = []
+      customProviderStatus.value = []
       return
     }
     const backends = (data?.items ?? []) as { provider: string; has_credentials: boolean }[]
@@ -1231,8 +1254,10 @@ async function loadProviders() {
       ...p,
       configured: configuredProviders.has(p.id),
     }))
-  } catch (e) {
+  } catch (e: unknown) {
     console.warn('Failed to load providers', e)
+    providerStatus.value = []
+    customProviderStatus.value = []
   } finally {
     providersLoading.value = false
   }

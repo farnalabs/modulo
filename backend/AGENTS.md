@@ -171,3 +171,7 @@ In-memory fallbacks exist at many call sites (rate limiter `core/rate_limiter.py
 - Setting `self._initialised = True` at the end of an async `initialise()` method WITHOUT a lock creates a race window. Two concurrent coroutines can both pass the `if self._initialised: return` guard (the check is between the flag being False and being set), then interleave their state mutations into `self._connectors`. Fix: use `asyncio.Lock()` with a double-checked locking pattern — check the flag outside the lock for fast-path return, then re-check inside the lock before the write path. Found in `ConnectorHub.initialise()` at `backend/src/modulo/core/connector_hub/__init__.py`.
 
 The Remy in-memory event registries (`_pending_ui_results`, `_pending_permissions`, `_session_approvals` in `remy.py:93-97`) have NO fallback at all — they are process-local `asyncio.Event` objects. Any deploy restart destroys in-flight Remy conversations. A Redis pub/sub replacement for these registries is the highest-priority follow-up.
+
+### `set_rls_org` must be called inside `session.begin()`
+
+- `set_rls_org(session, org_id)` calls `_ensure_active_transaction()` which raises `RuntimeError` if there is no active transaction. With `session.autobegin=False` (the DI default), calling `set_rls_org` before `async with session.begin():` will always crash. Always place `set_rls_org` inside the `async with session.begin():` block, never before it.

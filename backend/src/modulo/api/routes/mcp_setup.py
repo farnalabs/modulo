@@ -3,8 +3,10 @@
 import logging
 import uuid
 
+from cryptography.fernet import Fernet, InvalidToken
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, Field
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.api.dependencies import get_db_session
@@ -21,8 +23,8 @@ router = APIRouter(prefix="/api/v1", tags=["mcp-setup"])
 
 
 class CompleteSetupRequest(BaseModel):
-    token: str = Field(..., description="One-time setup token from the MCP tool response")
-    api_key: str = Field(..., description="The API key to configure")
+    token: str = Field(..., min_length=1, description="One-time setup token from the MCP tool response")
+    api_key: str = Field(..., min_length=1, description="The API key to configure")
 
 
 @router.post("/model-backends/{backend_id}/complete-setup")
@@ -33,65 +35,97 @@ async def complete_model_backend_setup(
     principal: AuthenticatedPrincipal = Depends(get_current_user),
 ) -> dict:
     """Complete the setup of a model backend by providing the API key via browser."""
-    from cryptography.fernet import Fernet, InvalidToken
-
     settings = get_settings()
     org_id = principal.organisation_id
 
-    await set_rls_org(session, org_id)
-
-    async with session.begin():
-        record = await consume_handoff(
-            session,
-            raw_token=body.token,
-            resource_type="model-backend",
-            org_id=org_id,
-        )
-        if record is None:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail={"error": "invalid_token", "detail": "Token not found, expired, or already used"},
+    try:
+        async with session.begin():
+            await set_rls_org(session, org_id)
+            record = await consume_handoff(
+                session,
+                raw_token=body.token,
+                resource_type="model-backend",
+                org_id=org_id,
             )
+            if record is None:
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail={"error": "invalid_token", "detail": "Token not found, expired, or already used"},
+                )
 
-        if record.resource_id != backend_id:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail={"error": "token_mismatch", "detail": "Token does not match the specified backend"},
-            )
+            if str(record.resource_id) != str(backend_id):
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail={"error": "token_mismatch", "detail": "Token does not match the specified backend"},
+                )
 
-        # Verify the backend is still in pending_setup
-        existing = await get_model_backend(session, backend_id)
-        if existing is None:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail={"error": "backend_not_found", "backend_id": str(backend_id)},
-            )
-        if existing.status != "pending_setup":
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail={"error": "already_configured", "detail": "Backend is already configured"},
-            )
+            existing = await get_model_backend(session, backend_id)
+            if existing is None:
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail={"error": "backend_not_found", "backend_id": str(backend_id)},
+                )
+            if existing.status != "pending_setup":
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail={"error": "already_configured", "detail": "Backend is already configured"},
+                )
 
-        # Encrypt the API key
-        try:
-            fernet = Fernet(settings.fernet_key.encode())
-        except (InvalidToken, ValueError, TypeError) as exc:
-            _log.error("Failed to initialise Fernet: %s", exc)
+            fernet_key = settings.fernet_key
+            if not fernet_key:
+                _log.error("FERNET_KEY is not configured")
+                raise HTTPException(
+                    status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                    detail={"error": "encryption_config_error", "detail": "Encryption is not configured"},
+                )
+
+            try:
+                fernet = Fernet(fernet_key.encode())
+            except (InvalidToken, ValueError, TypeError) as exc:
+                _log.error("Failed to initialise Fernet: %s", exc)
+                raise HTTPException(
+                    status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                    detail={"error": "encryption_error", "detail": "Failed to initialise encryption"},
+                ) from exc
+
+            try:
+                ciphertext = fernet.encrypt(body.api_key.encode())
+            except Exception as exc:
+                _log.error("Failed to encrypt API key: %s", exc)
+                raise HTTPException(
+                    status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                    detail={"error": "encryption_error", "detail": "Failed to encrypt API key"},
+                ) from exc
+
+            updates = {
+                "credentials_ciphertext": ciphertext,
+                "status": "active",
+            }
+            updated = await update_model_backend(session, backend_id, updates)
+
+        if updated is None:
+            _log.error("Failed to update model backend %s: returned None", backend_id)
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail={"error": "encryption_error", "detail": "Failed to initialise encryption"},
-            ) from exc
+                detail={"error": "update_failed", "detail": "Failed to update model backend"},
+            )
 
-        ciphertext = fernet.encrypt(body.api_key.encode())
-
-        updates = {
-            "credentials_ciphertext": ciphertext,
-            "status": "active",
+        return {
+            "status": "ok",
+            "backend_id": str(updated.id),
+            "name": updated.name,
         }
-        updated = await update_model_backend(session, backend_id, updates)
-
-    return {
-        "status": "ok",
-        "backend_id": str(updated.id),
-        "name": updated.name,
-    }
+    except HTTPException:
+        raise
+    except SQLAlchemyError as exc:
+        _log.error("Database error completing setup for backend %s: %s", backend_id, exc)
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail={"error": "database_error", "detail": "A database error occurred"},
+        ) from exc
+    except Exception as exc:
+        _log.error("Unexpected error completing setup for backend %s: %s", backend_id, exc)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail={"error": "internal_error", "detail": "An unexpected error occurred"},
+        ) from exc
