@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { mount, flushPromises } from '@vue/test-utils'
 import { createRouter, createWebHistory } from 'vue-router'
 import { nextTick } from 'vue'
+import { createPinia, setActivePinia } from 'pinia'
 
 const mockResponses: Record<string, unknown> = {
   default: { items: [], total: 0, page: 1, page_size: 100 },
@@ -11,6 +12,16 @@ vi.mock('../composables/useApi', () => ({
   useApi: vi.fn(() => ({
     get: vi.fn((url: string) => Promise.resolve(mockResponses[url] ?? mockResponses.default)),
   })),
+}))
+
+vi.mock('../lib/api/client', () => ({
+  api: {
+    GET: vi.fn().mockResolvedValue({ data: null, error: undefined }),
+    PUT: vi.fn().mockResolvedValue({ data: null, error: undefined }),
+    POST: vi.fn().mockResolvedValue({ data: null, error: undefined }),
+    DELETE: vi.fn().mockResolvedValue({ data: null, error: undefined }),
+  },
+  getAccessToken: vi.fn().mockReturnValue('mock-token'),
 }))
 
 import PipelineListView from '../views/PipelineListView.vue'
@@ -26,6 +37,7 @@ const router = createRouter({
 
 beforeEach(() => {
   vi.clearAllMocks()
+  setActivePinia(createPinia())
   mockResponses['/api/v1/pipelines?page_size=100'] = { items: [], total: 0, page: 1, page_size: 100 }
 })
 

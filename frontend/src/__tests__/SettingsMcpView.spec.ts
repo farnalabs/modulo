@@ -219,7 +219,7 @@ describe('SettingsMcpView', () => {
     await nextTick()
     await nextTick()
 
-    expect(wrapper.text()).toContain('Coming soon')
+    expect(wrapper.text()).toContain('Configuration Snippets')
   })
 
   it('copy button copies server URL to clipboard', async () => {
@@ -249,6 +249,6 @@ describe('SettingsMcpView', () => {
     await nextTick()
     await nextTick()
     expect(wrapper.text()).toContain('Registered OAuth Clients')
-    expect(wrapper.text()).toContain('Coming soon')
+    expect(wrapper.text()).toContain('coming in v0.4')
   })
 })
