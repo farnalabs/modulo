@@ -49,7 +49,11 @@ async def cleanup_old_runs(
             break
 
         await db_session.execute(delete(Run).where(Run.id.in_(ids)))
-        await db_session.commit()
+        try:
+            await db_session.commit()
+        except Exception:
+            _log.exception("Failed to commit run retention cleanup for %d runs", len(ids))
+            raise
         total += len(ids)
 
         if len(ids) < BATCH_SIZE:
