@@ -168,12 +168,12 @@ test.describe('View Modes Admin CRUD', () => {
 
     const editButtons = page.getByTestId('admin-views-edit')
     await expect(editButtons).toHaveCount(2)
-    await editButtons.first().click({ force: true })
+    await editButtons.first().evaluate((el: HTMLElement) => el.click())
 
     await expect(page.getByTestId('admin-views-form-title')).toHaveText('Edit View')
     await expect(page.getByTestId('admin-views-name-input')).toHaveValue('Active Runs')
     await expect(page.getByTestId('admin-views-type-select')).toHaveValue('table')
-    await expect(page.getByTestId('admin-views-filters-input')).toContainText('status')
+    await expect(page.getByTestId('admin-views-filters-input')).toHaveValue(/status/)
     await expect(page.getByTestId('admin-views-columns-input')).toHaveValue('name, status, created_at')
     await expect(page.getByTestId('admin-views-sort-by-input')).toHaveValue('created_at')
     await expect(page.getByTestId('admin-views-sort-order-select')).toHaveValue('desc')
@@ -196,17 +196,17 @@ test.describe('View Modes Admin CRUD', () => {
 
     const deleteButtons = page.getByTestId('admin-views-delete')
     await expect(deleteButtons).toHaveCount(2)
-    await deleteButtons.first().click({ force: true })
+    await deleteButtons.first().evaluate((el: HTMLElement) => el.click())
 
     await expect(page.getByTestId('admin-views-delete-confirm')).toBeVisible()
     await expect(page.getByTestId('admin-views-delete-cancel')).toBeVisible()
     await expect(page.getByTestId('admin-views-delete')).toHaveCount(2)
 
-    await page.getByTestId('admin-views-delete-cancel').click({ force: true })
+    await page.getByTestId('admin-views-delete-cancel').evaluate((el: HTMLElement) => el.click())
     await expect(page.getByTestId('admin-views-delete-confirm')).not.toBeVisible({ timeout: 3000 })
 
-    await deleteButtons.first().click({ force: true })
-    await page.getByTestId('admin-views-delete-confirm').click({ force: true })
+    await deleteButtons.first().evaluate((el: HTMLElement) => el.click())
+    await page.getByTestId('admin-views-delete-confirm').evaluate((el: HTMLElement) => el.click())
     await page.waitForLoadState('networkidle')
 
     await expect(page.getByTestId('admin-views-delete-confirm')).not.toBeVisible({ timeout: 3000 })
