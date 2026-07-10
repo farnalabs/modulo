@@ -159,7 +159,7 @@ import GraduationDialog from './GraduationDialog.vue'
 import VersionHistoryDropdown from './VersionHistoryDropdown.vue'
 import { useApi } from '../../../composables/useApi'
 import { formatApiError } from '../../../lib/api/formatError'
-import type { StageType, LifecycleStage, LifecycleEdge, LifecycleMapVersion, PipelineSummary } from '../../../types/lifecycleMap'
+import type { StageType, TriggerType, LifecycleStage, LifecycleEdge, LifecycleMapVersion, PipelineSummary } from '../../../types/lifecycleMap'
 
 function genId(): string {
   return typeof crypto !== 'undefined' && crypto.randomUUID ? crypto.randomUUID() : Date.now().toString(36) + Math.random().toString(36).slice(2, 10)
@@ -193,7 +193,7 @@ const showGraduation = ref(false)
 const graduationStageId = ref('')
 const graduationStageName = ref('')
 
-const nodeTypes = { 'lifecycle-stage': 'lifecycle-stage' }
+const nodeTypes = {}
 
 const selectedNodeData = computed(() => {
   if (!selectedNode.value) return { name: '', description: '', stage_type: 'placeholder' as StageType, pipeline_id: null, external_url: null, owner: null, graduated: false }

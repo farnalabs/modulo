@@ -201,8 +201,9 @@ export const useLifecycleMapsStore = defineStore('lifecycleMaps', () => {
     try {
       const data = await get<{ items: PipelineSummary[] }>('/api/v1/pipelines?limit=200')
       pipelines.value = data.items || []
-    } catch {
+    } catch (e: unknown) {
       pipelines.value = []
+      console.warn('Failed to fetch pipelines:', e)
     }
   }
 

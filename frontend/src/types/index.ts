@@ -5,3 +5,4 @@ export type {
   ParameterPortType, ParameterPort,
   SchemaField, CompositeDefinition,
 } from './pipeline'
+export type { StageType, TriggerType, EstimatedFrequency, LifecycleStage, LifecycleEdge, LifecycleMapVersion, LifecycleMap, PipelineSummary } from './lifecycleMap'
