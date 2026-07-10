@@ -8,29 +8,25 @@ Feature: Lifecycle Map Versioning
 
   Scenario: Creating a new map starts at version 1
     Given a lifecycle map named "Release Workflow" exists
-    When I GET /api/v1/lifecycle-maps/{id}
+    When I get the lifecycle map by id
     Then the response status is 200
     And the lifecycle map has version 1
 
   Scenario: Explicit content save creates new version
     Given a lifecycle map named "Release Workflow" exists
-    When I PUT /api/v1/lifecycle-maps/{id} with content_json:
-      | stages: [{id: "stage-a", name: "Build"}] |
+    When I update the lifecycle map content to include 1 stage
     Then the response status is 200
     And the lifecycle map has version 2
 
   Scenario: Multiple content updates increment version
     Given a lifecycle map named "Release Workflow" exists
-    When I PUT /api/v1/lifecycle-maps/{id} with content_json:
-      | stages: [{id: "stage-a", name: "Build"}] |
-    When I PUT /api/v1/lifecycle-maps/{id} with content_json:
-      | stages: [{id: "stage-a", name: "Build"}, {id: "stage-b", name: "Test"}] |
+    When I update the lifecycle map content to include 1 stage
+    When I update the lifecycle map content to include 2 stages
     Then the response status is 200
     And the lifecycle map has version 3
 
   Scenario: Metadata-only updates do not increment version
     Given a lifecycle map named "Release Workflow" exists with version 5
-    When I PUT /api/v1/lifecycle-maps/{id} with:
-      | description | Updated description only |
+    When I update the lifecycle map description to "Updated description only"
     Then the response status is 200
     And the lifecycle map has version 5
