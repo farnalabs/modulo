@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 """22 canonical library agent primitives.
 
 Each dict follows the pattern established in
@@ -9,6 +7,7 @@ prompt template, input/output schemas, and tags needed to
 register a :class:`~modulo.db.models.library_primitive.LibraryPrimitive`.
 """
 
+from __future__ import annotations
 
 from typing import Any
 
