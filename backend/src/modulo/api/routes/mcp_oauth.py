@@ -107,7 +107,7 @@ async def register_oauth_client(
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
-        )
+        ) from None
     except SQLAlchemyError:
         _log.warning(
             "mcp_oauth.register_oauth_client.sqlalchemy_error", extra={"org_id": str(principal.organisation_id)}
@@ -115,7 +115,7 @@ async def register_oauth_client(
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database error occurred. Please try again.",
-        )
+        ) from None
     except HTTPException:
         raise
     except Exception as e:
@@ -149,13 +149,13 @@ async def list_oauth_clients_endpoint(
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
-        )
+        ) from None
     except SQLAlchemyError:
         _log.warning("mcp_oauth.list_oauth_clients.sqlalchemy_error", extra={"org_id": str(principal.organisation_id)})
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database error occurred. Please try again.",
-        )
+        ) from None
     except HTTPException:
         raise
     except Exception as e:
@@ -193,7 +193,7 @@ async def remove_oauth_client(
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
-        )
+        ) from None
     except SQLAlchemyError:
         _log.warning(
             "mcp_oauth.remove_oauth_client.sqlalchemy_error",
@@ -202,7 +202,7 @@ async def remove_oauth_client(
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database error occurred. Please try again.",
-        )
+        ) from None
     except HTTPException:
         raise
     except Exception as e:

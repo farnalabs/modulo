@@ -270,7 +270,7 @@ async def consume_authorization_code(
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="This feature is not available. Run database migrations to enable it.",
-        )
+        ) from None
 
     return auth_code
 
