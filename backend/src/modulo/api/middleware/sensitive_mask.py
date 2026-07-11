@@ -24,7 +24,6 @@ from modulo.db.models.sso_provider import SsoProvider
 from modulo.db.rls import set_rls_org
 from modulo.settings import Settings, get_settings
 
-logger = logging.getLogger(__name__)
 _log = logging.getLogger(__name__)
 
 SENSITIVE_VALUE_MASK = "\u2022\u2022\u2022\u2022\u2022\u2022"
@@ -174,12 +173,12 @@ async def reveal_sensitive_value(
             actual_value = await _fetch_value(body, session, principal)
 
     except ProgrammingError:
-        logger.exception("middleware.sensitive_mask")
+        _log.exception("middleware.sensitive_mask")
 
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="This feature is not available. Run database migrations to enable it.",
-        )
+        ) from None
 
     token = str(uuid.uuid4())
     redis: Redis | None = None

@@ -175,7 +175,7 @@ class HITLManager:
         except IntegrityError:
             existing = await self._get(session, run_id=run_id, gate_id=gate_id, org_id=org_id)
             if existing is None:
-                raise RuntimeError(f"Concurrent gate creation lost race for run={run_id} gate={gate_id}")
+                raise RuntimeError(f"Concurrent gate creation lost race for run={run_id} gate={gate_id}") from None
             return existing
         return gate
 
