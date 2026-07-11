@@ -3,9 +3,11 @@ id: feat-core-email-config
 prd: 8.11
 code:
   - backend/src/modulo/api/routes/admin_email.py
+  - backend/src/modulo/core/email_service.py
 bdd: []
-unit-tests: []
-depends-on: []
+unit-tests:
+  - backend/tests/unit/api/test_admin_email.py
+depends-on: [feat-core-notifications]
 status: partial
 ---
 
@@ -25,3 +27,9 @@ Organisation-level SMTP email configuration for sending transactional emails. Se
 - [x] DB errors return 503 Service Unavailable
 - [ ] Email templates configuration
 - [ ] Per-organisation email branding
+
+## Known Gaps
+
+- **No BDD coverage** — No `.feature` files for email configuration (GET/PUT settings, test email, password clearing). Should be added under `tests/bdd/features/notifications/email.feature`.
+- **Email templates not implemented** — No per-organisation email template system. Both unchecked behaviours require a template rendering pipeline (stored templates, variable substitution, HTML inlining).
+- **Per-organisation email branding not implemented** — No support for org-level from-name, logo, or footer customisation in outgoing emails.

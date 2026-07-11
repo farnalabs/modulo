@@ -63,6 +63,8 @@ async def admin_get_email_settings(
         )
     except HTTPException:
         raise
+    except asyncio.CancelledError:
+        raise
     except Exception:
         logger.exception("Unexpected error in admin_get_email_settings")
         raise HTTPException(
@@ -107,6 +109,8 @@ async def admin_update_email_settings(
         )
     except HTTPException:
         raise
+    except asyncio.CancelledError:
+        raise
     except Exception:
         logger.exception("Unexpected error in admin_update_email_settings (fetch)")
         raise HTTPException(
@@ -144,6 +148,8 @@ async def admin_update_email_settings(
             detail="Database error while updating email settings.",
         )
     except HTTPException:
+        raise
+    except asyncio.CancelledError:
         raise
     except Exception:
         logger.exception("Unexpected error in admin_update_email_settings (update)")
@@ -183,6 +189,8 @@ async def admin_test_email_settings(
             detail="Database error while fetching org for test-email.",
         )
     except HTTPException:
+        raise
+    except asyncio.CancelledError:
         raise
     except Exception:
         logger.exception("Unexpected error in admin_test_email_settings (fetch)")
