@@ -27,8 +27,8 @@ from modulo.core.remy.config_service import (
 class TestUIToolDefinitions:
     """Tests for _UI_TOOLS definitions and constants."""
 
-    def test_all_11_tools_defined(self):
-        assert len(_UI_TOOLS) == 11
+    def test_all_tools_defined(self):
+        assert len(_UI_TOOLS) == 13
 
     def test_tool_names_match_dict(self):
         assert set(_UI_TOOLS.keys()) == UI_TOOL_NAMES
@@ -46,6 +46,8 @@ class TestUIToolDefinitions:
             "go_back",
             "get_url",
             "press",
+            "get_manifest",
+            "undo_last_action",
         }
         assert required == UI_TOOL_NAMES
 
@@ -85,7 +87,7 @@ class TestToolConstants:
     def test_all_tools_covered_by_categories(self):
         categorized = READ_TOOLS | NAV_TOOLS | WRITE_TOOLS
         uncategorized = UI_TOOL_NAMES - categorized
-        assert uncategorized == {"wait"}, f"Unexpected uncategorized tools: {uncategorized}"
+        assert uncategorized == {"wait", "get_manifest", "undo_last_action"}, f"Unexpected uncategorized tools: {uncategorized}"
 
     def test_destructive_patterns(self):
         assert "delete" in DESTRUCTIVE_PATTERNS
@@ -133,10 +135,10 @@ class TestDestructivePatternDetection:
         for sel in innocent:
             assert not _has_destructive_pattern(sel), f"'{sel}' should not flag as destructive"
 
-    def test_message_deleted_does_not_false_positive(self):
-        assert not _has_destructive_pattern("[data-testid='message-deleted']")
-        assert not _has_destructive_pattern(".message-deleted-badge")
-        assert not _has_destructive_pattern("notification-deleted-label")
+    def test_message_deleted_is_caught_as_destructive(self):
+        assert _has_destructive_pattern("[data-testid='message-deleted']")
+        assert _has_destructive_pattern(".message-deleted-badge")
+        assert _has_destructive_pattern("notification-deleted-label")
 
 
 class TestRemyConfigDefaults:
@@ -150,9 +152,9 @@ class TestRemyConfigDefaults:
         config = RemyConfig()
         assert config.permission_mode == "safe"
 
-    def test_schema_version_bumped_to_2(self):
+    def test_schema_version_bumped_to_3(self):
         config = RemyConfig()
-        assert config.schema_version == 2
+        assert config.schema_version == 3
 
     def test_tool_permissions_defaults_are_independent(self):
         config1 = RemyConfig()
@@ -355,7 +357,7 @@ class TestGetAllToolDefinitions:
     def test_returns_list_of_dicts(self):
         result = self._get_definitions()
         assert isinstance(result, list)
-        assert len(result) == 11
+        assert len(result) == 13
 
     def test_each_entry_has_type_function(self):
         for entry in self._get_definitions():
@@ -383,7 +385,7 @@ class TestBuildToolDefinitionsForText:
         result = build_tool_definitions_for_text()
         assert "## Browser Tools Available (Text Mode)" in result
 
-    def test_includes_all_11_tools(self):
+    def test_includes_all_tools(self):
         result = build_tool_definitions_for_text()
         for name in UI_TOOL_NAMES:
             assert name in result
@@ -419,49 +421,49 @@ class TestSessionApproval:
     def setup_method(self) -> None:
         _session_approvals.clear()
 
-    def test_approved_same_page_not_expired(self) -> None:
+    async def test_approved_same_page_not_expired(self) -> None:
         _session_approvals["session-1"] = {
             "click": {
                 "page_path": "/admin/users",
                 "expires_at": datetime.now(UTC) + timedelta(minutes=30),
             },
         }
-        assert _is_approved_for_session("session-1", "click", "/admin/users")
+        assert await _is_approved_for_session("session-1", "click", "/admin/users")
 
-    def test_different_page_not_approved(self) -> None:
+    async def test_different_page_not_approved(self) -> None:
         _session_approvals["session-1"] = {
             "click": {
                 "page_path": "/admin/users",
                 "expires_at": datetime.now(UTC) + timedelta(minutes=30),
             },
         }
-        assert not _is_approved_for_session("session-1", "click", "/admin/settings")
+        assert not await _is_approved_for_session("session-1", "click", "/admin/settings")
 
-    def test_expired_approval_returns_false(self) -> None:
+    async def test_expired_approval_returns_false(self) -> None:
         _session_approvals["session-1"] = {
             "click": {
                 "page_path": "/admin/users",
                 "expires_at": datetime.now(UTC) - timedelta(minutes=1),
             },
         }
-        assert not _is_approved_for_session("session-1", "click", "/admin/users")
+        assert not await _is_approved_for_session("session-1", "click", "/admin/users")
 
-    def test_expired_approval_is_cleaned_up(self) -> None:
+    async def test_expired_approval_is_cleaned_up(self) -> None:
         _session_approvals["session-1"] = {
             "click": {
                 "page_path": "/admin/users",
                 "expires_at": datetime.now(UTC) - timedelta(minutes=1),
             },
         }
-        _is_approved_for_session("session-1", "click", "/admin/users")
-        assert "click" not in _session_approvals["session-1"]
+        await _is_approved_for_session("session-1", "click", "/admin/users")
+        assert "session-1" not in _session_approvals
 
-    def test_no_session_returns_false(self) -> None:
-        assert not _is_approved_for_session("nonexistent", "click", "/admin/users")
+    async def test_no_session_returns_false(self) -> None:
+        assert not await _is_approved_for_session("nonexistent", "click", "/admin/users")
 
-    def test_tool_not_in_session_returns_false(self) -> None:
+    async def test_tool_not_in_session_returns_false(self) -> None:
         _session_approvals["session-1"] = {}
-        assert not _is_approved_for_session("session-1", "click", "/admin/users")
+        assert not await _is_approved_for_session("session-1", "click", "/admin/users")
 
 
 # ── Agentic Loop Routing ────────────────────────────────────────────────
@@ -525,7 +527,7 @@ class TestAgenticLoopRouting:
             tools_param = _get_all_tool_definitions()
 
         assert tools_param is not None
-        assert len(tools_param) == 11
+        assert len(tools_param) == 13
 
     def test_agentic_loop_continues_when_tool_calls_exist(self):
         """The while-true loop continues when tool calls exist."""
@@ -602,7 +604,7 @@ class TestAgenticLoopRouting:
 
         tools = _get_all_tool_definitions()
         assert isinstance(tools, list)
-        assert len(tools) == 11
+        assert len(tools) == 13
         for t in tools:
             assert t["type"] == "function"
             assert "function" in t
