@@ -432,6 +432,7 @@
   --radius-md: 0.5rem;
   --radius-lg: 0.75rem;
   --dot-color: rgba(255, 255, 255, 0.04);
+  --shadow-overlay: 0 4px 16px rgba(0,0,0,0.25);
 }
 
 /* Light mode — values derived from the ink scale (tailwind.config.cjs)
@@ -463,6 +464,7 @@
   --ring: 170 95% 26%;
   --accent-bright: 169 100% 50%;
   --dot-color: rgba(0, 0, 0, 0.04);
+  --shadow-overlay: 0 4px 16px rgba(0,0,0,0.1);
 }
 
 .light .bg-destructive\/10 {

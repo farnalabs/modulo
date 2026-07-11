@@ -542,11 +542,14 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
         logger.warning("startup.env_profile_seed_failed", exc_info=True)
 
     # Initialise the LangGraph checkpointer schema (langgraph.* tables).
-    await _init_checkpointer(
-        pg_connection_string(settings.database_url),
-        settings.fernet_key,
-        fernet_key_old=settings.fernet_key_old,
-    )
+    try:
+        await _init_checkpointer(
+            pg_connection_string(settings.database_url),
+            settings.fernet_key,
+            fernet_key_old=settings.fernet_key_old,
+        )
+    except Exception:
+        logger.warning("startup.checkpointer_init_failed_during_lifespan", exc_info=True)
 
     # Initialise the runtime-config store so it captures env-var state at boot.
     from modulo.core.runtime_config.store import get_runtime_config_store
@@ -560,12 +563,15 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
     # Both point to the same DB URL but have separate connection pools.  They
     # are intentionally decoupled — the entrypoint runs before FastAPI is
     # initialised and can't use DI.  Dispose both so no connections leak.
-    _di_engine = get_or_create_engine(settings)
-    _shutdown_manager.register("otel", shutdown_otel)
-    _shutdown_manager.register("db_engine", db_engine.dispose)
-    _shutdown_manager.register("di_engine", _di_engine.dispose)
-    _shutdown_manager.register("rate_limiter_redis", shutdown_rate_limiters)
-    _shutdown_manager.register("scheduler_engine", dispose_scheduler_engine)
+    try:
+        _di_engine = get_or_create_engine(settings)
+        _shutdown_manager.register("otel", shutdown_otel)
+        _shutdown_manager.register("db_engine", db_engine.dispose)
+        _shutdown_manager.register("di_engine", _di_engine.dispose)
+        _shutdown_manager.register("rate_limiter_redis", shutdown_rate_limiters)
+        _shutdown_manager.register("scheduler_engine", dispose_scheduler_engine)
+    except Exception:
+        logger.warning("startup.shutdown_manager_init_failed", exc_info=True)
 
     # Start the run retention background loop.
     retention_task = asyncio.create_task(_run_retention_loop())
