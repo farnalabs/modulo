@@ -141,8 +141,12 @@ class TestParseLLMResponse:
             _parse_llm_response("not json")
 
     def test_raises_on_missing_required_keys(self) -> None:
-        with pytest.raises(OptimizationFailedError, match="missing required key"):
+        with pytest.raises(OptimizationFailedError, match="must be a string"):
             _parse_llm_response(json.dumps({"analysis": "A"}))
+
+    def test_raises_on_non_string_key(self) -> None:
+        with pytest.raises(OptimizationFailedError, match="must be a string"):
+            _parse_llm_response(json.dumps({"suggested_prompt": [], "rationale": "R", "analysis": "A"}))
 
 
 class TestPromptOptimizer:
