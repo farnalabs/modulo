@@ -2,15 +2,25 @@
 id: feat-core-view-modes
 prd: 8.21
 delivery-tasks: []
-bdd: []
-unit-tests: []
+bdd:
+  - backend/tests/bdd/features/views/views.feature
+unit-tests:
+  - backend/tests/unit/api/test_view_endpoint.py
+  - backend/tests/unit/api/test_viewmodel_endpoint.py
+  - backend/tests/unit/api/test_viewmodel_view.py
+  - backend/tests/unit/api/test_viewmodel_license.py
+  - backend/tests/unit/api/test_viewmodel_error_paths.py
 code:
   - backend/src/modulo/api/routes/views.py
+  - backend/src/modulo/api/routes/viewmodel.py
   - backend/src/modulo/db/models/view.py
   - frontend/src/composables/useSidebar.ts
-  - frontend/src/components/layout/SidebarNav.vue
-  - frontend/src/components/layout/AppLayout.vue
-depends-on: []
+  - frontend/src/components/SidebarNav.vue
+  - frontend/src/components/AppLayout.vue
+  - frontend/src/components/ViewModeToggle.vue
+depends-on:
+  - feat-core-auth
+  - feat-feature-flags
 status: partial
 ---
 
