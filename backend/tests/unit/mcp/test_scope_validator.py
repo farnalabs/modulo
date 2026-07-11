@@ -4,6 +4,7 @@ Tests the ViewModel-level scope checks independently of the middleware,
 and verifies integration through the MCP tool handlers.
 """
 
+import uuid
 from collections.abc import Generator
 from unittest.mock import AsyncMock, patch
 
@@ -185,6 +186,10 @@ class TestConstants:
             "create_pipeline",
             "update_pipeline_graph",
             "create_model_backend",
+            "list_runs",
+            "get_run_evals",
+            "list_eval_definitions",
+            "list_triggers",
         }
         assert set(TOOL_SCOPE_REQUIREMENTS) == expected_tools
 
@@ -216,9 +221,13 @@ class TestToolHandlerScopeErrorFormat:
 
     @pytest.fixture(autouse=True)
     def _patch_auth(self) -> Generator[None, None, None]:
-        """Mock ``validate_current_auth`` to return True so scope checks are reached."""
+        """Mock ``validate_current_auth`` and set auth context so scope checks are reached."""
+        from modulo.api.mcp_server import _ctx_org_id
+
+        token = _ctx_org_id.set(uuid.UUID(_FAKE_ID))
         with patch("modulo.api.mcp_server.validate_current_auth", return_value=True):
             yield
+        _ctx_org_id.reset(token)
 
     @pytest.mark.parametrize(
         ("handler_name", "kwargs"),
