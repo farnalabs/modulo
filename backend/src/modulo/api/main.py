@@ -530,7 +530,10 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
     await _seed_modulo_users(settings)
 
     # Seed demo data if MODULO_DEMO_MODE is enabled.
-    await _seed_demo_data(settings)
+    try:
+        await _seed_demo_data(settings)
+    except Exception:
+        logger.warning("startup.demo_seed_failed", exc_info=True)
 
     # Seed SSO providers from deprecated env vars into the DB table (idempotent).
     await _seed_sso_providers(settings)
