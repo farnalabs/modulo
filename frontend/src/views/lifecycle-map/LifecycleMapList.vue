@@ -129,12 +129,61 @@
         </button>
       </div>
     </main>
+
+    <!-- Create dialog -->
+    <div
+      v-if="showCreateDialog"
+      class="fixed inset-0 z-50 flex items-center justify-center bg-black/50"
+      @click.self="showCreateDialog = false"
+    >
+      <div class="w-full max-w-md rounded-lg border bg-card p-6 shadow-lg">
+        <h3 class="mb-4 text-base font-semibold">Create Lifecycle Map</h3>
+        <div class="space-y-4">
+          <div>
+            <label class="mb-1 block text-sm font-medium">Name</label>
+            <input
+              v-model="newName"
+              class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm"
+              placeholder="My Delivery Lifecycle"
+            />
+          </div>
+          <div>
+            <label class="mb-1 block text-sm font-medium">Description</label>
+            <textarea
+              v-model="newDescription"
+              class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm"
+              rows="3"
+              placeholder="Optional description"
+            />
+          </div>
+          <div v-if="createError" class="rounded-lg border border-destructive/50 bg-destructive/10 p-3 text-sm text-destructive">
+            {{ createError }}
+          </div>
+          <div class="flex justify-end gap-2">
+            <button
+              class="rounded-lg border border-input bg-background px-4 py-2 text-sm hover:bg-accent"
+              @click="showCreateDialog = false"
+            >
+              Cancel
+            </button>
+            <Button
+              :disabled="!newName.trim() || creating"
+              variant="default"
+              @click="handleCreateConfirm"
+            >
+              {{ creating ? 'Creating...' : 'Create' }}
+            </Button>
+          </div>
+        </div>
+      </div>
+    </div>
   </div>
 </template>
 
 <script setup lang="ts">
 import { ref, computed, onMounted } from 'vue'
-import { useRouter } from 'vue-router'
+import { useRouter, useRoute } from 'vue-router'
+import { PlusIcon, MapIcon } from '@lucide/vue'
 import PageHeader from '../../components/shared/PageHeader.vue'
 import FilterBar from '../../components/shared/FilterBar.vue'
 import { useLifecycleMapsStore } from '../../stores/lifecycleMaps'
@@ -143,8 +192,11 @@ import EmptyState from '../../components/shared/EmptyState.vue'
 import { Button } from '@/components/ui/button'
 import type { LifecycleMapSummary } from '../../stores/lifecycleMaps'
 import { formatDateShort } from '../../lib/formatDate'
+import { api } from '../../lib/api/client'
+import { formatApiError } from '../../lib/api/formatError'
 
 const router = useRouter()
+const route = useRoute()
 const store = useLifecycleMapsStore()
 
 const search = ref('')
@@ -203,9 +255,43 @@ function openMap(m: LifecycleMapSummary): void {
   router.push(`/lifecycle-maps/${m.id}`)
 }
 
+const showCreateDialog = ref(false)
+const newName = ref('')
+const newDescription = ref('')
+const creating = ref(false)
+const createError = ref<string | null>(null)
+
 function handleNewMap(): void {
-  router.push('/lifecycle-maps?create=true')
+  newName.value = ''
+  newDescription.value = ''
+  createError.value = null
+  showCreateDialog.value = true
 }
 
-onMounted(loadMaps)
+async function handleCreateConfirm(): Promise<void> {
+  if (!newName.value.trim()) return
+  creating.value = true
+  createError.value = null
+  try {
+    const { data } = await api.POST('/api/v1/lifecycle-maps', {
+      body: {
+        name: newName.value.trim(),
+        description: newDescription.value.trim() || null,
+      },
+    })
+    showCreateDialog.value = false
+    if (data) router.push({ name: 'lifecycle-map-editor', params: { id: (data as LifecycleMapSummary).id } })
+  } catch (e: unknown) {
+    createError.value = formatApiError(e)
+  } finally {
+    creating.value = false
+  }
+}
+
+onMounted(async () => {
+  await loadMaps()
+  if (route.query.create === 'true') {
+    handleNewMap()
+  }
+})
 </script>
