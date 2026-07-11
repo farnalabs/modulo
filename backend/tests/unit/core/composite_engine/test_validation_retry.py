@@ -207,13 +207,13 @@ class TestRunOutputValidation:
 
 
 class TestExecuteCompositeWithRetry:
-    def test_no_validation_passthrough(self) -> None:
+    async def test_no_validation_passthrough(self) -> None:
         template = _template()
         node_def = _node_def()
-        result = execute_composite_with_retry(node_def, template, parameter_values={}, input_payload={"a": 1})
+        result = await execute_composite_with_retry(node_def, template, parameter_values={}, input_payload={"a": 1})
         assert result == {"a": 1}
 
-    def test_validation_passes_no_retry(self) -> None:
+    async def test_validation_passes_no_retry(self) -> None:
         template = _template()
         node_def = _node_def()
         ov = OutputValidation(
@@ -226,7 +226,7 @@ class TestExecuteCompositeWithRetry:
                 ),
             ],
         )
-        result = execute_composite_with_retry(
+        result = await execute_composite_with_retry(
             node_def,
             template,
             parameter_values={},
@@ -235,7 +235,7 @@ class TestExecuteCompositeWithRetry:
         )
         assert result == {"status": "ok"}
 
-    def test_retry_on_failure_succeeds_after_retry(self) -> None:
+    async def test_retry_on_failure_succeeds_after_retry(self) -> None:
         call_count = 0
 
         import modulo.core.composite_engine.expander as expander_mod
@@ -271,7 +271,7 @@ class TestExecuteCompositeWithRetry:
         expander_mod.run_output_validation = lambda mo, ov, ljc=None: results.pop(0)
 
         try:
-            result = execute_composite_with_retry(
+            result = await execute_composite_with_retry(
                 _node_def(),
                 _template(),
                 parameter_values={},
@@ -284,7 +284,7 @@ class TestExecuteCompositeWithRetry:
             expander_mod.expand_composite_node = original_expand
             expander_mod.run_output_validation = original_validate
 
-    def test_retry_budget_exhausted_raises(self) -> None:
+    async def test_retry_budget_exhausted_raises(self) -> None:
         ov = OutputValidation(
             eval_definitions=[
                 EvalDefinitionConfig(
@@ -313,7 +313,7 @@ class TestExecuteCompositeWithRetry:
 
         try:
             with pytest.raises(CompositeValidationError) as exc_info:
-                execute_composite_with_retry(
+                await execute_composite_with_retry(
                     _node_def(),
                     _template(),
                     parameter_values={},
@@ -325,7 +325,7 @@ class TestExecuteCompositeWithRetry:
             expander_mod.expand_composite_node = original_expand
             expander_mod.run_output_validation = original_validate
 
-    def test_block_behaviour_immediate_failure(self) -> None:
+    async def test_block_behaviour_immediate_failure(self) -> None:
         ov = OutputValidation(
             eval_definitions=[
                 EvalDefinitionConfig(
@@ -349,7 +349,7 @@ class TestExecuteCompositeWithRetry:
 
         try:
             with pytest.raises(CompositeValidationError) as exc_info:
-                execute_composite_with_retry(
+                await execute_composite_with_retry(
                     _node_def(),
                     _template(),
                     parameter_values={},
@@ -360,7 +360,7 @@ class TestExecuteCompositeWithRetry:
         finally:
             expander_mod.run_output_validation = original_validate
 
-    def test_warn_behaviour_does_not_retry(self) -> None:
+    async def test_warn_behaviour_does_not_retry(self) -> None:
         ov = OutputValidation(
             eval_definitions=[
                 EvalDefinitionConfig(
@@ -383,7 +383,7 @@ class TestExecuteCompositeWithRetry:
         )
 
         try:
-            result = execute_composite_with_retry(
+            result = await execute_composite_with_retry(
                 _node_def(),
                 _template(),
                 parameter_values={},
