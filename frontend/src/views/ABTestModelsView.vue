@@ -185,7 +185,7 @@
         </section>
 
         <section v-if="runEntries.size > 0" class="space-y-4">
-          <h2 class="text-base font-semibold">{{ $t('views.ABTestModelsView.results_title') }}</h2>
+          <h2 class="text-xl font-semibold tracking-tight">{{ $t('views.ABTestModelsView.results_title') }}</h2>
 
           <div class="table-wrapper">
             <table class="w-full text-left text-sm">
@@ -804,3 +804,4 @@ function delay(ms: number): Promise<void> {
   return new Promise(resolve => setTimeout(resolve, ms))
 }
 </script>
+
