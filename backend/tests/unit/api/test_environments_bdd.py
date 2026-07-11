@@ -46,12 +46,18 @@ def _fake_profile(**overrides: Any) -> MagicMock:
     p.organisation_id = overrides.get("organisation_id", _ORG_ID)
     p.name = overrides.get("name", "test-profile")
     p.description = overrides.get("description", "A test profile")
+    p.provider_type = overrides.get("provider_type", "docker")
     p.image_ref = overrides.get("image_ref", "python:3.12-slim")
     p.capabilities = overrides.get("capabilities", ["docker"])
-    p.egress_policy = overrides.get("egress_policy", "allow_all")
-    p.timeout_seconds = overrides.get("timeout_seconds", 3600)
-    p.resource_limits_json = overrides.get("resource_limits", {})
-    p.persistence_policy = overrides.get("persistence_policy", {})
+    p.capabilities_json = overrides.get("capabilities", ["docker"])
+    p.config_json = overrides.get("config_json", {})
+    p.network_policy = overrides.get("network_policy", "allow_all")
+    p.initialisation_strategy = overrides.get("initialisation_strategy", "none")
+    p.secret_refs_json = overrides.get("secret_refs", [])
+    p.persistence_policy = overrides.get("persistence_policy", "ephemeral")
+    p.status = overrides.get("status", "active")
+    p.visibility = overrides.get("visibility", "org")
+    p.owner_team_id = overrides.get("owner_team_id", None)
     p.is_active = overrides.get("is_active", True)
     p.created_by = overrides.get("created_by", _USER_ID)
     p.created_at = None
@@ -127,21 +133,17 @@ class TestBDDCreateProfile:
         resp = client.post(self.URL, json={"name": "", "image_ref": "python:3.12-slim"})
         assert resp.status_code == 422
 
-    def test_create_invalid_timeout_below_min(self, client: TestClient) -> None:
+    def test_create_unknown_fields_ignored(self, client: TestClient) -> None:
         resp = client.post(
             self.URL,
             json={"name": "test", "image_ref": "python:3.12-slim", "timeout_seconds": 30},
         )
-        assert resp.status_code == 422
+        assert resp.status_code == 201
+        data = resp.json()
+        assert data["name"] == "test"
+        assert data["status"] == "active"
 
-    def test_create_invalid_timeout_above_max(self, client: TestClient) -> None:
-        resp = client.post(
-            self.URL,
-            json={"name": "test", "image_ref": "python:3.12-slim", "timeout_seconds": 90000},
-        )
-        assert resp.status_code == 422
-
-    def test_create_invalid_egress_policy(self, client: TestClient) -> None:
+    def test_create_bogus_egress_policy_ignored(self, client: TestClient) -> None:
         resp = client.post(
             self.URL,
             json={
@@ -150,7 +152,7 @@ class TestBDDCreateProfile:
                 "egress_policy": "bogus",
             },
         )
-        assert resp.status_code == 422
+        assert resp.status_code == 201
 
 
 # ===========================================================================
@@ -229,8 +231,8 @@ class TestBDDUpdateProfile:
             description="Full update",
             image_ref="ubuntu:24.04",
             capabilities=["docker", "gpu", "network"],
-            egress_policy="deny_all",
-            timeout_seconds=7200,
+            network_policy="deny_all",
+            visibility="team",
         )
         with (
             patch("modulo.api.routes.environments.update_environment_profile") as mock_update,
@@ -244,8 +246,8 @@ class TestBDDUpdateProfile:
                     "description": "Full update",
                     "image_ref": "ubuntu:24.04",
                     "capabilities": ["docker", "gpu", "network"],
-                    "egress_policy": "deny_all",
-                    "timeout_seconds": 7200,
+                    "network_policy": "deny_all",
+                    "visibility": "team",
                 },
             )
         assert resp.status_code == 200
@@ -253,8 +255,7 @@ class TestBDDUpdateProfile:
         assert data["name"] == "full-update"
         assert data["image_ref"] == "ubuntu:24.04"
         assert data["capabilities"] == ["docker", "gpu", "network"]
-        assert data["egress_policy"] == "deny_all"
-        assert data["timeout_seconds"] == 7200
+        assert data["network_policy"] == "deny_all"
 
 
 # ===========================================================================
