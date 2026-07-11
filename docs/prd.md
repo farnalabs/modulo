@@ -2687,7 +2687,7 @@ class RemyConfig(BaseModel):
 The admin Remy page (`/admin/remy`, `AdminRemyView.vue`) gains a **"Knowledge Sources"** section:
 
 ```
-## Knowledge Sources
+#### 8.29.7.1 Knowledge Sources
 
 Control what Remy knows and how it loads that knowledge.
 
@@ -2774,7 +2774,7 @@ Remy needs a baseline understanding of what Modulo is and how it works, present 
 The primer is a Markdown block injected before page context:
 
 ```
-## Product Overview
+#### 8.30.1.1 Product Overview
 
 ### What is Modulo
 Governed orchestration for AI-powered SDLC pipelines — automated workflows that
