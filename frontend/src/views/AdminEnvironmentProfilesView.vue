@@ -293,6 +293,7 @@ import ErrorAlert from '../components/shared/ErrorAlert.vue'
 import FeatureGate from '../components/FeatureGate.vue'
 import { Button } from '@/components/ui/button'
 import TableActions from '../components/shared/TableActions.vue'
+import { formatDateShort } from '../lib/formatDate'
 
 type ProfileItem = components['schemas']['ProfileResponse']
 
@@ -374,11 +375,7 @@ function formatTimeout(seconds: number): string {
 function formatDate(dateStr: string | null | undefined): string {
   if (!dateStr) return '—'
   try {
-    return new Date(dateStr).toLocaleDateString('en-US', {
-      month: 'short',
-      day: 'numeric',
-      year: 'numeric',
-    })
+    return formatDateShort(new Date(dateStr))
   } catch {
     return '—'
   }

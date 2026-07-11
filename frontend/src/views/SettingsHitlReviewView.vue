@@ -240,6 +240,7 @@ import FilterBar from '../components/shared/FilterBar.vue'
 import LoadingSpinner from '../components/shared/LoadingSpinner.vue'
 import ErrorAlert from '../components/shared/ErrorAlert.vue'
 import { usePlanStore } from '../stores/planStore'
+import { formatDateShortWithTime } from '../lib/formatDate'
 import { shortId } from '../utils/format'
 
 const planStore = usePlanStore()
@@ -331,7 +332,7 @@ function statusBadgeClass(status: string): string {
 function formatDate(dateStr: string | null | undefined): string {
   if (!dateStr) return '-'
   const d = new Date(dateStr)
-  return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })
+  return formatDateShortWithTime(d)
 }
 
 function pipelineName(pipelineId: string): string {

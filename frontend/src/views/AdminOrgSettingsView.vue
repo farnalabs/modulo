@@ -148,6 +148,7 @@ import { usePlanStore } from '../stores/planStore'
 import FeatureGate from '../components/FeatureGate.vue'
 import { shortId } from '../utils/format'
 import { formatApiError } from '../lib/api/formatError'
+import { formatDateShort, formatDateFilename } from '../lib/formatDate'
 
 const planStore = usePlanStore()
 const router = useRouter()
@@ -213,7 +214,7 @@ const deleteError = ref<string | null>(null)
 function formatDate(dateStr: string): string {
   if (!dateStr) return 'N/A'
   const d = new Date(dateStr)
-  return d.toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: 'numeric' })
+  return formatDateShort(d)
 }
 
 async function startExport() {
@@ -242,7 +243,7 @@ function downloadExport() {
   const url = URL.createObjectURL(blob)
   const a = document.createElement('a')
   a.href = url
-  a.download = `org-export-${orgInfo.slug || orgInfo.id}-${new Date().toISOString().slice(0, 10)}.json`
+  a.download = `org-export-${orgInfo.slug || orgInfo.id}-${formatDateFilename(new Date())}.json`
   document.body.appendChild(a)
   a.click()
   document.body.removeChild(a)

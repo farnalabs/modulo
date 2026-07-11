@@ -97,6 +97,7 @@
 import { shortId } from "@/utils/format";
 import { useRemyStore } from "@/composables/useRemyStore";
 import { Button } from "@/components/ui/button";
+import { formatDateShort } from "@/lib/formatDate";
 
 const emit = defineEmits<{
   close: [];
@@ -143,7 +144,7 @@ function formatTime(iso: string): string {
   if (diffHr < 24) return `${diffHr}h ago`;
   const diffDay = Math.floor(diffHr / 24);
   if (diffDay < 7) return `${diffDay}d ago`;
-  return d.toLocaleDateString();
+  return formatDateShort(d);
 }
 </script>
 

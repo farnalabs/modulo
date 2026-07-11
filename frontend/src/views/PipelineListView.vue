@@ -348,6 +348,7 @@ import EmptyState from '../components/shared/EmptyState.vue'
 import { formatApiError } from '../lib/api/formatError'
 import { Button } from '@/components/ui/button'
 import { api } from '../lib/api/client'
+import { formatDateShort } from '../lib/formatDate'
 
 interface PipelineItem {
   id: string
@@ -423,7 +424,7 @@ function nextPage() {
 function formatDate(dateStr: string): string {
   const d = new Date(dateStr)
   if (isNaN(d.getTime())) return dateStr
-  return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })
+  return formatDateShort(d)
 }
 
 function openPipeline(p: PipelineItem) {

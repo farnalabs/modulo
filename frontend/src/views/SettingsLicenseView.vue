@@ -116,6 +116,7 @@ import LoadingSpinner from '../components/shared/LoadingSpinner.vue'
 import ErrorAlert from '../components/shared/ErrorAlert.vue'
 import { Badge } from '../components/ui/badge'
 import FormDialog from '../components/shared/FormDialog.vue'
+import { format } from 'date-fns'
 
 const planStore = usePlanStore()
 
@@ -157,11 +158,7 @@ const maskedKey = computed(() => {
 
 function formatDate(iso: string): string {
   try {
-    return new Date(iso).toLocaleDateString('en-US', {
-      year: 'numeric',
-      month: 'long',
-      day: 'numeric',
-    })
+    return format(new Date(iso), 'MMMM d, yyyy')
   } catch {
     return iso
   }

@@ -143,6 +143,7 @@ import ErrorAlert from '../../components/shared/ErrorAlert.vue'
 import EmptyState from '../../components/shared/EmptyState.vue'
 import { Button } from '@/components/ui/button'
 import type { LifecycleMapSummary } from '../../stores/lifecycleMaps'
+import { formatDateShort } from '../../lib/formatDate'
 
 const router = useRouter()
 const store = useLifecycleMapsStore()
@@ -196,7 +197,7 @@ function nextPage(): void {
 function formatDate(dateStr: string): string {
   const d = new Date(dateStr)
   if (isNaN(d.getTime())) return dateStr
-  return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })
+  return formatDateShort(d)
 }
 
 function openMap(m: LifecycleMapSummary): void {

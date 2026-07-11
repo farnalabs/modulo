@@ -76,6 +76,7 @@ import { useI18n } from 'vue-i18n'
 import PageHeader from '../components/shared/PageHeader.vue'
 import { Button } from '@/components/ui/button'
 import { useApi } from '../composables/useApi'
+import { formatDateShort } from '../lib/formatDate'
 
 const { t } = useI18n()
 
@@ -107,7 +108,7 @@ const userInitial = computed(() => {
 function formatMemberSince(dateStr: string): string {
   const d = new Date(dateStr)
   if (isNaN(d.getTime())) return '—'
-  return d.toLocaleDateString()
+  return formatDateShort(d)
 }
 
 async function loadProfile() {

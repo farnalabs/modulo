@@ -326,6 +326,7 @@ import { formatApiError } from '../lib/api/formatError'
 import type { components } from '../lib/api/client'
 import LoadingSpinner from '../components/shared/LoadingSpinner.vue'
 import FilterBar from '../components/shared/FilterBar.vue'
+import { formatDateShort } from '../lib/formatDate'
 import FeatureGate from '../components/FeatureGate.vue'
 import PageHeader from '../components/shared/PageHeader.vue'
 import PageTabs from "../components/PageTabs.vue"
@@ -738,9 +739,7 @@ async function restoreVersion(version: SchemaVersion) {
 
 function formatDate(dateStr: string): string {
   try {
-    return new Date(dateStr).toLocaleDateString('en-US', {
-      year: 'numeric', month: 'short', day: 'numeric',
-    })
+    return formatDateShort(new Date(dateStr))
   } catch {
     return dateStr
   }
