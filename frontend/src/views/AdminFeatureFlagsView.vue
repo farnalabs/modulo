@@ -197,7 +197,7 @@
       :open="overrideDialogOpen"
       @update:open="overrideDialogOpen = $event"
       title="Org Override"
-      :description="overrideDialogFlag ? `${$t('views.AdminFeatureFlagsView.org_override_for')} \"${overrideDialogFlag.name}\"` : ''"
+      :description="overrideDescription"
       confirm-text="Save"
       @confirm="saveOverride"
     >
@@ -369,6 +369,12 @@ const flagToggling = ref<Record<string, boolean>>({})
 const overrideDialogFlag = ref<FlagItem | null>(null)
 const overrideDialogOpen = ref(false)
 const overrideDialogValue = ref<string>('null')
+
+const overrideDescription = computed(() =>
+  overrideDialogFlag.value
+    ? `${$t('views.AdminFeatureFlagsView.org_override_for')} "${overrideDialogFlag.value.name}"`
+    : ''
+)
 
 function openOverrideDialog(flag: FlagItem) {
   const current = planStore.orgOverrides[flag.name]

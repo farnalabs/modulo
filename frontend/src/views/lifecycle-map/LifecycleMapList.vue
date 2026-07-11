@@ -29,7 +29,6 @@
             New Map
           </Button>
         </div>
-      </div>
     </header>
 
     <main class="page-wide">

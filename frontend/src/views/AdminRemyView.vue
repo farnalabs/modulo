@@ -182,7 +182,7 @@
             </TooltipContent>
           </Tooltip>
         </div>
-      </div>
+      </SectionCard>
 
       <!-- Default Model Configuration -->
       <SectionCard
