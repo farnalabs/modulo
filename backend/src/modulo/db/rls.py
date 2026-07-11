@@ -153,6 +153,8 @@ def register_rls_reset_hook(engine: AsyncEngine) -> None:
                 "rls_reset_hook: sync cursor API not available on this driver",
                 exc_info=True,
             )
+        except asyncio.CancelledError:
+            raise
         except Exception:
             _log.warning(
                 "rls_reset_hook: failed to clear RLS session context on checkout",
