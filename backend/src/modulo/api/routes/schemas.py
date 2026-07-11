@@ -145,7 +145,7 @@ async def list_schemas_endpoint(
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="A resource with this value already exists",
-        )
+        ) from None
     except ProgrammingError:
         logger.exception("schemas.table_missing")
         raise HTTPException(
@@ -234,7 +234,7 @@ async def get_schema_endpoint(
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="A resource with this value already exists",
-        )
+        ) from None
     except ProgrammingError:
         logger.exception("schemas.get")
         raise HTTPException(
@@ -273,21 +273,16 @@ async def update_schema_endpoint(
             await set_rls_org(session, principal.organisation_id)
             schema = await update_schema(session, schema_id, updates)
     except IntegrityError:
+        logger.exception("schemas.update_integrity")
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
-            detail="A resource with this value already exists",
-        )
+            detail="A schema with this name already exists in your organisation.",
+        ) from None
     except ProgrammingError:
         logger.exception("schemas.update")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Schema management is not available. Run database migrations to enable it.",
-        ) from None
-    except IntegrityError:
-        logger.exception("schemas.update_integrity")
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail="A schema with this name already exists in your organisation.",
         ) from None
     except SQLAlchemyError:
         logger.exception("schemas.update_schema")
@@ -323,7 +318,7 @@ async def deprecate_schema_endpoint(
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="A resource with this value already exists",
-        )
+        ) from None
     except ProgrammingError:
         logger.exception("schemas.deprecate")
         raise HTTPException(
@@ -370,7 +365,7 @@ async def delete_schema_endpoint(
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="A resource with this value already exists",
-        )
+        ) from None
     except ProgrammingError:
         logger.exception("schemas.delete")
         raise HTTPException(
@@ -423,7 +418,7 @@ async def list_schema_versions_endpoint(
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="A resource with this value already exists",
-        )
+        ) from None
     except ProgrammingError:
         logger.exception("schemas.list_versions")
         raise HTTPException(
@@ -528,7 +523,7 @@ async def get_schema_version_endpoint(
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="A resource with this value already exists",
-        )
+        ) from None
     except ProgrammingError:
         logger.exception("schemas.get_version")
         raise HTTPException(
@@ -597,7 +592,7 @@ async def list_schema_fields_endpoint(
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="A resource with this value already exists",
-        )
+        ) from None
     except ProgrammingError:
         logger.exception("schemas.list_fields")
         raise HTTPException(
@@ -689,7 +684,7 @@ async def infer_schema_endpoint(
                 )
 
             # Connector-types currently supported for schema inference
-            _SUPPORTED_INFERENCE_TYPES = frozenset(
+            supported_inference_types = frozenset(
                 {
                     "github",
                     "gitlab",
@@ -700,11 +695,11 @@ async def infer_schema_endpoint(
                     "confluence",
                 }
             )
-            if ci.connector_type_id not in _SUPPORTED_INFERENCE_TYPES:
+            if ci.connector_type_id not in supported_inference_types:
                 raise HTTPException(
                     status_code=status.HTTP_400_BAD_REQUEST,
                     detail=f"Connector type '{ci.connector_type_id}' does not support schema inference. "
-                    f"Supported types: {', '.join(sorted(_SUPPORTED_INFERENCE_TYPES))}",
+                    f"Supported types: {', '.join(sorted(supported_inference_types))}",
                 )
 
             mbs = await list_model_backends(session, page_size=1)
@@ -717,7 +712,7 @@ async def infer_schema_endpoint(
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="A resource with this value already exists",
-        )
+        ) from None
     except ProgrammingError:
         logger.exception("schemas.infer.table_missing")
         raise HTTPException(
@@ -838,7 +833,7 @@ async def infer_schema_endpoint(
             raise HTTPException(
                 status_code=status.HTTP_501_NOT_IMPLEMENTED,
                 detail="This feature is not available. Run database migrations to enable it.",
-            )
+            ) from None
 
     except Exception:
         logger.exception("schemas.infer.audit_failed")
@@ -891,7 +886,7 @@ async def generate_schema_endpoint(
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="A resource with this value already exists",
-        )
+        ) from None
     except ProgrammingError:
         logger.exception("schemas.generate")
         raise HTTPException(
@@ -981,7 +976,7 @@ async def generate_schema_endpoint(
             raise HTTPException(
                 status_code=status.HTTP_501_NOT_IMPLEMENTED,
                 detail="This feature is not available. Run database migrations to enable it.",
-            )
+            ) from None
 
     except HTTPException:
         raise
@@ -1048,7 +1043,7 @@ async def migrate_data_endpoint(
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="A resource with this value already exists",
-        )
+        ) from None
     except ProgrammingError:
         logger.exception("schemas.migrate")
         raise HTTPException(
