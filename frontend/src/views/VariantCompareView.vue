@@ -167,7 +167,7 @@
         </div>
 
         <div v-if="nodeNames.length > 0 && diffVariantsAvailable.length >= 2" class="space-y-4">
-          <h2 class="text-xl font-semibold tracking-tight">{{ $t('views.variantCompare.outputDiffViewer') }}</h2>
+          <h2 class="text-base font-semibold">{{ $t('views.variantCompare.outputDiffViewer') }}</h2>
           <div class="flex flex-wrap gap-4">
             <label class="flex items-center gap-2 text-sm">
               <span class="text-muted-foreground">{{ $t('views.variantCompare.node') }}:</span>
