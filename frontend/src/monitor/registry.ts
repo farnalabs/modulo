@@ -14,20 +14,16 @@ export class MonitorBackendRegistry implements MonitorBackend {
 
   captureError(event: MonitorEvent, error: Error, context?: Record<string, unknown>): void {
     for (const backend of this.backends) {
-      try {
+      if (typeof backend.captureError === 'function') {
         backend.captureError(event, error, context)
-      } catch (e) {
-        console.error('[MonitorBackendRegistry] Backend error:', e)
       }
     }
   }
 
   captureMessage(message: string, level: string): void {
     for (const backend of this.backends) {
-      try {
+      if (typeof backend.captureMessage === 'function') {
         backend.captureMessage(message, level)
-      } catch (e) {
-        console.error('[MonitorBackendRegistry] Backend error:', e)
       }
     }
   }
