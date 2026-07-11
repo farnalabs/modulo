@@ -3,7 +3,8 @@ id: feat-core-shared-manifest
 prd: 8.28
 delivery-tasks: []
 bdd: []
-unit-tests: []
+unit-tests:
+  - backend/tests/unit/remy/test_manifest.py
 code:
   - backend/src/modulo/api/routes/manifest.py
   - backend/src/modulo/core/manifest.py
