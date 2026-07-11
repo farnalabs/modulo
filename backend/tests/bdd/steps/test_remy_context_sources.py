@@ -104,9 +104,6 @@ def org_community_tier(ctx) -> None:
 @when("Remy builds a system prompt for a new session")
 @when("Remy builds a system prompt")
 def build_system_prompt(request, ctx) -> None:
-    org_id = ctx["org_id"]
-    user_id = ctx["user_id"]
-
     ctx_sources: dict[str, str] = dict(ctx["context_sources"])
 
     # Merge built-in defaults, then org defaults, then user overrides
