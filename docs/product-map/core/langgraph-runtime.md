@@ -62,7 +62,5 @@ LangGraph-based pipeline runtime — StateGraph compilation, execution, snapshot
 ## Known Gaps
 
 - **AsyncSqliteSaver not implemented** — only `ModuloPostgresSaver` exists. The `AsyncSqliteSaver` variant mentioned in §6.5 is a future item. SQLite dev-only mode uses LangGraph's built-in `SqliteSaver` via `AsyncSqliteSaver` from `langgraph.checkpoint.sqlite.aio`, but no Modulo wrapper with org_id isolation exists for it.
-- **Broad `except Exception` in `_stream_graph`** (`executor.py:1025`) may mask `asyncio.CancelledError`. The catch-all guards `RunCancelledError` and `TimeoutError` but does not re-raise `CancelledError` before the generic handler.
 - **No per-run checkpoint cleanup** — checkpoint tables (`checkpoints`, `checkpoint_blobs`, `checkpoint_writes`) grow unbounded. A nightly retention job should remove checkpoints for completed runs older than the configured retention period.
-- **`_init_model_backend_hub` broad catch** (`executor.py:318`) swallows all exceptions including `CancelledError` and `ProgrammingError`, logging only a warning. Should guard `CancelledError` and let initialisation failures propagate for non-debug deployments.
 - **`set_rls_org` called outside `session.begin()` in `_do_db_cancellation_check`** — the method creates its own `async with self._session_factory() as session:` without `session.begin()`, but calls `set_rls_org(session, org_id)` which requires an active transaction. This works only because `set_rls_org` calls `_ensure_active_transaction()` which will fail if autobegin is disabled.
