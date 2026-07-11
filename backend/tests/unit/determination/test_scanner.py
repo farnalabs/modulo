@@ -93,7 +93,6 @@ async def test_gitlab_scan():
     respx.get(f"{_GITLAB_API}/user").mock(httpx.Response(200, json={"username": "testuser"}))
     respx.get(f"{_GITLAB_API}/projects").mock(httpx.Response(200, json=[{"id": 1, "name": "proj1"}]))
     respx.get(path__regex=r".*merge_requests.*").mock(httpx.Response(200, json=[{"id": 42, "title": "MR 1"}]))
-    respx.get(path__regex=r".*merge_requests.*").mock(httpx.Response(200, json=[{"id": 42, "title": "MR 1"}]))
 
     samples = await run_scan(hub)
     resources = {s.resource for s in samples}
@@ -185,16 +184,17 @@ async def test_filesystem_connector_skipped():
 
 
 @respx.mock
-async def test_health_check_failure_returns_no_samples():
+async def test_health_check_failure_still_attempts_queries():
     ci = _fake_ci("github", creds={"token": "bad_token"})
     hub = _hub(ci)
     await hub.initialise([ci])
 
-    # Health check fails
+    # Health check returns 401 but doesn't raise; scanner proceeds to attempt queries
     respx.get(f"{_GITHUB_API}/user").mock(httpx.Response(401, text="Unauthorized"))
 
     samples = await run_scan(hub)
-    # The scanner doesn't gate on health check — it'll attempt queries and get errors
+    # Scanner attempts queries despite health check failure — individual query errors
+    # are captured as error samples, not as an unhandled exception
     resources = {s.resource for s in samples}
     assert len(resources) > 0
 
