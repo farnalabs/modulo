@@ -10,6 +10,7 @@ Each eval has a configurable failure_behaviour (warn | block).
 Blocked evals raise EvalBlockedError.
 """
 
+import asyncio
 import logging
 import re
 from collections.abc import Sequence
@@ -394,7 +395,7 @@ class EvalEngine:
         """
         try:
             raw = callable_fn(*callable_args)
-        except (KeyboardInterrupt, SystemExit):
+        except (KeyboardInterrupt, SystemExit, asyncio.CancelledError):
             raise
         except Exception as exc:
             _log.warning("%s eval %s %s raised: %s", log_prefix, eval_def.id, callable_name, exc, exc_info=True)
