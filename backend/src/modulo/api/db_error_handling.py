@@ -1,3 +1,4 @@
+import asyncio
 import logging
 from functools import wraps
 
@@ -23,26 +24,28 @@ def handle_db_errors(log_prefix: str = "api"):
         async def wrapper(*args, **kwargs):
             try:
                 return await func(*args, **kwargs)
+            except asyncio.CancelledError:
+                raise
             except IntegrityError:
                 raise HTTPException(
                     status_code=status.HTTP_409_CONFLICT,
-                    detail="Resource conflict. The operation could not be completed due to a conflict with the current state.",
-                )
+                    detail="Resource conflict. The operation could not be completed.",
+                ) from None
             except ProgrammingError:
                 raise HTTPException(
                     status_code=status.HTTP_501_NOT_IMPLEMENTED,
                     detail="Feature is not available. Run database migrations to enable it.",
-                )
+                ) from None
             except SQLAlchemyError:
                 raise HTTPException(
                     status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
                     detail="Database temporarily unavailable.",
-                )
+                ) from None
             except pydantic.ValidationError:
                 raise HTTPException(
                     status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
                     detail="Data validation failed.",
-                )
+                ) from None
             except HTTPException:
                 raise
             except Exception:

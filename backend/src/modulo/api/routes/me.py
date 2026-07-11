@@ -1,5 +1,6 @@
 """Minimal /api/v1/me endpoint — delegates to auth's /me logic."""
 
+import asyncio
 import logging
 import uuid
 from typing import Any
@@ -67,11 +68,10 @@ async def get_user_settings(
             account = await get_account_by_id(session, current_user.account_id)
     except ProgrammingError:
         logger.exception("routes.me")
-
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="This feature is not available. Run database migrations to enable it.",
-        )
+        ) from None
 
     if account is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Account not found")
@@ -94,11 +94,10 @@ async def update_user_settings(
                 account = await get_account_by_id(session, current_user.account_id)
         except ProgrammingError:
             logger.exception("routes.me")
-
             raise HTTPException(
                 status_code=status.HTTP_501_NOT_IMPLEMENTED,
                 detail="This feature is not available. Run database migrations to enable it.",
-            )
+            ) from None
 
         if account is None:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Account not found")
@@ -111,14 +110,12 @@ async def update_user_settings(
     try:
         async with session.begin():
             return await update_account_preferences(session, current_user.account_id, prefs)
-
     except ProgrammingError:
         logger.exception("routes.me")
-
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="This feature is not available. Run database migrations to enable it.",
-        )
+        ) from None
 
 
 class PasswordChangeRequest(BaseModel):
@@ -156,6 +153,8 @@ async def change_password(
                     await blacklist_family(session, family.family_id, current_user.account_id)
                 except HTTPException:
                     raise
+                except asyncio.CancelledError:
+                    raise
                 except Exception:
                     logging.getLogger(__name__).warning(
                         "Failed to blacklist previous token family during password change for account %s",
@@ -164,11 +163,10 @@ async def change_password(
 
     except ProgrammingError:
         logger.exception("routes.me")
-
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="This feature is not available. Run database migrations to enable it.",
-        )
+        ) from None
 
     return {"detail": "Password changed successfully"}
 
@@ -188,11 +186,10 @@ async def list_user_skills(
             skills = await get_user_skills(session, current_user.account_id, current_user.organisation_id)
     except ProgrammingError:
         logger.exception("routes.me")
-
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="This feature is not available. Run database migrations to enable it.",
-        )
+        ) from None
 
     return [_skill_to_response(s) for s in skills]
 
@@ -221,11 +218,10 @@ async def create_user_skill(
             await session.flush()
     except ProgrammingError:
         logger.exception("routes.me")
-
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="This feature is not available. Run database migrations to enable it.",
-        )
+        ) from None
 
     return _skill_to_response(skill)
 
@@ -255,11 +251,10 @@ async def update_user_skill(
             await session.flush()
     except ProgrammingError:
         logger.exception("routes.me")
-
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="This feature is not available. Run database migrations to enable it.",
-        )
+        ) from None
 
     return _skill_to_response(skill)
 
@@ -281,11 +276,10 @@ async def delete_user_skill(
 
     except ProgrammingError:
         logger.exception("routes.me")
-
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="This feature is not available. Run database migrations to enable it.",
-        )
+        ) from None
 
 
 class ContextSourceModeUpdate(BaseModel):
@@ -305,11 +299,10 @@ async def get_user_context_sources(
             user_overrides = await service.get_user_overrides(current_user.organisation_id, current_user.account_id)
     except ProgrammingError:
         logger.exception("routes.me")
-
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="This feature is not available. Run database migrations to enable it.",
-        )
+        ) from None
 
     return service.build_effective_items(config.context_sources, user_overrides)
 
@@ -335,11 +328,10 @@ async def set_user_context_source(
             user_overrides = await service.get_user_overrides(current_user.organisation_id, current_user.account_id)
     except ProgrammingError:
         logger.exception("routes.me")
-
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="This feature is not available. Run database migrations to enable it.",
-        )
+        ) from None
 
     return service.build_effective_items(config.context_sources, user_overrides)
 
@@ -357,10 +349,9 @@ async def reset_user_context_sources(
             config = await service.get_effective_config(current_user.organisation_id, current_user.account_id)
     except ProgrammingError:
         logger.exception("routes.me")
-
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="This feature is not available. Run database migrations to enable it.",
-        )
+        ) from None
 
     return service.build_effective_items(config.context_sources, {})
