@@ -71,6 +71,7 @@ status: covered | partial | gap    # auto-updated by graph-validate
 - [feat-core-schema-diff](core/schema-diff.md) => PRD 8.3
 - [feat-core-schema-versioning](core/schema-versioning.md) => PRD 8.3
 - [feat-core-schema-deletion](core/schema-deletion.md) => PRD 8.3
+- [feat-core-schema-import-export](core/schema-import-export.md) => PRD 8.3
 - [feat-core-schema-union-types](core/schema-union-types.md) => PRD 8.3
 - [feat-core-contribution-provenance](core/contribution-provenance.md) => PRD 8.14
 - [feat-core-contribute-primitive](core/contribute-primitive.md) => PRD 8.14
