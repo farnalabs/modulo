@@ -38,9 +38,9 @@ CRUD management for pipeline node categories — labelled groupings with colour 
 - No BDD feature file exists for node categories CRUD workflows
 - Category reordering API not implemented (no `PUT /reorder` or `sort_order` batch update endpoint)
 - Default categories are not seeded on org creation — users start with an empty category list
-- No `created_by` / `account_id` tracking in the route layer — the field exists in the model and response schema but is populated from the authenticated principal, not validated against the request
 - No `owner_team_id` field on the model for team-scoped categories (visible to all org members regardless)
 
 ## QA History
 
 - 2026-07-11: Cross-cutting QA — added IntegrityError→409 handling, logger.warning on error paths, populated frontmatter (unit-tests, depends-on, bdd reference), documented known gaps
+- 2026-07-12: Round 2 improve-architecture QA — verified B904, CancelledError, dead code (all clean). Removed stale known gap about `created_by` tracking: the field IS populated from `principal.account_id` in the create route handler (correct architecture — server-set, not client-supplied). Updated frontmatter note: `prd: 8` confirmed as best available (no specific PRD subsection for node categories). No code changes needed.
