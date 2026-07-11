@@ -2,7 +2,7 @@
   <div class="mx-auto max-w-5xl px-4 py-8">
     <div class="mb-6 flex items-center justify-between">
       <div>
-        <h1 class="text-2xl font-semibold tracking-tight">Lifecycle Maps</h1>
+        <h1 class="text-xl font-semibold">Lifecycle Maps</h1>
         <p class="mt-1 text-sm text-muted-foreground">
           Visual maps of your software delivery lifecycle stages and their transitions
         </p>
