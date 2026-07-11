@@ -134,7 +134,7 @@ def _to_response(p: EnvironmentProfile) -> ProfileResponse:
         initialisation_strategy=p.initialisation_strategy,
         secret_refs=p.secret_refs_json,
         persistence_policy=p.persistence_policy,
-        status=p.status,
+        status=p.status or "active",
         owner_team_id=str(p.owner_team_id) if p.owner_team_id else None,
         visibility=p.visibility,
         created_at=p.created_at.isoformat() if p.created_at else None,
