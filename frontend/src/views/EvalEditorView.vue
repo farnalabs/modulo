@@ -265,7 +265,7 @@
 <script setup lang="ts">
 import { ref, reactive, computed, onMounted } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { useApi } from '../composables/useApi'
+import { useDataFetch } from '../composables/useDataFetch'
 import LoadingSpinner from '../components/shared/LoadingSpinner.vue'
 import ErrorAlert from '../components/shared/ErrorAlert.vue'
 import { shortId } from '../utils/format'
@@ -276,11 +276,11 @@ import FeatureGate from '../components/FeatureGate.vue'
 import PageHeader from '../components/shared/PageHeader.vue'
 import { Button } from '@/components/ui/button'
 import PageTabs from "../components/PageTabs.vue"
+import { api } from '../lib/api/client'
 
 const { t } = useI18n()
 
 const planStore = usePlanStore()
-const { get, post, put, del } = useApi()
 
 interface PipelineItem {
   id: string
@@ -322,10 +322,6 @@ interface GraphResponse {
   validation_issues: string[]
 }
 
-const loading = ref(true)
-const pageError = ref<string | null>(null)
-
-const pipelines = ref<PipelineItem[]>([])
 const selectedPipelineId = ref('')
 const nodes = ref<GraphNode[]>([])
 const nodesLoading = ref(false)
@@ -385,14 +381,15 @@ function resetForm() {
   formSuccess.value = null
 }
 
-async function loadPipelines() {
-  try {
-    const data = await get<{ items: PipelineItem[]; total: number; page: number; page_size: number }>('/api/v1/pipelines')
-    pipelines.value = data.items ?? []
-  } catch (e: unknown) {
-    pageError.value = `${t('views.EvalEditorView.failed_to_load_pipelines')} ${formatApiError(e)}`
-  }
-}
+const { loading, error: pageError, data: pipelinesResp, load: loadAll } = useDataFetch(
+  async () => {
+    const { data } = await api.GET('/api/v1/pipelines')
+    return { data: (data as any)?.items ?? [], error: undefined }
+  },
+  { initialValue: [] as PipelineItem[] },
+)
+
+const pipelines = computed(() => (pipelinesResp.value as any) ?? [])
 
 async function loadNodes() {
   if (!selectedPipelineId.value) {
@@ -402,8 +399,10 @@ async function loadNodes() {
   nodesLoading.value = true
   nodesError.value = null
   try {
-    const data = await get<GraphResponse>(`/api/v1/pipelines/${selectedPipelineId.value}/graph`)
-    nodes.value = data.nodes ?? []
+    const { data } = await api.GET('/api/v1/pipelines/{pipeline_id}/graph', {
+      params: { path: { pipeline_id: selectedPipelineId.value } },
+    })
+    nodes.value = (data as any)?.nodes ?? []
   } catch {
     nodes.value = []
     nodesError.value = t('views.EvalEditorView.failed_to_load_nodes')
@@ -420,8 +419,10 @@ async function loadEvals() {
   evalsLoading.value = true
   evalsError.value = null
   try {
-    const data = await get<EvalListResponse>(`/api/v1/evals?pipeline_id=${selectedPipelineId.value}`)
-    evals.value = data.items ?? []
+    const { data } = await api.GET('/api/v1/evals', {
+      params: { query: { pipeline_id: selectedPipelineId.value } as any },
+    })
+    evals.value = (data as any)?.items ?? []
   } catch {
     evals.value = []
     evalsError.value = t('views.EvalEditorView.failed_to_load_evals')
@@ -468,10 +469,13 @@ async function saveEval() {
 
   try {
     if (editingEvalId.value) {
-      await put<unknown>(`/api/v1/evals/${editingEvalId.value}`, body)
+      await api.PUT('/api/v1/evals/{eval_id}', {
+        params: { path: { eval_id: editingEvalId.value } },
+        body,
+      })
       formSuccess.value = t('views.EvalEditorView.eval_updated')
     } else {
-      await post<unknown>('/api/v1/evals', body)
+      await api.POST('/api/v1/evals', { body })
       formSuccess.value = t('views.EvalEditorView.eval_created')
     }
     resetForm()
@@ -504,7 +508,9 @@ function confirmDelete(id: string) {
 async function deleteEval(id: string) {
   deleting.value = true
   try {
-    await del(`/api/v1/evals/${id}`)
+    await api.DELETE('/api/v1/evals/{eval_id}', {
+      params: { path: { eval_id: id } },
+    })
     evals.value = evals.value.filter(e => e.id !== id)
     deletingEvalId.value = null
   } catch (e: unknown) {
@@ -516,18 +522,6 @@ async function deleteEval(id: string) {
     }
   } finally {
     deleting.value = false
-  }
-}
-
-async function loadAll() {
-  loading.value = true
-  pageError.value = null
-  try {
-    await loadPipelines()
-  } catch (e: unknown) {
-    pageError.value = `${t('views.EvalEditorView.failed_to_load')} ${formatApiError(e)}`
-  } finally {
-    loading.value = false
   }
 }
 

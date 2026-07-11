@@ -162,9 +162,10 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted } from 'vue'
+import { ref, computed, onMounted } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { api } from '../lib/api/client'
+import { useDataFetch } from '../composables/useDataFetch'
 import PageHeader from '../components/shared/PageHeader.vue'
 import LoadingSpinner from '../components/shared/LoadingSpinner.vue'
 import ErrorAlert from '../components/shared/ErrorAlert.vue'
@@ -213,11 +214,7 @@ interface ViewData {
 
 const { t } = useI18n()
 
-const loading = ref(true)
-const error = ref<string | null>(null)
-const data = ref<ViewData | null>(null)
 const expandedTeamId = ref<string | null>(null)
-
 const pipelineEvals = ref<PipelineEval[]>([])
 const expandedTeam = ref<TeamInfo | null>(null)
 
@@ -249,84 +246,63 @@ function buildPipelineEvals(
   })).sort((a, b) => b.passRate - a.passRate)
 }
 
-async function loadData() {
-  loading.value = true
-  error.value = null
-  expandedTeamId.value = null
-
-  try {
-    const [{ data: summaryResult, error: summaryErr }, { data: teamsResult, error: teamsErr }] = await Promise.all([
-      api.GET('/api/v1/dashboard/summary'),
-      api.GET('/api/v1/admin/teams', { params: { query: { page_size: 100 } as any } }),
-    ])
-
-    if (summaryErr) {
-      error.value = t('views.TeamComparisonView.failed_to_load_dashboard') + ' ' + formatError(summaryErr)
-      return
-    }
-    if (teamsErr) {
-      error.value = t('views.TeamComparisonView.failed_to_load_teams') + ' ' + formatError(teamsErr)
-      return
-    }
-
-    const s = summaryResult as unknown as {
-      total_runs: number
-      active_pipelines: number
-      run_counts_by_status: TeamRunStatus
-      teams: Array<{
-        id: string
-        name: string
-        total_runs: number
-        active_pipelines: number
-        run_counts_by_status: TeamRunStatus
-        eval_pass_rate?: {
-          total_evals: number
-          passed_evals: number
-          pass_rate: number
-        }
-      }>
-      eval_pass_rate: {
-        overall_pass_rate: number | null
-        total_evals: number
-        passed_evals: number
-        per_pipeline: Record<string, { total_evals: number; passed_evals: number; pass_rate: number }> | null
-        per_team_pipeline?: Record<string, Record<string, { total_evals: number; passed_evals: number; pass_rate: number }>>
-      } | null
-    }
-
-    const t = teamsResult as unknown as {
-      items: Array<{ id: string; member_count: number }>
-    }
-    const memberCountMap = new Map(t.items.map(item => [item.id, item.member_count]))
-
-    const teams: TeamInfo[] = (s.teams ?? []).map(team => ({
-      id: team.id,
-      name: team.name,
-      totalRuns: team.total_runs,
-      activePipelines: team.active_pipelines,
-      runCounts: team.run_counts_by_status,
-      memberCount: memberCountMap.get(team.id) ?? 0,
-      avgPassRate: team.eval_pass_rate?.pass_rate ?? null,
-    }))
-
-    data.value = {
-      summary: { total_runs: s.total_runs, active_pipelines: s.active_pipelines },
-      teams,
-      orgEvalPassRate: s.eval_pass_rate?.overall_pass_rate ?? null,
-    }
-
-    // Cache per-pipeline eval data for drill-down
-    pipelineEvalCache.value = s.eval_pass_rate?.per_team_pipeline ?? {}
-  } catch (e: unknown) {
-    error.value = t('views.TeamComparisonView.failed_to_load_data') + ' ' + (formatApiError(e))
-  } finally {
-    loading.value = false
-  }
-}
-
-// Cache for per-pipeline eval data and pipeline names
 const pipelineEvalCache = ref<Record<string, Record<string, { total_evals: number; passed_evals: number; pass_rate: number }>>>({})
 const pipelineNames = ref<Map<string, string>>(new Map())
+
+async function fetchAndMerge() {
+  expandedTeamId.value = null
+
+  const [{ data: summaryResult, error: summaryErr }, { data: teamsResult, error: teamsErr }] = await Promise.all([
+    api.GET('/api/v1/dashboard/summary'),
+    api.GET('/api/v1/admin/teams', { params: { query: { page_size: 100 } as any } }),
+  ])
+
+  if (summaryErr) {
+    return { summaryErr: t('views.TeamComparisonView.failed_to_load_dashboard') + ' ' + formatError(summaryErr) }
+  }
+  if (teamsErr) {
+    return { teamsErr: t('views.TeamComparisonView.failed_to_load_teams') + ' ' + formatError(teamsErr) }
+  }
+
+  const s = summaryResult as unknown as {
+    total_runs: number
+    active_pipelines: number
+    run_counts_by_status: TeamRunStatus
+    teams: Array<{
+      id: string; name: string; total_runs: number; active_pipelines: number
+      run_counts_by_status: TeamRunStatus
+      eval_pass_rate?: { total_evals: number; passed_evals: number; pass_rate: number }
+    }>
+    eval_pass_rate: {
+      overall_pass_rate: number | null; total_evals: number; passed_evals: number
+      per_pipeline: Record<string, { total_evals: number; passed_evals: number; pass_rate: number }> | null
+      per_team_pipeline?: Record<string, Record<string, { total_evals: number; passed_evals: number; pass_rate: number }>>
+    } | null
+  }
+
+  const t = teamsResult as unknown as { items: Array<{ id: string; member_count: number }> }
+  const memberCountMap = new Map(t.items.map(item => [item.id, item.member_count]))
+
+  const teams: TeamInfo[] = (s.teams ?? []).map(team => ({
+    id: team.id,
+    name: team.name,
+    totalRuns: team.total_runs,
+    activePipelines: team.active_pipelines,
+    runCounts: team.run_counts_by_status,
+    memberCount: memberCountMap.get(team.id) ?? 0,
+    avgPassRate: team.eval_pass_rate?.pass_rate ?? null,
+  }))
+
+  pipelineEvalCache.value = s.eval_pass_rate?.per_team_pipeline ?? {}
+
+  return {
+    summary: { total_runs: s.total_runs, active_pipelines: s.active_pipelines },
+    teams,
+    orgEvalPassRate: s.eval_pass_rate?.overall_pass_rate ?? null,
+  } as ViewData
+}
+
+const { loading, error, data, load: loadData } = useDataFetch(fetchAndMerge)
 
 async function toggleExpand(teamId: string) {
   if (expandedTeamId.value === teamId) {
@@ -339,11 +315,9 @@ async function toggleExpand(teamId: string) {
   expandedTeamId.value = teamId
   expandedTeam.value = data.value?.teams.find(t => t.id === teamId) ?? null
 
-  // Build pipeline-level breakdown from cached eval data
   const teamPipelineData = pipelineEvalCache.value[teamId] ?? {}
   pipelineEvals.value = buildPipelineEvals(teamPipelineData, pipelineNames.value)
 
-  // Lazy-fetch pipeline names if we have eval data but no names yet
   if (Object.keys(pipelineEvalCache.value).length > 0 && pipelineNames.value.size === 0) {
     try {
       const { data: pipelinesResult } = await api.GET('/api/v1/pipelines', {
@@ -353,14 +327,12 @@ async function toggleExpand(teamId: string) {
       if (pr?.items) {
         const map = new Map(pr.items.map(p => [p.id, p.name]))
         pipelineNames.value = map
-        const teamPipelineData = pipelineEvalCache.value[teamId] ?? {}
-        pipelineEvals.value = buildPipelineEvals(teamPipelineData, map)
+        const tpd = pipelineEvalCache.value[teamId] ?? {}
+        pipelineEvals.value = buildPipelineEvals(tpd, map)
       }
     } catch (e) {
       console.warn('Failed to fetch pipeline names', e)
     }
   }
 }
-
-onMounted(() => loadData())
 </script>

@@ -177,11 +177,11 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import PageHeader from '../components/shared/PageHeader.vue'
 import { Button } from '@/components/ui/button'
-import { useApi } from '../composables/useApi'
+import { useDataFetch } from '../composables/useDataFetch'
 import LoadingSpinner from '../components/shared/LoadingSpinner.vue'
 import ErrorAlert from '../components/shared/ErrorAlert.vue'
 import OwnershipPicker from '../components/OwnershipPicker.vue'
@@ -191,6 +191,7 @@ import { VueFlow } from '@vue-flow/core'
 import { Background } from '@vue-flow/background'
 import '@vue-flow/core/dist/style.css'
 import '@vue-flow/core/dist/theme-default.css'
+import { api } from '../../lib/api/client'
 
 interface LibraryPrimitive {
   id: string
@@ -230,12 +231,8 @@ interface CreatePipelineResponse {
 }
 
 const route = useRoute()
-const { get, post } = useApi()
 
 const primitiveId = route.params.id as string
-const primitive = ref<LibraryPrimitive | null>(null)
-const loading = ref(true)
-const error = ref<string | null>(null)
 const pipelineName = ref('')
 const pipelineDescription = ref('')
 const ownership = ref<OwnershipValue>({ owner_team_id: null, visibility: 'org' })
@@ -244,6 +241,21 @@ const createError = ref<string | null>(null)
 const result = ref<CreatePipelineResponse | null>(null)
 
 const templateAgents = ref<Array<{ name: string; description?: string; connector_type_refs?: Array<{ connector_type: string }> }>>([])
+
+const { loading, error, data: primitive, load: _reload } = useDataFetch<LibraryPrimitive>(
+  () => api.GET('/api/v1/libraries/{primitive_id}', {
+    params: { path: { primitive_id: primitiveId } },
+  }),
+  { immediate: true },
+)
+
+watch(primitive, (p) => {
+  if (p) {
+    templateAgents.value = p.content_json?.agents ?? []
+    pipelineName.value = `${p.name}`
+    pipelineDescription.value = p.description ?? ''
+  }
+}, { immediate: true })
 
 function layoutNodes(
   nodes: Array<{ id: string; node_type?: string; label?: string }>,
@@ -313,34 +325,20 @@ const subGraphEdges = computed(() => {
 
 const subNodeTypes = { agent: 'agent' }
 
-onMounted(async () => {
-  try {
-    const data = await get<LibraryPrimitive>(`/api/v1/libraries/${primitiveId}`)
-    primitive.value = data
-    templateAgents.value = data.content_json?.agents ?? []
-    pipelineName.value = `${data.name}`
-    pipelineDescription.value = data.description ?? ''
-  } catch (e) {
-    error.value = e instanceof Error ? e.message : 'Failed to load template'
-  } finally {
-    loading.value = false
-  }
-})
-
 async function createPipeline() {
   creating.value = true
   createError.value = null
   try {
-    const data = await post<CreatePipelineResponse>(
-      `/api/v1/libraries/${primitiveId}/create-pipeline`,
-      {
+    const { data } = await api.POST('/api/v1/libraries/{primitive_id}/create-pipeline', {
+      params: { path: { primitive_id: primitiveId } },
+      body: {
         name: pipelineName.value || undefined,
         description: pipelineDescription.value || undefined,
         owner_team_id: ownership.value.owner_team_id,
         visibility: ownership.value.visibility,
       },
-    )
-    result.value = data
+    })
+    result.value = data as unknown as CreatePipelineResponse
   } catch (e) {
     createError.value = e instanceof Error ? e.message : 'Failed to create pipeline'
   } finally {

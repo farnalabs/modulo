@@ -213,9 +213,10 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted, onBeforeUnmount } from 'vue'
+import { ref, computed, onBeforeUnmount } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { api } from '../lib/api/client'
+import { useDataFetch } from '../composables/useDataFetch'
 import type { components } from '../lib/api/client'
 import { formatApiError } from '../lib/api/formatError'
 import LoadingSpinner from '../components/shared/LoadingSpinner.vue'
@@ -234,12 +235,6 @@ type FeedbackRecordDetail = components['schemas']['FeedbackRecordDetail']
 type PipelineItem = components['schemas']['PipelineItem']
 
 const { t, locale } = useI18n()
-
-const records = ref<FeedbackRecordItem[]>([])
-const pipelines = ref<PipelineItem[]>([])
-const loading = ref(true)
-const error = ref<string | null>(null)
-const pipelinesError = ref<string | null>(null)
 
 const statusFilter = ref('')
 const pipelineFilter = ref('')
@@ -289,44 +284,27 @@ function formatJson(value: unknown): string {
   }
 }
 
-async function loadPipelines() {
-  pipelinesError.value = null
-  try {
-    const { data, error: err } = await api.GET('/api/v1/pipelines')
-    if (err) {
-      pipelinesError.value = `${t('views.FeedbackInboxView.failed_to_load_pipelines')} ${formatApiError(err)}`
-    } else if (data) {
-      pipelines.value = data.items
-    }
-  } catch (e: unknown) {
-    pipelinesError.value = `${t('views.FeedbackInboxView.failed_to_load_pipelines')} ${formatApiError(e)}`
-  }
-}
-
-async function loadFeedback() {
-  loading.value = true
-  error.value = null
-  try {
+const { loading, error, data: feedbackResp, load: loadFeedback } = useDataFetch(
+  async () => {
     const params: Record<string, string | number> = {}
     if (statusFilter.value) params.status = statusFilter.value
     if (pipelineFilter.value) params.pipeline_id = pipelineFilter.value
     if (dateFrom.value) params.date_from = dateFrom.value
     if (dateTo.value) params.date_to = dateTo.value
-
-    const { data, error: err } = await api.GET('/api/v1/feedback/inbox', {
+    return api.GET('/api/v1/feedback/inbox', {
       params: { query: params as any },
     })
-    if (err) {
-      error.value = `${t('views.FeedbackInboxView.failed_to_load_feedback')} ${formatApiError(err)}`
-    } else if (data) {
-      records.value = data.items
-    }
-  } catch (e: unknown) {
-    error.value = `${t('views.FeedbackInboxView.failed_to_load_feedback')} ${formatApiError(e)}`
-  } finally {
-    loading.value = false
-  }
-}
+  },
+  { immediate: false },
+)
+
+const records = computed(() => (feedbackResp.value as any)?.items ?? [])
+
+const { loading: pipelinesLoading, error: pipelinesError, data: pipelinesResp, load: loadPipelines } = useDataFetch(
+  () => api.GET('/api/v1/pipelines'),
+)
+
+const pipelines = computed(() => (pipelinesResp.value as any)?.items ?? [])
 
 async function loadDetail(recordId: string) {
   detailLoading.value[recordId] = true
@@ -463,6 +441,7 @@ onBeforeUnmount(() => {
   }
 })
 
+import { onMounted } from 'vue'
 onMounted(async () => {
   await Promise.all([loadFeedback(), loadPipelines()])
 })

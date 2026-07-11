@@ -297,8 +297,6 @@ interface WorkspaceLeaseInfo {
 
 const route = useRoute()
 const { t, locale } = useI18n()
-const loading = ref(true)
-const error = ref<string | null>(null)
 const run = ref<RunResponse | null>(null)
 const runIO = ref<RunIOResponse | null>(null)
 const expandedNodes = ref(new Set<string>())
@@ -622,30 +620,45 @@ function startPolling(runId: string) {
   }, 3000)
 }
 
-onMounted(async () => {
-  const runId = route.params.id as string
-  if (!runId) {
-    error.value = t('views.RunDetailView.no_run_id_provided')
-    loading.value = false
-    return
-  }
+import { useDataFetch } from '../composables/useDataFetch'
 
-  try {
-    await Promise.all([
-      fetchRunData(runId),
-      fetchWorkspaceLease(runId),
-    ])
-    if (run.value?.status === 'complete' && nodeEntries.value.length > 0) {
-      const last = nodeEntries.value[nodeEntries.value.length - 1]
-      expandedNodes.value.add(last.name)
+interface RunFetchResult {
+  run: RunResponse | null
+  io: RunIOResponse | null
+  workspace: WorkspaceLeaseInfo | null
+}
+
+const { loading, error, load: runLoad } = useDataFetch<RunFetchResult>(
+  async () => {
+    const runId = route.params.id as string
+    if (!runId) {
+      return { data: { run: null, io: null, workspace: null }, error: { detail: t('views.RunDetailView.no_run_id_provided') } }
     }
-    startPolling(runId)
-  } catch (e: unknown) {
-    error.value = `${t('views.RunDetailView.failed_to_load_run')} ${formatApiError(e)}`
-  } finally {
-    loading.value = false
-  }
-})
+
+    try {
+      const [{ data: runData }, { data: ioData }, { data: wsData }] = await Promise.all([
+        api.GET('/api/v1/runs/{run_id}', { params: { path: { run_id: runId } } }),
+        api.GET('/api/v1/runs/{run_id}/io', { params: { path: { run_id: runId } } }),
+        api.GET('/api/v1/runs/{run_id}/workspace-lease', { params: { path: { run_id: runId } } }),
+      ])
+
+      if (runData) run.value = runData as unknown as RunResponse
+      if (ioData) runIO.value = ioData as unknown as RunIOResponse
+      if (wsData) workspaceLease.value = wsData as unknown as WorkspaceLeaseInfo
+
+      if (run.value?.status === 'complete' && nodeEntries.value.length > 0) {
+        const last = nodeEntries.value[nodeEntries.value.length - 1]
+        expandedNodes.value.add(last.name)
+      }
+      startPolling(runId)
+
+      return { data: { run: run.value, io: runIO.value, workspace: workspaceLease.value }, error: undefined }
+    } catch (e: unknown) {
+      return { data: undefined, error: { detail: `${t('views.RunDetailView.failed_to_load_run')} ${formatApiError(e)}` } }
+    }
+  },
+  { immediate: true },
+)
 
 onUnmounted(() => {
   if (pollInterval.value) {

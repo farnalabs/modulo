@@ -368,17 +368,18 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed } from 'vue'
 import { useRouter } from 'vue-router'
 import PageHeader from '../components/shared/PageHeader.vue'
 import FilterBar from '../components/shared/FilterBar.vue'
 import { Button } from '@/components/ui/button'
-import { useApi } from '../composables/useApi'
+import { useDataFetch } from '../composables/useDataFetch'
 import BackLink from '../components/BackLink.vue'
 import LoadingSpinner from '../components/shared/LoadingSpinner.vue'
 import ErrorAlert from '../components/shared/ErrorAlert.vue'
 import OwnershipPicker from '../components/OwnershipPicker.vue'
 import type { OwnershipValue } from '../components/OwnershipPicker.vue'
+import { api } from '../lib/api/client'
 
 interface PipelineItem {
   id: string
@@ -405,13 +406,16 @@ interface CloneResponse {
 }
 
 const steps = ['Select Pipeline', 'Configure', 'Review', 'Execute']
-const { get, post } = useApi()
 const router = useRouter()
 
+const { loading, error, data: pipelinesResp, load: fetchPipelines } = useDataFetch<PipelineListResponse>(
+  () => api.GET('/api/v1/pipelines', { params: { query: { page_size: 100 } } }),
+  { initialValue: { items: [] as PipelineItem[], total: 0, page: 1, page_size: 100 } },
+)
+
+const pipelines = computed(() => pipelinesResp.value?.items ?? [])
+
 const step = ref(1)
-const loading = ref(true)
-const error = ref<string | null>(null)
-const pipelines = ref<PipelineItem[]>([])
 const selectedPipeline = ref<PipelineItem | null>(null)
 const searchQuery = ref('')
 const visibilityFilter = ref<'all' | 'org' | 'team'>('all')
@@ -458,20 +462,7 @@ function formatDate(dateStr: string): string {
 }
 
 function retry() {
-  error.value = null
-  loading.value = true
   fetchPipelines()
-}
-
-async function fetchPipelines() {
-  try {
-    const data = await get<PipelineListResponse>('/api/v1/pipelines?page_size=100')
-    pipelines.value = data.items || []
-  } catch (e) {
-    error.value = e instanceof Error ? e.message : 'Failed to load pipelines'
-  } finally {
-    loading.value = false
-  }
 }
 
 async function executeCopy() {
@@ -484,11 +475,11 @@ async function executeCopy() {
     await new Promise(r => setTimeout(r, 300))
     progressStep.value = 'cloning'
 
-    const data = await post<CloneResponse>(
-      `/api/v1/pipelines/${selectedPipeline.value.id}/clone`,
-      { name: displayName.value || undefined },
-    )
-    result.value = data
+    const { data } = await api.POST('/api/v1/pipelines/{pipeline_id}/clone', {
+      params: { path: { pipeline_id: selectedPipeline.value.id } },
+      body: { name: displayName.value || undefined },
+    })
+    result.value = data as unknown as CloneResponse
 
     progressStep.value = 'configuring'
     await new Promise(r => setTimeout(r, 400))
@@ -526,5 +517,4 @@ function reset() {
   fetchPipelines()
 }
 
-onMounted(fetchPipelines)
 </script>

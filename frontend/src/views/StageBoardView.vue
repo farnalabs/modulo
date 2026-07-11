@@ -421,21 +421,16 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed } from 'vue'
 import PageHeader from '../components/shared/PageHeader.vue'
-import { useApi } from '../composables/useApi'
+import { useDataFetch } from '../composables/useDataFetch'
 import { usePlanStore } from '../stores/planStore'
 import { formatApiError } from '../lib/api/formatError'
+import { api } from '../lib/api/client'
 
 const planStore = usePlanStore()
-const { get, post, patch } = useApi()
+const { patch } = { patch: async (url: string, body: any) => { return api.PATCH(url as any, { body }) } }
 
-const loading = ref(true)
-const pageError = ref<string | null>(null)
-
-const stages = ref<any[]>([])
-const allPipelines = ref<any[]>([])
-const teams = ref<any[]>([])
 const selectedStageId = ref<string | null>(null)
 const selectedPipeline = ref<any | null>(null)
 
@@ -532,32 +527,39 @@ function applyFilters() {
   // reactivity handles this via computed
 }
 
-async function loadStages() {
-  try {
-    const result = await get<any>('/api/v1/stages')
-    stages.value = (result.items || []).sort((a: any, b: any) => a.position - b.position)
-  } catch (e) {
-    console.warn('Failed to load stages', e)
-  }
+async function fetchStages() {
+  const { data } = await api.GET('/api/v1/stages')
+  return (data as any)?.items ?? []
 }
 
-async function loadPipelines() {
-  try {
-    const result = await get<any>('/api/v1/pipelines')
-    allPipelines.value = result.items || []
-  } catch (e) {
-    console.warn('Failed to load pipelines', e)
-  }
+async function fetchPipelines() {
+  const { data } = await api.GET('/api/v1/pipelines')
+  return (data as any)?.items ?? []
 }
 
-async function loadTeams() {
-  try {
-    const result = await get<any>('/api/v1/teams')
-    teams.value = result.items || []
-  } catch (e) {
-    console.warn('Failed to load teams', e)
-  }
+async function fetchTeams() {
+  const { data } = await api.GET('/api/v1/teams')
+  return (data as any)?.items ?? []
 }
+
+const { loading, error: pageError } = useDataFetch(
+  async () => {
+    const [stagesData, pipelinesData, teamsData] = await Promise.all([
+      fetchStages(),
+      fetchPipelines(),
+      fetchTeams(),
+    ])
+    stages.value = (stagesData as any[]).sort((a: any, b: any) => a.position - b.position)
+    allPipelines.value = pipelinesData as any[]
+    teams.value = teamsData as any[]
+    return {}
+  },
+  { initialValue: {} },
+)
+
+const stages = ref<any[]>([])
+const allPipelines = ref<any[]>([])
+const teams = ref<any[]>([])
 
 const movingPipelines = ref<Record<string, boolean>>({})
 
@@ -572,7 +574,10 @@ async function movePipeline(pipeline: any, direction: number) {
   const prevStageId = pipeline.stage_id
   movingPipelines.value[pipeline.id] = true
   try {
-    await patch(`/api/v1/pipelines/${pipeline.id}`, { stage_id: targetStage.id })
+    await api.PATCH('/api/v1/pipelines/{pipeline_id}', {
+      params: { path: { pipeline_id: pipeline.id } },
+      body: { stage_id: targetStage.id },
+    })
     pipeline.stage_id = targetStage.id
   } catch (e) {
     console.warn('Failed to move pipeline', e)
@@ -586,18 +591,23 @@ async function createStage() {
   if (!createName.value.trim()) return
   createError.value = null
   try {
-    await post('/api/v1/stages', {
-      name: createName.value.trim(),
-      description: createDescription.value.trim() || null,
-      position: createPosition.value,
-      visibility: createVisibility.value,
+    await api.POST('/api/v1/stages', {
+      body: {
+        name: createName.value.trim(),
+        description: createDescription.value.trim() || null,
+        position: createPosition.value,
+        visibility: createVisibility.value,
+      },
     })
     showCreateDialog.value = false
     createName.value = ''
     createDescription.value = ''
     createPosition.value = 0
     createVisibility.value = 'org'
-    await loadStages()
+    await (async () => {
+      const { data } = await api.GET('/api/v1/stages')
+      stages.value = ((data as any)?.items ?? []).sort((a: any, b: any) => a.position - b.position)
+    })()
   } catch (e: unknown) {
     createError.value = formatApiError(e)
   }
@@ -630,9 +640,14 @@ async function saveEditingName() {
   if (existing && existing.name === name) return
   updatingStages.value[stageId] = true
   try {
-    const updated = await patch<any>(`/api/v1/stages/${stageId}`, { name })
-    const idx = stages.value.findIndex(s => s.id === stageId)
-    if (idx !== -1) stages.value[idx] = updated
+    const { data } = await api.PATCH('/api/v1/stages/{stage_id}', {
+      params: { path: { stage_id: stageId } },
+      body: { name },
+    })
+    if (data) {
+      const idx = stages.value.findIndex(s => s.id === stageId)
+      if (idx !== -1) stages.value[idx] = data
+    }
   } catch (e) {
     console.warn('Failed to rename stage', e)
   } finally {
@@ -659,9 +674,14 @@ async function saveEditingPosition() {
   if (existing && existing.position === position) return
   updatingStages.value[stageId] = true
   try {
-    const updated = await patch<any>(`/api/v1/stages/${stageId}`, { position })
-    const idx = stages.value.findIndex(s => s.id === stageId)
-    if (idx !== -1) stages.value[idx] = updated
+    const { data } = await api.PATCH('/api/v1/stages/{stage_id}', {
+      params: { path: { stage_id: stageId } },
+      body: { position },
+    })
+    if (data) {
+      const idx = stages.value.findIndex(s => s.id === stageId)
+      if (idx !== -1) stages.value[idx] = data
+    }
     stages.value.sort((a, b) => a.position - b.position)
   } catch (e) {
     console.warn('Failed to update stage position', e)
@@ -683,17 +703,21 @@ async function moveStage(stage: any, direction: number) {
   const myPos = stage.position
   const targetPos = target.position
 
-  // Optimistic update
   stage.position = targetPos
   target.position = myPos
   stages.value.sort((a, b) => a.position - b.position)
 
   updatingStages.value[stage.id] = true
   try {
-    await patch(`/api/v1/stages/${stage.id}`, { position: targetPos })
-    await patch(`/api/v1/stages/${target.id}`, { position: myPos })
+    await api.PATCH('/api/v1/stages/{stage_id}', {
+      params: { path: { stage_id: stage.id } },
+      body: { position: targetPos },
+    })
+    await api.PATCH('/api/v1/stages/{stage_id}', {
+      params: { path: { stage_id: target.id } },
+      body: { position: myPos },
+    })
   } catch (e) {
-    // Revert on failure
     stage.position = myPos
     target.position = targetPos
     stages.value.sort((a, b) => a.position - b.position)
@@ -702,15 +726,4 @@ async function moveStage(stage: any, direction: number) {
     updatingStages.value[stage.id] = false
   }
 }
-
-onMounted(async () => {
-  planStore.fetchPlan()
-  try {
-    await Promise.all([loadStages(), loadPipelines(), loadTeams()])
-  } catch (e) {
-    pageError.value = formatApiError(e)
-  } finally {
-    loading.value = false
-  }
-})
 </script>

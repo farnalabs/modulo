@@ -226,9 +226,10 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted, onBeforeUnmount, watch } from 'vue'
+import { ref, computed, onBeforeUnmount, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { api } from '../lib/api/client'
+import { useDataFetch } from '../composables/useDataFetch'
 import type { components } from '../lib/api/client'
 import LoadingSpinner from '../components/shared/LoadingSpinner.vue'
 import ErrorAlert from '../components/shared/ErrorAlert.vue'
@@ -254,11 +255,18 @@ interface RunEntry {
   evalResults: RunEvalItem[]
 }
 
-const groups = ref<VariantGroup[]>([])
+const { loading, error, data: groupsResp, load: fetchGroups } = useDataFetch(
+  () => api.GET('/api/v1/variant-groups'),
+  { initialValue: [] as VariantGroup[] },
+)
+
+const groups = computed(() => {
+  const raw = groupsResp.value
+  return (Array.isArray(raw) ? raw : (raw as any)?.items ?? []) as VariantGroup[]
+})
+
 const selectedGroupId = ref<string | null>(null)
 const selectedGroup = ref<VariantGroup | null>(null)
-const loading = ref(true)
-const error = ref<string | null>(null)
 const isUnmounted = ref(false)
 
 const runEntries = ref<Map<string, RunEntry>>(new Map())
@@ -379,10 +387,6 @@ const diffContentB = computed(() => {
   return output ? JSON.stringify(output, null, 2) : ''
 })
 
-onMounted(() => {
-  fetchGroups()
-})
-
 watch(selectedGroupId, async (id) => {
   if (id) {
     await fetchGroupDetail(id)
@@ -405,26 +409,11 @@ onBeforeUnmount(() => {
   isUnmounted.value = true
 })
 
-async function fetchGroups() {
-  loading.value = true
-  error.value = null
-  try {
-    const { data, error: err } = await api.GET('/api/v1/variant-groups')
-    if (err) {
-      error.value = `${t('views.variantCompare.failedToLoadGroups')} ${formatApiError(err)}`
-      return
-    }
-    const list = (data ?? []) as unknown as VariantGroup[]
-    groups.value = list
-    if (list.length > 0 && !selectedGroupId.value) {
-      selectedGroupId.value = list[0].id
-    }
-  } catch (e: unknown) {
-    error.value = `${t('views.variantCompare.failedToLoadGroups')} ${formatApiError(e)}`
-  } finally {
-    loading.value = false
+watch(groups, (list) => {
+  if (list.length > 0 && !selectedGroupId.value) {
+    selectedGroupId.value = list[0].id
   }
-}
+}, { immediate: true })
 
 async function fetchGroupDetail(id: string) {
   error.value = null

@@ -337,16 +337,17 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed } from 'vue'
 import { useRouter } from 'vue-router'
 import PageHeader from '../components/shared/PageHeader.vue'
 import FilterBar from '../components/shared/FilterBar.vue'
-import { useApi } from '../composables/useApi'
+import { useDataFetch } from '../composables/useDataFetch'
 import { usePlanStore } from '../stores/planStore'
 import ErrorAlert from '../components/shared/ErrorAlert.vue'
 import EmptyState from '../components/shared/EmptyState.vue'
 import { formatApiError } from '../lib/api/formatError'
 import { Button } from '@/components/ui/button'
+import { api } from '../lib/api/client'
 
 interface PipelineItem {
   id: string
@@ -367,10 +368,14 @@ interface PipelineListResponse {
 }
 
 const router = useRouter()
-const { get, post, patch, delete: del } = useApi()
 const planStore = usePlanStore()
 
-const allPipelines = ref<PipelineItem[]>([])
+const { loading, error, data: pipelinesResp, load: loadPipelines } = useDataFetch<PipelineListResponse>(
+  () => api.GET('/api/v1/pipelines', { params: { query: { page_size: 100 } } }),
+  { initialValue: { items: [] as PipelineItem[], total: 0, page: 1, page_size: 100 } },
+)
+
+const allPipelines = computed(() => pipelinesResp.value?.items ?? [])
 const showActionMenu = ref<string | null>(null)
 const showRenameDialog = ref(false)
 const renameTarget = ref<PipelineItem | null>(null)
@@ -387,8 +392,6 @@ const showAdvanced = ref(false)
 const advancedPayload = ref('')
 const running = ref(false)
 const runError = ref<string | null>(null)
-const loading = ref(true)
-const error = ref<string | null>(null)
 const search = ref('')
 const page = ref(1)
 const pageSize = 12
@@ -408,19 +411,6 @@ const pagedPipelines = computed(() => {
   const start = (page.value - 1) * pageSize
   return filteredPipelines.value.slice(start, start + pageSize)
 })
-
-async function loadPipelines() {
-  loading.value = true
-  error.value = null
-  try {
-    const data = await get<PipelineListResponse>('/api/v1/pipelines?page_size=100')
-    allPipelines.value = data.items || []
-  } catch (e) {
-    error.value = formatApiError(e)
-  } finally {
-    loading.value = false
-  }
-}
 
 function prevPage() {
   page.value--
@@ -462,7 +452,10 @@ async function handleRename() {
   renaming.value = true
   renameError.value = null
   try {
-    await patch(`/api/v1/pipelines/${renameTarget.value.id}`, { name: renameName.value.trim() })
+    await api.PATCH('/api/v1/pipelines/{pipeline_id}', {
+      params: { path: { pipeline_id: renameTarget.value.id } },
+      body: { name: renameName.value.trim() },
+    })
     showRenameDialog.value = false
     showActionMenu.value = null
     await loadPipelines()
@@ -475,7 +468,9 @@ async function handleRename() {
 
 async function handleArchive(p: PipelineItem) {
   try {
-    await post(`/api/v1/pipelines/${p.id}/archive`)
+    await api.POST('/api/v1/pipelines/{pipeline_id}/archive', {
+      params: { path: { pipeline_id: p.id } },
+    })
     showActionMenu.value = null
     await loadPipelines()
   } catch (e) {
@@ -485,7 +480,9 @@ async function handleArchive(p: PipelineItem) {
 
 async function handleUnarchive(p: PipelineItem) {
   try {
-    await post(`/api/v1/pipelines/${p.id}/unarchive`)
+    await api.POST('/api/v1/pipelines/{pipeline_id}/unarchive', {
+      params: { path: { pipeline_id: p.id } },
+    })
     showActionMenu.value = null
     await loadPipelines()
   } catch (e) {
@@ -504,7 +501,9 @@ async function handleDelete() {
   if (!deleteTarget.value) return
   deleteError.value = null
   try {
-    await del(`/api/v1/pipelines/${deleteTarget.value.id}`)
+    await api.DELETE('/api/v1/pipelines/{pipeline_id}', {
+      params: { path: { pipeline_id: deleteTarget.value.id } },
+    })
     showDeleteConfirm.value = false
     deleteTarget.value = null
     await loadPipelines()
@@ -539,18 +538,18 @@ async function triggerRun() {
     } else {
       inputPayload = {}
     }
-    const result = await post<{ id: string }>('/api/v1/runs', {
-      pipeline_id: selectedPipeline.value.id,
-      input_payload: inputPayload,
+    const { data } = await api.POST('/api/v1/runs', {
+      body: {
+        pipeline_id: selectedPipeline.value.id,
+        input_payload: inputPayload,
+      },
     })
     showRunDialog.value = false
-    router.push({ name: 'run-detail', params: { id: result.id } })
+    if (data) router.push({ name: 'run-detail', params: { id: (data as any).id } })
   } catch (e) {
     runError.value = formatApiError(e)
   } finally {
     running.value = false
   }
 }
-
-onMounted(loadPipelines)
 </script>
