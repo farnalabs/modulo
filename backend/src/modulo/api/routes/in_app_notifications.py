@@ -12,7 +12,7 @@ import uuid
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, Field
-from sqlalchemy.exc import ProgrammingError, SQLAlchemyError
+from sqlalchemy.exc import IntegrityError, ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.api.dependencies import get_db_session
@@ -47,6 +47,7 @@ class NotificationResponse(BaseModel):
     dismiss_strategy: str = "user_only"
     dismissible_at_scope: bool = False
     created_at: str
+    expires_at: str | None = None
     scope_label: str = ""
 
 
@@ -95,6 +96,7 @@ def _notification_to_response(n: Notification) -> NotificationResponse:
         dismiss_strategy=n.dismiss_strategy,
         dismissible_at_scope=n.dismissible_at_scope,
         created_at=n.created_at.isoformat() if n.created_at else "",
+        expires_at=n.expires_at.isoformat() if n.expires_at else None,
         scope_label=SCOPE_LABELS.get(n.scope, n.scope),
     )
 
@@ -123,6 +125,11 @@ async def get_dashboard(
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
+        ) from None
+    except IntegrityError:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="A data conflict occurred.",
         ) from None
     except SQLAlchemyError:
         raise HTTPException(
@@ -153,6 +160,11 @@ async def get_unread(
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
+        ) from None
+    except IntegrityError:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="A data conflict occurred.",
         ) from None
     except SQLAlchemyError:
         raise HTTPException(
@@ -203,6 +215,11 @@ async def list_notifications(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
         ) from None
+    except IntegrityError:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="A data conflict occurred.",
+        ) from None
     except SQLAlchemyError:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -238,6 +255,11 @@ async def get_notification_detail(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
         ) from None
+    except IntegrityError:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="A data conflict occurred.",
+        ) from None
     except SQLAlchemyError:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -270,6 +292,11 @@ async def review_later_endpoint(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
         ) from None
+    except IntegrityError:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="A data conflict occurred.",
+        ) from None
     except SQLAlchemyError:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -282,13 +309,13 @@ async def review_later_endpoint(
             org_id=str(principal.organisation_id),
             resource_type="notification",
             resource_id=str(notification_id),
-            action="dismissed",
+            action="review_later",
             version=1,
         )
     except Exception:
         _log.warning("review_later_endpoint.publish_failed", exc_info=True)
 
-    return {"status": "dismissed_for_self"}
+    return {"status": "review_later"}
 
 
 @router.post("/{notification_id}/dismiss", status_code=status.HTTP_200_OK)
@@ -317,6 +344,11 @@ async def dismiss_endpoint(
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
+        ) from None
+    except IntegrityError:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="A data conflict occurred.",
         ) from None
     except SQLAlchemyError:
         raise HTTPException(
