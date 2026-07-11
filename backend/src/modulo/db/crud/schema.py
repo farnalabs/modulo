@@ -71,13 +71,10 @@ async def get_schema(session: AsyncSession, schema_id: uuid.UUID) -> Schema | No
 async def list_schemas(
     session: AsyncSession,
     *,
-    pipeline_id: uuid.UUID | None = None,
     cursor: str | None = None,
     limit: int = 20,
 ) -> PageResult[Schema]:
     q = select(Schema)
-    if pipeline_id is not None:
-        q = q.where(Schema.id == pipeline_id)
 
     try:
         total = (await session.execute(select(func.count()).select_from(Schema))).scalar_one()

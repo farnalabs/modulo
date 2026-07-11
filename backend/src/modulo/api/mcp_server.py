@@ -1649,10 +1649,9 @@ async def get_available_features() -> dict[str, Any]:
 
 
 @mcp.tool(
-    description="List registered schemas with cursor-based pagination. Optionally filter by pipeline_id.",
+    description="List registered schemas with cursor-based pagination. Returns schema metadata.",
 )
 async def list_schemas(
-    pipeline_id: str | None = None,
     cursor: str | None = None,
     limit: int = 20,
 ) -> dict[str, Any]:
@@ -1660,11 +1659,10 @@ async def list_schemas(
         if not await validate_current_auth():
             return _tool_auth_error("Token revoked or expired — re-authenticate")
         org_id = _ctx_org_id_val()
-        pid = uuid.UUID(pipeline_id) if pipeline_id else None
         lim = max(1, min(limit, 100))
 
         async with _session(org_id) as s:
-            result = await db_list_schemas(s, pipeline_id=pid, cursor=cursor, limit=lim)
+            result = await db_list_schemas(s, cursor=cursor, limit=lim)
 
         return {
             "data": [
@@ -1673,7 +1671,6 @@ async def list_schemas(
                     "name": sc.name,
                     "description": sc.description,
                     "version": sc.abstract_name,
-                    "pipeline_id": None,
                     "created_at": sc.created_at.isoformat() if sc.created_at else None,
                 }
                 for sc in result.items
