@@ -1143,7 +1143,6 @@ async def list_primitives(
         _log.warning("list_primitives — DB not migrated for org %s", org_id)
     except Exception:
         _log.exception("list_primitives — DB query failed for org %s", org_id)
-        raise
 
     org_items = list(org_page.items)
     org_total = org_page.total
