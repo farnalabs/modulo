@@ -533,6 +533,10 @@ def _build_connector(
                 from modulo.connectors.ticket_tracker.github import GitHubTicketTracker
 
                 return GitHubTicketTracker(config, creds)
+            if provider == "trello":
+                from modulo.connectors.ticket_tracker.trello import TrelloTicketTracker
+
+                return TrelloTicketTracker(config, creds)
             raise ValueError(f"Unknown ticket-tracker provider: {provider!r}")
         case _:
             registry = get_plugin_registry()
