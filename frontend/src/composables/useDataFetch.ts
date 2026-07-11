@@ -1,10 +1,13 @@
-import { ref, onMounted } from 'vue'
+import { computed } from 'vue'
+import { useQuery } from '@tanstack/vue-query'
 import { formatApiError } from '../lib/api/formatError'
 
+let keyCounter = 0
+
 interface DataFetchResult<T> {
-  loading: ReturnType<typeof ref<boolean>>
-  error: ReturnType<typeof ref<string | null>>
-  data: ReturnType<typeof ref<T | undefined>>
+  loading: ReturnType<typeof computed<boolean>>
+  error: ReturnType<typeof computed<string | null>>
+  data: ReturnType<typeof computed<T | undefined>>
   load: () => Promise<void>
 }
 
@@ -19,30 +22,25 @@ export function useDataFetch<T>(
   fetcher: () => Promise<FetcherResult<T>> | FetcherResult<T>,
   options?: DataFetchOptions<T>,
 ): DataFetchResult<T> {
-  const loading = ref(false)
-  const error = ref<string | null>(null)
-  const data = ref<T | undefined>(options?.initialValue)
+  const key = [`useDataFetch`, ++keyCounter]
 
-  async function load() {
-    loading.value = true
-    error.value = null
-    try {
+  const { data, error, isLoading, isFetching, refetch } = useQuery({
+    queryKey: key,
+    queryFn: async () => {
       const result = await fetcher()
-      if (result.error) {
-        error.value = formatApiError(result.error)
-      } else {
-        data.value = result.data as T
-      }
-    } catch (e) {
-      error.value = formatApiError(e)
-    } finally {
-      loading.value = false
-    }
-  }
+      if (result.error) throw new Error(formatApiError(result.error))
+      return result.data as T
+    },
+    enabled: options?.immediate !== false,
+    initialData: options?.initialValue,
+    retry: 1,
+    staleTime: 30_000,
+  })
 
-  if (options?.immediate !== false) {
-    onMounted(() => load())
+  return {
+    loading: computed(() => isLoading.value || isFetching.value),
+    error: computed(() => error.value ? (error.value?.message ?? 'An error occurred') : null),
+    data: computed(() => data.value),
+    load: async () => { await refetch() },
   }
-
-  return { loading, error, data, load }
 }
