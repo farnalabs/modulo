@@ -17,7 +17,8 @@ code:
   - frontend/src/composables/useEventStream.ts
   - frontend/src/composables/useSyncStore.ts
   - frontend/src/stores/syncRegistry.ts
-depends-on: []
+depends-on:
+  - feat-auth-jwt-auth
 status: partial
 ---
 
