@@ -1,5 +1,6 @@
 """Determination API — read-only SDLC assessment and pipeline draft generation."""
 
+import asyncio
 import logging
 import uuid
 
@@ -126,7 +127,7 @@ async def _load_and_scan(settings: Settings) -> tuple[list[ScanSample], list[Fin
             raise HTTPException(
                 status_code=status.HTTP_501_NOT_IMPLEMENTED,
                 detail="This feature is not available. Run database migrations to enable it.",
-            )
+            ) from None
 
     relevant: list[ConnectorInstance] = [
         ci for ci in instances.items if ci.connector_type_id in {t.value for t in _DETERMINATION_SCOPES}
@@ -166,7 +167,7 @@ async def run_determination(
             raise HTTPException(
                 status_code=status.HTTP_501_NOT_IMPLEMENTED,
                 detail="This feature is not available. Run database migrations to enable it.",
-            )
+            ) from None
 
         relevant: list[ConnectorInstance] = [
             ci for ci in instances.items if ci.connector_type_id in {t.value for t in _DETERMINATION_SCOPES}
@@ -195,21 +196,25 @@ async def run_determination(
         )
     except HTTPException:
         raise
-    except SQLAlchemyError:
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Database service unavailable. Please try again later.",
-        )
     except IntegrityError:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="A resource with this value already exists",
-        )
+        ) from None
+    except SQLAlchemyError:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Database service unavailable. Please try again later.",
+        ) from None
     except ProgrammingError:
-        raise HTTPException(status_code=501, detail="Feature is not available. Run database migrations to enable it.")
-    except Exception as e:
-        logger.error("Unexpected error in run_determination: %s", str(e))
-        raise HTTPException(status_code=500, detail="Internal server error")
+        raise HTTPException(
+            status_code=501, detail="Feature is not available. Run database migrations to enable it."
+        ) from None
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        logger.exception("Unexpected error in run_determination")
+        raise HTTPException(status_code=500, detail="Internal server error") from None
 
 
 @router.post("/draft", response_model=DraftResponse)
@@ -236,7 +241,7 @@ async def create_determination_draft(
             raise HTTPException(
                 status_code=status.HTTP_501_NOT_IMPLEMENTED,
                 detail="This feature is not available. Run database migrations to enable it.",
-            )
+            ) from None
 
         relevant: list[ConnectorInstance] = [
             ci for ci in instances.items if ci.connector_type_id in {t.value for t in _DETERMINATION_SCOPES}
@@ -292,18 +297,22 @@ async def create_determination_draft(
         )
     except HTTPException:
         raise
-    except SQLAlchemyError:
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Database service unavailable. Please try again later.",
-        )
     except IntegrityError:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="A resource with this value already exists",
-        )
+        ) from None
+    except SQLAlchemyError:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Database service unavailable. Please try again later.",
+        ) from None
     except ProgrammingError:
-        raise HTTPException(status_code=501, detail="Feature is not available. Run database migrations to enable it.")
-    except Exception as e:
-        logger.error("Unexpected error in create_determination_draft: %s", str(e))
-        raise HTTPException(status_code=500, detail="Internal server error")
+        raise HTTPException(
+            status_code=501, detail="Feature is not available. Run database migrations to enable it."
+        ) from None
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        logger.exception("Unexpected error in create_determination_draft")
+        raise HTTPException(status_code=500, detail="Internal server error") from None
