@@ -40,6 +40,7 @@ Eval-before-interrupt (§8.17):
     ``EvalBlockedError`` is raised instead of a ``NodeInterrupt``.
 """
 
+import asyncio
 import json
 import logging
 import uuid
@@ -319,6 +320,8 @@ def make_hitl_gate_fn(
                                     detail=eval_result.detail,
                                 )
                                 session.add(db_result)
+                except asyncio.CancelledError:
+                    raise
                 except Exception:
                     _log.exception("hitl_gate.persist_eval_failed")
 
