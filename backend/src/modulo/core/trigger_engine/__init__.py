@@ -23,8 +23,6 @@ import uuid
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
-_log = logging.getLogger(__name__)
-
 from sqlalchemy import delete, func, select, text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -37,6 +35,8 @@ from modulo.db.models.run import Run
 from modulo.db.models.trigger import Trigger
 from modulo.db.models.trigger_event import TriggerEvent
 from modulo.db.models.webhook import WebhookDedupHash, WebhookPayload
+
+_log = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
 # Exceptions
@@ -231,7 +231,7 @@ class TriggerEngine:
         # HMAC is computed over timestamp.body for replay protection
         cfg = trigger.config_json or {}
         hmac_secret: str | None = cfg.get("hmac_secret")
-        if hmac_secret and not _verify_hmac(raw_body, hmac_secret, hmac_signature, timestamp=ts):
+        if hmac_secret is not None and not _verify_hmac(raw_body, hmac_secret, hmac_signature, timestamp=ts):
             _log.warning("Webhook HMAC validation failed for trigger %s", trigger_id)
             await self._log_event(
                 session,
@@ -416,10 +416,6 @@ class TriggerEngine:
         )
 
         return run, trigger_event, input_payload
-
-    # ------------------------------------------------------------------
-    # Dedup cleanup
-    # ------------------------------------------------------------------
 
     # ------------------------------------------------------------------
     # Polling trigger

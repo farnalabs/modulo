@@ -210,7 +210,7 @@ async def fire_polling_trigger(
     and async contexts.
     """
     settings = get_settings()
-    factory = async_sessionmaker(_get_engine(), expire_on_commit=False)
+    factory = async_sessionmaker(_get_engine(), expire_on_commit=False, autobegin=False)
 
     async with factory() as session, session.begin():
         await _set_rls_org(session, org_id)
@@ -422,16 +422,15 @@ def _validate_poll_config(config: dict[str, Any]) -> None:
     """Validate polling trigger configuration.
     Raises ValueError on invalid config."""
     interval = config.get("poll_interval_seconds")
-    if interval is not None:
-        if not isinstance(interval, (int, float)) or interval < 1:
-            raise ValueError(f"poll_interval_seconds must be >= 1, got {interval!r}")
+    if interval is not None and (not isinstance(interval, (int, float)) or interval < 1):
+        raise ValueError(f"poll_interval_seconds must be >= 1, got {interval!r}")
 
     ci_id = config.get("connector_instance_id")
     if ci_id is not None:
         try:
             uuid.UUID(ci_id)
         except (ValueError, TypeError):
-            raise ValueError(f"connector_instance_id must be a valid UUID, got {ci_id!r}")
+            raise ValueError(f"connector_instance_id must be a valid UUID, got {ci_id!r}") from None
 
     poll_query = config.get("poll_query")
     if poll_query is not None and not isinstance(poll_query, str):
@@ -570,7 +569,7 @@ class DatabasePollingScheduler(Scheduler):  # type: ignore[misc]
     async def _fetch_due_triggers(self) -> list[dict[str, Any]]:
         """Async query for polling triggers due to fire."""
         try:
-            factory = async_sessionmaker(_get_engine(), expire_on_commit=False)
+            factory = async_sessionmaker(_get_engine(), expire_on_commit=False, autobegin=False)
 
             async with factory() as session, session.begin():
                 now = datetime.datetime.now(datetime.UTC)
