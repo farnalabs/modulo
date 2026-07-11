@@ -1,5 +1,6 @@
 """Admin cost management routes — spend limits, cost reports, export, anomalies, scheduled reports."""
 
+import asyncio
 import csv
 import io
 import logging
@@ -98,6 +99,8 @@ async def get_costs(
         ) from None
     except HTTPException:
         raise
+    except asyncio.CancelledError:
+        raise
     except Exception:
         _log.exception("Unexpected error in get_costs")
         raise HTTPException(
@@ -141,6 +144,8 @@ async def get_spend_limits(
             detail="A database error occurred. Please try again.",
         ) from None
     except HTTPException:
+        raise
+    except asyncio.CancelledError:
         raise
     except Exception:
         _log.exception("Unexpected error in get_spend_limits")
@@ -194,6 +199,8 @@ async def set_org_spend_limit(
         ) from None
     except HTTPException:
         raise
+    except asyncio.CancelledError:
+        raise
     except Exception:
         _log.exception("Unexpected error in set_org_spend_limit")
         raise HTTPException(
@@ -238,6 +245,8 @@ async def set_team_spend_limit(
             detail="A database error occurred. Please try again.",
         ) from None
     except HTTPException:
+        raise
+    except asyncio.CancelledError:
         raise
     except Exception:
         _log.exception("Unexpected error in set_team_spend_limit")
@@ -295,6 +304,8 @@ async def get_cost_controls(
         ) from None
     except HTTPException:
         raise
+    except asyncio.CancelledError:
+        raise
     except Exception:
         _log.exception("Unexpected error in get_cost_controls")
         raise HTTPException(
@@ -350,6 +361,8 @@ async def update_cost_controls(
             detail="A database error occurred. Please try again.",
         ) from None
     except HTTPException:
+        raise
+    except asyncio.CancelledError:
         raise
     except Exception:
         _log.exception("Unexpected error in update_cost_controls")
@@ -415,6 +428,8 @@ async def export_costs(
             detail="A database error occurred. Please try again.",
         ) from None
     except HTTPException:
+        raise
+    except asyncio.CancelledError:
         raise
     except Exception:
         _log.exception("Unexpected error in export_costs")
@@ -494,6 +509,8 @@ async def create_report(
         ) from None
     except HTTPException:
         raise
+    except asyncio.CancelledError:
+        raise
     except Exception:
         _log.exception("Unexpected error in create_report")
         raise HTTPException(
@@ -540,6 +557,8 @@ async def list_reports(
             detail="A database error occurred. Please try again.",
         ) from None
     except HTTPException:
+        raise
+    except asyncio.CancelledError:
         raise
     except Exception:
         _log.exception("Unexpected error in list_reports")
@@ -592,6 +611,8 @@ async def delete_report(
             detail="A database error occurred. Please try again.",
         ) from None
     except HTTPException:
+        raise
+    except asyncio.CancelledError:
         raise
     except Exception:
         _log.exception("Unexpected error in delete_report")
@@ -718,6 +739,8 @@ async def get_anomalies(
         ) from None
     except HTTPException:
         raise
+    except asyncio.CancelledError:
+        raise
     except Exception:
         _log.exception("Unexpected error in get_anomalies")
         raise HTTPException(
@@ -756,6 +779,8 @@ async def dismiss_anomaly_endpoint(
             detail="A database error occurred. Please try again.",
         ) from None
     except HTTPException:
+        raise
+    except asyncio.CancelledError:
         raise
     except Exception:
         _log.exception("Unexpected error in dismiss_anomaly_endpoint")
