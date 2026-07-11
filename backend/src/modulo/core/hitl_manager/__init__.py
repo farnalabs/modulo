@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 """HITLManager — atomic claim, approve, reject, deliver_manual, and expiry for HITL gates.
 
 Each pipeline run that reaches a HITL gate edge creates one `hitl_claims` row.
@@ -25,6 +23,7 @@ run_id + gate_id + client_id, signed with SECRET_KEY. Opaque tokens from the
 alpha are still accepted for backwards compatibility.
 """
 
+from __future__ import annotations
 
 import logging
 import secrets
