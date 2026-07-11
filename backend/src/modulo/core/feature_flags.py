@@ -1,6 +1,17 @@
 from __future__ import annotations
 
-"""Feature flag registry — catalogs all known feature flags and their current status."""
+"""Feature flag registry — catalogs all known feature flags and their current status.
+
+Tier structure (matching the DB tier_catalog):
+    community (0) — Free tier, all features active without a license
+    team      (1) — The one paid tier (Enterprise in business docs)
+    v1        (2) — RESERVED / roadmap — no active features
+    v2        (3) — RESERVED / roadmap — no active features
+
+v1 and v2 exist in the catalog to reserve rank positions for future
+tier expansion without re-numbering existing ranks.  All currently
+shipped paid features use the ``team`` tier.
+"""
 
 
 import logging
@@ -142,7 +153,10 @@ _KNOWN_FLAGS: list[FeatureFlag] = [
         description="External secrets backends (Vault, AWS, 1Password, Azure Key Vault)",
         tier="team",
     ),
-    # ── v1 tier ────────────────────────────────────────────────────────
+    # ── v1 tier (ROADMAP — reserved, not an active pricing tier) ──────
+    # These flags are catalogued for future use. No backend routes or
+    # frontend UI exist for them yet. When implementation starts, move
+    # the flag to the appropriate active tier (likely ``team``).
     FeatureFlag(
         name="schema_union_types",
         description="Union types and polymorphic schemas",
@@ -153,7 +167,10 @@ _KNOWN_FLAGS: list[FeatureFlag] = [
         description="CLI tool for migrating pipelines across instances",
         tier="v1",
     ),
-    # ── v2 tier ────────────────────────────────────────────────────────
+    # ── v2 tier (ROADMAP — reserved, not an active pricing tier) ──────
+    # These flags are catalogued for future use. No backend routes or
+    # frontend UI exist for them yet. When implementation starts, move
+    # the flag to the appropriate active tier (likely ``team``).
     FeatureFlag(
         name="checkpoint_encryption",
         description="Encrypt pipeline checkpoints at rest",
@@ -244,6 +261,7 @@ _KNOWN_FLAGS: list[FeatureFlag] = [
 ]
 
 
+# community=Free, team=one paid tier (Enterprise in docs), v1/v2=roadmap/reserved
 TIER_RANK: dict[str, int] = {"community": 0, "team": 1, "v1": 2, "v2": 3}
 
 
