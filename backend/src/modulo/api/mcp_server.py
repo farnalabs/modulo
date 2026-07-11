@@ -70,9 +70,15 @@ from modulo.settings import get_settings
 _log = logging.getLogger(__name__)
 
 # ContextVars populated by McpAuthMiddleware before each request.
-# NOTE: FastMCP's stateless HTTP handler runs tool handlers in a child anyio task,
-# which does NOT inherit contextvars.  A module-level fallback store is used
-# so validate_current_auth can find the auth data even when contextvars are empty.
+# Propagation: this server runs FastMCP in stateless HTTP mode, where each request
+# spawns a fresh per-request server task *from the already-authenticated request
+# coroutine* (StreamableHTTPSessionManager._handle_stateless_request calls
+# task_group.start(...) at request time). asyncio/anyio copy the caller's context
+# at task-creation time, so values set here in the middleware propagate to tool
+# handlers. If a handler ever runs without this context, tenant resolution FAILS
+# CLOSED (auth error) — there must never be a process-global fallback, because
+# under concurrent multi-tenant load a global would resolve to whichever org
+# authenticated last, leaking cross-tenant data.
 _ctx_org_id: contextvars.ContextVar[uuid.UUID] = contextvars.ContextVar("mcp_org_id")
 _ctx_role: contextvars.ContextVar[str] = contextvars.ContextVar("mcp_role")
 _ctx_key_id: contextvars.ContextVar[uuid.UUID] = contextvars.ContextVar("mcp_key_id")
@@ -80,43 +86,35 @@ _ctx_auth_token: contextvars.ContextVar[str] = contextvars.ContextVar("mcp_auth_
 _ctx_user_id: contextvars.ContextVar[uuid.UUID] = contextvars.ContextVar("mcp_user_id")
 _ctx_auth_type: contextvars.ContextVar[str] = contextvars.ContextVar("mcp_auth_type")
 
-# Fallback store for auth data when contextvars are unavailable (child tasks).
-# Written by McpAuthMiddleware, read by validate_current_auth and tool handlers.
-_auth_token_fallback: str | None = None
-_auth_org_id_fallback: uuid.UUID | None = None
-_auth_user_id_fallback: uuid.UUID | None = None
-_auth_role_fallback: str | None = None
+
+class McpAuthContextError(LookupError):
+    """Raised when a handler runs without an authenticated tenant context.
+
+    Fail-closed guard: tenant scope must come from the request-scoped
+    ContextVars set by McpAuthMiddleware. There is deliberately no
+    process-global fallback and no placeholder org.
+    """
 
 
 def _ctx_org_id_val() -> uuid.UUID:
-    """Get org_id from context var, falling back to module-level store for FastMCP child tasks."""
+    """Get org_id from the request context. Fails closed if unset."""
     v = _ctx_org_id.get(None)
-    if v is not None:
-        return v
-    global _auth_org_id_fallback
-    return _auth_org_id_fallback or _PLACEHOLDER_ORG_ID
+    if v is None:
+        raise McpAuthContextError("No authenticated organisation context for this MCP request")
+    return v
 
 
 def _ctx_user_id_val() -> uuid.UUID:
-    """Get user/account_id from context var, falling back to module-level store."""
+    """Get user/account_id from the request context. Fails closed if unset."""
     v = _ctx_user_id.get(None)
-    if v is not None:
-        return v
-    global _auth_user_id_fallback
-    return _auth_user_id_fallback or uuid.UUID(int=0)
+    if v is None:
+        raise McpAuthContextError("No authenticated user context for this MCP request")
+    return v
 
 
 def _ctx_role_val() -> str | None:
-    """Get role from context var, falling back to module-level store."""
-    v = _ctx_role.get(None)
-    if v is not None:
-        return v
-    global _auth_role_fallback
-    return _auth_role_fallback
-
-
-# Fallback sentinel — replaced by the real org_id from the API key record or OAuth claims.
-_PLACEHOLDER_ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
+    """Get role from the request context (None if unset — scope checks then fail closed)."""
+    return _ctx_role.get(None)
 
 
 def _get_session_factory() -> async_sessionmaker[AsyncSession]:
@@ -151,17 +149,14 @@ async def validate_current_auth() -> bool:
     revocation, expiry, or OAuth token family blacklisting.
     Returns True if the credential is still valid, False otherwise.
 
-    Fallback: FastMCP runs tool handlers in a child anyio task that does not
-    inherit contextvars, so we fall back to module-level globals set by
-    ``McpAuthMiddleware``.
+    Fail closed: the credential and org come exclusively from the
+    request-scoped ContextVars set by ``McpAuthMiddleware``. If any of them
+    is missing, the request is treated as unauthenticated — there is no
+    process-global fallback.
     """
     auth_type = _ctx_auth_type.get(None)
     token = _ctx_auth_token.get(None)
-    # Use fallback-aware helper (contextvars are lost in FastMCP child tasks).
-    org_id = _ctx_org_id_val()
-    if token is None:
-        global _auth_token_fallback
-        token = _auth_token_fallback
+    org_id = _ctx_org_id.get(None)
 
     if auth_type is None:
         auth_type = "api_key" if token and token.startswith("mk_") else None
@@ -218,7 +213,6 @@ class McpAuthMiddleware(BaseHTTPMiddleware):
     """
 
     async def dispatch(self, request: Request, call_next: Any) -> Response:
-        global _auth_token_fallback, _auth_org_id_fallback, _auth_user_id_fallback, _auth_role_fallback
         # Allow unauthenticated access to the health check endpoint.
         clean = request.url.path.rstrip("/")
         if clean in ("/mcp/healthz", "/healthz"):
@@ -277,16 +271,12 @@ class McpAuthMiddleware(BaseHTTPMiddleware):
                 async with _session(key_record.organisation_id) as s:
                     key = await validate_api_key(s, token, org_id=key_record.organisation_id)
                 org_id = key.organisation_id
+                _ctx_org_id.set(org_id)
                 _ctx_role.set(key.role)
                 _ctx_key_id.set(key.id)
                 _ctx_user_id.set(key.account_id)
                 _ctx_auth_token.set(token)
                 _ctx_auth_type.set("api_key")
-                # Also set fallbacks for FastMCP child tasks (contextvars don't propagate).
-                _auth_token_fallback = token
-                _auth_org_id_fallback = org_id
-                _auth_user_id_fallback = key.account_id
-                _auth_role_fallback = key.role
                 request.scope["auth_principal"] = {
                     "type": "api_key",
                     "org_id": str(org_id),
@@ -323,11 +313,6 @@ class McpAuthMiddleware(BaseHTTPMiddleware):
             _ctx_user_id.set(principal.account_id)
             _ctx_auth_token.set(token)
             _ctx_auth_type.set("oauth")
-            # Also set fallbacks for FastMCP child tasks (contextvars don't propagate).
-            _auth_token_fallback = token
-            _auth_org_id_fallback = principal.organisation_id
-            _auth_user_id_fallback = principal.account_id
-            _auth_role_fallback = principal.org_role or "runner"
             request.scope["auth_principal"] = {
                 "type": "user",
                 "org_id": str(principal.organisation_id) if principal.organisation_id else "",

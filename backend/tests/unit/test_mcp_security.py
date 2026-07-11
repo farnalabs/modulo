@@ -8,6 +8,7 @@ Tests cover:
 
 from __future__ import annotations
 
+import uuid
 from collections.abc import Generator
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -113,9 +114,17 @@ class TestHumanOnlyGateBypass:
 
     @pytest.fixture(autouse=True)
     def _patch_auth(self) -> Generator[None, None, None]:
-        """Mock validate_current_auth to return True so the tool handler runs."""
-        with patch("modulo.api.mcp_server.validate_current_auth", return_value=True):
-            yield
+        """Mock validate_current_auth and set tenant context so the tool handler runs."""
+        import modulo.api.mcp_server as _ms
+
+        org_token = _ms._ctx_org_id.set(uuid.UUID(_FAKE_ID))
+        user_token = _ms._ctx_user_id.set(uuid.UUID(_FAKE_ID))
+        try:
+            with patch("modulo.api.mcp_server.validate_current_auth", return_value=True):
+                yield
+        finally:
+            _ms._ctx_user_id.reset(user_token)
+            _ms._ctx_org_id.reset(org_token)
 
     async def test_human_only_approve_rejected_via_mcp(self) -> None:
         from modulo.api.mcp_server import _ctx_role as _role
