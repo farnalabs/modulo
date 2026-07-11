@@ -1,5 +1,13 @@
-"""Trello implementation of the TicketTrackerBase ABC."""
+"""Trello implementation of the TicketTrackerBase ABC.
 
+Trello uses a key + token authentication model, where credentials are
+passed as query parameters on every request — never in the request body.
+Cards are organised into lists (idList). Status is derived from the
+`closed` field: a card with `closed: true` is considered "closed",
+otherwise it's "open".
+"""
+
+import logging
 from datetime import datetime
 from typing import Any
 
@@ -7,6 +15,11 @@ import httpx
 
 from modulo.connectors.base import ConnectorPayload, ConnectorQuery, ConnectorResult, ConnectorType, HealthResult
 from modulo.connectors.ticket_tracker.base import Ticket, TicketFilter, TicketTrackerBase
+
+logger = logging.getLogger(__name__)
+
+TRELLO_CARD_FIELDS = "id,name,desc,dateLastActivity,closed,due,url,idList,labels"
+DEFAULT_TIMEOUT = 10
 
 
 class TrelloTicketTracker(TicketTrackerBase):
@@ -17,6 +30,8 @@ class TrelloTicketTracker(TicketTrackerBase):
         self._token = creds.get("token", "")
         self._board_id = config.get("board_id", "")
         self._base_url = "https://api.trello.com/1"
+        if not self._api_key or not self._token:
+            raise ValueError("Trello connector requires api_key and token credentials")
 
     @property
     def connector_type(self) -> ConnectorType:
@@ -31,7 +46,7 @@ class TrelloTicketTracker(TicketTrackerBase):
                 resp = await client.get(
                     f"{self._base_url}/boards/{self._board_id}",
                     params=self._auth(),
-                    timeout=10,
+                    timeout=DEFAULT_TIMEOUT,
                 )
                 resp.raise_for_status()
                 return HealthResult(ok=True, detail=resp.json().get("name", ""))
@@ -67,16 +82,23 @@ class TrelloTicketTracker(TicketTrackerBase):
     async def list_tickets(self, filter: TicketFilter | None = None) -> list[Ticket]:
         async with httpx.AsyncClient() as client:
             params: dict[str, Any] = self._auth()
-            params["fields"] = "id,name,desc,dateLastActivity,closed,due,url,idList,labels"
+            params["fields"] = TRELLO_CARD_FIELDS
             if filter and filter.limit:
                 params["limit"] = str(min(filter.limit, 100))
-            resp = await client.get(
-                f"{self._base_url}/boards/{self._board_id}/cards",
-                params=params,
-                timeout=15,
-            )
-            resp.raise_for_status()
-            raw_cards = resp.json()
+            if filter and filter.offset:
+                logger.warning("offset is not supported by Trello's API; ignoring offset=%s", filter.offset)
+            try:
+                resp = await client.get(
+                    f"{self._base_url}/boards/{self._board_id}/cards",
+                    params=params,
+                    timeout=DEFAULT_TIMEOUT,
+                )
+                resp.raise_for_status()
+                raw_cards = resp.json()
+            except httpx.HTTPStatusError as e:
+                raise ValueError(f"Trello API error: {e.response.status_code} - {e.response.text}") from None
+            except httpx.RequestError as e:
+                raise ValueError(f"Trello network error: {e}") from None
 
         if filter and filter.search:
             raw_cards = [
@@ -92,49 +114,67 @@ class TrelloTicketTracker(TicketTrackerBase):
 
     async def get_ticket(self, ticket_id: str) -> Ticket:
         async with httpx.AsyncClient() as client:
-            resp = await client.get(
-                f"{self._base_url}/cards/{ticket_id}",
-                params={
-                    **self._auth(),
-                    "fields": "id,name,desc,dateLastActivity,closed,due,url,idList,labels",
-                },
-                timeout=10,
-            )
-            resp.raise_for_status()
-            return self._to_ticket(resp.json())
+            try:
+                resp = await client.get(
+                    f"{self._base_url}/cards/{ticket_id}",
+                    params={
+                        **self._auth(),
+                        "fields": TRELLO_CARD_FIELDS,
+                    },
+                    timeout=DEFAULT_TIMEOUT,
+                )
+                resp.raise_for_status()
+                return self._to_ticket(resp.json())
+            except httpx.HTTPStatusError as e:
+                raise ValueError(f"Trello API error: {e.response.status_code} - {e.response.text}") from None
+            except httpx.RequestError as e:
+                raise ValueError(f"Trello network error: {e}") from None
 
     async def create_ticket(self, title: str, description: str | None = None, **kwargs: Any) -> Ticket:
-        body: dict[str, Any] = {"name": title, **self._auth()}
+        if not kwargs.get("idList"):
+            raise ValueError("idList is required to create a Trello card")
+        body: dict[str, Any] = {"name": title}
         if description:
             body["desc"] = description
-        if kwargs.get("idList"):
-            body["idList"] = kwargs["idList"]
+        body["idList"] = kwargs["idList"]
         if "labels" in kwargs:
             raw_labels = kwargs["labels"]
             body["labels"] = ",".join(raw_labels) if isinstance(raw_labels, list) else raw_labels
         async with httpx.AsyncClient() as client:
-            resp = await client.post(
-                f"{self._base_url}/cards",
-                json=body,
-                timeout=10,
-            )
-            resp.raise_for_status()
-            return self._to_ticket(resp.json())
+            try:
+                resp = await client.post(
+                    f"{self._base_url}/cards",
+                    params=self._auth(),
+                    data=body,
+                    timeout=DEFAULT_TIMEOUT,
+                )
+                resp.raise_for_status()
+                return self._to_ticket(resp.json())
+            except httpx.HTTPStatusError as e:
+                raise ValueError(f"Trello API error: {e.response.status_code} - {e.response.text}") from None
+            except httpx.RequestError as e:
+                raise ValueError(f"Trello network error: {e}") from None
 
     async def update_ticket(self, ticket_id: str, **kwargs: Any) -> Ticket:
-        body: dict[str, Any] = {**self._auth()}
+        body: dict[str, Any] = {}
         if kwargs.get("idList"):
             body["idList"] = kwargs["idList"]
         if "due" in kwargs:
             body["due"] = kwargs["due"]
         async with httpx.AsyncClient() as client:
-            resp = await client.put(
-                f"{self._base_url}/cards/{ticket_id}",
-                json=body,
-                timeout=10,
-            )
-            resp.raise_for_status()
-            return self._to_ticket(resp.json())
+            try:
+                resp = await client.put(
+                    f"{self._base_url}/cards/{ticket_id}",
+                    params=self._auth(),
+                    data=body,
+                    timeout=DEFAULT_TIMEOUT,
+                )
+                resp.raise_for_status()
+                return self._to_ticket(resp.json())
+            except httpx.HTTPStatusError as e:
+                raise ValueError(f"Trello API error: {e.response.status_code} - {e.response.text}") from None
+            except httpx.RequestError as e:
+                raise ValueError(f"Trello network error: {e}") from None
 
     def _to_ticket(self, raw: dict) -> Ticket:
         return Ticket(
