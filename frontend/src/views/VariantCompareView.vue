@@ -25,15 +25,15 @@
           </option>
         </select>
 
-        <button
+        <Button
           :disabled="!selectedGroupId || runningVariants.size > 0"
+          variant="default"
           data-testid="variant-compare-run-variants"
-          class="inline-flex items-center gap-2 rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
           @click="runVariants"
         >
           <span v-if="runningVariants.size > 0" class="inline-block h-4 w-4 animate-spin rounded-full border-2 border-current border-t-transparent" />
           {{ runningVariants.size > 0 ? $t('views.variantCompare.running') : $t('views.variantCompare.runVariants') }}
-        </button>
+        </Button>
 
         <span v-if="selectedGroup" class="text-xs text-muted-foreground">
           {{ $t('views.variantCompare.runs', { count: selectedGroup.run_count }) }} �
@@ -236,6 +236,7 @@ import ErrorAlert from '../components/shared/ErrorAlert.vue'
 import PageHeader from '../components/shared/PageHeader.vue'
 import PageTabs from "../components/PageTabs.vue"
 import { formatApiError } from '../lib/api/formatError'
+import { Button } from '@/components/ui/button'
 
 const { t } = useI18n()
 

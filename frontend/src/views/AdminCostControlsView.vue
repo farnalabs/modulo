@@ -61,41 +61,39 @@
             <div v-if="teams.length === 0" class="py-4 text-center text-sm text-muted-foreground">
               {{ $t('views.AdminCostControlsView.no_teams_found') }}
             </div>
-            <table v-else class="w-full text-sm">
-              <thead>
-                <tr>
-                  <th class="table-header">{{ $t('views.AdminCostBreakdownView.team') }}</th>
-                  <th class="table-header table-cell-numeric">{{ $t('views.AdminCostControlsView.budget') }} ({{ settings.currency }})</th>
-                  <th class="table-header table-cell-numeric">{{ $t('views.AdminCostBreakdownView.total_spend') }}</th>
-                  <th class="table-header" />
-                </tr>
-              </thead>
-              <tbody>
-                <tr v-for="team in teams" :key="team.id" class="border-b last:border-b-0">
-                  <td class="table-cell font-medium">{{ team.name }}</td>
-                  <td class="table-cell">
-                    <Input
-                      :model-value="team.editingBudget ?? undefined" @update:model-value="(v: any) => team.editingBudget = v === '' ? null : Number(v)"
-                      type="number"
-                      min="0"
-                      step="0.01"
-                      :placeholder="$t('views.AdminCostControlsView.budget_placeholder')"
-                      class="max-w-40"
-                      :data-testid="'cc-team-budget-' + team.id"
-                    />
-                    <p v-if="team.saveError" class="mt-1 text-xs text-destructive">{{ team.saveError }}</p>
-                  </td>
-                  <td class="table-cell-numeric text-muted-foreground">
-                    {{ currencySymbol }}{{ teamCostMap[team.id]?.toFixed(2) ?? '0.00' }}
-                  </td>
-                  <td class="table-cell-numeric">
-                    <Button size="sm" :disabled="team.saving" :data-testid="'cc-team-save-' + team.id" @click="saveTeamBudget(team)">
-                      {{ team.saving ? $t('views.AdminCostControlsView.saving') : $t('views.AdminCostControlsView.save') }}
-                    </Button>
-                  </td>
-                </tr>
-              </tbody>
-            </table>
+            <DataTable
+              v-else
+              :columns="[
+                { key: 'name', label: $t('views.AdminCostBreakdownView.team') },
+                { key: 'budget', label: $t('views.AdminCostControlsView.budget') + ' (' + settings.currency + ')', numeric: true },
+                { key: 'spend', label: $t('views.AdminCostBreakdownView.total_spend'), numeric: true },
+                { key: 'actions', label: '' },
+              ]"
+              :rows="tableRows"
+            >
+              <template #cell-budget="{ row }">
+                <Input
+                  :model-value="(row as any).editingBudget ?? undefined" @update:model-value="(v: any) => (row as any).editingBudget = v === '' ? null : Number(v)"
+                  type="number"
+                  min="0"
+                  step="0.01"
+                  :placeholder="$t('views.AdminCostControlsView.budget_placeholder')"
+                  class="max-w-40"
+                  :data-testid="'cc-team-budget-' + (row as any).id"
+                />
+                <p v-if="(row as any).saveError" class="mt-1 text-xs text-destructive">{{ (row as any).saveError }}</p>
+              </template>
+              <template #cell-spend="{ row }">
+                <span class="text-muted-foreground">{{ currencySymbol }}{{ teamCostMap[(row as any).id]?.toFixed(2) ?? '0.00' }}</span>
+              </template>
+              <template #cell-actions="{ row }">
+                <div class="text-right">
+                  <Button size="sm" :disabled="(row as any).saving" :data-testid="'cc-team-save-' + (row as any).id" @click="saveTeamBudget(row as any)">
+                    {{ (row as any).saving ? $t('views.AdminCostControlsView.saving') : $t('views.AdminCostControlsView.save') }}
+                  </Button>
+                </div>
+              </template>
+            </DataTable>
           </CardContent>
         </Card>
 
@@ -239,6 +237,7 @@ import LoadingSpinner from '../components/shared/LoadingSpinner.vue'
 import { Card, CardHeader, CardTitle, CardDescription, CardContent } from '../components/ui/card'
 import { Input } from '../components/ui/input'
 import { Button } from '../components/ui/button'
+import { DataTable } from '../components/ui/data-table'
 import PageTabs from "../components/PageTabs.vue"
 
 const planStore = usePlanStore()
@@ -308,6 +307,8 @@ const { data: limitsData, loading: limitsLoading, load: loadLimits } = useDataFe
 )
 
 const teams = ref<TeamBudgetRow[]>([])
+
+const tableRows = computed(() => teams.value)
 
 watch(() => limitsData.value, (data) => {
   if (data) {

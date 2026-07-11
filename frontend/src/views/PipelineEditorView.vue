@@ -14,7 +14,7 @@
         <p class="mt-4 text-sm italic text-muted-foreground/60 select-none">no components in pipeline</p>
       </div>
       <div class="flex items-center gap-2">
-        <button class="rounded-md bg-primary px-3 py-1 text-xs font-medium text-primary-foreground hover:bg-primary/90" @click="openRenameDialog">Rename</button>
+        <Button variant="default" size="xs" @click="openRenameDialog">Rename</Button>
         <button v-if="!pipeline?.archived_at" class="rounded-md border border-input bg-background px-3 py-1 text-xs font-medium hover:bg-accent" @click="handleArchive">Archive</button>
         <button v-else class="rounded-md border border-input bg-background px-3 py-1 text-xs font-medium hover:bg-accent" @click="handleUnarchive">Unarchive</button>
         <button v-if="planStore.featureEnabled('pipeline_delete')" class="rounded-md border border-destructive/50 bg-destructive/10 px-3 py-1 text-xs font-medium text-destructive hover:bg-destructive/20" @click="showDeleteConfirm = true">Delete</button>
@@ -131,14 +131,15 @@
         </dl>
 
         <div class="mt-6 space-y-2">
-          <button
+          <Button
             v-if="selectedNodeData.node_type === 'manual'"
+            variant="default"
+            class="w-full"
             data-testid="pipeline-editor-convert-to-agent"
-            class="inline-flex w-full items-center justify-center rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90"
             @click="openAgentPicker"
           >
             Convert to Agent
-          </button>
+          </Button>
           <button
             v-if="selectedNodeData.node_type === 'agent'"
             data-testid="pipeline-editor-revert-to-manual"
@@ -310,14 +311,14 @@
           </div>
 
           <div class="flex gap-2 pt-2">
-            <button
+            <Button
               data-testid="pipeline-editor-save-edge"
-              class="flex-1 rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
+              class="flex-1"
               :disabled="savingEdge"
               @click="saveEdgeConfig"
             >
               {{ savingEdge ? 'Saving...' : 'Save Edge' }}
-            </button>
+            </Button>
             <button
               class="rounded-lg border border-input bg-background px-4 py-2 text-sm hover:bg-accent"
               @click="selectedEdgeData = null"
@@ -537,6 +538,7 @@ import BackLink from '../components/BackLink.vue'
 import FormDialog from '../components/shared/FormDialog.vue'
 import { shortId } from '../utils/format'
 import { api } from '../lib/api/client'
+import { Button } from '@/components/ui/button'
 
 const planStore = usePlanStore()
 const route = useRoute()

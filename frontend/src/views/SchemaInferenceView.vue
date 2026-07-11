@@ -63,14 +63,14 @@
           </div>
 
           <div class="flex items-center gap-2">
-            <button
+            <Button
               :disabled="!selectedConnectorId || !resourceType.trim() || inferring"
+              variant="default"
               data-testid="schema-inference-infer-schema"
-              class="rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
               @click="inferSchema"
             >
               {{ inferring ? $t('views.SchemaInferenceView.inferring') : $t('views.SchemaInferenceView.infer_schema') }}
-            </button>
+            </Button>
           </div>
         </div>
         <div v-if="inferError" class="mt-3 text-sm text-destructive">{{ inferError }}</div>
@@ -142,14 +142,14 @@
         </div>
 
         <div class="flex items-center gap-2">
-          <button
+          <Button
             :disabled="publishing"
+            variant="default"
             data-testid="schema-inference-publish"
-            class="rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
             @click="publishSchema"
           >
             {{ publishing ? $t('views.SchemaInferenceView.publishing') : $t('views.SchemaInferenceView.publish') }}
-          </button>
+          </Button>
           <button
             data-testid="schema-inference-discard"
             class="rounded-lg border border-input bg-background px-4 py-2 text-sm font-medium hover:bg-accent"
@@ -175,6 +175,7 @@ import LoadingSpinner from '../components/shared/LoadingSpinner.vue'
 import ErrorAlert from '../components/shared/ErrorAlert.vue'
 import PageHeader from '../components/shared/PageHeader.vue'
 import PageTabs from "../components/PageTabs.vue"
+import { Button } from '@/components/ui/button'
 
 type ConnectorItem = components['schemas']['ConnectorItem']
 

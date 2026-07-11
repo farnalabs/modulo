@@ -41,9 +41,9 @@
             ></textarea>
           </div>
           <div class="flex items-center gap-2">
-            <button :disabled="!createName.trim() || creatingTeam" data-testid="settings-teams-create-submit" class="rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90 disabled:opacity-50" @click="createTeam">
+            <Button :disabled="!createName.trim() || creatingTeam" data-testid="settings-teams-create-submit" @click="createTeam">
               {{ creatingTeam ? 'Creating...' : 'Create' }}
-            </button>
+            </Button>
             <button class="rounded-lg border border-input bg-background px-4 py-2 text-sm font-medium hover:bg-accent" data-testid="settings-teams-create-cancel" @click="cancelCreate">
               Cancel
             </button>
@@ -79,9 +79,9 @@
           <div v-if="expandedTeamId === team.id" class="p-4">
             <div v-if="renameTeamId === team.id" class="mb-4 flex items-center gap-2">
               <input v-model="renameName" type="text" data-testid="settings-teams-rename-name" class="flex-1 rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring" @keyup.enter="saveRename" />
-              <button :disabled="!renameName.trim() || renamingTeam" data-testid="settings-teams-rename-save" class="rounded-lg bg-primary px-3 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90 disabled:opacity-50" @click="saveRename">
+              <Button :disabled="!renameName.trim() || renamingTeam" data-testid="settings-teams-rename-save" @click="saveRename">
                 {{ renamingTeam ? 'Saving...' : 'Save' }}
-              </button>
+              </Button>
               <button class="rounded-lg border border-input bg-background px-3 py-2 text-sm font-medium hover:bg-accent" data-testid="settings-teams-rename-cancel" @click="cancelRename">
                 Cancel
               </button>
@@ -154,9 +154,9 @@
                 <option value="runner">Runner</option>
                 <option value="operator">Operator</option>
               </select>
-              <button :disabled="!addMemberUserId || addingMember" data-testid="settings-teams-add-member-submit" class="rounded-lg bg-primary px-3 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90 disabled:opacity-50" @click="addMember(team.id)">
+              <Button :disabled="!addMemberUserId || addingMember" data-testid="settings-teams-add-member-submit" @click="addMember(team.id)">
                 {{ addingMember ? 'Adding...' : 'Add' }}
-              </button>
+              </Button>
               <button class="rounded-lg border border-input bg-background px-3 py-2 text-sm font-medium hover:bg-accent" data-testid="settings-teams-add-member-cancel" @click="addMemberTeamId = null">
                 Cancel
               </button>

@@ -3,14 +3,14 @@
   <header class="flex flex-wrap items-center justify-between gap-4">
     <PageHeader title="Stage Board" subtitle="Organise pipelines into stages — track progress as pipelines move through development, testing, and production phases. Drag pipelines between stages to update their lifecycle status." />
     <div class="flex items-center gap-2">
-      <button
+      <Button
+        variant="default"
         data-testid="stage-board-create-btn"
-        class="inline-flex items-center gap-2 rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90"
         @click="showCreateDialog = true"
       >
         <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
         New Stage
-      </button>
+      </Button>
       <button
         data-testid="stage-board-reorder-btn"
         class="inline-flex items-center gap-2 rounded-lg border border-input bg-background px-4 py-2 text-sm font-medium hover:bg-accent"
@@ -362,14 +362,14 @@
           >
             Cancel
           </button>
-          <button
+          <Button
             :disabled="!createName.trim()"
+            variant="default"
             data-testid="stage-board-create-submit"
-            class="rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
             @click="createStage"
           >
             Create
-          </button>
+          </Button>
         </div>
       </div>
     </div>
@@ -428,6 +428,7 @@ import { usePlanStore } from '../stores/planStore'
 import { formatApiError } from '../lib/api/formatError'
 import { api } from '../lib/api/client'
 import { formatDateShort } from '../lib/formatDate'
+import { Button } from '@/components/ui/button'
 
 const planStore = usePlanStore()
 const { patch } = { patch: async (url: string, body: any) => { return api.PATCH(url as any, { body }) } }
