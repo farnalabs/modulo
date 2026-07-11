@@ -10,7 +10,7 @@ from typing import TYPE_CHECKING, Any
 
 from sqlalchemy import select
 
-from modulo.core.runtime_provider import RuntimeProvider
+from modulo.core.runtime_provider import RuntimeProvider, WorkspaceSpec
 
 if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession
@@ -31,28 +31,25 @@ class RuntimeProviderHub:
         self._providers: dict[str, RuntimeProvider] = {}
         self._lock = asyncio.Lock()
 
-    async def register(self, name: str, provider: RuntimeProvider) -> None:
+    def register(self, name: str, provider: RuntimeProvider) -> None:
         """Register a RuntimeProvider under a symbolic name."""
-        async with self._lock:
-            if name in self._providers:
-                raise ValueError(f"RuntimeProvider '{name}' is already registered")
-            self._providers[name] = provider
+        if name in self._providers:
+            raise ValueError(f"RuntimeProvider '{name}' is already registered")
+        self._providers[name] = provider
 
-    async def unregister(self, name: str) -> None:
+    def unregister(self, name: str) -> None:
         """Remove a registered provider by name."""
-        async with self._lock:
-            if name not in self._providers:
-                _log.warning("RuntimeProvider '%s' is not registered", name)
-                return
-            self._providers.pop(name, None)
+        if name not in self._providers:
+            _log.warning("RuntimeProvider '%s' is not registered", name)
+            return
+        self._providers.pop(name, None)
 
-    async def get(self, name: str) -> RuntimeProvider | None:
+    def get(self, name: str) -> RuntimeProvider | None:
         """Look up a registered provider by name."""
-        async with self._lock:
-            return self._providers.get(name)
+        return self._providers.get(name)
 
     def list_providers(self) -> dict[str, RuntimeProvider]:
-        """Return a copy of the provider registry."""
+        """Return a thread-safe copy of the provider registry."""
         return dict(self._providers)
 
     def resolve(
@@ -64,8 +61,9 @@ class RuntimeProviderHub:
         Resolution strategy:
         1. If the profile declares a ``provider_hint``, look it up by name.
         2. Match by ``provider_type`` against provider_id.
-        3. Fall back to the first registered provider.
-        4. Return None if nothing is registered.
+        3. Try each provider's ``supports()`` and return the first match.
+        4. Fall back to the first registered provider.
+        5. Return None if nothing is registered.
         """
         providers = dict(self._providers)
         hint: str | None = getattr(profile, "provider_hint", None)
@@ -78,8 +76,15 @@ class RuntimeProviderHub:
         provider_type: str | None = getattr(profile, "provider_type", None)
         if provider_type:
             for provider in providers.values():
-                if provider.provider_id == provider_type:
+                if getattr(provider, "provider_id", None) == provider_type:
                     return provider
+
+        for provider in providers.values():
+            try:
+                if getattr(provider, "supports", None) is not None and provider.supports(profile):
+                    return provider
+            except Exception:
+                _log.debug("supports() check failed for a provider", exc_info=True)
 
         for provider in providers.values():
             return provider
@@ -107,7 +112,10 @@ class RuntimeProviderHub:
                         docker_host=docker_host,
                         default_image=default_image,
                     )
-                    await self.register(provider_name, provider)
+                    try:
+                        self.register(provider_name, provider)
+                    except ValueError:
+                        _log.warning("Provider '%s' already registered, skipping", provider_name)
                 case "e2b":
                     from modulo.core.runtime_provider.e2b import E2BRuntimeProvider
 
@@ -116,7 +124,10 @@ class RuntimeProviderHub:
                         _log.warning("E2B provider '%s' has no api_key, skipping", provider_name)
                         continue
                     provider = E2BRuntimeProvider(api_key=api_key)
-                    await self.register(provider_name, provider)
+                    try:
+                        self.register(provider_name, provider)
+                    except ValueError:
+                        _log.warning("Provider '%s' already registered, skipping", provider_name)
                 case _:
                     _log.warning("Unknown provider type '%s' in config, skipping", provider_type)
 
@@ -130,12 +141,16 @@ class RuntimeProviderHub:
 
         Returns a WorkspaceLease ORM instance (not yet committed).
         Idempotent: returns the existing lease if one already exists for run_id.
+        Uses SELECT ... FOR UPDATE to prevent TOCTOU races.
         """
         from modulo.db.models.workspace_lease import WorkspaceLease
 
-        existing = await session.execute(select(WorkspaceLease).where(WorkspaceLease.run_id == run_id))
-        if existing.scalar_one_or_none() is not None:
-            return existing.scalar_one()
+        existing = await session.execute(
+            select(WorkspaceLease).where(WorkspaceLease.run_id == run_id).with_for_update()
+        )
+        row = existing.scalar_one_or_none()
+        if row is not None:
+            return row
 
         provider = self.resolve(profile)
         if provider is None:
@@ -143,13 +158,31 @@ class RuntimeProviderHub:
                 f"No RuntimeProvider registered for profile type '{getattr(profile, 'provider_type', None)}'"
             )
 
-        workspace_ref = await provider.create_workspace(profile, session)
+        spec = WorkspaceSpec(
+            environment_profile_id=profile.id,
+            organisation_id=profile.organisation_id,
+            run_id=run_id,
+            image_ref=profile.image_ref or "",
+            capabilities=list(getattr(profile, "capabilities_json", [])),
+            resource_limits=dict(getattr(profile, "config_json", {})),
+            labels={},
+        )
+        # Prefer new-style interface (WorkspaceSpec); fall back to legacy (profile, session)
+        try:
+            workspace_ref = await provider.create_workspace(spec)
+        except TypeError:
+            workspace_ref = await provider.create_workspace(profile, session)  # type: ignore[arg-type]
+
+        if isinstance(workspace_ref, dict):
+            provider_ref = workspace_ref.get("ref") or workspace_ref.get("container_id", "")
+        else:
+            provider_ref = str(workspace_ref)
 
         lease = WorkspaceLease(
             organisation_id=profile.organisation_id,
             environment_profile_id=profile.id,
             run_id=run_id,
-            provider_ref=workspace_ref.get("ref") or workspace_ref.get("container_id", ""),
+            provider_ref=provider_ref,
             status="running",
             lease_started_at=datetime.now(UTC),
         )
@@ -161,7 +194,7 @@ class RuntimeProviderHub:
         profile = getattr(lease, "environment_profile", None)
         provider = self.resolve(profile) if profile is not None else None
         if provider is None:
-            providers = dict(self._providers)
+            providers = self.list_providers()
             for p in providers.values():
                 provider = p
                 break
@@ -170,8 +203,9 @@ class RuntimeProviderHub:
             _log.warning("No RuntimeProvider registered, cannot destroy lease %s", lease)
             return
 
+        provider_ref = getattr(lease, "provider_ref", None)
         try:
-            await provider.destroy_workspace(lease.provider_ref if hasattr(lease, "provider_ref") else lease)
+            await provider.destroy_workspace(provider_ref or lease)
         except Exception:
             _log.exception("Failed to destroy workspace for lease %s", lease)
 

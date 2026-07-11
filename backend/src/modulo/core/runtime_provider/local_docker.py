@@ -6,6 +6,7 @@ import asyncio
 import io
 import logging
 import os
+import shlex
 import tarfile
 import time
 import uuid
@@ -47,20 +48,24 @@ class LocalDockerRuntimeProvider(RuntimeProvider):
         self._default_image = default_image
         self._timeout_seconds = timeout_seconds
         self._client: docker.DockerClient | None = None
+        self._client_lock = asyncio.Lock()
         self._workspaces: dict[str, str] = {}
 
     @property
     def provider_id(self) -> str:
         return "local_docker"
 
-    def _get_client(self) -> docker.DockerClient:
+    async def _get_client(self) -> docker.DockerClient:
         if self._client is None:
-            try:
-                self._client = (
-                    docker.from_env() if not self._docker_host else docker.DockerClient(base_url=self._docker_host)
-                )
-            except DockerException as exc:
-                raise RuntimeError(f"Failed to connect to Docker daemon: {exc}") from exc
+            async with self._client_lock:
+                if self._client is None:
+                    try:
+                        if not self._docker_host:
+                            self._client = docker.from_env()
+                        else:
+                            self._client = docker.DockerClient(base_url=self._docker_host)
+                    except DockerException as exc:
+                        raise RuntimeError(f"Failed to connect to Docker daemon: {exc}") from exc
         return self._client
 
     async def create_workspace(self, profile: Any, session: Any = None) -> Any:
@@ -72,12 +77,14 @@ class LocalDockerRuntimeProvider(RuntimeProvider):
         ref = uuid.uuid4().hex[:_UUID_TRUNC_LEN]
         container_name = f"{_WORKSPACE_PREFIX}{ref}"
 
-        config_json = getattr(profile, "config_json", None) or {}
+        config_json = getattr(profile, "config_json", None)
+        if not isinstance(config_json, dict):
+            config_json = {}
         memory_mb = config_json.get("memory_mb", _DEFAULT_MEMORY_MB)
         cpu_count = config_json.get("cpu", _DEFAULT_CPU)
 
         try:
-            client = self._get_client()
+            client = await self._get_client()
             await asyncio.to_thread(self._ensure_image, client, image)
             container = await asyncio.to_thread(
                 lambda: client.containers.create(
@@ -91,6 +98,8 @@ class LocalDockerRuntimeProvider(RuntimeProvider):
                 )
             )
             await asyncio.to_thread(container.start)
+        except asyncio.CancelledError:
+            raise
         except DockerException as exc:
             raise RuntimeError(f"Failed to create container for workspace {ref}: {exc}") from exc
 
@@ -114,21 +123,22 @@ class LocalDockerRuntimeProvider(RuntimeProvider):
         if container_id is None:
             return
         try:
-            client = self._get_client()
+            client = await self._get_client()
             container = await asyncio.to_thread(lambda: client.containers.get(container_id))
             await asyncio.to_thread(lambda: container.stop(timeout=5))
         except NotFound:
             pass
         except DockerException:
             _log.warning("Failed to destroy container %s", container_id, exc_info=True)
-        self._workspaces.pop(container_id, None)
+        ref = next((k for k, v in self._workspaces.items() if v == container_id), None)
+        self._workspaces.pop(ref, None)
 
     async def workspace_health(self, workspace: Any) -> bool:
         container_id = self._resolve_container_id(workspace)
         if container_id is None:
             return False
         try:
-            client = self._get_client()
+            client = await self._get_client()
             container = await asyncio.to_thread(lambda: client.containers.get(container_id))
             return container.status == "running"
         except (NotFound, DockerException):
@@ -146,14 +156,14 @@ class LocalDockerRuntimeProvider(RuntimeProvider):
         if container_id is None:
             raise ValueError(f"Unknown workspace: {workspace}")
         try:
-            client = self._get_client()
+            client = await self._get_client()
             container = await asyncio.to_thread(lambda: client.containers.get(container_id))
             exec_env = None
             if env:
                 exec_env = {k: str(v) for k, v in env.items()}
             exec_cmd = ["sh", "-c", command]
             if cwd:
-                exec_cmd = ["sh", "-c", f"cd {cwd} && {command}"]
+                exec_cmd = ["sh", "-c", f"cd {shlex.quote(cwd)} && {command}"]
             exit_code, output = await asyncio.to_thread(
                 lambda: container.exec_run(
                     cmd=exec_cmd,
@@ -177,7 +187,7 @@ class LocalDockerRuntimeProvider(RuntimeProvider):
         if container_id is None:
             raise ValueError(f"Unknown workspace: {workspace}")
         try:
-            client = self._get_client()
+            client = await self._get_client()
             container = await asyncio.to_thread(lambda: client.containers.get(container_id))
             tar_buffer = io.BytesIO()
             with tarfile.open(fileobj=tar_buffer, mode="w") as tar:
@@ -196,7 +206,7 @@ class LocalDockerRuntimeProvider(RuntimeProvider):
         if container_id is None:
             raise ValueError(f"Unknown workspace: {workspace}")
         try:
-            client = self._get_client()
+            client = await self._get_client()
             container = await asyncio.to_thread(lambda: client.containers.get(container_id))
             tar_stream, _ = await asyncio.to_thread(lambda: container.get_archive(path))
             tar_buffer = io.BytesIO()
@@ -235,6 +245,15 @@ class LocalDockerRuntimeProvider(RuntimeProvider):
         return None
 
     async def close(self) -> None:
+        for cid in list(self._workspaces.values()):
+            try:
+                container = await asyncio.to_thread(lambda c=cid: self._client.containers.get(c))
+                await asyncio.to_thread(lambda cont=container: cont.stop(timeout=5))
+            except NotFound:
+                pass
+            except Exception:
+                _log.warning("Failed to destroy container %s during close", cid, exc_info=True)
+        self._workspaces.clear()
         if self._client is not None:
             await asyncio.to_thread(self._client.close)
             self._client = None
