@@ -21,8 +21,11 @@ def load_manifest() -> dict:
     global _MANIFEST
     path = get_manifest_path()
     if path.exists():
-        with open(path) as f:
-            _MANIFEST = yaml.safe_load(f)
+        try:
+            with open(path) as f:
+                _MANIFEST = yaml.safe_load(f)
+        except (yaml.YAMLError, OSError, ValueError) as exc:
+            raise RuntimeError(f"Failed to load manifest from {path}: {exc}") from exc
     else:
         _MANIFEST = {"routes": {}, "elements": {}, "sidebar_groups": {}}
     return _MANIFEST
