@@ -1,8 +1,7 @@
 """PyPIConnector — async PyPI JSON/XML-RPC API connector for package metadata."""
 
+import xmlrpc.client
 from typing import Any, cast
-
-import xmlrpc.client  # noqa: I001 — stdlib import after defusedxml monkey-patch
 
 import defusedxml.xmlrpc
 import httpx
