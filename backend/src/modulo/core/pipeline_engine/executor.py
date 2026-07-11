@@ -315,6 +315,8 @@ class PipelineExecutor:
                     await hub.__aenter__()
                     await hub.initialise(backend_rows, secrets_backend=secrets_backend)
                     set_model_backend_hub(hub)
+        except asyncio.CancelledError:
+            raise
         except Exception:
             _log.warning("pipeline.model_backend_hub_init_failed", exc_info=True)
         return hub
@@ -488,6 +490,8 @@ class PipelineExecutor:
                 error_code = "configuration_error"
             else:
                 raise
+        except asyncio.CancelledError:
+            raise
         except Exception as exc:
             _log.exception("pipeline.resume_error", extra={"run_id": str(run_id)})
             final_status = "failed"
@@ -513,6 +517,8 @@ class PipelineExecutor:
                         resource_id=run_id,
                         payload_json={"error_detail": error_code},
                     )
+                except asyncio.CancelledError:
+                    raise
                 except Exception:
                     _log.exception("audit.eval_blocked_failed", extra={"run_id": str(run_id)})
 
@@ -670,6 +676,8 @@ class PipelineExecutor:
                     guard=guard,
                     node_token_budgets=node_token_budgets,
                 )
+        except asyncio.CancelledError:
+            raise
         except Exception as exc:
             _log.exception("pipeline.execution_error", extra={"run_id": str(run_id)})
             final_status = "failed"
@@ -689,6 +697,8 @@ class PipelineExecutor:
                             resource_id=run_id,
                             payload_json={"error_detail": error_detail},
                         )
+                    except asyncio.CancelledError:
+                        raise
                     except Exception:
                         _log.exception("audit.eval_blocked_failed", extra={"run_id": str(run_id)})
 
@@ -724,6 +734,8 @@ class PipelineExecutor:
                                     "score": exc.score,
                                 },
                             )
+                        except asyncio.CancelledError:
+                            raise
                         except Exception:
                             _log.exception("audit.eval_suite_blocked_failed", extra={"run_id": str(run_id)})
 
@@ -748,6 +760,8 @@ class PipelineExecutor:
                                         sr.get("trigger_id", "?"),
                                         sr.get("run_id", "?"),
                                     )
+                            except asyncio.CancelledError:
+                                raise
                             except Exception:
                                 _log.exception(
                                     "agent_signal.failed",
@@ -756,6 +770,8 @@ class PipelineExecutor:
                                         "node_id": node_id,
                                     },
                                 )
+        except asyncio.CancelledError:
+            raise
         except Exception:
             _log.exception("pipeline.post_stream_error", extra={"run_id": str(run_id)})
         finally:
@@ -978,6 +994,8 @@ class PipelineExecutor:
                             org_id=org_id,
                             required_team_id=required_team_id,
                         )
+                except asyncio.CancelledError:
+                    raise
                 except Exception:
                     _log.exception(
                         "hitl_gate.create_failed",
@@ -1022,6 +1040,8 @@ class PipelineExecutor:
                 extra={"run_id": str(run_id), "detail": error_detail},
             )
             return "failed", "node_timeout", error_detail, node_token_usage or None
+        except asyncio.CancelledError:
+            raise
         except Exception as exc:
             _log.exception("pipeline.stream_error", extra={"run_id": str(run_id)})
             broker.publish("run_failed", {"error": type(exc).__name__})
