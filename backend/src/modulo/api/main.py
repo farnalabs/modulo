@@ -536,7 +536,10 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
     await _seed_sso_providers(settings)
 
     # Seed the default modulo-dev EnvironmentProfile for the dogfood pipeline.
-    await _seed_environment_profiles(settings)
+    try:
+        await _seed_environment_profiles(settings)
+    except Exception:
+        logger.warning("startup.env_profile_seed_failed", exc_info=True)
 
     # Initialise the LangGraph checkpointer schema (langgraph.* tables).
     await _init_checkpointer(
