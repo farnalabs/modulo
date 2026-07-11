@@ -59,7 +59,9 @@ def client() -> Generator[TestClient, None, None]:
     mock_plan = MagicMock()
     mock_plan.feature_enabled.return_value = True
     app.dependency_overrides[get_plan_context] = lambda: mock_plan
-    yield TestClient(app)
+    client = TestClient(app)
+    client.mock_session = mock_session  # type: ignore[attr-defined]
+    yield client
     app.dependency_overrides.clear()
 
 
@@ -114,7 +116,11 @@ class TestListUserSkills:
 
 class TestCreateUserSkill:
     def test_create_skill_returns_201(self, client: TestClient) -> None:
-        with patch("modulo.api.routes.me.set_rls_org", new_callable=AsyncMock):
+        with (
+            patch("modulo.api.routes.me.set_rls_org", new_callable=AsyncMock),
+            patch.object(client.mock_session, "add"),  # type: ignore[attr-defined]
+            patch.object(client.mock_session, "flush", new_callable=AsyncMock),  # type: ignore[attr-defined]
+        ):
             resp = client.post(
                 "/api/v1/me/remy/skills",
                 json={
@@ -126,7 +132,11 @@ class TestCreateUserSkill:
         assert resp.status_code == 201
 
     def test_create_skill_calls_set_rls_org(self, client: TestClient) -> None:
-        with patch("modulo.api.routes.me.set_rls_org", new_callable=AsyncMock) as mock_set_rls_org:
+        with (
+            patch("modulo.api.routes.me.set_rls_org", new_callable=AsyncMock) as mock_set_rls_org,
+            patch.object(client.mock_session, "add"),  # type: ignore[attr-defined]
+            patch.object(client.mock_session, "flush", new_callable=AsyncMock),  # type: ignore[attr-defined]
+        ):
             resp = client.post(
                 "/api/v1/me/remy/skills",
                 json={
