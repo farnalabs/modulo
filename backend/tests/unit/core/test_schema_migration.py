@@ -296,46 +296,46 @@ class TestMigrationRegistry:
 class TestMigrationChain:
     """Field rename migration — v1 uses 'full_name', v2 uses 'display_name'."""
 
-    def test_single_step_v1_to_v2(self) -> None:
+    async def test_single_step_v1_to_v2(self) -> None:
         registry = MigrationRegistry()
         registry.register("1.0.0", "2.0.0", rename_field("full_name", "display_name"))
 
         data = {"full_name": "Alice", "age": 30}
-        result = registry.apply(data, "1.0.0", "2.0.0")
+        result = await registry.apply(data, "1.0.0", "2.0.0")
         assert result == {"display_name": "Alice", "age": 30}
         assert "full_name" not in result
 
-    def test_rename_does_not_mutate_original(self) -> None:
+    async def test_rename_does_not_mutate_original(self) -> None:
         registry = MigrationRegistry()
         registry.register("1.0.0", "2.0.0", rename_field("full_name", "display_name"))
 
         data = {"full_name": "Alice"}
-        result = registry.apply(data, "1.0.0", "2.0.0")
+        result = await registry.apply(data, "1.0.0", "2.0.0")
         assert result == {"display_name": "Alice"}
         assert data == {"full_name": "Alice"}
 
-    def test_rename_missing_field_noop(self) -> None:
+    async def test_rename_missing_field_noop(self) -> None:
         registry = MigrationRegistry()
         registry.register("1.0.0", "2.0.0", rename_field("full_name", "display_name"))
 
         data = {"age": 30}
-        result = registry.apply(data, "1.0.0", "2.0.0")
+        result = await registry.apply(data, "1.0.0", "2.0.0")
         assert result == data
 
 
 class TestTypeConversionMigration:
     """Type conversion — v1 stores 'count' as string, v2 stores as int."""
 
-    def test_convert_string_to_int(self) -> None:
+    async def test_convert_string_to_int(self) -> None:
         registry = MigrationRegistry()
         registry.register("1.0.0", "2.0.0", convert_field("count", int))
 
         data = {"count": "42", "name": "Alice"}
-        result = registry.apply(data, "1.0.0", "2.0.0")
+        result = await registry.apply(data, "1.0.0", "2.0.0")
         assert result == {"count": 42, "name": "Alice"}
         assert isinstance(result["count"], int)
 
-    def test_convert_with_custom_function(self) -> None:
+    async def test_convert_with_custom_function(self) -> None:
         registry = MigrationRegistry()
 
         def _to_bool(val: Any) -> bool:
@@ -344,59 +344,59 @@ class TestTypeConversionMigration:
         registry.register("1.0.0", "2.0.0", convert_field("active", _to_bool))
 
         data = {"active": "true", "name": "Alice"}
-        result = registry.apply(data, "1.0.0", "2.0.0")
+        result = await registry.apply(data, "1.0.0", "2.0.0")
         assert result["active"] is True
 
         data2 = {"active": "false", "name": "Bob"}
-        result2 = registry.apply(data2, "1.0.0", "2.0.0")
+        result2 = await registry.apply(data2, "1.0.0", "2.0.0")
         assert result2["active"] is False
 
-    def test_convert_missing_field_noop(self) -> None:
+    async def test_convert_missing_field_noop(self) -> None:
         registry = MigrationRegistry()
         registry.register("1.0.0", "2.0.0", convert_field("missing", int))
 
         data = {"name": "Alice"}
-        result = registry.apply(data, "1.0.0", "2.0.0")
+        result = await registry.apply(data, "1.0.0", "2.0.0")
         assert result == data
 
 
 class TestChainedMigrations:
     """Chained migrations v1->v2->v3."""
 
-    def test_two_step_chain(self) -> None:
+    async def test_two_step_chain(self) -> None:
         registry = MigrationRegistry()
         registry.register("1.0.0", "2.0.0", rename_field("full_name", "display_name"))
         registry.register("2.0.0", "3.0.0", convert_field("count", int))
 
         data = {"full_name": "Alice", "count": "42"}
-        result = registry.apply(data, "1.0.0", "3.0.0")
+        result = await registry.apply(data, "1.0.0", "3.0.0")
         assert result == {"display_name": "Alice", "count": 42}
         assert isinstance(result["count"], int)
 
-    def test_three_step_chain(self) -> None:
+    async def test_three_step_chain(self) -> None:
         registry = MigrationRegistry()
         registry.register("1.0.0", "2.0.0", rename_field("full_name", "display_name"))
         registry.register("2.0.0", "2.5.0", set_default("middle_name", ""))
         registry.register("2.5.0", "3.0.0", convert_field("count", int))
 
         data = {"full_name": "Alice", "count": "42"}
-        result = registry.apply(data, "1.0.0", "3.0.0")
+        result = await registry.apply(data, "1.0.0", "3.0.0")
         assert result == {"display_name": "Alice", "count": 42, "middle_name": ""}
         assert isinstance(result["count"], int)
 
-    def test_chain_from_intermediate_version(self) -> None:
+    async def test_chain_from_intermediate_version(self) -> None:
         registry = MigrationRegistry()
         registry.register("1.0.0", "2.0.0", rename_field("full_name", "display_name"))
         registry.register("2.0.0", "3.0.0", convert_field("count", int))
 
         data = {"display_name": "Alice", "count": "42"}
-        result = registry.apply(data, "2.0.0", "3.0.0")
+        result = await registry.apply(data, "2.0.0", "3.0.0")
         assert result == {"display_name": "Alice", "count": 42}
 
-    def test_same_version_returns_data(self) -> None:
+    async def test_same_version_returns_data(self) -> None:
         registry = MigrationRegistry()
         data = {"name": "Alice"}
-        result = registry.apply(data, "1.0.0", "1.0.0")
+        result = await registry.apply(data, "1.0.0", "1.0.0")
         assert result == data
         assert result is not data
 
@@ -404,78 +404,78 @@ class TestChainedMigrations:
 class TestMissingMigration:
     """Missing migration detection."""
 
-    def test_missing_intermediate_raises(self) -> None:
+    async def test_missing_intermediate_raises(self) -> None:
         registry = MigrationRegistry()
         registry.register("1.0.0", "2.0.0", rename_field("full_name", "display_name"))
         # No migration from 2.0.0 to 3.0.0
 
         data = {"full_name": "Alice"}
         with pytest.raises(MissingMigrationError):
-            registry.apply(data, "1.0.0", "3.0.0")
+            await registry.apply(data, "1.0.0", "3.0.0")
 
-    def test_missing_source(self) -> None:
+    async def test_missing_source(self) -> None:
         registry = MigrationRegistry()
         registry.register("2.0.0", "3.0.0", lambda d: d)
 
         data = {"name": "Alice"}
         with pytest.raises(MissingMigrationError):
-            registry.apply(data, "1.0.0", "3.0.0")
+            await registry.apply(data, "1.0.0", "3.0.0")
 
-    def test_missing_target(self) -> None:
+    async def test_missing_target(self) -> None:
         registry = MigrationRegistry()
         registry.register("1.0.0", "2.0.0", lambda d: d)
 
         data = {"name": "Alice"}
         with pytest.raises(MissingMigrationError):
-            registry.apply(data, "1.0.0", "3.0.0")
+            await registry.apply(data, "1.0.0", "3.0.0")
 
 
 class TestValidateChain:
     """Chain validation."""
 
-    def test_complete_chain_returns_empty(self) -> None:
+    async def test_complete_chain_returns_empty(self) -> None:
         registry = MigrationRegistry()
         registry.register("1.0.0", "2.0.0", lambda d: d)
         registry.register("2.0.0", "3.0.0", lambda d: d)
-        assert registry.validate_chain("1.0.0", "3.0.0") == []
+        assert await registry.validate_chain("1.0.0", "3.0.0") == []
 
-    def test_same_version_returns_empty(self) -> None:
+    async def test_same_version_returns_empty(self) -> None:
         registry = MigrationRegistry()
-        assert registry.validate_chain("1.0.0", "1.0.0") == []
+        assert await registry.validate_chain("1.0.0", "1.0.0") == []
 
-    def test_gap_detected(self) -> None:
+    async def test_gap_detected(self) -> None:
         registry = MigrationRegistry()
         registry.register("1.0.0", "2.0.0", lambda d: d)
         # Missing 2.0.0 -> 3.0.0
         registry.register("3.0.0", "4.0.0", lambda d: d)
 
-        gaps = registry.validate_chain("1.0.0", "4.0.0")
+        gaps = await registry.validate_chain("1.0.0", "4.0.0")
         assert len(gaps) > 0
         assert any("Chain reaches" in g for g in gaps)
         assert any("Missing migration" in g for g in gaps)
 
-    def test_no_registrations_returns_gap(self) -> None:
+    async def test_no_registrations_returns_gap(self) -> None:
         registry = MigrationRegistry()
-        gaps = registry.validate_chain("1.0.0", "2.0.0")
+        gaps = await registry.validate_chain("1.0.0", "2.0.0")
         assert len(gaps) > 0
 
-    def test_partial_chain_from_source_only(self) -> None:
+    async def test_partial_chain_from_source_only(self) -> None:
         registry = MigrationRegistry()
         registry.register("2.0.0", "3.0.0", lambda d: d)
 
-        gaps = registry.validate_chain("1.0.0", "3.0.0")
+        gaps = await registry.validate_chain("1.0.0", "3.0.0")
         assert any("No outgoing migration from 1.0.0" in g for g in gaps)
 
-    def test_single_migration_completes_chain(self) -> None:
+    async def test_single_migration_completes_chain(self) -> None:
         registry = MigrationRegistry()
         registry.register("1.0.0", "3.0.0", lambda d: d)
-        assert registry.validate_chain("1.0.0", "3.0.0") == []
+        assert await registry.validate_chain("1.0.0", "3.0.0") == []
 
 
 class TestRoundTrip:
     """Round-trip migration — forward then reverse yields original data."""
 
-    def test_forward_reverse_round_trip(self) -> None:
+    async def test_forward_reverse_round_trip(self) -> None:
         registry = MigrationRegistry()
 
         def _forward(data: dict[str, Any]) -> dict[str, Any]:
@@ -498,13 +498,13 @@ class TestRoundTrip:
         registry.register("2.0.0", "1.0.0", _reverse)
 
         original = {"full_name": "Alice", "count": "42"}
-        migrated = registry.apply(original, "1.0.0", "2.0.0")
+        migrated = await registry.apply(original, "1.0.0", "2.0.0")
         assert migrated == {"display_name": "Alice", "count": 42}
 
-        restored = registry.apply(migrated, "2.0.0", "1.0.0")
+        restored = await registry.apply(migrated, "2.0.0", "1.0.0")
         assert restored == original
 
-    def test_round_trip_three_versions(self) -> None:
+    async def test_round_trip_three_versions(self) -> None:
         registry = MigrationRegistry()
 
         def _v1_to_v2(data: dict[str, Any]) -> dict[str, Any]:
@@ -537,10 +537,10 @@ class TestRoundTrip:
         registry.register("2.0.0", "1.0.0", _v2_to_v1)
 
         original = {"full_name": "Alice", "count": "42"}
-        result = registry.apply(original, "1.0.0", "3.0.0")
+        result = await registry.apply(original, "1.0.0", "3.0.0")
         assert result == {"name": "Alice", "count": 42}
 
-        restored = registry.apply(result, "3.0.0", "1.0.0")
+        restored = await registry.apply(result, "3.0.0", "1.0.0")
         assert restored == original
 
 
@@ -672,7 +672,7 @@ class TestRemoveField:
 class TestIntegrationWithExistingMigration:
     """Test that new migration registry works with existing create_migration/apply_migration."""
 
-    def test_create_migration_plan_and_apply_via_registry(self) -> None:
+    async def test_create_migration_plan_and_apply_via_registry(self) -> None:
         v1_schema: dict[str, Any] = {
             "type": "object",
             "properties": {
@@ -698,7 +698,7 @@ class TestIntegrationWithExistingMigration:
         registry.register("1.0.0", "2.0.0", _auto_migrate)
 
         data = {"full_name": "Alice", "count": 42}
-        result = registry.apply(data, "1.0.0", "2.0.0")
+        result = await registry.apply(data, "1.0.0", "2.0.0")
 
         # The heuristic rename may pair "full_name" with "display_name" or "email";
         # we only assert invariants that hold regardless
@@ -715,12 +715,12 @@ class TestIntegrationWithExistingMigration:
 class TestDryRun:
     """Dry-run mode on MigrationRegistry."""
 
-    def test_describe_chain_returns_step_descriptions(self) -> None:
+    async def test_describe_chain_returns_step_descriptions(self) -> None:
         registry = MigrationRegistry()
         registry.register("1.0.0", "2.0.0", rename_field("full_name", "display_name"), "Rename full_name")
         registry.register("2.0.0", "3.0.0", convert_field("count", int), "Convert count to int")
 
-        steps = registry.describe_chain("1.0.0", "3.0.0")
+        steps = await registry.describe_chain("1.0.0", "3.0.0")
         assert len(steps) == 2
         assert steps[0]["source_version"] == "1.0.0"
         assert steps[0]["target_version"] == "2.0.0"
@@ -729,23 +729,23 @@ class TestDryRun:
         assert steps[1]["target_version"] == "3.0.0"
         assert steps[1]["description"] == "Convert count to int"
 
-    def test_describe_chain_same_version_empty(self) -> None:
+    async def test_describe_chain_same_version_empty(self) -> None:
         registry = MigrationRegistry()
-        assert registry.describe_chain("1.0.0", "1.0.0") == []
+        assert await registry.describe_chain("1.0.0", "1.0.0") == []
 
-    def test_describe_chain_missing_raises(self) -> None:
+    async def test_describe_chain_missing_raises(self) -> None:
         registry = MigrationRegistry()
         registry.register("1.0.0", "2.0.0", lambda d: d)
         with pytest.raises(MissingMigrationError):
-            registry.describe_chain("1.0.0", "3.0.0")
+            await registry.describe_chain("1.0.0", "3.0.0")
 
-    def test_dry_run_returns_per_step_diff(self) -> None:
+    async def test_dry_run_returns_per_step_diff(self) -> None:
         registry = MigrationRegistry()
         registry.register("1.0.0", "2.0.0", rename_field("full_name", "display_name"))
         registry.register("2.0.0", "3.0.0", convert_field("count", int))
 
         data = {"full_name": "Alice", "count": "42", "email": "a@b.com"}
-        steps = registry.dry_run(data, "1.0.0", "3.0.0")
+        steps = await registry.dry_run(data, "1.0.0", "3.0.0")
 
         assert len(steps) == 2
 
@@ -766,59 +766,59 @@ class TestDryRun:
         assert steps[1]["added_fields"] == []
         assert steps[1]["removed_fields"] == []
 
-    def test_dry_run_does_not_mutate_original(self) -> None:
+    async def test_dry_run_does_not_mutate_original(self) -> None:
         registry = MigrationRegistry()
         registry.register("1.0.0", "2.0.0", rename_field("full_name", "display_name"))
 
         data = {"full_name": "Alice"}
         original = deepcopy(data)
-        steps = registry.dry_run(data, "1.0.0", "2.0.0")
+        steps = await registry.dry_run(data, "1.0.0", "2.0.0")
         assert data == original
         assert len(steps) == 1
 
-    def test_dry_run_same_version_returns_empty(self) -> None:
+    async def test_dry_run_same_version_returns_empty(self) -> None:
         registry = MigrationRegistry()
         data = {"name": "Alice"}
-        steps = registry.dry_run(data, "1.0.0", "1.0.0")
+        steps = await registry.dry_run(data, "1.0.0", "1.0.0")
         assert steps == []
 
-    def test_dry_run_missing_chain_raises(self) -> None:
+    async def test_dry_run_missing_chain_raises(self) -> None:
         registry = MigrationRegistry()
         data = {"name": "Alice"}
         with pytest.raises(MissingMigrationError):
-            registry.dry_run(data, "1.0.0", "3.0.0")
+            await registry.dry_run(data, "1.0.0", "3.0.0")
 
-    def test_dry_run_set_default_appears_as_addition(self) -> None:
+    async def test_dry_run_set_default_appears_as_addition(self) -> None:
         registry = MigrationRegistry()
         registry.register("1.0.0", "2.0.0", set_default("middle_name", ""))
 
         data = {"first_name": "Alice"}
-        steps = registry.dry_run(data, "1.0.0", "2.0.0")
+        steps = await registry.dry_run(data, "1.0.0", "2.0.0")
         assert len(steps) == 1
         assert "middle_name" in steps[0]["added_fields"]
         assert "first_name" not in steps[0]["added_fields"]
         assert steps[0]["removed_fields"] == []
 
-    def test_dry_run_remove_field_appears_as_removal(self) -> None:
+    async def test_dry_run_remove_field_appears_as_removal(self) -> None:
         registry = MigrationRegistry()
         registry.register("1.0.0", "2.0.0", remove_field("legacy"))
 
         data = {"name": "Alice", "legacy": "old"}
-        steps = registry.dry_run(data, "1.0.0", "2.0.0")
+        steps = await registry.dry_run(data, "1.0.0", "2.0.0")
         assert len(steps) == 1
         assert "legacy" in steps[0]["removed_fields"]
         assert "name" not in steps[0]["removed_fields"]
 
-    def test_dry_run_uses_description_from_registration(self) -> None:
+    async def test_dry_run_uses_description_from_registration(self) -> None:
         registry = MigrationRegistry()
         registry.register("1.0.0", "2.0.0", rename_field("a", "b"), "Rename field a to b")
 
-        steps = registry.dry_run({"a": 1}, "1.0.0", "2.0.0")
+        steps = await registry.dry_run({"a": 1}, "1.0.0", "2.0.0")
         assert steps[0]["description"] == "Rename field a to b"
 
-    def test_dry_run_falls_back_to_function_name(self) -> None:
+    async def test_dry_run_falls_back_to_function_name(self) -> None:
         registry = MigrationRegistry()
         registry.register("1.0.0", "2.0.0", rename_field("a", "b"))
 
-        steps = registry.dry_run({"a": 1}, "1.0.0", "2.0.0")
+        steps = await registry.dry_run({"a": 1}, "1.0.0", "2.0.0")
         assert "rename_a_to_b" in steps[0]["description"]
