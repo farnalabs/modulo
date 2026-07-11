@@ -222,7 +222,7 @@ class TestHandlerPerEventAuth:
         mock_session: AsyncMock,
         mock_validate_auth: AsyncMock,
     ) -> None:
-        result = await list_pipelines_tool(page=1, page_size=20)
+        result = await list_pipelines_tool(limit=20)
         assert result["error"] == "auth_expired"
         assert "revoked" in result.get("detail", "").lower() or "expired" in result.get("detail", "").lower()
         mock_validate_auth.assert_called_once()
