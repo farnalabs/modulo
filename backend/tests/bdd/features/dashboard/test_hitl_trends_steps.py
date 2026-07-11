@@ -155,7 +155,8 @@ def _(client: TestClient) -> None:
 
 
 @then(
-    "each hitl_volume entry has total_decisions, approved_count, rejected_count, rejection_rate, and avg_time_to_approve_ms"
+    "each hitl_volume entry has total_decisions, approved_count,"
+    " rejected_count, rejection_rate, and avg_time_to_approve_ms"
 )
 def _(client: TestClient) -> None:
     pass
