@@ -15,7 +15,7 @@ Two migration styles are supported when collecting covered tables:
 1. Literal DDL — ``op.execute("ALTER TABLE foo ENABLE ROW LEVEL SECURITY")``
    (e.g. 0045_saved_views). Found by regex over the source.
 2. Loop over a table tuple — ``for t in _ORG_SCOPED_TABLES: ALTER TABLE "{t}"``
-   (e.g. 0002_rls_policies, 0086_rls_missing_policies). The table names live in
+   (e.g. 0002_rls_policies, 0088_rls_missing_policies). The table names live in
    module-level tuple/list constants, so we import each RLS-enabling migration
    module and read those constants. Reading the actual code constants (not the
    docstring prose) means removing a table from the tuple correctly makes this
@@ -91,7 +91,7 @@ def test_every_org_scoped_table_has_rls_policy() -> None:
     assert not missing, (
         "Org-scoped tables missing an RLS `ENABLE ROW LEVEL SECURITY` migration: "
         f"{sorted(missing)}. Add ENABLE + `CREATE POLICY rls_org_isolation` for each "
-        "in a new Alembic migration (see 0002_rls_policies.py / 0086_rls_missing_policies.py)."
+        "in a new Alembic migration (see 0002_rls_policies.py / 0088_rls_missing_policies.py)."
     )
 
 

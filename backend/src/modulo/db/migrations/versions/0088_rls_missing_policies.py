@@ -48,8 +48,8 @@ intentionally absent. PostgreSQL superusers and table owners bypass ENABLEd
 RLS; enforcing isolation requires connecting as a dedicated non-superuser,
 non-owner role — an infrastructure-layer concern. See docs/ops/database.md.
 
-Revision ID: 0086_rls_missing_policies
-Revises: 0085_mcp_setup_tokens
+Revision ID: 0088_rls_missing_policies
+Revises: 0087_environment_profiles
 Create Date: 2026-07-10
 """
 
@@ -58,8 +58,8 @@ from collections.abc import Sequence
 import sqlalchemy as sa
 from alembic import op
 
-revision: str = "0086_rls_missing_policies"
-down_revision: str | Sequence[str] | None = "0085_mcp_setup_tokens"
+revision: str = "0088_rls_missing_policies"
+down_revision: str | Sequence[str] | None = "0087_environment_profiles"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
