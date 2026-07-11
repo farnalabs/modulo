@@ -149,9 +149,8 @@ class RemyConfigService:
                 key=f"{_CONFIG_KEY_PREFIX}{org_id}",
                 value=config.model_dump(),
             )
-            await self._session.commit()
+            await self._session.flush()
         except SQLAlchemyError:
-            await self._session.rollback()
             logger.exception("Failed to update Remy config for org %s", org_id)
             raise
 
