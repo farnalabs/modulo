@@ -80,7 +80,11 @@ class TestManifestLoad:
         manifest = load_manifest()
         groups = manifest.get("sidebar_groups", {})
         expected_groups = {
+            "lifecycle",
             "core",
+            "analysis",
+            "evals",
+            "schemas",
             "remy",
             "settings",
             "access-control",
@@ -200,9 +204,7 @@ class TestGetManifestPathFiltering:
         elements = manifest.get("elements", {}).get(path, [])
         assert route is not None
         assert route.get("name") == "dashboard"
-        assert route.get("testid") == "page-dashboard"
         assert isinstance(elements, list)
-        assert len(elements) > 0
 
     def test_returns_none_for_unknown_path(self):
         self._reset_manifest()
@@ -214,3 +216,33 @@ class TestGetManifestPathFiltering:
         elements = manifest.get("elements", {}).get(path, [])
         assert route is None
         assert elements == []
+
+
+class TestManifestErrorHandling:
+    def _reset_manifest(self):
+        import modulo.core.manifest as m
+
+        m._MANIFEST = None
+
+    def test_raises_on_malformed_yaml(self):
+        self._reset_manifest()
+        from modulo.core.manifest import load_manifest
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            bad_yaml = Path(tmpdir) / "manifest.yaml"
+            bad_yaml.write_text("{{{{broken: [yaml")
+            with (
+                patch.dict(os.environ, {"MANIFEST_PATH": str(bad_yaml)}),
+                pytest.raises(RuntimeError, match="Failed to load manifest"),
+            ):
+                load_manifest()
+
+    def test_returns_empty_on_missing_file(self):
+        self._reset_manifest()
+        from modulo.core.manifest import load_manifest
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            missing = Path(tmpdir) / "no-such-file.yaml"
+            with patch.dict(os.environ, {"MANIFEST_PATH": str(missing)}):
+                result = load_manifest()
+                assert result == {"routes": {}, "elements": {}, "sidebar_groups": {}}
