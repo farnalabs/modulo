@@ -1,5 +1,6 @@
 """Admin-only routes for deployment-wide SystemConfig management."""
 
+import asyncio
 import logging
 from typing import Any
 
@@ -46,18 +47,13 @@ async def admin_list_config(
         ]
     except HTTPException:
         raise
-    except IntegrityError:
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail="A resource with this value already exists",
-        )
+    except asyncio.CancelledError:
+        raise
     except ProgrammingError:
-        raise HTTPException(status_code=503, detail="Database not available. Run migrations.")
-    except IntegrityError:
-        raise HTTPException(status_code=409, detail="Resource already exists or constraint violation.")
-    except Exception as e:
-        logger.error("Unexpected error in admin_list_config: %s", str(e))
-        raise HTTPException(status_code=500, detail="Internal server error")
+        raise HTTPException(status_code=501, detail="Database not available. Run migrations.") from None
+    except Exception:
+        logger.exception("Unexpected error in admin_list_config")
+        raise HTTPException(status_code=500, detail="Internal server error") from None
 
 
 class SetConfigRequest(BaseModel):
@@ -85,18 +81,18 @@ async def admin_set_config(
         )
     except HTTPException:
         raise
+    except asyncio.CancelledError:
+        raise
     except IntegrityError:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
-            detail="A resource with this value already exists",
-        )
+            detail="Resource already exists or constraint violation.",
+        ) from None
     except ProgrammingError:
-        raise HTTPException(status_code=503, detail="Database not available. Run migrations.")
-    except IntegrityError:
-        raise HTTPException(status_code=409, detail="Resource already exists or constraint violation.")
-    except Exception as e:
-        logger.error("Unexpected error in admin_set_config: %s", str(e))
-        raise HTTPException(status_code=500, detail="Internal server error")
+        raise HTTPException(status_code=501, detail="Database not available. Run migrations.") from None
+    except Exception:
+        logger.exception("Unexpected error in admin_set_config")
+        raise HTTPException(status_code=500, detail="Internal server error") from None
 
 
 @router.delete("/{key}", status_code=status.HTTP_204_NO_CONTENT)
@@ -119,15 +115,10 @@ async def admin_delete_config(
             )
     except HTTPException:
         raise
-    except IntegrityError:
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail="A resource with this value already exists",
-        )
+    except asyncio.CancelledError:
+        raise
     except ProgrammingError:
-        raise HTTPException(status_code=503, detail="Database not available. Run migrations.")
-    except IntegrityError:
-        raise HTTPException(status_code=409, detail="Resource already exists or constraint violation.")
-    except Exception as e:
-        logger.error("Unexpected error in admin_delete_config: %s", str(e))
-        raise HTTPException(status_code=500, detail="Internal server error")
+        raise HTTPException(status_code=501, detail="Database not available. Run migrations.") from None
+    except Exception:
+        logger.exception("Unexpected error in admin_delete_config")
+        raise HTTPException(status_code=500, detail="Internal server error") from None
