@@ -301,8 +301,6 @@ async def _resolve_api_key(
     try:
         fernet = Fernet(fernet_key.encode())
         return fernet.decrypt(backend.credentials_ciphertext).decode()
-    except HTTPException:
-        raise
     except Exception:
         logger.exception("Failed to decrypt credentials for provider %r", provider)
         return None
@@ -457,7 +455,7 @@ def _resolve_tool_permission(config: RemyConfig, tool_name: str, args: dict[str,
     elif mode == "full_auto":
         base = "always_allowed"
         raw_confidence = args.get("confidence", 1.0)
-        confidence = raw_confidence if isinstance(raw_confidence, (int, float)) else 1.0
+        confidence = raw_confidence if isinstance(raw_confidence, int | float) else 1.0
         if confidence < config.auto_execute_threshold:
             return "requires_approval"
     else:
@@ -594,6 +592,12 @@ async def list_sessions(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database error. Please try again later.",
         ) from None
+    except Exception:
+        logger.exception("remy.list_sessions.unexpected_error")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="An unexpected error occurred.",
+        ) from None
 
 
 @router.post("/sessions", status_code=status.HTTP_201_CREATED)
@@ -633,11 +637,11 @@ async def create_session(
                     provider = provider or config.default_provider
                     model = model or config.default_model
 
-            _DEFAULT_MODELS: dict[str, str] = {
+            _default_models: dict[str, str] = {
                 "opencode": "deepseek-v4-flash",
             }
-            if provider in _DEFAULT_MODELS:
-                model = _DEFAULT_MODELS[provider]
+            if provider in _default_models:
+                model = _default_models[provider]
 
             chat_session = ChatSession(
                 organisation_id=principal.organisation_id,
@@ -662,6 +666,12 @@ async def create_session(
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database error. Please try again later.",
+        ) from None
+    except Exception:
+        logger.exception("remy.create_session.unexpected_error")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="An unexpected error occurred.",
         ) from None
 
 
@@ -694,6 +704,12 @@ async def get_session(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database error. Please try again later.",
         ) from None
+    except Exception:
+        logger.exception("remy.get_session.unexpected_error")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="An unexpected error occurred.",
+        ) from None
 
 
 @router.patch("/sessions/{session_id}", status_code=status.HTTP_200_OK)
@@ -724,6 +740,12 @@ async def rename_session(
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database error. Please try again later.",
+        ) from None
+    except Exception:
+        logger.exception("remy.rename_session.unexpected_error")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="An unexpected error occurred.",
         ) from None
 
 
@@ -771,6 +793,12 @@ async def delete_session(
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database error. Please try again later.",
+        ) from None
+    except Exception:
+        logger.exception("remy.delete_session.unexpected_error")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="An unexpected error occurred.",
         ) from None
 
 
@@ -822,6 +850,12 @@ async def list_messages(
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database error. Please try again later.",
+        ) from None
+    except Exception:
+        logger.exception("remy.list_messages.unexpected_error")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="An unexpected error occurred.",
         ) from None
 
 
@@ -1460,6 +1494,12 @@ async def submit_permission_response(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database error. Please try again later.",
         ) from None
+    except Exception:
+        logger.exception("remy.submit_permission_response.unexpected_error")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="An unexpected error occurred.",
+        ) from None
 
     registry = _get_registry()
     if registry is not None:
@@ -1511,6 +1551,12 @@ async def submit_ui_command_results(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database error. Please try again later.",
         ) from None
+    except Exception:
+        logger.exception("remy.submit_ui_command_results.unexpected_error")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="An unexpected error occurred.",
+        ) from None
 
     sid = str(session_id)
     registry = _get_registry()
@@ -1548,6 +1594,12 @@ async def reset_session_permissions(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database error. Please try again later.",
         ) from None
+    except Exception:
+        logger.exception("remy.reset_session_permissions.unexpected_error")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="An unexpected error occurred.",
+        ) from None
 
     session_id_str = str(session_id)
     await _clear_session_approvals(session_id_str)
@@ -1575,6 +1627,12 @@ async def resume_session(
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database error. Please try again later.",
+        ) from None
+    except Exception:
+        logger.exception("remy.resume_session.unexpected_error")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="An unexpected error occurred.",
         ) from None
 
     sid = str(session_id)
@@ -1608,6 +1666,12 @@ async def stop_session(
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database error. Please try again later.",
+        ) from None
+    except Exception:
+        logger.exception("remy.stop_session.unexpected_error")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="An unexpected error occurred.",
         ) from None
 
     sid = str(session_id)
@@ -1682,6 +1746,12 @@ async def get_audit_trail(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database error. Please try again later.",
         ) from None
+    except Exception:
+        logger.exception("remy.get_audit_trail.unexpected_error")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="An unexpected error occurred.",
+        ) from None
 
 
 @router.post("/sessions/{session_id}/undo")
@@ -1747,4 +1817,10 @@ async def undo_last_action(
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database error. Please try again later.",
+        ) from None
+    except Exception:
+        logger.exception("remy.undo_last_action.unexpected_error")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="An unexpected error occurred.",
         ) from None

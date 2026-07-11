@@ -51,7 +51,9 @@ class RemyConfig(BaseModel):
     rate_limit_window_seconds: int = 60
     allowed_selectors: list[str] = Field(
         default_factory=list,
-        description="If non-empty, Remy can only interact with elements matching these CSS selectors or data-testid prefixes",
+        description=(
+            "If non-empty, Remy can only interact with elements matching these CSS selectors or data-testid prefixes"
+        ),
     )
     allowed_page_patterns: list[str] = Field(
         default_factory=list, description="If non-empty, Remy can only navigate to pages matching these URL patterns"
