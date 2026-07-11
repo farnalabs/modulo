@@ -9,7 +9,7 @@ import uuid
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from modulo.db.models.node import Node
+from modulo.db.models.node import Node  # TODO: migrate away from Node model to PipelineEdge
 
 
 async def get_child_nodes(session: AsyncSession, parent_id: uuid.UUID) -> list[Node]:
