@@ -509,9 +509,27 @@ def test_create_environment_profile_empty_name(client: TestClient) -> None:
 
 
 def test_create_environment_profile_unknown_fields_ignored(client: TestClient) -> None:
+    profile = MagicMock()
+    profile.id = uuid.UUID("00000000-0000-0000-0000-000000000001")
+    profile.organisation_id = uuid.UUID("00000000-0000-0000-0000-000000000001")
+    profile.name = "Test"
+    profile.description = None
+    profile.provider_type = "local_docker"
+    profile.image_ref = "img"
+    profile.capabilities_json = []
+    profile.config_json = {}
+    profile.network_policy = "outbound"
+    profile.initialisation_strategy = "git_clone"
+    profile.secret_refs_json = []
+    profile.persistence_policy = "ephemeral"
+    profile.status = "active"
+    profile.visibility = "org"
+    profile.owner_team_id = None
+    profile.created_at = None
+    profile.updated_at = None
     with (
         patch("modulo.api.routes.environments.set_rls_org"),
-        patch("modulo.api.routes.environments.create_environment_profile"),
+        patch("modulo.api.routes.environments.create_environment_profile", return_value=profile),
     ):
         resp = client.post(
             "/api/v1/environments",
