@@ -508,7 +508,7 @@ def test_create_environment_profile_empty_name(client: TestClient) -> None:
     assert resp.status_code == 422
 
 
-def test_create_environment_profile_timeout_too_low(client: TestClient) -> None:
+def test_create_environment_profile_unknown_fields_ignored(client: TestClient) -> None:
     with (
         patch("modulo.api.routes.environments.set_rls_org"),
         patch("modulo.api.routes.environments.create_environment_profile"),
@@ -521,23 +521,7 @@ def test_create_environment_profile_timeout_too_low(client: TestClient) -> None:
                 "timeout_seconds": 10,
             },
         )
-    assert resp.status_code == 422
-
-
-def test_create_environment_profile_timeout_too_high(client: TestClient) -> None:
-    with (
-        patch("modulo.api.routes.environments.set_rls_org"),
-        patch("modulo.api.routes.environments.create_environment_profile"),
-    ):
-        resp = client.post(
-            "/api/v1/environments",
-            json={
-                "name": "Test",
-                "image_ref": "img",
-                "timeout_seconds": 90000,
-            },
-        )
-    assert resp.status_code == 422
+    assert resp.status_code == 201
 
 
 # ---------------------------------------------------------------------------
