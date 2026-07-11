@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 """Workflow bundle export and import service.
 
 Produces portable .zip bundles that carry pipeline + agent + schema definitions
@@ -7,7 +5,9 @@ but strip org-private details (owner_team_id, connector credentials, api keys).
 Import resolves local equivalents via a binding wizard.
 """
 
+from __future__ import annotations
 
+import asyncio
 import copy
 import io
 import json
@@ -18,7 +18,7 @@ import zipfile
 from typing import Any
 
 from sqlalchemy import select
-from sqlalchemy.exc import SQLAlchemyError
+from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.db.crud.agent import create_agent
@@ -39,7 +39,8 @@ BUNDLE_FORMAT_VERSION = "1"
 MANIFEST_FILENAME = "bundle.json"
 DEFAULT_SCHEMA_VERSION = "1.0"
 DEFAULT_NODE_TIMEOUT = 300
-VALID_EDGE_TYPES: frozenset[str] = frozenset({"normal", "conditional", "error", "always", "success"})
+_MAX_NAME_RETRIES = 5
+VALID_EDGE_TYPES: frozenset[str] = frozenset({"normal", "reject", "conditional"})
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -61,6 +62,8 @@ async def _get_latest_published_version(
             .limit(1)
         )
         return sv_result.scalar_one_or_none()
+    except asyncio.CancelledError:
+        raise
     except Exception:
         logger.error("Failed to fetch latest published version for schema %s", schema_id)
         raise
@@ -79,6 +82,8 @@ async def _get_existing_names(
             stmt = stmt.with_for_update()
         result = await session.execute(stmt)
         return {row[0] for row in result}
+    except asyncio.CancelledError:
+        raise
     except Exception:
         logger.error("_get_existing_names: failed to fetch names for %s", model_cls.__name__)
         raise
@@ -232,6 +237,8 @@ async def export_pipeline_bundle(
             "model_backends": model_backends_list,
             "edges": edges_list,
         }
+    except asyncio.CancelledError:
+        raise
     except Exception:
         logger.error("export_pipeline_bundle: failed while building bundle for pipeline %s", pipeline_id)
         raise
@@ -324,6 +331,8 @@ async def resolve_schema(
                             "version": sv.version,
                             "warning": None,
                         }
+    except asyncio.CancelledError:
+        raise
     except Exception:
         logger.error("resolve_schema: DB query failed for schema '%s'", name)
         raise
@@ -353,6 +362,8 @@ async def resolve_connector_type(
         )
         result = await session.execute(stmt)
         instances = list(result.scalars())
+    except asyncio.CancelledError:
+        raise
     except Exception:
         logger.error("resolve_connector_type: DB query failed for type '%s'", connector_type_id)
         raise
@@ -418,6 +429,8 @@ async def resolve_model_backend(
                 "model_backend_id": str(backend2.id),
                 "warning": None,
             }
+    except asyncio.CancelledError:
+        raise
     except Exception:
         logger.error("resolve_model_backend: DB query failed for '%s' (%s/%s)", name, provider, model_id)
         raise
@@ -607,18 +620,38 @@ async def materialize_import(
                 schema_version_map[export_schema_id] = existing_sv.version
                 continue
 
-        try:
-            new_schema = await create_schema(
-                session,
-                org_id=org_id,
-                name=sname,
-                account_id=created_by,
-                description=sd.get("description"),
-                abstract_name=sd.get("abstract_name"),
-            )
-        except Exception as exc:
-            logger.error("Failed to create schema '%s': %s", sname, exc)
-            raise
+        schema_created = False
+        for attempt_sc in range(_MAX_NAME_RETRIES):
+            try:
+                async with session.begin_nested():
+                    new_schema = await create_schema(
+                        session,
+                        org_id=org_id,
+                        name=sname,
+                        account_id=created_by,
+                        description=sd.get("description"),
+                        abstract_name=sd.get("abstract_name"),
+                    )
+                schema_created = True
+                break
+            except IntegrityError:
+                if attempt_sc == _MAX_NAME_RETRIES - 1:
+                    raise
+                if existing_schema_names is None:
+                    all_existing = (
+                        (await session.execute(select(Schema).where(Schema.organisation_id == org_id))).scalars().all()
+                    )
+                    existing_schema_names = {s.name for s in all_existing}
+                existing_schema_names.add(sname)
+                new_sname = suggest_import_name(existing_schema_names, sname, suffix="(imported)")
+                warnings.append(f"Schema name '{sname}' collided; retrying as '{new_sname}'.")
+                sname = new_sname
+                existing_schema_names.add(sname)
+            except Exception as exc:
+                logger.error("Failed to create schema '%s': %s", sname, exc)
+                raise
+        if not schema_created:
+            raise RuntimeError(f"Failed to create schema '{sname}' after {_MAX_NAME_RETRIES} attempts")
 
         schema_id_map[export_schema_id] = str(new_schema.id)
 
@@ -697,11 +730,26 @@ async def materialize_import(
         if resolved_mb_id:
             agent_args["model_backend_id"] = _safe_uuid(resolved_mb_id, "agent.model_backend_id")
 
-        try:
-            agent = await create_agent(**agent_args)
-        except (ValueError, SQLAlchemyError) as exc:
-            logger.error("Failed to create agent '%s': %s", aname, exc)
-            raise
+        agent_created = False
+        for attempt_a in range(_MAX_NAME_RETRIES):
+            try:
+                async with session.begin_nested():
+                    agent = await create_agent(**agent_args)
+                agent_created = True
+                break
+            except IntegrityError:
+                if attempt_a == _MAX_NAME_RETRIES - 1:
+                    raise
+                existing_agent_names.add(aname)
+                aname = suggest_import_name(existing_agent_names, ad.get("name", "Imported Agent"))
+                existing_agent_names.add(aname)
+                agent_args["name"] = aname
+                warnings.append(f"Agent name collided; retrying as '{aname}'.")
+            except (ValueError, SQLAlchemyError) as exc:
+                logger.error("Failed to create agent '%s': %s", aname, exc)
+                raise
+        if not agent_created:
+            raise RuntimeError(f"Failed to create agent '{aname}' after {_MAX_NAME_RETRIES} attempts")
 
         agent_id_map[export_agent_id] = str(agent.id)
 
@@ -723,26 +771,39 @@ async def materialize_import(
         if node_output_schema and node_output_schema in schema_id_map:
             node["output_schema_id"] = schema_id_map[node_output_schema]
         connector_binding = node.get("connector_binding")
-        if connector_binding:
+        if isinstance(connector_binding, dict):
             existing_id = connector_binding.get("instance_id", "")
             if existing_id and existing_id in conn_overrides:
                 connector_binding["instance_id"] = conn_overrides[existing_id]
 
-    try:
-        pipeline = await create_pipeline(
-            session,
-            org_id=org_id,
-            name=pname,
-            account_id=created_by,
-            description=pipeline_info.get("description"),
-            visibility="org",
-            owner_team_id=owner_team_id,
-            node_timeout_seconds=pipeline_info.get("node_timeout_seconds") or DEFAULT_NODE_TIMEOUT,
-            run_context_defaults=pipeline_info.get("run_context_defaults"),
-        )
-    except Exception as exc:
-        logger.error("Failed to create pipeline '%s': %s", pname, exc)
-        raise
+    pipeline_created = False
+    for attempt_p in range(_MAX_NAME_RETRIES):
+        try:
+            async with session.begin_nested():
+                pipeline = await create_pipeline(
+                    session,
+                    org_id=org_id,
+                    name=pname,
+                    account_id=created_by,
+                    description=pipeline_info.get("description"),
+                    visibility="org",
+                    owner_team_id=owner_team_id,
+                    node_timeout_seconds=pipeline_info.get("node_timeout_seconds") or DEFAULT_NODE_TIMEOUT,
+                    run_context_defaults=pipeline_info.get("run_context_defaults"),
+                )
+            pipeline_created = True
+            break
+        except IntegrityError:
+            if attempt_p == _MAX_NAME_RETRIES - 1:
+                raise
+            existing_pipeline_names.add(pname)
+            pname = suggest_import_name(existing_pipeline_names, name)
+            warnings.append(f"Pipeline name '{name}' conflicted; retrying as '{pname}'.")
+        except Exception as exc:
+            logger.error("Failed to create pipeline '%s': %s", pname, exc)
+            raise
+    if not pipeline_created:
+        raise RuntimeError(f"Failed to create pipeline '{pname}' after {_MAX_NAME_RETRIES} attempts")
 
     pipeline.graph_nodes_json = list(graph_nodes)
     await session.flush()
