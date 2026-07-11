@@ -148,4 +148,5 @@ All 6 contribution endpoints and 3 community contribution endpoints catch `Progr
 ## QA History
 
 - 2026-07-02: improve-architecture index 44 — marked 28 behaviours [x], added 4 missing update_returns_none behaviours, added service-layer unit tests for submit_contribution_version and list_contribution_versions, added BDD feature file for contribution flow, created website docs stub
-- 2026-07-05: cross-cutting QA — verified all 30 behaviours against code, confirmed ProgrammingError catches on all 9 contribution/community endpoints, added Error Handling / Edge Cases / Resilience sections, created website docs stub 
+- 2026-07-05: cross-cutting QA — verified all 30 behaviours against code, confirmed ProgrammingError catches on all 9 contribution/community endpoints, added Error Handling / Edge Cases / Resilience sections, created website docs stub
+- 2026-07-12: R2 improve-architecture — verified B904 compliance (all `from None` correct), no CancelledError concerns (Python 3.12+), frontmatter clean, BDD paths exist, no stale known gaps, dead code check clean. All ruff checks pass.
