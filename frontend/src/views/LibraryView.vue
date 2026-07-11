@@ -298,13 +298,14 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted, onBeforeUnmount } from 'vue'
+import { ref, computed, watch, onMounted, onBeforeUnmount } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import { Button } from '@/components/ui/button'
 import PageHeader from '../components/shared/PageHeader.vue'
 import FilterBar from '../components/shared/FilterBar.vue'
-import { useApi } from '../composables/useApi'
+import { useDataFetch } from '../composables/useDataFetch'
 import { formatApiError } from '../lib/api/formatError'
+import { api } from '../lib/api/client'
 
 let searchTimer: ReturnType<typeof setTimeout> | null = null
 
@@ -336,21 +337,40 @@ interface ListResponse {
 
 const router = useRouter()
 const route = useRoute()
-const { get, patch } = useApi()
+
+const { loading, error, data: loadResp, load: loadPrimitives } = useDataFetch<ListResponse>(
+  async () => {
+    const params = new URLSearchParams({
+      page: String(page.value),
+      page_size: String(pageSize.value),
+    })
+    if (typeFilter.value) params.set('primitive_type', typeFilter.value)
+    if (search.value) params.set('search', search.value)
+    if (section.value === 'community') params.set('source', 'community')
+
+    const { data, error: err } = await api.GET('/api/v1/libraries', {
+      params: { query: Object.fromEntries(params) as any },
+    })
+    if (err) return { data: undefined, error: err }
+    return { data: data as unknown as ListResponse, error: undefined }
+  },
+  { initialValue: { items: [] as LibraryPrimitive[], total: 0, page: 1, page_size: 12 } },
+)
 
 const primitives = ref<LibraryPrimitive[]>([])
-const loading = ref(true)
-const error = ref<string | null>(null)
+watch(loadResp, (d) => {
+  if (d) {
+    primitives.value = section.value === 'native' ? d.items.filter(p => p.source !== 'community') : d.items
+    total.value = section.value === 'native' ? primitives.value.length : d.total
+  }
+}, { immediate: true })
+
 const search = ref('')
 const typeFilter = ref('')
 const page = ref(1)
 const pageSize = ref(12)
 const total = ref(0)
 
-// 'native' = Modulo-maintained structural workflows + the org's own saved
-// primitives (existing default library view). 'community' = opinionated,
-// narrower example pipelines contributed by users (ADR 010 §2) — always
-// fetched and rendered as a separate section, never mixed with Native.
 type LibrarySection = 'native' | 'community'
 const section = ref<LibrarySection>('native')
 
@@ -361,38 +381,9 @@ function switchSection(next: LibrarySection) {
   loadPrimitives()
 }
 
-// Within the Native section: in-dev primitives are hidden entirely; native
-// items stay in the primary grid; preview items are segregated into a
-// collapsed disclosure section. The Community section (source === 'community')
-// bypasses this tier split entirely — community items aren't tiered.
 const nativePrimitives = computed(() => primitives.value.filter(p => (p.tier ?? 'native') !== 'preview' && (p.tier ?? 'native') !== 'in_dev'))
 const previewPrimitives = computed(() => primitives.value.filter(p => p.tier === 'preview'))
 const communityPrimitives = computed(() => primitives.value.filter(p => p.source === 'community'))
-
-async function loadPrimitives() {
-  loading.value = true
-  error.value = null
-  try {
-    const params = new URLSearchParams({
-      page: String(page.value),
-      page_size: String(pageSize.value),
-    })
-    if (typeFilter.value) params.set('primitive_type', typeFilter.value)
-    if (search.value) params.set('search', search.value)
-    if (section.value === 'community') params.set('source', 'community')
-
-    const data = await get<ListResponse>(`/api/v1/libraries?${params}`)
-    // Community items are never mixed into the Native section, even though
-    // the default (no `source` filter) API response merges all sources.
-    primitives.value =
-      section.value === 'native' ? data.items.filter((p) => p.source !== 'community') : data.items
-    total.value = section.value === 'native' ? primitives.value.length : data.total
-  } catch (e) {
-    error.value = formatApiError(e)
-  } finally {
-    loading.value = false
-  }
-}
 
 function onSearchInput() {
   page.value = 1
@@ -446,9 +437,12 @@ async function toggleAutoUpdate(prim: LibraryPrimitive) {
   const newValue = !prim.auto_update
   toggleLoading.value[prim.id] = true
   try {
-    const data = await patch<LibraryPrimitive>(`/api/v1/libraries/${prim.id}`, { auto_update: newValue })
+    const { data } = await api.PATCH('/api/v1/libraries/{library_id}', {
+      params: { path: { library_id: prim.id } },
+      body: { auto_update: newValue },
+    })
     const idx = primitives.value.findIndex(x => x.id === prim.id)
-    if (idx !== -1) primitives.value[idx] = data
+    if (idx !== -1 && data) primitives.value[idx] = data as unknown as LibraryPrimitive
   } catch (e) {
     error.value = formatApiError(e)
   } finally {

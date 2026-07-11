@@ -106,36 +106,26 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted } from 'vue'
+import { ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { PlusIcon, MapIcon } from '@lucide/vue'
-import { useApi } from '../../composables/useApi'
+import { useDataFetch } from '../../composables/useDataFetch'
 import { formatApiError } from '../../lib/api/formatError'
 import type { LifecycleMap } from '../../types/lifecycleMap'
+import { api } from '../../lib/api/client'
 
-const { get, post } = useApi()
 const router = useRouter()
 
-const maps = ref<LifecycleMap[]>([])
-const loading = ref(true)
-const error = ref<string | null>(null)
+const { loading, error, data: maps, load: loadMaps } = useDataFetch<LifecycleMap[]>(
+  () => api.GET('/api/v1/lifecycle-maps'),
+  { initialValue: [] as LifecycleMap[] },
+)
+
 const showCreateDialog = ref(false)
 const newName = ref('')
 const newDescription = ref('')
 const creating = ref(false)
 const createError = ref<string | null>(null)
-
-async function loadMaps() {
-  loading.value = true
-  error.value = null
-  try {
-    maps.value = await get<LifecycleMap[]>('/api/v1/lifecycle-maps')
-  } catch (e: unknown) {
-    error.value = formatApiError(e)
-  } finally {
-    loading.value = false
-  }
-}
 
 function openMap(id: string) {
   router.push({ name: 'lifecycle-map-editor', params: { id } })
@@ -153,12 +143,14 @@ async function handleCreateConfirm() {
   creating.value = true
   createError.value = null
   try {
-    const created = await post<LifecycleMap>('/api/v1/lifecycle-maps', {
-      name: newName.value.trim(),
-      description: newDescription.value.trim() || null,
+    const { data } = await api.POST('/api/v1/lifecycle-maps', {
+      body: {
+        name: newName.value.trim(),
+        description: newDescription.value.trim() || null,
+      },
     })
     showCreateDialog.value = false
-    router.push({ name: 'lifecycle-map-editor', params: { id: created.id } })
+    if (data) router.push({ name: 'lifecycle-map-editor', params: { id: (data as LifecycleMap).id } })
   } catch (e: unknown) {
     createError.value = formatApiError(e)
   } finally {
@@ -175,6 +167,4 @@ function formatDate(dateStr: string) {
     return '?'
   }
 }
-
-onMounted(loadMaps)
 </script>

@@ -104,9 +104,10 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted } from 'vue'
+import { ref, computed } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { api } from '../lib/api/client'
+import { useDataFetch } from '../composables/useDataFetch'
 import { formatApiError, type ProblemDetail } from '../lib/api/formatError'
 import type { components } from '../lib/api/client'
 import LoadingSpinner from '../components/shared/LoadingSpinner.vue'
@@ -119,35 +120,26 @@ const { t } = useI18n()
 
 type SchemaItem = components['schemas']['SchemaItem']
 
-const schemas = ref<SchemaItem[]>([])
-const loading = ref(true)
-const error = ref<string | null>(null)
+interface SchemaListResponse {
+  items: SchemaItem[]
+  total: number
+  page: number
+  page_size: number
+}
+
+const { loading, error, data: schemasResp, load: loadSchemas } = useDataFetch<SchemaListResponse>(
+  () => api.GET('/api/v1/schemas', {
+    params: { query: { page: 1, page_size: 100 } },
+  }),
+  { initialValue: { items: [] as SchemaItem[], total: 0, page: 1, page_size: 100 } },
+)
+
+const schemas = computed(() => schemasResp.value?.items ?? [])
 
 const deprecateConfirmId = ref<string | null>(null)
 const deprecateConfirmName = ref('')
 const deprecating = ref(false)
 const deprecateError = ref<string | null>(null)
-
-async function loadSchemas() {
-  loading.value = true
-  error.value = null
-  try {
-    const { data, error: err } = await api.GET('/api/v1/schemas', {
-      params: { query: { page: 1, page_size: 100 } },
-    })
-    if (err) {
-      error.value = err && typeof err === 'object' && 'detail' in err
-        ? `${t('views.SchemaListView.failed_to_load_schemas')} ${(err as ProblemDetail).detail}`
-        : `${t('views.SchemaListView.failed_to_load_schemas')} ${formatApiError(err)}`
-    } else if (data) {
-      schemas.value = data.items
-    }
-  } catch (e: unknown) {
-    error.value = `${t('views.SchemaListView.failed_to_load_schemas')} ${formatApiError(e)}`
-  } finally {
-    loading.value = false
-  }
-}
 
 function confirmDeprecate(schema: SchemaItem) {
   deprecateConfirmId.value = schema.id
@@ -168,7 +160,8 @@ async function deprecateSchema() {
     } else if (data) {
       const idx = schemas.value.findIndex(s => s.id === deprecateConfirmId.value)
       if (idx >= 0) {
-        schemas.value[idx] = data
+        const s = schemasResp.value
+        if (s) s.items[idx] = data
       }
       deprecateConfirmId.value = null
     }
@@ -178,6 +171,4 @@ async function deprecateSchema() {
     deprecating.value = false
   }
 }
-
-onMounted(loadSchemas)
 </script>

@@ -523,28 +523,25 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, reactive, onMounted } from 'vue'
+import { ref, computed, reactive } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { VueFlow } from '@vue-flow/core'
 import { Background } from '@vue-flow/background'
 import { Controls } from '@vue-flow/controls'
 import '@vue-flow/core/dist/style.css'
 import '@vue-flow/core/dist/theme-default.css'
-import { useApi } from '../composables/useApi'
+import { useDataFetch } from '../composables/useDataFetch'
 import { formatApiError } from '../lib/api/formatError'
 import { usePlanStore } from '../stores/planStore'
 import BackLink from '../components/BackLink.vue'
 import FormDialog from '../components/shared/FormDialog.vue'
 import { shortId } from '../utils/format'
+import { api } from '../lib/api/client'
 
-const { get, post, patch, delete: del } = useApi()
 const planStore = usePlanStore()
 const route = useRoute()
 const router = useRouter()
 const pipelineId = route.params.id as string
-
-const loading = ref(true)
-const pageError = ref<string | null>(null)
 
 const rawNodes = ref<any[]>([])
 const rawEdges = ref<any[]>([])
@@ -654,7 +651,10 @@ function convertBackendEdge(e: any, i: number): any {
 
 async function loadGraph() {
   try {
-    const result = await get<any>(`/api/v1/pipelines/${pipelineId}/graph`)
+    const { data } = await api.GET('/api/v1/pipelines/{pipeline_id}/graph', {
+      params: { path: { pipeline_id: pipelineId } },
+    })
+    const result = data as any
     rawNodes.value = result.nodes || []
     rawEdges.value = result.edges || []
     flowNodes.value = rawNodes.value.map(convertBackendNode)
@@ -667,17 +667,19 @@ async function loadGraph() {
 async function loadCatalog() {
   try {
     const [a, c, mb, s, snaps] = await Promise.all([
-      get<any>('/api/v1/agents').catch(() => ({ items: [] })),
-      get<any>('/api/v1/connectors').catch(() => ({ items: [] })),
-      get<any>('/api/v1/model-backends').catch(() => ({ items: [] })),
-      get<any>('/api/v1/schemas').catch(() => ({ items: [] })),
-      get<any>(`/api/v1/pipelines/${pipelineId}/snapshots`).catch(() => ({ items: [] })),
+      api.GET('/api/v1/agents').then(r => (r.data as any)?.items ?? []),
+      api.GET('/api/v1/connectors').then(r => (r.data as any)?.items ?? []),
+      api.GET('/api/v1/model-backends').then(r => (r.data as any)?.items ?? []),
+      api.GET('/api/v1/schemas').then(r => (r.data as any)?.items ?? []),
+      api.GET('/api/v1/pipelines/{pipeline_id}/snapshots', {
+        params: { path: { pipeline_id: pipelineId } },
+      }).then(r => (r.data as any)?.items ?? []),
     ])
-    agents.value = a.items || []
-    connectors.value = c.items || []
-    modelBackends.value = mb.items || []
-    schemas.value = s.items || []
-    snapshots.value = (snaps.items || []).filter((sn: any) => sn.snapshot_version > 0)
+    agents.value = a
+    connectors.value = c
+    modelBackends.value = mb
+    schemas.value = s
+    snapshots.value = (snaps as any[]).filter((sn: any) => sn.snapshot_version > 0)
   } catch (e) {
     console.warn('Failed to load pipeline data', e)
   }
@@ -764,7 +766,6 @@ async function saveEdgeConfig() {
   savingEdge.value = true
   edgeSaveError.value = null
 
-  // Build updated edge list with the modified edge.
   const updatedEdges = rawEdges.value.map((e: any) => {
     if (e.id === selectedEdgeData.value.id) {
       return {
@@ -787,20 +788,23 @@ async function saveEdgeConfig() {
   })
 
   try {
-    await patch(`/api/v1/pipelines/${pipelineId}/graph`, {
-      nodes: rawNodes.value.map((n: any) => ({
-        id: n.id,
-        node_type: n.node_type || 'agent',
-        label: n.label || null,
-        agent_id: n.agent_id || null,
-        connector_binding: n.connector_binding || null,
-        output_schema_id: n.output_schema_id || null,
-        model_backend_id: n.model_backend_id || null,
-        role: n.role || null,
-        timeout_seconds: n.timeout_seconds || null,
-        position: n.position || null,
-      })),
-      edges: updatedEdges,
+    await api.PATCH('/api/v1/pipelines/{pipeline_id}/graph', {
+      params: { path: { pipeline_id: pipelineId } },
+      body: {
+        nodes: rawNodes.value.map((n: any) => ({
+          id: n.id,
+          node_type: n.node_type || 'agent',
+          label: n.label || null,
+          agent_id: n.agent_id || null,
+          connector_binding: n.connector_binding || null,
+          output_schema_id: n.output_schema_id || null,
+          model_backend_id: n.model_backend_id || null,
+          role: n.role || null,
+          timeout_seconds: n.timeout_seconds || null,
+          position: n.position || null,
+        })),
+        edges: updatedEdges,
+      },
     })
     await loadGraph()
     const updatedEdge = rawEdges.value.find((e: any) => e.id === selectedEdgeData.value.id)
@@ -848,10 +852,13 @@ async function handleSaveAsComposite() {
   saving.value = true
   saveAsError.value = null
   try {
-    await post(`/api/v1/pipelines/${pipelineId}/save-as-composite`, {
-      name: saveAsName.value,
-      description: saveAsDescription.value || null,
-      selected_node_ids: saveAsSelectedNodeIds.value,
+    await api.POST('/api/v1/pipelines/{pipeline_id}/save-as-composite', {
+      params: { path: { pipeline_id: pipelineId } },
+      body: {
+        name: saveAsName.value,
+        description: saveAsDescription.value || null,
+        selected_node_ids: saveAsSelectedNodeIds.value,
+      },
     })
     showSaveAsComposite.value = false
     router.push({ name: 'library' })
@@ -871,13 +878,16 @@ async function convertToAgent() {
   convertError.value = null
   try {
     const nodeId = selectedNodeData.value.id
-    await post(`/api/v1/pipelines/${pipelineId}/nodes/${nodeId}/convert-to-agent`, {
-      agent_id: pickerAgentId.value,
-      connector_binding: {
-        type: connectors.value.find(c => c.id === pickerConnectorId.value)?.connector_type_id || '',
-        instance_id: pickerConnectorId.value,
+    await api.POST('/api/v1/pipelines/{pipeline_id}/nodes/{node_id}/convert-to-agent', {
+      params: { path: { pipeline_id: pipelineId, node_id: nodeId } },
+      body: {
+        agent_id: pickerAgentId.value,
+        connector_binding: {
+          type: connectors.value.find(c => c.id === pickerConnectorId.value)?.connector_type_id || '',
+          instance_id: pickerConnectorId.value,
+        },
+        model_backend_id: selectedAgent.value?.model_backend_id,
       },
-      model_backend_id: selectedAgent.value?.model_backend_id,
     })
     showAgentPicker.value = false
     await loadGraph()
@@ -893,7 +903,10 @@ async function revertToManual() {
   revertLoading.value = true
   try {
     const nodeId = selectedNodeData.value.id
-    await post(`/api/v1/pipelines/${pipelineId}/nodes/${nodeId}/revert-to-manual?snapshot_id=${revertSnapshotId.value}`)
+    await api.POST('/api/v1/pipelines/{pipeline_id}/nodes/{node_id}/revert-to-manual', {
+      params: { path: { pipeline_id: pipelineId, node_id: nodeId } },
+      body: { snapshot_id: revertSnapshotId.value },
+    })
     showRevertDialog.value = false
     await loadGraph()
     selectedNodeData.value = rawNodes.value.find((n: any) => n.id === nodeId) || null
@@ -906,8 +919,10 @@ async function revertToManual() {
 
 async function loadPipeline() {
   try {
-    const data = await get<any>(`/api/v1/pipelines/${pipelineId}`)
-    pipeline.value = data
+    const { data } = await api.GET('/api/v1/pipelines/{pipeline_id}', {
+      params: { path: { pipeline_id: pipelineId } },
+    })
+    pipeline.value = data as any
   } catch (e) {
     pageError.value = `Failed to load pipeline: ${formatApiError(e)}`
   }
@@ -924,8 +939,11 @@ async function handleRename() {
   renaming.value = true
   renameError.value = null
   try {
-    const updated = await patch<any>(`/api/v1/pipelines/${pipelineId}`, { name: renameName.value.trim() })
-    pipeline.value = updated
+    const { data } = await api.PATCH('/api/v1/pipelines/{pipeline_id}', {
+      params: { path: { pipeline_id: pipelineId } },
+      body: { name: renameName.value.trim() },
+    })
+    pipeline.value = data as any
     showRenameDialog.value = false
   } catch (e: unknown) {
     renameError.value = formatApiError(e)
@@ -936,8 +954,10 @@ async function handleRename() {
 
 async function handleArchive() {
   try {
-    const updated = await post<any>(`/api/v1/pipelines/${pipelineId}/archive`)
-    pipeline.value = updated
+    const { data } = await api.POST('/api/v1/pipelines/{pipeline_id}/archive', {
+      params: { path: { pipeline_id: pipelineId } },
+    })
+    pipeline.value = data as any
   } catch (e: unknown) {
     pageError.value = `Failed to archive pipeline: ${formatApiError(e)}`
   }
@@ -945,8 +965,10 @@ async function handleArchive() {
 
 async function handleUnarchive() {
   try {
-    const updated = await post<any>(`/api/v1/pipelines/${pipelineId}/unarchive`)
-    pipeline.value = updated
+    const { data } = await api.POST('/api/v1/pipelines/{pipeline_id}/unarchive', {
+      params: { path: { pipeline_id: pipelineId } },
+    })
+    pipeline.value = data as any
   } catch (e: unknown) {
     pageError.value = `Failed to unarchive pipeline: ${formatApiError(e)}`
   }
@@ -955,15 +977,22 @@ async function handleUnarchive() {
 async function handleDelete() {
   deleteError.value = null
   try {
-    await del(`/api/v1/pipelines/${pipelineId}`)
+    await api.DELETE('/api/v1/pipelines/{pipeline_id}', {
+      params: { path: { pipeline_id: pipelineId } },
+    })
     router.push({ name: 'library' })
   } catch (e: unknown) {
     deleteError.value = formatApiError(e)
   }
 }
 
-onMounted(async () => {
-  await Promise.all([loadPipeline(), loadGraph(), loadCatalog()])
-  loading.value = false
-})
+const { loading, error: pageErrorRef, load: loadAll } = useDataFetch(
+  async () => {
+    await Promise.all([loadPipeline(), loadGraph(), loadCatalog()])
+    return {}
+  },
+  { initialValue: {} },
+)
+
+const pageError = pageErrorRef as any as ReturnType<typeof ref<string | null>>
 </script>

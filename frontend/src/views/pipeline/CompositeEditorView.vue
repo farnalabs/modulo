@@ -139,7 +139,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { VueFlow } from '@vue-flow/core'
 import { Background } from '@vue-flow/background'
@@ -147,20 +147,18 @@ import { Controls } from '@vue-flow/controls'
 import '@vue-flow/core/dist/style.css'
 import '@vue-flow/core/dist/theme-default.css'
 import BackLink from '../../components/BackLink.vue'
-import { useApi } from '../../composables/useApi'
+import { useDataFetch } from '../../composables/useDataFetch'
 import { shortId } from '../../utils/format'
 import PortDefinitionPanel from '../../components/pipeline/composite/PortDefinitionPanel.vue'
 import PublishCompositeFlow from '../../components/pipeline/composite/PublishCompositeFlow.vue'
 import type { ParameterPort } from '../../types/pipeline'
 import { formatApiError } from '../../lib/api/formatError'
+import { api } from '../../lib/api/client'
 
-const { get, post } = useApi()
 const route = useRoute()
 const router = useRouter()
 const compositeId = route.params.id as string
 
-const loading = ref(true)
-const pageError = ref<string | null>(null)
 const compositeName = ref('')
 const flowNodes = ref<any[]>([])
 const flowEdges = ref<any[]>([])
@@ -199,14 +197,22 @@ function convertBackendEdge(e: any, i: number): any {
   }
 }
 
-async function loadEditor() {
-  try {
-    const [template, editor] = await Promise.all([
-      get<any>(`/api/v1/composite-templates/${compositeId}`),
-      get<any>(`/api/v1/composite-templates/${compositeId}/editor`),
+const { loading, error: pageError, load: loadEditor } = useDataFetch(
+  async () => {
+    const [{ data: templateData }, { data: editorData }] = await Promise.all([
+      api.GET('/api/v1/composite-templates/{composite_id}', {
+        params: { path: { composite_id: compositeId } },
+      }),
+      api.GET('/api/v1/composite-templates/{composite_id}/editor', {
+        params: { path: { composite_id: compositeId } },
+      }),
     ])
-    compositeName.value = template.name
-    ports.value = (template.parameter_ports_json || []).map((p: any) => ({
+
+    const template = templateData as any
+    const editor = editorData as any
+
+    compositeName.value = template?.name ?? ''
+    ports.value = (template?.parameter_ports_json ?? []).map((p: any) => ({
       id: p.id,
       name: p.name,
       label: p.label,
@@ -215,14 +221,15 @@ async function loadEditor() {
       required: p.required || false,
       default: p.default_value,
     }))
-    rawNodes.value = editor.nodes || []
-    rawEdges.value = editor.edges || []
+    rawNodes.value = editor?.nodes ?? []
+    rawEdges.value = editor?.edges ?? []
     flowNodes.value = rawNodes.value.map(convertBackendNode)
     flowEdges.value = rawEdges.value.map(convertBackendEdge)
-  } catch (e: unknown) {
-    pageError.value = `Failed to load composite: ${formatApiError(e)}`
-  }
-}
+
+    return {}
+  },
+  { initialValue: {} },
+)
 
 function onNodeClick() {
   // Node selection handled by parent if needed
@@ -245,27 +252,29 @@ async function handleSaveAs() {
   saving.value = true
   saveAsError.value = null
   try {
-    await post<{ id: string }>(`/api/v1/composite-templates`, {
-      name: saveAsName.value,
-      description: saveAsDescription.value || null,
-      sub_pipeline_graph_json: {
-        nodes: rawNodes.value,
-        edges: rawEdges.value,
-      },
-      parameter_ports_json: ports.value.map(p => ({
-        id: p.id,
-        name: p.name,
-        label: p.label,
-        description: p.description || null,
-        type: p.type,
-        required: p.required,
-        default_value: p.default ?? null,
-        target_injection: {
-          mode: 'prompt_replace',
-          node_id: '',
-          injection_point: 'prompt_template',
+    await api.POST('/api/v1/composite-templates', {
+      body: {
+        name: saveAsName.value,
+        description: saveAsDescription.value || null,
+        sub_pipeline_graph_json: {
+          nodes: rawNodes.value,
+          edges: rawEdges.value,
         },
-      })),
+        parameter_ports_json: ports.value.map(p => ({
+          id: p.id,
+          name: p.name,
+          label: p.label,
+          description: p.description || null,
+          type: p.type,
+          required: p.required,
+          default_value: p.default ?? null,
+          target_injection: {
+            mode: 'prompt_replace',
+            node_id: '',
+            injection_point: 'prompt_template',
+          },
+        })),
+      },
     })
     showSaveAsComposite.value = false
     router.push({ name: 'library' })
@@ -281,8 +290,4 @@ function onPublished() {
   router.push({ name: 'library' })
 }
 
-onMounted(async () => {
-  await loadEditor()
-  loading.value = false
-})
 </script>

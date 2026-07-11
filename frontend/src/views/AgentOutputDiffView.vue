@@ -142,8 +142,9 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed } from 'vue'
 import { api } from '../lib/api/client'
+import { useDataFetch } from '../composables/useDataFetch'
 import type { components } from '../lib/api/client'
 import LoadingSpinner from '../components/shared/LoadingSpinner.vue'
 import ErrorAlert from '../components/shared/ErrorAlert.vue'
@@ -168,26 +169,12 @@ interface RecentRun {
   created_at: string
 }
 
-const recentRuns = ref<RecentRun[]>([])
-const loadingRuns = ref(false)
+const { loading: loadingRuns, data: summaryResp } = useDataFetch(
+  () => api.GET('/api/v1/admin/dashboard/summary'),
+  { immediate: true },
+)
 
-async function fetchRecentRuns() {
-  loadingRuns.value = true
-  try {
-    const { data, error: err } = await api.GET('/api/v1/admin/dashboard/summary')
-    if (!err && data) {
-      recentRuns.value = (data as any).recent_runs ?? []
-    }
-  } catch (e) {
-    console.warn('Failed to fetch recent runs', e)
-  } finally {
-    loadingRuns.value = false
-  }
-}
-
-onMounted(() => {
-  fetchRecentRuns()
-})
+const recentRuns = computed(() => ((summaryResp.value as any)?.recent_runs ?? []) as RecentRun[])
 
 function onSelectRunA(event: Event) {
   const target = event.target as HTMLSelectElement

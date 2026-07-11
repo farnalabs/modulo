@@ -122,9 +122,10 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted } from 'vue'
+import { ref, computed, watch } from 'vue'
 import { Button } from '@/components/ui/button'
 import { api } from '../lib/api/client'
+import { useDataFetch } from '../composables/useDataFetch'
 import { formatApiError } from '../lib/api/formatError'
 import { useRemyStore } from '../composables/useRemyStore'
 import PageHeader from '../components/shared/PageHeader.vue'
@@ -140,31 +141,25 @@ import {
 import type { SkillItem } from '../types/remy'
 
 const remyStore = useRemyStore()
-const skills = ref<SkillItem[]>([])
-const loading = ref(true)
-const loadError = ref<string | null>(null)
 const skillToggleError = ref<string | null>(null)
 const skillToggling = ref<Record<string, boolean>>({})
 
 const skillDialogRef = ref<InstanceType<typeof RemySkillDialog> | null>(null)
 
-async function loadSkills() {
-  loading.value = true
-  loadError.value = null
-  try {
-    const { data, error: err } = await (api as any).GET('/api/v1/me/remy/skills')
-    if (err) {
-      loadError.value = `Failed to load skills: ${formatApiError(err)}`
-    } else if (data) {
-      skills.value = (data as { items: SkillItem[] }).items || (data as SkillItem[])
-    }
-    remyStore.signalSkillsChanged()
-  } catch (e: unknown) {
-    loadError.value = `Failed to load skills: ${formatApiError(e)}`
-  } finally {
-    loading.value = false
-  }
+interface SkillsResponse {
+  items: SkillItem[]
 }
+
+const { loading, error: loadError, data: skillsResp, load: loadSkills } = useDataFetch<SkillsResponse>(
+  () => (api as any).GET('/api/v1/me/remy/skills'),
+  { initialValue: { items: [] as SkillItem[] } },
+)
+
+const skills = computed(() => skillsResp.value?.items ?? [])
+
+watch(skillsResp, () => {
+  remyStore.signalSkillsChanged()
+}, { immediate: true })
 
 async function toggleSkillActive(skill: SkillItem) {
   if (skillToggling.value[skill.id]) return
@@ -182,7 +177,9 @@ async function toggleSkillActive(skill: SkillItem) {
     }
     if (data) {
       const idx = skills.value.findIndex((s) => s.id === skill.id)
-      if (idx !== -1) skills.value[idx] = data as SkillItem
+      if (idx !== -1 && skillsResp.value) {
+        skillsResp.value.items[idx] = data as SkillItem
+      }
     }
     remyStore.signalSkillsChanged()
   } catch (e: unknown) {
@@ -191,6 +188,4 @@ async function toggleSkillActive(skill: SkillItem) {
     delete skillToggling.value[skill.id]
   }
 }
-
-onMounted(() => { loadSkills() })
 </script>

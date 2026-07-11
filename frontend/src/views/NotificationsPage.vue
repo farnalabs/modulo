@@ -77,8 +77,9 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted } from "vue";
+import { ref, watch } from "vue";
 import type { NotificationResponse } from "../lib/api/notifications";
+import { useDataFetch } from "../composables/useDataFetch";
 import { fetchNotifications, reviewLater } from "../lib/api/notifications";
 import NotificationCard from "../components/NotificationCard.vue";
 import PageHeader from '../components/shared/PageHeader.vue'
@@ -89,9 +90,6 @@ import { Button } from "@/components/ui/button";
 import { formatApiError } from "../lib/api/formatError";
 import EmptyState from "../components/shared/EmptyState.vue";
 
-const notifications = ref<NotificationResponse[]>([]);
-const loading = ref(false);
-const error = ref<string | null>(null);
 const total = ref(0);
 const page = ref(1);
 const pageSize = ref(20);
@@ -106,10 +104,8 @@ function handleFilterUpdate(key: string, value: string) {
   else if (key === 'status') filterStatus.value = value
 }
 
-async function loadNotifications(p?: number) {
-  loading.value = true;
-  error.value = null;
-  try {
+const { loading, error, data, load: loadNotifications } = useDataFetch(
+  async (p?: number) => {
     const result = await Promise.race([
       fetchNotifications({
         page: p ?? page.value,
@@ -120,15 +116,20 @@ async function loadNotifications(p?: number) {
       }),
       new Promise<never>((_, reject) => setTimeout(() => reject(new Error('Notifications request timed out after 30s')), 30000)),
     ]);
-    notifications.value = result.items;
-    total.value = result.total;
-    page.value = result.page;
-  } catch (e: unknown) {
-    error.value = formatApiError(e);
-  } finally {
-    loading.value = false;
+    return { data: result, error: undefined };
+  },
+  { initialValue: { items: [] as NotificationResponse[], total: 0, page: 1, page_size: 20 } },
+)
+
+const notifications = ref<NotificationResponse[]>([])
+
+watch(data, (d) => {
+  if (d) {
+    notifications.value = (d as any).items ?? []
+    total.value = (d as any).total ?? 0
+    page.value = (d as any).page ?? 1
   }
-}
+}, { immediate: true })
 
 function applyFilters() {
   page.value = 1;
@@ -165,6 +166,4 @@ async function onReviewLater(id: string) {
     error.value = e instanceof Error ? e.message : "Failed to dismiss notification";
   }
 }
-
-onMounted(() => void loadNotifications());
 </script>

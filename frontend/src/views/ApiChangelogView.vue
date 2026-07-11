@@ -69,9 +69,9 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { api } from '../lib/api/client'
+import { useDataFetch } from '../composables/useDataFetch'
 import PageHeader from '../components/shared/PageHeader.vue'
 import LoadingSpinner from '../components/shared/LoadingSpinner.vue'
 import ErrorAlert from '../components/shared/ErrorAlert.vue'
@@ -87,26 +87,8 @@ interface ChangelogEntry {
   migration_url: string | null
 }
 
-const entries = ref<ChangelogEntry[]>([])
-const loading = ref(true)
-const error = ref<string | null>(null)
-
-async function loadChangelog() {
-  loading.value = true
-  error.value = null
-  try {
-    const { data, error: err } = await api.GET('/api/v1/changelog')
-    if (err) {
-      error.value = t('views.ApiChangelogView.load_error_with_detail', { detail: String(err) })
-    } else if (data) {
-      entries.value = data as unknown as ChangelogEntry[]
-    }
-  } catch (e: unknown) {
-    error.value = t('views.ApiChangelogView.load_error')
-  } finally {
-    loading.value = false
-  }
-}
-
-onMounted(() => loadChangelog())
+const { loading, error, data: entries, load: loadChangelog } = useDataFetch<ChangelogEntry[]>(
+  () => api.GET('/api/v1/changelog'),
+  { initialValue: [] as ChangelogEntry[] },
+)
 </script>

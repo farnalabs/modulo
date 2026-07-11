@@ -100,8 +100,9 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted } from 'vue'
+import { ref, computed } from 'vue'
 import { api } from '../lib/api/client'
+import { useDataFetch } from '../composables/useDataFetch'
 import { formatApiError } from '../lib/api/formatError'
 import { shortId } from '../utils/format'
 import { useApi } from '../composables/useApi'
@@ -144,9 +145,12 @@ interface ProposalsResponse {
 
 const { patch } = useApi()
 
-const proposals = ref<EvalProposalItem[]>([])
-const loading = ref(true)
-const pageError = ref<string | null>(null)
+const { loading, error: pageError, data: proposalsResp, load: loadProposals } = useDataFetch<ProposalsResponse>(
+  () => api.GET('/api/v1/feedback/proposals', { params: {} as any }),
+  { initialValue: { items: [] as EvalProposalItem[], total: 0, page: 1, page_size: 20 } },
+)
+
+const proposals = computed(() => proposalsResp.value?.items ?? [])
 const actioningId = ref<string | null>(null)
 const actionMessages = ref<Record<string, { type: string; text: string }>>({})
 
@@ -171,30 +175,14 @@ function isActionable(status: string): boolean {
   return status === 'pending' || status === 'routing'
 }
 
-async function loadProposals() {
-  loading.value = true
-  pageError.value = null
-  try {
-    const { data, error: err } = await api.GET('/api/v1/feedback/proposals', { params: {} as any })
-    if (err) {
-      pageError.value = `Failed to load proposals: ${formatApiError(err)}`
-    } else if (data) {
-      proposals.value = (data as unknown as ProposalsResponse).items
-    }
-  } catch (e: unknown) {
-    pageError.value = `Failed to load proposals: ${formatApiError(e)}`
-  } finally {
-    loading.value = false
-  }
-}
-
 async function publishProposal(p: EvalProposalItem) {
   actioningId.value = p.id
   delete actionMessages.value[p.id]
   try {
     await patch(`/api/v1/feedback/${p.id}/status`, { status: 'resolved' })
     actionMessages.value[p.id] = { type: 'success', text: 'Proposal marked as published. Eval definition creation not yet implemented.' }
-    p.feedback_status = 'resolved'
+    const idx = proposals.value.findIndex(x => x.id === p.id)
+    if (idx !== -1 && proposalsResp.value) proposalsResp.value.items[idx].feedback_status = 'resolved'
     setTimeout(() => { delete actionMessages.value[p.id] }, 3000)
   } catch (e: unknown) {
     actionMessages.value[p.id] = { type: 'error', text: `Publish failed: ${formatApiError(e)}` }
@@ -209,8 +197,8 @@ async function dismissProposal(id: string) {
   try {
     await patch(`/api/v1/feedback/${id}/status`, { status: 'dismissed' })
     actionMessages.value[id] = { type: 'success', text: 'Proposal dismissed.' }
-    const prop = proposals.value.find(p => p.id === id)
-    if (prop) prop.feedback_status = 'dismissed'
+    const idx = proposals.value.findIndex(p => p.id === id)
+    if (idx !== -1 && proposalsResp.value) proposalsResp.value.items[idx].feedback_status = 'dismissed'
     setTimeout(() => { delete actionMessages.value[id] }, 3000)
   } catch (e: unknown) {
     actionMessages.value[id] = { type: 'error', text: `Dismiss failed: ${formatApiError(e)}` }
@@ -218,6 +206,4 @@ async function dismissProposal(id: string) {
     actioningId.value = null
   }
 }
-
-onMounted(() => { planStore.fetchPlan(); loadProposals() })
 </script>
