@@ -192,11 +192,13 @@ export function canSeeItem(
   user: { role: string; permissions?: string[] },
   plan: { isAtMinimumTier: (tier: string) => boolean },
 ): boolean {
-  if (item.requiredRoles && item.requiredRoles.length > 0 && !item.requiredRoles.includes(user.role)) return false
+  if (item.requiredRoles != null) {
+    if (item.requiredRoles.length === 0 || !item.requiredRoles.includes(user.role)) return false
+  }
   if (item.requiredTier && !plan.isAtMinimumTier(item.requiredTier)) return false
-  if (item.requiredPermissions && item.requiredPermissions.length > 0) {
-    if (!user.permissions || user.permissions.length === 0) return false
-    if (!item.requiredPermissions.some((p) => user.permissions.includes(p))) return false
+  if (item.requiredPermissions != null) {
+    if (item.requiredPermissions.length === 0) return false
+    if (!user.permissions || !item.requiredPermissions.some((p) => user.permissions.includes(p))) return false
   }
   return true
 }
@@ -207,5 +209,5 @@ export function getNavGroups(): NavGroup[] {
   if (_cachedGroups === null) {
     _cachedGroups = buildSidebarGroups()
   }
-  return _cachedGroups
+  return _cachedGroups.map((g) => ({ ...g, items: [...g.items] }))
 }
