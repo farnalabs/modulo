@@ -25,26 +25,32 @@ def test_fernet_backend_created_by_name():
 
 
 def test_vault_backend_created_by_name():
-    with patch("modulo.core.secrets_backend.vault._MODULE_AVAILABLE", True):
-        with patch("modulo.core.secrets_backend.vault._hvac"):
-            with patch.dict(os.environ, {"VAULT_ADDR": "http://vault:8200", "VAULT_TOKEN": "x"}):
-                backend = create_secrets_backend(fernet_key=_KEY, backend_name="vault")
-                assert isinstance(backend, VaultSecretsBackend)
+    with (
+        patch("modulo.core.secrets_backend._check_external_secrets_licensed", return_value=True),
+        patch("modulo.core.secrets_backend.vault._MODULE_AVAILABLE", True),
+        patch("modulo.core.secrets_backend.vault._hvac"),
+        patch.dict(os.environ, {"VAULT_ADDR": "http://vault:8200", "VAULT_TOKEN": "x"}),
+    ):
+        backend = create_secrets_backend(fernet_key=_KEY, backend_name="vault")
+        assert isinstance(backend, VaultSecretsBackend)
 
 
 def test_aws_backend_created_by_name():
-    with patch("modulo.core.secrets_backend.aws._MODULE_AVAILABLE", True):
-        with patch("modulo.core.secrets_backend.aws._boto3"):
-            with patch.dict(
-                os.environ,
-                {
-                    "AWS_REGION": "us-east-1",
-                    "AWS_ACCESS_KEY_ID": "x",
-                    "AWS_SECRET_ACCESS_KEY": "y",
-                },
-            ):
-                backend = create_secrets_backend(fernet_key=_KEY, backend_name="aws")
-                assert isinstance(backend, AWSSecretsManagerBackend)
+    with (
+        patch("modulo.core.secrets_backend._check_external_secrets_licensed", return_value=True),
+        patch("modulo.core.secrets_backend.aws._MODULE_AVAILABLE", True),
+        patch("modulo.core.secrets_backend.aws._boto3"),
+        patch.dict(
+            os.environ,
+            {
+                "AWS_REGION": "us-east-1",
+                "AWS_ACCESS_KEY_ID": "x",
+                "AWS_SECRET_ACCESS_KEY": "y",
+            },
+        ),
+    ):
+        backend = create_secrets_backend(fernet_key=_KEY, backend_name="aws")
+        assert isinstance(backend, AWSSecretsManagerBackend)
 
 
 def test_unknown_backend_raises_value_error():
@@ -59,44 +65,56 @@ def test_env_var_used_when_no_backend_name():
 
 
 def test_fernet_key_optional_for_vault_backend():
-    with patch("modulo.core.secrets_backend.vault._MODULE_AVAILABLE", True):
-        with patch("modulo.core.secrets_backend.vault._hvac"):
-            with patch.dict(os.environ, {"VAULT_ADDR": "http://vault:8200", "VAULT_TOKEN": "x"}):
-                backend = create_secrets_backend(fernet_key=None, backend_name="vault")
-                assert isinstance(backend, VaultSecretsBackend)
+    with (
+        patch("modulo.core.secrets_backend._check_external_secrets_licensed", return_value=True),
+        patch("modulo.core.secrets_backend.vault._MODULE_AVAILABLE", True),
+        patch("modulo.core.secrets_backend.vault._hvac"),
+        patch.dict(os.environ, {"VAULT_ADDR": "http://vault:8200", "VAULT_TOKEN": "x"}),
+    ):
+        backend = create_secrets_backend(fernet_key=None, backend_name="vault")
+        assert isinstance(backend, VaultSecretsBackend)
 
 
 def test_fernet_key_optional_for_aws_backend():
-    with patch("modulo.core.secrets_backend.aws._MODULE_AVAILABLE", True):
-        with patch("modulo.core.secrets_backend.aws._boto3"):
-            with patch.dict(
-                os.environ,
-                {
-                    "AWS_REGION": "us-east-1",
-                    "AWS_ACCESS_KEY_ID": "x",
-                    "AWS_SECRET_ACCESS_KEY": "y",
-                },
-            ):
-                backend = create_secrets_backend(fernet_key=None, backend_name="aws")
-                assert isinstance(backend, AWSSecretsManagerBackend)
+    with (
+        patch("modulo.core.secrets_backend._check_external_secrets_licensed", return_value=True),
+        patch("modulo.core.secrets_backend.aws._MODULE_AVAILABLE", True),
+        patch("modulo.core.secrets_backend.aws._boto3"),
+        patch.dict(
+            os.environ,
+            {
+                "AWS_REGION": "us-east-1",
+                "AWS_ACCESS_KEY_ID": "x",
+                "AWS_SECRET_ACCESS_KEY": "y",
+            },
+        ),
+    ):
+        backend = create_secrets_backend(fernet_key=None, backend_name="aws")
+        assert isinstance(backend, AWSSecretsManagerBackend)
 
 
 def test_backend_name_case_insensitive():
     """Factory lowercases and strips backend_name before matching."""
-    with patch("modulo.core.secrets_backend.vault._MODULE_AVAILABLE", True):
-        with patch("modulo.core.secrets_backend.vault._hvac"):
-            with patch.dict(os.environ, {"VAULT_ADDR": "http://vault:8200", "VAULT_TOKEN": "x"}):
-                backend = create_secrets_backend(fernet_key=None, backend_name="  Vault  ")
-                assert isinstance(backend, VaultSecretsBackend)
+    with (
+        patch("modulo.core.secrets_backend._check_external_secrets_licensed", return_value=True),
+        patch("modulo.core.secrets_backend.vault._MODULE_AVAILABLE", True),
+        patch("modulo.core.secrets_backend.vault._hvac"),
+        patch.dict(os.environ, {"VAULT_ADDR": "http://vault:8200", "VAULT_TOKEN": "x"}),
+    ):
+        backend = create_secrets_backend(fernet_key=None, backend_name="  Vault  ")
+        assert isinstance(backend, VaultSecretsBackend)
 
 
 def test_backend_name_whitespace_trimmed():
     """Factory strips whitespace from backend_name."""
-    with patch("modulo.core.secrets_backend.vault._MODULE_AVAILABLE", True):
-        with patch("modulo.core.secrets_backend.vault._hvac"):
-            with patch.dict(os.environ, {"VAULT_ADDR": "http://vault:8200", "VAULT_TOKEN": "x"}):
-                backend = create_secrets_backend(fernet_key=None, backend_name="  vault  ")
-                assert isinstance(backend, VaultSecretsBackend)
+    with (
+        patch("modulo.core.secrets_backend._check_external_secrets_licensed", return_value=True),
+        patch("modulo.core.secrets_backend.vault._MODULE_AVAILABLE", True),
+        patch("modulo.core.secrets_backend.vault._hvac"),
+        patch.dict(os.environ, {"VAULT_ADDR": "http://vault:8200", "VAULT_TOKEN": "x"}),
+    ):
+        backend = create_secrets_backend(fernet_key=None, backend_name="  vault  ")
+        assert isinstance(backend, VaultSecretsBackend)
 
 
 def test_fernet_key_required_when_backend_is_fernet():
