@@ -110,7 +110,7 @@ Async Linear GraphQL API connector implementing `ConnectorBase`. BDD coverage: 8
 - [ ] Linear API schema changes (field deprecation, new fields) require source code update
 - [ ] Prompt templates may use Linear-specific terminology ("issue", "team", "cycle")
 
- ## Known Gaps
+## Known Gaps
 
 - [ ] **State transitions require raw stateId**: no helper to map workflow state names to IDs
 - [ ] **No label management**: cannot create, rename, or delete labels
