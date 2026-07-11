@@ -12,6 +12,8 @@ from modulo.api.dependencies import _get_engine, get_db_session, get_plan_contex
 from modulo.api.main import app
 from modulo.auth.dependencies import get_current_user
 from modulo.auth.jwt import AuthenticatedPrincipal
+from sqlalchemy.exc import IntegrityError
+
 from modulo.db.crud.base import PageResult
 from modulo.settings import Settings, get_settings
 
@@ -166,9 +168,12 @@ class TestCreateProfile:
         resp = unauth_client.post(self.URL, json=self.PAYLOAD)
         assert resp.status_code in (401, 403)
 
-    def test_create_profile_missing_required_fields(self, client: TestClient) -> None:
+    def test_create_profile_with_defaults(self, client: TestClient) -> None:
         resp = client.post(self.URL, json={"name": "incomplete"})
-        assert resp.status_code == 422
+        assert resp.status_code == 201
+        data = resp.json()
+        assert data["name"] == "incomplete"
+        assert data["status"] == "active"
 
 
 class TestGetProfile:
@@ -231,9 +236,16 @@ class TestUpdateProfile:
         resp = unauth_client.patch(f"{self.URL}/{_PROFILE_ID}", json={"name": "x"})
         assert resp.status_code in (401, 403)
 
-    def test_update_profile_invalid_egress_policy(self, client: TestClient) -> None:
-        resp = client.patch(f"{self.URL}/{_PROFILE_ID}", json={"egress_policy": "bogus"})
-        assert resp.status_code == 422
+    def test_update_profile_invalid_network_policy(self, client: TestClient) -> None:
+        with (
+            patch("modulo.api.routes.environments.get_environment_profile") as mock_get,
+            patch("modulo.api.routes.environments.update_environment_profile") as mock_update,
+            patch("modulo.api.routes.environments.set_rls_org"),
+        ):
+            mock_update.side_effect = IntegrityError("mock", "mock", "mock")
+            resp = client.patch(f"{self.URL}/{_PROFILE_ID}", json={"network_policy": "bogus"})
+        assert resp.status_code == 409
+        assert resp.json()["detail"] == "An environment profile with this name already exists in your organisation."
 
 
 class TestDeleteProfile:
