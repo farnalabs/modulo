@@ -381,7 +381,7 @@ class TestHandlerPerEventAuth:
         # patch further down the call chain
         with patch("modulo.api.mcp_server.list_pipelines") as mock_list:
             mock_list.return_value = MagicMock(items=[], total=0, page=1, page_size=20)
-            result = await list_pipelines_tool(page=1, page_size=20)
+        result = await list_pipelines_tool(limit=20)
 
         mock_validate_auth.assert_called_once()
         mock_list.assert_called_once()
