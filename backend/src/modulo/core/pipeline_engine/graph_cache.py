@@ -65,10 +65,10 @@ def get_or_compile(
     return result
 
 
-def _get_edge_val(edge: dict[str, Any], canonical: str, stored: str) -> str:
-    value = edge.get(canonical, edge.get(stored))
+def _get_edge_val(edge: dict[str, Any], key: str) -> str:
+    value = edge.get(key)
     if value is None:
-        raise ValueError(f"graph edge missing {canonical}")
+        raise ValueError(f"graph edge missing {key}")
     return str(value)
 
 
@@ -114,7 +114,7 @@ def _make_conditional_router(
     compiled: list[tuple[Any, str]] = []
     for edge in conditional_edges:
         expr: str = edge.get("condition_expression", "")
-        target = _get_edge_val(edge, "target", "target_node_id")
+        target = _get_edge_val(edge, "target")
         compiled.append((jmespath.compile(expr), target))
 
     def _router(state: dict[str, Any]) -> str:
@@ -226,18 +226,18 @@ def build_graph_from_json(
     # Build reject-edge lookup for kick-back routing.
     reject_targets_by_source: dict[str, str] = {}
     for edge_def in edges:
-        etype = edge_def.get("type", edge_def.get("edge_type", ""))
+        etype = edge_def.get("type", "")
         if etype == "reject":
-            src = _get_edge_val(edge_def, "source", "source_node_id")
-            tgt = _get_edge_val(edge_def, "target", "target_node_id")
+            src = _get_edge_val(edge_def, "source")
+            tgt = _get_edge_val(edge_def, "target")
             reject_targets_by_source[src] = tgt
 
     # Group forwarding edges by source (skip reject).
     source_edges: dict[str, list[dict[str, Any]]] = defaultdict(list)
     for edge_def in edges:
-        if edge_def.get("type", edge_def.get("edge_type", "")) == "reject":
+        if edge_def.get("type", "") == "reject":
             continue
-        source = _get_edge_val(edge_def, "source", "source_node_id")
+        source = _get_edge_val(edge_def, "source")
         source_edges[source].append(edge_def)
 
     target_ids: set[str] = set()
@@ -251,7 +251,7 @@ def build_graph_from_json(
             # All outgoing edges from this source are handled by the router.
             normal_targets: list[str] = []
             for edge_def in normal:
-                tgt = _get_edge_val(edge_def, "target", "target_node_id")
+                tgt = _get_edge_val(edge_def, "target")
                 normal_targets.append(tgt)
                 target_ids.add(tgt)
 
@@ -266,7 +266,7 @@ def build_graph_from_json(
             graph.add_conditional_edges(source, router)
         else:
             for edge_def in normal:
-                target = _get_edge_val(edge_def, "target", "target_node_id")
+                target = _get_edge_val(edge_def, "target")
                 hitl_config = edge_def.get("hitl_gate_config")
                 if hitl_config:
                     gate_id = _make_gate_id(source, target)
