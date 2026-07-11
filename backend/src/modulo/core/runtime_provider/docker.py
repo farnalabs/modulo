@@ -230,7 +230,9 @@ class DockerRuntimeProvider(RuntimeProvider):
         return container_id
 
     async def close(self) -> None:
-        """Close the underlying Docker client connection."""
+        """Close the underlying Docker client connection and clean up workspaces."""
+        for provider_ref in list(self._workspaces.keys()):
+            await self.destroy_workspace(provider_ref)
         if self._client is not None:
             await self._client.close()
             self._client = None
