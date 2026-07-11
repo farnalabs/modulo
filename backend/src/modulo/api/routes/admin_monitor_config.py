@@ -2,7 +2,7 @@ import logging
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, status
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator
 from sqlalchemy.exc import ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -24,6 +24,8 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "grafana_faro": None,
 }
 
+_KNOWN_BACKENDS = frozenset({"builtin", "sentry", "datadog_rum", "grafana_faro"})
+
 
 def _require_admin(principal: AuthenticatedPrincipal) -> None:
     if principal.org_role != "admin":
@@ -39,6 +41,16 @@ class MonitorConfigBase(BaseModel):
     datadog_rum: dict[str, Any] | None = None
     grafana_faro: dict[str, Any] | None = None
 
+    @field_validator("backends")
+    @classmethod
+    def validate_backend_names(cls, v: list[str]) -> list[str]:
+        if not v:
+            raise ValueError("At least one backend must be specified")
+        unknown = [b for b in v if b not in _KNOWN_BACKENDS]
+        if unknown:
+            raise ValueError(f"Unknown backend(s): {', '.join(unknown)}. Known: {', '.join(sorted(_KNOWN_BACKENDS))}")
+        return v
+
 
 class MonitorConfigResponse(MonitorConfigBase):
     pass
@@ -49,9 +61,12 @@ class MonitorConfigUpdate(MonitorConfigBase):
 
 
 def _merge(entry: Any | None) -> dict[str, Any]:
-    if entry is None or entry.value is None:
+    if entry is None:
         return dict(DEFAULT_CONFIG)
-    return {**DEFAULT_CONFIG, **entry.value}
+    value = entry.value
+    if value is None or not isinstance(value, dict):
+        return dict(DEFAULT_CONFIG)
+    return {**DEFAULT_CONFIG, **value}
 
 
 @router.get("", response_model=MonitorConfigResponse)
@@ -66,12 +81,12 @@ async def get_monitor_config(
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
-        )
+        ) from None
     except SQLAlchemyError:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database error while fetching monitor config.",
-        )
+        ) from None
     except HTTPException:
         raise
     except Exception:
@@ -101,12 +116,12 @@ async def set_monitor_config(
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
-        )
+        ) from None
     except SQLAlchemyError:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database error while setting monitor config.",
-        )
+        ) from None
     except HTTPException:
         raise
     except Exception:
