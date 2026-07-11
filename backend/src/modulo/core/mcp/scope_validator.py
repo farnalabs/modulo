@@ -7,6 +7,7 @@ Dual-layer enforcement:
    business logic layer, preventing bypass if the middleware has a bug.
 """
 
+import types
 from logging import getLogger
 
 from modulo.auth.team_rbac import ORG_ROLE_HIERARCHY, org_role_level
@@ -29,7 +30,7 @@ class MCPConfigurationError(Exception):
     """Raised when a scope-requirement configuration error is detected."""
 
 
-TOOL_SCOPE_REQUIREMENTS: dict[str, str] = {
+_TOOL_SCOPE_REQUIREMENTS: dict[str, str] = {
     "trigger_pipeline": "runner",
     "cancel_run": "runner",
     "review_hitl": "operator",
@@ -49,8 +50,10 @@ TOOL_SCOPE_REQUIREMENTS: dict[str, str] = {
     "list_triggers": "runner",
 }
 
+TOOL_SCOPE_REQUIREMENTS: types.MappingProxyType[str, str] = types.MappingProxyType(_TOOL_SCOPE_REQUIREMENTS)
+
 _VALID_ROLES = frozenset(ORG_ROLE_HIERARCHY)
-for tool, role in TOOL_SCOPE_REQUIREMENTS.items():
+for tool, role in _TOOL_SCOPE_REQUIREMENTS.items():
     if role not in _VALID_ROLES:
         raise MCPConfigurationError(
             f"Misconfigured scope requirement for '{tool}': role '{role}' is not in the role hierarchy",
@@ -96,7 +99,8 @@ def check_tool_scope(
         if required is None:
             return
 
-    current_level = org_role_level(current_role)
+    current_role_normalized = current_role.strip().lower()
+    current_level = org_role_level(current_role_normalized)
     required_level = ORG_ROLE_HIERARCHY[required]
 
     if current_level < 0:
