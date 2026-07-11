@@ -4,11 +4,9 @@ import logging
 import uuid
 from datetime import datetime
 
-logger = logging.getLogger(__name__)
-
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, Field
-from sqlalchemy.exc import ProgrammingError, SQLAlchemyError
+from sqlalchemy.exc import IntegrityError, ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.api.dependencies import get_db_session
@@ -22,6 +20,8 @@ from modulo.db.crud.node_category import (
     update_node_category,
 )
 from modulo.db.rls import set_rls_org, set_rls_user_context
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/v1/node-categories", tags=["node-categories"])
 
@@ -79,11 +79,19 @@ async def list_node_categories_endpoint(
                 session, org_id=principal.organisation_id, page=page, page_size=page_size
             )
     except ProgrammingError:
+        logger.warning("node_categories.list.programming_error — missing DB table?")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
         ) from None
+    except IntegrityError:
+        logger.warning("node_categories.list.integrity_error")
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="A node category with this name already exists.",
+        ) from None
     except SQLAlchemyError:
+        logger.warning("node_categories.list.database_error", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database operation failed. Please try again later.",
@@ -125,11 +133,19 @@ async def create_node_category_endpoint(
                 sort_order=req.sort_order,
             )
     except ProgrammingError:
+        logger.warning("node_categories.create.programming_error — missing DB table?")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
         ) from None
+    except IntegrityError:
+        logger.warning("node_categories.create.integrity_error — duplicate name")
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="A node category with this name already exists.",
+        ) from None
     except SQLAlchemyError:
+        logger.warning("node_categories.create.database_error", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database operation failed. Please try again later.",
@@ -157,11 +173,19 @@ async def get_node_category_endpoint(
             await set_rls_user_context(session, principal.account_id, principal.org_role)
             category = await get_node_category(session, category_id, org_id=principal.organisation_id)
     except ProgrammingError:
+        logger.warning("node_categories.get.programming_error — missing DB table?")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
         ) from None
+    except IntegrityError:
+        logger.warning("node_categories.get.integrity_error")
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="A node category with this name already exists.",
+        ) from None
     except SQLAlchemyError:
+        logger.warning("node_categories.get.database_error", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database operation failed. Please try again later.",
@@ -193,11 +217,19 @@ async def update_node_category_endpoint(
             await set_rls_user_context(session, principal.account_id, principal.org_role)
             category = await update_node_category(session, category_id, updates, org_id=principal.organisation_id)
     except ProgrammingError:
+        logger.warning("node_categories.update.programming_error — missing DB table?")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
         ) from None
+    except IntegrityError:
+        logger.warning("node_categories.update.integrity_error — duplicate name")
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="A node category with this name already exists.",
+        ) from None
     except SQLAlchemyError:
+        logger.warning("node_categories.update.database_error", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database operation failed. Please try again later.",
@@ -227,11 +259,19 @@ async def delete_node_category_endpoint(
             await set_rls_user_context(session, principal.account_id, principal.org_role)
             deleted = await delete_node_category(session, category_id, org_id=principal.organisation_id)
     except ProgrammingError:
+        logger.warning("node_categories.delete.programming_error — missing DB table?")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
         ) from None
+    except IntegrityError:
+        logger.warning("node_categories.delete.integrity_error")
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Cannot delete: the category is referenced by one or more nodes.",
+        ) from None
     except SQLAlchemyError:
+        logger.warning("node_categories.delete.database_error", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database operation failed. Please try again later.",
