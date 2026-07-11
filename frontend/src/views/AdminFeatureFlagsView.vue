@@ -75,12 +75,12 @@
     </div>
 
     <div>
-      <div class="relative mb-4">
-        <Input
-          v-model="searchQuery"
-          placeholder="Search flags by name or description..." data-testid="search-input"
-        />
-      </div>
+      <FilterBar
+        :search="{ placeholder: 'Search flags by name or description...' }"
+        :search-value="searchQuery"
+        data-testid="search-input"
+        @update:search="searchQuery = $event; currentPage = 1"
+      />
 
       <LoadingSpinner v-if="loading" />
       <ErrorAlert v-else-if="error" :message="error" :on-retry="loadFlags" />
@@ -222,13 +222,13 @@
 
 <script setup lang="ts">
 import PageHeader from '../components/shared/PageHeader.vue'
+import FilterBar from '../components/shared/FilterBar.vue'
 import { ref, computed, onMounted, watch } from 'vue'
 import { api } from '../lib/api/client'
 import { usePlanStore } from '../stores/planStore'
 import { formatApiError } from '../lib/api/formatError'
 import LoadingSpinner from '../components/shared/LoadingSpinner.vue'
 import ErrorAlert from '../components/shared/ErrorAlert.vue'
-import { Input } from '../components/ui/input'
 import { Button } from '../components/ui/button'
 import {
   Dialog,

@@ -5,81 +5,36 @@
   <div class="page-wide">
     <PageHeader :title="$t('views.AdminErrorsView.error_dashboard')" :subtitle="$t('views.AdminErrorsView.monitor_and_manage_errors_across_your_organisation')" />
 
-    <div class="card p-4">
-      <div class="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
-        <div>
-          <label class="mb-1 block text-xs font-medium text-muted-foreground">Level</label>
-          <select
-            v-model="filterLevel"
-            aria-label="Level"
-            class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring"
-          >
-            <option value="">{{ $t('views.AdminErrorsView.all_levels') }}</option>
-            <option value="error">Error</option>
-            <option value="warning">Warning</option>
-            <option value="critical">Critical</option>
-          </select>
-        </div>
-        <div>
-          <label class="mb-1 block text-xs font-medium text-muted-foreground">Status</label>
-          <select
-            v-model="filterStatus"
-            aria-label="Status"
-            class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring"
-          >
-            <option value="">{{ $t('views.AdminErrorsView.all_statuses') }}</option>
-            <option value="new">New</option>
-            <option value="acknowledged">Acknowledged</option>
-            <option value="resolved">Resolved</option>
-            <option value="archived">Archived</option>
-          </select>
-        </div>
-        <div>
-          <label class="mb-1 block text-xs font-medium text-muted-foreground">Source</label>
-          <select
-            v-model="filterSource"
-            aria-label="Source"
-            class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring"
-          >
-            <option value="">{{ $t('views.AdminErrorsView.all_sources') }}</option>
-            <option value="backend">Backend</option>
-            <option value="frontend">Frontend</option>
-            <option value="celery">Celery</option>
-          </select>
-        </div>
-        <div>
-          <label class="mb-1 block text-xs font-medium text-muted-foreground">Environment</label>
-          <input
-            v-model="filterEnvironment"
-            type="text"
-            :placeholder="$t('views.AdminErrorsView.eg_production')"
-            class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring"
-          />
-        </div>
-      </div>
-      <div class="mt-3 flex items-center gap-2">
-        <div class="flex-1">
-          <input
-            v-model="filterSearch"
-            type="text"
-            :placeholder="$t('views.AdminErrorsView.search_error_messages')"
-            class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring"
-          />
-        </div>
-        <Button
-          variant="default"
-          @click="applyFilters"
-        >
-          Apply Filters
-        </Button>
-        <button
-          class="rounded-lg border border-input bg-background px-4 py-2 text-sm font-medium hover:bg-accent"
-          @click="resetFilters"
-        >
-          Reset
-        </button>
-      </div>
-    </div>
+    <FilterBar
+      :search="{ placeholder: $t('views.AdminErrorsView.search_error_messages') }"
+      :search-value="filterSearch"
+      :filters="[
+        { key: 'level', label: 'Level', options: [
+          { value: 'error', label: 'Error' },
+          { value: 'warning', label: 'Warning' },
+          { value: 'critical', label: 'Critical' },
+        ]},
+        { key: 'status', label: 'Status', options: [
+          { value: 'new', label: 'New' },
+          { value: 'acknowledged', label: 'Acknowledged' },
+          { value: 'resolved', label: 'Resolved' },
+          { value: 'archived', label: 'Archived' },
+        ]},
+        { key: 'source', label: 'Source', options: [
+          { value: 'backend', label: 'Backend' },
+          { value: 'frontend', label: 'Frontend' },
+          { value: 'celery', label: 'Celery' },
+        ]},
+      ]"
+      :filter-values="{ level: filterLevel, status: filterStatus, source: filterSource }"
+      @update:search="filterSearch = $event"
+      @update:filter="handleFilterUpdate"
+    >
+      <template #after>
+        <Button variant="default" @click="applyFilters">Apply Filters</Button>
+        <button class="rounded-lg border border-input bg-background px-4 py-2 text-sm font-medium hover:bg-accent" @click="resetFilters">Reset</button>
+      </template>
+    </FilterBar>
 
     <LoadingSpinner v-if="loading" />
 
@@ -179,6 +134,7 @@
 
 <script setup lang="ts">
 import PageHeader from '../components/shared/PageHeader.vue'
+import FilterBar from '../components/shared/FilterBar.vue'
 import { ref, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { fetchErrorGroups, type ErrorGroupSummary, type FetchErrorGroupsParams } from '../lib/api/errors'
@@ -210,6 +166,12 @@ const filterStatus = ref('')
 const filterSource = ref('')
 const filterEnvironment = ref('')
 const filterSearch = ref('')
+
+function handleFilterUpdate(key: string, value: string) {
+  if (key === 'level') filterLevel.value = value
+  else if (key === 'status') filterStatus.value = value
+  else if (key === 'source') filterSource.value = value
+}
 
 function buildParams(offs?: number): FetchErrorGroupsParams {
   const params: FetchErrorGroupsParams = { limit: limit.value }

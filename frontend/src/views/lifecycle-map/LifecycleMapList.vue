@@ -3,28 +3,22 @@
     <header class="bg-card border-b border-border px-6 py-4">
       <div class="mx-auto flex items-center justify-between gap-3 max-w-6xl">
         <PageHeader title="Lifecycle Maps" />
-        <div class="flex items-center gap-3">
-          <div class="relative">
-            <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground pointer-events-none"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
-            <input
-              v-model="search"
-              type="text"
-              placeholder="Search maps..."
-              class="pl-9 pr-3 py-1.5 border border-input bg-background rounded-lg text-sm w-64"
-              @input="page = 1"
-              data-testid="lifecycle-map-list-search"
-            />
-          </div>
-          <select
-            v-model="ownerFilter"
-            class="rounded-lg border border-input bg-background px-3 py-1.5 text-sm"
-            data-testid="lifecycle-map-list-owner-filter"
-          >
-            <option value="">All teams</option>
-            <option v-for="owner in uniqueOwners" :key="owner" :value="owner">
-              {{ owner }}
-            </option>
-          </select>
+        <FilterBar
+          :search="{ placeholder: 'Search maps...' }"
+          :search-value="search"
+          @update:search="search = $event; page = 1"
+        >
+          <template #after>
+            <select
+              v-model="ownerFilter"
+              class="rounded-lg border border-input bg-background px-3 py-1.5 text-sm"
+              data-testid="lifecycle-map-list-owner-filter"
+            >
+              <option value="">All teams</option>
+              <option v-for="owner in uniqueOwners" :key="owner" :value="owner">{{ owner }}</option>
+            </select>
+          </template>
+        </FilterBar>
           <Button
             variant="default"
             as="router-link"
@@ -143,6 +137,7 @@
 import { ref, computed, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import PageHeader from '../../components/shared/PageHeader.vue'
+import FilterBar from '../../components/shared/FilterBar.vue'
 import { useLifecycleMapsStore } from '../../stores/lifecycleMaps'
 import ErrorAlert from '../../components/shared/ErrorAlert.vue'
 import EmptyState from '../../components/shared/EmptyState.vue'

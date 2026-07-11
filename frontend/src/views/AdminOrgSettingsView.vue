@@ -9,8 +9,7 @@
 
     <template v-else>
       <!-- Org Info -->
-      <div class="card p-4">
-        <h2 class="mb-3 text-base font-semibold">Organisation Info</h2>
+      <SectionCard title="Organisation Info">
         <div class="grid grid-cols-1 gap-4 sm:grid-cols-3">
           <div>
             <span class="text-xs font-medium text-muted-foreground">Name</span>
@@ -41,14 +40,10 @@
             <p class="mt-0.5 font-mono text-xs text-muted-foreground">{{ orgInfo.slug || shortId(orgInfo.id) }}</p>
           </div>
         </div>
-      </div>
+      </SectionCard>
 
       <!-- Data Export -->
-      <div class="card p-4">
-        <h2 class="mb-3 text-base font-semibold">Data Export</h2>
-        <p class="mb-4 text-sm text-muted-foreground">
-          Export all organisation data including runs, pipelines, schemas, connectors, and settings.
-        </p>
+      <SectionCard title="Data Export" description="Export all organisation data including runs, pipelines, schemas, connectors, and settings.">
 
         <div v-if="exportStatus === 'idle'" class="flex items-center gap-3">
           <Button
@@ -93,14 +88,10 @@
             Export again
           </button>
         </div>
-      </div>
+      </SectionCard>
 
       <!-- Delete Organization -->
-      <div class="card border-destructive/30 p-4">
-        <h2 class="mb-3 text-base font-semibold text-destructive">Delete Organisation</h2>
-        <p class="mb-4 text-sm text-destructive/80">
-          Permanently delete this organisation and all associated data. This action cannot be undone.
-        </p>
+      <SectionCard title="Delete Organisation" description="Permanently delete this organisation and all associated data. This action cannot be undone." class="border-destructive/30" title-class="text-destructive" description-class="text-destructive/80">
         <Button
           variant="destructive"
           class="h-8 px-2.5"
@@ -108,7 +99,7 @@
         >
           Delete Organisation
         </Button>
-      </div>
+      </SectionCard>
     </template>
 
     <!-- Delete Confirmation Dialog -->
@@ -163,6 +154,7 @@
 
 <script setup lang="ts">
 import PageHeader from '../components/shared/PageHeader.vue'
+import SectionCard from '../components/shared/SectionCard.vue'
 import { ref, reactive, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { Button } from '@/components/ui/button'

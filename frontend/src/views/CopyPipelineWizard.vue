@@ -36,16 +36,11 @@
           <h2 class="text-lg font-medium text-foreground mb-1">{{ $t('views.CopyPipelineWizard.select_source_pipeline') }}</h2>
           <p class="text-sm text-muted-foreground mb-4">{{ $t('views.CopyPipelineWizard.choose_the_pipeline_you_want_to_copy_and_adapt') }}</p>
 
-          <div class="relative mb-4">
-            <input
-              v-model="searchQuery"
-              type="text"
-              :placeholder="$t('views.CopyPipelineWizard.search_pipelines_by_name')"
-              class="w-full pl-9 pr-3 py-2 border border-input bg-background rounded-lg text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-              data-testid="copy-wizard-search"
-            />
-            <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
-          </div>
+          <FilterBar
+            :search="{ placeholder: $t('views.CopyPipelineWizard.search_pipelines_by_name') }"
+            :search-value="searchQuery"
+            @update:search="searchQuery = $event"
+          />
 
           <div class="flex gap-2 mb-4">
             <button
@@ -376,6 +371,7 @@
 import { ref, computed, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import PageHeader from '../components/shared/PageHeader.vue'
+import FilterBar from '../components/shared/FilterBar.vue'
 import { Button } from '@/components/ui/button'
 import { useApi } from '../composables/useApi'
 import BackLink from '../components/BackLink.vue'

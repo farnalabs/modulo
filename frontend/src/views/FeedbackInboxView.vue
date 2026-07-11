@@ -2,67 +2,46 @@
   <div class="page-wide">
     <PageHeader :title="$t('views.FeedbackInboxView.feedback_inbox')" :subtitle="$t('views.FeedbackInboxView.review_and_resolve_pending_feedback_from_pipeline_evaluation')" data-testid="feedback-inbox-title" />
 
-    <div class="flex flex-wrap items-center gap-4">
-      <div class="flex items-center gap-2">
-        <label class="text-sm font-medium text-muted-foreground">{{ $t('views.FeedbackInboxView.status') }}</label>
-        <select
-          v-model="statusFilter"
-          data-testid="feedback-inbox-status-select"
-          aria-label="Status"
-          class="rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-          @change="loadFeedback"
-        >
-          <option value="">{{ $t('views.FeedbackInboxView.all') }}</option>
-          <option value="pending">{{ $t('views.FeedbackInboxView.pending') }}</option>
-          <option value="routing">{{ $t('views.FeedbackInboxView.routing') }}</option>
-          <option value="correcting">{{ $t('views.FeedbackInboxView.correcting') }}</option>
-          <option value="resolved">{{ $t('views.FeedbackInboxView.resolved') }}</option>
-          <option value="escalated">{{ $t('views.FeedbackInboxView.escalated') }}</option>
-        </select>
-      </div>
-
-      <div class="flex items-center gap-2">
-        <label class="text-sm font-medium text-muted-foreground">{{ $t('views.FeedbackInboxView.pipeline') }}</label>
-        <select
-          v-model="pipelineFilter"
-          data-testid="feedback-inbox-pipeline-select"
-          aria-label="Pipeline"
-          class="rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-          @change="loadFeedback"
-        >
-          <option value="">{{ $t('views.FeedbackInboxView.all_pipelines') }}</option>
-          <option
-            v-for="p in pipelines"
-            :key="p.id"
-            :value="p.id"
+    <FilterBar
+      :filters="[{ key: 'status', label: $t('views.FeedbackInboxView.all'), options: [
+        { value: 'pending', label: $t('views.FeedbackInboxView.pending') },
+        { value: 'routing', label: $t('views.FeedbackInboxView.routing') },
+        { value: 'correcting', label: $t('views.FeedbackInboxView.correcting') },
+        { value: 'resolved', label: $t('views.FeedbackInboxView.resolved') },
+        { value: 'escalated', label: $t('views.FeedbackInboxView.escalated') },
+      ]}]"
+      :filter-values="{ status: statusFilter }"
+      @update:filter="(key, value) => { if (key === 'status') { statusFilter = value; loadFeedback() } }"
+    >
+      <template #after>
+        <div class="flex items-center gap-2">
+          <select
+            v-model="pipelineFilter"
+            data-testid="feedback-inbox-pipeline-select"
+            aria-label="Pipeline"
+            class="rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            @change="loadFeedback"
           >
-            {{ p.name }}
-          </option>
-        </select>
-      </div>
-
-      <div class="flex items-center gap-2">
-        <label class="text-sm font-medium text-muted-foreground">{{ $t('views.FeedbackInboxView.from') }}</label>
-        <input
-          v-model="dateFrom"
-          type="date"
-          data-testid="feedback-inbox-date-from"
-          class="rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-          @change="loadFeedback"
-        />
-      </div>
-
-      <div class="flex items-center gap-2">
-        <label class="text-sm font-medium text-muted-foreground">{{ $t('views.FeedbackInboxView.to') }}</label>
-        <input
-          v-model="dateTo"
-          type="date"
-          data-testid="feedback-inbox-date-to"
-          class="rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-          @change="loadFeedback"
-        />
-      </div>
-    </div>
+            <option value="">{{ $t('views.FeedbackInboxView.all_pipelines') }}</option>
+            <option v-for="p in pipelines" :key="p.id" :value="p.id">{{ p.name }}</option>
+          </select>
+          <input
+            v-model="dateFrom"
+            type="date"
+            data-testid="feedback-inbox-date-from"
+            class="rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            @change="loadFeedback"
+          />
+          <input
+            v-model="dateTo"
+            type="date"
+            data-testid="feedback-inbox-date-to"
+            class="rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            @change="loadFeedback"
+          />
+        </div>
+      </template>
+    </FilterBar>
 
     <ErrorAlert v-if="pipelinesError" :message="pipelinesError" :on-retry="loadPipelines" />
 
@@ -241,6 +220,7 @@ import type { components } from '../lib/api/client'
 import { formatApiError } from '../lib/api/formatError'
 import LoadingSpinner from '../components/shared/LoadingSpinner.vue'
 import PageHeader from '../components/shared/PageHeader.vue'
+import FilterBar from '../components/shared/FilterBar.vue'
 import { Button } from '@/components/ui/button'
 import ErrorAlert from '../components/shared/ErrorAlert.vue'
 import {

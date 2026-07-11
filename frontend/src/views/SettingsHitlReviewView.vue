@@ -1,73 +1,57 @@
 <template>
   <div class="page-wide">
   <PageHeader title="HITL Review" subtitle="Review and respond to pending human-in-the-loop gates" />
-  <div class="flex flex-wrap items-center gap-4">
-    <div class="flex items-center gap-2">
-      <label class="text-sm font-medium text-muted-foreground">Status</label>
-      <select
-        v-model="statusFilter"
-        data-testid="hitl-review-status-select"
-        aria-label="Status"
-        class="rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-        @change="loadGates"
-      >
-        <option value="">All</option>
-        <option value="pending">Pending</option>
-        <option value="claimed">Claimed</option>
-        <option value="approved">Approved</option>
-        <option value="rejected">Rejected</option>
-      </select>
-    </div>
-    <div class="flex items-center gap-2">
-      <label class="text-sm font-medium text-muted-foreground">Pipeline</label>
-      <select
-        v-model="pipelineFilter"
-        data-testid="hitl-review-pipeline-select"
-        aria-label="Pipeline"
-        class="rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-        @change="loadGates"
-      >
-        <option value="">All Pipelines</option>
-        <option
-          v-for="p in pipelines"
-          :key="p.id"
-          :value="p.id"
+  <FilterBar
+    :search="{ placeholder: 'Search pipeline or node name...' }"
+    :search-value="searchQuery"
+    :filters="[
+      { key: 'status', label: 'Status', options: [
+        { value: 'pending', label: 'Pending' },
+        { value: 'claimed', label: 'Claimed' },
+        { value: 'approved', label: 'Approved' },
+        { value: 'rejected', label: 'Rejected' },
+      ]},
+    ]"
+    :filter-values="{ status: statusFilter }"
+    @update:search="searchQuery = $event; loadGates()"
+    @update:filter="(key, value) => { if (key === 'status') { statusFilter = value; loadGates() } }"
+  >
+    <template #after>
+      <div class="flex items-center gap-2">
+        <select
+          v-model="pipelineFilter"
+          data-testid="hitl-review-pipeline-select"
+          aria-label="Pipeline"
+          class="rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+          @change="loadGates"
         >
-          {{ p.name }}
-        </option>
-      </select>
-    </div>
-    <div class="flex-1 min-w-[200px]">
-      <input
-        v-model="searchQuery"
-        type="text"
-        placeholder="Search pipeline or node name..."
-        data-testid="hitl-review-search"
-        class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-        @input="loadGates"
-      />
-    </div>
-    <div class="flex items-center gap-2">
-      <label class="text-sm font-medium text-muted-foreground">From</label>
-      <input
-        v-model="dateFrom"
-        type="date"
-        data-testid="hitl-review-date-from"
-        class="rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-        @change="loadGates"
-      />
-    </div>
-    <div class="flex items-center gap-2">
-      <label class="text-sm font-medium text-muted-foreground">To</label>
-      <input
-        v-model="dateTo"
-        type="date"
-        data-testid="hitl-review-date-to"
-        class="rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-        @change="loadGates"
-      />
-    </div>
-    <div class="flex items-center gap-1 text-xs text-muted-foreground">
+          <option value="">All Pipelines</option>
+          <option
+            v-for="p in pipelines"
+            :key="p.id"
+            :value="p.id"
+          >
+            {{ p.name }}
+          </option>
+        </select>
+        <input
+          v-model="dateFrom"
+          type="date"
+          data-testid="hitl-review-date-from"
+          class="rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+          @change="loadGates"
+        />
+        <input
+          v-model="dateTo"
+          type="date"
+          data-testid="hitl-review-date-to"
+          class="rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+          @change="loadGates"
+        />
+      </div>
+    </template>
+  </FilterBar>
+  <div class="flex items-center gap-1 text-xs text-muted-foreground">
       <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
       Auto-refresh: {{ refreshCountdown }}s
     </div>
@@ -251,6 +235,7 @@ import { ref, computed, onMounted, onUnmounted } from 'vue'
 import { api } from '../lib/api/client'
 import { formatApiError, type ProblemDetail } from '../lib/api/formatError'
 import PageHeader from '../components/shared/PageHeader.vue'
+import FilterBar from '../components/shared/FilterBar.vue'
 import LoadingSpinner from '../components/shared/LoadingSpinner.vue'
 import ErrorAlert from '../components/shared/ErrorAlert.vue'
 import { usePlanStore } from '../stores/planStore'

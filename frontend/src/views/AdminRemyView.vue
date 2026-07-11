@@ -1,4 +1,4 @@
-﻿<template>
+<template>
   <div data-theme="agent" class="page-wide">
     <PageHeader :title="$t('views.AdminRemyView.remy_configuration')" :subtitle="$t('views.AdminRemyView.configure_remy_ai_assistant_behaviour_access_and_skills')" />
 
@@ -9,9 +9,11 @@
     <template v-else>
       <TooltipProvider>
       <!-- Configured Providers -->
-      <div class="card p-4" data-testid="remy-providers">
-        <h2 class="mb-3 text-base font-semibold">{{ $t('views.AdminRemyView.configured_providers') }}</h2>
-        <p class="mb-4 text-sm text-muted-foreground">{{ $t('views.AdminRemyView.api_keys_configured_for_each_llm_provider_remy_will_use_thes') }}</p>
+      <SectionCard
+        :title="$t('views.AdminRemyView.configured_providers')"
+        :description="$t('views.AdminRemyView.api_keys_configured_for_each_llm_provider_remy_will_use_thes')"
+        data-testid="remy-providers"
+      >
 
         <div v-if="providersLoading" class="py-4 text-center text-sm text-muted-foreground">
           Loading provider status...
@@ -31,7 +33,7 @@
                   class="flex h-10 w-10 items-center justify-center rounded-full text-lg font-bold"
                   :class="p.configured ? 'bg-success/20 text-success' : 'bg-muted text-muted-foreground'"
                 >
-                  {{ p.configured ? '✓' : '?' }}
+                  {{ p.configured ? '?' : '?' }}
                 </span>
                 <span class="text-sm font-medium">{{ p.label }}</span>
                 <span class="text-xs" :class="p.configured ? 'text-success' : 'text-muted-foreground'">
@@ -55,12 +57,14 @@
             </TooltipContent>
           </Tooltip>
         </div>
-      </div>
+      </SectionCard>
 
       <!-- Custom Backends -->
-      <div class="card p-4" data-testid="remy-custom-backends">
-        <h2 class="mb-3 text-base font-semibold">{{ $t('views.AdminRemyView.custom_backends') }}</h2>
-        <p class="mb-4 text-sm text-muted-foreground">{{ $t('views.AdminRemyView.custom_backends_description') }}</p>
+      <SectionCard
+        :title="$t('views.AdminRemyView.custom_backends')"
+        :description="$t('views.AdminRemyView.custom_backends_description')"
+        data-testid="remy-custom-backends"
+      >
 
         <div v-if="providersLoading" class="py-4 text-center text-sm text-muted-foreground">
           Loading...
@@ -77,7 +81,7 @@
                 class="flex h-8 w-8 items-center justify-center rounded-full text-sm font-bold"
                 :class="p.configured ? 'bg-success/20 text-success' : 'bg-muted text-muted-foreground'"
               >
-                {{ p.configured ? '✓' : '?' }}
+                {{ p.configured ? '?' : '?' }}
               </span>
               <span class="text-sm font-medium">{{ p.label }}</span>
             </div>
@@ -90,16 +94,17 @@
           </div>
           <div class="mt-3 text-xs text-muted-foreground">
             <router-link :to="{ name: 'admin-model-backends' }" class="underline hover:text-foreground">
-              Manage all backends in Model Backends →
+              Manage all backends in Model Backends ?
             </router-link>
           </div>
         </div>
-      </div>
+      </SectionCard>
 
       <!-- Access List -->
-      <div class="card p-4">
-        <h2 class="mb-3 text-base font-semibold">{{ $t('views.AdminRemyView.access_list') }}</h2>
-        <p class="mb-4 text-sm text-muted-foreground">{{ $t('views.AdminRemyView.control_who_can_use_remy_within_the_organisation') }}</p>
+      <SectionCard
+        :title="$t('views.AdminRemyView.access_list')"
+        :description="$t('views.AdminRemyView.control_who_can_use_remy_within_the_organisation')"
+      >
 
         <div class="space-y-6">
           <!-- Users -->
@@ -157,7 +162,7 @@
                   </label>
                 </TooltipTrigger>
                 <TooltipContent side="top" class="max-w-xs">
-                  <p>{{ role === 'admin' ? 'Full access to all settings and Remy configuration.' : role === 'operator' ? 'Can create and manage pipelines, use Remy.' : role === 'runner' ? 'Can execute pipeline runs, use Remy.' : 'Read-only access — can view but not edit, use Remy.' }}</p>
+                  <p>{{ role === 'admin' ? 'Full access to all settings and Remy configuration.' : role === 'operator' ? 'Can create and manage pipelines, use Remy.' : role === 'runner' ? 'Can execute pipeline runs, use Remy.' : 'Read-only access � can view but not edit, use Remy.' }}</p>
                 </TooltipContent>
               </Tooltip>
             </div>
@@ -183,10 +188,10 @@
       </div>
 
       <!-- Default Model Configuration -->
-      <div class="card p-4">
-        <h2 class="mb-3 text-base font-semibold">{{ $t('views.AdminRemyView.default_model_configuration') }}</h2>
-        <p class="mb-4 text-sm text-muted-foreground">{{ $t('views.AdminRemyView.set_the_default_model_and_allowed_providers_for_remy') }}</p>
-
+      <SectionCard
+        :title="$t('views.AdminRemyView.default_model_configuration')"
+        :description="$t('views.AdminRemyView.set_the_default_model_and_allowed_providers_for_remy')"
+      >
         <div class="space-y-4">
           <div>
             <label class="mb-1 block text-sm font-medium">{{ $t('views.AdminRemyView.default_provider') }}</label>
@@ -263,13 +268,13 @@
               </TooltipContent>
             </Tooltip>
         </div>
-      </div>
+      </SectionCard>
 
       <!-- System Prompt -->
-      <div class="card p-4">
-        <h2 class="mb-3 text-base font-semibold">{{ $t('views.AdminRemyView.system_prompt') }}</h2>
-        <p class="mb-4 text-sm text-muted-foreground">{{ $t('views.AdminRemyView.base_system_prompt_that_guides_remys_behaviour') }}</p>
-
+      <SectionCard
+        :title="$t('views.AdminRemyView.system_prompt')"
+        :description="$t('views.AdminRemyView.base_system_prompt_that_guides_remys_behaviour')"
+      >
         <div class="space-y-4">
           <div>
             <textarea
@@ -297,12 +302,13 @@
               </TooltipContent>
             </Tooltip>
         </div>
-      </div>
+      </SectionCard>
 
       <!-- Additional Guidance -->
-      <div class="card p-4">
-        <h2 class="mb-3 text-base font-semibold">{{ $t('views.AdminRemyView.additional_guidance') }}</h2>
-        <p class="mb-4 text-sm text-muted-foreground">{{ $t('views.AdminRemyView.extra_instructions_to_append_to_the_system_prompt') }}</p>
+      <SectionCard
+        :title="$t('views.AdminRemyView.additional_guidance')"
+        :description="$t('views.AdminRemyView.extra_instructions_to_append_to_the_system_prompt')"
+      >
 
         <div class="space-y-4">
           <div>
@@ -331,20 +337,17 @@
               </TooltipContent>
             </Tooltip>
         </div>
-      </div>
+      </SectionCard>
 
       <!-- Tool Permissions -->
-      <div class="card p-4">
-        <h2 class="mb-3 text-base font-semibold">Tool Permissions</h2>
-        <p class="mb-4 text-sm text-muted-foreground">Control which UI actions Remy can perform and whether approval is required.</p>
-
+      <SectionCard title="Tool Permissions" description="Control which UI actions Remy can perform and whether approval is required.">
         <div class="mb-6">
           <label class="mb-1 block text-sm font-medium">Permission Mode</label>
           <select v-model="toolPermMode" aria-label="Permission Mode" class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm" @change="applyModePreset">
-            <option value="safe">Safe — read ops auto-allowed, destructive actions require approval (recommended)</option>
-            <option value="full_auto">Full Auto — all actions auto-allowed (with destructive override)</option>
-            <option value="locked_down">Locked Down — all write actions require approval</option>
-            <option value="custom">Custom — manual per-tool configuration</option>
+            <option value="safe">Safe � read ops auto-allowed, destructive actions require approval (recommended)</option>
+            <option value="full_auto">Full Auto � all actions auto-allowed (with destructive override)</option>
+            <option value="locked_down">Locked Down � all write actions require approval</option>
+            <option value="custom">Custom � manual per-tool configuration</option>
           </select>
         </div>
 
@@ -377,13 +380,10 @@
         <Button :disabled="toolPermSaving" variant="default" class="mt-4" @click="saveToolPerms">
           {{ toolPermSaving ? 'Saving...' : 'Save Tool Permissions' }}
         </Button>
-      </div>
+      </SectionCard>
 
       <!-- Safety & Limits -->
-      <div class="card p-4">
-        <h2 class="mb-3 text-base font-semibold">Safety & Limits</h2>
-        <p class="mb-4 text-sm text-muted-foreground">Configure rate limits, auto-execution thresholds, and no-go patterns for Remy's browser automation.</p>
-
+      <SectionCard title="Safety &amp; Limits" description="Configure rate limits, auto-execution thresholds, and no-go patterns for Remy's browser automation.">
         <div class="space-y-4">
           <div>
             <label class="mb-1 block text-sm font-medium">Max actions per minute</label>
@@ -413,7 +413,7 @@
           </div>
           <div>
             <label class="mb-1 block text-sm font-medium">Auto-execute confidence threshold</label>
-            <p class="mb-2 text-xs text-muted-foreground">Minimum confidence score (0.0–1.0) required for Remy to auto-execute an action without approval.</p>
+            <p class="mb-2 text-xs text-muted-foreground">Minimum confidence score (0.0�1.0) required for Remy to auto-execute an action without approval.</p>
             <div class="flex items-center gap-3">
               <input
                 v-model.number="safetyConfig.autoExecuteThreshold"
@@ -489,15 +489,11 @@
             </TooltipContent>
           </Tooltip>
         </div>
-      </div>
+      </SectionCard>
 
       <!-- Skills Manager -->
-      <div class="card p-4">
-        <div class="flex items-center justify-between mb-4">
-          <div>
-            <h2 class="text-base font-semibold">Skills</h2>
-            <p class="text-sm text-muted-foreground">{{ $t('views.AdminRemyView.organisationlevel_skills_that_remy_can_use') }}</p>
-          </div>
+      <SectionCard title="Skills" :description="$t('views.AdminRemyView.organisationlevel_skills_that_remy_can_use')">
+        <template #header>
           <Button
             variant="default"
             class="border border-primary/30"
@@ -506,7 +502,7 @@
           >
             Add Skill
           </Button>
-        </div>
+        </template>
 
         <div v-if="skills.length === 0" class="py-8 text-center">
           <p class="text-sm text-muted-foreground">{{ $t('views.AdminRemyView.no_skills_configured_yet') }}</p>
@@ -532,10 +528,10 @@
                 <td class="table-cell text-muted-foreground max-w-xs truncate">
                   <Tooltip :delay-duration="300">
                     <TooltipTrigger as-child>
-                      <span>{{ skill.description || '—' }}</span>
+                      <span>{{ skill.description || '�' }}</span>
                     </TooltipTrigger>
                     <TooltipContent side="top" class="max-w-xs">
-                      <p>{{ skill.description || '—' }}</p>
+                      <p>{{ skill.description || '�' }}</p>
                     </TooltipContent>
                   </Tooltip>
                 </td>
@@ -548,7 +544,7 @@
                     >
                       {{ trigger }}
                     </span>
-                    <span v-if="!skill.triggers?.length" class="text-xs text-muted-foreground">—</span>
+                    <span v-if="!skill.triggers?.length" class="text-xs text-muted-foreground">�</span>
                   </div>
                 </td>
                 <td class="table-cell">
@@ -594,7 +590,7 @@
           </table>
         </div>
         <div v-if="skillError" class="px-3 pt-2 text-sm text-destructive">{{ skillError }}</div>
-      </div>
+      </SectionCard>
 
       <RemySkillDialog
         ref="skillDialogRef"
@@ -604,9 +600,10 @@
       />
 
       <!-- Knowledge Sources -->
-      <div class="card p-4">
-        <h2 class="mb-3 text-base font-semibold">{{ $t('views.AdminRemyView.knowledge_sources') }}</h2>
-        <p class="mb-4 text-sm text-muted-foreground">{{ $t('views.AdminRemyView.control_what_remy_knows') }}</p>
+      <SectionCard
+        :title="$t('views.AdminRemyView.knowledge_sources')"
+        :description="$t('views.AdminRemyView.control_what_remy_knows')"
+      >
 
         <div v-if="contextLoading" class="py-4 text-center text-sm text-muted-foreground">Loading sources...</div>
         <div v-else class="table-wrapper">
@@ -652,12 +649,14 @@
           </table>
         </div>
         <div v-if="contextError" class="mt-2 text-sm text-destructive">{{ contextError }}</div>
-      </div>
+      </SectionCard>
 
       <!-- Skills as Knowledge Sources -->
-      <div v-if="skills.length > 0" class="card p-4">
-        <h2 class="mb-3 text-base font-semibold">{{ $t('views.AdminRemyView.skills_as_knowledge') }}</h2>
-        <p class="mb-4 text-sm text-muted-foreground">{{ $t('views.AdminRemyView.control_what_remy_knows') }}</p>
+      <SectionCard
+        v-if="skills.length > 0"
+        :title="$t('views.AdminRemyView.skills_as_knowledge')"
+        :description="$t('views.AdminRemyView.control_what_remy_knows')"
+      >
         <div class="table-wrapper">
           <table class="w-full text-left text-sm">
             <thead>
@@ -686,12 +685,13 @@
             </tbody>
           </table>
         </div>
-      </div>
+      </SectionCard>
 
       <!-- Product Primer -->
-      <div class="card p-4">
-        <h2 class="mb-3 text-base font-semibold">{{ $t('views.AdminRemyView.product_primer') }}</h2>
-        <p class="mb-4 text-sm text-muted-foreground">{{ $t('views.AdminRemyView.product_primer_description') }}</p>
+      <SectionCard
+        :title="$t('views.AdminRemyView.product_primer')"
+        :description="$t('views.AdminRemyView.product_primer_description')"
+      >
         <div class="flex items-center gap-3">
           <Button
             :disabled="primerSaving"
@@ -702,7 +702,7 @@
           </Button>
           <span v-if="primerMessage" class="text-sm text-success">{{ primerMessage }}</span>
         </div>
-      </div>
+      </SectionCard>
 
       </TooltipProvider>
     </template>
@@ -711,6 +711,7 @@
 
 <script setup lang="ts">
 import PageHeader from '../components/shared/PageHeader.vue'
+import SectionCard from '../components/shared/SectionCard.vue'
 import { ref, reactive, computed, onMounted, onUnmounted } from 'vue'
 import { api } from '../lib/api/client'
 import { formatApiError } from '../lib/api/formatError'

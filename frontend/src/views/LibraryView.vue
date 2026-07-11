@@ -13,29 +13,21 @@
           >
             {{ $t('views.LibraryView.create_pipeline') }}
           </Button>
-          <input
-            v-model="search"
-            type="text"
-            :placeholder="$t('views.LibraryView.search_primitives')"
-            class="input-teal px-3 py-1.5 border border-input bg-background rounded-lg text-sm"
-            @input="onSearchInput"
-            data-testid="library-search"
+          <FilterBar
+            :search="{ placeholder: $t('views.LibraryView.search_primitives') }"
+            :search-value="search"
+            :filters="[{ key: 'type', label: $t('views.AdminNotificationDeliveryLogView.all_types'), options: [
+              { value: 'pipeline_template', label: $t('views.LibraryView.pipeline_templates') },
+              { value: 'workflow', label: $t('views.LibraryView.type_workflows') },
+              { value: 'agent', label: $t('views.LibraryView.type_agents') },
+              { value: 'schema', label: $t('views.LibraryView.type_schemas') },
+              { value: 'integration', label: $t('views.LibraryView.type_integrations') },
+              { value: 'composite', label: $t('views.LibraryView.type_composites') },
+            ] }]"
+            :filter-values="{ type: typeFilter }"
+            @update:search="search = $event; onSearchInput()"
+            @update:filter="(key, value) => { if (key === 'type') { typeFilter = value; onFilterChange() } }"
           />
-          <select
-            v-model="typeFilter"
-            class="input-teal px-3 py-1.5 pr-8 border border-input bg-background rounded-lg text-sm"
-            @change="onFilterChange"
-            data-testid="library-type-filter"
-            aria-label="Filter by type"
-          >
-            <option value="">{{ $t('views.AdminNotificationDeliveryLogView.all_types') }}</option>
-            <option value="pipeline_template">{{ $t('views.LibraryView.pipeline_templates') }}</option>
-            <option value="workflow">{{ $t('views.LibraryView.type_workflows') }}</option>
-            <option value="agent">{{ $t('views.LibraryView.type_agents') }}</option>
-            <option value="schema">{{ $t('views.LibraryView.type_schemas') }}</option>
-            <option value="integration">{{ $t('views.LibraryView.type_integrations') }}</option>
-            <option value="composite">{{ $t('views.LibraryView.type_composites') }}</option>
-          </select>
         </div>
       </div>
     </header>
@@ -310,6 +302,7 @@ import { ref, computed, onMounted, onBeforeUnmount } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import { Button } from '@/components/ui/button'
 import PageHeader from '../components/shared/PageHeader.vue'
+import FilterBar from '../components/shared/FilterBar.vue'
 import { useApi } from '../composables/useApi'
 import { formatApiError } from '../lib/api/formatError'
 
