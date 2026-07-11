@@ -47,38 +47,19 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted } from 'vue'
+import { computed } from 'vue'
 import { api } from '../lib/api/client'
-import { formatApiError } from '../lib/api/formatError'
 import type { components } from '../lib/api/client'
+import { useDataFetch } from '../composables/useDataFetch'
 import PageHeader from '../components/shared/PageHeader.vue'
 import LoadingSpinner from '../components/shared/LoadingSpinner.vue'
 import ErrorAlert from '../components/shared/ErrorAlert.vue'
 
 type RateLimitRule = components['schemas']['RateLimitRuleResponse']
 
-const loading = ref(true)
-const loadError = ref<string | null>(null)
-const mode = ref('in_memory')
-const rules = ref<RateLimitRule[]>([])
-
-async function loadRules() {
-  loading.value = true
-  loadError.value = null
-  try {
-    const { data, error: err } = await api.GET('/api/v1/admin/rate-limits')
-    if (err) {
-      loadError.value = `Failed to load rate limits: ${formatApiError(err)}`
-    } else if (data) {
-      mode.value = data.mode
-      rules.value = data.rules ?? []
-    }
-  } catch (e: unknown) {
-    loadError.value = `Failed to load rate limits: ${formatApiError(e)}`
-  } finally {
-    loading.value = false
-  }
-}
-
-onMounted(loadRules)
+const { loading, error: loadError, data, load: loadRules } = useDataFetch(
+  () => api.GET('/api/v1/admin/rate-limits'),
+)
+const mode = computed(() => data.value?.mode ?? 'in_memory')
+const rules = computed(() => data.value?.rules ?? [])
 </script>

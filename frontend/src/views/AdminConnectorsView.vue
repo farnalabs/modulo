@@ -316,6 +316,8 @@ import { ref, reactive, computed, onMounted } from 'vue'
 import { api } from '../lib/api/client'
 import { formatApiError } from '../lib/api/formatError'
 import type { components } from '../lib/api/client'
+import { useDataFetch } from '../composables/useDataFetch'
+import { useConfirmDialog } from '../composables/useConfirmDialog'
 import LoadingSpinner from '../components/shared/LoadingSpinner.vue'
 import ErrorAlert from '../components/shared/ErrorAlert.vue'
 import { usePlanStore } from '../stores/planStore'
@@ -345,15 +347,14 @@ function emptyForm(): ConnectorFormState {
   }
 }
 
-const connectors = ref<ConnectorItem[]>([])
+const { loading, error, data, load: loadConnectors } = useDataFetch(
+  () => api.GET('/api/v1/connectors'),
+  { immediate: false },
+)
 
-// In-dev connectors are hidden entirely; native connectors stay in the
-// primary table; preview connectors are segregated into a collapsed
-// disclosure section.
+const connectors = computed(() => data.value?.items ?? [])
 const nativeConnectors = computed(() => connectors.value.filter(c => (c.tier ?? 'native') !== 'preview' && (c.tier ?? 'native') !== 'in_dev'))
 const previewConnectors = computed(() => connectors.value.filter(c => c.tier === 'preview'))
-const loading = ref(true)
-const error = ref<string | null>(null)
 
 const formMode = ref<'add' | 'edit' | null>(null)
 const formData = reactive<ConnectorFormState>(emptyForm())
@@ -366,23 +367,6 @@ const deleteConfirmConnectorId = ref<string | null>(null)
 const deleteConfirmName = ref('')
 const deleting = ref(false)
 const deleteError = ref<string | null>(null)
-
-async function loadConnectors() {
-  loading.value = true
-  error.value = null
-  try {
-    const { data, error: err } = await api.GET('/api/v1/connectors')
-    if (err) {
-      error.value = `Failed to load connectors: ${formatApiError(err)}`
-    } else if (data) {
-      connectors.value = data.items
-    }
-  } catch (e: unknown) {
-    error.value = `Failed to load connectors: ${formatApiError(e)}`
-  } finally {
-    loading.value = false
-  }
-}
 
 function openAddForm() {
   formMode.value = 'add'
