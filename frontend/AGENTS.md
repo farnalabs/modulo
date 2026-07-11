@@ -88,3 +88,29 @@ is edited, re-run `npm install` (not just the script) to ensure the hook fires.
 ### Concurrent save guard: use a shared `configSaving` mutex
 
 - When multiple save functions (`saveAccessList`, `saveModelConfig`, `saveToolPerms`, etc.) all PUT to the same API endpoint, they must share a `configSaving` flag to prevent concurrent requests. Without the guard, clicking "Save" in two sections simultaneously fires parallel PUT calls — one section's changes silently overwrite the other's. Pattern: `if (configSaving.value) return; configSaving.value = true; ... configSaving.value = false` at the start and end of every save function that targets the shared endpoint.
+
+## Design System
+
+### Animation & Motion Philosophy
+
+This project follows [Emil Kowalski's animation philosophy](https://emilkowal.ski/ui/agents-with-taste) as codified in the [emilkowalski/skills](https://github.com/emilkowalski/skills) repo:
+
+- **`emil-design-eng`** — Core animation decision framework, easing/duration tables, button press feedback, origin-awareness, stagger, clip-path patterns
+- **`apple-design`** — Fluid interfaces, spring physics, interruptibility, velocity handoff, spatial consistency
+- **`review-animations`** — 10 non-negotiable standards for animation review (used in code review)
+- **`improve-animations`** — Audit-then-plan workflow for animation improvements
+
+Key design tokens live in `src/style.css` as `--ease-out`, `--ease-in-out`, `--duration-micro`, `--duration-fast`, `--duration-normal`, `--duration-slow` and are mapped to Tailwind utilities in `tailwind.config.cjs`.
+
+Rules:
+- Use `var(--ease-out)` for all UI enter/exit transitions (never the built-in `ease` keyword)
+- Buttons must have `:active { transform: scale(0.97) }` press feedback
+- Popovers/dropdowns/tooltips scale from their trigger (origin-aware), never from center
+- Never animate from `scale(0)` — start from `scale(0.95)` + `opacity: 0`
+- UI animations stay under 300ms (exceptions: modals/drawers up to 500ms)
+- Hover effects must be gated behind `@media (hover: hover) and (pointer: fine)`
+- Respect `prefers-reduced-motion` — keep opacity/color, drop transform animations
+- Exit animations are ~20% faster than entrances (asymmetric timing)
+- Stagger list entries 30-80ms apart instead of animating all at once
+- Prefer CSS transitions over keyframes for interruptible UI (toasts, toggles)
+- Avoid `transition: all` — always specify exact properties

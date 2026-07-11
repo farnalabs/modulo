@@ -61,6 +61,25 @@ module.exports = {
         md: 'var(--radius-md)',
         lg: 'var(--radius-lg)',
       },
+      transitionTimingFunction: {
+        'out': 'var(--ease-out)',
+        'in-out': 'var(--ease-in-out)',
+      },
+      transitionDuration: {
+        'micro': 'var(--duration-micro)',
+        'fast': 'var(--duration-fast)',
+        'normal': 'var(--duration-normal)',
+        'slow': 'var(--duration-slow)',
+      },
+      keyframes: {
+        'fade-in-up': {
+          '0%': { opacity: '0', transform: 'translateY(8px)' },
+          '100%': { opacity: '1', transform: 'translateY(0)' },
+        },
+      },
+      animation: {
+        'fade-in-up': 'fade-in-up 300ms var(--ease-out) forwards',
+      },
     },
   },
   plugins: [],
