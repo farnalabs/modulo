@@ -7,13 +7,11 @@
 # Relies on ``tests/bdd/conftest.py`` for environment setup and shared UUIDs.
 """
 
-import uuid
 from collections.abc import AsyncGenerator, Generator
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from fastapi.testclient import TestClient
-
 from tests.bdd.conftest import ORG_ID, USER_ID
 
 
