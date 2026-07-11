@@ -1,9 +1,10 @@
 """Admin tiers endpoint — lists all known tiers and their display labels."""
 
+import asyncio
 import logging
 
 from fastapi import APIRouter, Depends, HTTPException, status
-from sqlalchemy.exc import IntegrityError, ProgrammingError
+from sqlalchemy.exc import IntegrityError, ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.api.dependencies import get_db_session
@@ -25,17 +26,19 @@ async def list_tiers_endpoint(
         async with session.begin():
             tiers = await list_tiers(session)
         return {"tiers": tiers}
+    except asyncio.CancelledError:
+        raise
     except HTTPException:
         raise
     except IntegrityError:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="A resource with this value already exists",
-        )
+        ) from None
     except ProgrammingError:
-        raise HTTPException(status_code=503, detail="Database not available. Run migrations.")
-    except IntegrityError:
-        raise HTTPException(status_code=409, detail="Resource already exists or constraint violation.")
-    except Exception as e:
-        logger.error("Unexpected error in list_tiers_endpoint: %s", str(e))
-        raise HTTPException(status_code=500, detail="Internal server error")
+        raise HTTPException(status_code=501, detail="Database not available. Run migrations.") from None
+    except SQLAlchemyError:
+        raise HTTPException(status_code=503, detail="Database error occurred.") from None
+    except Exception:
+        logger.exception("Unexpected error in list_tiers_endpoint")
+        raise HTTPException(status_code=500, detail="Internal server error") from None
