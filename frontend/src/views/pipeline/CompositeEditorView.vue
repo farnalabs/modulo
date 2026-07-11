@@ -20,12 +20,13 @@
         >
           Save as composite
         </button>
-        <button
-          class="rounded-md bg-primary px-3 py-1 text-xs font-medium text-primary-foreground hover:bg-primary/90"
+        <Button
+          variant="default"
+          size="xs"
           @click="showPortPanel = !showPortPanel"
         >
           {{ showPortPanel ? 'Hide Ports' : 'Ports' }}
-        </button>
+        </Button>
         <button
           class="rounded-md bg-green-600 px-3 py-1 text-xs font-medium text-white hover:bg-green-500"
           @click="showPublishFlow = true"
@@ -115,9 +116,9 @@
             >
               Cancel
             </button>
-            <button
+            <Button
               :disabled="!saveAsName || saving"
-              class="rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
+              variant="default"
               @click="handleSaveAs"
             >
               {{ saving ? 'Saving...' : 'Save' }}
@@ -154,6 +155,7 @@ import PublishCompositeFlow from '../../components/pipeline/composite/PublishCom
 import type { ParameterPort } from '../../types/pipeline'
 import { formatApiError } from '../../lib/api/formatError'
 import { api } from '../../lib/api/client'
+import { Button } from '@/components/ui/button'
 
 const route = useRoute()
 const router = useRouter()

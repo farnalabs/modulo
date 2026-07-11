@@ -97,14 +97,14 @@
           />
         </div>
         <div class="flex items-center gap-2">
-          <button
+          <Button
             :disabled="!wizardState.resourceType.trim() || inferring"
+            variant="default"
             data-testid="onboarding-wizard-infer-schema"
-            class="rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
             @click="inferSchema"
           >
             {{ inferring ? $t('views.SchemaInferenceView.inferring') : $t('views.SchemaInferenceView.infer_schema') }}
-          </button>
+          </Button>
         </div>
         <div v-if="inferError" class="text-sm text-destructive">{{ inferError }}</div>
 
@@ -187,14 +187,14 @@
             </table>
           </div>
           <div class="flex items-center gap-2">
-            <button
-              :disabled="savingSchema"
-              data-testid="onboarding-wizard-confirm-save-schema"
-              class="rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
-              @click="saveSchema"
-            >
-              {{ savingSchema ? $t('views.OnboardingWizard.saving') : $t('views.OnboardingWizard.confirm_save_schema') }}
-            </button>
+          <Button
+            :disabled="savingSchema"
+            variant="default"
+            data-testid="onboarding-wizard-confirm-save-schema"
+            @click="saveSchema"
+          >
+            {{ savingSchema ? $t('views.OnboardingWizard.saving') : $t('views.OnboardingWizard.confirm_save_schema') }}
+          </Button>
           </div>
           <div v-if="schemaSaveError" class="text-sm text-destructive">{{ schemaSaveError }}</div>
           <div v-if="wizardState.publishedSchemaId" class="rounded-lg bg-success/10 p-3 text-sm text-success">
@@ -289,14 +289,14 @@
           <p v-if="selectedLibraryItem.description" class="text-xs text-muted-foreground">{{ selectedLibraryItem.description }}</p>
         </div>
         <div class="flex items-center gap-2">
-          <button
+          <Button
             :disabled="!wizardState.pipelineName.trim() || creatingPipeline"
+            variant="default"
             data-testid="onboarding-wizard-create-pipeline"
-            class="rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
             @click="createPipeline"
           >
             {{ creatingPipeline ? 'Creating...' : 'Create Pipeline' }}
-          </button>
+          </Button>
         </div>
         <div v-if="pipelineCreateError" class="text-sm text-destructive">{{ pipelineCreateError }}</div>
         <div v-if="wizardState.createdPipelineId" class="rounded-lg bg-success/10 p-3 text-sm text-success">
@@ -338,15 +338,15 @@
           </li>
         </ul>
         <div class="flex items-center justify-center gap-3 pt-4">
-          <button
+          <Button
             v-if="wizardState.createdPipelineId"
             :disabled="runningPipeline"
+            variant="default"
             data-testid="onboarding-wizard-run-pipeline-now"
-            class="rounded-lg bg-primary px-6 py-2.5 text-sm font-medium text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
             @click="runPipeline"
           >
             {{ runningPipeline ? 'Starting...' : 'Run Pipeline Now' }}
-          </button>
+          </Button>
           <router-link
             :to="{ name: 'dashboard' }"
             data-testid="onboarding-wizard-go-to-dashboard"
@@ -382,14 +382,14 @@
         >
           Skip to end
         </button>
-        <button
+        <Button
           :disabled="!canProceed"
+          variant="default"
           data-testid="onboarding-wizard-next"
-          class="rounded-lg bg-primary px-6 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
           @click="nextStep"
         >
           {{ currentStep === 5 ? 'Finish' : 'Next' }}
-        </button>
+        </Button>
       </div>
     </div>
   </div>
@@ -401,6 +401,7 @@ import { api } from '../lib/api/client'
 import type { components } from '../lib/api/client'
 import PageHeader from '../components/shared/PageHeader.vue'
 import { formatApiError } from '../lib/api/formatError'
+import { Button } from '@/components/ui/button'
 
 type ConnectorItem = components['schemas']['ConnectorItem']
 

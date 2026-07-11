@@ -7,13 +7,13 @@
           Visual maps of your software delivery lifecycle stages and their transitions
         </p>
       </div>
-      <button
-        class="rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90"
+      <Button
+        variant="default"
         @click="handleCreate"
       >
         <PlusIcon class="mr-1.5 inline-block h-4 w-4" />
         New Map
-      </button>
+      </Button>
     </div>
 
     <div v-if="loading" class="flex justify-center py-12">
@@ -30,12 +30,13 @@
       <p class="mt-1 text-xs text-muted-foreground">
         Create your first lifecycle map to visualize your delivery pipeline
       </p>
-      <button
-        class="mt-4 rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90"
+      <Button
+        variant="default"
+        class="mt-4"
         @click="handleCreate"
       >
         Create Lifecycle Map
-      </button>
+      </Button>
     </div>
 
     <div v-else class="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
@@ -91,13 +92,13 @@
             >
               Cancel
             </button>
-            <button
+            <Button
               :disabled="!newName.trim() || creating"
-              class="rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
+              variant="default"
               @click="handleCreateConfirm"
             >
               {{ creating ? 'Creating...' : 'Create' }}
-            </button>
+            </Button>
           </div>
         </div>
       </div>
@@ -114,6 +115,7 @@ import { formatApiError } from '../../lib/api/formatError'
 import type { LifecycleMap } from '../../types/lifecycleMap'
 import { api } from '../../lib/api/client'
 import { formatDateShort } from '../../lib/formatDate'
+import { Button } from '@/components/ui/button'
 
 const router = useRouter()
 

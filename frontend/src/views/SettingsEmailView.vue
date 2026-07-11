@@ -58,14 +58,14 @@
             </div>
 
             <div class="flex items-center gap-3 pt-2">
-              <button
+              <Button
                 type="button"
+                variant="default"
                 :disabled="saving"
-                class="rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
                 @click="saveSettings"
               >
                 {{ saving ? $t('views.SettingsEmailView.saving') : $t('views.SettingsEmailView.save') }}
-              </button>
+              </Button>
               <button
                 type="button"
                 :disabled="testing"
@@ -105,6 +105,7 @@ import FeatureGate from '../components/FeatureGate.vue'
 import PageHeader from '../components/shared/PageHeader.vue'
 import LoadingSpinner from '../components/shared/LoadingSpinner.vue'
 import ErrorAlert from '../components/shared/ErrorAlert.vue'
+import { Button } from '@/components/ui/button'
 
 interface EmailForm {
   smtp_host: string

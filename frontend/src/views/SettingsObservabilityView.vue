@@ -37,14 +37,15 @@
         <div class="rounded-lg border bg-card p-6 shadow-sm">
           <div class="mb-4 flex items-center justify-between">
             <h2 class="text-base font-semibold">{{ $t('views.SettingsObservabilityView.otlp_headers') }}</h2>
-            <button
+            <Button
+              variant="default"
+              size="sm"
               type="button"
-              class="rounded-lg bg-primary px-3 py-1.5 text-xs font-medium text-primary-foreground hover:bg-primary/90"
               data-testid="settings-observability-add-header"
               @click="addHeader"
             >
               {{ $t('views.SettingsObservabilityView.add_header') }}
-            </button>
+            </Button>
           </div>
           <div v-if="otlpHeaders.length === 0" data-testid="settings-observability-no-headers" class="text-sm text-muted-foreground">
             {{ $t('views.SettingsObservabilityView.no_custom_headers_configured') }}
@@ -178,14 +179,14 @@
           >
             {{ $t('views.SettingsObservabilityView.reset') }}
           </button>
-          <button
+          <Button
             type="submit"
+            variant="default"
             :disabled="saving"
-            class="rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
             data-testid="settings-observability-save"
           >
             {{ saving ? $t('views.SettingsObservabilityView.saving') : $t('views.SettingsObservabilityView.save') }}
-          </button>
+          </Button>
         </div>
       </form>
     </FeatureGate>
@@ -204,6 +205,7 @@ import { formatApiError } from '../lib/api/formatError'
 import FeatureGate from '../components/FeatureGate.vue'
 import LoadingSpinner from '../components/shared/LoadingSpinner.vue'
 import ErrorAlert from '../components/shared/ErrorAlert.vue'
+import { Button } from '@/components/ui/button'
 
 type OtelSettingsResponse = components['schemas']['OtelSettingsResponse']
 type TestSpanResult = components['schemas']['TestSpanResult']

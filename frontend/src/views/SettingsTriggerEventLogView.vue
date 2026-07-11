@@ -46,13 +46,13 @@
           </select>
         </div>
         <div class="flex items-end gap-2">
-          <button
+          <Button
+            variant="default"
             data-testid="settings-trigger-event-log-apply"
-            class="rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90"
             @click="applyFilters"
           >
             Apply
-          </button>
+          </Button>
           <button
             data-testid="settings-trigger-event-log-reset"
             class="rounded-lg border border-input bg-background px-4 py-2 text-sm font-medium hover:bg-accent"
@@ -162,6 +162,7 @@ import PageHeader from '../components/shared/PageHeader.vue'
 import LoadingSpinner from '../components/shared/LoadingSpinner.vue'
 import ErrorAlert from '../components/shared/ErrorAlert.vue'
 import { shortId } from '../utils/format'
+import { Button } from '@/components/ui/button'
 
 type TriggerEventItem = components['schemas']['TriggerEventItem']
 
