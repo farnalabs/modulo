@@ -91,7 +91,7 @@
             class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring"
             data-testid="admin-audit-date-from"
           />
-        </div>
+        </template>
         <div>
           <label class="mb-1 block text-xs font-medium text-muted-foreground">{{ $t('views.AdminAuditView.to') }}</label>
           <input
@@ -120,7 +120,7 @@
             <option value="sso_provider">{{ $t('views.AdminAuditView.optgroup_sso_provider') }}</option>
           </select>
         </div>
-      </div>
+      </FilterBar>
       <div class="mt-3 flex items-center gap-2">
         <Button
           variant="default"
