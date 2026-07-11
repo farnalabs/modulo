@@ -934,7 +934,7 @@ async def admin_deactivate_user(
 
             families = await list_families_for_account(session, user_id)
             for family in families:
-                await blacklist_family(session, family.family_id)
+                await blacklist_family(session, family.family_id, user_id)
 
             active_keys = (
                 (
@@ -1141,7 +1141,7 @@ async def admin_reset_password(
 
             families = await list_families_for_account(session, user_id)
             for family in families:
-                await blacklist_family(session, family.family_id)
+                await blacklist_family(session, family.family_id, user_id)
 
             await session.flush()
 
@@ -2488,7 +2488,9 @@ async def admin_update_publisher(
                     )
 
             try:
-                publisher = await crud_update_publisher(session, publisher_id, updates)
+                publisher = await crud_update_publisher(
+                    session, publisher_id, updates, org_id=current_user.organisation_id
+                )
             except ValueError as exc:
                 raise HTTPException(
                     status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
@@ -2539,7 +2541,7 @@ async def admin_delete_publisher(
     try:
         async with session.begin():
             await set_rls_org(session, current_user.organisation_id)
-            deleted = await crud_delete_publisher(session, publisher_id)
+            deleted = await crud_delete_publisher(session, publisher_id, org_id=current_user.organisation_id)
     except IntegrityError:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,

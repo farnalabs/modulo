@@ -12,7 +12,11 @@ from modulo.db.models.token_family import TokenFamily
 async def get_or_create_family(
     session: AsyncSession, family_id: uuid.UUID, account_id: uuid.UUID, org_id: uuid.UUID | None
 ) -> TokenFamily:
-    result = await session.execute(select(TokenFamily).where(TokenFamily.family_id == family_id).with_for_update())
+    result = await session.execute(
+        select(TokenFamily)
+        .where(TokenFamily.family_id == family_id, TokenFamily.account_id == account_id)
+        .with_for_update()
+    )
     family = result.scalar_one_or_none()
     if family is None:
         family = TokenFamily(
@@ -38,15 +42,22 @@ async def create_family(session: AsyncSession, account_id: uuid.UUID, org_id: uu
     return family
 
 
-async def advance_sequence(session: AsyncSession, family_id: uuid.UUID, expected_sequence: int) -> tuple[int, bool]:
+async def advance_sequence(
+    session: AsyncSession, family_id: uuid.UUID, expected_sequence: int, account_id: uuid.UUID
+) -> tuple[int, bool]:
     """Advance the token family sequence.
 
     Uses SELECT FOR UPDATE to prevent concurrent advancement races.
+    Only advances families owned by *account_id*.
     Returns (new_sequence, theft_detected).
     theft_detected=True if the expected_sequence does not match max_sequence
     (meaning a different token in the family was already used).
     """
-    result = await session.execute(select(TokenFamily).where(TokenFamily.family_id == family_id).with_for_update())
+    result = await session.execute(
+        select(TokenFamily)
+        .where(TokenFamily.family_id == family_id, TokenFamily.account_id == account_id)
+        .with_for_update()
+    )
     family = result.scalar_one_or_none()
     if family is None:
         return 0, False
@@ -65,8 +76,12 @@ async def advance_sequence(session: AsyncSession, family_id: uuid.UUID, expected
     return family.max_sequence, False
 
 
-async def blacklist_family(session: AsyncSession, family_id: uuid.UUID) -> bool:
-    result = await session.execute(select(TokenFamily).where(TokenFamily.family_id == family_id).with_for_update())
+async def blacklist_family(session: AsyncSession, family_id: uuid.UUID, account_id: uuid.UUID) -> bool:
+    result = await session.execute(
+        select(TokenFamily)
+        .where(TokenFamily.family_id == family_id, TokenFamily.account_id == account_id)
+        .with_for_update()
+    )
     family = result.scalar_one_or_none()
     if family is None:
         return False
@@ -81,8 +96,10 @@ async def list_families_for_account(session: AsyncSession, account_id: uuid.UUID
     return list(result.scalars().all())
 
 
-async def is_family_blacklisted(session: AsyncSession, family_id: uuid.UUID) -> bool:
-    result = await session.execute(select(TokenFamily).where(TokenFamily.family_id == family_id))
+async def is_family_blacklisted(session: AsyncSession, family_id: uuid.UUID, account_id: uuid.UUID) -> bool:
+    result = await session.execute(
+        select(TokenFamily).where(TokenFamily.family_id == family_id, TokenFamily.account_id == account_id)
+    )
     family = result.scalar_one_or_none()
     if family is None:
         return False

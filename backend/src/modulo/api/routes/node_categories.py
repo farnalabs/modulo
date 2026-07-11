@@ -75,7 +75,9 @@ async def list_node_categories_endpoint(
         async with session.begin():
             await set_rls_org(session, principal.organisation_id)
             await set_rls_user_context(session, principal.account_id, principal.org_role)
-            result = await list_node_categories(session, page=page, page_size=page_size)
+            result = await list_node_categories(
+                session, org_id=principal.organisation_id, page=page, page_size=page_size
+            )
     except ProgrammingError:
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
@@ -153,7 +155,7 @@ async def get_node_category_endpoint(
         async with session.begin():
             await set_rls_org(session, principal.organisation_id)
             await set_rls_user_context(session, principal.account_id, principal.org_role)
-            category = await get_node_category(session, category_id)
+            category = await get_node_category(session, category_id, org_id=principal.organisation_id)
     except ProgrammingError:
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
@@ -189,7 +191,7 @@ async def update_node_category_endpoint(
         async with session.begin():
             await set_rls_org(session, principal.organisation_id)
             await set_rls_user_context(session, principal.account_id, principal.org_role)
-            category = await update_node_category(session, category_id, updates)
+            category = await update_node_category(session, category_id, updates, org_id=principal.organisation_id)
     except ProgrammingError:
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
@@ -223,7 +225,7 @@ async def delete_node_category_endpoint(
         async with session.begin():
             await set_rls_org(session, principal.organisation_id)
             await set_rls_user_context(session, principal.account_id, principal.org_role)
-            deleted = await delete_node_category(session, category_id)
+            deleted = await delete_node_category(session, category_id, org_id=principal.organisation_id)
     except ProgrammingError:
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,

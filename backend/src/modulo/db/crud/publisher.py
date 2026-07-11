@@ -19,8 +19,11 @@ TRUST_TIER_AMBER = "amber"
 VALID_TIERS = frozenset({TRUST_TIER_GREEN, TRUST_TIER_AMBER})
 
 
-async def get_publisher(session: AsyncSession, publisher_id: uuid.UUID) -> Publisher | None:
-    stmt = select(Publisher).where(Publisher.id == publisher_id)
+async def get_publisher(session: AsyncSession, publisher_id: uuid.UUID, *, org_id: uuid.UUID) -> Publisher | None:
+    stmt = select(Publisher).where(
+        Publisher.id == publisher_id,
+        Publisher.organisation_id == org_id,
+    )
     result = await session.execute(stmt)
     return result.scalar_one_or_none()
 
@@ -110,8 +113,10 @@ async def update_publisher(
     session: AsyncSession,
     publisher_id: uuid.UUID,
     updates: dict[str, Any],
+    *,
+    org_id: uuid.UUID,
 ) -> Publisher | None:
-    publisher = await get_publisher(session, publisher_id)
+    publisher = await get_publisher(session, publisher_id, org_id=org_id)
     if publisher is None:
         return None
 
@@ -129,8 +134,8 @@ async def update_publisher(
     return publisher
 
 
-async def delete_publisher(session: AsyncSession, publisher_id: uuid.UUID) -> bool:
-    publisher = await get_publisher(session, publisher_id)
+async def delete_publisher(session: AsyncSession, publisher_id: uuid.UUID, *, org_id: uuid.UUID) -> bool:
+    publisher = await get_publisher(session, publisher_id, org_id=org_id)
     if publisher is None:
         return False
     await session.delete(publisher)
