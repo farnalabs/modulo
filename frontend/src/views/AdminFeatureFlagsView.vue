@@ -1,8 +1,7 @@
 ﻿<template>
   <div data-theme="agent" class="page-wide">
     <header>
-      <h1 class="text-2xl font-semibold tracking-tight">{{ $t('views.AdminFeatureFlagsView.feature_flags') }}</h1>
-      <p class="mt-1 text-muted-foreground">{{ $t('views.AdminFeatureFlagsView.all_known_feature_flags_and_their_current_activation_status') }}</p>
+      <PageHeader :title="$t('views.AdminFeatureFlagsView.feature_flags')" :subtitle="$t('views.AdminFeatureFlagsView.all_known_feature_flags_and_their_current_activation_status')" />
       <div v-if="planStore.isLoading" class="mt-2 flex items-center gap-2 text-sm text-muted-foreground">
         <div class="h-4 w-4 animate-spin rounded-full border-2 border-primary border-t-transparent" />
         {{ $t('views.AdminFeatureFlagsView.loading_plan_info') }}
@@ -222,6 +221,7 @@
 </template>
 
 <script setup lang="ts">
+import PageHeader from '../components/shared/PageHeader.vue'
 import { ref, computed, onMounted, watch } from 'vue'
 import { api } from '../lib/api/client'
 import { usePlanStore } from '../stores/planStore'

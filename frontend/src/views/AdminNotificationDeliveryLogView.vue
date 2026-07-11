@@ -1,9 +1,6 @@
 ﻿<template>
     <div class="page-wide">
-    <header>
-      <h1 data-testid="admin-notification-log-title" class="text-2xl font-semibold tracking-tight">{{ $t('views.AdminNotificationDeliveryLogView.notification_delivery_log') }}</h1>
-      <p class="mt-1 text-muted-foreground">{{ $t('views.AdminNotificationDeliveryLogView.admin_view_of_all_webhook_notification_deliveries') }}</p>
-    </header>
+    <PageHeader :title="$t('views.AdminNotificationDeliveryLogView.notification_delivery_log')" :subtitle="$t('views.AdminNotificationDeliveryLogView.admin_view_of_all_webhook_notification_deliveries')" data-test-id="admin-notification-log-title" />
 
     <div class="rounded-lg border bg-card p-4 shadow-sm">
       <div class="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-5">
@@ -249,6 +246,7 @@
 </template>
 
 <script setup lang="ts">
+import PageHeader from '../components/shared/PageHeader.vue'
 import { ref, computed, onMounted } from 'vue'
 import { api } from '../lib/api/client'
 import { formatApiError } from '../lib/api/formatError'
@@ -427,4 +425,3 @@ async function retryAllFailed() {
 
 onMounted(() => loadDeliveries(null))
 </script>
-

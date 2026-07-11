@@ -3,10 +3,7 @@
 
     <div class="page-narrow">
     <header class="flex items-center justify-between">
-      <div>
-        <h1 class="text-2xl font-semibold tracking-tight">Node Categories</h1>
-        <p class="mt-1 text-muted-foreground">Manage categories for classifying nodes in pipelines</p>
-      </div>
+      <PageHeader title="Node Categories" subtitle="Manage categories for classifying nodes in pipelines" />
       <Button
         variant="default"
         class="border-primary/30 hover:border-primary/60"
@@ -143,6 +140,7 @@
 </template>
 
 <script setup lang="ts">
+import PageHeader from '../components/shared/PageHeader.vue'
 import { ref, onMounted } from 'vue'
 import { api } from '../lib/api/client'
 import { formatApiError } from '../lib/api/formatError'
@@ -275,4 +273,3 @@ function iconSvg(name: string): string {
 
 onMounted(() => { planStore.fetchPlan(); loadCategories() })
 </script>
-

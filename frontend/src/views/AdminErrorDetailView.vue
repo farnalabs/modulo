@@ -9,12 +9,7 @@
         >
           &larr; Back
         </button>
-        <div>
-          <h1 class="text-2xl font-semibold tracking-tight">{{ $t('views.AdminErrorDetailView.error_group_detail') }}</h1>
-          <p v-if="group" class="mt-0.5 text-sm text-muted-foreground font-mono">
-            {{ shortId(group.fingerprint) }}
-          </p>
-        </div>
+        <PageHeader :title="$t('views.AdminErrorDetailView.error_group_detail')" :subtitle="group ? shortId(group.fingerprint) : undefined" />
       </div>
     </header>
 
@@ -211,6 +206,7 @@
 </template>
 
 <script setup lang="ts">
+import PageHeader from '../components/shared/PageHeader.vue'
 import { ref, onMounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { fetchErrorGroup, updateErrorGroup, fetchErrorGroupEvents, type ErrorGroupDetail, type ErrorEventDetail } from '../lib/api/errors'

@@ -1,10 +1,7 @@
 ﻿<template>
   <div class="page-wide">
     <header class="flex items-center justify-between">
-      <div>
-        <h1 class="text-2xl font-semibold tracking-tight">{{ $t('views.AdminSystemConfigView.system_admin_config') }}</h1>
-        <p class="mt-1 text-muted-foreground">{{ $t('views.AdminSystemConfigView.deploymentwide_system_configuration_system_admin_only') }}</p>
-      </div>
+      <PageHeader :title="$t('views.AdminSystemConfigView.system_admin_config')" :subtitle="$t('views.AdminSystemConfigView.deploymentwide_system_configuration_system_admin_only')" />
       <button
         type="button"
         class="rounded-lg border border-input bg-background px-4 py-2 text-sm font-medium hover:bg-accent disabled:opacity-50"
@@ -57,6 +54,7 @@
 </template>
 
 <script setup lang="ts">
+import PageHeader from '../components/shared/PageHeader.vue'
 import { ref, onMounted } from 'vue'
 import { api } from '../lib/api/client'
 import { formatApiError, type ProblemDetail } from '../lib/api/formatError'
@@ -106,4 +104,3 @@ async function loadConfig() {
 
 onMounted(loadConfig)
 </script>
-

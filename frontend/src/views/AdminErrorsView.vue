@@ -3,10 +3,7 @@
     { label: 'Dashboard', to: '/admin/errors' },
   ]" />
   <div class="page-wide">
-    <header>
-      <h1 class="text-2xl font-semibold tracking-tight">{{ $t('views.AdminErrorsView.error_dashboard') }}</h1>
-      <p class="mt-1 text-muted-foreground">{{ $t('views.AdminErrorsView.monitor_and_manage_errors_across_your_organisation') }}</p>
-    </header>
+    <PageHeader :title="$t('views.AdminErrorsView.error_dashboard')" :subtitle="$t('views.AdminErrorsView.monitor_and_manage_errors_across_your_organisation')" />
 
     <div class="card p-4">
       <div class="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
@@ -181,6 +178,7 @@
 </template>
 
 <script setup lang="ts">
+import PageHeader from '../components/shared/PageHeader.vue'
 import { ref, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { fetchErrorGroups, type ErrorGroupSummary, type FetchErrorGroupsParams } from '../lib/api/errors'
@@ -303,5 +301,3 @@ function formatDate(dateStr: string): string {
 
 onMounted(() => loadGroups(0))
 </script>
-
-

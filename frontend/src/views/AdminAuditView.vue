@@ -3,10 +3,7 @@
 
     <div class="page-wide">
     <header class="flex items-center justify-between">
-      <div>
-        <h1 class="text-2xl font-semibold tracking-tight">{{ $t('views.AdminAuditView.audit_log') }}</h1>
-        <p class="mt-1 text-muted-foreground">{{ $t('views.AdminAuditView.tamper_evident_event_trail') }}</p>
-      </div>
+      <PageHeader :title="$t('views.AdminAuditView.audit_log')" :subtitle="$t('views.AdminAuditView.tamper_evident_event_trail')" />
       <div class="flex items-center gap-2">
         <button
           :disabled="verifying"
@@ -36,8 +33,8 @@
     </header>
     <div v-if="chainResult" class="rounded-lg border px-4 py-3 text-sm" :class="chainResult.valid ? 'border-green-500 bg-green-50 text-green-800' : 'border-red-500 bg-red-50 text-red-800'" data-testid="admin-audit-chain-result">
       <strong>{{ chainResult.valid ? $t('views.AdminAuditView.chain_valid') : $t('views.AdminAuditView.chain_broken') }}</strong>
-      <span v-if="chainResult.event_count" class="ml-2">— {{ $t('views.AdminAuditView.events_verified', { count: chainResult.event_count }) }}</span>
-      <span v-if="chainResult.error" class="ml-2">— {{ chainResult.error }}</span>
+      <span v-if="chainResult.event_count" class="ml-2">ï¿½ {{ $t('views.AdminAuditView.events_verified', { count: chainResult.event_count }) }}</span>
+      <span v-if="chainResult.error" class="ml-2">ï¿½ {{ chainResult.error }}</span>
     </div>
 
     <div class="card p-4">
@@ -322,6 +319,7 @@
 </template>
 
 <script setup lang="ts">
+import PageHeader from '../components/shared/PageHeader.vue'
 import { ref, onMounted } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { api } from '../lib/api/client'
@@ -368,12 +366,12 @@ const verifying = ref(false)
 const chainResult = ref<{ valid: boolean; event_count?: number; error?: string } | null>(null)
 
 function formatActor(actorId: string | null): string {
-  if (!actorId) return '—'
+  if (!actorId) return 'ï¿½'
   return 'usr_' + shortId(actorId).replace('#', '')
 }
 
 function formatTimestamp(ts: string | null): string {
-  if (!ts) return '—'
+  if (!ts) return 'ï¿½'
   const d = new Date(ts)
   return d.toLocaleString(undefined, {
     month: 'short',
@@ -616,5 +614,3 @@ async function exportJsonl() {
 
 onMounted(() => { planStore.fetchPlan(); loadEvents(null) })
 </script>
-
-

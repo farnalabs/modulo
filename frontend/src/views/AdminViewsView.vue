@@ -1,10 +1,7 @@
 ﻿<template>
   <div class="page-narrow">
     <header class="flex items-center justify-between">
-      <div>
-        <h1 class="text-2xl font-semibold tracking-tight">{{ $t('components.ViewToggle.saved_views') }}</h1>
-        <p class="mt-1 text-muted-foreground">{{ $t('views.AdminViewsView.manage_saved_views_for_organizing_and_filtering_data') }}</p>
-      </div>
+      <PageHeader :title="$t('components.ViewToggle.saved_views')" :subtitle="$t('views.AdminViewsView.manage_saved_views_for_organizing_and_filtering_data')" />
       <Button
         variant="default"
         class="border-primary/30 hover:border-primary/60"
@@ -246,6 +243,7 @@
 </template>
 
 <script setup lang="ts">
+import PageHeader from '../components/shared/PageHeader.vue'
 import { ref, onMounted } from 'vue'
 import { getAccessToken } from '../lib/api/client'
 import LoadingSpinner from '../components/shared/LoadingSpinner.vue'
@@ -466,5 +464,3 @@ async function duplicateView(v: SavedView) {
 
 onMounted(loadViews)
 </script>
-
-

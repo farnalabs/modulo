@@ -3,10 +3,7 @@
     <FeatureGate feature-name="environment_profiles" required-tier="team" show-disabled>
 
       <header class="flex items-center justify-between">
-        <div>
-          <h1 class="text-2xl font-semibold tracking-tight">Environment Profiles</h1>
-          <p class="mt-1 text-muted-foreground">Manage sandbox environment profiles for code execution</p>
-        </div>
+        <PageHeader title="Environment Profiles" subtitle="Manage sandbox environment profiles for code execution" />
         <Button
           variant="default"
            class="border-primary/30 hover:border-primary/60"
@@ -319,6 +316,7 @@
 </template>
 
 <script setup lang="ts">
+import PageHeader from '../components/shared/PageHeader.vue'
 import { ref, reactive, onMounted } from 'vue'
 import { api } from '../lib/api/client'
 import { formatApiError } from '../lib/api/formatError'

@@ -1,9 +1,6 @@
 ﻿<template>
   <div data-theme="agent" class="page-wide">
-    <header>
-      <h1 class="text-2xl font-semibold tracking-tight">{{ $t('views.AdminRunRetentionView.run_retention') }}</h1>
-      <p class="mt-1 text-muted-foreground">{{ $t('views.AdminRunRetentionView.configure_run_retention_policies_and_manual_purge') }}</p>
-    </header>
+    <PageHeader :title="$t('views.AdminRunRetentionView.run_retention')" :subtitle="$t('views.AdminRunRetentionView.configure_run_retention_policies_and_manual_purge')" />
 
     <FeatureGate feature-name="admin_run_retention" required-tier="team" show-disabled>
 
@@ -110,6 +107,7 @@
 </template>
 
 <script setup lang="ts">
+import PageHeader from '../components/shared/PageHeader.vue'
 import { ref, onMounted } from 'vue'
 import { api } from '../lib/api/client'
 import { formatApiError } from '../lib/api/formatError'
@@ -252,4 +250,3 @@ onMounted(() => {
   loadStorageInfo()
 })
 </script>
-
