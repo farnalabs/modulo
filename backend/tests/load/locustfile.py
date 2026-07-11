@@ -157,7 +157,10 @@ class HitlReviewUser(BaseLoadUser):
             time.sleep(2)
             return
 
-        run_id = _run_waitlist.popleft()
+        try:
+            run_id = _run_waitlist.popleft()
+        except IndexError:
+            return
         start = time.time()
         try:
             gates = get_pending_hitl(self.client, self.token, run_id, base_url=BASE_URL)
@@ -204,7 +207,10 @@ class WebSocketUser(BaseLoadUser):
             time.sleep(2)
             return
 
-        run_id = _run_waitlist[-1]
+        try:
+            run_id = _run_waitlist[-1]
+        except IndexError:
+            return
         start = time.time()
         try:
             ws_token = get_ws_token(self.client, self.token, base_url=BASE_URL)
