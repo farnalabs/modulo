@@ -256,7 +256,6 @@ def _make_verify_result(
     first_tampered_id: str | None = None,
     chain_head_match: bool | None = None,
     chain_count_mismatch: bool | None = None,
-    detail: str | None = None,
 ) -> dict[str, Any]:
     return {
         "valid": valid,
