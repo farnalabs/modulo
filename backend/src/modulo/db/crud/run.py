@@ -337,8 +337,8 @@ async def batch_delete_old_terminal_runs(
                 await session.execute(
                     select(Run.id)
                     .where(
-                        Run.status.in_(["complete", "failed", "cancelled"]),
-                        Run.completed_at < cutoff,
+                        Run.status.in_(["complete", "failed", "eval_failed", "cancelled"]),
+                        Run.created_at < cutoff,
                     )
                     .limit(batch_size)
                 )
@@ -377,7 +377,7 @@ async def purge_runs(
                 await session.execute(
                     select(Run.id)
                     .where(
-                        Run.status.in_(["complete", "failed", "cancelled"]),
+                        Run.status.in_(["complete", "failed", "eval_failed", "cancelled"]),
                         Run.completed_at < cutoff,
                     )
                     .limit(batch_size)
