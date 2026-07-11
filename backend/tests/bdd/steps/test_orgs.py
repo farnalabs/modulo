@@ -158,7 +158,6 @@ def remove_user_from_team(request, username: str, team_name: str, client, ctx):
 @when(parsers.parse('I deactivate user "{username}"'))
 def deactivate_user(request, username: str, client, ctx):
     target_user_id = ctx.get("target_user_id", str(uuid.uuid4()))
-    now_iso = datetime.now(UTC).isoformat()
 
     mock_account = MagicMock()
     mock_account.id = target_user_id
