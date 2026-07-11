@@ -159,3 +159,9 @@ WebSocket auth tokens, algorithm pinning, and SECRET_KEY entropy enforcement (PR
 - Added 5 new tests in test_auth_programming_error.py (integrity error→409 on login, SQLAlchemyError→503 on login, refresh, logout, me)
 - Updated Error Handling section with 5 new [x] checkboxes
 - 9 existing tests + 5 new tests all pass
+
+### 2026-07-11 — Round 2 re-QA (improve-architecture index 387)
+- Fixed B904: added `from None` to all `except IntegrityError`, `except ProgrammingError`, `except SQLAlchemyError` handlers (prevented internal exception chain leakage in responses)
+- Fixed B904: added `asyncio.CancelledError: raise` guards before all `except Exception` blocks (login, refresh, logout inner, ws_token, me, csrf_token) — prevented silent CancelledError suppression
+- Removed dead `except IntegrityError` handler from `me()` endpoint (SELECT-only query cannot raise IntegrityError)
+- Updated product map: added Round 2 QA entry

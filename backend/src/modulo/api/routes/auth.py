@@ -1,5 +1,6 @@
 """Auth routes: login, refresh, logout, me (v1 account management)."""
 
+import asyncio
 import logging
 import secrets
 import uuid
@@ -128,19 +129,21 @@ async def login(
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="Account already has an active session. Try again.",
-        )
+        ) from None
     except ProgrammingError:
         _log.warning("login.programming_error")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
-        )
+        ) from None
     except SQLAlchemyError:
         _log.warning("login.sqlalchemy_error")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Authentication service is temporarily unavailable. Please try again.",
-        )
+        ) from None
+    except asyncio.CancelledError:
+        raise
     except HTTPException:
         raise
     except Exception:
@@ -232,19 +235,21 @@ async def refresh(
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="A resource with this value already exists",
-        )
+        ) from None
     except ProgrammingError:
         _log.warning("refresh.programming_error")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
-        )
+        ) from None
     except SQLAlchemyError:
         _log.warning("refresh.sqlalchemy_error")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Token refresh is temporarily unavailable. Please try again.",
-        )
+        ) from None
+    except asyncio.CancelledError:
+        raise
     except HTTPException:
         raise
     except Exception:
@@ -322,19 +327,21 @@ async def logout(
                 raise HTTPException(
                     status_code=status.HTTP_409_CONFLICT,
                     detail="A resource with this value already exists",
-                )
+                ) from None
             except ProgrammingError:
                 _log.warning("logout.programming_error")
                 raise HTTPException(
                     status_code=status.HTTP_501_NOT_IMPLEMENTED,
                     detail="Feature is not available. Run database migrations to enable it.",
-                )
+                ) from None
             except SQLAlchemyError:
                 _log.warning("logout.sqlalchemy_error")
                 raise HTTPException(
                     status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
                     detail="Logout is temporarily unavailable. Please try again.",
-                )
+                ) from None
+            except asyncio.CancelledError:
+                raise
             except HTTPException:
                 raise
             except Exception:
@@ -380,7 +387,7 @@ async def ws_token(
                 )
                 return WsTokenResponse(
                     ws_token=token,
-                    token_type="ws-opaque",
+                    token_type="ws-opaque",  # noqa: S106
                     expires_in_seconds=settings.modulo_ws_token_ttl_seconds,
                 )
             except HTTPException:
@@ -401,9 +408,11 @@ async def ws_token(
         )
         return WsTokenResponse(
             ws_token=token,
-            token_type="ws-jwt",
+            token_type="ws-jwt",  # noqa: S106
             expires_in_seconds=settings.modulo_ws_token_ttl_seconds,
         )
+    except asyncio.CancelledError:
+        raise
     except HTTPException:
         raise
     except Exception:
@@ -422,23 +431,20 @@ async def me(
     try:
         async with session.begin():
             account = await get_account_by_id(session, current_user.account_id)
-    except IntegrityError:
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail="A resource with this value already exists",
-        )
     except ProgrammingError:
         _log.warning("me.programming_error")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
-        )
+        ) from None
     except SQLAlchemyError:
         _log.warning("me.sqlalchemy_error")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Account service is temporarily unavailable. Please try again.",
-        )
+        ) from None
+    except asyncio.CancelledError:
+        raise
     except HTTPException:
         raise
     except Exception:
@@ -475,6 +481,8 @@ async def csrf_token(
         response = JSONResponse(content=content)
         _set_csrf_cookie(response, token, settings)
         return response
+    except asyncio.CancelledError:
+        raise
     except HTTPException:
         raise
     except Exception:
