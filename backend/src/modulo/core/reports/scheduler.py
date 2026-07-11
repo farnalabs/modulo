@@ -23,6 +23,7 @@ Report generators are registered via ``register_report_type()``.
 import asyncio
 import datetime
 import logging
+import threading
 import uuid
 from collections.abc import Awaitable, Callable
 from typing import Any
@@ -54,6 +55,7 @@ except ImportError:
 _log = logging.getLogger(__name__)
 
 _ENGINE: AsyncEngine | None = None
+_ENGINE_LOCK: threading.Lock = threading.Lock()
 
 _TEST_ENGINE: AsyncEngine | None = None
 
@@ -118,7 +120,9 @@ def _get_engine() -> AsyncEngine:
         return _TEST_ENGINE
     global _ENGINE
     if _ENGINE is None:
-        _ENGINE = create_async_engine(get_settings().database_url)
+        with _ENGINE_LOCK:
+            if _ENGINE is None:
+                _ENGINE = create_async_engine(get_settings().database_url)
     return _ENGINE
 
 
@@ -158,14 +162,17 @@ async def _set_rls_org(session: AsyncSession, org_id: uuid.UUID) -> None:
 # ---------------------------------------------------------------------------
 
 celery_app_global: Any = None
+_CELERY_LOCK: threading.Lock = threading.Lock()
 
 
 def get_celery_app() -> Any:
     global celery_app_global
     if celery_app_global is None:
-        from modulo.celery_app import get_celery_app as _get_celery_app
+        with _CELERY_LOCK:
+            if celery_app_global is None:
+                from modulo.celery_app import get_celery_app as _get_celery_app
 
-        celery_app_global = _get_celery_app()
+                celery_app_global = _get_celery_app()
     return celery_app_global
 
 
@@ -193,7 +200,7 @@ async def _fire_scheduled_report(
 ) -> dict[str, Any]:
     """Core fire logic — runs inside asyncio.run() inside the Celery task."""
     engine = _get_engine()
-    factory = async_sessionmaker(engine, expire_on_commit=False)
+    factory = async_sessionmaker(engine, expire_on_commit=False, autobegin=False)
 
     async with factory() as session, session.begin():
         await _set_rls_org(session, org_id)
@@ -511,22 +518,23 @@ class DatabaseReportScheduler(Scheduler):
     async def _fetch_due_reports(self) -> list[dict[str, Any]]:
         """Async query for scheduled reports due to fire."""
         try:
-            factory = async_sessionmaker(_get_engine(), expire_on_commit=False)
+            factory = async_sessionmaker(_get_engine(), expire_on_commit=False, autobegin=False)
 
             async with factory() as session:
-                now = datetime.datetime.now(datetime.UTC)
-                result = await session.execute(
-                    select(
-                        ScheduledReport.id,
-                        ScheduledReport.organisation_id,
-                        ScheduledReport.cron_expression,
-                        ScheduledReport.next_send_at,
-                    ).where(
-                        ScheduledReport.active == True,  # noqa: E712
-                        ScheduledReport.next_send_at <= now,
+                async with session.begin():
+                    now = datetime.datetime.now(datetime.UTC)
+                    result = await session.execute(
+                        select(
+                            ScheduledReport.id,
+                            ScheduledReport.organisation_id,
+                            ScheduledReport.cron_expression,
+                            ScheduledReport.next_send_at,
+                        ).where(
+                            ScheduledReport.active == True,  # noqa: E712
+                            ScheduledReport.next_send_at <= now,
+                        )
                     )
-                )
-                rows = result.all()
+                    rows = result.all()
 
                 reports: list[dict[str, Any]] = []
                 for row in rows:
