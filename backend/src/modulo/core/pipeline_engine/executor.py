@@ -27,7 +27,7 @@ from typing import Any
 
 from langgraph.errors import NodeInterrupt
 from sqlalchemy import select
-from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker
+from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
 from modulo.core.audit_logger import append_audit_event
 from modulo.core.eval_engine import (
@@ -177,7 +177,7 @@ class PipelineExecutor:
         checkpointer_conn_string: str | None = None,
     ) -> None:
         self._engine = db_engine
-        self._session_factory = async_sessionmaker(db_engine, expire_on_commit=False)
+        self._session_factory = async_sessionmaker(db_engine, expire_on_commit=False, autobegin=False)
         self._checkpointer_conn_string = checkpointer_conn_string
         self._otel_bridge = LangGraphOtelBridge()
 
@@ -241,9 +241,9 @@ class PipelineExecutor:
 
     async def _load_eval_defs_for_pipeline(
         self,
-        session: Any,
+        session: AsyncSession,
         pipeline_id: uuid.UUID,
-    ) -> list[Any]:
+    ) -> list[EvalDefinition]:
         """Load eval definitions for a pipeline that are scoped to a node."""
         eval_stmt = select(EvalDefinition).where(
             EvalDefinition.pipeline_id == pipeline_id,
@@ -253,7 +253,7 @@ class PipelineExecutor:
 
     @staticmethod
     def _build_eval_defs_by_node(
-        eval_rows: list[Any],
+        eval_rows: list[EvalDefinition],
         org_id: uuid.UUID,
         pipeline_id: uuid.UUID,
     ) -> dict[str, list[EvalDefDTO]]:
@@ -349,7 +349,7 @@ class PipelineExecutor:
         run_id: uuid.UUID,
     ) -> bool:
         """Execute the DB cancellation check query."""
-        async with self._session_factory() as session:
+        async with self._session_factory() as session, session.begin():
             await set_rls_org(session, org_id)
             run = await get_run(session, run_id)
             return run is not None and run.cancellation_requested
@@ -810,7 +810,7 @@ class PipelineExecutor:
 
     async def _check_eval_suites(
         self,
-        session: Any,
+        session: AsyncSession,
         run_id: uuid.UUID,
         pipeline_id: uuid.UUID,
     ) -> list[SuiteEvalResult]:
