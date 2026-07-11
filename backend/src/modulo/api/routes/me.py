@@ -31,6 +31,7 @@ from modulo.core.remy.context_source_service import (
 from modulo.db.crud.account import get_account_by_id, update_account_preferences
 from modulo.db.crud.token_family import blacklist_family, list_families_for_account
 from modulo.db.models.remy_skill import RemySkill
+from modulo.db.rls import set_rls_org
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/v1", tags=["user"])
@@ -183,6 +184,7 @@ async def list_user_skills(
 ) -> list[SkillResponse]:
     try:
         async with session.begin():
+            await set_rls_org(session, current_user.organisation_id)
             skills = await get_user_skills(session, current_user.account_id)
     except ProgrammingError:
         logger.exception("routes.me")
@@ -204,6 +206,7 @@ async def create_user_skill(
 ) -> SkillResponse:
     try:
         async with session.begin():
+            await set_rls_org(session, current_user.organisation_id)
             skill = RemySkill(
                 id=uuid.uuid4(),
                 organisation_id=None,
@@ -237,6 +240,7 @@ async def update_user_skill(
 ) -> SkillResponse:
     try:
         async with session.begin():
+            await set_rls_org(session, current_user.organisation_id)
             skill = await get_user_skill_or_404(session, current_user.account_id, skill_id)
             if req.name is not None:
                 skill.name = req.name
@@ -269,6 +273,7 @@ async def delete_user_skill(
 ) -> None:
     try:
         async with session.begin():
+            await set_rls_org(session, current_user.organisation_id)
             skill = await get_user_skill_or_404(session, current_user.account_id, skill_id)
             await session.delete(skill)
 

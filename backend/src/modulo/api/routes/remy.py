@@ -940,6 +940,10 @@ async def stream_chat(
                 except HTTPException as exc:
                     yield f"event: error\ndata: {json.dumps({'detail': exc.detail})}\n\n"
                     return
+                except Exception as exc:
+                    logger.exception("remy.backend_construction_failed")
+                    yield f"event: error\ndata: {json.dumps({'detail': f'Failed to initialize backend: {exc}'})}\n\n"
+                    return
 
                 # 3. Construct system prompt from config + skills
                 supports_tools = getattr(backend, "supports_tools", False)
