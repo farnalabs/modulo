@@ -22,10 +22,9 @@ code:
   - backend/src/modulo/api/mcp_server.py
   - backend/src/modulo/auth/sso.py
   - backend/src/modulo/core/feature_flags.py
-  - backend/src/modulo/db/migrations/versions/0026_team_rbac_cap.py
+  - backend/src/modulo/db/migrations/versions/0002_v2_teams_library.py
 unit-tests:
   - backend/tests/unit/auth/test_team_rbac.py
-  - backend/tests/unit/db/test_migration_0026.py
 depends-on: [feat-teams-team-crud]
 status: partial
 ---
@@ -241,6 +240,21 @@ Org-level and team-level role hierarchy with privilege cap, team membership mana
 - No `PATCH /teams/{id}/members/{id}` audit event for role changes (PUT audit events on team create/update/delete only — role changes are not audited)
 
 ## QA History
+
+### 2026-07-11 — Round 2 re-QA (index 359)
+
+**Fixed:**
+- Removed stale migration file `test_migration_0026.py` which referenced non-existent `0026_team_rbac_cap.py` — the privilege cap trigger logic was consolidated into `0002_v2_teams_library.py`
+- Updated product map frontmatter: `code:` path from `0026_team_rbac_cap.py` → `0002_v2_teams_library.py`
+- Updated product map frontmatter: `unit-tests:` removed stale `test_migration_0026.py` ref
+
+**Verified:**
+- Error handling correct: IntegrityError→409 before SQLAlchemyError→503 in all team routes
+- CancelledError guard not needed (Python 3.12+ — CancelledError doesn't inherit from Exception)
+- Frontmatter accurate (migration file path now correct)
+- All 17 known gaps still valid (no regressions)
+
+**Status:** partial
 
 ### 2026-07-04 — Cross-cutting QA (index 127)
 - Fixed CRITICAL: Added ProgrammingError→501 catches to all 8 unprotected routes in teams.py (create, get, update, delete, list_members, add_member, remove_member, change_member_role) — was returning raw 500 on missing DB table. Only list_teams had the catch.
