@@ -135,9 +135,10 @@
 <script setup lang="ts">
 import PageHeader from '../components/shared/PageHeader.vue'
 import FilterBar from '../components/shared/FilterBar.vue'
-import { ref, onMounted } from 'vue'
+import { ref, computed } from 'vue'
 import { useRouter } from 'vue-router'
 import { fetchErrorGroups, type ErrorGroupSummary, type FetchErrorGroupsParams } from '../lib/api/errors'
+import { useDataFetch } from '../composables/useDataFetch'
 import LoadingSpinner from '../components/shared/LoadingSpinner.vue'
 import ErrorAlert from '../components/shared/ErrorAlert.vue'
 import PageTabs from "../components/PageTabs.vue"
@@ -153,13 +154,20 @@ import EmptyState from '../components/shared/EmptyState.vue'
 
 const router = useRouter()
 
-const groups = ref<ErrorGroupSummary[]>([])
-const loading = ref(true)
-const error = ref<string | null>(null)
-const total = ref(0)
 const limit = ref(20)
 const offset = ref(0)
 const currentPage = ref(1)
+
+const { data: groupsData, loading, error, load: loadGroups } = useDataFetch(
+  () => fetchErrorGroups(buildParams()).then(
+    d => ({ data: d }),
+    e => ({ error: { detail: `Failed to load error groups: ${formatApiError(e)}` } }),
+  ),
+  { initialValue: { items: [] as ErrorGroupSummary[], total: 0 } },
+)
+
+const groups = computed(() => groupsData.value?.items ?? [])
+const total = computed(() => groupsData.value?.total ?? 0)
 
 const filterLevel = ref('')
 const filterStatus = ref('')
@@ -173,10 +181,8 @@ function handleFilterUpdate(key: string, value: string) {
   else if (key === 'source') filterSource.value = value
 }
 
-function buildParams(offs?: number): FetchErrorGroupsParams {
-  const params: FetchErrorGroupsParams = { limit: limit.value }
-  if (offs !== undefined) params.offset = offs
-  else params.offset = offset.value
+function buildParams(): FetchErrorGroupsParams {
+  const params: FetchErrorGroupsParams = { limit: limit.value, offset: offset.value }
   if (filterLevel.value) params.level = filterLevel.value
   if (filterStatus.value) params.status = filterStatus.value
   if (filterSource.value) params.source = filterSource.value
@@ -185,24 +191,10 @@ function buildParams(offs?: number): FetchErrorGroupsParams {
   return params
 }
 
-async function loadGroups(offs?: number) {
-  loading.value = true
-  error.value = null
-  try {
-    const data = await fetchErrorGroups(buildParams(offs))
-    groups.value = data.items
-    total.value = data.total
-  } catch (e: unknown) {
-    error.value = `Failed to load error groups: ${formatApiError(e)}`
-  } finally {
-    loading.value = false
-  }
-}
-
 function applyFilters() {
   currentPage.value = 1
   offset.value = 0
-  loadGroups(0)
+  loadGroups()
 }
 
 function resetFilters() {
@@ -213,7 +205,7 @@ function resetFilters() {
   filterSearch.value = ''
   currentPage.value = 1
   offset.value = 0
-  loadGroups(0)
+  loadGroups()
 }
 
 function nextPage() {
@@ -221,7 +213,7 @@ function nextPage() {
   if (newOffset >= total.value) return
   currentPage.value++
   offset.value = newOffset
-  loadGroups(newOffset)
+  loadGroups()
 }
 
 function prevPage() {
@@ -229,7 +221,7 @@ function prevPage() {
   if (newOffset === offset.value) return
   currentPage.value--
   offset.value = newOffset
-  loadGroups(newOffset)
+  loadGroups()
 }
 
 function navigateToDetail(id: string) {
@@ -261,5 +253,5 @@ function formatDate(dateStr: string): string {
   })
 }
 
-onMounted(() => loadGroups(0))
+/* onMounted handled by useDataFetch */
 </script>

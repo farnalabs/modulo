@@ -183,8 +183,9 @@
 
 <script setup lang="ts">
 import PageHeader from '../components/shared/PageHeader.vue'
-import { ref, onMounted, onBeforeUnmount } from 'vue'
+import { ref, computed, onBeforeUnmount } from 'vue'
 import { useApi } from '../composables/useApi'
+import { useDataFetch } from '../composables/useDataFetch'
 import LoadingSpinner from '../components/shared/LoadingSpinner.vue'
 import { Button } from '@/components/ui/button'
 import EmptyState from '../components/shared/EmptyState.vue'
@@ -212,12 +213,16 @@ interface UserListResponse {
 
 const { get, put: httpPut, post } = useApi()
 
-const users = ref<UserItem[]>([])
-const loading = ref(true)
-const error = ref<string | null>(null)
 const page = ref(1)
 const pageSize = ref(50)
-const total = ref(0)
+
+const { data: usersResp, loading, error, load: loadUsers } = useDataFetch(
+  () => get<UserListResponse>(`/api/v1/admin/users?page=${page.value}&page_size=${pageSize.value}`).then(d => ({ data: d })),
+  { initialValue: { items: [] as UserItem[], total: 0, page: 1, page_size: 50 } as UserListResponse }
+)
+
+const users = computed(() => usersResp.value?.items ?? [])
+const total = computed(() => usersResp.value?.total ?? 0)
 const showCreate = ref(false)
 const createError = ref('')
 const newUser = ref({ email: '', display_name: '', password: '', org_role: 'runner' })
@@ -243,25 +248,6 @@ function showFlash(type: 'success' | 'error', text: string) {
 function updateUserInList(data: UserItem) {
   const idx = users.value.findIndex(x => x.id === data.id)
   if (idx !== -1) users.value[idx] = data
-}
-
-async function loadUsers() {
-  loading.value = true
-  error.value = null
-  try {
-    const data = await get<UserListResponse>(`/api/v1/admin/users?page=${page.value}&page_size=${pageSize.value}`)
-    if (data && Array.isArray(data.items)) {
-      users.value = data.items
-      total.value = data.total ?? 0
-    } else {
-      users.value = []
-      total.value = 0
-    }
-  } catch (e) {
-    error.value = e instanceof Error ? e.message : 'Failed to load users'
-  } finally {
-    loading.value = false
-  }
 }
 
 const selectedRole = ref<string>('')
@@ -394,5 +380,5 @@ onBeforeUnmount(() => {
   if (copyTimeout) clearTimeout(copyTimeout)
   if (flashTimeout) clearTimeout(flashTimeout)
 })
-onMounted(loadUsers)
+/* onMounted handled by useDataFetch */
 </script>

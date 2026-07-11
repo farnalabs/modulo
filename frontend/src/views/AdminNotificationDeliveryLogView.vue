@@ -247,8 +247,9 @@
 
 <script setup lang="ts">
 import PageHeader from '../components/shared/PageHeader.vue'
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed } from 'vue'
 import { api } from '../lib/api/client'
+import { useDataFetch } from '../composables/useDataFetch'
 import { formatApiError } from '../lib/api/formatError'
 import type { components } from '../lib/api/client'
 import LoadingSpinner from '../components/shared/LoadingSpinner.vue'
@@ -257,13 +258,29 @@ import { Button } from '@/components/ui/button'
 
 type DeliveryLogEntry = components['schemas']['DeliveryLogEntry']
 
-const items = ref<DeliveryLogEntry[]>([])
-const loading = ref(true)
-const error = ref<string | null>(null)
-const total = ref(0)
-const nextCursor = ref<string | null>(null)
-const prevCursor = ref<string | null>(null)
-const currentCursor = ref<string | null>(null)
+const cursor = ref<string | null>(null)
+
+const { data: deliveriesData, loading, error, load: loadDeliveries } = useDataFetch(
+  () => {
+    const params: Record<string, unknown> = { limit: 50 }
+    if (cursor.value) params.cursor = cursor.value
+    if (filterStatus.value) params.status = filterStatus.value
+    if (filterEventType.value) params.event_type = filterEventType.value
+    if (filterDateFrom.value) params.from = filterDateFrom.value
+    if (filterDateTo.value) params.to = filterDateTo.value
+    return api.GET('/api/v1/admin/notifications/deliveries', { params: { query: params as any } })
+  },
+  { initialValue: { items: [] as DeliveryLogEntry[], total: 0, next_cursor: null as string | null, prev_cursor: null as string | null } }
+)
+
+const items = computed(() => deliveriesData.value?.items ?? [])
+const total = computed(() => deliveriesData.value?.total ?? 0)
+const nextCursor = computed(() => deliveriesData.value?.next_cursor ?? null)
+const prevCursor = computed(() => {
+  const dc = deliveriesData.value
+  if (!dc?.prev_cursor) return null
+  return dc.prev_cursor
+})
 
 const filterStatus = ref('')
 const filterEventType = ref('')
@@ -308,44 +325,17 @@ function toggleRow(id: string) {
   expandedId.value = expandedId.value === id ? null : id
 }
 
-async function loadDeliveries(cursor?: string | null) {
-  loading.value = true
-  error.value = null
+function goToPage(c: string | null) {
+  if (!c) return
+  cursor.value = c
   retrySuccessMessage.value = null
-  try {
-    const params: Record<string, unknown> = { limit: 50 }
-    if (cursor) params.cursor = cursor
-    if (filterStatus.value) params.status = filterStatus.value
-    if (filterEventType.value) params.event_type = filterEventType.value
-    if (filterDateFrom.value) params.from = filterDateFrom.value
-    if (filterDateTo.value) params.to = filterDateTo.value
-    const { data, error: err } = await api.GET('/api/v1/admin/notifications/deliveries', {
-      params: { query: params as any },
-    })
-    if (err) {
-      error.value = `Failed to load delivery logs: ${formatApiError(err)}`
-    } else if (data) {
-      items.value = data.items
-      total.value = data.total
-      nextCursor.value = data.next_cursor
-      prevCursor.value = cursor ?? null
-      currentCursor.value = cursor ?? null
-      expandedId.value = null
-    }
-  } catch (e: unknown) {
-    error.value = `Failed to load delivery logs: ${formatApiError(e)}`
-  } finally {
-    loading.value = false
-  }
-}
-
-function goToPage(cursor: string | null) {
-  if (!cursor) return
-  loadDeliveries(cursor)
+  loadDeliveries()
 }
 
 function applyFilters() {
-  loadDeliveries(null)
+  cursor.value = null
+  retrySuccessMessage.value = null
+  loadDeliveries()
 }
 
 function resetFilters() {
@@ -353,7 +343,9 @@ function resetFilters() {
   filterEventType.value = ''
   filterDateFrom.value = ''
   filterDateTo.value = ''
-  loadDeliveries(null)
+  cursor.value = null
+  retrySuccessMessage.value = null
+  loadDeliveries()
 }
 
 function showDeadLettered() {
@@ -361,7 +353,9 @@ function showDeadLettered() {
   filterEventType.value = ''
   filterDateFrom.value = ''
   filterDateTo.value = ''
-  loadDeliveries(null)
+  cursor.value = null
+  retrySuccessMessage.value = null
+  loadDeliveries()
 }
 
 async function retryDelivery(entry: DeliveryLogEntry) {
@@ -388,10 +382,10 @@ async function retryDelivery(entry: DeliveryLogEntry) {
       retryMessages.value[entry.id] = { type: 'error', text: `Retry failed: ${formatApiError(err)}` }
     } else if (data) {
       if (data.success) {
-        await loadDeliveries(currentCursor.value)
+        await loadDeliveries()
         retryMessages.value[entry.id] = { type: 'success', text: 'Retry succeeded' }
       } else {
-        await loadDeliveries(currentCursor.value)
+        await loadDeliveries()
         retryMessages.value[entry.id] = { type: 'error', text: `Retry failed: ${data.error || `HTTP ${data.status_code}`}` }
       }
     }
@@ -412,7 +406,7 @@ async function retryAllFailed() {
     if (err) {
       error.value = `Retry all failed: ${formatApiError(err)}`
     } else if (data) {
-      await loadDeliveries(currentCursor.value)
+      await loadDeliveries()
       const msg = `Retried ${data.retried} deliver${data.retried === 1 ? 'y' : 'ies'}`
       retrySuccessMessage.value = data.success ? msg : `${msg} with ${data.errors?.length || 0} error(s)`
     }
@@ -423,5 +417,5 @@ async function retryAllFailed() {
   }
 }
 
-onMounted(() => loadDeliveries(null))
+/* onMounted handled by useDataFetch */
 </script>

@@ -166,8 +166,9 @@
 
 <script setup lang="ts">
 import PageHeader from '../components/shared/PageHeader.vue'
-import { ref, reactive, onMounted } from 'vue'
+import { ref, reactive, computed, watch } from 'vue'
 import { api } from '../lib/api/client'
+import { useDataFetch } from '../composables/useDataFetch'
 import { formatApiError } from '../lib/api/formatError'
 import LoadingSpinner from '../components/shared/LoadingSpinner.vue'
 import ErrorAlert from '../components/shared/ErrorAlert.vue'
@@ -185,9 +186,22 @@ interface PluginItem {
   health_checked_at: string | null
 }
 
-const plugins = ref<PluginItem[]>([])
-const loading = ref(true)
-const error = ref<string | null>(null)
+const { data: pluginsData, loading, error, load: loadPlugins } = useDataFetch(
+  () => (api as any).GET('/api/v1/plugins') as Promise<{ data?: PluginItem[]; error?: { detail?: string } }>,
+  { initialValue: [] as PluginItem[] }
+)
+
+const plugins = computed(() => pluginsData.value ?? [])
+
+watch(pluginsData, (newData) => {
+  if (newData) {
+    for (const p of newData) {
+      if (activeStates[p.PLUGIN_ID] === undefined) {
+        activeStates[p.PLUGIN_ID] = true
+      }
+    }
+  }
+})
 
 const activeStates = reactive<Record<string, boolean>>({})
 const expanded = reactive<Record<string, boolean>>({})
@@ -219,27 +233,4 @@ async function togglePlugin(id: string) {
   }
 }
 
-async function loadPlugins() {
-  loading.value = true
-  error.value = null
-  try {
-    const { data, error: err } = await (api as any).GET('/api/v1/plugins')
-    if (err) {
-      error.value = `Failed to load plugins: ${formatApiError(err)}`
-    } else if (data) {
-      plugins.value = data as PluginItem[]
-      for (const p of data as PluginItem[]) {
-        if (activeStates[p.PLUGIN_ID] === undefined) {
-          activeStates[p.PLUGIN_ID] = true
-        }
-      }
-    }
-  } catch (e: unknown) {
-    error.value = `Failed to load plugins: ${formatApiError(e)}`
-  } finally {
-    loading.value = false
-  }
-}
-
-onMounted(loadPlugins)
 </script>

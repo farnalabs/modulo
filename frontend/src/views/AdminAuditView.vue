@@ -291,9 +291,10 @@
 <script setup lang="ts">
 import PageHeader from '../components/shared/PageHeader.vue'
 import FilterBar from '../components/shared/FilterBar.vue'
-import { ref, onMounted } from 'vue'
+import { ref, computed } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { api } from '../lib/api/client'
+import { useDataFetch } from '../composables/useDataFetch'
 import type { components } from '../lib/api/client'
 import LoadingSpinner from '../components/shared/LoadingSpinner.vue'
 import ErrorAlert from '../components/shared/ErrorAlert.vue'
@@ -314,13 +315,18 @@ const planStore = usePlanStore()
 
 type AuditEvent = components['schemas']['AuditEventResponse']
 
-const events = ref<AuditEvent[]>([])
-const loading = ref(true)
-const error = ref<string | null>(null)
-const total = ref(0)
-const nextCursor = ref<string | null>(null)
-const prevCursor = ref<string | null>(null)
+const cursor = ref<string | null>(null)
 const currentPage = ref(1)
+
+const { data: auditData, loading, error, load: loadEvents } = useDataFetch(
+  () => api.GET('/api/v1/admin/audit', { params: { query: buildQuery() as any } }),
+  { initialValue: { items: [] as AuditEvent[], total: 0, next_cursor: null as string | null, prev_cursor: null as string | null } }
+)
+
+const events = computed(() => auditData.value?.items ?? [])
+const total = computed(() => auditData.value?.total ?? 0)
+const nextCursor = computed(() => auditData.value?.next_cursor ?? null)
+const prevCursor = computed(() => auditData.value?.prev_cursor ?? null)
 
 const filterEventType = ref('')
 const filterActor = ref('')
@@ -392,9 +398,9 @@ function toggleExpand(id: string) {
   expandedEvent.value = events.value.find(e => e.id === id) ?? null
 }
 
-function buildQuery(cursor?: string | null) {
+function buildQuery() {
   const q: Record<string, unknown> = { limit: 50 }
-  if (cursor) q.cursor = cursor
+  if (cursor.value) q.cursor = cursor.value
   if (filterEventType.value) q.event_type = filterEventType.value
   if (filterActor.value) q.user_id = filterActor.value
   if (filterDateFrom.value) q.from_date = filterDateFrom.value
@@ -403,41 +409,19 @@ function buildQuery(cursor?: string | null) {
   return q
 }
 
-async function loadEvents(cursor?: string | null) {
-  loading.value = true
-  error.value = null
-  try {
-    const { data, error: err } = await api.GET('/api/v1/admin/audit', {
-      params: { query: buildQuery(cursor) as any },
-    })
-    if (err) {
-      error.value = `${t('views.AdminAuditView.failed_to_load_audit_events')} ${formatError(err)}`
-    } else if (data) {
-      events.value = data.items
-      total.value = data.total
-      nextCursor.value = data.next_cursor
-      prevCursor.value = data.prev_cursor
-      expandedId.value = null
-      expandedEvent.value = null
-    }
-  } catch (e: unknown) {
-    error.value = `${t('views.AdminAuditView.failed_to_load_audit_events')} ${formatApiError(e)}`
-  } finally {
-    loading.value = false
-  }
-}
-
-function goToPage(cursor: string | null) {
-  if (!cursor) return
-  currentPage.value = prevCursor.value === cursor
+function goToPage(c: string | null) {
+  if (!c) return
+  currentPage.value = prevCursor.value === c
     ? Math.max(1, currentPage.value - 1)
     : currentPage.value + 1
-  loadEvents(cursor)
+  cursor.value = c
+  loadEvents()
 }
 
 function applyFilters() {
   currentPage.value = 1
-  loadEvents(null)
+  cursor.value = null
+  loadEvents()
 }
 
 function resetFilters() {
@@ -447,7 +431,8 @@ function resetFilters() {
   filterDateTo.value = ''
   filterTargetType.value = ''
   currentPage.value = 1
-  loadEvents(null)
+  cursor.value = null
+  loadEvents()
 }
 
 async function exportCsv() {
@@ -583,5 +568,5 @@ async function exportJsonl() {
   }
 }
 
-onMounted(() => { planStore.fetchPlan(); loadEvents(null) })
+planStore.fetchPlan()
 </script>

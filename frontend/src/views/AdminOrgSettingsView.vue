@@ -136,10 +136,11 @@
 <script setup lang="ts">
 import PageHeader from '../components/shared/PageHeader.vue'
 import SectionCard from '../components/shared/SectionCard.vue'
-import { ref, reactive, onMounted } from 'vue'
+import { ref, computed } from 'vue'
 import { useRouter } from 'vue-router'
 import { Button } from '@/components/ui/button'
 import { api } from '../lib/api/client'
+import { useDataFetch } from '../composables/useDataFetch'
 import LoadingSpinner from '../components/shared/LoadingSpinner.vue'
 import ErrorAlert from '../components/shared/ErrorAlert.vue'
 import FormDialog from '../components/shared/FormDialog.vue'
@@ -151,17 +152,31 @@ import { formatApiError } from '../lib/api/formatError'
 const planStore = usePlanStore()
 const router = useRouter()
 
-const loading = ref(true)
-const loadError = ref<string | null>(null)
+const { data: orgData, loading, error: loadError, load: loadData } = useDataFetch(
+  async () => {
+    const [overviewResp, exportResp] = await Promise.all([
+      (api as any).GET('/api/v1/admin/billing/overview'),
+      (api as any).GET('/api/v1/admin/org/export'),
+    ])
+    if (overviewResp.error) return { error: { detail: `Failed to load org info: ${formatApiError(overviewResp.error)}` } }
+    if (exportResp.error) return { error: { detail: `Failed to load org info: ${formatApiError(exportResp.error)}` } }
+    const overview = overviewResp.data as BillingOverviewResponse
+    const exportResult = exportResp.data as ExportResponse
+    return {
+      data: {
+        id: exportResult.organisation?.id ?? '',
+        name: exportResult.organisation?.name ?? 'Unnamed Org',
+        slug: exportResult.organisation?.slug ?? '',
+        createdAt: exportResult.organisation?.created_at ?? '',
+        planTier: overview.plan_tier ?? 'community',
+        memberCount: overview.total_users ?? 0,
+      }
+    }
+  },
+  { initialValue: { id: '', name: '', slug: '', planTier: 'community' as string, createdAt: '', memberCount: 0 } }
+)
 
-const orgInfo = reactive({
-  id: '',
-  name: '',
-  slug: '',
-  planTier: 'community' as string,
-  createdAt: '',
-  memberCount: 0,
-})
+const orgInfo = computed(() => orgData.value!)
 
 interface ExportResponse {
   organisation?: {
@@ -199,40 +214,6 @@ function formatDate(dateStr: string): string {
   if (!dateStr) return 'N/A'
   const d = new Date(dateStr)
   return d.toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: 'numeric' })
-}
-
-async function loadData() {
-  loading.value = true
-  loadError.value = null
-  try {
-    const [overviewResp, exportResp] = await Promise.all([
-      (api as any).GET('/api/v1/admin/billing/overview'),
-      (api as any).GET('/api/v1/admin/org/export'),
-    ])
-
-    if (overviewResp.error) {
-      loadError.value = `Failed to load org info: ${formatApiError(overviewResp.error)}`
-      return
-    }
-    if (exportResp.error) {
-      loadError.value = `Failed to load org info: ${formatApiError(exportResp.error)}`
-      return
-    }
-
-    const overview = overviewResp.data as BillingOverviewResponse
-    const exportResult = exportResp.data as ExportResponse
-
-    orgInfo.id = exportResult.organisation?.id ?? ''
-    orgInfo.name = exportResult.organisation?.name ?? 'Unnamed Org'
-    orgInfo.slug = exportResult.organisation?.slug ?? ''
-    orgInfo.createdAt = exportResult.organisation?.created_at ?? ''
-    orgInfo.planTier = overview.plan_tier ?? 'community'
-    orgInfo.memberCount = overview.total_users ?? 0
-  } catch (e: unknown) {
-    loadError.value = `Failed to load org info: ${formatApiError(e)}`
-  } finally {
-    loading.value = false
-  }
 }
 
 async function startExport() {
@@ -299,5 +280,5 @@ async function confirmDelete() {
   }
 }
 
-onMounted(() => { planStore.fetchPlan(); loadData() })
+planStore.fetchPlan()
 </script>

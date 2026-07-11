@@ -210,8 +210,9 @@
 
 <script setup lang="ts">
 import PageHeader from '../components/shared/PageHeader.vue'
-import { ref, onMounted } from 'vue'
+import { ref, computed } from 'vue'
 import { getAccessToken } from '../lib/api/client'
+import { useDataFetch } from '../composables/useDataFetch'
 import LoadingSpinner from '../components/shared/LoadingSpinner.vue'
 import ErrorAlert from '../components/shared/ErrorAlert.vue'
 import {
@@ -235,9 +236,24 @@ interface SavedView {
   created_at: string
 }
 
-const views = ref<SavedView[]>([])
-const loading = ref(true)
-const error = ref<string | null>(null)
+const { data: viewsData, loading, error, load: loadViews } = useDataFetch(
+  async () => {
+    try {
+      const res = await fetch('/api/v1/views', { headers: getHeaders() })
+      if (!res.ok) {
+        const errData = await res.json().catch(() => null)
+        return { error: { detail: errData?.detail ?? `Failed to load views (${res.status})` } }
+      }
+      const data = await res.json()
+      return { data: (data.items ?? data) as SavedView[] }
+    } catch (e: unknown) {
+      return { error: { detail: formatApiError(e) } }
+    }
+  },
+  { initialValue: [] as SavedView[] },
+)
+
+const views = computed(() => viewsData.value ?? [])
 
 const showForm = ref(false)
 const editingId = ref<string | null>(null)
@@ -262,24 +278,6 @@ function getHeaders(): Record<string, string> {
   const token = getAccessToken()
   if (token) headers['Authorization'] = `Bearer ${token}`
   return headers
-}
-
-async function loadViews() {
-  loading.value = true
-  error.value = null
-  try {
-    const res = await fetch('/api/v1/views', { headers: getHeaders() })
-    if (!res.ok) {
-      const errData = await res.json().catch(() => null)
-      throw new Error(errData?.detail ?? `Failed to load views (${res.status})`)
-    }
-    const data = await res.json()
-    views.value = data.items ?? data
-  } catch (e: unknown) {
-    error.value = formatApiError(e)
-  } finally {
-    loading.value = false
-  }
 }
 
 function filtersSummary(filters: SavedView['filters']): string {
@@ -450,5 +448,5 @@ function viewActions(v: SavedView) {
   ]
 }
 
-onMounted(loadViews)
+/* onMounted handled by useDataFetch */
 </script>

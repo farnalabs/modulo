@@ -108,8 +108,9 @@
 
 <script setup lang="ts">
 import PageHeader from '../components/shared/PageHeader.vue'
-import { ref, onMounted } from 'vue'
+import { ref, computed } from 'vue'
 import { api } from '../lib/api/client'
+import { useDataFetch } from '../composables/useDataFetch'
 import { formatApiError } from '../lib/api/formatError'
 import { usePlanStore } from '../stores/planStore'
 import FeatureGate from '../components/FeatureGate.vue'
@@ -135,17 +136,21 @@ interface PurgeResult {
   deleted_count: number
 }
 
-const loading = ref(true)
-const loadError = ref<string | null>(null)
+const { data: retentionData, loading, error: loadError, load: loadData } = useDataFetch(
+  () => (api as any).GET('/api/v1/admin/runs/retention') as Promise<{ data?: RetentionConfig; error?: { detail?: string } }>,
+)
 
-const retentionDays = ref<number | null>(null)
+const retentionDays = computed(() => retentionData.value?.retention_days ?? null)
 const savingRetention = ref(false)
 const retentionSaveError = ref<string | null>(null)
 const retentionSaveSuccess = ref(false)
 
-const storageLoading = ref(true)
-const storageError = ref<string | null>(null)
-const storageInfo = ref<StorageInfo>({ total_runs: 0, status_breakdown: {}, estimated_saved_bytes: 0 })
+const { data: storageResp, loading: storageLoading, error: storageError, load: loadStorageInfo } = useDataFetch(
+  () => (api as any).GET('/api/v1/admin/runs/storage') as Promise<{ data?: StorageInfo; error?: { detail?: string } }>,
+  { initialValue: { total_runs: 0, status_breakdown: {}, estimated_saved_bytes: 0 } as StorageInfo }
+)
+
+const storageInfo = computed(() => storageResp.value ?? { total_runs: 0, status_breakdown: {}, estimated_saved_bytes: 0 } as StorageInfo)
 
 const purgeAge = ref<number | null>(null)
 const purging = ref(false)
@@ -158,41 +163,6 @@ function formatBytes(bytes: number): string {
   const i = Math.floor(Math.log(bytes) / Math.log(1024))
   const val = bytes / Math.pow(1024, i)
   return `${val.toFixed(1)} ${units[i]}`
-}
-
-async function loadData() {
-  loading.value = true
-  loadError.value = null
-  try {
-    const { data, error: err } = await (api as any).GET('/api/v1/admin/runs/retention')
-    if (err) {
-      loadError.value = `Failed to load retention config: ${formatApiError(err)}`
-    } else if (data) {
-      const resp = data as RetentionConfig
-      retentionDays.value = resp.retention_days
-    }
-  } catch (e: unknown) {
-    loadError.value = `Failed to load retention config: ${formatApiError(e)}`
-  } finally {
-    loading.value = false
-  }
-}
-
-async function loadStorageInfo() {
-  storageLoading.value = true
-  storageError.value = null
-  try {
-    const { data, error: err } = await (api as any).GET('/api/v1/admin/runs/storage')
-    if (err) {
-      storageError.value = `Failed to load storage info: ${formatApiError(err)}`
-    } else if (data) {
-      storageInfo.value = data as StorageInfo
-    }
-  } catch (e: unknown) {
-    storageError.value = `Failed to load storage info: ${formatApiError(e)}`
-  } finally {
-    storageLoading.value = false
-  }
 }
 
 async function saveRetention() {
@@ -244,9 +214,5 @@ async function executePurge() {
   }
 }
 
-onMounted(() => {
-  planStore.fetchPlan()
-  loadData()
-  loadStorageInfo()
-})
+planStore.fetchPlan()
 </script>

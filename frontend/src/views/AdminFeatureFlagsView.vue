@@ -220,8 +220,9 @@
 <script setup lang="ts">
 import PageHeader from '../components/shared/PageHeader.vue'
 import FilterBar from '../components/shared/FilterBar.vue'
-import { ref, computed, onMounted, watch } from 'vue'
+import { ref, computed, watch } from 'vue'
 import { api } from '../lib/api/client'
+import { useDataFetch } from '../composables/useDataFetch'
 import { usePlanStore } from '../stores/planStore'
 import { formatApiError } from '../lib/api/formatError'
 import LoadingSpinner from '../components/shared/LoadingSpinner.vue'
@@ -276,18 +277,22 @@ interface FlagGroup {
   flags: FlagItem[]
 }
 
-const flags = ref<FlagItem[]>([])
-const license = ref<LicenseInfo>({ tier: 'community', has_license_key: false, is_valid: true })
-const wouldActivate = ref<FlagItem[]>([])
-const loading = ref(true)
-const error = ref<string | null>(null)
 const searchQuery = ref('')
 const currentPage = ref(1)
 const pageSize = 10
 
+const { data: flagsResponse, loading, error, load: loadFlags } = useDataFetch(
+  () => (api as any).GET('/api/v1/admin/feature-flags') as Promise<{ data?: FlagsResponse; error?: { detail?: string } }>,
+  { initialValue: { flags: [] as FlagItem[], license: { tier: 'community', has_license_key: false, is_valid: true } as LicenseInfo, would_activate: [] as FlagItem[] } as FlagsResponse }
+)
+
+const flags = computed(() => flagsResponse.value?.flags ?? [])
+const license = computed(() => flagsResponse.value?.license ?? { tier: 'community', has_license_key: false, is_valid: true })
+const wouldActivate = computed(() => flagsResponse.value?.would_activate ?? [])
+
 const filteredFlags = computed(() => {
   const query = searchQuery.value.toLowerCase().trim()
-  const items = flags.value ?? []
+  const items = flags.value
   return query
     ? items.filter(f =>
         f.name.toLowerCase().includes(query) ||
@@ -329,7 +334,7 @@ const paginatedGroups = computed(() => {
 
 const filteredWouldActivate = computed(() => {
   const query = searchQuery.value.toLowerCase().trim()
-  const items = wouldActivate.value ?? []
+  const items = wouldActivate.value
   if (!query) return items
   return items.filter(f =>
     f.name.toLowerCase().includes(query) ||
@@ -348,29 +353,15 @@ function formatDate(dateStr: string): string {
   return d.toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: 'numeric' })
 }
 
-async function loadFlags() {
-  loading.value = true
-  error.value = null
-  try {
-    const { data, error: err } = await (api as any).GET('/api/v1/admin/feature-flags')
-    if (err) {
-      error.value = `Failed to load feature flags: ${formatApiError(err)}`
-    } else if (data) {
-      const resp = data as FlagsResponse
-      flags.value = resp.flags
-      license.value = resp.license ?? { tier: 'community', has_license_key: false, is_valid: true }
-      wouldActivate.value = resp.would_activate ?? []
-      for (const flag of resp.flags) {
-        const override = await planStore.fetchOrgFlagOverride(flag.name)
+watch(() => flagsResponse.value?.flags, (newFlags) => {
+  if (newFlags) {
+    for (const flag of newFlags) {
+      planStore.fetchOrgFlagOverride(flag.name).then(override => {
         planStore.orgOverrides[flag.name] = override
-      }
+      })
     }
-  } catch (e: unknown) {
-    error.value = `Failed to load feature flags: ${formatApiError(e)}`
-  } finally {
-    loading.value = false
   }
-}
+})
 
 const flagToggling = ref<Record<string, boolean>>({})
 
@@ -415,8 +406,5 @@ async function toggleFlag(flag: FlagItem) {
   flagToggling.value[flag.name] = false
 }
 
-onMounted(() => {
-  planStore.fetchPlan()
-  loadFlags()
-})
+planStore.fetchPlan()
 </script>

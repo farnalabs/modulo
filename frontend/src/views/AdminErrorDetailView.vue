@@ -207,10 +207,11 @@
 
 <script setup lang="ts">
 import PageHeader from '../components/shared/PageHeader.vue'
-import { ref, onMounted } from 'vue'
+import { ref, computed, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { fetchErrorGroup, updateErrorGroup, fetchErrorGroupEvents, type ErrorGroupDetail, type ErrorEventDetail } from '../lib/api/errors'
 import { api } from '../lib/api/client'
+import { useDataFetch } from '../composables/useDataFetch'
 import LoadingSpinner from '../components/shared/LoadingSpinner.vue'
 import ErrorAlert from '../components/shared/ErrorAlert.vue'
 import BackLink from '../components/BackLink.vue'
@@ -219,11 +220,6 @@ import { formatApiError } from '../lib/api/formatError'
 const route = useRoute()
 const router = useRouter()
 const errorId = route.params.id as string
-
-const group = ref<ErrorGroupDetail | null>(null)
-const sampleEvent = ref<ErrorEventDetail | null>(null)
-const loading = ref(true)
-const error = ref<string | null>(null)
 
 const showStacktrace = ref(false)
 const showContext = ref(false)
@@ -236,6 +232,21 @@ const eventsTotal = ref(0)
 const eventsLoading = ref(false)
 const eventsOffset = ref(0)
 const eventsLimit = 20
+
+const { data: groupData, loading, error, load: loadDetail } = useDataFetch(
+  () => fetchErrorGroup(errorId).then(
+    d => ({ data: d }),
+    e => ({ error: { detail: `Failed to load error group: ${formatApiError(e)}` } }),
+  ),
+  { initialValue: null as ErrorGroupDetail | null }
+)
+
+const group = computed(() => groupData.value ?? null)
+const sampleEvent = computed(() => groupData.value?.sample_event ?? null)
+
+watch(() => groupData.value, (g) => {
+  if (g) assigneeId.value = g.assigned_to || ''
+})
 
 function goBack() {
   router.push('/admin/errors')
@@ -264,21 +275,6 @@ function formatDate(dateStr: string): string {
     hour: '2-digit',
     minute: '2-digit',
   })
-}
-
-async function loadDetail() {
-  loading.value = true
-  error.value = null
-  try {
-    const data = await fetchErrorGroup(errorId)
-    group.value = data
-    sampleEvent.value = data.sample_event
-    assigneeId.value = data.assigned_to || ''
-  } catch (e: unknown) {
-    error.value = `Failed to load error group: ${formatApiError(e)}`
-  } finally {
-    loading.value = false
-  }
 }
 
 async function updateStatus(status: string) {
@@ -323,9 +319,6 @@ async function loadUsers() {
   }
 }
 
-onMounted(() => {
-  loadDetail()
-  loadEvents(0)
-  loadUsers()
-})
+loadEvents(0)
+loadUsers()
 </script>
