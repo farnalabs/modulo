@@ -15,39 +15,7 @@ if [ -f /tmp/database_url.env ]; then
 fi
 
 echo "=== Running DB migrations ==="
-# Clean orphaned alembic_version entries from restructured migration branches.
-# When orphans are present (now or historically), the revision chain diverges
-# from the codebase — stamp head instead of upgrading, since the schema is
-# already at the latest state (proven by the previous working deployment).
-OUTPUT=$(.venv/bin/python3 /app/deploy/fly/cleanup_orphan_migrations.py 2>&1)
-echo "$OUTPUT"
-if echo "$OUTPUT" | grep -q "ACTION: stamp head"; then
-  .venv/bin/alembic stamp head
-  echo "  Stamped head (orphans were present)"
-elif echo "$OUTPUT" | grep -q "ACTION: upgrade heads"; then
-  .venv/bin/alembic upgrade heads && echo "  Upgrade complete" || {
-    echo "  Upgrade failed — stamping head as fallback (schema presumed current)"
-    .venv/bin/alembic stamp head
-  }
-fi
-
-echo "=== Applying schema patches (columns missing from base migrations) ==="
-.venv/bin/python3 -c "
-import os
-os.environ['DATABASE_URL'] = os.environ.get('DATABASE_URL', '')
-from modulo.db.session import AsyncSessionLocal
-from sqlalchemy import text
-import asyncio
-async def fix():
-    async with AsyncSessionLocal() as s:
-        async with s.begin():
-            await s.execute(text(\"ALTER TABLE pipelines ADD COLUMN IF NOT EXISTS default_autonomy_level VARCHAR(30) DEFAULT 'manual_approval'\"))
-            await s.execute(text(\"ALTER TABLE agents ADD COLUMN IF NOT EXISTS max_input_length INTEGER\"))
-            await s.execute(text(\"ALTER TABLE agents ADD COLUMN IF NOT EXISTS token_budget INTEGER\"))
-            await s.execute(text(\"ALTER TABLE agents ADD COLUMN IF NOT EXISTS library_id UUID\"))
-            print('Schema patches applied')
-asyncio.run(fix())
-" 2>&1
+.venv/bin/alembic upgrade head && echo "  Migrations complete"
 
 echo "=== Admin user seeding handled by backend lifespan startup (_seed_modulo_users) ==="
 
