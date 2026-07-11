@@ -527,6 +527,13 @@ def _build_connector(
                 token=_get_cred(creds, "token", type_id),
                 base_url=config.get("base_url", _LOCALHOST_5678),
             )
+        case "ticket-tracker":
+            provider = config.get("provider", "github")
+            if provider == "github":
+                from modulo.connectors.ticket_tracker.github import GitHubTicketTracker
+
+                return GitHubTicketTracker(config, creds)
+            raise ValueError(f"Unknown ticket-tracker provider: {provider!r}")
         case _:
             registry = get_plugin_registry()
             if registry.has_connector_type(type_id):

@@ -380,9 +380,9 @@ _MODULO_PRIMITIVES: list[LibraryPrimitive] = [
     _make_modulo(
         pid="00000000-0000-0000-0000-000000000060",
         primitive_type="agent",
-        name="Issue Reader Agent",
-        slug="issue-reader",
-        description="Reads a GitHub issue via GitHubConnector and extracts a structured spec for code generation.",
+        name="Ticket Reader Agent",
+        slug="ticket-reader",
+        description="Reads a ticket via a ticket-tracker connector and extracts a structured spec for code generation.",
         content_json={
             "input_schema": "github-issue-input",
             "output_schema": "structured-requirements",
@@ -391,13 +391,13 @@ _MODULO_PRIMITIVES: list[LibraryPrimitive] = [
                 "and extract a structured specification for implementation.\n\n"
                 "Issue:\n{{ input }}"
             ),
-            "connector_type_refs": [{"connector_type": "github", "capabilities": ["issue_read"]}],
+            "connector_type_refs": [{"connector_type": "ticket-tracker", "capabilities": ["issue_read"]}],
             "required_environment_capabilities": ["egress:github.com"],
             "model_backend_id": None,
             "retry_policy": {},
             "token_budget": None,
         },
-        tags=["agent", "github", "issue-reader", "dogfood"],
+        tags=["agent", "ticket-tracker", "ticket-reader", "dogfood"],
     ),
     _make_modulo(
         pid="00000000-0000-0000-0000-000000000061",
