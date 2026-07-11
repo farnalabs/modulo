@@ -81,34 +81,7 @@
               {{ u.created_at ? new Date(u.created_at).toLocaleDateString() : '—' }}
             </td>
             <td class="table-cell-numeric">
-              <div class="flex items-center justify-end gap-2">
-                <button
-                  :data-testid="`admin-users-reset-password-${u.id}`"
-                  @click="resetPassword(u)"
-                  :disabled="actionLoading[u.id]"
-                  class="text-xs text-muted-foreground hover:text-foreground hover:underline disabled:opacity-30"
-                >
-                  {{ actionLoading[u.id] ? '...' : 'Reset Password' }}
-                </button>
-                <button
-                  v-if="u.is_active"
-                  :data-testid="`admin-users-deactivate-${u.id}`"
-                  @click="deactivate(u)"
-                  :disabled="actionLoading[u.id]"
-                  class="text-xs text-destructive hover:underline disabled:opacity-30"
-                >
-                  {{ actionLoading[u.id] ? '...' : 'Deactivate' }}
-                </button>
-                <button
-                  v-else
-                  :data-testid="`admin-users-reactivate-${u.id}`"
-                  @click="reactivate(u)"
-                  :disabled="actionLoading[u.id]"
-                  class="text-xs text-success hover:underline disabled:opacity-30"
-                >
-                  {{ actionLoading[u.id] ? '...' : 'Reactivate' }}
-                </button>
-              </div>
+              <TableActions :actions="rowActions(u)" />
             </td>
           </tr>
         </tbody>
@@ -141,46 +114,47 @@
       {{ flashMessage.text }}
     </div>
 
-    <div v-if="showCreate" class="fixed inset-0 z-50 flex items-center justify-center bg-black/50" @click.self="showCreate = false">
-      <div class="bg-background rounded-xl border shadow-lg p-6 w-full max-w-md mx-4 space-y-4">
-        <h2 class="text-base font-semibold">{{ $t('views.AdminUsersView.create_user') }}</h2>
-        <form @submit.prevent="createUser">
-          <div>
-            <label class="block text-sm font-medium mb-1">Email</label>
-            <input v-model="newUser.email" data-testid="admin-users-create-email" type="email" class="w-full px-3 py-2 border border-input bg-background rounded-lg text-sm" required />
-          </div>
-          <div>
-            <label class="block text-sm font-medium mb-1">{{ $t('views.AdminModelBackendsView.display_name') }}</label>
-            <input v-model="newUser.display_name" data-testid="admin-users-create-display-name" type="text" class="w-full px-3 py-2 border border-input bg-background rounded-lg text-sm" required />
-          </div>
-          <div>
-            <label class="block text-sm font-medium mb-1">Password</label>
-            <input v-model="newUser.password" data-testid="admin-users-create-password" type="password" class="w-full px-3 py-2 border border-input bg-background rounded-lg text-sm" minlength="8" required />
-          </div>
-          <div>
-            <label class="block text-sm font-medium mb-1">Role</label>
-            <select v-model="newUser.org_role" data-testid="admin-users-create-role" aria-label="Role" class="w-full px-3 py-2 border border-input bg-background rounded-lg text-sm">
-              <option value="runner">Runner</option>
-              <option value="operator">Operator</option>
-              <option value="admin">Admin</option>
-              <option value="viewer">Viewer</option>
-            </select>
-          </div>
-          <p v-if="createError" class="text-sm text-destructive">{{ createError }}</p>
-          <div class="flex justify-end gap-2 pt-2">
-            <button type="button" @click="showCreate = false" data-testid="admin-users-cancel" class="px-4 py-2 border border-input bg-background rounded-lg text-sm">Cancel</button>
-            <Button type="submit" variant="default" data-testid="admin-users-create">Create</Button>
-          </div>
-        </form>
-      </div>
-    </div>
+    <FormDialog
+      :open="showCreate"
+      @update:open="showCreate = false"
+      title="Create User"
+      confirmText="Create"
+      @confirm="createUser"
+    >
+      <form @submit.prevent="createUser">
+        <div>
+          <label class="block text-sm font-medium mb-1">Email</label>
+          <input v-model="newUser.email" data-testid="admin-users-create-email" type="email" class="w-full px-3 py-2 border border-input bg-background rounded-lg text-sm" required />
+        </div>
+        <div>
+          <label class="block text-sm font-medium mb-1">{{ $t('views.AdminModelBackendsView.display_name') }}</label>
+          <input v-model="newUser.display_name" data-testid="admin-users-create-display-name" type="text" class="w-full px-3 py-2 border border-input bg-background rounded-lg text-sm" required />
+        </div>
+        <div>
+          <label class="block text-sm font-medium mb-1">Password</label>
+          <input v-model="newUser.password" data-testid="admin-users-create-password" type="password" class="w-full px-3 py-2 border border-input bg-background rounded-lg text-sm" minlength="8" required />
+        </div>
+        <div>
+          <label class="block text-sm font-medium mb-1">Role</label>
+          <select v-model="newUser.org_role" data-testid="admin-users-create-role" aria-label="Role" class="w-full px-3 py-2 border border-input bg-background rounded-lg text-sm">
+            <option value="runner">Runner</option>
+            <option value="operator">Operator</option>
+            <option value="admin">Admin</option>
+            <option value="viewer">Viewer</option>
+          </select>
+        </div>
+        <p v-if="createError" class="text-sm text-destructive">{{ createError }}</p>
+      </form>
+    </FormDialog>
 
-    <div v-if="showResetDialog" class="fixed inset-0 z-50 flex items-center justify-center bg-black/50" @click.self="showResetDialog = false">
-      <div class="bg-background rounded-xl border shadow-lg p-6 w-full max-w-md mx-4 space-y-4">
-        <h2 class="text-base font-semibold">{{ $t('views.AdminUsersView.password_reset') }}</h2>
+    <Dialog :open="showResetDialog" @update:open="showResetDialog = false">
+      <DialogContent class="sm:max-w-md">
+        <DialogHeader>
+          <DialogTitle>{{ $t('views.AdminUsersView.password_reset') }}</DialogTitle>
+      </DialogHeader>
         <p class="text-sm text-muted-foreground">
           A temporary password has been generated for <strong>{{ resetUserEmail }}</strong>.
-          Share this password with the user � they will be prompted to change it on next login.
+          Share this password with the user - they will be prompted to change it on next login.
         </p>
         <div class="flex items-center gap-2 bg-muted rounded-lg px-4 py-3">
           <code class="flex-1 text-sm font-mono break-all">{{ tempPassword }}</code>
@@ -193,7 +167,7 @@
             {{ copied ? 'Copied!' : 'Copy' }}
           </Button>
         </div>
-        <div class="flex justify-end pt-2">
+        <DialogFooter class="gap-2 sm:justify-end">
           <Button
             variant="default"
             data-testid="admin-users-reset-done"
@@ -201,9 +175,9 @@
           >
             Done
           </Button>
-        </div>
-      </div>
-    </div>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   </div>
 </template>
 
@@ -214,6 +188,9 @@ import { useApi } from '../composables/useApi'
 import LoadingSpinner from '../components/shared/LoadingSpinner.vue'
 import { Button } from '@/components/ui/button'
 import EmptyState from '../components/shared/EmptyState.vue'
+import FormDialog from '../components/shared/FormDialog.vue'
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '../components/ui/dialog'
+import TableActions from '../components/shared/TableActions.vue'
 
 interface UserItem {
   id: string
@@ -346,6 +323,34 @@ async function resetPassword(u: UserItem) {
   } finally {
     actionLoading.value[u.id] = false
   }
+}
+
+function rowActions(u: UserItem) {
+  const actions: { key: string; label: string; onClick: () => void; disabled?: boolean; danger?: boolean }[] = [
+    {
+      key: 'reset-password',
+      label: 'Reset Password',
+      onClick: () => resetPassword(u),
+      disabled: actionLoading.value[u.id],
+    },
+  ]
+  if (u.is_active) {
+    actions.push({
+      key: 'deactivate',
+      label: 'Deactivate',
+      onClick: () => deactivate(u),
+      disabled: actionLoading.value[u.id],
+      danger: true,
+    })
+  } else {
+    actions.push({
+      key: 'reactivate',
+      label: 'Reactivate',
+      onClick: () => reactivate(u),
+      disabled: actionLoading.value[u.id],
+    })
+  }
+  return actions
 }
 
 function copyPassword() {

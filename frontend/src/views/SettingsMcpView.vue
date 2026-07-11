@@ -142,57 +142,47 @@
       </Card>
     </template>
 
-    <!-- Create API Key Dialog -->
-    <Dialog v-model:open="createKeyDialogOpen">
-      <DialogContent class="sm:max-w-md">
-        <DialogHeader>
-          <DialogTitle>Create MCP API Key</DialogTitle>
-          <DialogDescription>Generate a new API key for MCP client authentication</DialogDescription>
-        </DialogHeader>
-        <div class="space-y-4 py-2">
-          <div>
-            <label class="mb-1 block text-sm font-medium">Key Name</label>
-            <input
-              v-model="createKeyName"
-              type="text"
-              data-testid="settings-mcp-create-key-name"
-              class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-              placeholder="e.g. Claude Desktop"
-              @blur="createKeyNameTouched = true"
-            />
-            <p
-              v-if="createKeyNameTouched && !createKeyName.trim()"
-              class="mt-1 text-sm text-destructive"
-            >Key name is required.</p>
-          </div>
-          <div>
-            <label class="mb-1 block text-sm font-medium">Role</label>
-            <select
-              v-model="createKeyRole"
-              data-testid="settings-mcp-create-key-role"
-              aria-label="Role"
-              class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-            >
-              <option value="operator">Operator</option>
-              <option value="runner">Runner</option>
-            </select>
-          </div>
-          <div v-if="createKeyError" class="text-sm text-destructive">{{ createKeyError }}</div>
+    <FormDialog
+      v-model:open="createKeyDialogOpen"
+      title="Create MCP API Key"
+      description="Generate a new API key for MCP client authentication"
+      confirmText="Create"
+      :confirmDisabled="!createKeyName.trim()"
+      :loading="creatingKey"
+      @confirm="createKey"
+    >
+      <div class="space-y-4 py-2">
+        <div>
+          <label class="mb-1 block text-sm font-medium">Key Name</label>
+          <input
+            v-model="createKeyName"
+            type="text"
+            data-testid="settings-mcp-create-key-name"
+            class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            placeholder="e.g. Claude Desktop"
+            @blur="createKeyNameTouched = true"
+          />
+          <p
+            v-if="createKeyNameTouched && !createKeyName.trim()"
+            class="mt-1 text-sm text-destructive"
+          >Key name is required.</p>
         </div>
-        <DialogFooter class="gap-2 sm:justify-end">
-          <Button variant="outline" @click="createKeyDialogOpen = false">Cancel</Button>
-          <Button
-            :disabled="!createKeyName.trim() || creatingKey"
-            data-testid="settings-mcp-create-key-submit"
-            @click="createKey"
+        <div>
+          <label class="mb-1 block text-sm font-medium">Role</label>
+          <select
+            v-model="createKeyRole"
+            data-testid="settings-mcp-create-key-role"
+            aria-label="Role"
+            class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
           >
-            {{ creatingKey ? 'Creating...' : 'Create' }}
-          </Button>
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
+            <option value="operator">Operator</option>
+            <option value="runner">Runner</option>
+          </select>
+        </div>
+        <div v-if="createKeyError" class="text-sm text-destructive">{{ createKeyError }}</div>
+      </div>
+    </FormDialog>
 
-    <!-- Key Created Dialog (one-time display) -->
     <Dialog v-model:open="keyCreatedDialogOpen" @update:open="onKeyCreatedDialogClose">
       <DialogContent class="sm:max-w-lg">
         <DialogHeader>
@@ -236,30 +226,19 @@
       </DialogContent>
     </Dialog>
 
-    <!-- Revoke API Key Confirmation Dialog -->
-    <Dialog v-model:open="revokeKeyDialogOpen">
-      <DialogContent class="sm:max-w-md">
-        <DialogHeader>
-          <DialogTitle>Revoke API Key</DialogTitle>
-          <DialogDescription>
-            Are you sure you want to revoke the key <strong>{{ revokeKeyTarget?.name }}</strong>?
-            Any clients using this key will lose access immediately.
-          </DialogDescription>
-        </DialogHeader>
-        <div v-if="revokeKeyError" class="text-sm text-destructive">{{ revokeKeyError }}</div>
-        <DialogFooter class="gap-2 sm:justify-end">
-          <Button variant="outline" @click="revokeKeyDialogOpen = false">Cancel</Button>
-          <Button
-            variant="destructive"
-            :disabled="revokingKey"
-            data-testid="settings-mcp-revoke-key-confirm"
-            @click="revokeKey"
-          >
-            {{ revokingKey ? 'Revoking...' : 'Confirm Revoke' }}
-          </Button>
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
+    <FormDialog
+      v-model:open="revokeKeyDialogOpen"
+      title="Revoke API Key"
+      confirmText="Confirm Revoke"
+      :loading="revokingKey"
+      @confirm="revokeKey"
+    >
+      <p class="text-sm text-muted-foreground">
+        Are you sure you want to revoke the key <strong>{{ revokeKeyTarget?.name }}</strong>?
+        Any clients using this key will lose access immediately.
+      </p>
+      <div v-if="revokeKeyError" class="text-sm text-destructive">{{ revokeKeyError }}</div>
+    </FormDialog>
 
   </div>
   </FeatureGate>
@@ -276,6 +255,7 @@ import ErrorAlert from '../components/shared/ErrorAlert.vue'
 import { Badge } from '../components/ui/badge'
 import { Button } from '../components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '../components/ui/card'
+import FormDialog from '../components/shared/FormDialog.vue'
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '../components/ui/dialog'
 import { usePlanStore } from '../stores/planStore'
 import FeatureGate from '../components/FeatureGate.vue'

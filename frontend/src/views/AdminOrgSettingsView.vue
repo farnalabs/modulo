@@ -102,52 +102,33 @@
       </SectionCard>
     </template>
 
-    <!-- Delete Confirmation Dialog -->
-    <Dialog :open="deleteDialogOpen" @update:open="deleteDialogOpen = false">
-      <DialogContent class="sm:max-w-md">
-        <DialogHeader>
-          <DialogTitle>Delete Organisation</DialogTitle>
-          <DialogDescription>
-            This will permanently delete <strong>{{ orgInfo.name }}</strong> and all associated data including runs, pipelines, schemas, connectors, and settings.
-            <br /><br />
-            <span class="font-semibold text-destructive">This action cannot be undone.</span>
-          </DialogDescription>
-        </DialogHeader>
-
-        <div class="space-y-3">
-          <p class="text-sm text-muted-foreground">
-            Type <strong class="text-foreground">{{ orgInfo.name }}</strong> to confirm:
-          </p>
-          <input
-            v-model="confirmName"
-            :placeholder="orgInfo.name"
-            class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm placeholder:text-muted-foreground/50 focus:outline-none focus:ring-2 focus:ring-destructive/50"
-            data-testid="org-delete-confirm-input"
-          />
-          <p v-if="deleteError" class="text-sm text-destructive">{{ deleteError }}</p>
-        </div>
-
-        <DialogFooter class="gap-2 sm:justify-end">
-          <button
-            type="button"
-            class="inline-flex h-8 items-center justify-center gap-1.5 rounded-lg border border-input bg-background px-2.5 text-sm font-medium hover:bg-muted transition-all"
-            @click="cancelDelete"
-          >
-            Cancel
-          </button>
-            <Button
-              type="button"
-              :disabled="confirmName !== orgInfo.name || deleting"
-              variant="destructive"
-              class="h-8 px-2.5"
-              data-testid="org-delete-confirm-button"
-              @click="confirmDelete"
-          >
-              {{ deleting ? 'Deleting...' : 'Permanently Delete' }}
-            </Button>
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
+    <FormDialog
+      :open="deleteDialogOpen"
+      @update:open="deleteDialogOpen = false"
+      title="Delete Organisation"
+      confirmText="Permanently Delete"
+      :confirmDisabled="confirmName !== orgInfo.name || deleting"
+      :loading="deleting"
+      @confirm="confirmDelete"
+    >
+      <p class="text-sm text-muted-foreground">
+        This will permanently delete <strong>{{ orgInfo.name }}</strong> and all associated data including runs, pipelines, schemas, connectors, and settings.
+        <br /><br />
+        <span class="font-semibold text-destructive">This action cannot be undone.</span>
+      </p>
+      <div class="space-y-3">
+        <p class="text-sm text-muted-foreground">
+          Type <strong class="text-foreground">{{ orgInfo.name }}</strong> to confirm:
+        </p>
+        <input
+          v-model="confirmName"
+          :placeholder="orgInfo.name"
+          class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm placeholder:text-muted-foreground/50 focus:outline-none focus:ring-2 focus:ring-destructive/50"
+          data-testid="org-delete-confirm-input"
+        />
+        <p v-if="deleteError" class="text-sm text-destructive">{{ deleteError }}</p>
+      </div>
+    </FormDialog>
   </div>
   </FeatureGate>
 </template>
@@ -161,14 +142,7 @@ import { Button } from '@/components/ui/button'
 import { api } from '../lib/api/client'
 import LoadingSpinner from '../components/shared/LoadingSpinner.vue'
 import ErrorAlert from '../components/shared/ErrorAlert.vue'
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from '../components/ui/dialog'
+import FormDialog from '../components/shared/FormDialog.vue'
 import { usePlanStore } from '../stores/planStore'
 import FeatureGate from '../components/FeatureGate.vue'
 import { shortId } from '../utils/format'

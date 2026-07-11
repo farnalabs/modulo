@@ -175,41 +175,7 @@
               <td class="px-4 py-3 text-muted-foreground">{{ v.created_by || '—' }}</td>
               <td class="px-4 py-3 text-muted-foreground">{{ formatDate(v.created_at) }}</td>
               <td class="px-4 py-3 text-right">
-                <div class="flex items-center justify-end gap-1">
-                  <button
-                    class="rounded p-1 text-muted-foreground hover:bg-accent"
-                    data-testid="admin-views-duplicate"
-                    :aria-label="$t('views.AdminViewsView.duplicate_view')"
-                    title="Duplicate"
-                    @click="duplicateView(v)"
-                  >
-                    <svg class="h-4 w-4" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                      <rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/>
-                    </svg>
-                  </button>
-                  <button
-                    class="rounded p-1 text-muted-foreground hover:bg-accent"
-                    data-testid="admin-views-edit"
-                    :aria-label="$t('views.AdminViewsView.edit_view')"
-                    :title="$t('views.AdminViewsView.edit_view_1')"
-                    @click="openEditForm(v)"
-                  >
-                    <svg class="h-4 w-4" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                      <path d="M17 3a2.85 2.85 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z" />
-                    </svg>
-                  </button>
-                  <button
-                    class="rounded p-1 text-destructive hover:bg-destructive/10"
-                    data-testid="admin-views-delete"
-                    :aria-label="$t('views.AdminViewsView.delete_view')"
-                    :title="$t('views.AdminViewsView.delete_view_1')"
-                    @click="confirmDelete(v)"
-                  >
-                    <svg class="h-4 w-4" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                      <path d="M3 6h18" /><path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6" /><path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2" />
-                    </svg>
-                  </button>
-                </div>
+                <TableActions :actions="viewActions(v)" />
               </td>
             </tr>
           </tbody>
@@ -255,6 +221,7 @@ import {
 } from '../components/ui/tooltip'
 import { formatApiError } from '../lib/api/formatError'
 import { Button } from '@/components/ui/button'
+import TableActions from '../components/shared/TableActions.vue'
 
 interface SavedView {
   id: string
@@ -460,6 +427,27 @@ async function duplicateView(v: SavedView) {
   } catch (e: unknown) {
     error.value = formatApiError(e)
   }
+}
+
+function viewActions(v: SavedView) {
+  return [
+    {
+      key: 'duplicate',
+      label: 'Duplicate',
+      onClick: () => duplicateView(v),
+    },
+    {
+      key: 'edit',
+      label: 'Edit',
+      onClick: () => openEditForm(v),
+    },
+    {
+      key: 'delete',
+      label: 'Delete',
+      onClick: () => confirmDelete(v),
+      danger: true,
+    },
+  ]
 }
 
 onMounted(loadViews)

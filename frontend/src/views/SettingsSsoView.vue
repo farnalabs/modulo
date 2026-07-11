@@ -84,17 +84,7 @@
                     <path d="M17 3a2.85 2.85 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z" />
                   </svg>
                 </button>
-                <button
-                  class="rounded p-1 text-destructive hover:bg-destructive/10"
-                  data-testid="settings-sso-delete"
-                  :aria-label="$t('views.SettingsSsoView.delete_provider')"
-                  :title="$t('views.SettingsSsoView.delete_provider')"
-                  @click="confirmDelete(provider)"
-                >
-                  <svg class="h-4 w-4" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                    <path d="M3 6h18" /><path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6" /><path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2" />
-                  </svg>
-                </button>
+                <TableActions :actions="ssoActions(provider)" />
                 <label
                   class="relative inline-flex cursor-pointer items-center"
                   data-testid="settings-sso-toggle"
@@ -177,6 +167,7 @@
 <script setup lang="ts">
 import { ref, reactive, onMounted, onBeforeUnmount } from 'vue'
 import { Button } from '@/components/ui/button'
+import TableActions from '../components/shared/TableActions.vue'
 import { api } from '../lib/api/client'
 import type { components } from '../lib/api/client'
 import SsoProviderForm from '../components/SsoProviderForm.vue'
@@ -483,5 +474,16 @@ async function testConnection(providerId: string) {
 onBeforeUnmount(() => {
   if (ssoTestTimeout) clearTimeout(ssoTestTimeout)
 })
+function ssoActions(provider: SsoProviderResponse) {
+  return [
+    {
+      key: 'delete',
+      label: 'Delete',
+      onClick: () => confirmDelete(provider),
+      danger: true,
+    },
+  ]
+}
+
 onMounted(loadProviders)
 </script>

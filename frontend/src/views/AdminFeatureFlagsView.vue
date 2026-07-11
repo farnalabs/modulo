@@ -193,30 +193,27 @@
         </template>
       </template>
     </div>
-    <Dialog v-if="overrideDialogFlag" :open="overrideDialogOpen" @update:open="overrideDialogOpen = $event">
-      <DialogContent class="sm:max-w-[400px]">
-        <DialogHeader>
-          <DialogTitle>{{ $t('views.AdminFeatureFlagsView.org_override_for') }} "{{ overrideDialogFlag.name }}"</DialogTitle>
-          <DialogDescription>{{ $t('views.AdminFeatureFlagsView.org_override_description') }}</DialogDescription>
-        </DialogHeader>
-        <div class="py-4">
-          <Select v-model="overrideDialogValue">
-            <SelectTrigger>
-              <SelectValue :placeholder="$t('views.AdminFeatureFlagsView.select_override')" />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="null">{{ $t('views.AdminFeatureFlagsView.system_default') }}</SelectItem>
-              <SelectItem value="true">{{ $t('views.AdminFeatureFlagsView.force_enabled') }}</SelectItem>
-              <SelectItem value="false">{{ $t('views.AdminFeatureFlagsView.force_disabled') }}</SelectItem>
-            </SelectContent>
-          </Select>
-        </div>
-        <DialogFooter>
-          <Button variant="outline" @click="overrideDialogOpen = false">{{ $t('common.cancel') }}</Button>
-          <Button @click="saveOverride">{{ $t('common.save') }}</Button>
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
+    <FormDialog
+      :open="overrideDialogOpen"
+      @update:open="overrideDialogOpen = $event"
+      title="Org Override"
+      :description="overrideDialogFlag ? `${$t('views.AdminFeatureFlagsView.org_override_for')} \"${overrideDialogFlag.name}\"` : ''"
+      confirm-text="Save"
+      @confirm="saveOverride"
+    >
+      <div class="py-4">
+        <Select v-model="overrideDialogValue">
+          <SelectTrigger>
+            <SelectValue :placeholder="$t('views.AdminFeatureFlagsView.select_override')" />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="null">{{ $t('views.AdminFeatureFlagsView.system_default') }}</SelectItem>
+            <SelectItem value="true">{{ $t('views.AdminFeatureFlagsView.force_enabled') }}</SelectItem>
+            <SelectItem value="false">{{ $t('views.AdminFeatureFlagsView.force_disabled') }}</SelectItem>
+          </SelectContent>
+        </Select>
+      </div>
+    </FormDialog>
   </div>
 </template>
 
@@ -230,14 +227,7 @@ import { formatApiError } from '../lib/api/formatError'
 import LoadingSpinner from '../components/shared/LoadingSpinner.vue'
 import ErrorAlert from '../components/shared/ErrorAlert.vue'
 import { Button } from '../components/ui/button'
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from '../components/ui/dialog'
+import FormDialog from '../components/shared/FormDialog.vue'
 import {
   Select,
   SelectContent,

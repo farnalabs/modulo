@@ -215,41 +215,7 @@
               </td>
               <td class="table-cell text-muted-foreground">{{ formatDate(profile.created_at) }}</td>
               <td class="table-cell-numeric">
-                  <div class="flex items-center justify-end gap-1">
-                    <button
-                      class="rounded p-1 text-muted-foreground hover:bg-accent"
-                      data-testid="admin-envprofiles-edit"
-                      :aria-label="'Edit profile'"
-                      title="Edit profile"
-                      @click="openEditForm(profile)"
-                    >
-                      <svg class="h-4 w-4" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                        <path d="M17 3a2.85 2.85 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z" />
-                      </svg>
-                    </button>
-                    <button
-                      class="rounded p-1 text-primary hover:bg-primary/10"
-                      data-testid="admin-envprofiles-test"
-                      :aria-label="'Test connection'"
-                      title="Test connection"
-                      @click="testConnection(profile)"
-                    >
-                      <svg class="h-4 w-4" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                        <polyline points="22 12 18 12 15 21 9 3 6 12 2 12" />
-                      </svg>
-                    </button>
-                    <button
-                      class="rounded p-1 text-destructive hover:bg-destructive/10"
-                      data-testid="admin-envprofiles-delete"
-                      :aria-label="'Delete profile'"
-                      title="Delete profile"
-                      @click="confirmDelete(profile)"
-                    >
-                      <svg class="h-4 w-4" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                        <path d="M3 6h18" /><path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6" /><path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2" />
-                      </svg>
-                    </button>
-                  </div>
+                  <TableActions :actions="profileActions(profile)" />
                 </td>
               </tr>
             </tbody>
@@ -325,6 +291,7 @@ import LoadingSpinner from '../components/shared/LoadingSpinner.vue'
 import ErrorAlert from '../components/shared/ErrorAlert.vue'
 import FeatureGate from '../components/FeatureGate.vue'
 import { Button } from '@/components/ui/button'
+import TableActions from '../components/shared/TableActions.vue'
 
 type ProfileItem = components['schemas']['ProfileResponse']
 
@@ -658,6 +625,27 @@ function closeTestResult() {
   testResult.profileId = null
   testResult.profileName = ''
   testResult.events = []
+}
+
+function profileActions(profile: ProfileItem) {
+  return [
+    {
+      key: 'edit',
+      label: 'Edit',
+      onClick: () => openEditForm(profile),
+    },
+    {
+      key: 'test',
+      label: 'Test',
+      onClick: () => testConnection(profile),
+    },
+    {
+      key: 'delete',
+      label: 'Delete',
+      onClick: () => confirmDelete(profile),
+      danger: true,
+    },
+  ]
 }
 
 onMounted(loadProfiles)
