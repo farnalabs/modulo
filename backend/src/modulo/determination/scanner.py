@@ -178,6 +178,11 @@ async def run_scan(hub: ConnectorHub) -> list[ScanSample]:
         except KeyError:
             logger.warning("Connector %s not found in hub during scan", connector_id)
             continue
-        samples = await _sample_connector(connector_id, connector)
-        all_samples.extend(samples)
+        try:
+            samples = await _sample_connector(connector_id, connector)
+            all_samples.extend(samples)
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            logger.exception("Connector %s sampling failed: %s", connector_id, exc)
     return all_samples
