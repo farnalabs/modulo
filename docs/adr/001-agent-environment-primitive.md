@@ -1,7 +1,7 @@
 # ADR 001 — Agent Execution Environment as a V1 Primitive
 
 **Date**: 2026-06-23
-**Status**: Active — delivering in phase-7a, before the rest of v1
+**Status**: Implemented — delivered incrementally, core infrastructure on main. ShellConnector + Local Docker provider on main. E2B second-citizen provider deferred.
 
 ---
 

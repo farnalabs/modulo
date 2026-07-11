@@ -1,7 +1,6 @@
-from __future__ import annotations
-
 """Library service — CRUD and community primitives for library_primitives."""
 
+from __future__ import annotations
 
 import asyncio
 import logging
@@ -437,7 +436,7 @@ _MODULO_PRIMITIVES: list[LibraryPrimitive] = [
                 "Changes:\n{{ input }}"
             ),
             "connector_type_refs": [{"connector_type": "shell", "capabilities": ["write"]}],
-            "required_environment_capabilities": ["filesystem:write"],
+            "required_environment_capabilities": ["git", "shell", "python>=3.12"],
             "model_backend_id": None,
             "retry_policy": {},
             "token_budget": None,
@@ -459,7 +458,7 @@ _MODULO_PRIMITIVES: list[LibraryPrimitive] = [
                 "Code changes applied:\n{{ input }}"
             ),
             "connector_type_refs": [{"connector_type": "shell", "capabilities": ["read", "write"]}],
-            "required_environment_capabilities": ["shell:exec", "python3.12", "uv"],
+            "required_environment_capabilities": ["git", "shell", "python>=3.12"],
             "model_backend_id": None,
             "retry_policy": {},
             "token_budget": None,

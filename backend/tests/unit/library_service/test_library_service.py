@@ -289,11 +289,15 @@ def test_dogfood_agents_have_environment_capabilities():
 
     assert dogfood_agents["issue-reader"].content_json["required_environment_capabilities"] == ["egress:github.com"]
     assert dogfood_agents["code-generator"].content_json["required_environment_capabilities"] == []
-    assert dogfood_agents["code-applier"].content_json["required_environment_capabilities"] == ["filesystem:write"]
+    assert dogfood_agents["code-applier"].content_json["required_environment_capabilities"] == [
+        "git",
+        "shell",
+        "python>=3.12",
+    ]
     assert dogfood_agents["test-runner"].content_json["required_environment_capabilities"] == [
-        "shell:exec",
-        "python3.12",
-        "uv",
+        "git",
+        "shell",
+        "python>=3.12",
     ]
     assert dogfood_agents["pr-creator"].content_json["required_environment_capabilities"] == ["egress:github.com"]
 
