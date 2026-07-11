@@ -719,7 +719,7 @@ class GraphValidator:
 
         rows = (await session.execute(select(Agent).where(Agent.id.in_(agent_ids)))).scalars().all()
 
-        profile_caps: set[str] = set(profile.capabilities or [])
+        profile_caps: set[str] = set(profile.capabilities_json or [])
 
         for agent in rows:
             required: list[str] = agent.required_environment_capabilities or []

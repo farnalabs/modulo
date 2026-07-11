@@ -92,24 +92,41 @@ def provider_ref() -> str:
     return "ws-test-001"
 
 
+@pytest.fixture()
+def workspace_lease_id() -> uuid.UUID:
+    return uuid.uuid4()
+
+
 # ---------------------------------------------------------------------------
 # Construction
 # ---------------------------------------------------------------------------
 
 
-def test_connector_type(provider: _FakeRuntimeProvider) -> None:
-    c = ShellConnector(runtime_provider=provider)
+def _connector(
+    provider: _FakeRuntimeProvider | None = None,
+    lease_id: uuid.UUID | None = None,
+    allowed: list[str] | None = None,
+) -> ShellConnector:
+    return ShellConnector(
+        runtime_provider=provider,
+        workspace_lease_id=lease_id or uuid.uuid4(),
+        allowed_commands=allowed,
+    )
+
+
+def test_connector_type(provider: _FakeRuntimeProvider, workspace_lease_id: uuid.UUID) -> None:
+    c = ShellConnector(runtime_provider=provider, workspace_lease_id=workspace_lease_id)
     assert c.connector_type == ConnectorType.SHELL
 
 
-async def test_health_ok(provider: _FakeRuntimeProvider) -> None:
-    c = ShellConnector(runtime_provider=provider)
+async def test_health_ok(provider: _FakeRuntimeProvider, workspace_lease_id: uuid.UUID) -> None:
+    c = ShellConnector(runtime_provider=provider, workspace_lease_id=workspace_lease_id)
     result = await c.health_check()
     assert result == HealthResult(ok=True, detail="ShellConnector ready")
 
 
-async def test_health_fail_no_provider() -> None:
-    c = ShellConnector(runtime_provider=None)  # type: ignore[arg-type]
+async def test_health_fail_no_provider(workspace_lease_id: uuid.UUID) -> None:
+    c = ShellConnector(runtime_provider=None, workspace_lease_id=workspace_lease_id)  # type: ignore[arg-type]
     result = await c.health_check()
     assert result.ok is False
     assert "not configured" in result.detail
@@ -120,9 +137,9 @@ async def test_health_fail_no_provider() -> None:
 # ---------------------------------------------------------------------------
 
 
-async def test_read_file(provider: _FakeRuntimeProvider, provider_ref: str) -> None:
+async def test_read_file(provider: _FakeRuntimeProvider, provider_ref: str, workspace_lease_id: uuid.UUID) -> None:
     provider.store_file("/tmp/hello.txt", "world")
-    c = ShellConnector(runtime_provider=provider)
+    c = _connector(provider, workspace_lease_id)
 
     result = await c.query(
         ConnectorQuery(
@@ -135,8 +152,10 @@ async def test_read_file(provider: _FakeRuntimeProvider, provider_ref: str) -> N
     assert result.records[0]["path"] == "/tmp/hello.txt"
 
 
-async def test_read_file_missing(provider: _FakeRuntimeProvider, provider_ref: str) -> None:
-    c = ShellConnector(runtime_provider=provider)
+async def test_read_file_missing(
+    provider: _FakeRuntimeProvider, provider_ref: str, workspace_lease_id: uuid.UUID
+) -> None:
+    c = _connector(provider, workspace_lease_id)
 
     with pytest.raises(ValueError, match="Failed to read file"):
         await c.query(
@@ -147,8 +166,8 @@ async def test_read_file_missing(provider: _FakeRuntimeProvider, provider_ref: s
         )
 
 
-async def test_read_file_missing_provider_ref(provider: _FakeRuntimeProvider) -> None:
-    c = ShellConnector(runtime_provider=provider)
+async def test_read_file_missing_provider_ref(provider: _FakeRuntimeProvider, workspace_lease_id: uuid.UUID) -> None:
+    c = _connector(provider, workspace_lease_id)
 
     with pytest.raises(ValueError, match="provider_ref is required"):
         await c.query(ConnectorQuery(resource="file", filters={"path": "/tmp/x.txt"}))
@@ -162,7 +181,7 @@ async def test_read_file_missing_provider_ref(provider: _FakeRuntimeProvider) ->
 async def test_list_directory(provider: _FakeRuntimeProvider, provider_ref: str) -> None:
     provider.store_file("/workspace/a.txt", "a")
     provider.store_file("/workspace/b.txt", "b")
-    c = ShellConnector(runtime_provider=provider)
+    c = ShellConnector(runtime_provider=provider, workspace_lease_id=workspace_lease_id)
 
     result = await c.query(
         ConnectorQuery(
@@ -178,7 +197,7 @@ async def test_list_directory(provider: _FakeRuntimeProvider, provider_ref: str)
 
 async def test_list_directory_default_path(provider: _FakeRuntimeProvider, provider_ref: str) -> None:
     provider.store_file("/tmp/test.txt", "data")
-    c = ShellConnector(runtime_provider=provider)
+    c = ShellConnector(runtime_provider=provider, workspace_lease_id=workspace_lease_id)
 
     result = await c.query(
         ConnectorQuery(
@@ -195,7 +214,7 @@ async def test_list_directory_default_path(provider: _FakeRuntimeProvider, provi
 
 
 async def test_unsupported_query_resource(provider: _FakeRuntimeProvider, provider_ref: str) -> None:
-    c = ShellConnector(runtime_provider=provider)
+    c = ShellConnector(runtime_provider=provider, workspace_lease_id=workspace_lease_id)
 
     with pytest.raises(ValueError, match="Unsupported shell query resource"):
         await c.query(
@@ -216,7 +235,7 @@ async def test_run_command(provider: _FakeRuntimeProvider, provider_ref: str) ->
         "echo hello",
         ExecResult(exit_code=0, stdout="hello\n", stderr="", duration_ms=15),
     )
-    c = ShellConnector(runtime_provider=provider, allowed_commands=["echo"])
+    c = ShellConnector(runtime_provider=provider, workspace_lease_id=workspace_lease_id, allowed_commands=["echo"])
 
     result = await c.write(
         ConnectorPayload(
@@ -240,7 +259,7 @@ async def test_run_command(provider: _FakeRuntimeProvider, provider_ref: str) ->
 
 
 async def test_run_command_with_cwd(provider: _FakeRuntimeProvider, provider_ref: str) -> None:
-    c = ShellConnector(runtime_provider=provider, allowed_commands=["make"])
+    c = ShellConnector(runtime_provider=provider, workspace_lease_id=workspace_lease_id, allowed_commands=["make"])
 
     await c.write(
         ConnectorPayload(
@@ -262,7 +281,7 @@ async def test_run_command_with_cwd(provider: _FakeRuntimeProvider, provider_ref
 
 
 async def test_run_command_with_env(provider: _FakeRuntimeProvider, provider_ref: str) -> None:
-    c = ShellConnector(runtime_provider=provider, allowed_commands=["npm"])
+    c = ShellConnector(runtime_provider=provider, workspace_lease_id=workspace_lease_id, allowed_commands=["npm"])
 
     await c.write(
         ConnectorPayload(
@@ -284,7 +303,7 @@ async def test_run_command_with_env(provider: _FakeRuntimeProvider, provider_ref
 
 
 async def test_run_command_with_timeout(provider: _FakeRuntimeProvider, provider_ref: str) -> None:
-    c = ShellConnector(runtime_provider=provider, allowed_commands=["sleep"])
+    c = ShellConnector(runtime_provider=provider, workspace_lease_id=workspace_lease_id, allowed_commands=["sleep"])
 
     await c.write(
         ConnectorPayload(
@@ -308,7 +327,7 @@ async def test_run_command_with_timeout(provider: _FakeRuntimeProvider, provider
 
 
 async def test_run_command_deny_all_default(provider: _FakeRuntimeProvider, provider_ref: str) -> None:
-    c = ShellConnector(runtime_provider=provider)
+    c = ShellConnector(runtime_provider=provider, workspace_lease_id=workspace_lease_id)
 
     with pytest.raises(ConnectorPermissionError, match="deny-all"):
         await c.write(
@@ -323,7 +342,9 @@ async def test_run_command_deny_all_default(provider: _FakeRuntimeProvider, prov
 
 
 async def test_run_command_not_in_allowlist(provider: _FakeRuntimeProvider, provider_ref: str) -> None:
-    c = ShellConnector(runtime_provider=provider, allowed_commands=["echo", "cat"])
+    c = ShellConnector(
+        runtime_provider=provider, workspace_lease_id=workspace_lease_id, allowed_commands=["echo", "cat"]
+    )
 
     with pytest.raises(ConnectorPermissionError, match="not in the allowed list"):
         await c.write(
@@ -338,7 +359,9 @@ async def test_run_command_not_in_allowlist(provider: _FakeRuntimeProvider, prov
 
 
 async def test_run_command_allowed(provider: _FakeRuntimeProvider, provider_ref: str) -> None:
-    c = ShellConnector(runtime_provider=provider, allowed_commands=["echo", "cat", "ls"])
+    c = ShellConnector(
+        runtime_provider=provider, workspace_lease_id=workspace_lease_id, allowed_commands=["echo", "cat", "ls"]
+    )
 
     result = await c.write(
         ConnectorPayload(
@@ -358,7 +381,7 @@ async def test_run_command_allowed(provider: _FakeRuntimeProvider, provider_ref:
 
 
 async def test_write_file(provider: _FakeRuntimeProvider, provider_ref: str) -> None:
-    c = ShellConnector(runtime_provider=provider)
+    c = ShellConnector(runtime_provider=provider, workspace_lease_id=workspace_lease_id)
 
     result = await c.write(
         ConnectorPayload(
@@ -378,7 +401,7 @@ async def test_write_file(provider: _FakeRuntimeProvider, provider_ref: str) -> 
 async def test_write_file_missing_provider_ref(
     provider: _FakeRuntimeProvider,
 ) -> None:
-    c = ShellConnector(runtime_provider=provider)
+    c = ShellConnector(runtime_provider=provider, workspace_lease_id=workspace_lease_id)
 
     with pytest.raises(ValueError, match="provider_ref is required"):
         await c.write(
@@ -395,7 +418,7 @@ async def test_write_file_missing_provider_ref(
 
 
 async def test_unsupported_write_resource(provider: _FakeRuntimeProvider, provider_ref: str) -> None:
-    c = ShellConnector(runtime_provider=provider)
+    c = ShellConnector(runtime_provider=provider, workspace_lease_id=workspace_lease_id)
 
     with pytest.raises(ValueError, match="Unsupported shell write resource"):
         await c.write(
@@ -417,7 +440,7 @@ def test_connector_type_capabilities() -> None:
 
 async def test_run_command_empty_allowlist(provider: _FakeRuntimeProvider, provider_ref: str) -> None:
     """Explicitly passing allowed_commands=[] should behave as deny-all."""
-    c = ShellConnector(runtime_provider=provider, allowed_commands=[])
+    c = ShellConnector(runtime_provider=provider, workspace_lease_id=workspace_lease_id, allowed_commands=[])
 
     with pytest.raises(ConnectorPermissionError, match="deny-all"):
         await c.write(
@@ -430,7 +453,7 @@ async def test_run_command_empty_allowlist(provider: _FakeRuntimeProvider, provi
 
 async def test_run_command_empty_command(provider: _FakeRuntimeProvider, provider_ref: str) -> None:
     """An empty command string should raise permission error (base cmd is '')."""
-    c = ShellConnector(runtime_provider=provider, allowed_commands=["echo"])
+    c = ShellConnector(runtime_provider=provider, workspace_lease_id=workspace_lease_id, allowed_commands=["echo"])
 
     with pytest.raises(ConnectorPermissionError, match="not in the allowed list"):
         await c.write(
@@ -445,7 +468,7 @@ async def test_run_command_without_provider_ref(
     provider: _FakeRuntimeProvider,
 ) -> None:
     """Write command without provider_ref should raise ValueError."""
-    c = ShellConnector(runtime_provider=provider, allowed_commands=["echo"])
+    c = ShellConnector(runtime_provider=provider, workspace_lease_id=workspace_lease_id, allowed_commands=["echo"])
 
     with pytest.raises(ValueError, match="provider_ref is required"):
         await c.write(
@@ -458,7 +481,7 @@ async def test_run_command_without_provider_ref(
 
 async def test_run_command_with_cwd_and_env(provider: _FakeRuntimeProvider, provider_ref: str) -> None:
     """Both cwd and env should be combined in the exec command."""
-    c = ShellConnector(runtime_provider=provider, allowed_commands=["npm"])
+    c = ShellConnector(runtime_provider=provider, workspace_lease_id=workspace_lease_id, allowed_commands=["npm"])
 
     await c.write(
         ConnectorPayload(
@@ -483,7 +506,7 @@ async def test_run_command_with_cwd_and_env(provider: _FakeRuntimeProvider, prov
 
 async def test_build_exec_cmd_raw(provider: _FakeRuntimeProvider, provider_ref: str) -> None:
     """_build_exec_cmd with neither cwd nor env returns raw split command."""
-    c = ShellConnector(runtime_provider=provider, allowed_commands=["echo"])
+    c = ShellConnector(runtime_provider=provider, workspace_lease_id=workspace_lease_id, allowed_commands=["echo"])
     result = c._build_exec_cmd("echo hello")
     assert result == ["echo", "hello"]
 
@@ -494,7 +517,7 @@ async def test_write_file_failure(provider: _FakeRuntimeProvider, provider_ref: 
         "base64 -d > /tmp/readonly.txt",
         ExecResult(exit_code=1, stdout="", stderr="mkdir: Permission denied"),
     )
-    c = ShellConnector(runtime_provider=provider)
+    c = ShellConnector(runtime_provider=provider, workspace_lease_id=workspace_lease_id)
 
     with pytest.raises(ValueError, match="Failed to write file"):
         await c.write(
@@ -511,7 +534,7 @@ async def test_write_file_failure(provider: _FakeRuntimeProvider, provider_ref: 
 
 async def test_empty_directory_listing(provider: _FakeRuntimeProvider, provider_ref: str) -> None:
     """Listing an empty directory should return no records."""
-    c = ShellConnector(runtime_provider=provider)
+    c = ShellConnector(runtime_provider=provider, workspace_lease_id=workspace_lease_id)
 
     result = await c.query(
         ConnectorQuery(
@@ -525,7 +548,7 @@ async def test_empty_directory_listing(provider: _FakeRuntimeProvider, provider_
 
 async def test_write_file_special_chars(provider: _FakeRuntimeProvider, provider_ref: str) -> None:
     """Write file content with special characters survives base64 round-trip."""
-    c = ShellConnector(runtime_provider=provider)
+    c = ShellConnector(runtime_provider=provider, workspace_lease_id=workspace_lease_id)
 
     result = await c.write(
         ConnectorPayload(
@@ -547,7 +570,7 @@ async def test_run_command_stderr_output(provider: _FakeRuntimeProvider, provide
         "grep foo",
         ExecResult(exit_code=1, stdout="", stderr="grep: No such file", duration_ms=5),
     )
-    c = ShellConnector(runtime_provider=provider, allowed_commands=["grep"])
+    c = ShellConnector(runtime_provider=provider, workspace_lease_id=workspace_lease_id, allowed_commands=["grep"])
 
     result = await c.write(
         ConnectorPayload(

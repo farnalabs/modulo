@@ -16,27 +16,34 @@ async def create_environment_profile(
     *,
     org_id: uuid.UUID,
     name: str,
-    image_ref: str,
     account_id: uuid.UUID,
     description: str | None = None,
+    provider_type: str = "local_docker",
+    image_ref: str | None = None,
     capabilities: list[str] | None = None,
-    egress_policy: str | None = None,
-    timeout_seconds: int = 3600,
-    persistence_policy: dict[str, Any] | None = None,
-    resource_limits: dict[str, Any] | None = None,
+    config_json: dict[str, Any] | None = None,
+    network_policy: str = "outbound",
+    initialisation_strategy: str = "git_clone",
+    secret_refs: list[str] | None = None,
+    persistence_policy: str = "ephemeral",
+    owner_team_id: uuid.UUID | None = None,
+    visibility: str = "org",
 ) -> EnvironmentProfile:
     profile = EnvironmentProfile(
         organisation_id=org_id,
         name=name,
         description=description,
+        provider_type=provider_type,
         image_ref=image_ref,
-        capabilities=capabilities or [],
-        egress_policy=egress_policy,
-        timeout_seconds=timeout_seconds,
-        persistence_policy=persistence_policy or {},
-        resource_limits_json=resource_limits or {},
+        capabilities_json=capabilities or [],
+        config_json=config_json or {},
+        network_policy=network_policy,
+        initialisation_strategy=initialisation_strategy,
+        secret_refs_json=secret_refs or [],
+        persistence_policy=persistence_policy,
         account_id=account_id,
-        is_active=True,
+        owner_team_id=owner_team_id,
+        visibility=visibility,
     )
     session.add(profile)
     await session.flush()
@@ -80,9 +87,10 @@ async def update_environment_profile(
 
 
 async def delete_environment_profile(session: AsyncSession, profile_id: uuid.UUID) -> bool:
+    """Soft-delete: set status to 'deleted' instead of hard-deleting."""
     profile = await get_environment_profile(session, profile_id)
     if profile is None:
         return False
-    await session.delete(profile)
+    profile.status = "deleted"
     await session.flush()
     return True
