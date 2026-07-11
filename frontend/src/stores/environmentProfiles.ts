@@ -42,7 +42,7 @@ export const useEnvironmentProfilesStore = defineStore('environmentProfiles', ()
     error.value = null
     try {
       const data = await get<{ items: EnvironmentProfileSummary[] }>('/api/v1/environment-profiles')
-      profiles.value = Array.isArray(data) ? data : (data.items ?? [])
+      profiles.value = data.items ?? []
     } catch (e: unknown) {
       error.value = formatApiError(e)
       profiles.value = []

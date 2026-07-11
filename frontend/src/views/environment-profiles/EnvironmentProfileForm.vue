@@ -170,7 +170,10 @@ const route = useRoute()
 const router = useRouter()
 const store = useEnvironmentProfilesStore()
 
-const isEdit = computed(() => !!(props.profileId || route.params.id))
+const isEdit = computed(() => {
+  const id = props.profileId || (route.params.id as string)
+  return !!(id && id !== 'new')
+})
 
 const availableCapabilities = [
   'git',
@@ -224,7 +227,7 @@ async function handleSubmit() {
 
   try {
     const profileId = props.profileId || (route.params.id as string)
-    if (isEdit.value && profileId) {
+    if (profileId && profileId !== 'new') {
       await store.updateProfile(profileId, payload as any)
     } else {
       await store.createProfile(payload as any)
