@@ -3,45 +3,33 @@
     <PageHeader title="Notifications" :subtitle="$t('views.NotificationsPage.view_and_manage_your_notifications')" />
 
     <!-- Filters -->
-    <div class="card p-4">
-      <div class="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
-        <select v-model="filterLevel" aria-label="Filter by level" class="rounded-md border bg-background px-3 py-2 text-sm">
-          <option value="">{{ $t('views.AdminErrorsView.all_levels') }}</option>
-          <option value="error">Error</option>
-          <option value="warning">Warning</option>
-          <option value="info">Info</option>
-          <option value="debug">Debug</option>
-        </select>
-        <select v-model="filterScope" aria-label="Filter by scope" class="rounded-md border bg-background px-3 py-2 text-sm">
-          <option value="">{{ $t('views.NotificationsPage.all_scopes') }}</option>
-          <option value="user">Personal</option>
-          <option value="org">{{ $t('components.OwnershipPicker.orgwide') }}</option>
-          <option value="admin">Admin</option>
-        </select>
-        <select v-model="filterStatus" aria-label="Filter by status" class="rounded-md border bg-background px-3 py-2 text-sm">
-          <option value="">{{ $t('views.NotificationsPage.all_status') }}</option>
-          <option value="active">Active</option>
-          <option value="dismissed_self">{{ $t('views.NotificationsPage.dismissed_self') }}</option>
-          <option value="dismissed_scope">{{ $t('views.NotificationsPage.dismissed_scope') }}</option>
-        </select>
-        <div class="flex items-end gap-2">
-        <Button
-          type="button"
-          variant="default"
-          @click="applyFilters"
-        >
-          Apply Filters
-        </Button>
-          <button
-            type="button"
-            class="rounded-md border px-4 py-2 text-sm font-medium text-muted-foreground hover:bg-muted transition-colors"
-            @click="resetFilters"
-          >
-            Reset
-          </button>
-        </div>
-      </div>
-    </div>
+    <FilterBar
+      :filters="[
+        { key: 'level', label: $t('views.AdminErrorsView.all_levels'), options: [
+          { value: 'error', label: 'Error' },
+          { value: 'warning', label: 'Warning' },
+          { value: 'info', label: 'Info' },
+          { value: 'debug', label: 'Debug' },
+        ]},
+        { key: 'scope', label: $t('views.NotificationsPage.all_scopes'), options: [
+          { value: 'user', label: 'Personal' },
+          { value: 'org', label: $t('components.OwnershipPicker.orgwide') },
+          { value: 'admin', label: 'Admin' },
+        ]},
+        { key: 'status', label: $t('views.NotificationsPage.all_status'), options: [
+          { value: 'active', label: 'Active' },
+          { value: 'dismissed_self', label: $t('views.NotificationsPage.dismissed_self') },
+          { value: 'dismissed_scope', label: $t('views.NotificationsPage.dismissed_scope') },
+        ]},
+      ]"
+      :filter-values="{ level: filterLevel, scope: filterScope, status: filterStatus }"
+      @update:filter="handleFilterUpdate"
+    >
+      <template #after>
+        <Button type="button" variant="default" @click="applyFilters">Apply Filters</Button>
+        <button type="button" class="rounded-md border px-4 py-2 text-sm font-medium text-muted-foreground hover:bg-muted transition-colors" @click="resetFilters">Reset</button>
+      </template>
+    </FilterBar>
 
     <!-- States -->
     <LoadingSpinner v-if="loading" />
@@ -94,6 +82,7 @@ import type { NotificationResponse } from "../lib/api/notifications";
 import { fetchNotifications, reviewLater } from "../lib/api/notifications";
 import NotificationCard from "../components/NotificationCard.vue";
 import PageHeader from '../components/shared/PageHeader.vue'
+import FilterBar from '../components/shared/FilterBar.vue'
 import LoadingSpinner from "../components/shared/LoadingSpinner.vue";
 import ErrorAlert from "../components/shared/ErrorAlert.vue";
 import { Button } from "@/components/ui/button";
@@ -110,6 +99,12 @@ const pageSize = ref(20);
 const filterLevel = ref("");
 const filterScope = ref("");
 const filterStatus = ref("");
+
+function handleFilterUpdate(key: string, value: string) {
+  if (key === 'level') filterLevel.value = value
+  else if (key === 'scope') filterScope.value = value
+  else if (key === 'status') filterStatus.value = value
+}
 
 async function loadNotifications(p?: number) {
   loading.value = true;

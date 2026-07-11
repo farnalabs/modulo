@@ -38,73 +38,46 @@
     </div>
 
     <div class="card p-4">
-      <div class="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-5">
-        <div>
-          <label class="mb-1 block text-xs font-medium text-muted-foreground">{{ $t('views.AdminAuditView.event_type') }}</label>
-          <select
-            v-model="filterEventType"
-            class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring"
-            data-testid="admin-audit-event-type"
-            aria-label="Event Type"
-          >
-            <option value="">{{ $t('views.AdminAuditView.all_types') }}</option>
-            <optgroup :label="$t('views.AdminAuditView.optgroup_pipeline')">
-              <option value="pipeline.created">{{ $t('views.AdminAuditView.opt_pipeline_created') }}</option>
-              <option value="pipeline.updated">{{ $t('views.AdminAuditView.opt_pipeline_updated') }}</option>
-              <option value="pipeline.deleted">{{ $t('views.AdminAuditView.opt_pipeline_deleted') }}</option>
-            </optgroup>
-            <optgroup :label="$t('views.AdminAuditView.optgroup_run')">
-              <option value="run.started">{{ $t('views.AdminAuditView.opt_run_started') }}</option>
-              <option value="run.completed">{{ $t('views.AdminAuditView.opt_run_completed') }}</option>
-              <option value="run.failed">{{ $t('views.AdminAuditView.opt_run_failed') }}</option>
-              <option value="run.cancelled">{{ $t('views.AdminAuditView.opt_run_cancelled') }}</option>
-            </optgroup>
-            <optgroup :label="$t('views.AdminAuditView.optgroup_user')">
-              <option value="user.created">{{ $t('views.AdminAuditView.opt_user_created') }}</option>
-              <option value="user.updated">{{ $t('views.AdminAuditView.opt_user_updated') }}</option>
-              <option value="user.deactivated">{{ $t('views.AdminAuditView.opt_user_deactivated') }}</option>
-              <option value="user.activated">{{ $t('views.AdminAuditView.opt_user_activated') }}</option>
-            </optgroup>
-            <optgroup :label="$t('views.AdminAuditView.optgroup_team')">
-              <option value="team.created">{{ $t('views.AdminAuditView.opt_team_created') }}</option>
-              <option value="team.updated">{{ $t('views.AdminAuditView.opt_team_updated') }}</option>
-              <option value="team.deleted">{{ $t('views.AdminAuditView.opt_team_deleted') }}</option>
-            </optgroup>
-            <optgroup :label="$t('views.AdminAuditView.optgroup_schema')">
-              <option value="schema.created">{{ $t('views.AdminAuditView.opt_schema_created') }}</option>
-              <option value="schema.updated">{{ $t('views.AdminAuditView.opt_schema_updated') }}</option>
-              <option value="schema.deleted">{{ $t('views.AdminAuditView.opt_schema_deleted') }}</option>
-            </optgroup>
-            <optgroup :label="$t('views.AdminAuditView.optgroup_connector')">
-              <option value="connector.created">{{ $t('views.AdminAuditView.opt_connector_created') }}</option>
-              <option value="connector.updated">{{ $t('views.AdminAuditView.opt_connector_updated') }}</option>
-              <option value="connector.deleted">{{ $t('views.AdminAuditView.opt_connector_deleted') }}</option>
-            </optgroup>
-            <optgroup :label="$t('views.AdminAuditView.optgroup_model_backend')">
-              <option value="model_backend.created">{{ $t('views.AdminAuditView.opt_model_backend_created') }}</option>
-              <option value="model_backend.updated">{{ $t('views.AdminAuditView.opt_model_backend_updated') }}</option>
-              <option value="model_backend.deleted">{{ $t('views.AdminAuditView.opt_model_backend_deleted') }}</option>
-            </optgroup>
-            <optgroup :label="$t('views.AdminAuditView.optgroup_sso_provider')">
-              <option value="sso_provider.created">{{ $t('views.AdminAuditView.opt_sso_provider_created') }}</option>
-              <option value="sso_provider.updated">{{ $t('views.AdminAuditView.opt_sso_provider_updated') }}</option>
-              <option value="sso_provider.deleted">{{ $t('views.AdminAuditView.opt_sso_provider_deleted') }}</option>
-              <option value="sso_provider.toggled">{{ $t('views.AdminAuditView.opt_sso_provider_toggled') }}</option>
-            </optgroup>
-            <optgroup :label="$t('views.AdminAuditView.optgroup_settings')">
-              <option value="settings.updated">{{ $t('views.AdminAuditView.opt_settings_updated') }}</option>
-            </optgroup>
-            <optgroup :label="$t('views.AdminAuditView.optgroup_api_key')">
-              <option value="api_key.created">{{ $t('views.AdminAuditView.opt_api_key_created') }}</option>
-              <option value="api_key.deleted">{{ $t('views.AdminAuditView.opt_api_key_deleted') }}</option>
-            </optgroup>
-            <optgroup :label="$t('views.AdminAuditView.optgroup_export')">
-              <option value="export.csv">{{ $t('views.AdminAuditView.opt_export_csv') }}</option>
-            </optgroup>
-          </select>
-        </div>
-        <div>
-          <label class="mb-1 block text-xs font-medium text-muted-foreground">{{ $t('views.AdminAuditView.actor') }}</label>
+      <FilterBar
+        :filters="[
+          { key: 'event_type', label: $t('views.AdminAuditView.all_types'), options: [
+            { value: 'pipeline.created', label: $t('views.AdminAuditView.opt_pipeline_created') },
+            { value: 'pipeline.updated', label: $t('views.AdminAuditView.opt_pipeline_updated') },
+            { value: 'pipeline.deleted', label: $t('views.AdminAuditView.opt_pipeline_deleted') },
+            { value: 'run.started', label: $t('views.AdminAuditView.opt_run_started') },
+            { value: 'run.completed', label: $t('views.AdminAuditView.opt_run_completed') },
+            { value: 'run.failed', label: $t('views.AdminAuditView.opt_run_failed') },
+            { value: 'run.cancelled', label: $t('views.AdminAuditView.opt_run_cancelled') },
+            { value: 'user.created', label: $t('views.AdminAuditView.opt_user_created') },
+            { value: 'user.updated', label: $t('views.AdminAuditView.opt_user_updated') },
+            { value: 'user.deactivated', label: $t('views.AdminAuditView.opt_user_deactivated') },
+            { value: 'user.activated', label: $t('views.AdminAuditView.opt_user_activated') },
+            { value: 'team.created', label: $t('views.AdminAuditView.opt_team_created') },
+            { value: 'team.updated', label: $t('views.AdminAuditView.opt_team_updated') },
+            { value: 'team.deleted', label: $t('views.AdminAuditView.opt_team_deleted') },
+            { value: 'schema.created', label: $t('views.AdminAuditView.opt_schema_created') },
+            { value: 'schema.updated', label: $t('views.AdminAuditView.opt_schema_updated') },
+            { value: 'schema.deleted', label: $t('views.AdminAuditView.opt_schema_deleted') },
+            { value: 'connector.created', label: $t('views.AdminAuditView.opt_connector_created') },
+            { value: 'connector.updated', label: $t('views.AdminAuditView.opt_connector_updated') },
+            { value: 'connector.deleted', label: $t('views.AdminAuditView.opt_connector_deleted') },
+            { value: 'model_backend.created', label: $t('views.AdminAuditView.opt_model_backend_created') },
+            { value: 'model_backend.updated', label: $t('views.AdminAuditView.opt_model_backend_updated') },
+            { value: 'model_backend.deleted', label: $t('views.AdminAuditView.opt_model_backend_deleted') },
+            { value: 'sso_provider.created', label: $t('views.AdminAuditView.opt_sso_provider_created') },
+            { value: 'sso_provider.updated', label: $t('views.AdminAuditView.opt_sso_provider_updated') },
+            { value: 'sso_provider.deleted', label: $t('views.AdminAuditView.opt_sso_provider_deleted') },
+            { value: 'sso_provider.toggled', label: $t('views.AdminAuditView.opt_sso_provider_toggled') },
+            { value: 'settings.updated', label: $t('views.AdminAuditView.opt_settings_updated') },
+            { value: 'api_key.created', label: $t('views.AdminAuditView.opt_api_key_created') },
+            { value: 'api_key.deleted', label: $t('views.AdminAuditView.opt_api_key_deleted') },
+            { value: 'export.csv', label: $t('views.AdminAuditView.opt_export_csv') },
+          ]},
+        ]"
+        :filter-values="{ event_type: filterEventType }"
+        @update:filter="(key, value) => { if (key === 'event_type') filterEventType = value }"
+      >
+        <template #after>
           <input
             v-model="filterActor"
             type="text"
@@ -112,9 +85,6 @@
             class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring"
             data-testid="admin-audit-actor"
           />
-        </div>
-        <div>
-          <label class="mb-1 block text-xs font-medium text-muted-foreground">{{ $t('views.AdminAuditView.from') }}</label>
           <input
             v-model="filterDateFrom"
             type="date"
@@ -320,6 +290,7 @@
 
 <script setup lang="ts">
 import PageHeader from '../components/shared/PageHeader.vue'
+import FilterBar from '../components/shared/FilterBar.vue'
 import { ref, onMounted } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { api } from '../lib/api/client'

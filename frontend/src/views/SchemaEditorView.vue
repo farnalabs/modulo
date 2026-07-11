@@ -8,15 +8,12 @@
     <aside class="flex w-80 flex-col border-r bg-background">
       <div class="border-b p-4">
         <h2 class="text-base font-semibold">{{ $t('views.SchemaEditorView.schemas') }}</h2>
-        <div class="relative mt-2">
-          <input
-            v-model="searchQuery"
-            type="text"
-            :placeholder="$t('views.SchemaEditorView.search_schemas')"
-            data-testid="schema-editor-search"
-            class="w-full rounded-lg border border-input bg-background px-3 py-2 pl-9 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+        <div class="mt-2">
+          <FilterBar
+            :search="{ placeholder: $t('views.SchemaEditorView.search_schemas') }"
+            :search-value="searchQuery"
+            @update:search="searchQuery = $event"
           />
-          <svg class="absolute left-3 top-2.5 h-4 w-4 text-muted-foreground" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></svg>
         </div>
       </div>
 
@@ -328,6 +325,7 @@ import { api, getAccessToken } from '../lib/api/client'
 import { formatApiError } from '../lib/api/formatError'
 import type { components } from '../lib/api/client'
 import LoadingSpinner from '../components/shared/LoadingSpinner.vue'
+import FilterBar from '../components/shared/FilterBar.vue'
 import FeatureGate from '../components/FeatureGate.vue'
 import PageHeader from '../components/shared/PageHeader.vue'
 import PageTabs from "../components/PageTabs.vue"
