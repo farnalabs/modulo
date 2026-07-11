@@ -1,5 +1,6 @@
 """Admin-only routes for organisation, user, team, and billing management."""
 
+import asyncio
 import logging
 import secrets
 import uuid
@@ -2584,13 +2585,34 @@ async def admin_retention_purge_runs(
             await set_rls_org(session, current_user.organisation_id)
             deleted = await batch_delete_old_terminal_runs(session, max_age_days=req.max_age_days)
 
+    except asyncio.CancelledError:
+        raise
+    except IntegrityError:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="A resource with this value already exists",
+        ) from None
     except ProgrammingError:
         logger.exception("routes.admin")
 
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="This feature is not available. Run database migrations to enable it.",
-        )
+        ) from None
+    except SQLAlchemyError:
+        logger.exception("routes.admin")
+
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="A database error occurred. Please try again later.",
+        ) from None
+    except Exception:
+        logger.exception("routes.admin")
+
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="An unexpected error occurred.",
+        ) from None
 
     return {"deleted_run_count": deleted}
 
@@ -2625,16 +2647,32 @@ async def admin_manual_purge(
                 resource_type="run",
                 payload_json={"older_than": req.older_than},
             )
+    except asyncio.CancelledError:
+        raise
     except IntegrityError:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="A resource with this value already exists",
-        )
+        ) from None
     except ProgrammingError:
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
-        )
+        ) from None
+    except SQLAlchemyError:
+        logger.exception("routes.admin")
+
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="A database error occurred. Please try again later.",
+        ) from None
+    except Exception:
+        logger.exception("routes.admin")
+
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="An unexpected error occurred.",
+        ) from None
 
     return result
 
@@ -2673,13 +2711,34 @@ async def admin_purge_stale_runs(
                 )
             )
 
+    except asyncio.CancelledError:
+        raise
+    except IntegrityError:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="A resource with this value already exists",
+        ) from None
     except ProgrammingError:
         logger.exception("routes.admin")
 
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="This feature is not available. Run database migrations to enable it.",
-        )
+        ) from None
+    except SQLAlchemyError:
+        logger.exception("routes.admin")
+
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="A database error occurred. Please try again later.",
+        ) from None
+    except Exception:
+        logger.exception("routes.admin")
+
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="An unexpected error occurred.",
+        ) from None
 
     return PurgeRunsResponse(purged_count=result.rowcount)  # type: ignore[attr-defined]
 
@@ -2724,13 +2783,34 @@ async def admin_get_retention(
                 select(Organisation.settings_json).where(Organisation.id == current_user.organisation_id).limit(1)
             )
             row = result.scalar_one_or_none()
+    except asyncio.CancelledError:
+        raise
+    except IntegrityError:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="A resource with this value already exists",
+        ) from None
     except ProgrammingError:
         logger.exception("routes.admin")
 
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="This feature is not available. Run database migrations to enable it.",
-        )
+        ) from None
+    except SQLAlchemyError:
+        logger.exception("routes.admin")
+
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="A database error occurred. Please try again later.",
+        ) from None
+    except Exception:
+        logger.exception("routes.admin")
+
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="An unexpected error occurred.",
+        ) from None
 
     retention_days = 90
     if row and isinstance(row, dict):
@@ -2759,13 +2839,34 @@ async def admin_update_retention(
             settings["retention_days"] = req.retention_days
             org.settings_json = settings
             await session.flush()
+    except asyncio.CancelledError:
+        raise
+    except IntegrityError:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="A resource with this value already exists",
+        ) from None
     except ProgrammingError:
         logger.exception("routes.admin")
 
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="This feature is not available. Run database migrations to enable it.",
-        )
+        ) from None
+    except SQLAlchemyError:
+        logger.exception("routes.admin")
+
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="A database error occurred. Please try again later.",
+        ) from None
+    except Exception:
+        logger.exception("routes.admin")
+
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="An unexpected error occurred.",
+        ) from None
 
     logger.info(
         "run_retention.updated",
