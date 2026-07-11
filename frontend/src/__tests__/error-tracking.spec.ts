@@ -368,9 +368,19 @@ describe('Transport batching', () => {
 
 describe('Context enrichment', () => {
   it('includes URL and viewport in context', () => {
-    const tracker = createErrorTracker()
+    const mockBackend = new BuiltinMonitorBackend()
+    const captureSpy = vi.spyOn(mockBackend, 'captureError')
+    const tracker = createErrorTracker({ monitorBackends: [mockBackend] })
     const error = new Error('context test')
     tracker.captureError(error)
+
+    expect(captureSpy).toHaveBeenCalledTimes(1)
+    const event = captureSpy.mock.calls[0][0] as any
+    expect(event.context_json).toBeDefined()
+    expect(event.context_json.url).toBeTypeOf('string')
+    expect(event.context_json.viewport).toBeDefined()
+    expect(event.context_json.viewport.width).toBeTypeOf('number')
+    expect(event.context_json.viewport.height).toBeTypeOf('number')
 
     tracker.dispose()
   })
@@ -380,9 +390,15 @@ describe('Context enrichment', () => {
     const plan = usePlanStore()
     plan.$patch({ currentTier: 'enterprise' })
 
-    const tracker = createErrorTracker()
+    const mockBackend = new BuiltinMonitorBackend()
+    const captureSpy = vi.spyOn(mockBackend, 'captureError')
+    const tracker = createErrorTracker({ monitorBackends: [mockBackend] })
     const error = new Error('tier test')
     tracker.captureError(error)
+
+    expect(captureSpy).toHaveBeenCalledTimes(1)
+    const event = captureSpy.mock.calls[0][0] as any
+    expect(event.context_json.tier).toBe('enterprise')
 
     tracker.dispose()
   })
