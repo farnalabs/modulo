@@ -119,6 +119,7 @@ import PageHeader from '../components/shared/PageHeader.vue'
 import { ref, computed, onMounted } from 'vue'
 import { api } from '../lib/api/client'
 import { formatApiError } from '../lib/api/formatError'
+import { useDataFetch } from '../composables/useDataFetch'
 import { usePlanStore } from '../stores/planStore'
 import FeatureGate from '../components/FeatureGate.vue'
 import LoadingSpinner from '../components/shared/LoadingSpinner.vue'
@@ -152,9 +153,14 @@ interface AnomalyResponse {
   dismissed: boolean
 }
 
-const loading = ref(true)
-const loadError = ref<string | null>(null)
-const items = ref<CostReportRow[]>([])
+const { loading, error: loadError, data, load: loadData } = useDataFetch(
+  () => (api as any).GET('/api/v1/admin/costs', {
+    params: { query: { group_by: 'team', period: 'month' } },
+  }),
+  { immediate: false },
+)
+
+const items = computed(() => (data.value as CostReportResponse)?.items ?? [])
 
 const anomaliesLoading = ref(true)
 const anomaliesError = ref<string | null>(null)
@@ -166,25 +172,6 @@ const avgCostPerRun = computed(() => totalRuns.value > 0 ? totalSpend.value / to
 
 const activeAnomalies = computed(() => anomalies.value.filter((a) => !a.dismissed))
 const dismissedAnomalies = computed(() => anomalies.value.filter((a) => a.dismissed))
-
-async function loadData() {
-  loading.value = true
-  loadError.value = null
-  try {
-    const { data, error: err } = await (api as any).GET('/api/v1/admin/costs', {
-      params: { query: { group_by: 'team', period: 'month' } },
-    })
-    if (err) {
-      loadError.value = `Failed to load cost report: ${formatApiError(err)}`
-    } else if (data) {
-      items.value = (data as CostReportResponse).items ?? []
-    }
-  } catch (e: unknown) {
-    loadError.value = `Failed to load cost report: ${formatApiError(e)}`
-  } finally {
-    loading.value = false
-  }
-}
 
 async function loadAnomalies() {
   anomaliesLoading.value = true
