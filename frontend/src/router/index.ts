@@ -267,6 +267,10 @@ const router = createRouter({
       component: AgentOutputDiffView,
     },
     {
+      path: '/admin',
+      redirect: '/admin/remy',
+    },
+    {
       path: '/admin/my-profile',
       name: 'my-profile',
       component: MyProfileView,
