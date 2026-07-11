@@ -1,5 +1,3 @@
-import asyncio
-
 """Agent signal trigger — cross-pipeline signal on node completion.
 
 When a source pipeline's designated node completes execution, fires a child
@@ -14,6 +12,7 @@ Trigger config_json structure::
     }
 """
 
+import asyncio
 import hashlib
 import logging
 import uuid
