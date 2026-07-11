@@ -66,8 +66,8 @@ class SchemaInferenceService:
         self._timeout = timeout
 
     async def infer(self, samples: list[dict[str, Any]]) -> dict[str, Any]:
-        if samples is None:
-            raise SchemaInferenceError("samples must be a list of dicts, got None")
+        if not isinstance(samples, list):
+            raise SchemaInferenceError("samples must be a list of dicts")
         if not all(isinstance(r, dict) for r in samples):
             raise SchemaInferenceError("samples must be a list of dicts")
 
