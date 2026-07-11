@@ -15,16 +15,12 @@ from modulo.db.models.trigger_event import TriggerEvent
 from modulo.settings import get_settings
 
 try:
-    from celery import Task
-except ImportError:
-    import typing
+    from celery import Task as _CeleryTask
 
-    if typing.TYPE_CHECKING:
-        from celery import Task
-    else:
-        raise ImportError(
-            "Celery is required for modulo.cleanup.webhook_dedup. Install it with: pip install celery"
-        ) from None
+    CELERY_AVAILABLE = True
+except ImportError:
+    _CeleryTask = object  # type: ignore[assignment,misc]
+    CELERY_AVAILABLE = False
 
 _log = logging.getLogger(__name__)
 
@@ -87,7 +83,7 @@ def _get_engine() -> AsyncEngine:
     return _ENGINE_GLOBAL
 
 
-class WebhookDedupCleanupTask(Task):  # type: ignore[misc]
+class WebhookDedupCleanupTask(_CeleryTask):  # type: ignore[misc]
     """Celery task that runs the webhook dedup cleanup once per hour."""
 
     name = "modulo.cleanup.webhook_dedup"
