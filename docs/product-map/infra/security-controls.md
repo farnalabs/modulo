@@ -46,7 +46,14 @@ unit-tests:
   - backend/tests/unit/notifier/test_notifier.py
   - backend/tests/unit/events/test_redis_broker.py
   - backend/tests/unit/api/test_auth_rate_limiter.py
-depends-on: []
+depends-on:
+  - feat-auth-jwt-auth
+  - feat-auth-team-rbac
+  - feat-teams-team-isolation
+  - feat-core-secrets-backend
+  - feat-pipelines-hitl-gates
+  - feat-core-trigger-system
+  - feat-auth-rate-limiting
 status: partial
 ---
 
