@@ -6,7 +6,8 @@ let _refreshingPromise: Promise<boolean> | null = null
 
 function notifyListeners(): void {
   const token = localStorage.getItem(TOKEN_KEY)
-  for (const fn of _authListeners) {
+  const listeners = _authListeners.slice()
+  for (const fn of listeners) {
     fn(token)
   }
 }

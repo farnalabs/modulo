@@ -13,7 +13,12 @@ export async function* parseSSEStream(
 
   for (;;) {
     const { done, value } = await reader.read()
-    if (done) break
+    if (done) {
+      if (currentEvent) {
+        yield { event: currentEvent, data: '' }
+      }
+      break
+    }
 
     buffer += decoder.decode(value, { stream: true })
     if (buffer.length > maxBufferSize) {
@@ -32,7 +37,13 @@ export async function* parseSSEStream(
       } else if (line.startsWith('data: ')) {
         yield { event: currentEvent, data: line.slice(6) }
         currentEvent = ''
+      } else if (line.startsWith(':')) {
+        continue
       }
     }
+  }
+
+  if (currentEvent) {
+    yield { event: currentEvent, data: '' }
   }
 }
