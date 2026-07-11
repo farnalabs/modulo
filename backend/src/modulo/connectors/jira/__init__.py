@@ -39,7 +39,7 @@ def _compute_delay(attempt: int, response: httpx.Response | None = None) -> floa
         retry_after = _parse_retry_after(response)
         if retry_after is not None:
             return min(retry_after, _MAX_DELAY)
-    jitter = random.uniform(0, 1)
+    jitter = random.uniform(0, 1)  # noqa: S311 — non-cryptographic jitter for retry delays
     return min(_BASE_DELAY * (2**attempt) + jitter, _MAX_DELAY)
 
 
