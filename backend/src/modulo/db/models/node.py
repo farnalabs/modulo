@@ -1,5 +1,9 @@
 from __future__ import annotations
 
+# DEPRECATED: This model is not used by the pipeline execution engine.
+# Used only by db/crud/node_composite.py for composite template functionality.
+# Scheduled for removal once composite templates are migrated to use PipelineEdge directly.
+
 """Node model — a pipeline node that can be composed into a hierarchy
 with parent-child relationships and temporal execution constraints.
 """
