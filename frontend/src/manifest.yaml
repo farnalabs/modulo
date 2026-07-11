@@ -76,8 +76,8 @@ routes:
         breadcrumb: Copy Pipeline
         parent: /library
         product_map:
-        sidebar_group: core
-        sidebar_order: 6
+        sidebar_group:
+        sidebar_order:
         type: form_page
         <<: *community
         deprecated: false
