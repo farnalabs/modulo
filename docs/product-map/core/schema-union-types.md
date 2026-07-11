@@ -163,7 +163,7 @@ Union type validation (oneOf/anyOf) and array schema validation for the Schema R
 - No concurrency tests for schema version creation race conditions
 - No backward compatibility integration tests for deprecated schema versions
 - No BDD coverage for union/array validation (feature files only cover inference and migration)
-- `connectors/schema_inference.feature` is a placeholder with no real step definitions
+- `connectors/schema_inference.feature` BDD steps exist but union/array validation scenarios still missing
 - Schema version lifecycle (deprecation → hard delete) not tested
 - No retry/backoff for LLM inference/generation failures
 - No timeout on ModelBackendHub.initialise
@@ -172,9 +172,7 @@ Union type validation (oneOf/anyOf) and array schema validation for the Schema R
 
 ## Known Gaps
 - PRD 8.3 states "No union/collection types in alpha" but validation code exists — spec needs updating to reflect implementation
-- BDD feature files referenced by `test_alpha_schemas.py` do not exist (`backend/tests/bdd/features/schemas/create.feature`, `backend/tests/bdd/features/schemas/version.feature`, `backend/tests/bdd/features/schemas/deletion_protection.feature`)
-- `schema_inference.feature` is a placeholder with no real scenarios
-- No BDD coverage for union/array validation
+- No BDD coverage for union/array validation (oneOf/anyOf)
 - No concurrency tests for schema version creation race conditions
 - No backward compatibility integration tests for deprecated schema versions
 - Schema version lifecycle (deprecation → hard delete) not tested 
