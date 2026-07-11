@@ -2,10 +2,7 @@
   <FeatureGate feature-name="mcp_server" show-disabled>
 
     <div data-theme="agent" class="page-narrow">
-    <header>
-      <h1 class="text-2xl font-semibold tracking-tight">MCP Configuration</h1>
-      <p class="mt-1 text-muted-foreground">Configure Model Context Protocol (MCP) server settings and API keys</p>
-    </header>
+    <PageHeader title="MCP Configuration" subtitle="Configure Model Context Protocol (MCP) server settings and API keys" />
 
     <LoadingSpinner v-if="loading" />
     <ErrorAlert v-else-if="loadError" :message="loadError" :on-retry="loadAll" />
@@ -273,6 +270,7 @@ import { ref, computed, onMounted, onUnmounted } from 'vue'
 import { api } from '../lib/api/client'
 import { formatApiError, type ProblemDetail } from '../lib/api/formatError'
 import type { components } from '../lib/api/client'
+import PageHeader from '../components/shared/PageHeader.vue'
 import LoadingSpinner from '../components/shared/LoadingSpinner.vue'
 import ErrorAlert from '../components/shared/ErrorAlert.vue'
 import { Badge } from '../components/ui/badge'

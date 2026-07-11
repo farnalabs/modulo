@@ -3,10 +3,7 @@
 
     <div class="page-narrow">
       <header class="flex items-center justify-between">
-        <div>
-          <h1 class="text-2xl font-semibold tracking-tight">{{ $t('views.SettingsSsoView.title') }}</h1>
-          <p class="mt-1 text-muted-foreground">{{ $t('views.SettingsSsoView.description') }}</p>
-        </div>
+        <PageHeader :title="$t('views.SettingsSsoView.title')" :subtitle="$t('views.SettingsSsoView.description')" />
         <Button
           variant="default"
            class="border-primary/30 hover:border-primary/60"
@@ -183,6 +180,7 @@ import { Button } from '@/components/ui/button'
 import { api } from '../lib/api/client'
 import type { components } from '../lib/api/client'
 import SsoProviderForm from '../components/SsoProviderForm.vue'
+import PageHeader from '../components/shared/PageHeader.vue'
 import LoadingSpinner from '../components/shared/LoadingSpinner.vue'
 import ErrorAlert from '../components/shared/ErrorAlert.vue'
 import FeatureGate from '../components/FeatureGate.vue'

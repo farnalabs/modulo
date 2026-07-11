@@ -2,10 +2,7 @@
   <div data-theme="agent" class="page-narrow">
       <TooltipProvider>
     <header class="flex items-center justify-between">
-      <div>
-        <h1 class="text-2xl font-semibold tracking-tight">{{ $t('views.UserRemySkillsView.my_remy_skills') }}</h1>
-        <p class="mt-1 text-muted-foreground">{{ $t('views.UserRemySkillsView.manage_your_personal_skills_for_the_remy_ai_assistant') }}</p>
-      </div>
+      <PageHeader :title="$t('views.UserRemySkillsView.my_remy_skills')" :subtitle="$t('views.UserRemySkillsView.manage_your_personal_skills_for_the_remy_ai_assistant')" />
       <Button
         variant="default"
         class="border border-primary/30"
@@ -130,6 +127,7 @@ import { Button } from '@/components/ui/button'
 import { api } from '../lib/api/client'
 import { formatApiError } from '../lib/api/formatError'
 import { useRemyStore } from '../composables/useRemyStore'
+import PageHeader from '../components/shared/PageHeader.vue'
 import LoadingSpinner from '../components/shared/LoadingSpinner.vue'
 import ErrorAlert from '../components/shared/ErrorAlert.vue'
 import RemySkillDialog from '../components/remy/RemySkillDialog.vue'

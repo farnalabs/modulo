@@ -7,10 +7,7 @@
     </template>
     <template #default>
       <div class="page-narrow">
-        <h1 class="text-2xl font-semibold">{{ $t('views.SettingsMonitorConfigView.browser_monitoring') }}</h1>
-        <p class="text-muted-foreground text-sm">
-          {{ $t('views.SettingsMonitorConfigView.description') }}
-        </p>
+        <PageHeader :title="$t('views.SettingsMonitorConfigView.browser_monitoring')" :subtitle="$t('views.SettingsMonitorConfigView.description')" />
 
         <div v-if="loading" class="flex items-center justify-center h-32">
           <span class="animate-spin h-5 w-5 border-2 border-primary border-t-transparent rounded-full" />
@@ -83,6 +80,7 @@ import { formatApiError } from '../lib/api/formatError'
 import { getErrorTracker } from '../lib/error-tracking'
 import { loadBackends } from '../monitor'
 import type { MonitorConfig } from '../monitor/types'
+import PageHeader from '../components/shared/PageHeader.vue'
 import { Button } from '../components/ui/button'
 
 const { t } = useI18n()

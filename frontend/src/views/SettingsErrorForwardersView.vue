@@ -1,9 +1,6 @@
 ﻿<template>
   <div data-theme="agent" class="page-narrow">
-    <header>
-      <h1 class="text-2xl font-semibold tracking-tight">{{ $t('views.SettingsErrorForwardersView.error_forwarders') }}</h1>
-      <p class="mt-1 text-muted-foreground">{{ $t('views.SettingsErrorForwardersView.configure_external_error_tracking_and_alerting_integrations') }}</p>
-    </header>
+    <PageHeader :title="$t('views.SettingsErrorForwardersView.error_forwarders')" :subtitle="$t('views.SettingsErrorForwardersView.configure_external_error_tracking_and_alerting_integrations')" />
 
     <FeatureGate feature-name="error_forwarders" required-tier="team" show-disabled>
 
@@ -261,6 +258,7 @@ import { formatApiError, type ProblemDetail } from '../lib/api/formatError'
 import { usePlanStore } from '../stores/planStore'
 import { api } from '../lib/api/client'
 import FeatureGate from '../components/FeatureGate.vue'
+import PageHeader from '../components/shared/PageHeader.vue'
 import LoadingSpinner from '../components/shared/LoadingSpinner.vue'
 import ErrorAlert from '../components/shared/ErrorAlert.vue'
 
@@ -414,4 +412,3 @@ onMounted(() => {
   loadForwarders()
 })
 </script>
-

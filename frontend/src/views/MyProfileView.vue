@@ -1,9 +1,6 @@
 ﻿<template>
   <div class="p-6 max-w-2xl mx-auto space-y-6">
-    <div>
-      <h1 class="text-2xl font-semibold tracking-tight">{{ $t('views.MyProfileView.my_profile') }}</h1>
-      <p class="text-muted-foreground mt-1">{{ $t('views.MyProfileView.manage_your_account_settings_and_password') }}</p>
-    </div>
+    <PageHeader :title="$t('views.MyProfileView.my_profile')" :subtitle="$t('views.MyProfileView.manage_your_account_settings_and_password')" />
 
     <div class="card p-6 space-y-6">
       <div class="flex items-center gap-4 pb-4 border-b border-border">
@@ -76,6 +73,7 @@
 <script setup lang="ts">
 import { ref, computed, onMounted } from 'vue'
 import { useI18n } from 'vue-i18n'
+import PageHeader from '../components/shared/PageHeader.vue'
 import { Button } from '@/components/ui/button'
 import { useApi } from '../composables/useApi'
 

@@ -1,9 +1,6 @@
 ﻿<template>
   <div data-theme="agent" class="page-narrow">
-    <header>
-      <h1 data-testid="rate-limits-title" class="text-2xl font-semibold tracking-tight">{{ $t('views.SettingsRateLimitsView.rate_limits') }}</h1>
-      <p class="mt-1 text-muted-foreground">{{ $t('views.SettingsRateLimitsView.view_perroute_rate_limiting_rules_and_current_usage') }}</p>
-    </header>
+    <PageHeader :title="$t('views.SettingsRateLimitsView.rate_limits')" data-test-id="rate-limits-title" :subtitle="$t('views.SettingsRateLimitsView.view_perroute_rate_limiting_rules_and_current_usage')" />
 
     <LoadingSpinner v-if="loading" />
 
@@ -54,6 +51,7 @@ import { ref, onMounted } from 'vue'
 import { api } from '../lib/api/client'
 import { formatApiError } from '../lib/api/formatError'
 import type { components } from '../lib/api/client'
+import PageHeader from '../components/shared/PageHeader.vue'
 import LoadingSpinner from '../components/shared/LoadingSpinner.vue'
 import ErrorAlert from '../components/shared/ErrorAlert.vue'
 
@@ -84,4 +82,3 @@ async function loadRules() {
 
 onMounted(loadRules)
 </script>
-

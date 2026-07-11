@@ -1,9 +1,6 @@
 <template>
   <div class="page-wide">
-  <header>
-    <h1 class="text-2xl font-semibold tracking-tight">HITL Review</h1>
-    <p class="mt-1 text-muted-foreground">Review and respond to pending human-in-the-loop gates</p>
-  </header>
+  <PageHeader title="HITL Review" subtitle="Review and respond to pending human-in-the-loop gates" />
   <div class="flex flex-wrap items-center gap-4">
     <div class="flex items-center gap-2">
       <label class="text-sm font-medium text-muted-foreground">Status</label>
@@ -253,6 +250,7 @@
 import { ref, computed, onMounted, onUnmounted } from 'vue'
 import { api } from '../lib/api/client'
 import { formatApiError, type ProblemDetail } from '../lib/api/formatError'
+import PageHeader from '../components/shared/PageHeader.vue'
 import LoadingSpinner from '../components/shared/LoadingSpinner.vue'
 import ErrorAlert from '../components/shared/ErrorAlert.vue'
 import { usePlanStore } from '../stores/planStore'
@@ -539,4 +537,3 @@ onUnmounted(() => {
   stopAutoRefresh()
 })
 </script>
-
