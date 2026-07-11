@@ -149,7 +149,6 @@ async def get_providers(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Internal server error",
         ) from None
-    return [SsoProviderResponse.from_orm(p) for p in providers]  # type: ignore[pydantic-orm]
 
 
 @router.post("/providers", response_model=SsoProviderResponse, status_code=status.HTTP_201_CREATED)
@@ -273,7 +272,7 @@ async def delete_provider_endpoint(
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="A resource with this value already exists",
-        )
+        ) from None
     except ProgrammingError as exc:
         _log.warning("SSO providers table not available on delete: %s", exc)
         raise HTTPException(
@@ -316,7 +315,7 @@ async def test_provider_connection(
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="A resource with this value already exists",
-        )
+        ) from None
     except ProgrammingError as exc:
         _log.warning("SSO providers table not available on test connection: %s", exc)
         raise HTTPException(
@@ -504,7 +503,7 @@ async def toggle_provider_endpoint(
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="A resource with this value already exists",
-        )
+        ) from None
     except ProgrammingError as exc:
         _log.warning("SSO providers table not available on toggle: %s", exc)
         raise HTTPException(
@@ -563,7 +562,7 @@ async def set_group_mappings_endpoint(
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="A resource with this value already exists",
-        )
+        ) from None
     except ProgrammingError as exc:
         _log.warning("SSO providers table not available on set_group_mappings: %s", exc)
         raise HTTPException(
