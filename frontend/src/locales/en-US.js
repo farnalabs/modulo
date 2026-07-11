@@ -1531,5 +1531,8 @@ export default {
     "failed_to_save": "Failed to save",
     "configuration_saved": "Configuration saved",
     "reset": "Reset"
+  },
+  "nav": {
+    "environment-profiles": "Environment Profiles"
   }
 }
