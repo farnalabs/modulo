@@ -102,7 +102,7 @@ defineEmits<{
 }
 
 .sidebar-group-chevron {
-  transition: transform 0.2s ease;
+  transition: transform 0.2s var(--ease-out);
   display: flex;
   align-items: center;
 }
@@ -119,8 +119,8 @@ defineEmits<{
 .fade-enter-active,
 .fade-leave-active {
   transition:
-    opacity 0.15s ease,
-    transform 0.15s ease;
+    opacity 0.15s var(--ease-out),
+    transform 0.15s var(--ease-out);
   overflow: hidden;
 }
 
