@@ -123,6 +123,8 @@ def cancellable_node(
             if db_check is not None:
                 try:
                     db_cancelled = await db_check()
+                except asyncio.CancelledError:
+                    raise
                 except Exception:
                     _log.warning(
                         "run_context.cancellation_check_failed",
