@@ -6,6 +6,7 @@ that overrides `get_settings` (e.g. in tests), tests should pass settings
 explicitly rather than relying on the module-level `get_settings()` call.
 """
 
+import asyncio
 import logging
 from typing import Any, ClassVar
 
@@ -49,6 +50,8 @@ def _create_registry(settings: Settings) -> RateLimiterRegistry:
             redis_available = True
             _log.info("ratelimit.redis_enabled")
             return registry
+        except asyncio.CancelledError:
+            raise
         except Exception as exc:
             _log.warning("ratelimit.redis_fallback", extra={"error": str(exc)})
 
@@ -209,6 +212,8 @@ def get_auth_rate_limiter(settings: Settings | None = None) -> AuthRateLimiterCl
                 window_s=window_s,
             )
             return _auth_rate_limiter
+        except asyncio.CancelledError:
+            raise
         except Exception as exc:
             _log.warning("auth_ratelimit.redis_fallback", extra={"error": str(exc)})
 
@@ -285,6 +290,8 @@ async def shutdown_rate_limiters() -> None:
     for client in list(_redis_clients):
         try:
             await client.aclose()
+        except asyncio.CancelledError:
+            raise
         except Exception:
             _log.exception("Failed to close rate limiter Redis client")
     _redis_clients.clear()
