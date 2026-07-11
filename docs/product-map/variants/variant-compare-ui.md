@@ -10,7 +10,7 @@ code:
   - backend/src/modulo/api/routes/variants.py
   - backend/src/modulo/db/crud/variant_group.py
   - backend/src/modulo/db/models/variant_group.py
-  - Website/modulo-website/src/docs/variants/variant-execution.md
+  - Website/modulo-website/src/docs/variants/variant-compare-ui.md
 unit-tests:
   - backend/tests/unit/api/test_variants.py
   - backend/tests/unit/db/crud/test_variant_group.py
