@@ -279,6 +279,7 @@
 
 <script setup lang="ts">
 import { ref, computed, watch, nextTick, onMounted, onUnmounted } from "vue";
+import { useStorage } from '@vueuse/core';
 import { shortId } from "@/utils/format";
 import { useRemyStore } from "@/composables/useRemyStore";
 import { useRemyContext } from "@/composables/useRemyContext";
@@ -310,9 +311,7 @@ const speedDescriptions: Record<string, string> = {
   normal: 'Navigates at a pace you can comfortably follow',
   lightning: 'Navigates as fast as possible',
 }
-let savedSpeed: string | null = null
-try { savedSpeed = localStorage.getItem('remy-action-speed') } catch { /* localStorage may throw in private mode */ }
-const currentSpeed = ref(savedSpeed ?? 'normal')
+const currentSpeed = useStorage('remy-action-speed', 'normal')
 const currentSpeedLabel = computed(() => {
   const idx = speedLabels.indexOf(currentSpeed.value)
   return speedLabels[idx >= 0 ? idx : 1]
@@ -332,7 +331,6 @@ function cycleSpeed() {
   const idx = speedLabels.indexOf(currentSpeed.value)
   const next = speedLabels[(idx + 1) % speedLabels.length]
   currentSpeed.value = next
-  localStorage.setItem('remy-action-speed', next)
   setActionSpeed(next)
   const desc = speedDescriptions[next]
   if (desc) showSpeedFlash(`UI Nav: ${speedIcons[speedLabels.indexOf(next)]} ${desc}`)
@@ -526,7 +524,7 @@ watch(() => store.requestRename, () => {
 onMounted(async () => {
   window.addEventListener("resize", onWindowResize)
   await store.fetchSessions();
-  const savedId = store.loadActiveSessionId()
+  const savedId = store.activeSessionId
   if (savedId && store.sessions.some(s => s.id === savedId)) {
     await store.loadSession(savedId)
   } else if (!store.activeSessionId) {
