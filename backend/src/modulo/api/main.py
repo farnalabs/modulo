@@ -56,6 +56,7 @@ from modulo.api.routes.costs import router as costs_router
 from modulo.api.routes.dashboard import router as dashboard_router
 from modulo.api.routes.deployment import router as deployment_router
 from modulo.api.routes.determination import router as determination_router
+from modulo.api.routes.environment_profiles import router as environment_profiles_router
 from modulo.api.routes.environments import router as environments_router
 from modulo.api.routes.error_forwarder_config import router as error_forwarder_config_router
 from modulo.api.routes.error_notification_rules import router as error_notification_rules_router
@@ -642,6 +643,7 @@ app.include_router(stages_router)
 app.include_router(templates_router)
 app.include_router(onboarding_router)
 app.include_router(environments_router)
+app.include_router(environment_profiles_router)
 app.include_router(error_forwarder_config_router)
 app.include_router(error_notification_rules_router)
 app.include_router(errors_router)

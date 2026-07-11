@@ -60,7 +60,7 @@ class RuntimeProvider(ABC):
         provider_ref: str,
         command: list[str],
         *,
-        timeout: int | None = None,  # noqa: ASYNC109
+        timeout: int | None = None,
     ) -> ExecResult:
         """Run a command inside an existing workspace."""
         ...
@@ -83,7 +83,7 @@ class RuntimeProvider(ABC):
         """
         return False
 
-    async def close(self) -> None:  # noqa: B027
+    async def close(self) -> None:
         """Release provider-level resources (connections, clients, etc.)."""
 
 

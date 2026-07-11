@@ -60,6 +60,8 @@ dependencies = [
     "python-jose[cryptography]>=3.3.0",
     "passlib[bcrypt]>=1.7.4",
     "cryptography>=42.0.0",
+    # Docker SDK (local_docker runtime provider)
+    "docker>=7.0.0",
     # SSO / OIDC
     "authlib>=1.3.0",
     # SSO / SAML 2.0

@@ -6,7 +6,9 @@ invoking this connector (403 otherwise).
 """
 
 import base64
+import logging
 import shlex
+import uuid
 from pathlib import Path
 from typing import Any
 
@@ -19,11 +21,15 @@ from modulo.connectors.base import (
     ConnectorType,
     HealthResult,
 )
-from modulo.core.runtime_provider import RuntimeProvider
+
+_log = logging.getLogger(__name__)
 
 
 class ShellConnector(ConnectorBase):
     """Execute shell commands and manage files inside a workspace lease.
+
+    Requires an active ``workspace_lease_id`` — 403 if not set.
+    Command allowlist is enforced via ``allowed_commands``.
 
     Supported query resources:
       "file"      — read a file via ``cat``; filters: {path, provider_ref}
@@ -38,20 +44,32 @@ class ShellConnector(ConnectorBase):
 
     def __init__(
         self,
-        runtime_provider: RuntimeProvider | None = None,
+        runtime_provider: Any | None = None,
         allowed_commands: list[str] | None = None,
+        runtime_provider_hub: Any | None = None,
+        environment_profile_id: uuid.UUID | None = None,
+        workspace_lease_id: uuid.UUID | None = None,
     ) -> None:
         self._runtime_provider = runtime_provider
         self._allowed_commands = frozenset(allowed_commands or [])
+        self._runtime_provider_hub = runtime_provider_hub
+        self._environment_profile_id = environment_profile_id
+        self._workspace_lease_id = workspace_lease_id
 
     @property
     def connector_type(self) -> ConnectorType:
         return ConnectorType.SHELL
 
     async def health_check(self) -> HealthResult:
-        if self._runtime_provider is None:
+        if self._runtime_provider is None and self._runtime_provider_hub is None:
             return HealthResult(ok=False, detail="Runtime provider not configured")
         return HealthResult(ok=True, detail="ShellConnector ready")
+
+    def _check_workspace_lease(self) -> None:
+        if self._workspace_lease_id is None:
+            raise ConnectorPermissionError(
+                "No active workspace lease. Shell access is only available inside a running pipeline."
+            )
 
     def _check_command_allowed(self, command: list[str]) -> None:
         if not self._allowed_commands:
@@ -68,6 +86,7 @@ class ShellConnector(ConnectorBase):
     async def query(self, q: ConnectorQuery) -> ConnectorResult:
         if self._runtime_provider is None:
             raise ValueError("Runtime provider not configured")
+        self._check_workspace_lease()
         provider_ref: str | None = q.filters.get("provider_ref")
         if not provider_ref:
             raise ValueError("provider_ref is required in query filters")
@@ -103,6 +122,7 @@ class ShellConnector(ConnectorBase):
     async def write(self, payload: ConnectorPayload) -> dict[str, Any]:
         if self._runtime_provider is None:
             raise ValueError("Runtime provider not configured")
+        self._check_workspace_lease()
         provider_ref: str | None = payload.data.get("provider_ref")
         if not provider_ref:
             raise ValueError("provider_ref is required in payload data")
@@ -165,22 +185,18 @@ class ShellConnector(ConnectorBase):
         cwd: str | None = None,
         env: dict[str, str] | None = None,
     ) -> list[str]:
-        """Build the exec_command arg list, wrapping with cd/env as needed.
-
-        When cwd or env is set, we invoke ``sh -c`` with each token individually
-        quoted so that shell metacharacters (``;``, ``&&``, ``|``, etc.) in
-        ``command_str`` cannot bypass the allowlist.
-        """
         command_parts = shlex.split(command_str)
         if not cwd and not env:
             return command_parts
 
         shell_parts: list[str] = []
         if cwd:
-            shell_parts.append(f"cd {shlex.quote(cwd)}")
+            shell_parts.append(f"cd {__import__('shlex').quote(cwd)}")
         quoted_cmd = " ".join(shlex.quote(p) for p in command_parts)
         if env:
-            env_prefix = " ".join(f"{shlex.quote(k)}={shlex.quote(v)}" for k, v in env.items())
+            env_prefix = " ".join(
+                f"{__import__('shlex').quote(k)}={__import__('shlex').quote(v)}" for k, v in env.items()
+            )
             quoted_cmd = f"{env_prefix} {quoted_cmd}"
         shell_parts.append(quoted_cmd)
         return ["sh", "-c", " && ".join(shell_parts)]

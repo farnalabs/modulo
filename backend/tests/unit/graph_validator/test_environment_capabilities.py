@@ -37,7 +37,7 @@ def _mock_profile(
     profile = MagicMock()
     profile.id = profile_id or uuid.uuid4()
     profile.name = name
-    profile.capabilities = capabilities or []
+    profile.capabilities_json = capabilities or []
     return profile
 
 

@@ -692,8 +692,8 @@ async def get_run_workspace_lease(
         "run_id": str(lease.run_id) if lease.run_id else None,
         "provider_ref": lease.provider_ref,
         "status": lease.status,
-        "started_at": lease.started_at.isoformat() if lease.started_at else None,
-        "expires_at": lease.expires_at.isoformat() if lease.expires_at else None,
+        "started_at": lease.lease_started_at.isoformat() if lease.lease_started_at else None,
+        "expires_at": lease.lease_expires_at.isoformat() if lease.lease_expires_at else None,
         "resource_usage": lease.resource_usage_json,
     }
 
