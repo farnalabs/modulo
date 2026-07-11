@@ -1,10 +1,7 @@
 <template>
   <div class="flex min-h-screen items-center justify-center bg-background p-4">
     <div class="w-full max-w-md rounded-lg border p-6 shadow-sm">
-      <h1 class="mb-2 text-xl font-semibold">Complete Model Backend Setup</h1>
-      <p class="mb-6 text-sm text-muted-foreground">
-        A model backend was created via MCP. Paste the API key below to complete setup.
-      </p>
+      <PageHeader title="Complete Model Backend Setup" subtitle="A model backend was created via MCP. Paste the API key below to complete setup." />
 
       <div v-if="success" class="space-y-4">
         <div class="rounded-md bg-green-50 p-3 text-sm text-green-800">
@@ -40,6 +37,7 @@
 <script setup lang="ts">
 import { ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
+import PageHeader from '../../components/shared/PageHeader.vue'
 import { useApi } from '../../composables/useApi'
 import { Button } from '../../components/ui/button'
 import { Input } from '../../components/ui/input'

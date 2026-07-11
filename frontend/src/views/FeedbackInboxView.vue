@@ -1,9 +1,6 @@
 ﻿<template>
   <div class="page-wide">
-    <header>
-      <h1 data-testid="feedback-inbox-title" class="text-2xl font-semibold tracking-tight">{{ $t('views.FeedbackInboxView.feedback_inbox') }}</h1>
-      <p class="mt-1 text-muted-foreground">{{ $t('views.FeedbackInboxView.review_and_resolve_pending_feedback_from_pipeline_evaluation') }}</p>
-    </header>
+    <PageHeader :title="$t('views.FeedbackInboxView.feedback_inbox')" :subtitle="$t('views.FeedbackInboxView.review_and_resolve_pending_feedback_from_pipeline_evaluation')" data-testid="feedback-inbox-title" />
 
     <div class="flex flex-wrap items-center gap-4">
       <div class="flex items-center gap-2">
@@ -243,6 +240,7 @@ import { api } from '../lib/api/client'
 import type { components } from '../lib/api/client'
 import { formatApiError } from '../lib/api/formatError'
 import LoadingSpinner from '../components/shared/LoadingSpinner.vue'
+import PageHeader from '../components/shared/PageHeader.vue'
 import { Button } from '@/components/ui/button'
 import ErrorAlert from '../components/shared/ErrorAlert.vue'
 import {

@@ -5,10 +5,7 @@
     { label: 'Infer', to: '/schemas/infer' },
   ]" />
     <div class="page-narrow">
-    <header>
-      <h1 class="text-2xl font-semibold tracking-tight">Schemas</h1>
-      <p class="mt-1 text-muted-foreground">{{ $t('views.SchemaListView.manage_schemas_and_deprecate_outdated_definitions') }}</p>
-    </header>
+    <PageHeader title="Schemas" :subtitle="$t('views.SchemaListView.manage_schemas_and_deprecate_outdated_definitions')" />
 
     <LoadingSpinner v-if="loading" />
 
@@ -114,6 +111,7 @@ import { formatApiError, type ProblemDetail } from '../lib/api/formatError'
 import type { components } from '../lib/api/client'
 import LoadingSpinner from '../components/shared/LoadingSpinner.vue'
 import ErrorAlert from '../components/shared/ErrorAlert.vue'
+import PageHeader from '../components/shared/PageHeader.vue'
 import { Button } from '@/components/ui/button'
 import PageTabs from "../components/PageTabs.vue"
 
@@ -183,4 +181,3 @@ async function deprecateSchema() {
 
 onMounted(loadSchemas)
 </script>
-

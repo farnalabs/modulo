@@ -9,10 +9,7 @@
     ]" />
 
     <div class="page-narrow">
-    <header>
-      <h1 class="text-2xl font-semibold tracking-tight">Eval Proposals Queue</h1>
-      <p class="mt-1 text-muted-foreground">Eval gaps detected by the feedback system — review and publish as eval definitions</p>
-    </header>
+    <PageHeader title="Eval Proposals Queue" subtitle="Eval gaps detected by the feedback system — review and publish as eval definitions" />
 
     <LoadingSpinner v-if="loading" />
 
@@ -112,6 +109,7 @@ import LoadingSpinner from '../components/shared/LoadingSpinner.vue'
 import ErrorAlert from '../components/shared/ErrorAlert.vue'
 import { usePlanStore } from '../stores/planStore'
 import FeatureGate from '../components/FeatureGate.vue'
+import PageHeader from '../components/shared/PageHeader.vue'
 import { Button } from '@/components/ui/button'
 import PageTabs from "../components/PageTabs.vue"
 import EmptyState from '../components/shared/EmptyState.vue'
@@ -223,4 +221,3 @@ async function dismissProposal(id: string) {
 
 onMounted(() => { planStore.fetchPlan(); loadProposals() })
 </script>
-

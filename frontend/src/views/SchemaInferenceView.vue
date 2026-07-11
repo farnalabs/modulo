@@ -5,10 +5,7 @@
     { label: $t('views.SchemaInferenceView.infer'), to: '/schemas/infer' },
   ]" />
     <div class="page-narrow">
-    <header>
-      <h1 class="text-2xl font-semibold tracking-tight">{{ $t('views.SchemaInferenceView.schema_inference') }}</h1>
-      <p class="mt-1 text-muted-foreground">{{ $t('views.SchemaInferenceView.infer_a_schema_from_a_connected_data_source') }}</p>
-    </header>
+    <PageHeader :title="$t('views.SchemaInferenceView.schema_inference')" :subtitle="$t('views.SchemaInferenceView.infer_a_schema_from_a_connected_data_source')" />
 
     <LoadingSpinner v-if="loadingConnectors" />
 
@@ -176,6 +173,7 @@ import type { components } from '../lib/api/client'
 import { formatApiError } from '../lib/api/formatError'
 import LoadingSpinner from '../components/shared/LoadingSpinner.vue'
 import ErrorAlert from '../components/shared/ErrorAlert.vue'
+import PageHeader from '../components/shared/PageHeader.vue'
 import PageTabs from "../components/PageTabs.vue"
 
 type ConnectorItem = components['schemas']['ConnectorItem']
@@ -338,4 +336,3 @@ onMounted(() => {
   loadConnectors()
 })
 </script>
-

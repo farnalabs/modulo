@@ -2,7 +2,7 @@
   <div class="min-h-screen">
     <header class="bg-card border-b border-border px-6 py-4">
       <div class="mx-auto flex items-center justify-between gap-3 max-w-6xl">
-        <h1 class="text-2xl font-semibold tracking-tight text-foreground">{{ $t('views.LibraryView.title') }}</h1>
+        <PageHeader :title="$t('views.LibraryView.title')" />
         <div class="flex items-center gap-3">
           <Button
             variant="default"
@@ -309,6 +309,7 @@
 import { ref, computed, onMounted, onBeforeUnmount } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import { Button } from '@/components/ui/button'
+import PageHeader from '../components/shared/PageHeader.vue'
 import { useApi } from '../composables/useApi'
 import { formatApiError } from '../lib/api/formatError'
 

@@ -10,7 +10,7 @@
         >
           &larr; Back to Library
         </button>
-        <h1 class="text-xl font-semibold text-foreground">{{ $t('views.LibraryPipelineWizard.create_pipeline_from_template') }}</h1>
+        <PageHeader :title="$t('views.LibraryPipelineWizard.create_pipeline_from_template')" />
       </div>
     </header>
 
@@ -160,7 +160,7 @@
         >
           <p class="font-medium">{{ $t('views.LibraryPipelineWizard.pipeline_created') }}</p>
           <p class="text-sm mt-1">
-            {{ result.name }} is ready. 
+            {{ result.name }} is ready.
              <a :href="`/pipelines/${result.id}`" class="underline font-medium" data-testid="library-wizard-view-pipeline">{{ $t('views.LibraryPipelineWizard.view_pipeline') }}</a>
           </p>
         </div>
@@ -179,6 +179,7 @@
 <script setup lang="ts">
 import { ref, computed, onMounted } from 'vue'
 import { useRoute } from 'vue-router'
+import PageHeader from '../components/shared/PageHeader.vue'
 import { Button } from '@/components/ui/button'
 import { useApi } from '../composables/useApi'
 import LoadingSpinner from '../components/shared/LoadingSpinner.vue'

@@ -1,9 +1,6 @@
 ﻿<template>
   <div class="page-wide">
-    <header>
-      <h1 class="text-2xl font-semibold tracking-tight">{{ $t('views.TeamComparisonView.team_comparison') }}</h1>
-      <p class="mt-1 text-muted-foreground">{{ $t('views.TeamComparisonView.sidebyside_eval_pass_rates_and_pipeline_metrics_across_teams') }}</p>
-    </header>
+    <PageHeader :title="$t('views.TeamComparisonView.team_comparison')" :subtitle="$t('views.TeamComparisonView.sidebyside_eval_pass_rates_and_pipeline_metrics_across_teams')" />
 
     <LoadingSpinner v-if="loading" />
 
@@ -168,6 +165,7 @@
 import { ref, onMounted } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { api } from '../lib/api/client'
+import PageHeader from '../components/shared/PageHeader.vue'
 import LoadingSpinner from '../components/shared/LoadingSpinner.vue'
 import ErrorAlert from '../components/shared/ErrorAlert.vue'
 import { formatError } from '../lib/utils'

@@ -3,8 +3,7 @@
     <header class="bg-card border-b border-border px-6 py-4">
       <div class="max-w-3xl mx-auto">
         <BackLink to="/pipelines" label="Back to Pipelines" class="mb-2" />
-        <h1 class="text-xl font-semibold text-foreground">{{ $t('views.CopyPipelineWizard.copy_pipeline') }}</h1>
-        <p class="text-sm text-muted-foreground mt-1">{{ $t('views.CopyPipelineWizard.duplicate_an_existing_pipeline_and_adapt_it_for_a_new_purpos') }}</p>
+        <PageHeader :title="$t('views.CopyPipelineWizard.copy_pipeline')" :subtitle="$t('views.CopyPipelineWizard.duplicate_an_existing_pipeline_and_adapt_it_for_a_new_purpos')" />
       </div>
     </header>
 
@@ -376,6 +375,7 @@
 <script setup lang="ts">
 import { ref, computed, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
+import PageHeader from '../components/shared/PageHeader.vue'
 import { Button } from '@/components/ui/button'
 import { useApi } from '../composables/useApi'
 import BackLink from '../components/BackLink.vue'

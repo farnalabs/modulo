@@ -10,9 +10,7 @@
             <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="15 18 9 12 15 6"/></svg>
             Back
           </router-link>
-          <h1 class="text-2xl font-semibold tracking-tight text-foreground">
-            {{ mapData?.name || 'Lifecycle Map' }}
-          </h1>
+          <PageHeader :title="mapData?.name || 'Lifecycle Map'" />
           <span
             v-if="mapData"
             class="rounded-full bg-muted px-2 py-0.5 text-xs text-muted-foreground"
@@ -90,6 +88,7 @@
 <script setup lang="ts">
 import { ref, computed, onMounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
+import PageHeader from '../../components/shared/PageHeader.vue'
 import { useLifecycleMapsStore } from '../../stores/lifecycleMaps'
 import LifecycleMapRenderer from '../../components/lifecycle-map/LifecycleMapRenderer.vue'
 import ErrorAlert from '../../components/shared/ErrorAlert.vue'
