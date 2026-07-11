@@ -173,12 +173,12 @@ async def trigger_run(
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="A resource with this value already exists",
-        )
+        ) from None
     except ProgrammingError:
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
-        )
+        ) from None
 
     except SQLAlchemyError:
         _log.warning("route.db_error", exc_info=True)
@@ -234,12 +234,12 @@ async def trigger_run(
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="A resource with this value already exists",
-        )
+        ) from None
     except ProgrammingError:
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
-        )
+        ) from None
 
     except SQLAlchemyError:
         _log.warning("route.db_error", exc_info=True)
@@ -285,12 +285,12 @@ async def get_run_stats_endpoint(
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="A resource with this value already exists",
-        )
+        ) from None
     except ProgrammingError:
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
-        )
+        ) from None
 
     except SQLAlchemyError:
         _log.warning("route.db_error", exc_info=True)
@@ -324,12 +324,12 @@ async def get_run_heatmap_endpoint(
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="A resource with this value already exists",
-        )
+        ) from None
     except ProgrammingError:
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
-        )
+        ) from None
 
     except SQLAlchemyError:
         _log.warning("route.db_error", exc_info=True)
@@ -362,12 +362,12 @@ async def get_run_status(
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="A resource with this value already exists",
-        )
+        ) from None
     except ProgrammingError:
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
-        )
+        ) from None
 
     except SQLAlchemyError:
         _log.warning("route.db_error", exc_info=True)
@@ -419,12 +419,12 @@ async def cancel_run(
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="A resource with this value already exists",
-        )
+        ) from None
     except ProgrammingError:
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
-        )
+        ) from None
 
     except SQLAlchemyError:
         _log.warning("route.db_error", exc_info=True)
@@ -537,12 +537,12 @@ async def get_run_io_endpoint(
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="A resource with this value already exists",
-        )
+        ) from None
     except ProgrammingError:
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
-        )
+        ) from None
 
     except SQLAlchemyError:
         _log.warning("route.db_error", exc_info=True)
@@ -597,12 +597,12 @@ async def export_run_fixture(
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="A resource with this value already exists",
-        )
+        ) from None
     except ProgrammingError:
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
-        )
+        ) from None
 
     except SQLAlchemyError:
         _log.warning("route.db_error", exc_info=True)
@@ -661,12 +661,12 @@ async def get_run_workspace_lease(
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="A resource with this value already exists",
-        )
+        ) from None
     except ProgrammingError:
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
-        )
+        ) from None
 
     except SQLAlchemyError:
         _log.warning("route.db_error", exc_info=True)
@@ -723,12 +723,12 @@ async def get_run_workspace_events(
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="A resource with this value already exists",
-        )
+        ) from None
     except ProgrammingError:
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
-        )
+        ) from None
 
     except SQLAlchemyError:
         _log.warning("route.db_error", exc_info=True)
@@ -810,12 +810,12 @@ async def get_run_node_output(
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="A resource with this value already exists",
-        )
+        ) from None
     except ProgrammingError:
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
-        )
+        ) from None
 
     except SQLAlchemyError:
         _log.warning("route.db_error", exc_info=True)
@@ -885,12 +885,12 @@ async def observe_run_node(
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="A resource with this value already exists",
-        )
+        ) from None
     except ProgrammingError:
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
-        )
+        ) from None
 
     except SQLAlchemyError:
         _log.warning("route.db_error", exc_info=True)
@@ -924,12 +924,12 @@ async def observe_run_node(
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="A resource with this value already exists",
-        )
+        ) from None
     except ProgrammingError:
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
-        )
+        ) from None
 
     except SQLAlchemyError:
         _log.warning("route.db_error", exc_info=True)
@@ -1022,12 +1022,12 @@ async def recover_run_node(
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="A resource with this value already exists",
-        )
+        ) from None
     except ProgrammingError:
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
-        )
+        ) from None
 
     except SQLAlchemyError:
         _log.warning("route.db_error", exc_info=True)
@@ -1060,7 +1060,7 @@ async def recover_run_node(
             resume_data=resume_data,
         )
     except Exception as exc:
-        logger.exception("run.recover_node.resume_failed")
+        _log.exception("run.recover_node.resume_failed")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to resume pipeline after node recovery",
@@ -1324,7 +1324,7 @@ async def reveal_node_prompt(
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="A resource with this value already exists",
-        )
+        ) from None
     except ProgrammingError:
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
@@ -1395,12 +1395,12 @@ async def diff_node_output(
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="A resource with this value already exists",
-        )
+        ) from None
     except ProgrammingError:
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
-        )
+        ) from None
 
     except SQLAlchemyError:
         _log.warning("route.db_error", exc_info=True)
