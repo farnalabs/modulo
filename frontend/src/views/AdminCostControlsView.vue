@@ -10,9 +10,6 @@
     <FeatureGate feature-name="admin_cost_controls" required-tier="team" show-disabled>
 
       <LoadingSpinner v-if="loading" />
-
-      <ErrorAlert v-else-if="loadError" :message="loadError" :on-retry="loadAll" />
-
       <template v-else>
         <Card>
           <CardHeader>
@@ -239,7 +236,6 @@ import { formatApiError } from '../lib/api/formatError'
 import { usePlanStore } from '../stores/planStore'
 import FeatureGate from '../components/FeatureGate.vue'
 import LoadingSpinner from '../components/shared/LoadingSpinner.vue'
-import ErrorAlert from '../components/shared/ErrorAlert.vue'
 import { Card, CardHeader, CardTitle, CardDescription, CardContent } from '../components/ui/card'
 import { Input } from '../components/ui/input'
 import { Button } from '../components/ui/button'
@@ -306,7 +302,7 @@ watch(() => costsData.value, (data) => {
   }
 })
 
-const { data: limitsData, load: loadLimits } = useDataFetch(
+const { data: limitsData, loading: limitsLoading, load: loadLimits } = useDataFetch(
   () => (api as any).GET('/api/v1/admin/costs/limits'),
   { immediate: false }
 )
@@ -334,18 +330,13 @@ const settings = ref<ControlsSettings>({
   circuitBreakerEnabled: false,
 })
 
-const loading = ref(true)
-const loadError = ref<string | null>(null)
+const settingsLoading = ref(false)
 
 async function loadAll() {
-  loading.value = true
-  loadError.value = null
-  try {
-    await Promise.all([loadCosts(), loadLimits(), loadSettings()])
-  } finally {
-    loading.value = false
-  }
+  await Promise.all([loadCosts(), loadLimits(), loadSettings()])
 }
+
+const loading = computed(() => costsLoading.value || limitsLoading.value || settingsLoading.value)
 
 const savingBudget = ref(false)
 const budgetSaveError = ref<string | null>(null)
@@ -387,16 +378,18 @@ const progressBarClass = computed(() => {
 })
 
 async function loadSettings() {
+  settingsLoading.value = true
   try {
     const { data, error: err } = await (api as any).GET('/api/v1/admin/costs/controls')
     if (err) {
-      // endpoint may not exist yet — use defaults
       return
     } else if (data) {
       settings.value = { ...settings.value, ...data }
     }
   } catch (e) {
     console.warn('Failed to load cost control settings', e)
+  } finally {
+    settingsLoading.value = false
   }
 }
 

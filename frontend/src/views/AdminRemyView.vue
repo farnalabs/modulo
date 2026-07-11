@@ -3,9 +3,6 @@
     <PageHeader :title="$t('views.AdminRemyView.remy_configuration')" :subtitle="$t('views.AdminRemyView.configure_remy_ai_assistant_behaviour_access_and_skills')" />
 
     <LoadingSpinner v-if="loading" />
-
-    <ErrorAlert v-else-if="loadError" :message="loadError" :on-retry="loadAll" />
-
     <template v-else>
       <TooltipProvider>
       <!-- Configured Providers -->
@@ -717,7 +714,6 @@ import { api } from '../lib/api/client'
 import { useDataFetch } from '../composables/useDataFetch'
 import { formatApiError } from '../lib/api/formatError'
 import LoadingSpinner from '../components/shared/LoadingSpinner.vue'
-import ErrorAlert from '../components/shared/ErrorAlert.vue'
 import RemySkillDialog from '../components/remy/RemySkillDialog.vue'
 import AccessEntitySelector from '../components/remy/AccessEntitySelector.vue'
 import {
@@ -748,9 +744,6 @@ const availableProviders = ref<{ native: ProviderInfo[]; customTypes: ProviderIn
   native: [],
   customTypes: [],
 })
-
-const loading = ref(true)
-const loadError = ref<string | null>(null)
 
 const { data: configData, loading: configLoading, error: configError, load: loadConfig } = useDataFetch(
   () => (api as any).GET('/api/v1/admin/remy/config'),
@@ -790,7 +783,7 @@ const contextLoading = ref(true)
 const contextSaving = ref(false)
 const contextError = ref<string | null>(null)
 
-const { data: contextSourcesData, load: loadContextSources } = useDataFetch(
+const { data: contextSourcesData, loading: contextSourcesLoading, load: loadContextSources } = useDataFetch(
   () => (api as any).GET('/api/v1/admin/remy/context-sources'),
   { immediate: false }
 )
@@ -1122,7 +1115,7 @@ async function regeneratePrimer() {
   }
 }
 
-const { data: usersResp, load: loadUsers } = useDataFetch(
+const { data: usersResp, loading: usersLoading, load: loadUsers } = useDataFetch(
   () => (api as any).GET('/api/v1/admin/users', { params: { query: { page_size: 1000 } as any } }),
   { immediate: false }
 )
@@ -1135,7 +1128,7 @@ watch(() => usersResp.value, (data) => {
   }
 })
 
-const { data: teamsResp, load: loadTeams } = useDataFetch(
+const { data: teamsResp, loading: teamsLoading, load: loadTeams } = useDataFetch(
   () => (api as any).GET('/api/v1/admin/teams', { params: { query: { page_size: 1000 } as any } }),
   { immediate: false }
 )
@@ -1186,7 +1179,7 @@ function initSkillModes() {
   skillModes.value = modes
 }
 
-const { data: skillsResp, load: loadSkills } = useDataFetch(
+const { data: skillsResp, loading: skillsLoading, load: loadSkills } = useDataFetch(
   () => (api as any).GET('/api/v1/admin/remy/skills'),
   { immediate: false }
 )
@@ -1198,7 +1191,7 @@ watch(() => skillsResp.value, (data) => {
   }
 })
 
-const { data: providersResp, load: loadAvailableProviders } = useDataFetch(
+const { data: providersResp, loading: providersRespLoading, load: loadAvailableProviders } = useDataFetch(
   () => (api as any).GET('/api/v1/admin/remy/available-providers'),
   { immediate: false }
 )
@@ -1240,27 +1233,23 @@ async function loadProviders() {
   }
 }
 
+const loading = computed(() =>
+  configLoading.value || contextSourcesLoading.value || contextLoading.value ||
+  providersLoading.value || providersRespLoading.value || usersLoading.value ||
+  teamsLoading.value || skillsLoading.value
+)
+
 async function loadAll() {
-  loading.value = true
-  loadError.value = null
-  try {
-    const results = await Promise.allSettled([
-      loadConfig(),
-      loadAvailableProviders(),
-      loadUsers(),
-      loadTeams(),
-      loadSkills(),
-      loadContextSources(),
-    ])
-    const errors = results.filter(r => r.status === 'rejected').map(r => (r as PromiseRejectedResult).reason)
-    if (errors.length > 0) {
-      loadError.value = `Failed to load some data: ${errors.map(e => formatApiError(e)).join('; ')}`
-    }
-    await loadProviders()
-    initSkillModes()
-  } finally {
-    loading.value = false
-  }
+  await Promise.allSettled([
+    loadConfig(),
+    loadAvailableProviders(),
+    loadUsers(),
+    loadTeams(),
+    loadSkills(),
+    loadContextSources(),
+  ])
+  await loadProviders()
+  initSkillModes()
 }
 
 loadAll()

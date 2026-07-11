@@ -39,6 +39,7 @@ import { ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import PageHeader from '../../components/shared/PageHeader.vue'
 import { useApi } from '../../composables/useApi'
+import { useMutation } from '../../composables/useMutation'
 import { Button } from '../../components/ui/button'
 import { Input } from '../../components/ui/input'
 
@@ -49,15 +50,11 @@ const { post } = useApi()
 const backendId = route.params.id as string
 const token = route.query.token as string
 const apiKey = ref('')
-const loading = ref(false)
 const success = ref(false)
 const backendName = ref('')
-const error = ref('')
 
-async function submit() {
+const { loading, error, mutate: submit } = useMutation(async () => {
   if (!apiKey.value.trim()) return
-  loading.value = true
-  error.value = ''
   try {
     const resp = await post<{ status: string; backend_id: string; name: string }>(
       `/model-backends/${backendId}/complete-setup`,
@@ -65,17 +62,15 @@ async function submit() {
     )
     backendName.value = resp.name
     success.value = true
+    return resp
   } catch (e: any) {
     const detail = e?.detail || e?.message || ''
-    if (detail?.includes('invalid_token')) {
-      error.value = 'Setup link expired or already used. Re-run the MCP command to generate a new setup URL.'
-    } else if (detail?.includes('backend_not_found')) {
-      error.value = 'Model backend not found. It may have been deleted.'
-    } else {
-      error.value = 'Setup failed. Please try again.'
+    if (detail.includes('invalid_token')) {
+      throw new Error('Setup link expired or already used. Re-run the MCP command to generate a new setup URL.')
+    } else if (detail.includes('backend_not_found')) {
+      throw new Error('Model backend not found. It may have been deleted.')
     }
-  } finally {
-    loading.value = false
+    throw new Error('Setup failed. Please try again.')
   }
-}
+})
 </script>

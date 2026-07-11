@@ -287,9 +287,10 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted, onBeforeUnmount, watch } from 'vue'
+import { ref, computed, onBeforeUnmount, watch } from 'vue'
 import { api } from '../lib/api/client'
 import type { components } from '../lib/api/client'
+import { useDataFetch } from '../composables/useDataFetch'
 import LoadingSpinner from '../components/shared/LoadingSpinner.vue'
 import ErrorAlert from '../components/shared/ErrorAlert.vue'
 import PageTabs from "../components/PageTabs.vue"
@@ -332,7 +333,6 @@ const selectedGroupId = ref<string>('')
 const groupName = ref('')
 const groupDescription = ref('')
 const variants = ref<VariantForm[]>([])
-const loading = ref(true)
 const error = ref<string | null>(null)
 const isUnmounted = ref(false)
 const running = ref(false)
@@ -340,6 +340,44 @@ const savedGroupId = ref<string | null>(null)
 const promotingName = ref<string | null>(null)
 
 const runEntries = ref<Map<string, RunEntry>>(new Map())
+const { loading: pipelinesLoading, data: pipelinesData } = useDataFetch(
+  () => api.GET('/api/v1/pipelines'),
+  { immediate: true }
+)
+const { loading: groupsLoading, data: groupsData, load: loadGroups } = useDataFetch(
+  () => api.GET('/api/v1/variant-groups'),
+  { immediate: true }
+)
+const { loading: backendsLoading, data: backendsData } = useDataFetch(
+  () => api.GET('/api/v1/model-backends'),
+  { immediate: true }
+)
+
+const loading = computed(() => pipelinesLoading.value || groupsLoading.value || backendsLoading.value)
+
+watch(() => pipelinesData.value, (data) => {
+  if (data) {
+    const listResp = data as unknown as { items: PipelineItem[]; total: number; page: number; page_size: number }
+    pipelines.value = listResp.items ?? []
+    if (listResp.items.length > 0 && !selectedPipelineId.value) {
+      selectedPipelineId.value = listResp.items[0].id
+    }
+  }
+})
+
+watch(() => groupsData.value, (data) => {
+  if (data) {
+    variantGroups.value = (Array.isArray(data) ? data : (data as any)?.items ?? []) as unknown as VariantGroup[]
+  }
+})
+
+watch(() => backendsData.value, (data) => {
+  if (data) {
+    const resp = data as unknown as { items: ModelBackend[]; total: number; page: number; page_size: number }
+    modelBackends.value = resp.items ?? []
+  }
+})
+
 const terminalStatuses = new Set(['complete', 'failed', 'cancelled', 'eval_failed'])
 
 const filteredGroups = computed(() =>
@@ -506,7 +544,7 @@ async function saveGroup() {
         const group = data as unknown as VariantGroup
         savedGroupId.value = group.id
         selectedGroupId.value = group.id
-        await fetchVariantGroups()
+        await loadGroups()
       }
     }
   } catch (e: unknown) {
@@ -696,15 +734,6 @@ onBeforeUnmount(() => {
   isUnmounted.value = true
 })
 
-onMounted(async () => {
-  await Promise.all([
-    fetchPipelines(),
-    fetchVariantGroups(),
-    fetchModelBackends(),
-  ])
-  loading.value = false
-})
-
 watch(selectedPipelineId, async (id) => {
   if (id) {
     selectedGroupId.value = ''
@@ -743,20 +772,6 @@ watch(selectedGroupId, async (id) => {
   }
 })
 
-async function fetchPipelines() {
-  try {
-    const { data, error: err } = await api.GET('/api/v1/pipelines')
-    if (err) return
-    const listResp = data as unknown as { items: PipelineItem[]; total: number; page: number; page_size: number }
-    pipelines.value = listResp.items ?? []
-    if (listResp.items.length > 0 && !selectedPipelineId.value) {
-      selectedPipelineId.value = listResp.items[0].id
-    }
-  } catch (e) {
-    console.warn('Failed to fetch pipelines', e)
-  }
-}
-
 async function fetchVariantGroups() {
   try {
     const { data, error: err } = await api.GET('/api/v1/variant-groups')
@@ -764,17 +779,6 @@ async function fetchVariantGroups() {
     variantGroups.value = (Array.isArray(data) ? data : (data as any)?.items ?? []) as unknown as VariantGroup[]
   } catch (e) {
     console.warn('Failed to fetch variant groups', e)
-  }
-}
-
-async function fetchModelBackends() {
-  try {
-    const { data, error: err } = await api.GET('/api/v1/model-backends')
-    if (err) return
-    const resp = data as unknown as { items: ModelBackend[]; total: number; page: number; page_size: number }
-    modelBackends.value = resp.items ?? []
-  } catch (e) {
-    console.warn('Failed to fetch model backends', e)
   }
 }
 
