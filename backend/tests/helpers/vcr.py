@@ -15,22 +15,24 @@ import warnings
 from pathlib import Path
 from typing import Any
 
-_VALID_RECORD_MODES = {"once", "new_episodes", "none", "all"}
+_VALID_RECORD_MODES = frozenset({"once", "new_episodes", "none", "all"})
 
 VCR_CASSETTE_DIR = Path(__file__).parent.parent / "cassettes"
 
-_KNOWN_VCR_CONFIG_KEYS: set[str] = {
-    "cassette_library_dir",
-    "record_mode",
-    "filter_headers",
-    "filter_query_parameters",
-    "match_on",
-    "decode_compressed_response",
-    "before_record_request",
-    "before_record_response",
-    "path_transformer",
-    "func_path",
-}
+_KNOWN_VCR_CONFIG_KEYS: frozenset[str] = frozenset(
+    {
+        "cassette_library_dir",
+        "record_mode",
+        "filter_headers",
+        "filter_query_parameters",
+        "match_on",
+        "decode_compressed_response",
+        "before_record_request",
+        "before_record_response",
+        "path_transformer",
+        "func_path",
+    }
+)
 
 
 def _validate_record_mode(mode: str) -> None:
