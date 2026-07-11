@@ -458,7 +458,8 @@ def backup(db_url: str | None, output_dir: Path | None) -> None:
     settings = get_settings()
 
     ts = datetime.now(UTC).strftime("%Y%m%d-%H%M%S")
-    if output_dir is not None:
+    user_specified = output_dir is not None
+    if user_specified:
         backup_dir = output_dir
         backup_dir.mkdir(parents=True, exist_ok=True)
     else:
@@ -520,7 +521,7 @@ def backup(db_url: str | None, output_dir: Path | None) -> None:
 
     except Exception as exc:
         _log.exception("Backup failed")
-        if backup_dir.exists():
+        if not user_specified and backup_dir.exists():
             shutil.rmtree(backup_dir, ignore_errors=True)
             click.echo(f"Cleaned up partial backup directory: {backup_dir}", err=True)
         click.echo(f"Backup failed: {exc}", err=True)
