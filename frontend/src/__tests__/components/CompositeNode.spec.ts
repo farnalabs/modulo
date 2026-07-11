@@ -73,7 +73,7 @@ function makePort(overrides: Partial<ParameterPort> = {}): ParameterPort {
     description: null,
     type: 'string',
     required: false,
-    default: null,
+    default_value: undefined,
     options: null,
     multiline: false,
     target_injection: { mode: 'prompt_replace', node_id: '', injection_point: 'prompt_template' },
@@ -87,7 +87,7 @@ function makePort(overrides: Partial<ParameterPort> = {}): ParameterPort {
       name: 'prompt',
       label: 'Prompt',
       required: true,
-      default: 'Hello',
+      default_value: 'Hello',
     })
     const wrapper = mount(ParameterPortForm, {
       props: { port, modelValue: '' },
@@ -104,7 +104,7 @@ function makePort(overrides: Partial<ParameterPort> = {}): ParameterPort {
       name: 'temperature',
       label: 'Temperature',
       type: 'number',
-      default: 0.7,
+      default_value: 0.7,
     })
     const wrapper = mount(ParameterPortForm, {
       props: { port, modelValue: 0.7 },
