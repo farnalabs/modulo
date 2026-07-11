@@ -1,8 +1,8 @@
-from __future__ import annotations
-
 """Local Docker RuntimeProvider — ephemeral containers via the docker Python SDK."""
 
+from __future__ import annotations
 
+import asyncio
 import io
 import logging
 import os
@@ -78,17 +78,19 @@ class LocalDockerRuntimeProvider(RuntimeProvider):
 
         try:
             client = self._get_client()
-            await self._ensure_image(client, image)
-            container = client.containers.create(
-                image=image,
-                command=["sleep", "infinity"],
-                name=container_name,
-                detach=True,
-                mem_limit=f"{memory_mb}m",
-                nano_cpus=int(cpu_count * 1e9),
-                auto_remove=True,
+            await asyncio.to_thread(self._ensure_image, client, image)
+            container = await asyncio.to_thread(
+                lambda: client.containers.create(
+                    image=image,
+                    command=["sleep", "infinity"],
+                    name=container_name,
+                    detach=True,
+                    mem_limit=f"{memory_mb}m",
+                    nano_cpus=int(cpu_count * 1e9),
+                    auto_remove=True,
+                )
             )
-            container.start()
+            await asyncio.to_thread(container.start)
         except DockerException as exc:
             raise RuntimeError(f"Failed to create container for workspace {ref}: {exc}") from exc
 
@@ -96,7 +98,7 @@ class LocalDockerRuntimeProvider(RuntimeProvider):
         self._workspaces[ref] = container.id
         return workspace
 
-    async def _ensure_image(self, client: docker.DockerClient, image: str) -> None:
+    def _ensure_image(self, client: docker.DockerClient, image: str) -> None:
         """Pull the image if not already present locally."""
         try:
             client.images.get(image)
@@ -113,12 +115,13 @@ class LocalDockerRuntimeProvider(RuntimeProvider):
             return
         try:
             client = self._get_client()
-            container = client.containers.get(container_id)
-            container.stop(timeout=5)
+            container = await asyncio.to_thread(lambda: client.containers.get(container_id))
+            await asyncio.to_thread(lambda: container.stop(timeout=5))
         except NotFound:
             pass
         except DockerException:
             _log.warning("Failed to destroy container %s", container_id, exc_info=True)
+        self._workspaces.pop(container_id, None)
 
     async def workspace_health(self, workspace: Any) -> bool:
         container_id = self._resolve_container_id(workspace)
@@ -126,7 +129,7 @@ class LocalDockerRuntimeProvider(RuntimeProvider):
             return False
         try:
             client = self._get_client()
-            container = client.containers.get(container_id)
+            container = await asyncio.to_thread(lambda: client.containers.get(container_id))
             return container.status == "running"
         except (NotFound, DockerException):
             return False
@@ -144,18 +147,21 @@ class LocalDockerRuntimeProvider(RuntimeProvider):
             raise ValueError(f"Unknown workspace: {workspace}")
         try:
             client = self._get_client()
-            container = client.containers.get(container_id)
+            container = await asyncio.to_thread(lambda: client.containers.get(container_id))
             exec_env = None
             if env:
                 exec_env = {k: str(v) for k, v in env.items()}
             exec_cmd = ["sh", "-c", command]
             if cwd:
                 exec_cmd = ["sh", "-c", f"cd {cwd} && {command}"]
-            exit_code, output = container.exec_run(
-                cmd=exec_cmd,
-                environment=exec_env,
-                workdir=cwd,
-                demux=True,
+            exit_code, output = await asyncio.to_thread(
+                lambda: container.exec_run(
+                    cmd=exec_cmd,
+                    environment=exec_env,
+                    workdir=cwd,
+                    demux=True,
+                    timeout=timeout_seconds,
+                )
             )
             stdout_bytes, stderr_bytes = output
             return {
@@ -172,7 +178,7 @@ class LocalDockerRuntimeProvider(RuntimeProvider):
             raise ValueError(f"Unknown workspace: {workspace}")
         try:
             client = self._get_client()
-            container = client.containers.get(container_id)
+            container = await asyncio.to_thread(lambda: client.containers.get(container_id))
             tar_buffer = io.BytesIO()
             with tarfile.open(fileobj=tar_buffer, mode="w") as tar:
                 data = content.encode("utf-8")
@@ -181,7 +187,7 @@ class LocalDockerRuntimeProvider(RuntimeProvider):
                 info.mtime = int(time.time())
                 tar.addfile(info, io.BytesIO(data))
             tar_buffer.seek(0)
-            container.put_archive("/", tar_buffer)
+            await asyncio.to_thread(lambda: container.put_archive("/", tar_buffer))
         except (NotFound, DockerException) as exc:
             raise RuntimeError(f"Failed to write file {path} in container {container_id}: {exc}") from exc
 
@@ -191,8 +197,8 @@ class LocalDockerRuntimeProvider(RuntimeProvider):
             raise ValueError(f"Unknown workspace: {workspace}")
         try:
             client = self._get_client()
-            container = client.containers.get(container_id)
-            tar_stream, _ = container.get_archive(path)
+            container = await asyncio.to_thread(lambda: client.containers.get(container_id))
+            tar_stream, _ = await asyncio.to_thread(lambda: container.get_archive(path))
             tar_buffer = io.BytesIO()
             for chunk in tar_stream:
                 tar_buffer.write(chunk)
@@ -230,5 +236,5 @@ class LocalDockerRuntimeProvider(RuntimeProvider):
 
     async def close(self) -> None:
         if self._client is not None:
-            self._client.close()
+            await asyncio.to_thread(self._client.close)
             self._client = None

@@ -95,21 +95,21 @@ class ShellConnector(ConnectorBase):
             case "file":
                 path = q.filters["path"]
                 safe_path = shlex.quote(path)
-                result = await self._runtime_provider.exec_command(
-                    provider_ref, ["sh", "-c", f"cat {safe_path}"], timeout=30
+                result = await self._runtime_provider.execute_command(
+                    provider_ref, f"cat {safe_path}", timeout_seconds=30
                 )
-                if result.exit_code != 0:
-                    raise ValueError(f"Failed to read file {path!r}: {result.stderr.strip()}")
-                return ConnectorResult(records=[{"path": path, "content": result.stdout}])
+                if result["exit_code"] != 0:
+                    raise ValueError(f"Failed to read file {path!r}: {(result['stderr'] or '').strip()}")
+                return ConnectorResult(records=[{"path": path, "content": result["stdout"]}])
 
             case "directory":
                 dir_path = q.filters.get("path", ".")
                 safe_path = shlex.quote(dir_path)
-                result = await self._runtime_provider.exec_command(
-                    provider_ref, ["sh", "-c", f"ls -1a {safe_path}"], timeout=30
+                result = await self._runtime_provider.execute_command(
+                    provider_ref, f"ls -1a {safe_path}", timeout_seconds=30
                 )
                 entries: list[dict[str, Any]] = []
-                for line in result.stdout.strip().split("\n"):
+                for line in (result["stdout"] or "").strip().split("\n"):
                     name = line.strip()
                     if name and name not in (".", ".."):
                         resolved = f"{dir_path.rstrip('/')}/{name}"
@@ -138,16 +138,16 @@ class ShellConnector(ConnectorBase):
                 cwd: str | None = payload.data.get("cwd")
 
                 cmd = self._build_exec_cmd(command_str, cwd, env)
-                exec_result = await self._runtime_provider.exec_command(
+                exec_result = await self._runtime_provider.execute_command(
                     provider_ref,
                     cmd,
-                    timeout=timeout,
+                    timeout_seconds=timeout,
                 )
                 return {
-                    "stdout": exec_result.stdout,
-                    "stderr": exec_result.stderr,
-                    "exit_code": exec_result.exit_code,
-                    "duration_ms": exec_result.duration_ms,
+                    "stdout": exec_result["stdout"],
+                    "stderr": exec_result["stderr"],
+                    "exit_code": exec_result["exit_code"],
+                    "duration_ms": exec_result.get("duration_ms", 0),
                     "masked": True,
                 }
 
@@ -159,21 +159,17 @@ class ShellConnector(ConnectorBase):
                 parent = str(Path(path).parent)
                 safe_parent = shlex.quote(parent)
 
-                exec_result = await self._runtime_provider.exec_command(
+                exec_result = await self._runtime_provider.execute_command(
                     provider_ref,
-                    [
-                        "sh",
-                        "-c",
-                        f"mkdir -p {safe_parent} && echo '{encoded}' | base64 -d > {safe_path}",
-                    ],
-                    timeout=30,
+                    f"mkdir -p {safe_parent} && echo '{encoded}' | base64 -d > {safe_path}",
+                    timeout_seconds=30,
                 )
-                if exec_result.exit_code != 0:
-                    raise ValueError(f"Failed to write file {path!r}: {exec_result.stderr.strip()}")
+                if exec_result["exit_code"] != 0:
+                    raise ValueError(f"Failed to write file {path!r}: {(exec_result['stderr'] or '').strip()}")
                 return {
                     "path": path,
                     "bytes_written": len(content),
-                    "exit_code": exec_result.exit_code,
+                    "exit_code": exec_result["exit_code"],
                 }
 
             case _:
@@ -184,19 +180,17 @@ class ShellConnector(ConnectorBase):
         command_str: str,
         cwd: str | None = None,
         env: dict[str, str] | None = None,
-    ) -> list[str]:
+    ) -> str:
         command_parts = shlex.split(command_str)
         if not cwd and not env:
-            return command_parts
+            return command_str
 
         shell_parts: list[str] = []
         if cwd:
-            shell_parts.append(f"cd {__import__('shlex').quote(cwd)}")
+            shell_parts.append(f"cd {shlex.quote(cwd)}")
         quoted_cmd = " ".join(shlex.quote(p) for p in command_parts)
         if env:
-            env_prefix = " ".join(
-                f"{__import__('shlex').quote(k)}={__import__('shlex').quote(v)}" for k, v in env.items()
-            )
+            env_prefix = " ".join(f"{shlex.quote(k)}={shlex.quote(v)}" for k, v in env.items())
             quoted_cmd = f"{env_prefix} {quoted_cmd}"
         shell_parts.append(quoted_cmd)
-        return ["sh", "-c", " && ".join(shell_parts)]
+        return " && ".join(shell_parts)
