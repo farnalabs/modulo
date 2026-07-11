@@ -9,6 +9,7 @@
       </div>
       <Button
         variant="default"
+        class="cursor-pointer"
         @click="handleCreate"
       >
         <PlusIcon class="mr-1.5 inline-block h-4 w-4" />
@@ -32,7 +33,7 @@
       </p>
       <Button
         variant="default"
-        class="mt-4"
+        class="mt-4 cursor-pointer"
         @click="handleCreate"
       >
         Create Lifecycle Map
@@ -107,8 +108,8 @@
 </template>
 
 <script setup lang="ts">
-import { ref } from 'vue'
-import { useRouter } from 'vue-router'
+import { ref, onMounted } from 'vue'
+import { useRouter, useRoute } from 'vue-router'
 import { PlusIcon, MapIcon } from '@lucide/vue'
 import { useDataFetch } from '../../composables/useDataFetch'
 import { formatApiError } from '../../lib/api/formatError'
@@ -118,6 +119,13 @@ import { formatDateShort } from '../../lib/formatDate'
 import { Button } from '@/components/ui/button'
 
 const router = useRouter()
+const route = useRoute()
+
+onMounted(() => {
+  if (route.query.create === 'true') {
+    handleCreate()
+  }
+})
 
 const { loading, error, data: maps, load: loadMaps } = useDataFetch<LifecycleMap[]>(
   () => api.GET('/api/v1/lifecycle-maps'),

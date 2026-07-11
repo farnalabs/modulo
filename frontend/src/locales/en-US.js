@@ -1424,6 +1424,7 @@ export default {
       "item_notifications": "Notifications",
       "item_my_pipelines": "My Pipelines",
       "item_library": "Library",
+      "item_lifecycle_maps": "Lifecycle Maps",
       "item_templates": "Templates",
       "item_copy_pipeline": "Copy Pipeline",
       "item_stages_board": "Stages Board",
