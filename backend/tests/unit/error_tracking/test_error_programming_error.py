@@ -311,6 +311,26 @@ def _make_fwd_app():
 
     app.dependency_overrides[get_user] = _override_user()
     app.dependency_overrides[get_db] = _override_db
+
+    from modulo.api.dependencies import get_plan_context
+
+    class _AllFeatures:
+        def feature_enabled(self, name: str) -> bool:
+            return True
+
+        def list_enabled_features(self) -> list:
+            return []
+
+        def tier(self) -> str:
+            return "enterprise"
+
+        def has_license_key(self) -> bool:
+            return True
+
+    async def _override_plan_context() -> _AllFeatures:
+        return _AllFeatures()
+
+    app.dependency_overrides[get_plan_context] = _override_plan_context
     return app, session
 
 
