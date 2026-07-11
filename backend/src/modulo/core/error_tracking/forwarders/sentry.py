@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import logging
 from typing import Any
 from urllib.parse import urlparse
@@ -53,7 +54,7 @@ class SentryErrorForwarder(BaseForwarder):
 
         try:
             import sentry_sdk
-        except Exception:
+        except ImportError:
             return await self._forward_via_api(dsn, org_slug, project_slug, org_id, error_group, error_event)
 
         return await self._forward_via_sdk(sentry_sdk, dsn, org_id, error_group, error_event)
@@ -73,19 +74,45 @@ class SentryErrorForwarder(BaseForwarder):
             environment = error_event.environment or "unknown"
             version = error_event.version or "unknown"
             fingerprint = [error_group.fingerprint] if error_group and error_group.fingerprint else []
-            with sentry_sdk.push_scope() as scope:
-                scope.set_tag("org_id", str(org_id))
-                scope.set_tag("source", source)
-                scope.set_tag("environment", environment)
-                scope.set_tag("version", version)
-                scope.set_level(level)
-                if fingerprint:
-                    scope.fingerprint = fingerprint
-                sentry_sdk.capture_message(message, level=level)
+            org_id_str = str(org_id)
+            await asyncio.to_thread(
+                self._send_via_sdk_sync,
+                sentry_sdk,
+                level,
+                message,
+                source,
+                environment,
+                version,
+                fingerprint,
+                org_id_str,
+            )
             return True
+        except asyncio.CancelledError:
+            raise
         except Exception:
             _log.exception("sentry_forwarder.sdk_failed")
             return False
+
+    @staticmethod
+    def _send_via_sdk_sync(
+        sentry_sdk: Any,
+        level: str,
+        message: str,
+        source: str,
+        environment: str,
+        version: str,
+        fingerprint: list[str],
+        org_id_str: str,
+    ) -> None:
+        with sentry_sdk.push_scope() as scope:
+            scope.set_tag("org_id", org_id_str)
+            scope.set_tag("source", source)
+            scope.set_tag("environment", environment)
+            scope.set_tag("version", version)
+            scope.set_level(level)
+            if fingerprint:
+                scope.fingerprint = fingerprint
+            sentry_sdk.capture_message(message, level=level)
 
     async def _forward_via_api(
         self,
@@ -138,6 +165,8 @@ class SentryErrorForwarder(BaseForwarder):
                     extra={"status": resp.status_code, "org_id": str(org_id)},
                 )
                 return False
+        except asyncio.CancelledError:
+            raise
         except Exception:
             _log.exception("sentry_forwarder.api_request_failed")
             return False
