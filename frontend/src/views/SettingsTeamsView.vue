@@ -185,6 +185,7 @@
 
 <script setup lang="ts">
 import { ref, onMounted, onBeforeUnmount } from 'vue'
+import { useDataFetch } from '../composables/useDataFetch'
 import { Button } from '@/components/ui/button'
 import TableActions from '../components/shared/TableActions.vue'
 import { api } from '../lib/api/client'
@@ -204,10 +205,15 @@ type AdminTeamItem = components['schemas']['AdminTeamItem']
 type MembershipResponse = components['schemas']['MembershipResponse']
 type AdminUserListItem = components['schemas']['AdminUserListItem']
 
-const teams = ref<AdminTeamItem[]>([])
+const { loading, error, data: teams, load: loadTeams } = useDataFetch<AdminTeamItem[]>(
+  async () => {
+    const res = await api.GET('/api/v1/admin/teams')
+    if (res.error) return { error: res.error }
+    return { data: res.data.items }
+  },
+  { initialValue: [] as AdminTeamItem[] }
+)
 const users = ref<AdminUserListItem[]>([])
-const loading = ref(true)
-const error = ref<string | null>(null)
 
 const expandedTeamId = ref<string | null>(null)
 const membersByTeam = ref<Record<string, MembershipResponse[]>>({})
@@ -249,23 +255,6 @@ function userEmail(userId: string): string {
 function availableUsers(teamId: string): AdminUserListItem[] {
   const memberIds = new Set((membersByTeam.value[teamId] ?? []).map(m => m.user_id))
   return users.value.filter(u => !memberIds.has(u.id))
-}
-
-async function loadTeams() {
-  loading.value = true
-  error.value = null
-  try {
-    const { data, error: err } = await api.GET('/api/v1/admin/teams')
-    if (err) {
-      error.value = `Failed to load teams: ${formatApiError(err)}`
-    } else if (data) {
-      teams.value = data.items
-    }
-  } catch (e: unknown) {
-    error.value = `Failed to load teams: ${formatApiError(e)}`
-  } finally {
-    loading.value = false
-  }
 }
 
 async function loadUsers() {
@@ -516,6 +505,6 @@ function memberActions(teamId: string, member: MembershipResponse) {
 
 onMounted(async () => {
   planStore.fetchPlan()
-  await Promise.all([loadTeams(), loadUsers()])
+  await loadUsers()
 })
 </script>

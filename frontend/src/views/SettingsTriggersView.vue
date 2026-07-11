@@ -298,7 +298,8 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted } from 'vue'
+import { ref, computed, onMounted } from 'vue'
+import { useDataFetch } from '../composables/useDataFetch'
 import { Button } from '@/components/ui/button'
 import { api } from '../lib/api/client'
 import { formatApiError } from '../lib/api/formatError'
@@ -335,10 +336,15 @@ interface TriggerForm {
   signal_source_node: string
 }
 
-const items = ref<TriggerItem[]>([])
-const pipelines = ref<PipelineItem[]>([])
-const loading = ref(true)
-const error = ref<string | null>(null)
+const { loading, error, data: triggersData, load: loadTriggers } = useDataFetch(
+  () => api.GET('/api/v1/triggers', { params: { query: { page: 1, page_size: 100 } } }),
+)
+const { data: pipelinesData, load: loadPipelines } = useDataFetch(
+  () => api.GET('/api/v1/pipelines', {}),
+  { immediate: false }
+)
+const items = computed(() => (triggersData.value as any)?.items ?? [])
+const pipelines = computed(() => (pipelinesData.value as any)?.items ?? [])
 
 const dialogOpen = ref(false)
 const deleteDialogOpen = ref(false)
@@ -590,37 +596,8 @@ async function toggleActive(trigger: TriggerItem) {
   }
 }
 
-async function loadTriggers() {
-  try {
-    const { data, error: err } = await api.GET('/api/v1/triggers', {
-      params: { query: { page: 1, page_size: 100 } },
-    })
-    if (err) {
-      error.value = `Failed to load triggers: ${formatApiError(err)}`
-    } else if (data) {
-      items.value = data.items
-    }
-  } catch (e: unknown) {
-    error.value = `Failed to load triggers: ${formatApiError(e)}`
-  }
-}
-
-async function loadPipelines() {
-  try {
-    const { data, error: err } = await api.GET('/api/v1/pipelines', {})
-    if (!err && data) {
-      pipelines.value = data.items
-    }
-  } catch (e) {
-    console.warn('Failed to load pipelines', e)
-  }
-}
-
 async function loadAll() {
-  loading.value = true
-  error.value = null
   await Promise.all([loadTriggers(), loadPipelines()])
-  loading.value = false
 }
 
 function triggerActions(trigger: TriggerItem) {
@@ -640,4 +617,5 @@ function triggerActions(trigger: TriggerItem) {
 }
 
 onMounted(() => { planStore.fetchPlan(); loadAll() })
+
 </script>

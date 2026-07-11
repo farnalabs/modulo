@@ -162,7 +162,8 @@
 </template>
 
 <script setup lang="ts">
-import { ref, reactive, onMounted, onBeforeUnmount } from 'vue'
+import { ref, reactive, computed, watch, onBeforeUnmount } from 'vue'
+import { useDataFetch } from '../composables/useDataFetch'
 import { useI18n } from 'vue-i18n'
 import { api } from '../lib/api/client'
 import { formatApiError, type ProblemDetail } from '../lib/api/formatError'
@@ -187,16 +188,22 @@ interface ConfigResponse {
   has_drift: boolean
 }
 
-const loading = ref(true)
-const error = ref<string | null>(null)
 const saving = ref(false)
 const formError = ref<string | null>(null)
 const formSuccess = ref<string | null>(null)
 let runtimeConfigTimeout: ReturnType<typeof setTimeout> | null = null
-const items = ref<ConfigEntry[]>([])
 const hasDrift = ref(false)
 const editedValues = reactive<Record<string, string>>({})
 const editedKeys = reactive(new Set<string>())
+
+const items = ref<ConfigEntry[]>([])
+const { loading, error, data: configData, load: loadConfig } = useDataFetch<ConfigResponse>(
+  () => api.GET('/api/v1/admin/runtime-config'),
+)
+
+watch(configData, (resp) => {
+  if (resp) applyResponse(resp)
+})
 
 const SENSITIVE_KEY_PATTERNS = /SECRET|PASSWORD|TOKEN|KEY|DATABASE_URL|ENCRYPTION|SIGNING|PRIVATE/i
 
@@ -244,25 +251,6 @@ function applyResponse(resp: ConfigResponse): void {
   editedKeys.clear()
   for (const entry of resp.items) {
     editedValues[entry.key] = entry.current_value ?? ''
-  }
-}
-
-async function loadConfig() {
-  loading.value = true
-  error.value = null
-  try {
-    const { data, error: err } = await api.GET('/api/v1/admin/runtime-config')
-    if (err) {
-      error.value = err && typeof err === 'object' && 'detail' in err
-        ? `${t('views.SettingsRuntimeConfigView.failed_to_load_runtime_config')} ${(err as ProblemDetail).detail}`
-        : `${t('views.SettingsRuntimeConfigView.failed_to_load_runtime_config')} ${formatApiError(err)}`
-    } else if (data) {
-      applyResponse(data as unknown as ConfigResponse)
-    }
-  } catch (e: unknown) {
-    error.value = `${t('views.SettingsRuntimeConfigView.failed_to_load_runtime_config')} ${formatApiError(e)}`
-  } finally {
-    loading.value = false
   }
 }
 
@@ -338,5 +326,4 @@ async function clearOverride(key: string) {
 onBeforeUnmount(() => {
   if (runtimeConfigTimeout) clearTimeout(runtimeConfigTimeout)
 })
-onMounted(loadConfig)
 </script>

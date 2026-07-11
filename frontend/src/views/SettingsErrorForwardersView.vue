@@ -254,6 +254,7 @@
 
 <script setup lang="ts">
 import { ref, reactive, onMounted, onBeforeUnmount } from 'vue'
+import { useDataFetch } from '../composables/useDataFetch'
 import { formatApiError, type ProblemDetail } from '../lib/api/formatError'
 import { usePlanStore } from '../stores/planStore'
 import { api } from '../lib/api/client'
@@ -287,9 +288,20 @@ interface ForwarderConfigs {
 
 const planStore = usePlanStore()
 
-const loading = ref(true)
-const loadError = ref<string | null>(null)
-const forwarders = ref<ForwarderItem[]>([])
+const { loading, error: loadError, data: forwarders, load: loadForwarders } = useDataFetch<ForwarderItem[]>(
+  async () => {
+    const res = await (api as any).GET('/api/v1/errors/forwarders')
+    if (res.error) return { error: res.error }
+    const items = res.data.forwarders as ForwarderItem[]
+    for (const fwd of items) {
+      if (fwd.configured) {
+        expanded.value[fwd.forwarder_type] = true
+      }
+    }
+    return { data: items }
+  },
+  { initialValue: [] as ForwarderItem[] }
+)
 const expanded = ref<Record<string, boolean>>({})
 const testing = ref<Record<string, boolean>>({})
 const saving = ref<Record<string, boolean>>({})
@@ -306,30 +318,6 @@ const configs = reactive<ForwarderConfigs>({
   opsgenie: {},
   loki: {},
 })
-
-async function loadForwarders() {
-  loading.value = true
-  loadError.value = null
-  try {
-    const { data, error: err } = await (api as any).GET('/api/v1/errors/forwarders')
-    if (err) {
-      loadError.value = err && typeof err === 'object' && 'detail' in err
-        ? `Failed to load forwarders: ${(err as ProblemDetail).detail}`
-        : `Failed to load forwarders: ${formatApiError(err)}`
-    } else if (data) {
-      forwarders.value = data.forwarders
-      for (const fwd of data.forwarders) {
-        if (fwd.configured) {
-          expanded.value[fwd.forwarder_type] = true
-        }
-      }
-    }
-  } catch (e: unknown) {
-    loadError.value = `Failed to load forwarders: ${formatApiError(e)}`
-  } finally {
-    loading.value = false
-  }
-}
 
 function toggleForwarder(fwd: ForwarderItem) {
   fwd.enabled = !fwd.enabled
@@ -409,6 +397,5 @@ onBeforeUnmount(() => {
 
 onMounted(() => {
   planStore.fetchPlan()
-  loadForwarders()
 })
 </script>

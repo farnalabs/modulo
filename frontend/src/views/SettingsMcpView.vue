@@ -246,8 +246,9 @@
 
 <script setup lang="ts">
 import { ref, computed, onMounted, onUnmounted } from 'vue'
+import { useDataFetch } from '../composables/useDataFetch'
 import { api } from '../lib/api/client'
-import { formatApiError, type ProblemDetail } from '../lib/api/formatError'
+import { formatApiError } from '../lib/api/formatError'
 import type { components } from '../lib/api/client'
 import PageHeader from '../components/shared/PageHeader.vue'
 import LoadingSpinner from '../components/shared/LoadingSpinner.vue'
@@ -272,15 +273,28 @@ interface ApiKeyItem {
   created_at: string
 }
 
-type McpConfigResponse = components['schemas']['McpConfigResponse']
+interface McpPageData {
+  mcpUrl: string
+  apiKeys: ApiKeyItem[]
+}
+
 type ApiKeyCreatedResponse = components['schemas']['ApiKeyCreatedResponse']
 
-const loading = ref(true)
-const loadError = ref<string | null>(null)
+const { loading, error: loadError, data: mcpData, load: loadAll } = useDataFetch<McpPageData>(
+  async () => {
+    const [mcpResp, keysResp] = await Promise.all([
+      (api as any).GET('/api/v1/api-keys/mcp-config'),
+      (api as any).GET('/api/v1/api-keys'),
+    ])
+    if (mcpResp.error) return { error: mcpResp.error }
+    if (keysResp.error) return { error: keysResp.error }
+    return { data: { mcpUrl: mcpResp.data.mcp_url, apiKeys: keysResp.data as ApiKeyItem[] } }
+  },
+  { initialValue: { mcpUrl: '', apiKeys: [] } }
+)
 
-const mcpUrl = ref('')
-
-const apiKeys = ref<ApiKeyItem[]>([])
+const mcpUrl = computed(() => mcpData.value?.mcpUrl ?? '')
+const apiKeys = computed(() => mcpData.value?.apiKeys ?? [])
 const createKeyDialogOpen = ref(false)
 const createKeyName = ref('')
 const createKeyNameTouched = ref(false)
@@ -378,36 +392,6 @@ function onKeyCreatedDialogClose(open: boolean) {
   }
 }
 
-async function loadAll() {
-  loading.value = true
-  loadError.value = null
-  try {
-    const [mcpResp, keysResp] = await Promise.all([
-      (api as any).GET('/api/v1/api-keys/mcp-config'),
-      (api as any).GET('/api/v1/api-keys'),
-    ])
-
-    if (mcpResp.error) {
-      loadError.value = `Failed to load MCP config: ${formatApiError(mcpResp.error)}`
-      return
-    }
-    const mcpData = mcpResp.data as McpConfigResponse
-    mcpUrl.value = mcpData.mcp_url
-
-    if (keysResp.error) {
-      loadError.value = `Failed to load API keys: ${formatApiError(keysResp.error)}`
-      return
-    }
-    apiKeys.value = keysResp.data as ApiKeyItem[]
-  } catch (e: unknown) {
-      loadError.value = e && typeof e === 'object' && 'detail' in e
-        ? `Failed to load data: ${(e as ProblemDetail).detail}`
-        : `Failed to load data: ${formatApiError(e)}`
-  } finally {
-    loading.value = false
-  }
-}
-
 function openCreateKeyDialog() {
   createKeyName.value = ''
   createKeyNameTouched.value = false
@@ -494,7 +478,7 @@ async function copyToClipboard(text: string, field: string) {
   }
 }
 
-onMounted(() => { planStore.fetchPlan(); loadAll() })
+onMounted(() => { planStore.fetchPlan() })
 onUnmounted(() => {
   clearKeyMaskTimer()
   if (mcpCopyTimeout) clearTimeout(mcpCopyTimeout)

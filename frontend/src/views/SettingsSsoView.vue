@@ -165,7 +165,8 @@
 </template>
 
 <script setup lang="ts">
-import { ref, reactive, onMounted, onBeforeUnmount } from 'vue'
+import { ref, reactive, onBeforeUnmount } from 'vue'
+import { useDataFetch } from '../composables/useDataFetch'
 import { Button } from '@/components/ui/button'
 import TableActions from '../components/shared/TableActions.vue'
 import { api } from '../lib/api/client'
@@ -213,10 +214,14 @@ function emptyForm(): SsoFormState {
   }
 }
 
-const providers = ref<SsoProviderResponse[]>([])
-const loading = ref(true)
-const error = ref<string | null>(null)
-const errorRetryable = ref(true)
+const { loading, error, data: providers, load: loadProviders } = useDataFetch<SsoProviderResponse[]>(
+  async () => {
+    const resp = await api.GET('/api/v1/admin/sso/providers')
+    if (resp.error) return { error: resp.error }
+    return { data: (Array.isArray(resp.data) ? resp.data : (resp.data as any)?.items ?? []) }
+  },
+  { initialValue: [] as SsoProviderResponse[] }
+)
 
 const formMode = ref<'add' | 'edit' | null>(null)
 const formData = reactive<SsoFormState>(emptyForm())
@@ -237,27 +242,6 @@ let ssoTestTimeout: ReturnType<typeof setTimeout> | null = null
 
 function onFormUpdate(updated: SsoFormState) {
   Object.assign(formData, updated)
-}
-
-async function loadProviders() {
-  loading.value = true
-  error.value = null
-  errorRetryable.value = true
-  try {
-    const resp = await api.GET('/api/v1/admin/sso/providers')
-    if (resp.error) {
-      error.value = `Failed to load providers: ${formatError(resp.error)}`
-      if (resp.response?.status && resp.response.status >= 400 && resp.response.status < 500) {
-        errorRetryable.value = false
-      }
-    } else if (resp.data) {
-      providers.value = (Array.isArray(resp.data) ? resp.data : (resp.data as any)?.items ?? [])
-    }
-  } catch (e: unknown) {
-    error.value = `Failed to load providers: ${formatApiError(e)}`
-  } finally {
-    loading.value = false
-  }
 }
 
 function openAddForm() {
@@ -485,5 +469,5 @@ function ssoActions(provider: SsoProviderResponse) {
   ]
 }
 
-onMounted(loadProviders)
+
 </script>
