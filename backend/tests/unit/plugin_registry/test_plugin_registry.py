@@ -155,7 +155,11 @@ def test_get_plugin():
         version="1.0.0",
     )
     registry.register_connector_type("t1", lambda c, cr: _StubPluginConnector(), manifest)
-    assert registry.get_plugin("test-plugin") is manifest
+    retrieved = registry.get_plugin("test-plugin")
+    assert retrieved is not None
+    assert retrieved.PLUGIN_ID == manifest.PLUGIN_ID
+    assert retrieved.display_name == manifest.display_name
+    assert retrieved.capabilities == {"connector_type"}
     assert registry.get_plugin("nonexistent") is None
 
 
@@ -300,8 +304,7 @@ def _make_mock_entry_point(
     else:
         loader.load = lambda: load_result
 
-    ep = types.SimpleNamespace(name=ep_name, dist=dist, load=loader.load)
-    return ep
+    return types.SimpleNamespace(name=ep_name, dist=dist, load=loader.load)
 
 
 class _DiscoveryStubConnector(ConnectorBase):

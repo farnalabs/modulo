@@ -18,6 +18,7 @@ Usage:
 """
 
 
+import copy
 import importlib.metadata
 import logging
 import threading
@@ -141,7 +142,7 @@ class PluginRegistry:
         if discovered:
             ids = [p.PLUGIN_ID for p in discovered]
             logger.info("Discovered %d plugin(s): %s", len(discovered), ids)
-        return discovered
+        return [copy.deepcopy(m) for m in discovered]
 
     def _load_entry_point(self, ep: importlib.metadata.EntryPoint, group: str) -> PluginManifest | None:
         """Load an entry point and register its builder.
@@ -219,7 +220,8 @@ class PluginRegistry:
             raise TypeError("config must be a dict")
         if not isinstance(creds, dict):
             raise TypeError("creds must be a dict")
-        builder = self._connector_builders.get(type_id)
+        with self._lock:
+            builder = self._connector_builders.get(type_id)
         if builder is None:
             raise PluginNotFoundError(f"No plugin registered connector type {type_id!r}")
         try:
@@ -241,7 +243,8 @@ class PluginRegistry:
             raise TypeError("model_id must be a string")
         if not isinstance(api_key, str):
             raise TypeError("api_key must be a string")
-        builder = self._backend_builders.get(provider)
+        with self._lock:
+            builder = self._backend_builders.get(provider)
         if builder is None:
             raise PluginNotFoundError(f"No plugin registered model backend provider {provider!r}")
         try:
@@ -296,11 +299,12 @@ class PluginRegistry:
     def list_plugins(self) -> dict[str, PluginManifest]:
         """Return all discovered plugin manifests keyed by PLUGIN_ID."""
         with self._lock:
-            return dict(self._plugins)
+            return {pid: copy.deepcopy(m) for pid, m in self._plugins.items()}
 
     def get_plugin(self, plugin_id: str) -> PluginManifest | None:
         with self._lock:
-            return self._plugins.get(plugin_id)
+            m = self._plugins.get(plugin_id)
+            return copy.deepcopy(m) if m is not None else None
 
     def has_connector_type(self, type_id: str) -> bool:
         with self._lock:
@@ -346,7 +350,6 @@ class PluginRegistry:
                 self._health[plugin_id] = health
             return {plugin_id: health}
 
-        manifests: list[PluginManifest] = []
         with self._lock:
             manifests = list(self._plugins.values())
         results: dict[str, PluginHealth] = {}
