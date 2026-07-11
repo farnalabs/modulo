@@ -145,12 +145,12 @@
 import { ref, computed } from 'vue'
 import { api } from '../lib/api/client'
 import { useDataFetch } from '../composables/useDataFetch'
+import { useMutation } from '../composables/useMutation'
 import type { components } from '../lib/api/client'
 import LoadingSpinner from '../components/shared/LoadingSpinner.vue'
 import ErrorAlert from '../components/shared/ErrorAlert.vue'
 import PageHeader from '../components/shared/PageHeader.vue'
 import { Button } from '@/components/ui/button'
-import { formatApiError } from '../lib/api/formatError'
 
 type NodeOutputDiffResponse = components['schemas']['NodeOutputDiffResponse']
 type NodeOutputDiffLine = components['schemas']['NodeOutputDiffLine']
@@ -158,8 +158,6 @@ type NodeOutputDiffLine = components['schemas']['NodeOutputDiffLine']
 const runIdA = ref('')
 const nodeId = ref('')
 const runIdB = ref('')
-const loading = ref(false)
-const error = ref<string | null>(null)
 const result = ref<NodeOutputDiffResponse | null>(null)
 
 interface RecentRun {
@@ -226,30 +224,16 @@ function diffMarker(line: NodeOutputDiffLine): string {
   return ' '
 }
 
-async function compare() {
-  if (!canCompare.value) return
-  loading.value = true
-  error.value = null
-  result.value = null
-
-  try {
-    const { data, error: err } = await api.POST('/api/v1/runs/diff', {
-      body: {
-        run_id_a: runIdA.value.trim(),
-        node_id_a: nodeId.value.trim(),
-        run_id_b: runIdB.value.trim(),
-        node_id_b: nodeId.value.trim(),
-      },
-    })
-    if (err) {
-      error.value = `Diff failed: ${JSON.stringify(err)}`
-      return
-    }
-    result.value = data as unknown as NodeOutputDiffResponse
-  } catch (e: unknown) {
-    error.value = `Failed to compare outputs: ${formatApiError(e)}`
-  } finally {
-    loading.value = false
-  }
-}
+const { loading, error, mutate: compare } = useMutation(async () => {
+  const { data } = await api.POST('/api/v1/runs/diff', {
+    body: {
+      run_id_a: runIdA.value.trim(),
+      node_id_a: nodeId.value.trim(),
+      run_id_b: runIdB.value.trim(),
+      node_id_b: nodeId.value.trim(),
+    },
+  })
+  result.value = data as unknown as NodeOutputDiffResponse
+  return data
+})
 </script>

@@ -69,37 +69,27 @@
 import { ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { Button } from '@/components/ui/button'
+import { useMutation } from '../composables/useMutation'
 import { setAccessToken, setRefreshToken } from '../lib/api/client'
-import { formatApiError } from '../lib/api/formatError'
 
 const router = useRouter()
 const email = ref('')
 const password = ref('')
-const loading = ref(false)
-const error = ref<string | null>(null)
 
-async function login() {
-  loading.value = true
-  error.value = null
-  try {
-    const res = await fetch('/api/v1/auth/login', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ email: email.value, password: password.value }),
-    })
-    if (!res.ok) {
-      const body = await res.json().catch(() => ({}))
-      error.value = body.detail || res.statusText
-      return
-    }
-    const data = await res.json()
-    setAccessToken(data.access_token)
-    if (data.refresh_token) setRefreshToken(data.refresh_token)
-    router.push('/')
-  } catch (e: unknown) {
-    error.value = `Login failed: ${formatApiError(e)}`
-  } finally {
-    loading.value = false
+const { loading, error, mutate: login } = useMutation(async () => {
+  const res = await fetch('/api/v1/auth/login', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ email: email.value, password: password.value }),
+  })
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}))
+    throw new Error(body.detail || res.statusText)
   }
-}
+  const data = await res.json()
+  setAccessToken(data.access_token)
+  if (data.refresh_token) setRefreshToken(data.refresh_token)
+  router.push('/')
+  return data
+})
 </script>
