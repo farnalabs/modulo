@@ -72,6 +72,8 @@ def _resolve_admin_auth(token: str | None) -> str | None:
             if principal.org_role not in ("admin", "owner"):
                 raise click.ClickException("Token is not an admin-level JWT")
             return str(principal.user_id)
+        except asyncio.CancelledError:
+            raise
         except click.ClickException:
             raise
         except Exception as exc:
@@ -317,12 +319,16 @@ async def _import_org_data(
                             id_map[old_id_str] = str(getattr(new_obj, pk_col))
                         counts["created"] += 1
 
+            except asyncio.CancelledError:
+                raise
             except Exception as exc:
                 _log.exception("Error importing %s row %s: %s", table_name, row_id or "?", exc)
                 counts["errors"] += 1
 
         try:
             await session.flush()
+        except asyncio.CancelledError:
+            raise
         except Exception as exc:
             _log.error("Flush failed after importing table %s: %s", table_name, exc)
             raise
@@ -450,6 +456,8 @@ async def _async_export_org(
             record_count = sum(len(v) for k, v in bundle.items() if isinstance(v, list))
             click.echo(f"Exported {record_count} records to {output}")
             click.echo(f"Export hash: {hashes['__export__']}")
+    except asyncio.CancelledError:
+        raise
     except click.ClickException:
         raise
     except Exception as exc:
@@ -502,6 +510,8 @@ async def _async_import_org(
     try:
         async with AsyncSessionLocal() as session:
             await _verify_admin_access(session, org_id, ctx.obj["admin_user_id"])
+    except asyncio.CancelledError:
+        raise
     except click.ClickException:
         raise
     except Exception as exc:
@@ -530,6 +540,8 @@ async def _async_import_org(
                 f"{counts['skipped']} skipped, "
                 f"{counts['errors']} errors"
             )
+    except asyncio.CancelledError:
+        raise
     except click.ClickException:
         raise
     except Exception as exc:
@@ -555,6 +567,8 @@ def verify_export(ctx: click.Context, org_id: str, input_path: Path) -> None:
 async def _async_verify_export(ctx: click.Context, org_id: uuid.UUID, input_path: Path) -> None:
     try:
         meta, records = await _read_jsonl(input_path)
+    except asyncio.CancelledError:
+        raise
     except click.ClickException:
         raise
     except Exception as exc:
