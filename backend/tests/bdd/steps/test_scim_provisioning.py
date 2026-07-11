@@ -195,7 +195,7 @@ def scim_client() -> Generator[TestClient, None, None]:
     async def override_session() -> AsyncGenerator[AsyncMock, None]:
         yield mock_session
 
-    from modulo.api.dependencies import _get_engine, get_plan_context
+    from modulo.api.dependencies import _get_engine, get_db_session, get_plan_context
     from modulo.api.main import app
     from modulo.core.feature_flags import LicenseData, LicenseKeyTier, PlanContext
 
@@ -309,6 +309,9 @@ def _when_post_user_no_auth(email: str, request: Any, ctx: dict[str, Any]) -> No
     """
     body = dict(_USER_CREATE_BODY)
     body["userName"] = email
+
+    from modulo.api.dependencies import _get_engine, get_db_session
+    from modulo.api.main import app
 
     app.dependency_overrides.clear()
     app.dependency_overrides[get_settings] = _make_scim_settings

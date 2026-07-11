@@ -293,7 +293,6 @@ def eval_blocked_on(eval_name: str, ctx):
 
 @then("remaining evals are not evaluated")
 def remaining_not_evaluated(ctx):
-    evaluated = [n for n, d in ctx.get("eval_defs", {}).items() if d.get("evaluated")]
     failed_one = ctx.get("eval_blocked_detail")
     for name, data in ctx.get("eval_defs", {}).items():
         if name != failed_one:

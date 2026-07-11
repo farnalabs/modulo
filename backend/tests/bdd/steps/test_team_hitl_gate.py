@@ -73,7 +73,8 @@ def run_awaiting_with_team(run_name: str, gate_id: str, team_name: str, ctx):
 
 @given(
     parsers.parse(
-        'a run "{run_name}" is awaiting human at gate "{gate_id}" with required_team_id "{team_name}" and human_only true'
+        'a run "{run_name}" is awaiting human at gate "{gate_id}"'
+        ' with required_team_id "{team_name}" and human_only true'
     )
 )
 def run_awaiting_with_team_and_human_only(run_name: str, gate_id: str, team_name: str, ctx):
