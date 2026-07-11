@@ -1,10 +1,8 @@
+"""Redis-backed registry for Remy distributed state, replacing in-memory dicts."""
+
 from __future__ import annotations
 
 import asyncio
-
-"""Redis-backed registry for Remy distributed state, replacing in-memory dicts."""
-
-
 import json
 import logging
 import time
@@ -158,6 +156,7 @@ class RemyRedisRegistry:
             return None
         finally:
             await pubsub.unsubscribe(f"remy:channel:permission:{request_id}")
+            await pubsub.aclose()
 
     async def publish_ui_results(self, session_id: str) -> None:
         r = await self._get_redis()
@@ -176,6 +175,7 @@ class RemyRedisRegistry:
             return message is not None
         finally:
             await pubsub.unsubscribe(f"remy:channel:ui_results:{session_id}")
+            await pubsub.aclose()
 
     async def publish_resume(self, session_id: str) -> None:
         r = await self._get_redis()
@@ -194,3 +194,4 @@ class RemyRedisRegistry:
             return message is not None
         finally:
             await pubsub.unsubscribe(f"remy:channel:resume:{session_id}")
+            await pubsub.aclose()
