@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 """Overdue HITL claim warning system.
 
 Finds pending (undecided) HITL claims whose creation time exceeds a
@@ -7,6 +5,7 @@ configurable warning threshold.  Optionally escalates claims that exceed
 a longer escalation threshold.
 """
 
+from __future__ import annotations
 
 import logging
 import uuid
