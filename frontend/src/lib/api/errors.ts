@@ -20,25 +20,25 @@ export interface FetchErrorGroupsParams {
 
 export async function fetchErrorGroups(params: FetchErrorGroupsParams = {}): Promise<ErrorListResponse> {
   return throwOnError(await api.GET('/api/v1/errors', {
-    params: { query: params as any },
-  }))
+    params: { query: params as unknown as Record<string, unknown> },
+  })) as ErrorListResponse
 }
 
 export async function fetchErrorGroup(id: string): Promise<ErrorGroupDetail> {
   return throwOnError(await api.GET('/api/v1/errors/{error_id}', {
     params: { path: { error_id: id } },
-  }))
+  })) as ErrorGroupDetail
 }
 
 export async function updateErrorGroup(id: string, body: { status?: string; assigned_to?: string }): Promise<ErrorGroupDetail> {
   return throwOnError(await api.PATCH('/api/v1/errors/{error_id}', {
     params: { path: { error_id: id } },
-    body: body as any,
-  }))
+    body: body as unknown as Record<string, unknown>,
+  })) as ErrorGroupDetail
 }
 
 export async function fetchErrorGroupEvents(id: string, params: { limit?: number; offset?: number } = {}): Promise<ErrorEventListResponse> {
   return throwOnError(await api.GET('/api/v1/errors/{error_id}/events', {
-    params: { path: { error_id: id }, query: params as any },
-  }))
+    params: { path: { error_id: id }, query: params as unknown as Record<string, unknown> },
+  })) as ErrorEventListResponse
 }
