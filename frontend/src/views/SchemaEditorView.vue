@@ -44,13 +44,14 @@
       </div>
 
       <div class="border-t p-4">
-        <button
+        <Button
+          variant="default"
+          class="w-full"
           data-testid="schema-editor-new"
-          class="w-full rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90"
           @click="createNewSchema"
         >
           {{ $t('views.SchemaEditorView.new_schema') }}
-        </button>
+        </Button>
       </div>
     </aside>
 
@@ -64,14 +65,14 @@
           <header class="flex items-center justify-between">
             <PageHeader :title="isNew ? $t('views.SchemaEditorView.new_schema_title') : $t('views.SchemaEditorView.edit_schema_title')" :subtitle="isNew ? $t('views.SchemaEditorView.define_new_schema') : schemaName" />
             <div class="flex items-center gap-2">
-              <button
+              <Button
+                variant="default"
                 data-testid="schema-editor-save"
                 :disabled="saving || !isValid"
-                class="rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
                 @click="saveSchema"
               >
                 {{ saving ? $t('views.SchemaEditorView.saving') : $t('views.SchemaEditorView.save') }}
-              </button>
+              </Button>
               <button
                 data-testid="schema-editor-cancel"
                 class="rounded-lg border border-input bg-background px-4 py-2 text-sm font-medium hover:bg-accent"
@@ -138,13 +139,14 @@
               <section class="rounded-lg border bg-card p-6 shadow-sm">
                 <div class="mb-4 flex items-center justify-between">
                   <h2 class="text-base font-semibold">{{ $t('views.SchemaEditorView.fields') }}</h2>
-                  <button
+                  <Button
+                    variant="default"
+                    size="sm"
                     data-testid="schema-editor-add-field"
-                    class="rounded-lg bg-primary px-3 py-1.5 text-xs font-medium text-primary-foreground hover:bg-primary/90"
                     @click="addField"
                   >
                     {{ $t('views.SchemaEditorView.add_field') }}
-                  </button>
+                  </Button>
                 </div>
 
                 <div v-if="fields.length === 0" class="py-4 text-center text-sm text-muted-foreground">
@@ -330,6 +332,7 @@ import { formatDateShort } from '../lib/formatDate'
 import FeatureGate from '../components/FeatureGate.vue'
 import PageHeader from '../components/shared/PageHeader.vue'
 import PageTabs from "../components/PageTabs.vue"
+import { Button } from '@/components/ui/button'
 
 const { t } = useI18n()
 

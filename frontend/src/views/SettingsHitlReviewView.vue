@@ -166,14 +166,15 @@
                 <h3 class="mb-2 text-sm font-semibold text-muted-foreground uppercase tracking-wider">Actions</h3>
                 <div class="space-y-3">
                   <div v-if="gateStatus(gate) === 'pending'">
-                    <button
+                    <Button
                       :disabled="claiming[expandKey(gate)]"
+                      variant="default"
+                      class="w-full"
                       data-testid="hitl-review-claim"
-                      class="w-full rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
                       @click="claimGate(gate)"
                     >
                       {{ claiming[expandKey(gate)] ? 'Claiming...' : 'Claim Gate' }}
-                    </button>
+                    </Button>
                   </div>
                   <div v-if="gateStatus(gate) === 'claimed'">
                     <div class="space-y-2">
@@ -241,6 +242,7 @@ import ErrorAlert from '../components/shared/ErrorAlert.vue'
 import { usePlanStore } from '../stores/planStore'
 import { formatDateShortWithTime } from '../lib/formatDate'
 import { shortId } from '../utils/format'
+import { Button } from '@/components/ui/button'
 
 const planStore = usePlanStore()
 
