@@ -2344,3 +2344,5 @@ async def notify_importers_of_update(
                     _log.exception("notify_importers_of_update: failed to update copy %s", copy.id)
     except ProgrammingError:
         _log.warning("notify_importers_of_update failed (DB not migrated): %s", primitive_id)
+    except Exception:
+        _log.exception("notify_importers_of_update: unexpected error for primitive %s", primitive_id)
