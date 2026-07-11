@@ -1,6 +1,7 @@
 """Health check endpoints — liveness, readiness, and dependency health."""
 
 import asyncio
+import contextlib
 import time
 from datetime import UTC, datetime
 from typing import Literal
@@ -79,10 +80,8 @@ async def _check_redis() -> CheckResult:
         )
     finally:
         if r is not None:
-            try:
+            with contextlib.suppress(Exception):
                 await r.aclose()
-            except Exception:
-                pass
 
 
 async def _check_checkpointer() -> CheckResult:
@@ -100,10 +99,8 @@ async def _check_checkpointer() -> CheckResult:
                 detail=f"checkpoint_migrations table not accessible: {exc}",
             )
         finally:
-            try:
+            with contextlib.suppress(Exception):
                 await conn.close()
-            except Exception:
-                pass
         return CheckResult(status="ok", detail="checkpointer schema accessible")
     except Exception as exc:
         return CheckResult(status="degraded", detail=str(exc) or "checkpointer check failed")
