@@ -1,5 +1,6 @@
 import { defineStore } from 'pinia'
 import { ref } from 'vue'
+import { useStorage } from '@vueuse/core'
 import i18n, { detectBrowserLocale, isSupportedLocale, loadLocaleMessages, type SupportedLocale, SUPPORTED_LOCALES } from '../i18n'
 import { api, getAccessToken } from '../lib/api/client'
 import { withTimeout } from '../lib/asyncUtils'
@@ -11,14 +12,11 @@ export const useLocaleStore = defineStore('locale', () => {
   const locale = ref<SupportedLocale>('en-US')
   const initialized = ref(false)
   const error = ref<string | null>(null)
+  const stored = useStorage<string>(STORAGE_KEY, DEFAULT_LOCALE)
   let initPromise: Promise<void> | null = null
 
   function persist(code: SupportedLocale): void {
-    try {
-      localStorage.setItem(STORAGE_KEY, code)
-    } catch (err) {
-      console.warn('[locale] Failed to persist locale to localStorage', err)
-    }
+    stored.value = code
   }
 
   async function setLocale(code: SupportedLocale): Promise<void> {
@@ -81,13 +79,9 @@ export const useLocaleStore = defineStore('locale', () => {
 
       // 2. Try localStorage
       if (detected === DEFAULT_LOCALE) {
-        try {
-          const stored = localStorage.getItem(STORAGE_KEY)
-          if (stored && isSupportedLocale(stored)) {
-            detected = stored
-          }
-        } catch (err) {
-          console.warn('[locale] Failed to read locale from localStorage', err)
+        const storedVal = stored.value
+        if (storedVal && isSupportedLocale(storedVal)) {
+          detected = storedVal
         }
       }
 
