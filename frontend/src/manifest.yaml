@@ -667,6 +667,43 @@ routes:
         <<: *community
         deprecated: false
 
+    /environment-profiles:
+        name: environment-profiles
+        breadcrumb: Environment Profiles
+        parent: /
+        product_map:
+        sidebar_group: system
+        sidebar_order: 8
+        type: list_page
+        <<: *team
+        deprecated: false
+        exact: true
+
+    /environment-profiles/new:
+        name: environment-profiles-new
+        breadcrumb: New Profile
+        parent: /environment-profiles
+        product_map:
+        sidebar_group:
+        sidebar_order:
+        type: form_page
+        <<: *team
+        deprecated: false
+
+    /environment-profiles/:id/edit:
+        name: environment-profiles-edit
+        breadcrumb: Edit Profile
+        parent: /environment-profiles
+        product_map:
+        sidebar_group:
+        sidebar_order:
+        type: form_page
+        pattern: /environment-profiles/:id/edit
+        dynamic_params:
+        -   id
+        <<: *team
+        deprecated: false
+
     /admin/my-profile:
         name: my-profile
         breadcrumb: My Profile
