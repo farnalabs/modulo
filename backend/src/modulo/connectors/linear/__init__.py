@@ -2,6 +2,7 @@
 
 import asyncio
 import json
+import random
 from typing import Any
 
 import httpx
@@ -199,13 +200,23 @@ query($teamId: String!) {
 
 
 def _parse_retry_after(response: httpx.Response) -> float | None:
-    value = response.headers.get("Retry-After") or response.headers.get("retry-after")
+    value = response.headers.get("Retry-After")
     if value:
         try:
             return float(value)
         except (ValueError, TypeError):
             pass
     return None
+
+
+def _compute_delay(attempt: int, response: httpx.Response | None = None) -> float:
+    """Compute retry delay with exponential backoff, jitter, and optional Retry-After."""
+    if response:
+        retry_after = _parse_retry_after(response)
+        if retry_after is not None:
+            return min(retry_after, _MAX_DELAY)
+    jitter = random.uniform(0, 1)  # noqa: S311 — non-crypto jitter for retry backoff
+    return min(_BASE_DELAY * (2**attempt) + jitter, _MAX_DELAY)
 
 
 class LinearConnector(ConnectorBase):
@@ -258,38 +269,34 @@ class LinearConnector(ConnectorBase):
                     if r.status_code == 304:
                         raise ValueError("Linear API returned 304 Not Modified — resource unchanged")
                     if r.status_code in _RETRYABLE_STATUSES and attempt < _MAX_RETRIES:
-                        retry_after = _parse_retry_after(r)
-                        delay = (
-                            min(retry_after, _MAX_DELAY) if retry_after else min(_BASE_DELAY * (2**attempt), _MAX_DELAY)
-                        )
+                        delay = _compute_delay(attempt, r)
                         await asyncio.sleep(delay)
                         continue
                     r.raise_for_status()
             except httpx.HTTPStatusError as exc:
                 if exc.response.status_code in _RETRYABLE_STATUSES and attempt < _MAX_RETRIES:
-                    retry_after = _parse_retry_after(exc.response)
-                    delay = min(retry_after, _MAX_DELAY) if retry_after else min(_BASE_DELAY * (2**attempt), _MAX_DELAY)
+                    delay = _compute_delay(attempt, exc.response)
                     await asyncio.sleep(delay)
                     last_exc = exc
                     continue
                 raise ValueError(f"Linear API HTTP {exc.response.status_code}: {exc.response.text[:200]}") from exc
             except httpx.TimeoutException as exc:
                 if attempt < _MAX_RETRIES:
-                    delay = min(_BASE_DELAY * (2**attempt), _MAX_DELAY)
+                    delay = _compute_delay(attempt)
                     await asyncio.sleep(delay)
                     last_exc = exc
                     continue
                 raise ValueError("Linear API timeout") from exc
             except httpx.ConnectError as exc:
                 if attempt < _MAX_RETRIES:
-                    delay = min(_BASE_DELAY * (2**attempt), _MAX_DELAY)
+                    delay = _compute_delay(attempt)
                     await asyncio.sleep(delay)
                     last_exc = exc
                     continue
                 raise ValueError("Linear API connection error") from exc
             except httpx.ProtocolError as exc:
                 if attempt < _MAX_RETRIES:
-                    delay = min(_BASE_DELAY * (2**attempt), _MAX_DELAY)
+                    delay = _compute_delay(attempt)
                     await asyncio.sleep(delay)
                     last_exc = exc
                     continue
