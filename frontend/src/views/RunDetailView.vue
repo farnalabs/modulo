@@ -8,7 +8,7 @@
       <header class="flex flex-wrap items-center justify-between gap-4">
         <div>
           <div class="flex items-center gap-3">
-            <h1 class="text-2xl font-semibold tracking-tight">{{ $t('views.RunDetailView.run_detail') }}</h1>
+            <PageHeader :title="$t('views.RunDetailView.run_detail')" />
             <span :class="statusBadgeClass" class="capitalize">{{ run.status }}</span>
           </div>
           <p class="mt-1 text-sm text-muted-foreground">
@@ -224,6 +224,7 @@ import { useRoute } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import { api } from '../lib/api/client'
 import type { components } from '../lib/api/client'
+import PageHeader from '../components/shared/PageHeader.vue'
 import BackLink from '../components/BackLink.vue'
 import LoadingSpinner from '../components/shared/LoadingSpinner.vue'
 import ErrorAlert from '../components/shared/ErrorAlert.vue'

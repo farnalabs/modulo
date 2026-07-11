@@ -3,12 +3,7 @@
     <LoadingSpinner v-if="loading" />
     <ErrorAlert v-else-if="error" :message="error" />
     <template v-else>
-      <header>
-        <h1 class="text-2xl font-semibold tracking-tight">{{ $t('views.AgentOutputDiffView.agent_output_diff') }}</h1>
-        <p class="mt-1 text-muted-foreground">
-          Compare agent outputs across two pipeline runs
-        </p>
-      </header>
+      <PageHeader :title="$t('views.AgentOutputDiffView.agent_output_diff')" subtitle="Compare agent outputs across two pipeline runs" />
 
       <div class="flex flex-wrap items-end gap-4 rounded-lg border bg-card p-6">
         <div class="flex flex-col gap-1.5">
@@ -152,6 +147,7 @@ import { api } from '../lib/api/client'
 import type { components } from '../lib/api/client'
 import LoadingSpinner from '../components/shared/LoadingSpinner.vue'
 import ErrorAlert from '../components/shared/ErrorAlert.vue'
+import PageHeader from '../components/shared/PageHeader.vue'
 import { Button } from '@/components/ui/button'
 import { formatApiError } from '../lib/api/formatError'
 
@@ -270,4 +266,3 @@ async function compare() {
   }
 }
 </script>
-

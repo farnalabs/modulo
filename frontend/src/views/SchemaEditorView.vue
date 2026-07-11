@@ -65,10 +65,7 @@
       <template v-else>
         <div class="space-y-6 p-6">
           <header class="flex items-center justify-between">
-            <div>
-              <h1 class="text-2xl font-semibold tracking-tight">{{ isNew ? $t('views.SchemaEditorView.new_schema_title') : $t('views.SchemaEditorView.edit_schema_title') }}</h1>
-              <p class="mt-0.5 text-sm text-muted-foreground">{{ isNew ? $t('views.SchemaEditorView.define_new_schema') : schemaName }}</p>
-            </div>
+            <PageHeader :title="isNew ? $t('views.SchemaEditorView.new_schema_title') : $t('views.SchemaEditorView.edit_schema_title')" :subtitle="isNew ? $t('views.SchemaEditorView.define_new_schema') : schemaName" />
             <div class="flex items-center gap-2">
               <button
                 data-testid="schema-editor-save"
@@ -332,6 +329,7 @@ import { formatApiError } from '../lib/api/formatError'
 import type { components } from '../lib/api/client'
 import LoadingSpinner from '../components/shared/LoadingSpinner.vue'
 import FeatureGate from '../components/FeatureGate.vue'
+import PageHeader from '../components/shared/PageHeader.vue'
 import PageTabs from "../components/PageTabs.vue"
 
 const { t } = useI18n()
@@ -772,4 +770,3 @@ onMounted(() => {
   }
 })
 </script>
-

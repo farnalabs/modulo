@@ -9,12 +9,7 @@
     <LoadingSpinner v-if="loading" />
     <ErrorAlert v-else-if="error" :message="error" />
     <template v-else>
-      <header>
-        <h1 class="text-2xl font-semibold tracking-tight">{{ $t('views.ABTestModelsView.ab_test_models') }}</h1>
-        <p class="mt-1 text-muted-foreground">
-          Compare model backends side by side with weighted A/B testing — eval scores, costs, and token usage
-        </p>
-      </header>
+      <PageHeader :title="$t('views.ABTestModelsView.ab_test_models')" subtitle="Compare model backends side by side with weighted A/B testing â€” eval scores, costs, and token usage" />
 
       <div class="flex flex-wrap items-center gap-4">
         <label class="flex items-center gap-2 text-sm">
@@ -226,7 +221,7 @@
                       {{ s.passRate.toFixed(0) }}%
                       <span class="font-normal opacity-70">({{ s.passedCount }}/{{ s.totalEvals }})</span>
                     </span>
-                    <span v-else class="text-xs text-muted-foreground">—</span>
+                    <span v-else class="text-xs text-muted-foreground">ï¿½</span>
                   </td>
                 </tr>
                 <tr class="border-b hover:bg-muted/30">
@@ -237,7 +232,7 @@
                     class="table-cell table-cell-numeric font-mono text-xs"
                   >
                     <span v-if="s.totalCost !== null">${{ Number(s.totalCost).toFixed(6) }}</span>
-                    <span v-else class="text-muted-foreground">—</span>
+                    <span v-else class="text-muted-foreground">ï¿½</span>
                   </td>
                 </tr>
                 <tr class="hover:bg-muted/30">
@@ -248,7 +243,7 @@
                     class="table-cell table-cell-numeric font-mono text-xs"
                   >
                     <span v-if="s.tokenTotal !== null">{{ s.tokenTotal.toLocaleString() }}</span>
-                    <span v-else class="text-muted-foreground">—</span>
+                    <span v-else class="text-muted-foreground">ï¿½</span>
                   </td>
                 </tr>
               </tbody>
@@ -298,6 +293,7 @@ import type { components } from '../lib/api/client'
 import LoadingSpinner from '../components/shared/LoadingSpinner.vue'
 import ErrorAlert from '../components/shared/ErrorAlert.vue'
 import PageTabs from "../components/PageTabs.vue"
+import PageHeader from '../components/shared/PageHeader.vue'
 import { Button } from '@/components/ui/button'
 import { shortId } from '../utils/format'
 import { formatApiError } from '../lib/api/formatError'
@@ -804,4 +800,3 @@ function delay(ms: number): Promise<void> {
   return new Promise(resolve => setTimeout(resolve, ms))
 }
 </script>
-

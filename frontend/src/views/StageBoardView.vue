@@ -1,10 +1,7 @@
 <template>
   <div class="mx-auto space-y-6 p-6">
   <header class="flex flex-wrap items-center justify-between gap-4">
-    <div>
-      <h1 class="text-2xl font-semibold tracking-tight">Stage Board</h1>
-      <p class="mt-1 text-muted-foreground">Organise pipelines into stages � track progress as pipelines move through development, testing, and production phases. Drag pipelines between stages to update their lifecycle status.</p>
-    </div>
+    <PageHeader title="Stage Board" subtitle="Organise pipelines into stages — track progress as pipelines move through development, testing, and production phases. Drag pipelines between stages to update their lifecycle status." />
     <div class="flex items-center gap-2">
       <button
         data-testid="stage-board-create-btn"
@@ -425,6 +422,7 @@
 
 <script setup lang="ts">
 import { ref, computed, onMounted } from 'vue'
+import PageHeader from '../components/shared/PageHeader.vue'
 import { useApi } from '../composables/useApi'
 import { usePlanStore } from '../stores/planStore'
 import { formatApiError } from '../lib/api/formatError'

@@ -9,10 +9,7 @@
     ]" />
 
     <div class="page-narrow">
-    <header>
-      <h1 class="text-2xl font-semibold tracking-tight">{{ $t('views.EvalEditorView.eval_editor') }}</h1>
-      <p class="mt-1 text-muted-foreground">{{ $t('views.EvalEditorView.create_and_manage_eval_definitions') }}</p>
-    </header>
+    <PageHeader :title="$t('views.EvalEditorView.eval_editor')" :subtitle="$t('views.EvalEditorView.create_and_manage_eval_definitions')" />
 
     <LoadingSpinner v-if="loading" />
 
@@ -276,6 +273,7 @@ import { formatApiError } from '../lib/api/formatError'
 import EmptyState from '../components/shared/EmptyState.vue'
 import { usePlanStore } from '../stores/planStore'
 import FeatureGate from '../components/FeatureGate.vue'
+import PageHeader from '../components/shared/PageHeader.vue'
 import { Button } from '@/components/ui/button'
 import PageTabs from "../components/PageTabs.vue"
 

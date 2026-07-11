@@ -10,12 +10,7 @@
     <LoadingSpinner v-if="loading" />
     <ErrorAlert v-else-if="error" :message="error" />
     <template v-else>
-      <header>
-        <h1 class="text-2xl font-semibold tracking-tight">{{ $t('views.variantCompare.title') }}</h1>
-        <p class="mt-1 text-muted-foreground">
-          {{ $t('views.variantCompare.subtitle') }}
-        </p>
-      </header>
+      <PageHeader :title="$t('views.variantCompare.title')" :subtitle="$t('views.variantCompare.subtitle')" />
 
       <div class="flex flex-wrap items-center gap-4">
         <select
@@ -41,7 +36,7 @@
         </button>
 
         <span v-if="selectedGroup" class="text-xs text-muted-foreground">
-          {{ $t('views.variantCompare.runs', { count: selectedGroup.run_count }) }} ·
+          {{ $t('views.variantCompare.runs', { count: selectedGroup.run_count }) }} ï¿½
           {{ selectedGroup.selection_strategy }}
         </span>
       </div>
@@ -101,7 +96,7 @@
                       <span
                         v-else
                         class="text-xs text-muted-foreground"
-                      >—</span>
+                      >ï¿½</span>
                     </div>
                     <div v-if="getNodeEvalResults(node, v.name).length > 0" class="flex flex-wrap gap-1">
                       <span
@@ -110,7 +105,7 @@
                         class="inline-flex items-center gap-0.5 rounded bg-muted px-1.5 py-0.5 text-[10px] tabular-nums text-muted-foreground"
                         :title="er.detail ?? undefined"
                       >
-                        {{ er.score !== null ? er.score.toFixed(2) : '—' }}
+                        {{ er.score !== null ? er.score.toFixed(2) : 'ï¿½' }}
                       </span>
                     </div>
                   </div>
@@ -144,7 +139,7 @@
                       >
                         {{ s.passRate.toFixed(0) }}%
                       </span>
-                      <span v-else class="text-muted-foreground">—</span>
+                      <span v-else class="text-muted-foreground">ï¿½</span>
                       <span class="text-muted-foreground">{{ $t('views.variantCompare.pass') }}</span>
                     </div>
                     <div v-if="s.totalCost !== null" class="text-muted-foreground">
@@ -206,13 +201,13 @@
           <div class="grid grid-cols-1 gap-4 md:grid-cols-2">
             <div class="overflow-auto rounded-lg border bg-card">
               <div class="border-b bg-muted/50 px-3 py-2 text-xs font-medium text-muted-foreground">
-                {{ diffVarA || '—' }}
+                {{ diffVarA || 'ï¿½' }}
               </div>
               <pre class="overflow-x-auto p-3 text-xs leading-relaxed"><code>{{ diffContentA }}</code></pre>
             </div>
             <div class="overflow-auto rounded-lg border bg-card">
               <div class="border-b bg-muted/50 px-3 py-2 text-xs font-medium text-muted-foreground">
-                {{ diffVarB || '—' }}
+                {{ diffVarB || 'ï¿½' }}
               </div>
               <pre class="overflow-x-auto p-3 text-xs leading-relaxed"><code>{{ diffContentB }}</code></pre>
             </div>
@@ -237,6 +232,7 @@ import { api } from '../lib/api/client'
 import type { components } from '../lib/api/client'
 import LoadingSpinner from '../components/shared/LoadingSpinner.vue'
 import ErrorAlert from '../components/shared/ErrorAlert.vue'
+import PageHeader from '../components/shared/PageHeader.vue'
 import PageTabs from "../components/PageTabs.vue"
 import { formatApiError } from '../lib/api/formatError'
 

@@ -1,10 +1,7 @@
 ﻿<template>
   <div class="page-wide">
     <DashboardNotificationsPanel class="mb-4" />
-    <header>
-      <h1 data-testid="dashboard-title" class="text-2xl font-semibold tracking-tight">{{ $t('views.DashboardView.dashboard') }}</h1>
-      <p class="mt-1 text-muted-foreground">{{ $t('views.DashboardView.overview_of_your_organisations_pipelines_and_runs') }}</p>
-    </header>
+    <PageHeader :title="$t('views.DashboardView.dashboard')" :subtitle="$t('views.DashboardView.overview_of_your_organisations_pipelines_and_runs')" data-testid="dashboard-title" />
 
     <!-- Loading skeleton grid -->
     <div v-if="loading" class="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
@@ -309,6 +306,7 @@
 import { ref, computed, onMounted, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { Button } from '@/components/ui/button'
+import PageHeader from '../components/shared/PageHeader.vue'
 import DashboardNotificationsPanel from '../components/DashboardNotificationsPanel.vue'
 import { usePlanStore } from '../stores/planStore'
 import { useDashboardStore } from '../stores/dashboard'

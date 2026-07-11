@@ -1,9 +1,6 @@
 ﻿<template>
   <div class="page-narrow">
-    <header>
-      <h1 class="text-2xl font-semibold tracking-tight">{{ $t('views.OnboardingWizard.sdlc_onboarding') }}</h1>
-      <p class="mt-1 text-muted-foreground">{{ $t('views.OnboardingWizard.guided_setup_wizard_mdash_connect_tools_infer_schemas_browse') }}</p>
-    </header>
+    <PageHeader :title="$t('views.OnboardingWizard.sdlc_onboarding')" :subtitle="$t('views.OnboardingWizard.guided_setup_wizard_mdash_connect_tools_infer_schemas_browse')" />
 
     <div class="flex items-center justify-center gap-0">
       <template v-for="(_, i) in steps" :key="i">
@@ -402,6 +399,7 @@
 import { ref, reactive, computed, onMounted, watch } from 'vue'
 import { api } from '../lib/api/client'
 import type { components } from '../lib/api/client'
+import PageHeader from '../components/shared/PageHeader.vue'
 import { formatApiError } from '../lib/api/formatError'
 
 type ConnectorItem = components['schemas']['ConnectorItem']
@@ -696,4 +694,3 @@ onMounted(() => {
   loadConnectors()
 })
 </script>
-
