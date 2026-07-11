@@ -362,6 +362,67 @@ async def _seed_sso_providers(settings: Settings) -> None:
             )
 
 
+async def _seed_environment_profiles(settings: Settings) -> None:
+    """Seed a default modulo-dev EnvironmentProfile for the default org.
+
+    Creates a reusable sandbox profile for the dogfood pipeline. Skips if
+    a profile named 'modulo-dev' already exists.
+    """
+    from sqlalchemy import select
+
+    from modulo.api.dependencies import get_or_create_engine, get_or_create_session_factory
+    from modulo.db.crud.environment_profile import create_environment_profile
+    from modulo.db.models.account import Account
+    from modulo.db.models.environment_profile import EnvironmentProfile
+    from modulo.db.models.organisation import Organisation
+
+    engine = get_or_create_engine(settings)
+    factory = get_or_create_session_factory(engine)
+
+    async with factory() as session, session.begin():
+        org_result = await session.execute(select(Organisation).order_by(Organisation.created_at).limit(1))
+        org = org_result.scalar_one_or_none()
+        if org is None:
+            logger.warning("startup.no_org_for_env_profile_seed")
+            return
+
+        existing = await session.execute(
+            select(EnvironmentProfile).where(
+                EnvironmentProfile.organisation_id == org.id,
+                EnvironmentProfile.name == "modulo-dev",
+            )
+        )
+        if existing.scalar_one_or_none() is not None:
+            logger.info("startup.env_profile_modulo_dev_exists")
+            return
+
+        admin_result = await session.execute(
+            select(Account).where(Account.email == "admin").order_by(Account.created_at).limit(1)
+        )
+        admin = admin_result.scalar_one_or_none()
+        if admin is None:
+            admin_result = await session.execute(select(Account).order_by(Account.created_at).limit(1))
+            admin = admin_result.scalar_one_or_none()
+            if admin is None:
+                logger.warning("startup.no_admin_for_env_profile_seed")
+                return
+
+        await create_environment_profile(
+            session,
+            org_id=org.id,
+            name="modulo-dev",
+            description="Default sandbox for Modulo dogfood development. Python 3.12, git, pip.",
+            provider_type="local_docker",
+            image_ref="python:3.12-slim",
+            capabilities=["git", "python>=3.12", "shell", "network:github.com", "network:pypi.org"],
+            network_policy="outbound",
+            initialisation_strategy="git_clone",
+            persistence_policy="ephemeral",
+            account_id=admin.id,
+        )
+        logger.info("startup.env_profile_modulo_dev_seeded")
+
+
 async def _init_checkpointer(conn_string: str, fernet_key: str, fernet_key_old: str = "") -> None:
     """Ensure the langgraph.* checkpointer schema exists on startup."""
     import uuid
@@ -473,6 +534,9 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
 
     # Seed SSO providers from deprecated env vars into the DB table (idempotent).
     await _seed_sso_providers(settings)
+
+    # Seed the default modulo-dev EnvironmentProfile for the dogfood pipeline.
+    await _seed_environment_profiles(settings)
 
     # Initialise the LangGraph checkpointer schema (langgraph.* tables).
     await _init_checkpointer(
