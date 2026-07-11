@@ -18,6 +18,7 @@ from sqlalchemy import case, func, select
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from modulo.core.reports.scheduler import _deliver_to_urls
 from modulo.db.models.daily_run_count import OrgDailyRunCount
 from modulo.db.models.eval_result import EvalResult
 
@@ -376,8 +377,6 @@ async def deliver_quality_report(
 
     Returns a list of delivery results with keys: url, status, status_code, error.
     """
-    from modulo.core.reports.scheduler import _deliver_to_urls
-
     slack_blocks_str = report_data if isinstance(report_data, str) else format_slack_message(report_data)
     payload = {"blocks": json.loads(slack_blocks_str)}
     return await _deliver_to_urls(
