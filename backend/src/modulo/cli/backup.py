@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 """modulo backup/restore: CLI for self-hosted backup and disaster recovery.
 
 Usage:
@@ -7,6 +5,7 @@ Usage:
   modulo restore <backup-dir> [--db-url <url>] [--yes] [--previous-fernet-key <key>]
 """
 
+from __future__ import annotations
 
 import hashlib
 import json
@@ -231,9 +230,7 @@ def _export_credentials_references_sync(raw_url: str) -> dict[str, list[dict[str
         for table in _CREDENTIALS_TABLES:
             rows: list[dict[str, Any]] = []
             with conn.cursor() as cur:
-                if table not in _CREDENTIALS_TABLES:
-                    raise RuntimeError(f"Unexpected credentials table: {table}")
-                sql = f"SELECT id, organisation_id, name, credentials_ciphertext FROM {table} ORDER BY id"  # noqa: S608 — guarded by whitelist check above
+                sql = f"SELECT id, organisation_id, name, credentials_ciphertext FROM {table} ORDER BY id"  # noqa: S608 — guarded by whitelist in loop source
                 cur.execute(sql)
                 for row in cur:
                     org_id = row.get("organisation_id")
