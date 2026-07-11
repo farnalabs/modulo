@@ -108,6 +108,8 @@ const LifecycleMapEditorView = () => import('../views/lifecycle-map/LifecycleMap
 const ModelBackendSetupView = () => import('../views/setup/ModelBackendSetupView.vue')
 const LifecycleMapList = () => import('../views/lifecycle-map/LifecycleMapList.vue')
 const LifecycleMapView = () => import('../views/lifecycle-map/LifecycleMapView.vue')
+const EnvironmentProfileList = () => import('../views/environment-profiles/EnvironmentProfileList.vue')
+const EnvironmentProfileForm = () => import('../views/environment-profiles/EnvironmentProfileForm.vue')
 
 const router = createRouter({
   history: createWebHistory(),
@@ -443,6 +445,28 @@ const router = createRouter({
       path: '/lifecycle-maps/new',
       name: 'lifecycle-map-new',
       redirect: '/lifecycle-maps',
+    },
+    {
+      path: '/environment-profiles',
+      name: 'environment-profiles',
+      component: EnvironmentProfileList,
+    },
+    {
+      path: '/environment-profiles/new',
+      name: 'environment-profiles-new',
+      component: EnvironmentProfileForm,
+      meta: { breadcrumb: 'New Profile', parent: 'environment-profiles' },
+    },
+    {
+      path: '/environment-profiles/:id',
+      redirect: (to) => ({ path: `/environment-profiles/${to.params.id}/edit` }),
+    },
+    {
+      path: '/environment-profiles/:id/edit',
+      name: 'environment-profiles-edit',
+      component: EnvironmentProfileForm,
+      meta: { breadcrumb: 'Edit Profile', parent: 'environment-profiles' },
+      props: true,
     },
     {
       path: '/:pathMatch(.*)*',

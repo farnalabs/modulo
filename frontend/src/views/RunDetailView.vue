@@ -176,6 +176,35 @@
         </table>
       </section>
 
+      <!-- Workspace Lease -->
+      <section v-if="workspaceLease" class="rounded-lg border bg-card p-6">
+        <h2 class="mb-3 text-base font-semibold tracking-tight">Workspace</h2>
+        <div class="space-y-2 text-sm">
+          <div class="flex items-center gap-2">
+            <span class="font-medium">Status:</span>
+            <span
+              class="inline-flex items-center gap-1.5 rounded-full px-2.5 py-0.5 text-xs font-medium"
+              :class="workspaceStatusClass"
+            >
+              <span class="h-1.5 w-1.5 rounded-full" :class="workspaceDotClass" />
+              {{ workspaceLease.status }}
+            </span>
+          </div>
+          <div v-if="workspaceLease.sandbox_id" class="flex items-center gap-2">
+            <span class="font-medium">Sandbox:</span>
+            <code class="rounded bg-muted px-1.5 py-0.5 font-mono text-xs">{{ workspaceLease.sandbox_id }}</code>
+          </div>
+          <div v-if="workspaceLease.duration_seconds != null">
+            <span class="font-medium">Duration:</span>
+            <span class="ml-1 tabular-nums">{{ formatDuration(workspaceLease.duration_seconds) }}</span>
+          </div>
+          <div v-if="workspaceLease.error_message" class="text-destructive">
+            <span class="font-medium">Error:</span>
+            <span class="ml-1">{{ workspaceLease.error_message }}</span>
+          </div>
+        </div>
+      </section>
+
       <!-- Total Run Cost -->
       <section v-if="run.total_cost_usd != null" class="rounded-lg border bg-card p-6">
         <div class="flex items-center justify-between">
@@ -259,6 +288,13 @@ interface NodeEntry {
   io: { input: unknown; output: unknown } | null
 }
 
+interface WorkspaceLeaseInfo {
+  status: string
+  sandbox_id?: string
+  duration_seconds?: number
+  error_message?: string
+}
+
 const route = useRoute()
 const { t, locale } = useI18n()
 const loading = ref(true)
@@ -274,6 +310,7 @@ const pollInterval = ref<ReturnType<typeof setInterval> | null>(null)
 const promptLoading = ref(new Set<string>())
 const revealedPrompts = ref<Record<string, null | { prompt: string; messages: { role: string; content: string }[]; tokenCount: number; promptAlwaysVisible: boolean }>>({})
 const selectedPrompt = ref<{ nodeName: string; prompt: string; tokenCount: number | null } | null>(null)
+const workspaceLease = ref<WorkspaceLeaseInfo | null>(null)
 
 const shareSummary = computed(() => {
   const r = run.value
@@ -470,6 +507,38 @@ const formattedOutput = computed(() => {
   return JSON.stringify(output, null, 2)
 })
 
+const workspaceStatusClass = computed(() => {
+  const s = workspaceLease.value?.status ?? ''
+  const map: Record<string, string> = {
+    running: 'bg-primary/10 text-primary',
+    pending: 'bg-warning/10 text-warning',
+    completed: 'bg-success/10 text-success',
+    failed: 'bg-destructive/10 text-destructive',
+    expired: 'bg-muted text-muted-foreground',
+  }
+  return map[s] ?? 'bg-muted text-muted-foreground'
+})
+
+const workspaceDotClass = computed(() => {
+  const s = workspaceLease.value?.status ?? ''
+  const map: Record<string, string> = {
+    running: 'bg-primary',
+    pending: 'bg-warning',
+    completed: 'bg-success',
+    failed: 'bg-destructive',
+    expired: 'bg-muted-foreground',
+  }
+  return map[s] ?? 'bg-muted-foreground'
+})
+
+function formatDuration(seconds: number): string {
+  if (seconds < 60) return `${seconds}s`
+  if (seconds < 3600) return `${Math.floor(seconds / 60)}m ${seconds % 60}s`
+  const h = Math.floor(seconds / 3600)
+  const m = Math.floor((seconds % 3600) / 60)
+  return `${h}h ${m}m`
+}
+
 async function copyOutput() {
   const text = formattedOutput.value
   if (!text) return
@@ -529,6 +598,19 @@ async function fetchRunData(runId: string) {
   }
 }
 
+async function fetchWorkspaceLease(runId: string) {
+  try {
+    const { data } = await api.GET('/api/v1/runs/{run_id}/workspace-lease', {
+      params: { path: { run_id: runId } },
+    })
+    if (data) {
+      workspaceLease.value = data as unknown as WorkspaceLeaseInfo
+    }
+  } catch (e) {
+    console.warn('No workspace lease for this run', e)
+  }
+}
+
 function startPolling(runId: string) {
   pollInterval.value = setInterval(async () => {
     if (run.value && TERMINAL_STATUSES.includes(run.value.status)) {
@@ -549,7 +631,10 @@ onMounted(async () => {
   }
 
   try {
-    await fetchRunData(runId)
+    await Promise.all([
+      fetchRunData(runId),
+      fetchWorkspaceLease(runId),
+    ])
     if (run.value?.status === 'complete' && nodeEntries.value.length > 0) {
       const last = nodeEntries.value[nodeEntries.value.length - 1]
       expandedNodes.value.add(last.name)
