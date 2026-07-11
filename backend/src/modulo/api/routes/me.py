@@ -185,7 +185,7 @@ async def list_user_skills(
     try:
         async with session.begin():
             await set_rls_org(session, current_user.organisation_id)
-            skills = await get_user_skills(session, current_user.account_id)
+            skills = await get_user_skills(session, current_user.account_id, current_user.organisation_id)
     except ProgrammingError:
         logger.exception("routes.me")
 
