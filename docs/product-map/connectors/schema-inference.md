@@ -102,10 +102,6 @@ LLM-assisted schema draft generation from connected tool data (issue trackers, g
 - [ ] **No abstract_name inference**: PRD says inferred `abstract_name` suggestion per resource type — not implemented; only static string "Inferred from {name}"
 - [ ] **SandboxedEnvironment for LLM prompt**: PRD requires `SandboxedEnvironment` with structural separators for prompt safety — not used
 - [ ] **CRITICAL: Sample data not sanitised before LLM prompt**: raw fields are interpolated with only markdown code-fence separation; PRD requires SandboxedEnvironment with structural separators
-- [ ] **No timeout on connector sampling step (fixed: 30s timeout added)**
-- [ ] **Default sample limit is 10 (PRD says 200); code caps at 50 in prompt builder, 100 via API max**
-- [ ] **No rare-field exclusion based on <10% frequency (PRD §8.16)**
-- [ ] **No abstract_name inference**: always returns 'Inferred from {name}'
 - [ ] **No concurrency guard**: multiple concurrent inference requests per connector are not serialised
 - [ ] **No enterprise feature flag on inference endpoint**
 - [ ] **Connector-type-aware field extraction not implemented**: all connector types use the same generic prompt
@@ -115,3 +111,4 @@ LLM-assisted schema draft generation from connected tool data (issue trackers, g
 
 - 2026-07-03: Cross-cutting QA (index 111). Fixed stale checkboxes (audit event [ ]→[x], connector-type validation confirmed). Added Error Handling section (11 behaviour checkboxes covering all error paths). Added 30s timeout on connector sampling step. Added ProgrammingError→501 unit tests (infer + generate endpoints). Updated Known Gaps: removed 2 stale gaps (connector-type validation, audit event dispatch), added 9 new gaps. Created website docs stub. Status: partial (17 known gaps remain).
 - 2026-07-08: Cross-cutting QA (index 269). Fixed CRITICAL — added `try/except Exception→500` guard around `create_secrets_backend()` in both `infer_schema_endpoint` and `generate_schema_endpoint` (previously unguarded — bad Fernet key or unexpected error from `create_secrets_backend` would propagate to CatchAllMiddleware as opaque 500). Corrected 3 stale `[ ]`→`[x]` Error Handling checkboxes for schema generation (no backends→400, ProgrammingError→501, GenerationError→502). Added 2 new Error Handling checkboxes. Added `test_schema_generate_endpoint.py` to unit-tests. Added 2 new tests for Exception→500 on both endpoints. All new tests pass. Pre-existing: `test_generate_schema_generation_failure_returns_502` asserts 502 but CatchAllMiddleware returns 500 — systemic CatchAllMiddleware bug intercepting HTTPException before FastAPI's exception handler. Status: partial.
+- 2026-07-11: Round 3 improve-architecture. Removed stale Known Gap (timeout fix verified in code with `async with asyncio.timeout(30.0)`). Removed 3 duplicate gaps (sample limit, rare-field, abstract_name already documented in lines 100-102). 12 gaps remain (was 16).
