@@ -114,6 +114,7 @@ import PageHeader from '../components/shared/PageHeader.vue'
 import { Button } from '@/components/ui/button'
 import PageTabs from "../components/PageTabs.vue"
 import EmptyState from '../components/shared/EmptyState.vue'
+import { formatDateShortWithTime } from '../lib/formatDate'
 
 const planStore = usePlanStore()
 
@@ -168,7 +169,7 @@ function statusBadgeClass(status: string): string {
 
 function formatDate(dateStr: string): string {
   const d = new Date(dateStr)
-  return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })
+  return formatDateShortWithTime(d)
 }
 
 function isActionable(status: string): boolean {

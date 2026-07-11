@@ -380,6 +380,7 @@ import ErrorAlert from '../components/shared/ErrorAlert.vue'
 import OwnershipPicker from '../components/OwnershipPicker.vue'
 import type { OwnershipValue } from '../components/OwnershipPicker.vue'
 import { api } from '../lib/api/client'
+import { formatDateShort } from '../lib/formatDate'
 
 interface PipelineItem {
   id: string
@@ -455,7 +456,7 @@ const filteredPipelines = computed(() => {
 function formatDate(dateStr: string): string {
   try {
     const d = new Date(dateStr)
-    return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })
+    return formatDateShort(d)
   } catch {
     return dateStr
   }

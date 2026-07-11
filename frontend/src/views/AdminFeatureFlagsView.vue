@@ -242,6 +242,7 @@ import {
   TooltipTrigger,
   TooltipContent,
 } from '../components/ui/tooltip'
+import { formatDateShort } from '../lib/formatDate'
 
 const planStore = usePlanStore()
 
@@ -350,7 +351,7 @@ watch(searchQuery, () => {
 
 function formatDate(dateStr: string): string {
   const d = new Date(dateStr)
-  return d.toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: 'numeric' })
+  return formatDateShort(d)
 }
 
 watch(() => flagsResponse.value?.flags, (newFlags) => {

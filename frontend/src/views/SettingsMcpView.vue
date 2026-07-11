@@ -260,6 +260,7 @@ import FormDialog from '../components/shared/FormDialog.vue'
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '../components/ui/dialog'
 import { usePlanStore } from '../stores/planStore'
 import FeatureGate from '../components/FeatureGate.vue'
+import { formatDateShort } from '../lib/formatDate'
 
 const planStore = usePlanStore()
 
@@ -355,11 +356,7 @@ const mcpConfigSnippet = computed(() => {
 
 function formatDate(iso: string): string {
   try {
-    return new Date(iso).toLocaleDateString('en-US', {
-      year: 'numeric',
-      month: 'short',
-      day: 'numeric',
-    })
+    return formatDateShort(new Date(iso))
   } catch {
     return iso
   }

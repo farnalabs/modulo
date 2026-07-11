@@ -78,7 +78,7 @@
             </td>
             <td class="table-cell text-xs text-muted-foreground">{{ u.auth_provider }}</td>
             <td class="table-cell-numeric text-xs text-muted-foreground">
-              {{ u.created_at ? new Date(u.created_at).toLocaleDateString() : '—' }}
+              {{ u.created_at ? formatDateShort(new Date(u.created_at)) : '—' }}
             </td>
             <td class="table-cell-numeric">
               <TableActions :actions="rowActions(u)" />
@@ -192,6 +192,7 @@ import EmptyState from '../components/shared/EmptyState.vue'
 import FormDialog from '../components/shared/FormDialog.vue'
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '../components/ui/dialog'
 import TableActions from '../components/shared/TableActions.vue'
+import { formatDateShort } from '../lib/formatDate'
 
 interface UserItem {
   id: string

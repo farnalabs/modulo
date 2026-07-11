@@ -229,6 +229,7 @@ import {
   TooltipTrigger,
   TooltipContent,
 } from '../components/ui/tooltip'
+import { formatDateShortWithTime } from '../lib/formatDate'
 
 type FeedbackRecordItem = components['schemas']['FeedbackRecordItem']
 type FeedbackRecordDetail = components['schemas']['FeedbackRecordDetail']
@@ -267,7 +268,7 @@ function statusBadgeClass(status: string): string {
 function formatDate(dateStr: string): string {
   const d = new Date(dateStr)
   if (isNaN(d.getTime())) return '-'
-  return d.toLocaleDateString(locale.value, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })
+  return formatDateShortWithTime(d)
 }
 
 function handlerTypeLabel(type: string): string {

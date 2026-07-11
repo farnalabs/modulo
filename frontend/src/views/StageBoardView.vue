@@ -427,6 +427,7 @@ import { useDataFetch } from '../composables/useDataFetch'
 import { usePlanStore } from '../stores/planStore'
 import { formatApiError } from '../lib/api/formatError'
 import { api } from '../lib/api/client'
+import { formatDateShort } from '../lib/formatDate'
 
 const planStore = usePlanStore()
 const { patch } = { patch: async (url: string, body: any) => { return api.PATCH(url as any, { body }) } }
@@ -491,7 +492,7 @@ function statusBadgeClass(status: string): string {
 
 function formatDate(dateStr: string | null | undefined): string {
   if (!dateStr) return '-'
-  return new Date(dateStr).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })
+  return formatDateShort(new Date(dateStr))
 }
 
 function stageName(stageId: string | null | undefined): string {

@@ -303,6 +303,7 @@ import { usePlanStore } from '../stores/planStore'
 import FeatureGate from '../components/FeatureGate.vue'
 import { formatApiError } from '../lib/api/formatError'
 import { Button } from '@/components/ui/button'
+import { formatDateFilename } from '../lib/formatDate'
 
 const { t } = useI18n()
 import {
@@ -487,7 +488,7 @@ async function exportCsv() {
     const url = URL.createObjectURL(blob)
     const a = document.createElement('a')
     a.href = url
-    a.download = `audit-log-${new Date().toISOString().slice(0, 10)}.csv`
+    a.download = `audit-log-${formatDateFilename(new Date())}.csv`
     a.click()
     URL.revokeObjectURL(url)
   } catch (e: unknown) {
@@ -558,7 +559,7 @@ async function exportJsonl() {
     const url = URL.createObjectURL(blob)
     const a = document.createElement('a')
     a.href = url
-    a.download = `audit-log-${new Date().toISOString().slice(0, 10)}.jsonl`
+    a.download = `audit-log-${formatDateFilename(new Date())}.jsonl`
     a.click()
     URL.revokeObjectURL(url)
   } catch (e: unknown) {

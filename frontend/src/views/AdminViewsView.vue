@@ -221,6 +221,7 @@ import {
   TooltipContent,
 } from '../components/ui/tooltip'
 import { formatApiError } from '../lib/api/formatError'
+import { formatDateShort } from '../lib/formatDate'
 import { Button } from '@/components/ui/button'
 import TableActions from '../components/shared/TableActions.vue'
 
@@ -289,9 +290,7 @@ function filtersSummary(filters: SavedView['filters']): string {
 function formatDate(dateStr: string | null): string {
   if (!dateStr) return '—'
   try {
-    return new Date(dateStr).toLocaleDateString('en-US', {
-      year: 'numeric', month: 'short', day: 'numeric',
-    })
+    return formatDateShort(new Date(dateStr))
   } catch {
     return dateStr
   }

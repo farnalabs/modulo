@@ -113,6 +113,7 @@ import { useDataFetch } from '../../composables/useDataFetch'
 import { formatApiError } from '../../lib/api/formatError'
 import type { LifecycleMap } from '../../types/lifecycleMap'
 import { api } from '../../lib/api/client'
+import { formatDateShort } from '../../lib/formatDate'
 
 const router = useRouter()
 
@@ -162,7 +163,7 @@ function formatDate(dateStr: string) {
   try {
     const d = new Date(dateStr)
     if (isNaN(d.getTime())) return '?'
-    return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' })
+    return formatDateShort(d)
   } catch {
     return '?'
   }

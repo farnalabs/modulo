@@ -39,6 +39,7 @@
 import { ref, computed, onMounted, onUnmounted } from 'vue'
 import { HistoryIcon, ChevronDownIcon } from '@lucide/vue'
 import type { LifecycleMapVersion } from '../../../types/lifecycleMap'
+import { formatDateShort } from '../../../lib/formatDate'
 
 const props = defineProps<{
   versions: LifecycleMapVersion[]
@@ -65,7 +66,7 @@ function formatDate(dateStr: string) {
   try {
     const d = new Date(dateStr)
     if (isNaN(d.getTime())) return '?'
-    return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' })
+    return formatDateShort(d)
   } catch {
     return '?'
   }
