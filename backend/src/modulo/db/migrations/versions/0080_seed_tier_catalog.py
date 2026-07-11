@@ -1,5 +1,11 @@
 """Seed tier_catalog and feature_flag_catalog
 
+NOTE: v1 and v2 tiers are RESERVED for future/roadmap tier expansion.
+They exist in the catalog to reserve rank positions 2 and 3 so that
+future tier additions slot in without re-numbering. No active features
+are gated behind v1 or v2 today — all paid features use the ``team``
+tier, matching the "one paid Enterprise tier" business model.
+
 Revision ID: 0080_seed_tier_catalog
 Revises: 0079_add_opencode_provider
 Create Date: 2026-07-05 14:50:00.000000
@@ -27,9 +33,9 @@ def upgrade() -> None:
                 INSERT INTO tier_catalog (tier_id, label, rank, requires_license, description)
                 VALUES
                 ('community', 'Community', 0, false, 'Free tier for individual developers'),
-                ('team', 'Team', 1, true, 'Team tier for small teams'),
-                ('v1', 'V1', 2, true, 'Production tier with enterprise features'),
-                ('v2', 'V2', 3, true, 'Full platform with all features')
+                ('team', 'Team', 1, true, 'The one paid tier — org governance, assurance, and support'),
+                ('v1', 'V1', 2, true, 'RESERVED for future tier expansion — no active features'),
+                ('v2', 'V2', 3, true, 'RESERVED for future tier expansion — no active features')
             """)
         )
 
@@ -65,13 +71,13 @@ def upgrade() -> None:
                 ('error_forwarders', 'External error tracking and alerting integrations', 'team', NULL, true),
                 ('schema_version_history', 'Version history and diff for schema definitions', 'team', NULL, true),
                 ('external_secrets', 'External secrets backends (Vault, AWS, 1Password, Azure Key Vault)', 'team', NULL, true),
-                ('schema_union_types', 'Union types and polymorphic schemas', 'v1', NULL, true),
-                ('migration_cli', 'CLI tool for migrating pipelines across instances', 'v1', NULL, true),
-                ('checkpoint_encryption', 'Encrypt pipeline checkpoints at rest', 'v2', NULL, true),
+                ('schema_union_types', 'Union types and polymorphic schemas (ROADMAP)', 'v1', NULL, true),
+                ('migration_cli', 'CLI tool for migrating pipelines across instances (ROADMAP)', 'v1', NULL, true),
+                ('checkpoint_encryption', 'Encrypt pipeline checkpoints at rest (ROADMAP)', 'v2', NULL, true),
                 ('audit_crypto_chain', 'Cryptographic chaining of audit events for tamper evidence', 'team', NULL, true),
-                ('community_registry', 'Publish and discover community pipeline primitives', 'v2', NULL, true),
-                ('prompt_optimization', 'Automated prompt tuning and optimisation', 'v2', NULL, true),
-                ('pipeline_diff_rollback', 'Diff-based pipeline version comparison and rollback', 'v2', NULL, true),
+                ('community_registry', 'Publish and discover community pipeline primitives (ROADMAP)', 'v2', NULL, true),
+                ('prompt_optimization', 'Automated prompt tuning and optimisation (ROADMAP)', 'v2', NULL, true),
+                ('pipeline_diff_rollback', 'Diff-based pipeline version comparison and rollback (ROADMAP)', 'v2', NULL, true),
                 ('email_config', 'SMTP email configuration for notifications', 'team', NULL, true),
                 ('error_tracking', 'External error tracking and alerting integrations', 'team', NULL, true),
                 ('scim', 'SCIM 2.0 user and group provisioning', 'team', NULL, true)
