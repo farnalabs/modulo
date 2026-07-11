@@ -269,7 +269,7 @@ async function handleSaveAs() {
           description: p.description || null,
           type: p.type,
           required: p.required,
-          default_value: p.default ?? null,
+          default_value: p.default_value ?? null,
           target_injection: {
             mode: 'prompt_replace',
             node_id: '',

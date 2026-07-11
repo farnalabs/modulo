@@ -56,7 +56,7 @@ function openEditForm(index: number) {
     type: p.type,
     required: p.required,
     default:
-      p.default !== undefined && p.default !== null ? String(p.default) : "",
+      p.default_value !== undefined && p.default_value !== null ? String(p.default_value) : "",
     multiline: p.multiline,
   };
   showAddForm.value = true;
@@ -85,7 +85,7 @@ function savePort() {
     description: form.value.description.trim() || undefined,
     type: form.value.type,
     required: form.value.required,
-    default:
+    default_value:
       form.value.default === "" || form.value.default === undefined
         ? undefined
         : form.value.type === "number"

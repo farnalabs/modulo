@@ -14,7 +14,7 @@ const emit = defineEmits<{
 const localValue = computed({
   get: () =>
     props.modelValue ??
-    props.port.default ??
+    props.port.default_value ??
     (props.port.type === "boolean"
       ? false
       : props.port.type === "number"
@@ -67,7 +67,7 @@ function onBooleanChange(event: Event) {
       v-else-if="port.type === 'string'"
       :value="localValue as string"
       class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm"
-      :placeholder="(port.default as string) ?? ''"
+      :placeholder="(port.default_value as string) ?? ''"
       @change="onStringChange"
     />
 
@@ -76,7 +76,7 @@ function onBooleanChange(event: Event) {
       :value="localValue as number"
       type="number"
       class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm"
-      :placeholder="port.default != null ? String(port.default) : ''"
+      :placeholder="port.default_value != null ? String(port.default_value) : ''"
       @change="onNumberChange"
     />
 

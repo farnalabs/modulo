@@ -13,7 +13,7 @@ export interface ParameterPort {
   description?: string | null
   type: ParameterPortType
   required: boolean
-  default: unknown | null
+  default_value: unknown
   options: { label: string; value: string }[] | null
   multiline: boolean
   target_injection: TargetInjection
@@ -31,6 +31,7 @@ export interface CompositeDefinition {
   name: string
   description: string | null
   version: string
+  sub_pipeline_graph_json: Record<string, unknown>
   parameter_ports_json: Record<string, unknown>[]
   input_schema_id: string | null
   output_schema_id: string | null
