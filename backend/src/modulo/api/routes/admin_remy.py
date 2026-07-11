@@ -9,7 +9,7 @@ from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, Field
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from sqlalchemy.exc import ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -609,12 +609,14 @@ async def reset_org_context_sources(
 # ── User-level helper (reused by me.py) ────────────────────────────────
 
 
-async def get_user_skills(session: AsyncSession, user_id: uuid.UUID) -> list[RemySkill]:
+async def get_user_skills(session: AsyncSession, user_id: uuid.UUID, org_id: uuid.UUID) -> list[RemySkill]:
     result = await session.execute(
         select(RemySkill)
         .where(
-            RemySkill.user_id == user_id,
-            RemySkill.organisation_id.is_(None),
+            or_(
+                RemySkill.user_id == user_id,
+                RemySkill.organisation_id == org_id,
+            )
         )
         .order_by(RemySkill.created_at.desc())
     )
