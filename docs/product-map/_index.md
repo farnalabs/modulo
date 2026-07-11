@@ -131,7 +131,7 @@ status: covered | partial | gap    # auto-updated by graph-validate
 - [feat-infra-deployment](infra/deployment.md) => PRD 10.3a
 - [feat-infra-extensibility](infra/extensibility.md) => PRD 10
 
-### library
+### Library
 - [feat-library-schemas](library/library-schemas.md) => PRD 8.3
 - [feat-community-library](library/community-library.md) => PRD 8.14
 - [feat-library-auto-update](library/auto-update.md) => PRD 8.14
@@ -161,7 +161,7 @@ status: covered | partial | gap    # auto-updated by graph-validate
 - [feat-pipelines-library](pipelines/library.md) => PRD 8.14
 - [feat-pipelines-hitl-gates](pipelines/hitl-gates.md) => PRD 8.8
 
-### remy
+### Remy
 - [feat-remy-context-sources](remy/remy-context-sources.md) => PRD 8.29, 8.30
 - [feat-remy-assistant](remy/remy-assistant.md) => PRD 8.23, 8.27
 
