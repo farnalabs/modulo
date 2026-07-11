@@ -37,13 +37,13 @@
           />
         </div>
         <div class="flex items-end gap-2">
-          <button
+          <Button
+            variant="default"
             data-testid="settings-notification-log-apply"
-            class="rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90"
             @click="applyFilters"
           >
             Apply
-          </button>
+          </Button>
           <button
             data-testid="settings-notification-log-reset"
             class="rounded-lg border border-input bg-background px-4 py-2 text-sm font-medium hover:bg-accent"
@@ -143,6 +143,7 @@ import type { components } from '../lib/api/client'
 import PageHeader from '../components/shared/PageHeader.vue'
 import LoadingSpinner from '../components/shared/LoadingSpinner.vue'
 import ErrorAlert from '../components/shared/ErrorAlert.vue'
+import { Button } from '@/components/ui/button'
 
 type DeliveryLogEntry = components['schemas']['DeliveryLogEntry']
 

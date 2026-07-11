@@ -214,14 +214,14 @@
               >
                 {{ testing[fwd.forwarder_type] ? 'Testing...' : 'Test Connection' }}
               </button>
-              <button
+              <Button
                 type="button"
+                variant="default"
                 :disabled="saving[fwd.forwarder_type]"
-                class="rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
                 @click="saveConfig(fwd)"
               >
                 {{ saving[fwd.forwarder_type] ? 'Saving...' : 'Save' }}
-              </button>
+              </Button>
             </div>
 
             <div
@@ -262,6 +262,7 @@ import FeatureGate from '../components/FeatureGate.vue'
 import PageHeader from '../components/shared/PageHeader.vue'
 import LoadingSpinner from '../components/shared/LoadingSpinner.vue'
 import ErrorAlert from '../components/shared/ErrorAlert.vue'
+import { Button } from '@/components/ui/button'
 
 interface ForwarderItem {
   forwarder_type: string
