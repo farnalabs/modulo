@@ -1,9 +1,6 @@
 ﻿<template>
   <div data-theme="agent" class="page-wide">
-    <header>
-      <h1 class="text-2xl font-semibold tracking-tight">{{ $t('views.AdminRemyView.remy_configuration') }}</h1>
-      <p class="mt-1 text-muted-foreground">{{ $t('views.AdminRemyView.configure_remy_ai_assistant_behaviour_access_and_skills') }}</p>
-    </header>
+    <PageHeader :title="$t('views.AdminRemyView.remy_configuration')" :subtitle="$t('views.AdminRemyView.configure_remy_ai_assistant_behaviour_access_and_skills')" />
 
     <LoadingSpinner v-if="loading" />
 
@@ -713,6 +710,7 @@
 </template>
 
 <script setup lang="ts">
+import PageHeader from '../components/shared/PageHeader.vue'
 import { ref, reactive, computed, onMounted, onUnmounted } from 'vue'
 import { api } from '../lib/api/client'
 import { formatApiError } from '../lib/api/formatError'
@@ -1292,4 +1290,3 @@ onUnmounted(() => {
   if (primerTimer) clearTimeout(primerTimer)
 })
 </script>
-

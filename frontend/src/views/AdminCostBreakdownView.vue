@@ -5,10 +5,7 @@
     { label: 'Cost Controls', to: '/admin/costs/controls' },
   ]" />
   <div data-theme="agent" class="page-wide">
-    <header>
-      <h1 class="text-2xl font-semibold tracking-tight">{{ $t('views.AdminCostBreakdownView.cost_breakdown') }}</h1>
-      <p class="mt-1 text-muted-foreground">{{ $t('views.AdminCostBreakdownView.monthly_cost_report_and_anomaly_detection_across_teams') }}</p>
-    </header>
+    <PageHeader :title="$t('views.AdminCostBreakdownView.cost_breakdown')" :subtitle="$t('views.AdminCostBreakdownView.monthly_cost_report_and_anomaly_detection_across_teams')" />
 
     <FeatureGate feature-name="admin_cost_breakdown" required-tier="team" show-disabled>
 
@@ -118,6 +115,7 @@
 </template>
 
 <script setup lang="ts">
+import PageHeader from '../components/shared/PageHeader.vue'
 import { ref, computed, onMounted } from 'vue'
 import { api } from '../lib/api/client'
 import { formatApiError } from '../lib/api/formatError'
@@ -225,4 +223,3 @@ onMounted(() => {
   loadAnomalies()
 })
 </script>
-

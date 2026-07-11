@@ -2,10 +2,7 @@
   <FeatureGate feature-name="model_backend_management" show-disabled>
     <div class="page-narrow">
       <header class="flex items-center justify-between">
-        <div>
-          <h1 class="text-2xl font-semibold tracking-tight">{{ $t('views.AdminModelBackendsView.model_backends') }}</h1>
-          <p class="mt-1 text-muted-foreground">{{ $t('views.AdminModelBackendsView.manage_llm_backend_connections_and_credentials') }}</p>
-        </div>
+        <PageHeader :title="$t('views.AdminModelBackendsView.model_backends')" :subtitle="$t('views.AdminModelBackendsView.manage_llm_backend_connections_and_credentials')" />
         <Button
           variant="default"
            class="border-primary/30 hover:border-primary/60"
@@ -398,6 +395,7 @@
 </template>
 
 <script setup lang="ts">
+import PageHeader from '../components/shared/PageHeader.vue'
 import { ref, reactive, computed, onMounted } from 'vue'
 import { api } from '../lib/api/client'
 import type { components } from '../lib/api/client'

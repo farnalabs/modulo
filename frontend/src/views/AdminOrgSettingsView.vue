@@ -2,10 +2,7 @@
   <FeatureGate feature-name="team_rbac" required-tier="team" show-disabled>
 
     <div data-theme="agent" class="page-wide">
-    <header>
-      <h1 class="text-2xl font-semibold tracking-tight">Organisation Settings</h1>
-      <p class="mt-1 text-muted-foreground">Manage your organisation profile, export data, or delete the organisation</p>
-    </header>
+    <PageHeader title="Organisation Settings" subtitle="Manage your organisation profile, export data, or delete the organisation" />
 
     <LoadingSpinner v-if="loading" />
     <ErrorAlert v-else-if="loadError" :message="loadError" :on-retry="loadData" />
@@ -165,6 +162,7 @@
 </template>
 
 <script setup lang="ts">
+import PageHeader from '../components/shared/PageHeader.vue'
 import { ref, reactive, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { Button } from '@/components/ui/button'
@@ -337,4 +335,3 @@ async function confirmDelete() {
 
 onMounted(() => { planStore.fetchPlan(); loadData() })
 </script>
-

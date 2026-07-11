@@ -1,10 +1,7 @@
 ﻿<template>
   <div class="page-wide">
     <div class="flex items-center justify-between">
-      <div>
-        <h1 class="text-2xl font-semibold tracking-tight">Users</h1>
-        <p class="text-muted-foreground mt-1">{{ $t('views.AdminUsersView.manage_user_accounts_and_permissions') }}</p>
-      </div>
+      <PageHeader title="Users" :subtitle="$t('views.AdminUsersView.manage_user_accounts_and_permissions')" />
       <Button
         variant="default"
         class="border-primary/30"
@@ -211,6 +208,7 @@
 </template>
 
 <script setup lang="ts">
+import PageHeader from '../components/shared/PageHeader.vue'
 import { ref, onMounted, onBeforeUnmount } from 'vue'
 import { useApi } from '../composables/useApi'
 import LoadingSpinner from '../components/shared/LoadingSpinner.vue'

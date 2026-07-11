@@ -5,10 +5,7 @@
     { label: 'Cost Controls', to: '/admin/costs/controls' },
   ]" />
   <div data-theme="agent" class="page-wide">
-    <header>
-      <h1 class="text-2xl font-semibold tracking-tight">{{ $t('views.AdminCostBreakdownView.cost_controls') }}</h1>
-      <p class="mt-1 text-muted-foreground">{{ $t('views.AdminCostControlsView.budget_overview_team_budgets_alert_thresholds_and_billing_se') }}</p>
-    </header>
+    <PageHeader :title="$t('views.AdminCostBreakdownView.cost_controls')" :subtitle="$t('views.AdminCostControlsView.budget_overview_team_budgets_alert_thresholds_and_billing_se')" />
 
     <FeatureGate feature-name="admin_cost_controls" required-tier="team" show-disabled>
 
@@ -234,6 +231,7 @@
 </template>
 
 <script setup lang="ts">
+import PageHeader from '../components/shared/PageHeader.vue'
 import { ref, computed, onMounted } from 'vue'
 import { api } from '../lib/api/client'
 import { formatApiError } from '../lib/api/formatError'
@@ -509,4 +507,3 @@ onMounted(() => {
   loadAll()
 })
 </script>
-

@@ -5,10 +5,7 @@
     { label: 'Cost Controls', to: '/admin/costs/controls' },
   ]" />
   <div data-theme="agent" class="page-wide">
-    <header>
-      <h1 class="text-2xl font-semibold tracking-tight">{{ $t('views.AdminCostBreakdownView.spend_limits') }}</h1>
-      <p class="mt-1 text-muted-foreground">{{ $t('views.AdminSpendLimitsView.configure_daily_spend_limits_at_the_org_and_team_level') }}</p>
-    </header>
+    <PageHeader :title="$t('views.AdminCostBreakdownView.spend_limits')" :subtitle="$t('views.AdminSpendLimitsView.configure_daily_spend_limits_at_the_org_and_team_level')" />
 
     <FeatureGate feature-name="admin_spend_limits" required-tier="team" show-disabled>
 
@@ -117,6 +114,7 @@
 </template>
 
 <script setup lang="ts">
+import PageHeader from '../components/shared/PageHeader.vue'
 import { ref, onMounted } from 'vue'
 import { api } from '../lib/api/client'
 import { formatApiError } from '../lib/api/formatError'
@@ -269,4 +267,3 @@ onMounted(() => {
   loadCosts()
 })
 </script>
-
