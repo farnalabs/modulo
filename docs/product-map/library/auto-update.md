@@ -59,13 +59,16 @@ Users can disable auto-update on adapted community library primitives to pin a s
 
 ## QA History
 
-### 2026-07-06 — Library product map QA
+### 2026-07-11 — Cross-cutting QA (index 378)
 
-**CRITICAL — No findings in this file.**
+**CRITICAL — BDD feature file was never loaded by any test module.** `backend/tests/bdd/features/library/auto_update.feature` existed with 5 scenarios but no module called `scenarios(...)` on it. Added to `test_library.py`. Step definitions added for all 5 scenarios.
 
-**MAJOR — No findings in this file.**
+**MAJOR — Missing generic `except Exception` in `notify_importers_of_update`.** The outer try/except only caught `ProgrammingError`. A `TypeError`, `AttributeError`, or other Python-level error during loop execution would propagate as an unhandled exception. Added generic catch with `_log.exception()`.
 
 **Product map updated:**
-- Added QA History section for tracking.
+- Added `scenarios("../features/library/auto_update.feature")` to `test_library.py`
+- Added step definitions for all 5 BDD scenarios (toggle on/off, adapt default, notification respect)
+- Added `except Exception` catch to `notify_importers_of_update`
+- Updated status to reflect new BDD coverage
 
-**Status:** covered (no changes).
+**Status:** covered (BDD scenarios now load and run; scenarios 4-5 tested at mock level — integration test remains pending).
