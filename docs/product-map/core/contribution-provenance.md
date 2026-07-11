@@ -156,10 +156,8 @@ Cryptographic signing, verification, and fork tracking for community library pri
 - `@awaiting-implementation` scenarios in `plugin_registry.feature` are not runnable
 
 ### Ratings
-- No BDD tests for rating submission cooldown enforcement
-- No BDD tests for self-rating block
 - No BDD tests for rating-requires-prior-adapt rule
-- No BDD tests for ownership picker during copy-to-adapt
+- No BDD tests for ownership picker (frontend UI) during copy-to-adapt
 
 ### Error handling & security
 - `register_publisher_endpoint` has no admin role check — any authenticated user can register a verified publisher
