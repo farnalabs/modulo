@@ -4,13 +4,7 @@ from __future__ import annotations
 
 Tier structure (matching the DB tier_catalog):
     community (0) — Free tier, all features active without a license
-    team      (1) — The one paid tier (Enterprise in business docs)
-    v1        (2) — RESERVED / roadmap — no active features
-    v2        (3) — RESERVED / roadmap — no active features
-
-v1 and v2 exist in the catalog to reserve rank positions for future
-tier expansion without re-numbering existing ranks.  All currently
-shipped paid features use the ``team`` tier.
+    team      (1) — The one paid tier
 """
 
 
@@ -153,28 +147,20 @@ _KNOWN_FLAGS: list[FeatureFlag] = [
         description="External secrets backends (Vault, AWS, 1Password, Azure Key Vault)",
         tier="team",
     ),
-    # ── v1 tier (ROADMAP — reserved, not an active pricing tier) ──────
-    # These flags are catalogued for future use. No backend routes or
-    # frontend UI exist for them yet. When implementation starts, move
-    # the flag to the appropriate active tier (likely ``team``).
     FeatureFlag(
         name="schema_union_types",
         description="Union types and polymorphic schemas",
-        tier="v1",
+        tier="team",
     ),
     FeatureFlag(
         name="migration_cli",
         description="CLI tool for migrating pipelines across instances",
-        tier="v1",
+        tier="team",
     ),
-    # ── v2 tier (ROADMAP — reserved, not an active pricing tier) ──────
-    # These flags are catalogued for future use. No backend routes or
-    # frontend UI exist for them yet. When implementation starts, move
-    # the flag to the appropriate active tier (likely ``team``).
     FeatureFlag(
         name="checkpoint_encryption",
         description="Encrypt pipeline checkpoints at rest",
-        tier="v2",
+        tier="team",
     ),
     FeatureFlag(
         name="audit_crypto_chain",
@@ -184,17 +170,17 @@ _KNOWN_FLAGS: list[FeatureFlag] = [
     FeatureFlag(
         name="community_registry",
         description="Publish and discover community pipeline primitives",
-        tier="v2",
+        tier="team",
     ),
     FeatureFlag(
         name="prompt_optimization",
         description="Automated prompt tuning and optimisation",
-        tier="v2",
+        tier="team",
     ),
     FeatureFlag(
         name="pipeline_diff_rollback",
         description="Diff-based pipeline version comparison and rollback",
-        tier="v2",
+        tier="team",
     ),
     FeatureFlag(
         name="environment_profiles",
@@ -261,8 +247,8 @@ _KNOWN_FLAGS: list[FeatureFlag] = [
 ]
 
 
-# community=Free, team=one paid tier (Enterprise in docs), v1/v2=roadmap/reserved
-TIER_RANK: dict[str, int] = {"community": 0, "team": 1, "v1": 2, "v2": 3}
+# community=Free, team=one paid tier
+TIER_RANK: dict[str, int] = {"community": 0, "team": 1}
 
 
 class CommunityTier:
