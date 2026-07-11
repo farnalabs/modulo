@@ -152,7 +152,7 @@ async def change_password(
             families = await list_families_for_account(session, current_user.account_id)
             for family in families:
                 try:
-                    await blacklist_family(session, family.family_id)
+                    await blacklist_family(session, family.family_id, current_user.account_id)
                 except HTTPException:
                     raise
                 except Exception:

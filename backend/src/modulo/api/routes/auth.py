@@ -211,9 +211,23 @@ async def refresh(
             detail="Invalid refresh token family",
         ) from exc
 
+    account_id_claim = claims.get("account_id") or claims.get("user_id")
+    if not isinstance(account_id_claim, str):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid refresh token claims",
+        )
+    try:
+        account_uuid = uuid.UUID(account_id_claim)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid refresh token account",
+        ) from exc
+
     try:
         async with session.begin():
-            new_sequence, theft_detected = await advance_sequence(session, family_uuid, sequence)
+            new_sequence, theft_detected = await advance_sequence(session, family_uuid, sequence, account_uuid)
     except IntegrityError:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
@@ -247,7 +261,7 @@ async def refresh(
 
     sub_val = claims.get("sub")
     org_id_val = claims.get("org_id")
-    account_id_val = claims.get("account_id") or claims.get("user_id")
+    account_id_val = account_id_claim
     org_role_val = claims.get("org_role")
     if not all(isinstance(v, str) for v in [sub_val, org_id_val, account_id_val]) or (
         org_id_val is not None and not isinstance(org_id_val, str)
@@ -294,12 +308,14 @@ async def logout(
         ) from exc
 
     family_id_val = claims.get("token_family")
-    if isinstance(family_id_val, str):
+    account_id_val = claims.get("account_id") or claims.get("user_id")
+    if isinstance(family_id_val, str) and isinstance(account_id_val, str):
         try:
             family_uuid = uuid.UUID(family_id_val)
+            account_uuid = uuid.UUID(account_id_val)
             try:
                 async with session.begin():
-                    blacklisted = await blacklist_family(session, family_uuid)
+                    blacklisted = await blacklist_family(session, family_uuid, account_uuid)
                     if not blacklisted:
                         _log.warning("logout.family_not_found", extra={"family_id": family_id_val})
             except IntegrityError:
