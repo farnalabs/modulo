@@ -68,22 +68,21 @@
         {{ error }}
       </div>
 
-      <div
       <EmptyState
-        v-else-if="section === 'native' &amp;&amp; nativePrimitives.length === 0 &amp;&amp; previewPrimitives.length === 0"
+        v-else-if="section === 'native' && nativePrimitives.length === 0 && previewPrimitives.length === 0"
         :title="$t('views.LibraryView.no_primitives_found')"
       />
 
       <EmptyState
-        v-else-if="section === 'community' &amp;&amp; communityPrimitives.length === 0"
+        v-else-if="section === 'community' && communityPrimitives.length === 0"
         :title="$t('views.LibraryView.no_primitives_found')"
       />
       <EmptyState
-        v-else-if="section === 'native' &amp;&amp; nativePrimitives.length === 0 &amp;&amp; previewPrimitives.length === 0"
+        v-else-if="section === 'native' && nativePrimitives.length === 0 && previewPrimitives.length === 0"
         :title="$t('views.LibraryView.no_primitives_found')"
       />
 
-      <div v-else-if="section === 'native' &amp;&amp; nativePrimitives.length > 0" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+      <div v-else-if="section === 'native' && nativePrimitives.length > 0" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
         <div
           v-for="prim in nativePrimitives"
           :key="prim.id"
