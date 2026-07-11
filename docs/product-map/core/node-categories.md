@@ -4,9 +4,13 @@ prd: 8
 code:
   - backend/src/modulo/api/routes/node_categories.py
   - backend/src/modulo/db/crud/node_category.py
+  - backend/src/modulo/db/models/node_category.py
 bdd: []
-unit-tests: []
-depends-on: []
+unit-tests:
+  - backend/tests/unit/api/test_node_category_endpoint.py
+  - backend/tests/unit/db/crud/test_org_scoping.py
+depends-on:
+  - feat-core-db-abstraction-core
 status: partial
 ---
 
@@ -25,5 +29,18 @@ CRUD management for pipeline node categories — labelled groupings with colour 
 - [x] Input validation (colour hex pattern, name length limits)
 - [x] Missing DB table returns 501 Not Implemented
 - [x] DB errors return 503 Service Unavailable
+- [x] Duplicate name returns 409 Conflict (IntegrityError→409)
 - [ ] Category reordering
 - [ ] Default categories seeded on org creation
+
+## Known Gaps
+
+- No BDD feature file exists for node categories CRUD workflows
+- Category reordering API not implemented (no `PUT /reorder` or `sort_order` batch update endpoint)
+- Default categories are not seeded on org creation — users start with an empty category list
+- No `created_by` / `account_id` tracking in the route layer — the field exists in the model and response schema but is populated from the authenticated principal, not validated against the request
+- No `owner_team_id` field on the model for team-scoped categories (visible to all org members regardless)
+
+## QA History
+
+- 2026-07-11: Cross-cutting QA — added IntegrityError→409 handling, logger.warning on error paths, populated frontmatter (unit-tests, depends-on, bdd reference), documented known gaps
