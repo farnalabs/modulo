@@ -29,11 +29,16 @@ from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from modulo.api.dependencies import _get_engine
 from modulo.auth.jwt import AuthenticatedPrincipal, decode_principal
-from modulo.auth.ws_token import consume_ws_token
+from modulo.auth.ws_token import WsTokenExpired, consume_ws_token
 from modulo.core.pipeline_engine.event_broker import get_registry
 from modulo.db.crud.run import get_run
 from modulo.db.rls import set_rls_org
 from modulo.settings import get_settings
+
+try:
+    from redis.asyncio import Redis
+except ImportError:
+    Redis = None  # type: ignore[assignment,misc]
 
 _log = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/v1/runs", tags=["runs-ws"])
@@ -50,7 +55,8 @@ async def run_websocket(
 ) -> None:
     """Stream run events over WebSocket.
 
-    Requires a short-lived ws-token (15 min TTL) from POST /api/v1/auth/ws-token.
+    Requires a short-lived ws-token from POST /api/v1/auth/ws-token
+    (default 60s TTL, configurable via modulo_ws_token_ttl_seconds).
     Sends JSON objects conforming to RunEvent.to_json() schema.
     Closes with code 4001 on auth failure, 4004 on unknown run.
     """
@@ -62,14 +68,10 @@ async def run_websocket(
 
     # Try opaque single-use token first, fall back to JWT for backward compat.
     principal: AuthenticatedPrincipal | None = None
-    if settings.redis_url:
+    if settings.redis_url and Redis is not None:
         redis: Redis | None = None
         try:
-            from redis.asyncio import Redis
-
             redis = Redis.from_url(settings.redis_url, decode_responses=False)
-            from modulo.auth.ws_token import WsTokenExpired as _WsTokenExpired
-
             try:
                 payload = await consume_ws_token(redis, token)
                 principal = AuthenticatedPrincipal(
@@ -78,7 +80,7 @@ async def run_websocket(
                     user_id=uuid.UUID(payload["user_id"]),
                     org_role=payload["org_role"],
                 )
-            except _WsTokenExpired:
+            except WsTokenExpired:
                 pass
         except Exception as exc:
             _log.warning("ws_token.consume_failed", extra={"error": str(exc)})
@@ -113,16 +115,16 @@ async def run_websocket(
             run = await get_run(session, run_id)
     except ProgrammingError:
         await ws.send_json({"error": "migration_required", "detail": "Run database migrations to enable this feature."})
-        await ws.close(code=4004)
+        await ws.close(code=1011)
         return
     except SQLAlchemyError:
         await ws.send_json({"error": "db_unavailable", "detail": "Database temporarily unavailable."})
-        await ws.close(code=4004)
+        await ws.close(code=1011)
         return
     except Exception:
         _log.exception("run_ws.db_check_failed")
         await ws.send_json({"error": "internal_error", "detail": "An unexpected error occurred."})
-        await ws.close(code=4004)
+        await ws.close(code=1011)
         return
 
     if run is None:
