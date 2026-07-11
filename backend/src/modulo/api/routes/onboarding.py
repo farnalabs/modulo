@@ -1,5 +1,6 @@
 """First-run onboarding wizard REST API — status, step tracking, and step data."""
 
+import asyncio
 import logging
 from dataclasses import dataclass
 
@@ -141,18 +142,20 @@ async def get_onboarding_status(
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="A resource with this value already exists",
-        )
+        ) from None
     except ProgrammingError:
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
-        )
+        ) from None
     except SQLAlchemyError:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database error. Please try again.",
-        )
+        ) from None
     except HTTPException:
+        raise
+    except asyncio.CancelledError:
         raise
     except Exception as e:
         logger.exception("onboarding.get_onboarding_status.unexpected_error")
@@ -216,18 +219,20 @@ async def mark_step_completed(
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="A resource with this value already exists",
-        )
+        ) from None
     except ProgrammingError:
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
-        )
+        ) from None
     except SQLAlchemyError:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database error. Please try again.",
-        )
+        ) from None
     except HTTPException:
+        raise
+    except asyncio.CancelledError:
         raise
     except Exception as e:
         logger.exception("onboarding.mark_step_completed.unexpected_error")
@@ -287,12 +292,12 @@ async def get_step_data(
                 raise HTTPException(
                     status_code=status.HTTP_409_CONFLICT,
                     detail="A resource with this value already exists",
-                )
+                ) from None
             except ProgrammingError:
                 raise HTTPException(
                     status_code=status.HTTP_501_NOT_IMPLEMENTED,
                     detail="Feature is not available. Run database migrations to enable it.",
-                )
+                ) from None
 
         return OnboardingStepDataResponse(
             step_id=step["id"],
@@ -304,18 +309,20 @@ async def get_step_data(
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="A resource with this value already exists",
-        )
+        ) from None
     except ProgrammingError:
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
-        )
+        ) from None
     except SQLAlchemyError:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database error. Please try again.",
-        )
+        ) from None
     except HTTPException:
+        raise
+    except asyncio.CancelledError:
         raise
     except Exception as e:
         logger.exception("onboarding.get_step_data.unexpected_error")
@@ -411,18 +418,20 @@ async def create_starter_pipeline(
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="A starter pipeline or schema with this name already exists.",
-        )
+        ) from None
     except ProgrammingError:
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
-        )
+        ) from None
     except SQLAlchemyError:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database temporarily unavailable.",
-        )
+        ) from None
     except HTTPException:
+        raise
+    except asyncio.CancelledError:
         raise
     except Exception as e:
         logger.exception("onboarding.create_starter_pipeline.unexpected_error")
