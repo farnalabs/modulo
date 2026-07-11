@@ -97,6 +97,7 @@
 
 <script setup lang="ts">
 import { ref, reactive, onMounted, onBeforeUnmount } from 'vue'
+import { useDataFetch } from '../composables/useDataFetch'
 import { formatApiError, type ProblemDetail } from '../lib/api/formatError'
 import { usePlanStore } from '../stores/planStore'
 import { api } from '../lib/api/client'
@@ -115,8 +116,24 @@ interface EmailForm {
 
 const planStore = usePlanStore()
 
-const loading = ref(true)
-const loadError = ref<string | null>(null)
+const { loading, error: loadError, load: loadSettings } = useDataFetch(
+  async () => {
+    const orgId = planStore.orgId
+    if (!orgId) return { error: { detail: 'Organisation ID not available' } }
+    const res = await (api as any).GET('/api/v1/admin/org/{org_id}/email-settings', {
+      params: { path: { org_id: orgId } },
+    })
+    if (res.data) {
+      form.smtp_host = res.data.smtp_host || ''
+      form.smtp_port = res.data.smtp_port || 587
+      form.smtp_username = res.data.smtp_username || ''
+      form.smtp_password = ''
+      form.email_from = res.data.email_from || ''
+    }
+    return res
+  },
+  { immediate: false }
+)
 const saving = ref(false)
 const testing = ref(false)
 const successMessage = ref<string | null>(null)
@@ -133,36 +150,6 @@ const form = reactive<EmailForm>({
 
 function getOrgId(): string | null {
   return planStore.orgId
-}
-
-async function loadSettings() {
-  loading.value = true
-  loadError.value = null
-  try {
-    const orgId = getOrgId()
-    if (!orgId) {
-      loadError.value = 'Organisation ID not available'
-      return
-    }
-    const { data, error: err } = await (api as any).GET('/api/v1/admin/org/{org_id}/email-settings', {
-      params: { path: { org_id: orgId } },
-    })
-    if (err) {
-      loadError.value = err && typeof err === 'object' && 'detail' in err
-        ? `Failed to load email settings: ${(err as ProblemDetail).detail}`
-        : `Failed to load email settings: ${formatApiError(err)}`
-    } else if (data) {
-      form.smtp_host = data.smtp_host || ''
-      form.smtp_port = data.smtp_port || 587
-      form.smtp_username = data.smtp_username || ''
-      form.smtp_password = ''
-      form.email_from = data.email_from || ''
-    }
-  } catch (e: unknown) {
-    loadError.value = `Failed to load email settings: ${formatApiError(e)}`
-  } finally {
-    loading.value = false
-  }
 }
 
 async function saveSettings() {
@@ -241,8 +228,6 @@ onMounted(async () => {
   if (promise) await promise
   if (planStore.featureEnabled('email_config')) {
     loadSettings()
-  } else {
-    loading.value = false
   }
 })
 </script>

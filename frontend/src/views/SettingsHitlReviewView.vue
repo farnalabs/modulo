@@ -232,6 +232,7 @@
 
 <script setup lang="ts">
 import { ref, computed, onMounted, onUnmounted } from 'vue'
+import { useDataFetch } from '../composables/useDataFetch'
 import { api } from '../lib/api/client'
 import { formatApiError, type ProblemDetail } from '../lib/api/formatError'
 import PageHeader from '../components/shared/PageHeader.vue'
@@ -261,10 +262,29 @@ interface PipelineItem {
   name: string
 }
 
-const gates = ref<GateItem[]>([])
-const pipelines = ref<PipelineItem[]>([])
-const loading = ref(true)
-const error = ref<string | null>(null)
+const { loading, error, data: gates, load: loadGates } = useDataFetch<GateItem[]>(
+  async () => {
+    const res = await api.GET('/api/v1/hitl/pending')
+    if (res.error) return { error: res.error }
+    const raw = (res.data as any)?.gates || []
+    return { data: raw.map((g: any) => ({
+      ...g,
+      run_id: String(g.run_id),
+      pipeline_id: String(g.pipeline_id),
+      claimed_by: g.claimed_by ? String(g.claimed_by) : null,
+    })) }
+  },
+  { initialValue: [] as GateItem[] }
+)
+
+const { load: loadPipelines, data: pipelines } = useDataFetch<PipelineItem[]>(
+  async () => {
+    const res = await api.GET('/api/v1/pipelines')
+    if (res.error) return { error: res.error }
+    return { data: (res.data as any)?.items || [] }
+  },
+  { immediate: false, initialValue: [] as PipelineItem[] }
+)
 
 const statusFilter = ref('')
 const pipelineFilter = ref('')
@@ -342,41 +362,6 @@ const filteredGates = computed(() => {
     return true
   })
 })
-
-async function loadPipelines() {
-  try {
-    const { data, error: err } = await api.GET('/api/v1/pipelines')
-    if (!err && data) {
-      pipelines.value = (data as any).items || []
-    }
-  } catch (e) {
-    console.warn('Failed to load pipelines', e)
-  }
-}
-
-async function loadGates() {
-  loading.value = true
-  error.value = null
-  try {
-    const { data, error: err } = await api.GET('/api/v1/hitl/pending')
-    if (err) {
-      error.value = err && typeof err === 'object' && 'detail' in err
-        ? `Failed to load gates: ${(err as ProblemDetail).detail}`
-        : `Failed to load gates: ${formatApiError(err)}`
-    } else if (data) {
-      gates.value = ((data as any).gates || []).map((g: any) => ({
-        ...g,
-        run_id: String(g.run_id),
-        pipeline_id: String(g.pipeline_id),
-        claimed_by: g.claimed_by ? String(g.claimed_by) : null,
-      }))
-    }
-  } catch (e: unknown) {
-    error.value = `Failed to load gates: ${formatApiError(e)}`
-  } finally {
-    loading.value = false
-  }
-}
 
 async function claimGate(gate: GateItem) {
   const key = expandKey(gate)
@@ -514,7 +499,7 @@ function stopAutoRefresh() {
 
 onMounted(async () => {
   planStore.fetchPlan()
-  await Promise.all([loadGates(), loadPipelines()])
+  await loadPipelines()
   startAutoRefresh()
 })
 

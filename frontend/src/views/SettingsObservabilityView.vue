@@ -194,6 +194,7 @@
 
 <script setup lang="ts">
 import { ref, onMounted, onBeforeUnmount } from 'vue'
+import { useDataFetch } from '../composables/useDataFetch'
 import { useI18n } from 'vue-i18n'
 import { api } from '../lib/api/client'
 import type { components } from '../lib/api/client'
@@ -215,8 +216,24 @@ interface HeaderRow {
 const planStore = usePlanStore()
 const { t } = useI18n()
 
-const loading = ref(true)
-const loadError = ref<string | null>(null)
+const { loading, error: loadError, load: loadSettings } = useDataFetch(
+  async () => {
+    const res = await api.GET('/api/v1/settings/observability')
+    if (res.data) {
+      const s = res.data as unknown as OtelSettingsResponse
+      otlpEndpoint.value = s.otlp_endpoint
+      savedOtlpHeaders.value = { ...s.otlp_headers }
+      otlpHeaders.value = headersToRows(s.otlp_headers)
+      exportIntervalSeconds.value = s.export_interval_seconds
+      langsmithEnabled.value = s.langsmith_enabled
+      hasLangsmithKey.value = s.has_langsmith_api_key
+      envOverrideActive.value = s.env_override_active
+      effectiveOtlpEndpoint.value = s.effective_otlp_endpoint
+    }
+    return res
+  },
+  { immediate: false }
+)
 
 const otlpEndpoint = ref('')
 const otlpHeaders = ref<HeaderRow[]>([])
@@ -256,31 +273,6 @@ function rowsToHeaders(rows: HeaderRow[]): Record<string, string> {
     }
   }
   return result
-}
-
-async function loadSettings() {
-  loading.value = true
-  loadError.value = null
-  try {
-    const { data, error: err } = await api.GET('/api/v1/settings/observability')
-    if (err) {
-      loadError.value = t('views.SettingsObservabilityView.failed_to_load_settings') + ' ' + formatApiError(err)
-    } else if (data) {
-      const s = data as unknown as OtelSettingsResponse
-      otlpEndpoint.value = s.otlp_endpoint
-      savedOtlpHeaders.value = { ...s.otlp_headers }
-      otlpHeaders.value = headersToRows(s.otlp_headers)
-      exportIntervalSeconds.value = s.export_interval_seconds
-      langsmithEnabled.value = s.langsmith_enabled
-      hasLangsmithKey.value = s.has_langsmith_api_key
-      envOverrideActive.value = s.env_override_active
-      effectiveOtlpEndpoint.value = s.effective_otlp_endpoint
-    }
-  } catch (e: unknown) {
-    loadError.value = t('views.SettingsObservabilityView.failed_to_load_settings') + ' ' + formatApiError(e)
-  } finally {
-    loading.value = false
-  }
 }
 
 function resetForm() {
@@ -387,8 +379,8 @@ onBeforeUnmount(() => {
   if (observabilityTestTimeout) clearTimeout(observabilityTestTimeout)
 })
 
-onMounted(() => {
+onMounted(async () => {
   planStore.fetchPlan()
-  loadSettings()
+  await loadSettings()
 })
 </script>

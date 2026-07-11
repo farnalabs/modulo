@@ -74,6 +74,7 @@
 
 <script setup lang="ts">
 import { ref, reactive, onMounted, onBeforeUnmount } from 'vue'
+import { useDataFetch } from '../composables/useDataFetch'
 import { useI18n } from 'vue-i18n'
 import { api } from '../lib/api/client'
 import { formatApiError } from '../lib/api/formatError'
@@ -146,7 +147,16 @@ const backendForms = reactive<BackendForm[]>([
   },
 ])
 
-const loading = ref(true)
+const { loading, load } = useDataFetch(
+  async () => {
+    const res = await api.GET('/api/v1/admin/monitor-config')
+    if (res.data) {
+      fromApiPayload(res.data as Record<string, any>)
+    }
+    return res
+  },
+  { immediate: false }
+)
 const saving = ref(false)
 const dirty = ref(false)
 const flash = ref('')
@@ -230,20 +240,6 @@ function fromApiPayload(data: Record<string, any>) {
   }
 
   dirty.value = false
-}
-
-async function load() {
-  loading.value = true
-  try {
-    const res = await api.GET('/api/v1/admin/monitor-config')
-    if (res.data) {
-      fromApiPayload(res.data as Record<string, any>)
-    }
-  } catch (e) {
-    showFlash(`${t('common.failed_to_load')}: ${formatApiError(e)}`, 'error')
-  } finally {
-    loading.value = false
-  }
 }
 
 async function save() {

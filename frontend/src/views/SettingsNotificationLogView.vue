@@ -135,8 +135,9 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted } from 'vue'
+import { ref, computed } from 'vue'
 import { api } from '../lib/api/client'
+import { useDataFetch } from '../composables/useDataFetch'
 import { formatApiError } from '../lib/api/formatError'
 import type { components } from '../lib/api/client'
 import PageHeader from '../components/shared/PageHeader.vue'
@@ -145,13 +146,29 @@ import ErrorAlert from '../components/shared/ErrorAlert.vue'
 
 type DeliveryLogEntry = components['schemas']['DeliveryLogEntry']
 
-const items = ref<DeliveryLogEntry[]>([])
-const loading = ref(true)
-const error = ref<string | null>(null)
-const total = ref(0)
 const cursorStack = ref<(string | null)[]>([])
 const currentCursor = ref<string | null>(null)
 const nextCursor = ref<string | null>(null)
+
+const { loading, error, data: responseData, load: loadDeliveries } = useDataFetch(
+  async () => {
+    const params: Record<string, unknown> = { limit: 50 }
+    if (currentCursor.value) params.cursor = currentCursor.value
+    if (filterStatus.value) params.status = filterStatus.value
+    if (filterDateFrom.value) params.from = filterDateFrom.value
+    if (filterDateTo.value) params.to = filterDateTo.value
+    const res = await api.GET('/api/v1/admin/notifications/deliveries', {
+      params: { query: params as any },
+    })
+    if (res.data) {
+      nextCursor.value = res.data.next_cursor ?? null
+    }
+    return res
+  },
+)
+
+const items = computed(() => (responseData.value as any)?.items ?? [])
+const total = computed(() => (responseData.value as any)?.total ?? 0)
 
 const filterStatus = ref('')
 const filterDateFrom = ref('')
@@ -176,56 +193,32 @@ function statusBadge(status: string): string {
   return 'badge badge-context-slate'
 }
 
-async function loadDeliveries(cursor?: string | null) {
-  loading.value = true
-  error.value = null
-  try {
-    const params: Record<string, unknown> = { limit: 50 }
-    if (cursor) params.cursor = cursor
-    if (filterStatus.value) params.status = filterStatus.value
-    if (filterDateFrom.value) params.from = filterDateFrom.value
-    if (filterDateTo.value) params.to = filterDateTo.value
-    const { data, error: err } = await api.GET('/api/v1/admin/notifications/deliveries', {
-      params: { query: params as any },
-    })
-    if (err) {
-      error.value = `Failed to load delivery logs: ${formatApiError(err)}`
-    } else if (data) {
-      items.value = data.items
-      total.value = data.total
-      nextCursor.value = data.next_cursor
-      currentCursor.value = cursor ?? null
-      if (!cursor) cursorStack.value = []
-    }
-  } catch (e: unknown) {
-    error.value = `Failed to load delivery logs: ${formatApiError(e)}`
-  } finally {
-    loading.value = false
-  }
-}
-
 function goToPreviousPage() {
   const prev = cursorStack.value.pop()
   if (prev === undefined) return
-  loadDeliveries(prev)
+  currentCursor.value = prev
+  loadDeliveries()
 }
 
 function goToNextPage() {
   if (!nextCursor.value) return
   cursorStack.value.push(currentCursor.value)
-  loadDeliveries(nextCursor.value)
+  currentCursor.value = nextCursor.value
+  loadDeliveries()
 }
 
 function applyFilters() {
-  loadDeliveries(null)
+  currentCursor.value = null
+  cursorStack.value = []
+  loadDeliveries()
 }
 
 function resetFilters() {
   filterStatus.value = ''
   filterDateFrom.value = ''
   filterDateTo.value = ''
-  loadDeliveries(null)
+  currentCursor.value = null
+  cursorStack.value = []
+  loadDeliveries()
 }
-
-onMounted(() => loadDeliveries(null))
 </script>

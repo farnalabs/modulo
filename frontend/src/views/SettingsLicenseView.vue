@@ -106,6 +106,7 @@
 
 <script setup lang="ts">
 import { ref, computed, onMounted } from 'vue'
+import { useDataFetch } from '../composables/useDataFetch'
 import { Button } from '@/components/ui/button'
 import { api } from '../lib/api/client'
 import { formatApiError } from '../lib/api/formatError'
@@ -118,9 +119,6 @@ import FormDialog from '../components/shared/FormDialog.vue'
 
 const planStore = usePlanStore()
 
-const loading = ref(true)
-const loadError = ref<string | null>(null)
-
 interface LicenseStatus {
   has_license: boolean
   tier: string
@@ -129,13 +127,18 @@ interface LicenseStatus {
   org_id: string | null
 }
 
-const licenseInfo = ref<LicenseStatus>({
+const defaultLicense: LicenseStatus = {
   has_license: false,
   tier: 'community',
   features: [],
   expires_at: null,
   org_id: null,
-})
+}
+
+const { loading, error: loadError, data: licenseInfo, load: loadAll } = useDataFetch<LicenseStatus>(
+  () => (api as any).GET('/api/v1/admin/license'),
+  { initialValue: defaultLicense }
+)
 
 const newLicenseKey = ref('')
 
@@ -161,24 +164,6 @@ function formatDate(iso: string): string {
     })
   } catch {
     return iso
-  }
-}
-
-async function loadAll() {
-  loading.value = true
-  loadError.value = null
-  try {
-    const licResp = await (api as any).GET('/api/v1/admin/license')
-
-    if (licResp.error) {
-      loadError.value = `Failed to load license: ${formatApiError(licResp.error)}`
-      return
-    }
-    licenseInfo.value = licResp.data as LicenseStatus
-  } catch (e: unknown) {
-    loadError.value = `Failed to load data: ${formatApiError(e)}`
-  } finally {
-    loading.value = false
   }
 }
 
@@ -257,6 +242,5 @@ async function removeLicense() {
 
 onMounted(() => {
   planStore.fetchPlan()
-  loadAll()
 })
 </script>

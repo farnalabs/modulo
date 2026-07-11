@@ -153,8 +153,9 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted } from 'vue'
+import { ref, computed } from 'vue'
 import { api } from '../lib/api/client'
+import { useDataFetch } from '../composables/useDataFetch'
 import { formatApiError } from '../lib/api/formatError'
 import type { components } from '../lib/api/client'
 import PageHeader from '../components/shared/PageHeader.vue'
@@ -164,13 +165,28 @@ import { shortId } from '../utils/format'
 
 type TriggerEventItem = components['schemas']['TriggerEventItem']
 
-const items = ref<TriggerEventItem[]>([])
-const loading = ref(true)
-const error = ref<string | null>(null)
-const total = ref(0)
 const cursorStack = ref<(string | null)[]>([])
 const currentCursor = ref<string | null>(null)
 const nextCursor = ref<string | null>(null)
+
+const { loading, error, data: responseData, load: loadEvents } = useDataFetch(
+  async () => {
+    const params: Record<string, unknown> = { limit: 50 }
+    if (currentCursor.value) params.cursor = currentCursor.value
+    if (filterTriggerType.value) params.trigger_type = filterTriggerType.value
+    if (filterResult.value) params.validation_result = filterResult.value
+    const res = await api.GET('/api/v1/admin/trigger-events', {
+      params: { query: params as any },
+    })
+    if (res.data) {
+      nextCursor.value = res.data.next_cursor ?? null
+    }
+    return res
+  },
+)
+
+const items = computed(() => (responseData.value as any)?.items ?? [])
+const total = computed(() => (responseData.value as any)?.total ?? 0)
 
 const filterTriggerType = ref('')
 const filterResult = ref('')
@@ -205,54 +221,31 @@ function resultBadge(result: string): string {
   return 'badge badge-context-slate'
 }
 
-async function loadEvents(cursor?: string | null) {
-  loading.value = true
-  error.value = null
-  try {
-    const params: Record<string, unknown> = { limit: 50 }
-    if (cursor) params.cursor = cursor
-    if (filterTriggerType.value) params.trigger_type = filterTriggerType.value
-    if (filterResult.value) params.validation_result = filterResult.value
-    const { data, error: err } = await api.GET('/api/v1/admin/trigger-events', {
-      params: { query: params as any },
-    })
-    if (err) {
-      error.value = `Failed to load trigger events: ${formatApiError(err)}`
-    } else if (data) {
-      items.value = data.items
-      total.value = data.total
-      nextCursor.value = data.next_cursor
-      currentCursor.value = cursor ?? null
-      if (!cursor) cursorStack.value = []
-    }
-  } catch (e: unknown) {
-    error.value = `Failed to load trigger events: ${formatApiError(e)}`
-  } finally {
-    loading.value = false
-  }
-}
-
 function goToPreviousPage() {
   const prev = cursorStack.value.pop()
   if (prev === undefined) return
-  loadEvents(prev)
+  currentCursor.value = prev
+  loadEvents()
 }
 
 function goToNextPage() {
   if (!nextCursor.value) return
   cursorStack.value.push(currentCursor.value)
-  loadEvents(nextCursor.value)
+  currentCursor.value = nextCursor.value
+  loadEvents()
 }
 
 function applyFilters() {
-  loadEvents(null)
+  currentCursor.value = null
+  cursorStack.value = []
+  loadEvents()
 }
 
 function resetFilters() {
   filterTriggerType.value = ''
   filterResult.value = ''
-  loadEvents(null)
+  currentCursor.value = null
+  cursorStack.value = []
+  loadEvents()
 }
-
-onMounted(() => loadEvents(null))
 </script>
