@@ -283,8 +283,9 @@
 
 <script setup lang="ts">
 import PageHeader from '../components/shared/PageHeader.vue'
-import { ref, reactive, onMounted } from 'vue'
+import { ref, reactive, computed } from 'vue'
 import { api } from '../lib/api/client'
+import { useDataFetch } from '../composables/useDataFetch'
 import { formatApiError } from '../lib/api/formatError'
 import type { components } from '../lib/api/client'
 import LoadingSpinner from '../components/shared/LoadingSpinner.vue'
@@ -330,9 +331,15 @@ function emptyForm(): ProfileFormState {
   }
 }
 
-const profiles = ref<ProfileItem[]>([])
-const loading = ref(true)
-const error = ref<string | null>(null)
+const { data: profilesData, loading, error, load: loadProfiles } = useDataFetch(
+  () => api.GET('/api/v1/environments') as Promise<{ data?: { items?: ProfileItem[] }; error?: { detail?: string } }>,
+  { initialValue: [] as ProfileItem[] }
+)
+
+const profiles = computed(() => {
+  const d = profilesData.value
+  return ((d as any)?.items ?? d ?? []) as ProfileItem[]
+})
 
 const formMode = ref<'add' | 'edit' | null>(null)
 const formData = reactive<ProfileFormState>(emptyForm())
@@ -351,23 +358,6 @@ const testResult = reactive<{ profileId: string | null; profileName: string; eve
   profileName: '',
   events: [],
 })
-
-async function loadProfiles() {
-  loading.value = true
-  error.value = null
-  try {
-    const { data, error: err } = await api.GET('/api/v1/environments')
-    if (err) {
-      error.value = `Failed to load profiles: ${formatApiError(err)}`
-    } else if (data) {
-      profiles.value = data.items
-    }
-  } catch (e: unknown) {
-    error.value = `Failed to load profiles: ${formatApiError(e)}`
-  } finally {
-    loading.value = false
-  }
-}
 
 function providerLabel(profile: ProfileItem): string {
   if (profile.capabilities?.includes('provider:docker')) return 'Docker'
@@ -648,5 +638,5 @@ function profileActions(profile: ProfileItem) {
   ]
 }
 
-onMounted(loadProfiles)
+/* onMounted handled by useDataFetch */
 </script>

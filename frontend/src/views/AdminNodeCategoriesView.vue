@@ -118,8 +118,9 @@
 
 <script setup lang="ts">
 import PageHeader from '../components/shared/PageHeader.vue'
-import { ref, onMounted } from 'vue'
+import { ref, computed } from 'vue'
 import { api } from '../lib/api/client'
+import { useDataFetch } from '../composables/useDataFetch'
 import { formatApiError } from '../lib/api/formatError'
 import NodeCategoryEditor from '../components/NodeCategoryEditor.vue'
 import LoadingSpinner from '../components/shared/LoadingSpinner.vue'
@@ -140,9 +141,15 @@ interface NodeCategory {
   sort_order: number
 }
 
-const categories = ref<NodeCategory[]>([])
-const loading = ref(true)
-const error = ref<string | null>(null)
+const { data: categoriesData, loading, error, load: loadCategories } = useDataFetch(
+  () => api.GET('/api/v1/node-categories') as Promise<{ data?: { items?: NodeCategory[] }; error?: { detail?: string } }>,
+  { initialValue: [] as NodeCategory[] }
+)
+
+const categories = computed(() => {
+  const d = categoriesData.value
+  return (d as any)?.items ?? d ?? []
+})
 
 const editorMode = ref<'add' | 'edit' | null>(null)
 const editCategoryId = ref<string | null>(null)
@@ -152,23 +159,6 @@ const deleteConfirmCategoryId = ref<string | null>(null)
 const deleteConfirmName = ref('')
 const deleting = ref(false)
 const deleteError = ref<string | null>(null)
-
-async function loadCategories() {
-  loading.value = true
-  error.value = null
-  try {
-    const { data, error: err } = await api.GET('/api/v1/node-categories')
-    if (err) {
-      error.value = `Failed to load categories: ${formatApiError(err)}`
-    } else if (data) {
-      categories.value = data.items ?? data as unknown as NodeCategory[]
-    }
-  } catch (e: unknown) {
-    error.value = formatApiError(e)
-  } finally {
-    loading.value = false
-  }
-}
 
 function openAddForm() {
   editorMode.value = 'add'
@@ -265,5 +255,5 @@ function categoryActions(cat: NodeCategory) {
   ]
 }
 
-onMounted(() => { planStore.fetchPlan(); loadCategories() })
+planStore.fetchPlan()
 </script>

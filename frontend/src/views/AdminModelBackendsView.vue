@@ -354,8 +354,9 @@
 
 <script setup lang="ts">
 import PageHeader from '../components/shared/PageHeader.vue'
-import { ref, reactive, computed, onMounted } from 'vue'
+import { ref, reactive, computed } from 'vue'
 import { api } from '../lib/api/client'
+import { useDataFetch } from '../composables/useDataFetch'
 import type { components } from '../lib/api/client'
 import LoadingSpinner from '../components/shared/LoadingSpinner.vue'
 import ErrorAlert from '../components/shared/ErrorAlert.vue'
@@ -394,14 +395,13 @@ function emptyForm(): BackendFormState {
   }
 }
 
-const backends = ref<ModelBackendItem[]>([])
+const { data: backendsResp, loading, error, load: loadBackends } = useDataFetch(
+  () => api.GET('/api/v1/model-backends'),
+  { initialValue: { items: [] } as { items: ModelBackendItem[] } }
+)
 
-// In-dev backends are hidden entirely; native backends stay in the primary
-// table; preview backends are segregated into a collapsed disclosure section.
-const nativeBackends = computed(() => backends.value.filter(b => (b.tier ?? 'native') !== 'preview' && (b.tier ?? 'native') !== 'in_dev'))
-const previewBackends = computed(() => backends.value.filter(b => b.tier === 'preview'))
-const loading = ref(true)
-const error = ref<string | null>(null)
+const nativeBackends = computed(() => (backendsResp.value?.items ?? []).filter(b => (b.tier ?? 'native') !== 'preview' && (b.tier ?? 'native') !== 'in_dev'))
+const previewBackends = computed(() => (backendsResp.value?.items ?? []).filter(b => b.tier === 'preview'))
 
 const formMode = ref<'add' | 'edit' | null>(null)
 const formData = reactive<BackendFormState>(emptyForm())
@@ -414,23 +414,6 @@ const deleteConfirmBackendId = ref<string | null>(null)
 const deleteConfirmName = ref('')
 const deleting = ref(false)
 const deleteError = ref<string | null>(null)
-
-async function loadBackends() {
-  loading.value = true
-  error.value = null
-  try {
-    const { data, error: err } = await api.GET('/api/v1/model-backends')
-    if (err) {
-      error.value = `Failed to load model backends: ${formatApiError(err)}`
-    } else if (data) {
-      backends.value = data.items
-    }
-  } catch (e: unknown) {
-    error.value = `Failed to load model backends: ${formatApiError(e)}`
-  } finally {
-    loading.value = false
-  }
-}
 
 function openAddForm() {
   formMode.value = 'add'
@@ -526,8 +509,8 @@ async function createBackend() {
     if (err) {
       formError.value = formatApiError(err)
     } else if (data) {
-      backends.value.push(data)
       closeForm()
+      loadBackends()
     }
   } catch (e: unknown) {
     formError.value = formatApiError(e)
@@ -548,11 +531,8 @@ async function updateBackend() {
     if (err) {
       formError.value = formatApiError(err)
     } else if (data) {
-      const idx = backends.value.findIndex(b => b.id === editBackendId.value)
-      if (idx >= 0) {
-        backends.value[idx] = data
-      }
       closeEditForm()
+      loadBackends()
     }
   } catch (e: unknown) {
     formError.value = formatApiError(e)
@@ -579,8 +559,8 @@ async function deleteBackend() {
     if (err) {
       deleteError.value = formatApiError(err)
     } else if (response.status === 204 || response.ok) {
-      backends.value = backends.value.filter(b => b.id !== deleteConfirmBackendId.value)
       deleteConfirmBackendId.value = null
+      loadBackends()
     }
   } catch (e: unknown) {
     deleteError.value = formatApiError(e)
@@ -605,5 +585,5 @@ function backendActions(backend: ModelBackendItem) {
   ]
 }
 
-onMounted(loadBackends)
+/* onMounted handled by useDataFetch */
 </script>

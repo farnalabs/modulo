@@ -115,8 +115,9 @@
 
 <script setup lang="ts">
 import PageHeader from '../components/shared/PageHeader.vue'
-import { ref, onMounted } from 'vue'
+import { ref, computed, watch } from 'vue'
 import { api } from '../lib/api/client'
+import { useDataFetch } from '../composables/useDataFetch'
 import { formatApiError } from '../lib/api/formatError'
 import { usePlanStore } from '../stores/planStore'
 import FeatureGate from '../components/FeatureGate.vue'
@@ -138,16 +139,9 @@ interface SpendLimitData {
   }>
 }
 
-interface TeamCostItem {
-  team_id: string
-  team_name: string
-  cost_usd: number
-  limit_usd: number | null
-}
-
 interface CostReportData {
   org_total_usd: number
-  teams: TeamCostItem[]
+  teams: Array<{ team_id: string; team_name: string; cost_usd: number; limit_usd: number | null }>
 }
 
 interface TeamRow {
@@ -159,67 +153,41 @@ interface TeamRow {
   saveError: string | null
 }
 
-const loading = ref(true)
-const loadError = ref<string | null>(null)
+const { data: limitsData, loading, error: loadError, load: loadData } = useDataFetch(
+  () => (api as any).GET('/api/v1/admin/costs/limits'),
+)
 
 const orgLimit = ref<number | null>(null)
+const teams = ref<TeamRow[]>([])
+
+watch(() => limitsData.value, (data) => {
+  if (data) {
+    const resp = data as SpendLimitData
+    orgLimit.value = resp.org_daily_limit_usd
+    teams.value = (resp.teams ?? []).map(t => ({
+      ...t,
+      editingLimit: t.daily_limit_usd,
+      saving: false,
+      saveError: null,
+    }))
+  }
+})
+
+const { data: costsResp, loading: costsLoading, error: costsError, load: loadCosts } = useDataFetch(
+  () => (api as any).GET('/api/v1/admin/costs'),
+  { initialValue: { org_total_usd: 0, teams: [] } }
+)
+
+const orgTotalCost = computed(() => (costsResp.value as CostReportData)?.org_total_usd ?? 0)
+const teamCosts = computed(() => (costsResp.value as CostReportData)?.teams ?? [])
+
 const savingOrg = ref(false)
 const orgSaveError = ref<string | null>(null)
 const orgSaveSuccess = ref(false)
 
-const teams = ref<TeamRow[]>([])
-
-const costsLoading = ref(true)
-const costsError = ref<string | null>(null)
-const orgTotalCost = ref(0)
-const teamCosts = ref<TeamCostItem[]>([])
-
 function overageClass(cost: number, limit: number | null): string {
   if (limit === null || limit <= 0) return ''
   return cost > limit ? 'text-destructive' : 'text-success'
-}
-
-async function loadData() {
-  loading.value = true
-  loadError.value = null
-  try {
-    const { data, error: err } = await (api as any).GET('/api/v1/admin/costs/limits')
-    if (err) {
-      loadError.value = `Failed to load spend limits: ${formatApiError(err)}`
-    } else if (data) {
-      const resp = data as SpendLimitData
-      orgLimit.value = resp.org_daily_limit_usd
-      teams.value = (resp.teams ?? []).map((t) => ({
-        ...t,
-        editingLimit: t.daily_limit_usd,
-        saving: false,
-        saveError: null,
-      }))
-    }
-  } catch (e: unknown) {
-    loadError.value = `Failed to load spend limits: ${formatApiError(e)}`
-  } finally {
-    loading.value = false
-  }
-}
-
-async function loadCosts() {
-  costsLoading.value = true
-  costsError.value = null
-  try {
-    const { data, error: err } = await (api as any).GET('/api/v1/admin/costs')
-    if (err) {
-      costsError.value = `Failed to load costs: ${formatApiError(err)}`
-    } else if (data) {
-      const resp = data as CostReportData
-      orgTotalCost.value = resp.org_total_usd ?? 0
-      teamCosts.value = resp.teams ?? []
-    }
-  } catch (e: unknown) {
-    costsError.value = `Failed to load costs: ${formatApiError(e)}`
-  } finally {
-    costsLoading.value = false
-  }
 }
 
 async function saveOrgLimit() {
@@ -261,9 +229,5 @@ async function saveTeamLimit(team: TeamRow) {
   }
 }
 
-onMounted(() => {
-  planStore.fetchPlan()
-  loadData()
-  loadCosts()
-})
+planStore.fetchPlan()
 </script>

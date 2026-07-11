@@ -232,8 +232,9 @@
 
 <script setup lang="ts">
 import PageHeader from '../components/shared/PageHeader.vue'
-import { ref, computed, onMounted } from 'vue'
+import { ref, reactive, computed, watch } from 'vue'
 import { api } from '../lib/api/client'
+import { useDataFetch } from '../composables/useDataFetch'
 import { formatApiError } from '../lib/api/formatError'
 import { usePlanStore } from '../stores/planStore'
 import FeatureGate from '../components/FeatureGate.vue'
@@ -285,15 +286,45 @@ interface TeamBudgetRow {
   saveError: string | null
 }
 
-const loading = ref(true)
-const loadError = ref<string | null>(null)
+const { data: costsData, loading: costsLoading, error: costsError, load: loadCosts } = useDataFetch(
+  () => (api as any).GET('/api/v1/admin/costs'),
+  { initialValue: { org_total_usd: 0, teams: [] } }
+)
 
-const costsLoading = ref(true)
-const costsError = ref<string | null>(null)
 const totalSpend = ref(0)
 const teamCostMap = ref<Record<string, number>>({})
 
+watch(() => costsData.value, (data) => {
+  if (data) {
+    const resp = data as CostReportData
+    totalSpend.value = resp.org_total_usd ?? 0
+    const map: Record<string, number> = {}
+    for (const tc of resp.teams ?? []) {
+      map[tc.team_id] = tc.cost_usd
+    }
+    teamCostMap.value = map
+  }
+})
+
+const { data: limitsData, load: loadLimits } = useDataFetch(
+  () => (api as any).GET('/api/v1/admin/costs/limits'),
+  { immediate: false }
+)
+
 const teams = ref<TeamBudgetRow[]>([])
+
+watch(() => limitsData.value, (data) => {
+  if (data) {
+    const resp = data as SpendLimitResponse
+    teams.value = (resp.team_limits ?? []).map((t: any) => ({
+      id: t.team_id as string,
+      name: t.team_name as string,
+      editingBudget: t.daily_spend_limit,
+      saving: false,
+      saveError: null,
+    }))
+  }
+})
 
 const settings = ref<ControlsSettings>({
   budget: 0,
@@ -302,6 +333,19 @@ const settings = ref<ControlsSettings>({
   alertThresholds: [50, 75, 90],
   circuitBreakerEnabled: false,
 })
+
+const loading = ref(true)
+const loadError = ref<string | null>(null)
+
+async function loadAll() {
+  loading.value = true
+  loadError.value = null
+  try {
+    await Promise.all([loadCosts(), loadLimits(), loadSettings()])
+  } finally {
+    loading.value = false
+  }
+}
 
 const savingBudget = ref(false)
 const budgetSaveError = ref<string | null>(null)
@@ -341,56 +385,6 @@ const progressBarClass = computed(() => {
   if (pct >= 75) return 'bg-amber-500'
   return 'bg-primary'
 })
-
-async function loadAll() {
-  loading.value = true
-  loadError.value = null
-  await Promise.all([loadCosts(), loadLimits(), loadSettings()])
-  loading.value = false
-}
-
-async function loadCosts() {
-  costsLoading.value = true
-  costsError.value = null
-  try {
-    const { data, error: err } = await (api as any).GET('/api/v1/admin/costs')
-    if (err) {
-      costsError.value = `Failed to load costs: ${formatApiError(err)}`
-    } else if (data) {
-      const resp = data as CostReportData
-      totalSpend.value = resp.org_total_usd ?? 0
-      const map: Record<string, number> = {}
-      for (const tc of resp.teams ?? []) {
-        map[tc.team_id] = tc.cost_usd
-      }
-      teamCostMap.value = map
-    }
-  } catch (e: unknown) {
-    costsError.value = `Failed to load costs: ${formatApiError(e)}`
-  } finally {
-    costsLoading.value = false
-  }
-}
-
-async function loadLimits() {
-  try {
-    const { data, error: err } = await (api as any).GET('/api/v1/admin/costs/limits')
-    if (err) {
-      return
-    } else if (data) {
-      const resp = data as SpendLimitResponse
-      teams.value = (resp.team_limits ?? []).map((t) => ({
-        id: t.team_id as string,
-        name: t.team_name as string,
-        editingBudget: t.daily_spend_limit,
-        saving: false,
-        saveError: null,
-      }))
-    }
-  } catch (e) {
-    console.warn('Failed to load team budgets', e)
-  }
-}
 
 async function loadSettings() {
   try {
@@ -502,8 +496,6 @@ async function onBillingPeriodChange(e: Event) {
   }
 }
 
-onMounted(() => {
-  planStore.fetchPlan()
-  loadAll()
-})
+planStore.fetchPlan()
+loadAll()
 </script>

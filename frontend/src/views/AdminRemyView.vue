@@ -712,8 +712,9 @@
 <script setup lang="ts">
 import PageHeader from '../components/shared/PageHeader.vue'
 import SectionCard from '../components/shared/SectionCard.vue'
-import { ref, reactive, computed, onMounted, onUnmounted } from 'vue'
+import { ref, reactive, computed, watch, onUnmounted } from 'vue'
 import { api } from '../lib/api/client'
+import { useDataFetch } from '../composables/useDataFetch'
 import { formatApiError } from '../lib/api/formatError'
 import LoadingSpinner from '../components/shared/LoadingSpinner.vue'
 import ErrorAlert from '../components/shared/ErrorAlert.vue'
@@ -734,9 +735,45 @@ interface ProviderStatus {
   configured: boolean
 }
 
+const configSaving = ref(false)
+
+let primerTimer: ReturnType<typeof setTimeout> | null = null
+
+interface ProviderInfo {
+  id: string
+  label: string
+}
+
+const availableProviders = ref<{ native: ProviderInfo[]; customTypes: ProviderInfo[] }>({
+  native: [],
+  customTypes: [],
+})
+
 const loading = ref(true)
 const loadError = ref<string | null>(null)
-const configSaving = ref(false)
+
+const { data: configData, loading: configLoading, error: configError, load: loadConfig } = useDataFetch(
+  () => (api as any).GET('/api/v1/admin/remy/config'),
+  { immediate: false }
+)
+
+watch(() => configData.value, (cfg) => {
+  if (!cfg) return
+  const c = cfg as any
+  const acl = c.access_list || {}
+  accessList.userIds = acl.user_ids || []
+  accessList.teamIds = acl.team_ids || []
+  accessList.selectedRoles = acl.org_roles || ['admin']
+  modelConfig.defaultProvider = c.default_provider || 'anthropic'
+  modelConfig.defaultModel = c.default_model || ''
+  modelConfig.contextWindow = c.default_context_window ?? 200000
+  modelConfig.allowedProviders = c.allowed_providers || ['anthropic']
+  modelConfig.allowedModels = (c.allowed_models || []).join(', ')
+  systemPrompt.value = c.system_prompt || ''
+  guidance.value = c.additional_guidance || ''
+  loadPermsFromConfig(c)
+  loadSafetyFromConfig(c)
+})
 
 const contextSourceDefs = [
   { key: 'product_primer', label: 'Product Primer', descKey: 'product_primer_description', tokens: '~700' },
@@ -752,25 +789,33 @@ const contextSources = ref<Record<string, string>>({})
 const contextLoading = ref(true)
 const contextSaving = ref(false)
 const contextError = ref<string | null>(null)
+
+const { data: contextSourcesData, load: loadContextSources } = useDataFetch(
+  () => (api as any).GET('/api/v1/admin/remy/context-sources'),
+  { immediate: false }
+)
+
+watch(() => contextSourcesData.value, (data) => {
+  if (data) {
+    contextSources.value = data as Record<string, string>
+    const modes = contextSources.value
+    for (const src of contextSourceDefs) {
+      if (!modes[src.key]) {
+        modes[src.key] = 'always_on'
+      }
+    }
+  }
+  contextLoading.value = false
+})
+
 const skillModes = ref<Record<string, string>>({})
 const skillModeSaving = ref<Record<string, boolean>>({})
 const primerSaving = ref(false)
 const primerMessage = ref<string | null>(null)
-let primerTimer: ReturnType<typeof setTimeout> | null = null
 
 const providerStatus = ref<ProviderStatus[]>([])
 const customProviderStatus = ref<ProviderStatus[]>([])
 const providersLoading = ref(true)
-
-interface ProviderInfo {
-  id: string
-  label: string
-}
-
-const availableProviders = ref<{ native: ProviderInfo[]; customTypes: ProviderInfo[] }>({
-  native: [],
-  customTypes: [],
-})
 
 const orgRoles = ['admin', 'operator', 'runner', 'viewer']
 
@@ -1077,49 +1122,35 @@ async function regeneratePrimer() {
   }
 }
 
-async function loadUsers() {
-  try {
-    const { data, error: err } = await (api as any).GET('/api/v1/admin/users', {
-      params: { query: { page_size: 1000 } },
-    })
-    if (err) {
-      console.warn('Failed to load users', err)
-      users.value = []
-      return
-    }
-    if (data) {
-      users.value = (data as { items: Array<{ id: string; display_name: string; email: string }> }).items || []
-      users.value.sort((a, b) => a.display_name.localeCompare(b.display_name))
-    }
-  } catch (e: unknown) {
-    console.warn('Failed to load users', e)
-    users.value = []
-  }
-}
+const { data: usersResp, load: loadUsers } = useDataFetch(
+  () => (api as any).GET('/api/v1/admin/users', { params: { query: { page_size: 1000 } as any } }),
+  { immediate: false }
+)
 
-async function loadTeams() {
-  try {
-    const { data, error: err } = await (api as any).GET('/api/v1/admin/teams', {
-      params: { query: { page_size: 1000 } },
-    })
-    if (err) {
-      console.warn('Failed to load teams', err)
-      teams.value = []
-      return
-    }
-    if (data) {
-      const items = (data as { items: Array<{ id: string; name: string; member_count: number }> }).items || []
-      teams.value = items.map(t => ({
-        ...t,
-        member_count_label: `${t.member_count ?? 0} member${(t.member_count ?? 0) !== 1 ? 's' : ''}`,
-      }))
-      teams.value.sort((a, b) => a.name.localeCompare(b.name))
-    }
-  } catch (e: unknown) {
-    console.warn('Failed to load teams', e)
-    teams.value = []
+watch(() => usersResp.value, (data) => {
+  if (data) {
+    const raw = data as { items: Array<{ id: string; display_name: string; email: string }> }
+    users.value = raw.items || []
+    users.value.sort((a, b) => a.display_name.localeCompare(b.display_name))
   }
-}
+})
+
+const { data: teamsResp, load: loadTeams } = useDataFetch(
+  () => (api as any).GET('/api/v1/admin/teams', { params: { query: { page_size: 1000 } as any } }),
+  { immediate: false }
+)
+
+watch(() => teamsResp.value, (data) => {
+  if (data) {
+    const raw = data as { items: Array<{ id: string; name: string; member_count: number }> }
+    const items = raw.items || []
+    teams.value = items.map(t => ({
+      ...t,
+      member_count_label: `${t.member_count ?? 0} member${(t.member_count ?? 0) !== 1 ? 's' : ''}`,
+    }))
+    teams.value.sort((a, b) => a.name.localeCompare(b.name))
+  }
+})
 
 // Skills
 const skills = ref<SkillItem[]>([])
@@ -1147,20 +1178,6 @@ async function toggleSkillActive(skill: SkillItem) {
   }
 }
 
-async function loadSkills() {
-  try {
-    const { data, error: err } = await (api as any).GET('/api/v1/admin/remy/skills')
-    if (err) {
-      skillError.value = `Failed to load skills: ${formatApiError(err)}`
-    } else if (data) {
-      const items = (data as { items?: SkillItem[] }).items
-      skills.value = Array.isArray(items) ? items : []
-    }
-  } catch (e: unknown) {
-    skillError.value = `Failed to load skills: ${formatApiError(e)}`
-  }
-}
-
 function initSkillModes() {
   const modes: Record<string, string> = {}
   for (const skill of skills.value) {
@@ -1169,67 +1186,28 @@ function initSkillModes() {
   skillModes.value = modes
 }
 
-async function loadConfig() {
-  try {
-    const { data, error: err } = await (api as any).GET('/api/v1/admin/remy/config')
-    if (err) {
-      loadError.value = `Failed to load Remy config: ${formatApiError(err)}`
-      return
-    }
-    if (data) {
-      const cfg = data as {
-        access_list?: { user_ids?: string[]; team_ids?: string[]; org_roles?: string[] }
-        default_provider?: string
-        default_model?: string
-        default_context_window?: number
-        allowed_providers?: string[]
-        allowed_models?: string[]
-        system_prompt?: string
-        additional_guidance?: string
-        permission_mode?: string
-        tool_permissions?: Record<string, string>
-        rate_limit_max_actions?: number
-        rate_limit_window_seconds?: number
-        auto_execute_threshold?: number
-        nogo_page_patterns?: string[]
-        nogo_selector_patterns?: string[]
-        allowed_selectors?: string[]
-        allowed_page_patterns?: string[]
-      }
-      const acl = cfg.access_list || {}
-      accessList.userIds = acl.user_ids || []
-      accessList.teamIds = acl.team_ids || []
-      accessList.selectedRoles = acl.org_roles || []
-      modelConfig.defaultProvider = cfg.default_provider || 'anthropic'
-      modelConfig.defaultModel = cfg.default_model || ''
-      modelConfig.contextWindow = cfg.default_context_window ?? 200000
-      modelConfig.allowedProviders = cfg.allowed_providers || ['anthropic']
-      modelConfig.allowedModels = (cfg.allowed_models || []).join(', ')
-      systemPrompt.value = cfg.system_prompt || ''
-      guidance.value = cfg.additional_guidance || ''
-      loadPermsFromConfig(cfg)
-      loadSafetyFromConfig(cfg)
-    }
-  } catch (e: unknown) {
-    loadError.value = `Failed to load Remy config: ${formatApiError(e)}`
-  }
-}
+const { data: skillsResp, load: loadSkills } = useDataFetch(
+  () => (api as any).GET('/api/v1/admin/remy/skills'),
+  { immediate: false }
+)
 
-async function loadAvailableProviders() {
-  try {
-    const { data, error: err } = await (api as any).GET('/api/v1/admin/remy/available-providers')
-    if (err) {
-      console.warn('Failed to load available providers', err)
-      return
-    }
-    if (data) {
-      availableProviders.value = data as { native: ProviderInfo[]; customTypes: ProviderInfo[] }
-    }
-  } catch (e: unknown) {
-    console.warn('Failed to load available providers', e)
-    availableProviders.value = { native: [], customTypes: [] }
+watch(() => skillsResp.value, (data) => {
+  if (data) {
+    const items = (data as { items?: SkillItem[] }).items
+    skills.value = Array.isArray(items) ? items : []
   }
-}
+})
+
+const { data: providersResp, load: loadAvailableProviders } = useDataFetch(
+  () => (api as any).GET('/api/v1/admin/remy/available-providers'),
+  { immediate: false }
+)
+
+watch(() => providersResp.value, (data) => {
+  if (data) {
+    availableProviders.value = data as { native: ProviderInfo[]; customTypes: ProviderInfo[] }
+  }
+})
 
 async function loadProviders() {
   providersLoading.value = true
@@ -1285,7 +1263,7 @@ async function loadAll() {
   }
 }
 
-onMounted(() => { loadAll() })
+loadAll()
 
 onUnmounted(() => {
   if (primerTimer) clearTimeout(primerTimer)
