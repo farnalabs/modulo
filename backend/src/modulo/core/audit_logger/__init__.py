@@ -1,11 +1,10 @@
-from __future__ import annotations
-
 """Cryptographic audit chaining — SHA-256 linked events per organisation.
 
 Each AuditEvent records the SHA-256 hash of the canonical JSON of the
 prior event in the same org, forming a tamper-evident chain.
 """
 
+from __future__ import annotations
 
 import asyncio
 import hashlib
@@ -332,7 +331,7 @@ async def verify_chain(
         created_at=events[-1].created_at.isoformat() if events[-1].created_at else "",
     )
 
-    head = await get_chain_head(session, org_id)
+    head = await _get_chain_head_locked(session, org_id)
 
     if head:
         chain_head_match = head.last_event_hash == expected_prev
