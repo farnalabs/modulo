@@ -71,6 +71,11 @@ class TestToTicket:
         ticket = tracker._to_ticket(raw)
         assert ticket.labels == []
 
+    def test_missing_labels_key(self, tracker: TrelloTicketTracker) -> None:
+        raw = {"id": "no-labels", "name": "No Labels", "closed": False}
+        ticket = tracker._to_ticket(raw)
+        assert ticket.labels == []
+
 
 class TestListTickets:
     @patch("httpx.AsyncClient")
@@ -105,6 +110,33 @@ class TestListTickets:
         assert len(tickets) == 1
         assert tickets[0].id == "abc123"
 
+    @patch("httpx.AsyncClient")
+    async def test_filters_by_status(self, mock_client_cls: MagicMock, tracker: TrelloTicketTracker) -> None:
+        mock_client = AsyncMock()
+        mock_client_cls.return_value.__aenter__.return_value = mock_client
+        mock_client.get.return_value = _response(
+            200,
+            json=[
+                _make_mock_card(),
+                _make_mock_card({"id": "def456", "name": "Closed card", "closed": True}),
+            ],
+        )
+
+        tickets = await tracker.list_tickets(TicketFilter(status="open"))
+
+        assert len(tickets) == 1
+        assert tickets[0].id == "abc123"
+        assert tickets[0].status == "open"
+
+    @patch("httpx.AsyncClient")
+    async def test_http_error(self, mock_client_cls: MagicMock, tracker: TrelloTicketTracker) -> None:
+        mock_client = AsyncMock()
+        mock_client_cls.return_value.__aenter__.return_value = mock_client
+        mock_client.get.return_value = _response(429)
+
+        with pytest.raises(ValueError, match="Trello API error: 429"):
+            await tracker.list_tickets()
+
 
 class TestGetTicket:
     @patch("httpx.AsyncClient")
@@ -127,6 +159,15 @@ class TestGetTicket:
             timeout=10,
         )
 
+    @patch("httpx.AsyncClient")
+    async def test_network_error(self, mock_client_cls: MagicMock, tracker: TrelloTicketTracker) -> None:
+        mock_client = AsyncMock()
+        mock_client_cls.return_value.__aenter__.return_value = mock_client
+        mock_client.get.side_effect = httpx.ConnectError("Connection refused")
+
+        with pytest.raises(ValueError, match="Trello network error"):
+            await tracker.get_ticket("abc123")
+
 
 class TestCreateTicket:
     @patch("httpx.AsyncClient")
@@ -135,10 +176,68 @@ class TestCreateTicket:
         mock_client_cls.return_value.__aenter__.return_value = mock_client
         mock_client.post.return_value = _response(200, json=_make_mock_card())
 
-        ticket = await tracker.create_ticket("Fix login bug", description="SSO broken", labels=["bug"])
+        ticket = await tracker.create_ticket(
+            "Fix login bug", description="SSO broken", labels=["bug"], idList="list456"
+        )
 
         assert ticket.id == "abc123"
         assert ticket.title == "Fix login bug"
+
+    @patch("httpx.AsyncClient")
+    async def test_posts_payload(self, mock_client_cls: MagicMock, tracker: TrelloTicketTracker) -> None:
+        mock_client = AsyncMock()
+        mock_client_cls.return_value.__aenter__.return_value = mock_client
+        mock_client.post.return_value = _response(200, json=_make_mock_card())
+
+        await tracker.create_ticket("New card", idList="list789")
+
+        mock_client.post.assert_called_once_with(
+            "https://api.trello.com/1/cards",
+            params={"key": "fake_key", "token": "fake_token"},
+            data={"name": "New card", "idList": "list789"},
+            timeout=10,
+        )
+
+    async def test_missing_idlist(self, tracker: TrelloTicketTracker) -> None:
+        with pytest.raises(ValueError, match="idList is required to create a Trello card"):
+            await tracker.create_ticket("No list card")
+
+    @patch("httpx.AsyncClient")
+    async def test_http_error(self, mock_client_cls: MagicMock, tracker: TrelloTicketTracker) -> None:
+        mock_client = AsyncMock()
+        mock_client_cls.return_value.__aenter__.return_value = mock_client
+        mock_client.post.return_value = _response(401, json={"message": "unauthorized"})
+
+        with pytest.raises(ValueError, match="Trello API error: 401"):
+            await tracker.create_ticket("Unauthorized", idList="list456")
+
+
+class TestUpdateTicket:
+    @patch("httpx.AsyncClient")
+    async def test_updates_ticket(self, mock_client_cls: MagicMock, tracker: TrelloTicketTracker) -> None:
+        mock_client = AsyncMock()
+        mock_client_cls.return_value.__aenter__.return_value = mock_client
+        mock_client.put.return_value = _response(200, json=_make_mock_card())
+
+        ticket = await tracker.update_ticket("abc123", idList="list789", due="2025-02-01T00:00:00.000Z")
+
+        assert ticket.id == "abc123"
+        assert ticket.title == "Fix login bug"
+        mock_client.put.assert_called_once_with(
+            "https://api.trello.com/1/cards/abc123",
+            params={"key": "fake_key", "token": "fake_token"},
+            data={"idList": "list789", "due": "2025-02-01T00:00:00.000Z"},
+            timeout=10,
+        )
+
+    @patch("httpx.AsyncClient")
+    async def test_http_error(self, mock_client_cls: MagicMock, tracker: TrelloTicketTracker) -> None:
+        mock_client = AsyncMock()
+        mock_client_cls.return_value.__aenter__.return_value = mock_client
+        mock_client.put.return_value = _response(404)
+
+        with pytest.raises(ValueError, match="Trello API error: 404"):
+            await tracker.update_ticket("nonexistent")
 
 
 class TestHealthCheck:
@@ -169,3 +268,17 @@ class TestHealthCheck:
 class TestConnectorType:
     def test_returns_ticket_tracker(self, tracker: TrelloTicketTracker) -> None:
         assert tracker.connector_type.value == "ticket-tracker"
+
+
+class TestInit:
+    def test_missing_api_key_raises(self) -> None:
+        with pytest.raises(ValueError, match="Trello connector requires api_key and token credentials"):
+            TrelloTicketTracker(config={"board_id": "board123"}, creds={})
+
+    def test_missing_token_raises(self) -> None:
+        with pytest.raises(ValueError, match="Trello connector requires api_key and token credentials"):
+            TrelloTicketTracker(config={"board_id": "board123"}, creds={"api_key": "key_only"})
+
+    def test_empty_credentials_raises(self) -> None:
+        with pytest.raises(ValueError, match="Trello connector requires api_key and token credentials"):
+            TrelloTicketTracker(config={"board_id": "board123"}, creds={"api_key": "", "token": ""})
