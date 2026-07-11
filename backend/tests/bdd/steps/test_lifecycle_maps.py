@@ -1,7 +1,7 @@
 """Step definitions for lifecycle map BDD features."""
 
 import uuid
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -52,8 +52,8 @@ def _make_lifecycle_map(**kwargs: Any) -> MagicMock:
     m.content_json = kwargs.get("content_json", {})
     m.archived_at = kwargs.get("archived_at")
     m.account_id = kwargs.get("account_id", USER_ID)
-    m.created_at = kwargs.get("created_at", datetime.now(timezone.utc))
-    m.updated_at = kwargs.get("updated_at", datetime.now(timezone.utc))
+    m.created_at = kwargs.get("created_at", datetime.now(UTC))
+    m.updated_at = kwargs.get("updated_at", datetime.now(UTC))
     return m
 
 
