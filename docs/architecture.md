@@ -307,7 +307,7 @@ Three compose files:
 - `docker-compose.yml` — dev mode (builds from source, Postgres 16, Redis 7)
 - `docker-compose.local.yml` — with observability profile (otel-collector, Prometheus, Grafana)
 - `docker-compose.test.yml` — CI test environment
-- `docker-compose.mariadb.yml` — MariaDB alternative (experimental multi-backend)
+- `docker-compose.mariadb.yml` — MariaDB alternative (experimental multi-backend — **deprecated 2026-07-11**, not actively tested or maintained)
 
 ### Kubernetes (Helm)
 
