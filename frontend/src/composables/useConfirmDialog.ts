@@ -18,12 +18,11 @@ export function useConfirmDialog(options?: ConfirmDialogOptions) {
   }
 
   async function confirm(fn: () => Promise<void>) {
+    if (isConfirming.value) return
     isConfirming.value = true
     try {
       await fn()
       close()
-    } catch (e) {
-      throw e
     } finally {
       isConfirming.value = false
     }
