@@ -12,68 +12,66 @@ from modulo.connectors.base import (
     HealthResult,
 )
 from modulo.connectors.shell import ShellConnector
-from modulo.core.runtime_provider import ExecResult, RuntimeProvider, WorkspaceSpec
+from modulo.core.runtime_provider import WorkspaceSpec
 
 
-class _FakeRuntimeProvider(RuntimeProvider):
+class _FakeRuntimeProvider:
     """Controllable test double that captures commands and returns canned output."""
 
     def __init__(self) -> None:
         self.created_workspaces: list[WorkspaceSpec] = []
-        self.executed_commands: list[tuple[str, list[str]]] = []
-        self.exec_results: dict[str, ExecResult] = {}
+        self.executed_commands: list[tuple[str, str]] = []
+        self.exec_results: dict[str, dict[str, object]] = {}
         self._file_store: dict[str, str] = {}
 
     def store_file(self, path: str, content: str) -> None:
         self._file_store[path] = content
 
-    def set_exec_result(self, command_suffix: str, result: ExecResult) -> None:
+    def set_exec_result(self, command_suffix: str, result: dict[str, object]) -> None:
         self.exec_results[command_suffix] = result
 
     async def create_workspace(self, spec: WorkspaceSpec) -> str:
         self.created_workspaces.append(spec)
         return f"ws-{uuid.uuid4()}"
 
-    async def exec_command(
+    async def execute_command(
         self,
-        provider_ref: str,
-        command: list[str],
-        *,
-        timeout: int | None = None,  # noqa: ASYNC109
-    ) -> ExecResult:
-        self.executed_commands.append((provider_ref, command))
-
-        cmd_str = " ".join(command)
+        workspace: str,
+        command: str,
+        cwd: str | None = None,
+        env: dict[str, str] | None = None,
+        timeout_seconds: int = 60,
+    ) -> dict[str, object]:
+        self.executed_commands.append((workspace, command))
 
         for suffix, result in self.exec_results.items():
-            if cmd_str.endswith(suffix):
+            if command.endswith(suffix):
                 return result
 
-        if "cat" in cmd_str:
-            # command is ["sh", "-c", "cat /some/path"]; parse the path
-            cat_arg = cmd_str.partition("cat ")[2].strip()
+        if "cat" in command:
+            cat_arg = command.partition("cat ")[2].strip()
             content = self._file_store.get(cat_arg, "")
             if cat_arg in self._file_store:
-                return ExecResult(exit_code=0, stdout=content, stderr="")
-            return ExecResult(
-                exit_code=1,
-                stdout="",
-                stderr=f"cat: {cat_arg}: No such file",
-            )
+                return {"exit_code": 0, "stdout": content, "stderr": ""}
+            return {
+                "exit_code": 1,
+                "stdout": "",
+                "stderr": f"cat: {cat_arg}: No such file",
+            }
 
-        if "ls -1a" in cmd_str:
+        if "ls -1a" in command:
             entries = list(self._file_store.keys())
             names = sorted({e.split("/")[-1] for e in entries})
             lines = "\n".join([".", "..", *names])
-            return ExecResult(exit_code=0, stdout=lines, stderr="")
+            return {"exit_code": 0, "stdout": lines, "stderr": ""}
 
-        if "mkdir" in cmd_str and "base64" in cmd_str:
-            return ExecResult(exit_code=0, stdout="", stderr="")
+        if "mkdir" in command and "base64" in command:
+            return {"exit_code": 0, "stdout": "", "stderr": ""}
 
-        if "echo" in cmd_str:
-            return ExecResult(exit_code=0, stdout="hello", stderr="")
+        if "echo" in command:
+            return {"exit_code": 0, "stdout": "hello", "stderr": ""}
 
-        return ExecResult(exit_code=0, stdout="", stderr="")
+        return {"exit_code": 0, "stdout": "", "stderr": ""}
 
     async def destroy_workspace(self, provider_ref: str) -> None:
         pass
@@ -233,7 +231,7 @@ async def test_unsupported_query_resource(provider: _FakeRuntimeProvider, provid
 async def test_run_command(provider: _FakeRuntimeProvider, provider_ref: str) -> None:
     provider.set_exec_result(
         "echo hello",
-        ExecResult(exit_code=0, stdout="hello\n", stderr="", duration_ms=15),
+        {"exit_code": 0, "stdout": "hello\n", "stderr": "", "duration_ms": 15},
     )
     c = ShellConnector(runtime_provider=provider, workspace_lease_id=workspace_lease_id, allowed_commands=["echo"])
 
@@ -274,10 +272,9 @@ async def test_run_command_with_cwd(provider: _FakeRuntimeProvider, provider_ref
 
     assert len(provider.executed_commands) == 1
     _, cmd = provider.executed_commands[0]
-    full = " ".join(cmd)
-    assert "cd" in full
-    assert "/workspace/project" in full
-    assert "make build" in full
+    assert "cd" in cmd
+    assert "/workspace/project" in cmd
+    assert "make build" in cmd
 
 
 async def test_run_command_with_env(provider: _FakeRuntimeProvider, provider_ref: str) -> None:
@@ -296,10 +293,9 @@ async def test_run_command_with_env(provider: _FakeRuntimeProvider, provider_ref
 
     assert len(provider.executed_commands) == 1
     _, cmd = provider.executed_commands[0]
-    full = " ".join(cmd)
-    assert "NODE_ENV=test" in full
-    assert "CI=true" in full
-    assert "npm test" in full
+    assert "NODE_ENV=test" in cmd
+    assert "CI=true" in cmd
+    assert "npm test" in cmd
 
 
 async def test_run_command_with_timeout(provider: _FakeRuntimeProvider, provider_ref: str) -> None:
@@ -497,25 +493,24 @@ async def test_run_command_with_cwd_and_env(provider: _FakeRuntimeProvider, prov
 
     assert len(provider.executed_commands) == 1
     _, cmd = provider.executed_commands[0]
-    full = " ".join(cmd)
-    assert "cd" in full
-    assert "/workspace/project" in full
-    assert "NODE_ENV=production" in full
-    assert "npm run build" in full
+    assert "cd" in cmd
+    assert "/workspace/project" in cmd
+    assert "NODE_ENV=production" in cmd
+    assert "npm run build" in cmd
 
 
 async def test_build_exec_cmd_raw(provider: _FakeRuntimeProvider, provider_ref: str) -> None:
-    """_build_exec_cmd with neither cwd nor env returns raw split command."""
+    """_build_exec_cmd with neither cwd nor env returns raw command string."""
     c = ShellConnector(runtime_provider=provider, workspace_lease_id=workspace_lease_id, allowed_commands=["echo"])
     result = c._build_exec_cmd("echo hello")
-    assert result == ["echo", "hello"]
+    assert result == "echo hello"
 
 
 async def test_write_file_failure(provider: _FakeRuntimeProvider, provider_ref: str) -> None:
     """Write file when runtime provider returns non-zero exit code."""
     provider.set_exec_result(
         "base64 -d > /tmp/readonly.txt",
-        ExecResult(exit_code=1, stdout="", stderr="mkdir: Permission denied"),
+        {"exit_code": 1, "stdout": "", "stderr": "mkdir: Permission denied"},
     )
     c = ShellConnector(runtime_provider=provider, workspace_lease_id=workspace_lease_id)
 
@@ -568,7 +563,7 @@ async def test_run_command_stderr_output(provider: _FakeRuntimeProvider, provide
     """Command stderr is captured and returned."""
     provider.set_exec_result(
         "grep foo",
-        ExecResult(exit_code=1, stdout="", stderr="grep: No such file", duration_ms=5),
+        {"exit_code": 1, "stdout": "", "stderr": "grep: No such file", "duration_ms": 5},
     )
     c = ShellConnector(runtime_provider=provider, workspace_lease_id=workspace_lease_id, allowed_commands=["grep"])
 
