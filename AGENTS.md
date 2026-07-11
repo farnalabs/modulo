@@ -148,7 +148,9 @@ modulo/
 
 ### Multi-backend DB support
 
-Modulo supports three database backends, configurable via `MODULO_DB` env var:
+> **MariaDB is deprecated (2026-07-11).** MariaDB support was added as premature generality (see architecture critique 2026-07-09). Production and demo run on Postgres (Supabase). References are preserved for backward compatibility but MariaDB is not actively tested or maintained.
+
+Modulo nominally supports three database backends, configurable via `MODULO_DB` env var:
 
 | Backend | `MODULO_DB` | Driver | Default `DATABASE_URL` |
 |---|---|---|---|
