@@ -4,10 +4,13 @@ prd: 8.29, 8.30
 delivery-tasks: []
 bdd:
   - backend/tests/bdd/features/remy/remy_context_sources.feature
-unit-tests: []
+unit-tests:
+  - backend/tests/unit/remy/test_context_source_service.py
+  - backend/tests/unit/remy/test_config_service.py
+  - backend/tests/unit/remy/test_skill_loader.py
 code:
-  - backend/src/modulo/db/models/remy_context_source.py
-  - backend/src/modulo/api/routes/remy.py
+  - backend/src/modulo/api/routes/me.py
+  - backend/src/modulo/api/routes/admin_remy.py
 depends-on: [feat-remy-assistant]
 status: partial
 ---
@@ -26,6 +29,6 @@ Remy's knowledge is organised into context sources — named domains of informat
 
 ### BDD Tests
 
-- [x] Feature file covers context source lifecycle (create, list, update, delete)
+- [x] Feature file covers source modes, user overrides, skill filtering, and MCP tools
 - [ ] Product primer auto-generation (always-on `## Product Overview` section)
-- [ ] Graduated injection modes (always-on, on-demand, excluded)
+- [x] Graduated injection modes (always-on, tool, off)
