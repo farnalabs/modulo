@@ -201,7 +201,6 @@ import PageHeader from '../components/shared/PageHeader.vue'
 import { usePlanStore } from '../stores/planStore'
 import { formatApiError } from '../lib/api/formatError'
 import FeatureGate from '../components/FeatureGate.vue'
-import PageHeader from '../components/shared/PageHeader.vue'
 import LoadingSpinner from '../components/shared/LoadingSpinner.vue'
 import ErrorAlert from '../components/shared/ErrorAlert.vue'
 
