@@ -2,10 +2,7 @@
   <FeatureGate feature-name="team_rbac" required-tier="team" show-disabled>
     <div class="page-narrow">
     <header class="flex items-center justify-between">
-      <div>
-        <h1 class="text-2xl font-semibold tracking-tight">Teams</h1>
-        <p class="mt-1 text-muted-foreground">Manage teams and team membership</p>
-      </div>
+      <PageHeader title="Teams" subtitle="Manage teams and team membership" />
       <Button
         variant="default"
            class="border-primary/30 hover:border-primary/60"
@@ -204,6 +201,7 @@ import { ref, onMounted, onBeforeUnmount } from 'vue'
 import { Button } from '@/components/ui/button'
 import { api } from '../lib/api/client'
 import type { components } from '../lib/api/client'
+import PageHeader from '../components/shared/PageHeader.vue'
 import LoadingSpinner from '../components/shared/LoadingSpinner.vue'
 import ErrorAlert from '../components/shared/ErrorAlert.vue'
 import TeamNotificationEndpoints from '../components/TeamNotificationEndpoints.vue'

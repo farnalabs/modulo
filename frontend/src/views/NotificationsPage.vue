@@ -1,9 +1,6 @@
 ﻿<template>
   <div class="page-wide">
-    <header>
-      <h1 class="text-2xl font-semibold tracking-tight">Notifications</h1>
-      <p class="mt-1 text-muted-foreground">{{ $t('views.NotificationsPage.view_and_manage_your_notifications') }}</p>
-    </header>
+    <PageHeader title="Notifications" :subtitle="$t('views.NotificationsPage.view_and_manage_your_notifications')" />
 
     <!-- Filters -->
     <div class="card p-4">
@@ -96,6 +93,7 @@ import { ref, onMounted } from "vue";
 import type { NotificationResponse } from "../lib/api/notifications";
 import { fetchNotifications, reviewLater } from "../lib/api/notifications";
 import NotificationCard from "../components/NotificationCard.vue";
+import PageHeader from '../components/shared/PageHeader.vue'
 import LoadingSpinner from "../components/shared/LoadingSpinner.vue";
 import ErrorAlert from "../components/shared/ErrorAlert.vue";
 import { Button } from "@/components/ui/button";

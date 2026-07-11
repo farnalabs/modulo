@@ -1,9 +1,6 @@
 ﻿<template>
   <div class="page-narrow">
-    <header>
-      <h1 class="text-2xl font-semibold tracking-tight">{{ $t('views.SettingsObservabilityView.observability') }}</h1>
-      <p class="mt-1 text-muted-foreground">{{ $t('views.SettingsObservabilityView.configure_opentelemetry_export_and_langsmith_integration') }}</p>
-    </header>
+    <PageHeader :title="$t('views.SettingsObservabilityView.observability')" :subtitle="$t('views.SettingsObservabilityView.configure_opentelemetry_export_and_langsmith_integration')" />
 
     <FeatureGate feature-name="observability" required-tier="team" show-disabled>
 
@@ -203,6 +200,7 @@ import type { components } from '../lib/api/client'
 import { usePlanStore } from '../stores/planStore'
 import { formatApiError } from '../lib/api/formatError'
 import FeatureGate from '../components/FeatureGate.vue'
+import PageHeader from '../components/shared/PageHeader.vue'
 import LoadingSpinner from '../components/shared/LoadingSpinner.vue'
 import ErrorAlert from '../components/shared/ErrorAlert.vue'
 

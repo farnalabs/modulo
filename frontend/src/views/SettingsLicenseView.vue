@@ -1,9 +1,6 @@
 ﻿<template>
   <div data-theme="agent" data-loading="false" class="page-narrow">
-    <header>
-      <h1 data-testid="license-title" class="text-2xl font-semibold tracking-tight">License</h1>
-      <p class="mt-1 text-muted-foreground">{{ $t('views.SettingsLicenseView.manage_your_modulo_team_license_key_and_view_plan_details') }}</p>
-    </header>
+    <PageHeader title="License" data-test-id="license-title" :subtitle="$t('views.SettingsLicenseView.manage_your_modulo_team_license_key_and_view_plan_details')" />
 
     <LoadingSpinner v-if="loading" />
     <ErrorAlert v-else-if="loadError" :message="loadError" :on-retry="loadAll" />
@@ -131,6 +128,7 @@ import { Button } from '@/components/ui/button'
 import { api } from '../lib/api/client'
 import { formatApiError } from '../lib/api/formatError'
 import { usePlanStore } from '../stores/planStore'
+import PageHeader from '../components/shared/PageHeader.vue'
 import LoadingSpinner from '../components/shared/LoadingSpinner.vue'
 import ErrorAlert from '../components/shared/ErrorAlert.vue'
 import { Badge } from '../components/ui/badge'

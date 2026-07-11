@@ -1,9 +1,6 @@
 ﻿<template>
   <div data-theme="agent" class="page-narrow">
-    <header>
-      <h1 class="text-2xl font-semibold tracking-tight">{{ $t('views.SettingsEmailView.email_settings') }}</h1>
-      <p class="mt-1 text-muted-foreground">{{ $t('views.SettingsEmailView.configure_smtp_provider_for_transactional_emails') }}</p>
-    </header>
+    <PageHeader :title="$t('views.SettingsEmailView.email_settings')" :subtitle="$t('views.SettingsEmailView.configure_smtp_provider_for_transactional_emails')" />
 
     <FeatureGate feature-name="email_config" required-tier="team" show-disabled>
 
@@ -104,6 +101,7 @@ import { formatApiError, type ProblemDetail } from '../lib/api/formatError'
 import { usePlanStore } from '../stores/planStore'
 import { api } from '../lib/api/client'
 import FeatureGate from '../components/FeatureGate.vue'
+import PageHeader from '../components/shared/PageHeader.vue'
 import LoadingSpinner from '../components/shared/LoadingSpinner.vue'
 import ErrorAlert from '../components/shared/ErrorAlert.vue'
 
@@ -248,4 +246,3 @@ onMounted(async () => {
   }
 })
 </script>
-
