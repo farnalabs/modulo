@@ -161,7 +161,8 @@ export async function flush(): Promise<void> {
     if (!res.ok && res.status >= 500) {
       reQueueWithBackoff(batch)
     } else if (!res.ok) {
-      console.warn('[error-tracking] Dropping events due to %d response:', res.status, batch.length)
+      const messages = batch.map((b) => b.event.message).filter(Boolean)
+      console.warn('[error-tracking] Dropping %d events due to %d response', batch.length, res.status, messages)
     }
   } catch (err) {
     console.warn('[error-tracking] Ingest fetch failed, queuing batch for retry:', err)
@@ -170,6 +171,14 @@ export async function flush(): Promise<void> {
 }
 
 const BACKOFF_DELAYS = [1000, 5000, 30_000]
+
+function scheduleRetryFlush(delay: number): void {
+  if (flushTimer) return
+  flushTimer = setTimeout(() => {
+    flushTimer = null
+    void flush()
+  }, delay)
+}
 
 function reQueueWithBackoff(items: PendingItem[]): void {
   for (const item of items) {
@@ -180,12 +189,7 @@ function reQueueWithBackoff(items: PendingItem[]): void {
         const idx = RETRY_TIMERS.indexOf(timer)
         if (idx !== -1) RETRY_TIMERS.splice(idx, 1)
         PENDING.push(item)
-        if (!flushTimer) {
-          flushTimer = setTimeout(() => {
-            flushTimer = null
-            void flush()
-          }, delay)
-        }
+        scheduleRetryFlush(delay)
       }, delay)
       RETRY_TIMERS.push(timer)
     } else {
