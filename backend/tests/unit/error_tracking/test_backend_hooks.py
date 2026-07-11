@@ -56,7 +56,9 @@ class TestCatchAllMiddleware:
         resp = client.get("/crash")
         assert resp.status_code == 500
         body = resp.json()
-        assert body["error"]["code"] == "INTERNAL_ERROR"
+        assert body["type"] == "urn:problem:modulo:internal_error"
+        assert body["title"] == "Internal Error"
+        assert body["status"] == 500
 
     @patch("modulo.api.middleware.catch_all._ingest_unhandled_error")
     def test_healthy_route_passes_through(self, mock_ingest: Any) -> None:
