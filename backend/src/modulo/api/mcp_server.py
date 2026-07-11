@@ -60,8 +60,10 @@ from modulo.core.library_service import (
 )
 from modulo.core.mcp.scope_validator import MCPAuthorizationError, check_tool_scope
 from modulo.db.crud.model_backend import create_model_backend as db_create_model_backend
-from modulo.db.crud.pipeline import get_pipeline, list_pipelines
+from modulo.db.crud.pipeline import get_pipeline
 from modulo.db.crud.run import get_run
+from modulo.db.crud.schema import get_schema
+from modulo.db.crud.schema import list_schemas as db_list_schemas
 from modulo.db.models.hitl_claim import HitlClaim
 from modulo.db.models.pipeline_edge import PipelineEdge
 from modulo.db.rls import set_rls_org, set_rls_user_context
@@ -403,22 +405,28 @@ def _tool_auth_error(msg: str) -> dict[str, Any]:
 @mcp.tool(
     name="list_pipelines",
     description=(
-        "List pipelines in the organisation. Returns summaries. "
+        "List pipelines in the organisation with cursor-based pagination. Returns summaries. "
         "For raw text output, see the modulo://pipelines resource."
     ),
 )
-async def list_pipelines_tool(page: int = 1, page_size: int = 20) -> dict[str, Any]:
+async def list_pipelines_tool(
+    cursor: str | None = None,
+    limit: int = 20,
+) -> dict[str, Any]:
     try:
         if not await validate_current_auth():
             return _tool_auth_error("Token revoked or expired — re-authenticate")
         org_id = _ctx_org_id_val()
+        from modulo.db.crud.pipeline import list_pipelines
+
+        lim = max(1, min(limit, 100))
         async with _session(org_id) as s:
-            result = await list_pipelines(s, page=page, page_size=page_size)
+            result = await list_pipelines(s, cursor=cursor, page_size=lim)
         return {
-            "pipelines": [{"id": str(p.id), "name": p.name, "visibility": p.visibility} for p in result.items],
+            "data": [{"id": str(p.id), "name": p.name, "visibility": p.visibility} for p in result.items],
             "total": result.total,
-            "page": result.page,
-            "page_size": result.page_size,
+            "next_cursor": result.next_cursor,
+            "has_more": result.has_more,
         }
     except Exception:
         _log.exception("list_pipelines_tool failed")
@@ -779,10 +787,12 @@ async def get_run_evals(run_id: str) -> dict[str, Any]:
 
 
 @mcp.tool(
-    description="List eval definitions configured for the organisation. Optionally filter by pipeline_id.",
+    description="List eval definitions with cursor-based pagination. Optionally filter by pipeline_id.",
 )
 async def list_eval_definitions(
     pipeline_id: str | None = None,
+    cursor: str | None = None,
+    limit: int = 20,
 ) -> dict[str, Any]:
     try:
         if not await validate_current_auth():
@@ -792,12 +802,13 @@ async def list_eval_definitions(
 
         org_id = _ctx_org_id_val()
         pid = uuid.UUID(pipeline_id) if pipeline_id else None
+        lim = max(1, min(limit, 100))
 
         async with _session(org_id) as s:
-            defs = await db_list_eval_definitions(s, org_id, pipeline_id=pid)
+            result = await db_list_eval_definitions(s, org_id, pipeline_id=pid, cursor=cursor, limit=lim)
 
         return {
-            "eval_definitions": [
+            "data": [
                 {
                     "id": str(d.id),
                     "name": d.name,
@@ -807,9 +818,11 @@ async def list_eval_definitions(
                     "pass_threshold": d.pass_threshold,
                     "suite_id": d.suite_id,
                 }
-                for d in defs
+                for d in result.items
             ],
-            "count": len(defs),
+            "total": result.total,
+            "next_cursor": result.next_cursor,
+            "has_more": result.has_more,
         }
     except MCPAuthorizationError as exc:
         return {"error": "insufficient_scope", "detail": str(exc)}
@@ -1158,20 +1171,21 @@ async def search_library(
 
 @mcp.tool(
     name="get_trigger_events",
-    description=("[DEPRECATED — use list_trigger_events] Get recent trigger events for a given trigger or pipeline."),
+    description=("[DEPRECATED — use list_trigger_events] Get recent trigger events with cursor-based pagination."),
 )
 async def get_trigger_events_alias(
     trigger_id: str | None = None,
     pipeline_id: str | None = None,
+    cursor: str | None = None,
     limit: int = 20,
 ) -> dict[str, Any]:
-    return await list_trigger_events(trigger_id=trigger_id, pipeline_id=pipeline_id, limit=limit)
+    return await list_trigger_events(trigger_id=trigger_id, pipeline_id=pipeline_id, cursor=cursor, limit=limit)
 
 
 @mcp.tool(
     name="list_trigger_events",
     description=(
-        "List recent trigger events for a given trigger or pipeline. "
+        "List recent trigger events with cursor-based pagination. "
         "Filter by trigger_id and/or pipeline_id. Returns events ordered "
         "by most recent first."
     ),
@@ -1179,25 +1193,24 @@ async def get_trigger_events_alias(
 async def list_trigger_events(
     trigger_id: str | None = None,
     pipeline_id: str | None = None,
+    cursor: str | None = None,
     limit: int = 20,
 ) -> dict[str, Any]:
     try:
         if not await validate_current_auth():
             return _tool_auth_error("Token revoked or expired — re-authenticate")
         check_tool_scope(_ctx_role_val(), "list_trigger_events")
-        from sqlalchemy import select
+        from sqlalchemy import func, select
 
+        from modulo.db.crud.pagination import CursorPaginator
         from modulo.db.models.trigger import Trigger
         from modulo.db.models.trigger_event import TriggerEvent
 
         org_id = _ctx_org_id_val()
+        lim = max(1, min(limit, 100))
+
         async with _session(org_id) as s:
-            q = (
-                select(TriggerEvent)
-                .where(TriggerEvent.organisation_id == org_id)
-                .order_by(TriggerEvent.created_at.desc(), TriggerEvent.id.desc())
-                .limit(limit)
-            )
+            q = select(TriggerEvent).where(TriggerEvent.organisation_id == org_id)
 
             if trigger_id is not None:
                 try:
@@ -1223,10 +1236,33 @@ async def list_trigger_events(
                     Trigger.pipeline_id == pid,
                 )
 
-            rows = (await s.execute(q)).scalars().all()
+            total = (await s.execute(select(func.count()).select_from(q.subquery()))).scalar_one_or_none() or 0
+
+            if cursor is not None:
+                paginator = CursorPaginator(sort_field="created_at", sort_dir="desc")
+                cp = await paginator.paginate(
+                    s,
+                    q,
+                    cursor=cursor,
+                    limit=lim,
+                    model=TriggerEvent,
+                    compute_total=False,
+                )
+                items = cp.items
+                next_cursor = cp.next_cursor
+                has_more = cp.has_more
+            else:
+                q = q.order_by(TriggerEvent.created_at.desc(), TriggerEvent.id.desc())
+                rows = list((await s.execute(q.limit(lim + 1))).scalars().all())
+                has_more = len(rows) > lim
+                items = rows[:lim]
+                next_cursor = None
+                if has_more:
+                    last = items[-1]
+                    next_cursor = CursorPaginator.encode_cursor(last.created_at, last.id)
 
         return {
-            "events": [
+            "data": [
                 {
                     "id": str(e.id),
                     "trigger_id": str(e.trigger_id),
@@ -1235,10 +1271,11 @@ async def list_trigger_events(
                     "created_at": e.created_at.isoformat() if e.created_at else None,
                     "run_id": str(e.run_id) if e.run_id else None,
                 }
-                for e in rows
+                for e in items
             ],
-            "count": len(rows),
-            "limit": limit,
+            "total": total,
+            "next_cursor": next_cursor,
+            "has_more": has_more,
         }
     except MCPAuthorizationError as exc:
         return {"error": "insufficient_scope", "detail": str(exc)}
@@ -1248,12 +1285,14 @@ async def list_trigger_events(
 
 
 @mcp.tool(
-    description="List triggers configured for the organisation. "
+    description="List triggers configured for the organisation with cursor-based pagination. "
     "Optionally filter by pipeline_id. Returns trigger metadata "
     "including type, active status, and cron schedule.",
 )
 async def list_triggers(
     pipeline_id: str | None = None,
+    cursor: str | None = None,
+    limit: int = 20,
 ) -> dict[str, Any]:
     try:
         if not await validate_current_auth():
@@ -1263,12 +1302,13 @@ async def list_triggers(
 
         org_id = _ctx_org_id_val()
         pid = uuid.UUID(pipeline_id) if pipeline_id else None
+        lim = max(1, min(limit, 100))
 
         async with _session(org_id) as s:
-            triggers = await db_list_triggers(s, org_id, pipeline_id=pid)
+            result = await db_list_triggers(s, org_id, pipeline_id=pid, cursor=cursor, limit=lim)
 
         return {
-            "triggers": [
+            "data": [
                 {
                     "id": str(t.id),
                     "pipeline_id": str(t.pipeline_id),
@@ -1279,9 +1319,11 @@ async def list_triggers(
                     "last_fired_at": t.last_fired_at.isoformat() if t.last_fired_at else None,
                     "created_at": t.created_at.isoformat() if t.created_at else None,
                 }
-                for t in triggers
+                for t in result.items
             ],
-            "count": len(triggers),
+            "total": result.total,
+            "next_cursor": result.next_cursor,
+            "has_more": result.has_more,
         }
     except MCPAuthorizationError as exc:
         return {"error": "insufficient_scope", "detail": str(exc)}
@@ -1606,6 +1648,158 @@ async def get_available_features() -> dict[str, Any]:
         return _tool_error("Failed to get available features")
 
 
+@mcp.tool(
+    description="List registered schemas with cursor-based pagination. Optionally filter by pipeline_id.",
+)
+async def list_schemas(
+    pipeline_id: str | None = None,
+    cursor: str | None = None,
+    limit: int = 20,
+) -> dict[str, Any]:
+    try:
+        if not await validate_current_auth():
+            return _tool_auth_error("Token revoked or expired — re-authenticate")
+        org_id = _ctx_org_id_val()
+        pid = uuid.UUID(pipeline_id) if pipeline_id else None
+        lim = max(1, min(limit, 100))
+
+        async with _session(org_id) as s:
+            result = await db_list_schemas(s, pipeline_id=pid, cursor=cursor, limit=lim)
+
+        return {
+            "data": [
+                {
+                    "id": str(sc.id),
+                    "name": sc.name,
+                    "description": sc.description,
+                    "version": sc.abstract_name,
+                    "pipeline_id": None,
+                    "created_at": sc.created_at.isoformat() if sc.created_at else None,
+                }
+                for sc in result.items
+            ],
+            "total": result.total,
+            "next_cursor": result.next_cursor,
+            "has_more": result.has_more,
+        }
+    except Exception:
+        _log.exception("list_schemas failed")
+        return _tool_error("Failed to list schemas")
+
+
+@mcp.tool(
+    description="AI-assisted schema inference. Takes a sample JSON payload and returns an inferred "
+    "JSON Schema definition.",
+)
+async def infer_schema(
+    input_sample: dict[str, Any],
+    pipeline_id: str | None = None,
+) -> dict[str, Any]:
+    try:
+        if not await validate_current_auth():
+            return _tool_auth_error("Token revoked or expired — re-authenticate")
+        check_tool_scope(_ctx_role_val(), "infer_schema")
+        from modulo.core.schema_registry import SchemaInferenceError, SchemaInferenceService
+
+        org_id = _ctx_org_id_val()
+
+        async with _session(org_id) as s:
+            from modulo.db.crud.model_backend import list_model_backends
+
+            mbs = await list_model_backends(s, page_size=1)
+            if not mbs.items:
+                return {"error": "no_backend", "detail": "No model backends configured; cannot perform inference"}
+
+            from modulo.core.model_backend_hub import ModelBackendHub
+            from modulo.core.secrets_backend import create_secrets_backend
+
+            secrets_backend = create_secrets_backend(fernet_key=get_settings().fernet_key)
+            async with ModelBackendHub() as mh:
+                await mh.initialise(mbs.items, secrets_backend=secrets_backend)
+                backend = await mh.get(mbs.items[0].id)
+
+                samples = [input_sample]
+                service = SchemaInferenceService(backend)
+                definition = await service.infer(samples)
+
+        return {
+            "definition": definition,
+            "sample_count": 1,
+        }
+    except MCPAuthorizationError as exc:
+        return {"error": "insufficient_scope", "detail": str(exc)}
+    except SchemaInferenceError as exc:
+        return {"error": "inference_failed", "detail": str(exc)}
+    except Exception:
+        _log.exception("infer_schema failed")
+        return _tool_error("Failed to infer schema")
+
+
+@mcp.tool(
+    description="Validate a payload against a registered schema by schema_id. Returns validation errors or success.",
+)
+async def validate_payload(
+    schema_id: str,
+    payload: dict[str, Any],
+) -> dict[str, Any]:
+    try:
+        if not await validate_current_auth():
+            return _tool_auth_error("Token revoked or expired — re-authenticate")
+        from jsonschema import Draft202012Validator, ValidationError  # type: ignore[import-untyped]
+        from jsonschema.exceptions import SchemaError as JsSchemaError
+
+        org_id = _ctx_org_id_val()
+        try:
+            sid = uuid.UUID(schema_id)
+        except ValueError:
+            return {"error": "invalid_id", "field": "schema_id", "detail": f"Invalid UUID format: {schema_id}"}
+
+        async with _session(org_id) as s:
+            schema = await get_schema(s, sid)
+            if schema is None:
+                return {"error": "not_found", "detail": f"Schema {schema_id} not found"}
+
+            from sqlalchemy import select
+
+            from modulo.db.models.schema import SchemaVersion
+
+            result = await s.execute(
+                select(SchemaVersion)
+                .where(SchemaVersion.schema_id == sid)
+                .order_by(SchemaVersion.version_number.desc())
+                .limit(1)
+            )
+            sv = result.scalar_one_or_none()
+            if sv is None:
+                return {"error": "no_version", "detail": f"Schema {schema_id} has no versions"}
+
+        definition = sv.definition_json
+        try:
+            Draft202012Validator.check_schema(definition)
+            validator = Draft202012Validator(definition)
+            errors = list(validator.iter_errors(payload))
+            if not errors:
+                return {"valid": True, "errors": []}
+            return {
+                "valid": False,
+                "errors": [
+                    {
+                        "path": ".".join(str(p) for p in e.path),
+                        "message": e.message,
+                    }
+                    for e in errors
+                ],
+            }
+        except (ValidationError, JsSchemaError) as exc:
+            return {
+                "valid": False,
+                "errors": [{"path": "(schema)", "message": f"Invalid schema definition: {exc.message}"}],
+            }
+    except Exception:
+        _log.exception("validate_payload failed")
+        return _tool_error("Failed to validate payload")
+
+
 # Backward-compatible function references for renamed tools
 browse_library = browse_library_alias
 get_documentation = get_documentation_alias
@@ -1621,6 +1815,8 @@ get_trigger_events = get_trigger_events_alias
 async def resource_pipelines() -> str:
     if not await validate_current_auth():
         return "error: Token revoked or expired — re-authenticate"
+    from modulo.db.crud.pipeline import list_pipelines
+
     org_id = _ctx_org_id_val()
     async with _session(org_id) as s:
         result = await list_pipelines(s, page=1, page_size=50)
