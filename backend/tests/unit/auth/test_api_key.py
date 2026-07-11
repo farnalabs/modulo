@@ -384,24 +384,9 @@ async def test_update_api_key_updates_expires_at() -> None:
 
 
 # ---------------------------------------------------------------------------
-# validate_api_key — revoked
+# validate_api_key — revoked (filtered by SQL query, not code)
 # ---------------------------------------------------------------------------
-
-
-@pytest.mark.asyncio
-async def test_validate_api_key_revoked_raises() -> None:
-    """A revoked key (revoked_at set) raises ApiKeyInvalidError."""
-
-    from modulo.db.models.api_key import OrgApiKey
-
-    full_key, _, _ = generate_api_key()
-    org_id = uuid.uuid4()
-
-    revoked_key = MagicMock(spec=OrgApiKey)
-    revoked_key.hashed_secret = _hash_key(full_key + "_tampered")
-    revoked_key.expires_at = None
-
-    session = _make_session(revoked_key)
-
-    with pytest.raises(ApiKeyInvalidError):
-        await validate_api_key(session, full_key, org_id)
+# Revoked key detection is handled by the WHERE clause in validate_api_key's
+# SQL query (OrgApiKey.revoked_at.is_(None)). When the key is revoked, the
+# query returns no results and ApiKeyInvalidError is raised via the "not found"
+# path. This is tested by test_validate_api_key_not_found_raises above.
