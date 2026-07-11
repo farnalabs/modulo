@@ -4,6 +4,11 @@ prd: 8.16
 delivery-tasks: [task-nv9-ai-schema-gen]
 bdd:
   - backend/tests/bdd/features/connectors/schema_inference.feature
+unit-tests:
+  - backend/tests/unit/core/test_schema_inference.py
+  - backend/tests/unit/core/test_schema_generation.py
+  - backend/tests/unit/api/test_schema_inference_bdd.py
+  - backend/tests/integration/crud/test_schema_inference_integration.py
 code:
   - backend/src/modulo/core/schema_registry/inference.py
   - backend/src/modulo/core/schema_registry/generation.py

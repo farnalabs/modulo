@@ -160,6 +160,8 @@ async def list_schemas_endpoint(
         ) from None
     except HTTPException:
         raise
+    except asyncio.CancelledError:
+        raise
     except Exception:
         logger.exception("schemas.list_schemas")
         raise HTTPException(
@@ -211,6 +213,8 @@ async def create_schema_endpoint(
         ) from None
     except HTTPException:
         raise
+    except asyncio.CancelledError:
+        raise
     except Exception:
         logger.exception("schemas.create_schema")
         raise HTTPException(
@@ -248,6 +252,8 @@ async def get_schema_endpoint(
             detail="Schema management is temporarily unavailable.",
         ) from None
     except HTTPException:
+        raise
+    except asyncio.CancelledError:
         raise
     except Exception:
         logger.exception("schemas.get_schema")
@@ -292,6 +298,8 @@ async def update_schema_endpoint(
         ) from None
     except HTTPException:
         raise
+    except asyncio.CancelledError:
+        raise
     except Exception:
         logger.exception("schemas.update_schema")
         raise HTTPException(
@@ -332,6 +340,8 @@ async def deprecate_schema_endpoint(
             detail="Schema management is temporarily unavailable.",
         ) from None
     except HTTPException:
+        raise
+    except asyncio.CancelledError:
         raise
     except Exception:
         logger.exception("schemas.deprecate_schema")
@@ -379,6 +389,8 @@ async def delete_schema_endpoint(
             detail="Schema management is temporarily unavailable.",
         ) from None
     except HTTPException:
+        raise
+    except asyncio.CancelledError:
         raise
     except Exception:
         logger.exception("schemas.delete_schema")
@@ -432,6 +444,8 @@ async def list_schema_versions_endpoint(
             detail="Schema management is temporarily unavailable.",
         ) from None
     except HTTPException:
+        raise
+    except asyncio.CancelledError:
         raise
     except Exception:
         logger.exception("schemas.list_schema_versions")
@@ -495,6 +509,8 @@ async def create_schema_version_endpoint(
         ) from None
     except HTTPException:
         raise
+    except asyncio.CancelledError:
+        raise
     except Exception:
         logger.exception("schemas.create_schema_version")
         raise HTTPException(
@@ -537,6 +553,8 @@ async def get_schema_version_endpoint(
             detail="Schema management is temporarily unavailable.",
         ) from None
     except HTTPException:
+        raise
+    except asyncio.CancelledError:
         raise
     except Exception:
         logger.exception("schemas.get_schema_version")
@@ -606,6 +624,8 @@ async def list_schema_fields_endpoint(
             detail="Schema management is temporarily unavailable.",
         ) from None
     except HTTPException:
+        raise
+    except asyncio.CancelledError:
         raise
     except Exception:
         logger.exception("schemas.list_schema_fields")
@@ -726,6 +746,8 @@ async def infer_schema_endpoint(
             detail="Schema management is temporarily unavailable.",
         ) from None
     except HTTPException:
+        raise
+    except asyncio.CancelledError:
         raise
     except Exception:
         logger.exception("schemas.infer.unexpected")
@@ -901,6 +923,8 @@ async def generate_schema_endpoint(
         ) from None
     except HTTPException:
         raise
+    except asyncio.CancelledError:
+        raise
     except Exception:
         logger.exception("schemas.generate.unexpected")
         raise HTTPException(
@@ -980,6 +1004,8 @@ async def generate_schema_endpoint(
 
     except HTTPException:
         raise
+    except asyncio.CancelledError:
+        raise
     except Exception:
         logger.exception("schemas.generate.audit_failed")
 
@@ -1058,6 +1084,8 @@ async def migrate_data_endpoint(
         ) from None
     except HTTPException:
         raise
+    except asyncio.CancelledError:
+        raise
     except Exception:
         logger.exception("schemas.migrate_data")
         raise HTTPException(
@@ -1111,6 +1139,8 @@ async def migration_plan_endpoint(
     try:
         plan = create_migration(req.from_definition, req.to_definition)
     except HTTPException:
+        raise
+    except asyncio.CancelledError:
         raise
     except Exception:
         logger.exception("schemas.migration_plan")
