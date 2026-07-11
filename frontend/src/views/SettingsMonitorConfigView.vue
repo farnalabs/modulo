@@ -19,7 +19,7 @@
               v-for="b in backendForms"
               :key="b.key"
               class="border rounded-lg p-5 space-y-4"
-              :class="{ 'opacity-50': !b.enabled }"
+              :class="{}"
             >
               <div class="flex items-center justify-between">
                 <div>
