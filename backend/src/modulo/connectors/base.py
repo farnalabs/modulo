@@ -17,9 +17,9 @@ class Capability(StrEnum):
     GET_RUN_STATUS = "get_run_status"
     GET_RUN_LOGS = "get_run_logs"
     LIST_RUNS = "list_runs"
-    ISSUE_READ = "issue_read"
-    ISSUE_WRITE = "issue_write"
-    ISSUE_SEARCH = "issue_search"
+    TICKET_READ = "ticket_read"
+    TICKET_WRITE = "ticket_write"
+    TICKET_SEARCH = "ticket_search"
     MONITORING = "monitoring"
     OBSERVABILITY = "observability"
     VULNERABILITY_SCANNING = "vulnerability_scanning"
@@ -44,6 +44,7 @@ class ConnectorType(StrEnum):
     LINEAR = "linear"
     TRELLO = "trello"
     ASANA = "asana"
+    TICKET_TRACKER = "ticket-tracker"
     SLACK = "slack"
     SHELL = "shell"
     SHAREPOINT = "sharepoint"
@@ -89,8 +90,8 @@ class ConnectorType(StrEnum):
                         Capability.WRITE,
                         Capability.GIT_PUSH,
                         Capability.CREATE_PR,
-                        Capability.ISSUE_READ,
-                        Capability.ISSUE_WRITE,
+                        Capability.TICKET_READ,
+                        Capability.TICKET_WRITE,
                     }
                 )
             case ConnectorType.BITBUCKET:
@@ -113,22 +114,38 @@ class ConnectorType(StrEnum):
                         Capability.WRITE,
                         Capability.GIT_PUSH,
                         Capability.CREATE_PR,
-                        Capability.ISSUE_READ,
-                        Capability.ISSUE_WRITE,
-                        Capability.ISSUE_SEARCH,
+                        Capability.TICKET_READ,
+                        Capability.TICKET_WRITE,
+                        Capability.TICKET_SEARCH,
                         Capability.TRIGGER_RUN,
                     }
                 )
             case ConnectorType.AZURE_REPOS:
                 return frozenset({Capability.READ, Capability.WRITE, Capability.GIT_PUSH, Capability.CREATE_PR})
             case ConnectorType.JIRA:
-                return frozenset({Capability.ISSUE_READ, Capability.ISSUE_WRITE, Capability.ISSUE_SEARCH})
+                return frozenset({Capability.TICKET_READ, Capability.TICKET_WRITE, Capability.TICKET_SEARCH})
             case ConnectorType.LINEAR:
-                return frozenset({Capability.ISSUE_READ, Capability.ISSUE_WRITE, Capability.ISSUE_SEARCH})
+                return frozenset({Capability.TICKET_READ, Capability.TICKET_WRITE, Capability.TICKET_SEARCH})
             case ConnectorType.TRELLO:
-                return frozenset({Capability.READ, Capability.WRITE})
+                return frozenset(
+                    {
+                        Capability.READ,
+                        Capability.WRITE,
+                        Capability.TICKET_READ,
+                        Capability.TICKET_WRITE,
+                        Capability.TICKET_SEARCH,
+                    }
+                )
             case ConnectorType.ASANA:
-                return frozenset({Capability.READ, Capability.WRITE})
+                return frozenset(
+                    {
+                        Capability.READ,
+                        Capability.WRITE,
+                        Capability.TICKET_READ,
+                        Capability.TICKET_WRITE,
+                        Capability.TICKET_SEARCH,
+                    }
+                )
             case ConnectorType.SLACK:
                 return frozenset({Capability.MESSAGING, Capability.READ, Capability.WRITE})
             case ConnectorType.SHELL:
@@ -290,6 +307,8 @@ class ConnectorType(StrEnum):
                 return frozenset({Capability.PACKAGE_MANAGEMENT, Capability.READ})
             case ConnectorType.N8N:
                 return frozenset({Capability.AUTOMATION, Capability.READ, Capability.WRITE})
+            case ConnectorType.TICKET_TRACKER:
+                return frozenset({Capability.TICKET_READ, Capability.TICKET_WRITE, Capability.TICKET_SEARCH})
             case _:
                 return frozenset()
 
