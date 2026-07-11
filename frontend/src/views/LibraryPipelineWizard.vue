@@ -191,7 +191,7 @@ import { VueFlow } from '@vue-flow/core'
 import { Background } from '@vue-flow/background'
 import '@vue-flow/core/dist/style.css'
 import '@vue-flow/core/dist/theme-default.css'
-import { api } from '../../lib/api/client'
+import { api } from '../lib/api/client'
 
 interface LibraryPrimitive {
   id: string

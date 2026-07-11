@@ -1030,29 +1030,6 @@ async function saveGuidance() {
   configSaving.value = false
 }
 
-async function loadContextSources() {
-  contextLoading.value = true
-  contextError.value = null
-  try {
-    const { data, error: err } = await (api as any).GET('/api/v1/admin/remy/context-sources')
-    if (err) {
-      contextError.value = `Failed to load context sources: ${formatApiError(err)}`
-    } else if (data) {
-      contextSources.value = (data as Record<string, string>)
-      const modes = contextSources.value
-      for (const src of contextSourceDefs) {
-        if (!modes[src.key]) {
-          modes[src.key] = 'always_on'
-        }
-      }
-    }
-  } catch (e: unknown) {
-    contextError.value = `Failed to load context sources: ${formatApiError(e)}`
-  } finally {
-    contextLoading.value = false
-  }
-}
-
 async function saveContextSource(sourceKey: string) {
   if (configSaving.value) return
   configSaving.value = true
