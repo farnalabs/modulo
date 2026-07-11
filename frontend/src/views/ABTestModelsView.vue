@@ -1,4 +1,4 @@
-ï»¿<template>
+<template>
   <PageTabs :tabs="[
     { label: 'Evals', to: '/evals/editor' },
     { label: 'Proposals', to: '/evals/proposals' },
@@ -12,7 +12,7 @@
       <header>
         <h1 class="text-2xl font-semibold tracking-tight">{{ $t('views.ABTestModelsView.ab_test_models') }}</h1>
         <p class="mt-1 text-muted-foreground">
-          Compare model backends side by side with weighted A/B testing â€” eval scores, costs, and token usage
+          Compare model backends side by side with weighted A/B testing — eval scores, costs, and token usage
         </p>
       </header>
 
@@ -185,7 +185,7 @@
         </section>
 
         <section v-if="runEntries.size > 0" class="space-y-4">
-          <h2 class="text-xl font-semibold tracking-tight">{{ $t('views.ABTestModelsView.results_title') }}</h2>
+          <h2 class="text-base font-semibold">{{ $t('views.ABTestModelsView.results_title') }}</h2>
 
           <div class="table-wrapper">
             <table class="w-full text-left text-sm">
@@ -226,7 +226,7 @@
                       {{ s.passRate.toFixed(0) }}%
                       <span class="font-normal opacity-70">({{ s.passedCount }}/{{ s.totalEvals }})</span>
                     </span>
-                    <span v-else class="text-xs text-muted-foreground">â€”</span>
+                    <span v-else class="text-xs text-muted-foreground">—</span>
                   </td>
                 </tr>
                 <tr class="border-b hover:bg-muted/30">
@@ -237,7 +237,7 @@
                     class="table-cell table-cell-numeric font-mono text-xs"
                   >
                     <span v-if="s.totalCost !== null">${{ Number(s.totalCost).toFixed(6) }}</span>
-                    <span v-else class="text-muted-foreground">â€”</span>
+                    <span v-else class="text-muted-foreground">—</span>
                   </td>
                 </tr>
                 <tr class="hover:bg-muted/30">
@@ -248,7 +248,7 @@
                     class="table-cell table-cell-numeric font-mono text-xs"
                   >
                     <span v-if="s.tokenTotal !== null">{{ s.tokenTotal.toLocaleString() }}</span>
-                    <span v-else class="text-muted-foreground">â€”</span>
+                    <span v-else class="text-muted-foreground">—</span>
                   </td>
                 </tr>
               </tbody>
