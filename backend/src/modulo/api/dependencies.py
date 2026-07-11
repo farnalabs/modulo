@@ -123,7 +123,7 @@ async def get_db_session(
             raise HTTPException(
                 status_code=status.HTTP_501_NOT_IMPLEMENTED,
                 detail="Feature is not available. Run database migrations to enable it.",
-            )
+            ) from None
 
 
 async def get_plan_context(
@@ -154,7 +154,7 @@ async def get_plan_context(
             raise HTTPException(
                 status_code=status.HTTP_501_NOT_IMPLEMENTED,
                 detail="This feature is not available. Run database migrations to enable it.",
-            )
+            ) from None
 
         except (TypeError, AttributeError):
             logger.warning("Session does not support async begin() — returning CommunityTier")
