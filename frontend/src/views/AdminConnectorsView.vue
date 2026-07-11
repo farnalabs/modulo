@@ -137,30 +137,7 @@
                 </span>
               </td>
               <td class="table-cell-numeric">
-                <div class="flex items-center justify-end gap-1">
-                  <button
-                    class="rounded p-1 text-muted-foreground hover:bg-accent"
-                    data-testid="admin-connectors-edit"
-                    :aria-label="'Edit connector'"
-                    title="Edit connector"
-                    @click="openEditForm(connector)"
-                  >
-                    <svg class="h-4 w-4" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                      <path d="M17 3a2.85 2.85 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z" />
-                    </svg>
-                  </button>
-                  <button
-                    class="rounded p-1 text-destructive hover:bg-destructive/10"
-                    data-testid="admin-connectors-delete"
-                    :aria-label="'Delete connector'"
-                    title="Delete connector"
-                    @click="confirmDelete(connector)"
-                  >
-                    <svg class="h-4 w-4" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                      <path d="M3 6h18" /><path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6" /><path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2" />
-                    </svg>
-                  </button>
-                </div>
+                <TableActions :actions="connectorActions(connector)" />
               </td>
             </tr>
           </tbody>
@@ -198,30 +175,7 @@
                   <span class="badge badge-context-amber text-xs">{{ $t('views.AdminConnectorsView.preview_badge') }}</span>
                 </td>
                 <td class="table-cell-numeric">
-                  <div class="flex items-center justify-end gap-1">
-                    <button
-                      class="rounded p-1 text-muted-foreground hover:bg-accent"
-                      data-testid="admin-connectors-edit"
-                      :aria-label="'Edit connector'"
-                      title="Edit connector"
-                      @click="openEditForm(connector)"
-                    >
-                      <svg class="h-4 w-4" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                        <path d="M17 3a2.85 2.85 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z" />
-                      </svg>
-                    </button>
-                    <button
-                      class="rounded p-1 text-destructive hover:bg-destructive/10"
-                      data-testid="admin-connectors-delete"
-                      :aria-label="'Delete connector'"
-                      title="Delete connector"
-                      @click="confirmDelete(connector)"
-                    >
-                      <svg class="h-4 w-4" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                        <path d="M3 6h18" /><path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6" /><path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2" />
-                      </svg>
-                    </button>
-                  </div>
+                  <TableActions :actions="connectorActions(connector)" />
                 </td>
               </tr>
             </tbody>
@@ -323,6 +277,7 @@ import ErrorAlert from '../components/shared/ErrorAlert.vue'
 import { usePlanStore } from '../stores/planStore'
 import FeatureGate from '../components/FeatureGate.vue'
 import { Button } from '@/components/ui/button'
+import TableActions from '../components/shared/TableActions.vue'
 
 const planStore = usePlanStore()
 
@@ -500,6 +455,22 @@ async function deleteConnector() {
   } finally {
     deleting.value = false
   }
+}
+
+function connectorActions(connector: ConnectorItem) {
+  return [
+    {
+      key: 'edit',
+      label: 'Edit',
+      onClick: () => openEditForm(connector),
+    },
+    {
+      key: 'delete',
+      label: 'Delete',
+      onClick: () => confirmDelete(connector),
+      danger: true,
+    },
+  ]
 }
 
 onMounted(() => { planStore.fetchPlan(); loadConnectors() })

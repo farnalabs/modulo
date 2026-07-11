@@ -191,30 +191,7 @@
                   {{ backend.visibility }}
                 </td>
                 <td class="table-cell-numeric">
-                  <div class="flex items-center justify-end gap-1">
-                    <button
-                      class="rounded p-1 text-muted-foreground hover:bg-accent"
-                      data-testid="admin-model-backends-edit"
-                      :aria-label="$t('views.AdminModelBackendsView.edit_model_backend_1')"
-                      :title="$t('views.AdminModelBackendsView.edit_model_backend')"
-                      @click="openEditForm(backend)"
-                    >
-                      <svg class="h-4 w-4" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                        <path d="M17 3a2.85 2.85 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z" />
-                      </svg>
-                    </button>
-                    <button
-                      class="rounded p-1 text-destructive hover:bg-destructive/10"
-                      data-testid="admin-model-backends-delete"
-                      :aria-label="$t('views.AdminModelBackendsView.delete_model_backend')"
-                      :title="$t('views.AdminModelBackendsView.delete_model_backend_1')"
-                      @click="confirmDelete(backend)"
-                    >
-                      <svg class="h-4 w-4" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                        <path d="M3 6h18" /><path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6" /><path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2" />
-                      </svg>
-                    </button>
-                  </div>
+                  <TableActions :actions="backendActions(backend)" />
                 </td>
               </tr>
             </tbody>
@@ -254,26 +231,7 @@
                   <span class="badge badge-context-amber text-xs">{{ $t('views.AdminModelBackendsView.preview_badge') }}</span>
                 </td>
                 <td class="table-cell-numeric">
-                    <div class="flex items-center justify-end gap-1">
-                      <button
-                        class="rounded p-1 text-muted-foreground hover:bg-accent"
-                        data-testid="admin-model-backends-edit"
-                        @click="openEditForm(backend)"
-                      >
-                        <svg class="h-4 w-4" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                          <path d="M17 3a2.85 2.85 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z" />
-                        </svg>
-                      </button>
-                      <button
-                        class="rounded p-1 text-destructive hover:bg-destructive/10"
-                        data-testid="admin-model-backends-delete"
-                        @click="confirmDelete(backend)"
-                      >
-                        <svg class="h-4 w-4" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                          <path d="M3 6h18" /><path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6" /><path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2" />
-                        </svg>
-                      </button>
-                    </div>
+                    <TableActions :actions="backendActions(backend)" />
                   </td>
                 </tr>
               </tbody>
@@ -404,6 +362,7 @@ import ErrorAlert from '../components/shared/ErrorAlert.vue'
 import FeatureGate from '../components/FeatureGate.vue'
 import { formatApiError } from '../lib/api/formatError'
 import { Button } from '@/components/ui/button'
+import TableActions from '../components/shared/TableActions.vue'
 
 type ModelBackendItem = components['schemas']['ModelBackendResponse']
 
@@ -628,6 +587,22 @@ async function deleteBackend() {
   } finally {
     deleting.value = false
   }
+}
+
+function backendActions(backend: ModelBackendItem) {
+  return [
+    {
+      key: 'edit',
+      label: 'Edit',
+      onClick: () => openEditForm(backend),
+    },
+    {
+      key: 'delete',
+      label: 'Delete',
+      onClick: () => confirmDelete(backend),
+      danger: true,
+    },
+  ]
 }
 
 onMounted(loadBackends)

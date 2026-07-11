@@ -72,16 +72,7 @@
             </div>
             <div class="flex items-center gap-3">
               <span class="text-sm text-muted-foreground">{{ team.member_count }} member{{ team.member_count !== 1 ? 's' : '' }}</span>
-              <button class="rounded p-1 text-muted-foreground hover:bg-accent" data-testid="settings-teams-rename" :aria-label="'Rename team'" title="Rename team" @click.stop="startRename(team)">
-                <svg class="h-4 w-4" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                  <path d="M17 3a2.85 2.85 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z" />
-                </svg>
-              </button>
-              <button class="rounded p-1 text-destructive hover:bg-destructive/10" data-testid="settings-teams-delete" :aria-label="'Delete team'" title="Delete team" @click.stop="confirmDelete(team)">
-                <svg class="h-4 w-4" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                  <path d="M3 6h18" /><path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6" /><path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2" />
-                </svg>
-              </button>
+              <TableActions :actions="teamActions(team)" />
             </div>
           </div>
 
@@ -144,11 +135,7 @@
                       </select>
                     </td>
                     <td class="py-2 text-right">
-                      <button class="rounded p-1 text-muted-foreground hover:text-destructive" data-testid="settings-teams-member-remove" :aria-label="'Remove member'" title="Remove member" @click="removeMember(team.id, member)">
-                        <svg class="h-4 w-4" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                          <path d="M18 6 6 18" /><path d="m6 6 12 12" />
-                        </svg>
-                      </button>
+                      <TableActions :actions="memberActions(team.id, member)" />
                     </td>
                   </tr>
                 </tbody>
@@ -199,6 +186,7 @@
 <script setup lang="ts">
 import { ref, onMounted, onBeforeUnmount } from 'vue'
 import { Button } from '@/components/ui/button'
+import TableActions from '../components/shared/TableActions.vue'
 import { api } from '../lib/api/client'
 import type { components } from '../lib/api/client'
 import PageHeader from '../components/shared/PageHeader.vue'
@@ -498,6 +486,33 @@ async function removeMember(teamId: string, member: MembershipResponse) {
 onBeforeUnmount(() => {
   if (teamsCreateTimeout) clearTimeout(teamsCreateTimeout)
 })
+
+function teamActions(team: AdminTeamItem) {
+  return [
+    {
+      key: 'rename',
+      label: 'Rename',
+      onClick: () => startRename(team),
+    },
+    {
+      key: 'delete',
+      label: 'Delete',
+      onClick: () => confirmDelete(team),
+      danger: true,
+    },
+  ]
+}
+
+function memberActions(teamId: string, member: MembershipResponse) {
+  return [
+    {
+      key: 'remove',
+      label: 'Remove',
+      onClick: () => removeMember(teamId, member),
+      danger: true,
+    },
+  ]
+}
 
 onMounted(async () => {
   planStore.fetchPlan()

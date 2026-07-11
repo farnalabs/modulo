@@ -332,10 +332,15 @@
       </aside>
     </template>
 
-    <div v-if="showAgentPicker" class="fixed inset-0 z-50 flex items-center justify-center bg-black/50" @click.self="showAgentPicker = false">
-      <div class="w-full max-w-lg rounded-lg border bg-card p-6 shadow-lg">
-        <h3 class="mb-4 text-base font-semibold">{{ $t('views.PipelineEditorView.convert_to_agent') }}</h3>
-        <div class="space-y-4">
+    <FormDialog
+      :open="showAgentPicker"
+      @update:open="showAgentPicker = false"
+      :title="$t('views.PipelineEditorView.convert_to_agent')"
+      confirmText="Convert"
+      :confirmDisabled="!canConvert"
+      @confirm="convertToAgent"
+    >
+      <div class="space-y-4">
           <div>
             <label class="mb-1 block text-sm font-medium">{{ $t('views.PipelineEditorView.agent') }}</label>
             <select
@@ -377,221 +382,143 @@
             {{ convertError }}
           </div>
 
-          <div class="flex justify-end gap-2">
-            <button
-              data-testid="pipeline-editor-cancel"
-              class="rounded-lg border border-input bg-background px-4 py-2 text-sm hover:bg-accent"
-              @click="showAgentPicker = false"
-            >
-              Cancel
-            </button>
-            <button
-              :disabled="!canConvert"
-              data-testid="pipeline-editor-convert"
-              class="rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
-              @click="convertToAgent"
-            >
-              Convert
-            </button>
-          </div>
-        </div>
       </div>
-    </div>
+    </FormDialog>
 
-    <div v-if="showRevertDialog" class="fixed inset-0 z-50 flex items-center justify-center bg-black/50" @click.self="showRevertDialog = false">
-      <div class="w-full max-w-lg rounded-lg border bg-card p-6 shadow-lg">
-        <h3 class="mb-4 text-base font-semibold">{{ $t('views.PipelineEditorView.revert_dialog_title') }}</h3>
-        <div v-if="revertLoading" class="flex items-center justify-center py-8">
-          <div class="h-6 w-6 animate-spin rounded-full border-4 border-primary border-t-transparent" />
-        </div>
-        <div v-else class="space-y-4">
-          <p class="text-sm text-muted-foreground">
-            {{ $t('views.PipelineEditorView.select_snapshot_description') }}
-          </p>
-          <div>
-            <label class="mb-1 block text-sm font-medium">{{ $t('views.PipelineEditorView.snapshot_label') }}</label>
-            <select
-              v-model="revertSnapshotId"
-              data-testid="pipeline-editor-snapshot-select"
-              aria-label="Snapshot"
-              class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm"
-            >
-              <option value="">{{ $t('views.PipelineEditorView.select_snapshot_placeholder') }}</option>
-              <option
-                v-for="s in snapshots"
-                :key="s.id"
-                :value="s.id"
-              >
-                v{{ s.snapshot_version }}{{ s.tag ? ` — ${s.tag}` : '' }}
-              </option>
-            </select>
-          </div>
-
-          <div v-if="revertError" class="rounded-lg border border-destructive/50 bg-destructive/10 p-3 text-sm text-destructive">
-            {{ revertError }}
-          </div>
-
-          <div class="flex justify-end gap-2">
-            <button
-              data-testid="pipeline-editor-revert-cancel"
-              class="rounded-lg border border-input bg-background px-4 py-2 text-sm hover:bg-accent"
-              @click="showRevertDialog = false"
-            >
-              {{ $t('views.PipelineEditorView.cancel') }}
-            </button>
-            <button
-              :disabled="!revertSnapshotId"
-              data-testid="pipeline-editor-revert"
-              class="rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
-              @click="revertToManual"
-            >
-              {{ $t('views.PipelineEditorView.revert') }}
-            </button>
-          </div>
-        </div>
-      </div>
-    </div>
-
-    <!-- Save as composite dialog -->
-    <div
-      v-if="showSaveAsComposite"
-      class="fixed inset-0 z-50 flex items-center justify-center bg-black/50"
-      @click.self="showSaveAsComposite = false"
+    <FormDialog
+      :open="showRevertDialog"
+      @update:open="showRevertDialog = false"
+      :title="$t('views.PipelineEditorView.revert_dialog_title')"
+      confirmText="Revert"
+      :confirmDisabled="!revertSnapshotId"
+      @confirm="revertToManual"
     >
-      <div class="w-full max-w-lg rounded-lg border bg-card p-6 shadow-lg">
-        <h3 class="mb-4 text-base font-semibold">Save as Composite</h3>
-        <p class="mb-4 text-sm text-muted-foreground">
-          Extracts selected nodes from this pipeline into a reusable composite template.
-          Parameter placeholders (&#123;&#123;parameter.*&#125;&#125;) in agent prompts are auto-detected.
+      <div v-if="revertLoading" class="flex items-center justify-center py-8">
+        <div class="h-6 w-6 animate-spin rounded-full border-4 border-primary border-t-transparent" />
+      </div>
+      <div v-else class="space-y-4">
+        <p class="text-sm text-muted-foreground">
+          {{ $t('views.PipelineEditorView.select_snapshot_description') }}
         </p>
-        <div class="space-y-4">
-          <div>
-            <label class="mb-1 block text-sm font-medium">Name *</label>
-            <input
-              v-model="saveAsName"
-              class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm"
-              placeholder="My Composite"
-            />
-          </div>
-          <div>
-            <label class="mb-1 block text-sm font-medium">Description</label>
-            <textarea
-              v-model="saveAsDescription"
-              class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm"
-              rows="3"
-              placeholder="Optional description"
-            />
-          </div>
-          <div>
-            <label class="mb-1 block text-sm font-medium">Selected Nodes</label>
-            <div class="max-h-32 space-y-1 overflow-y-auto">
-              <label
-                v-for="node in rawNodes"
-                :key="node.id"
-                class="flex items-center gap-2 rounded-md bg-muted/30 px-3 py-1.5 text-sm"
-              >
-                <input
-                  v-model="saveAsSelectedNodeIds"
-                  type="checkbox"
-                  :value="node.id"
-                  class="h-4 w-4 rounded border-gray-300 text-indigo-500 focus:ring-indigo-500"
-                />
-                <span>{{ node.label || 'Node ' + shortId(node.id) }}</span>
-              </label>
-            </div>
-          </div>
-          <div v-if="saveAsError" class="rounded-lg border border-destructive/50 bg-destructive/10 p-3 text-sm text-destructive">
-            {{ saveAsError }}
-          </div>
-          <div class="flex justify-end gap-2">
-            <button
-              class="rounded-lg border border-input bg-background px-4 py-2 text-sm hover:bg-accent"
-              @click="showSaveAsComposite = false"
-            >
-              Cancel
-            </button>
-            <button
-              :disabled="!saveAsName || saveAsSelectedNodeIds.length === 0 || saving"
-              class="rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
-              @click="handleSaveAsComposite"
-            >
-              {{ saving ? 'Saving...' : 'Save' }}
-            </button>
-          </div>
-        </div>
-      </div>
-    </div>
-
-    <!-- Rename dialog -->
-    <div
-      v-if="showRenameDialog"
-      class="fixed inset-0 z-50 flex items-center justify-center bg-black/50"
-      @click.self="showRenameDialog = false"
-    >
-      <div class="w-full max-w-md rounded-lg border bg-card p-6 shadow-lg">
-        <h3 class="mb-4 text-lg font-semibold">Rename Pipeline</h3>
-        <div class="space-y-4">
-          <div>
-            <label class="mb-1 block text-sm font-medium">Name</label>
-            <input
-              v-model="renameName"
-              class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm"
-              placeholder="Pipeline name"
-              @keyup.enter="handleRename"
-            />
-          </div>
-          <div v-if="renameError" class="rounded-lg border border-destructive/50 bg-destructive/10 p-3 text-sm text-destructive">
-            {{ renameError }}
-          </div>
-          <div class="flex justify-end gap-2">
-            <button
-              class="rounded-lg border border-input bg-background px-4 py-2 text-sm hover:bg-accent"
-              @click="showRenameDialog = false"
-            >
-              Cancel
-            </button>
-            <button
-              :disabled="!renameName.trim() || renaming"
-              class="rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
-              @click="handleRename"
-            >
-              {{ renaming ? 'Saving...' : 'Save' }}
-            </button>
-          </div>
-        </div>
-      </div>
-    </div>
-
-    <!-- Delete confirmation dialog -->
-    <div
-      v-if="showDeleteConfirm"
-      class="fixed inset-0 z-50 flex items-center justify-center bg-black/50"
-      @click.self="showDeleteConfirm = false"
-    >
-      <div class="w-full max-w-md rounded-lg border bg-card p-6 shadow-lg">
-        <h3 class="mb-4 text-lg font-semibold text-destructive">Delete Pipeline</h3>
-        <p class="mb-4 text-sm text-muted-foreground">
-          Are you sure? This permanently deletes the pipeline and all its runs.
-        </p>
-        <div v-if="deleteError" class="mb-4 rounded-lg border border-destructive/50 bg-destructive/10 p-3 text-sm text-destructive">
-          {{ deleteError }}
-        </div>
-        <div class="flex justify-end gap-2">
-          <button
-            class="rounded-lg border border-input bg-background px-4 py-2 text-sm hover:bg-accent"
-            @click="showDeleteConfirm = false"
+        <div>
+          <label class="mb-1 block text-sm font-medium">{{ $t('views.PipelineEditorView.snapshot_label') }}</label>
+          <select
+            v-model="revertSnapshotId"
+            data-testid="pipeline-editor-snapshot-select"
+            aria-label="Snapshot"
+            class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm"
           >
-            Cancel
-          </button>
-          <button
-            class="rounded-lg bg-destructive px-4 py-2 text-sm font-medium text-destructive-foreground hover:bg-destructive/90"
-            @click="handleDelete"
-          >
-            Delete
-          </button>
+            <option value="">{{ $t('views.PipelineEditorView.select_snapshot_placeholder') }}</option>
+            <option
+              v-for="s in snapshots"
+              :key="s.id"
+              :value="s.id"
+            >
+              v{{ s.snapshot_version }}{{ s.tag ? ` — ${s.tag}` : '' }}
+            </option>
+          </select>
+        </div>
+
+        <div v-if="revertError" class="rounded-lg border border-destructive/50 bg-destructive/10 p-3 text-sm text-destructive">
+          {{ revertError }}
         </div>
       </div>
-    </div>
+    </FormDialog>
+
+    <FormDialog
+      :open="showSaveAsComposite"
+      @update:open="showSaveAsComposite = false"
+      title="Save as Composite"
+      confirmText="Save"
+      :confirmDisabled="!saveAsName || saveAsSelectedNodeIds.length === 0 || saving"
+      :loading="saving"
+      @confirm="handleSaveAsComposite"
+    >
+      <p class="mb-4 text-sm text-muted-foreground">
+        Extracts selected nodes from this pipeline into a reusable composite template.
+        Parameter placeholders (&#123;&#123;parameter.*&#125;&#125;) in agent prompts are auto-detected.
+      </p>
+      <div class="space-y-4">
+        <div>
+          <label class="mb-1 block text-sm font-medium">Name *</label>
+          <input
+            v-model="saveAsName"
+            class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm"
+            placeholder="My Composite"
+          />
+        </div>
+        <div>
+          <label class="mb-1 block text-sm font-medium">Description</label>
+          <textarea
+            v-model="saveAsDescription"
+            class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm"
+            rows="3"
+            placeholder="Optional description"
+          />
+        </div>
+        <div>
+          <label class="mb-1 block text-sm font-medium">Selected Nodes</label>
+          <div class="max-h-32 space-y-1 overflow-y-auto">
+            <label
+              v-for="node in rawNodes"
+              :key="node.id"
+              class="flex items-center gap-2 rounded-md bg-muted/30 px-3 py-1.5 text-sm"
+            >
+              <input
+                v-model="saveAsSelectedNodeIds"
+                type="checkbox"
+                :value="node.id"
+                class="h-4 w-4 rounded border-gray-300 text-indigo-500 focus:ring-indigo-500"
+              />
+              <span>{{ node.label || 'Node ' + shortId(node.id) }}</span>
+            </label>
+          </div>
+        </div>
+        <div v-if="saveAsError" class="rounded-lg border border-destructive/50 bg-destructive/10 p-3 text-sm text-destructive">
+          {{ saveAsError }}
+        </div>
+      </div>
+    </FormDialog>
+
+    <FormDialog
+      :open="showRenameDialog"
+      @update:open="showRenameDialog = false"
+      title="Rename Pipeline"
+      confirmText="Save"
+      :confirmDisabled="!renameName.trim() || renaming"
+      :loading="renaming"
+      @confirm="handleRename"
+    >
+      <div class="space-y-4">
+        <div>
+          <label class="mb-1 block text-sm font-medium">Name</label>
+          <input
+            v-model="renameName"
+            class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm"
+            placeholder="Pipeline name"
+            @keyup.enter="handleRename"
+          />
+        </div>
+        <div v-if="renameError" class="rounded-lg border border-destructive/50 bg-destructive/10 p-3 text-sm text-destructive">
+          {{ renameError }}
+        </div>
+      </div>
+    </FormDialog>
+
+    <FormDialog
+      :open="showDeleteConfirm"
+      @update:open="showDeleteConfirm = false"
+      title="Delete Pipeline"
+      confirmText="Delete"
+      @confirm="handleDelete"
+    >
+      <p class="mb-4 text-sm text-muted-foreground">
+        Are you sure? This permanently deletes the pipeline and all its runs.
+      </p>
+      <div v-if="deleteError" class="mb-4 rounded-lg border border-destructive/50 bg-destructive/10 p-3 text-sm text-destructive">
+        {{ deleteError }}
+      </div>
+    </FormDialog>
   </div>
 </template>
 
@@ -607,6 +534,7 @@ import { useApi } from '../composables/useApi'
 import { formatApiError } from '../lib/api/formatError'
 import { usePlanStore } from '../stores/planStore'
 import BackLink from '../components/BackLink.vue'
+import FormDialog from '../components/shared/FormDialog.vue'
 import { shortId } from '../utils/format'
 
 const { get, post, patch, delete: del } = useApi()

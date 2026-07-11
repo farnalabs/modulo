@@ -84,41 +84,23 @@
       </div>
     </template>
 
-    <!-- Apply Confirmation Dialog -->
-    <Dialog v-model:open="applyDialogOpen">
-      <DialogContent class="sm:max-w-md">
-        <DialogHeader>
-          <DialogTitle>Apply License Key</DialogTitle>
-          <DialogDescription>
-            This will replace your current license key. Applying a new license key requires a server restart to take full effect.
-          </DialogDescription>
-        </DialogHeader>
-        <DialogFooter class="gap-2 sm:justify-end">
-          <Button variant="outline" @click="applyDialogOpen = false">Cancel</Button>
-          <Button :disabled="applying" @click="applyKey">
-            {{ applying ? 'Applying...' : 'Confirm Apply' }}
-          </Button>
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
+    <FormDialog
+      v-model:open="applyDialogOpen"
+      title="Apply License Key"
+      description="This will replace your current license key. Applying a new license key requires a server restart to take full effect."
+      confirmText="Confirm Apply"
+      :loading="applying"
+      @confirm="applyKey"
+    />
 
-    <!-- Remove Confirmation Dialog -->
-    <Dialog v-model:open="removeDialogOpen">
-      <DialogContent class="sm:max-w-md">
-        <DialogHeader>
-          <DialogTitle>Remove License</DialogTitle>
-          <DialogDescription>
-            Are you sure you want to remove the Team license? Your instance will revert to Community tier and all Team features will be disabled.
-          </DialogDescription>
-        </DialogHeader>
-        <DialogFooter class="gap-2 sm:justify-end">
-          <Button variant="outline" @click="removeDialogOpen = false">Cancel</Button>
-          <Button variant="destructive" :disabled="removing" @click="removeLicense">
-            {{ removing ? 'Removing...' : 'Confirm Remove' }}
-          </Button>
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
+    <FormDialog
+      v-model:open="removeDialogOpen"
+      title="Remove License"
+      description="Are you sure you want to remove the Team license? Your instance will revert to Community tier and all Team features will be disabled."
+      confirmText="Confirm Remove"
+      :loading="removing"
+      @confirm="removeLicense"
+    />
   </div>
 </template>
 
@@ -132,14 +114,7 @@ import PageHeader from '../components/shared/PageHeader.vue'
 import LoadingSpinner from '../components/shared/LoadingSpinner.vue'
 import ErrorAlert from '../components/shared/ErrorAlert.vue'
 import { Badge } from '../components/ui/badge'
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from '../components/ui/dialog'
+import FormDialog from '../components/shared/FormDialog.vue'
 
 const planStore = usePlanStore()
 
