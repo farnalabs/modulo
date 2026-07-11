@@ -28,6 +28,6 @@ Public endpoint returning build and runtime metadata for the current deployment:
 ## Known Gaps
 
 - **PRD alignment**: PRD §10.3a "Infrastructure" covers general infra checklist items (Docker Compose, startup sequence, auth) but has no dedicated section specifying the deployment metadata endpoint. The previous reference to PRD §10.5 was incorrect — that section covers Opt-In Telemetry only.
-- **No BDD tests**: The deployment endpoint has unit tests but no BDD/Gherkin feature files. BDD scenarios should cover: metadata shape, env-var-driven fields, fallback defaults, and uptime monotonicity.
+- **BDD coverage partial**: 7 BDD scenarios exist in `backend/tests/bdd/features/deployment/metadata.feature` covering metadata shape, version, uptime, environment defaults, build metadata fields, and env var fallbacks. Missing: CI job URL field validation, non-development environment override, and error responses (missing auth, internal error).
 - **No health status aggregation**: The deployment endpoint is separate from `/healthz`. There is no combined endpoint that returns both deployment metadata and health status.
 - **No rollback history tracking**: The endpoint returns only current-deployment metadata. No history of previous deployments or rollback state is tracked.

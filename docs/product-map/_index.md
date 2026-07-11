@@ -127,8 +127,8 @@ status: covered | partial | gap    # auto-updated by graph-validate
 ### Infrastructure
 - [feat-infra-security](infra/security-controls.md) => PRD 7
 - [feat-infra-sse-event-bus](infra/sse-event-bus.md) => PRD 8.22
-- [feat-infra-health](infra/health-checks.md) => PRD 10.5
-- [feat-infra-deployment](infra/deployment.md) => PRD 10.5
+- [feat-infra-health](infra/health-checks.md) => (no PRD section — internal infra concern)
+- [feat-infra-deployment](infra/deployment.md) => PRD 10.3a
 - [feat-infra-extensibility](infra/extensibility.md) => PRD 10
 
 ### library
