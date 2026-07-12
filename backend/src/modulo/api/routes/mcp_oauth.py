@@ -8,6 +8,7 @@ The protocol endpoints (POST /mcp/oauth/authorize, POST /mcp/oauth/token)
 live in the MCP sub-app at ``mcp_server.py``.
 """
 
+import asyncio
 import logging
 
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -116,6 +117,8 @@ async def register_oauth_client(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database error occurred. Please try again.",
         ) from None
+    except asyncio.CancelledError:
+        raise
     except HTTPException:
         raise
     except Exception as e:
@@ -156,6 +159,8 @@ async def list_oauth_clients_endpoint(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database error occurred. Please try again.",
         ) from None
+    except asyncio.CancelledError:
+        raise
     except HTTPException:
         raise
     except Exception as e:
@@ -203,6 +208,8 @@ async def remove_oauth_client(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database error occurred. Please try again.",
         ) from None
+    except asyncio.CancelledError:
+        raise
     except HTTPException:
         raise
     except Exception as e:
