@@ -322,10 +322,10 @@ class GraphValidator:
     ) -> None:
         """Validate eval_condition on a HITL gate config, if present."""
         hitl_config = edge.get("hitl_gate_config")
-        if not hitl_config:
+        if not isinstance(hitl_config, dict):
             return
         eval_cond = hitl_config.get("eval_condition")
-        if not eval_cond:
+        if not isinstance(eval_cond, dict):
             return
         src: str = str(edge.get("source", edge.get("source_node_id", "?")))
         eval_name: str | None = eval_cond.get("eval_name")
@@ -337,7 +337,7 @@ class GraphValidator:
             )
             return
         threshold = eval_cond.get("threshold")
-        if threshold is None or not isinstance(threshold, (int, float)):
+        if threshold is None or isinstance(threshold, bool) or not isinstance(threshold, (int, float)):
             result.error(
                 "HITL_EVAL_CONDITION_INVALID_THRESHOLD",
                 f"Edge from '{src}': eval_condition.threshold must be a number",
@@ -855,7 +855,12 @@ class GraphValidator:
         5. failure_behaviour must be valid.
         """
         max_retries = output_validation.get("max_validation_retries", 0)
-        if not isinstance(max_retries, (int, float)) or max_retries < 0 or max_retries > 5:
+        if (
+            isinstance(max_retries, bool)
+            or not isinstance(max_retries, (int, float))
+            or max_retries < 0
+            or max_retries > 5
+        ):
             result.error(
                 "COMPOSITE_VALIDATION_RETRIES_RANGE",
                 f"Node '{node_id}': max_validation_retries must be an integer between 0 and 5 (got {max_retries!r})",
@@ -866,6 +871,8 @@ class GraphValidator:
         valid_behaviours = {"retry", "block", "warn"}
 
         eval_definitions: list[dict[str, Any]] = output_validation.get("eval_definitions", [])
+        if not isinstance(eval_definitions, list):
+            return
         for i, eval_def in enumerate(eval_definitions):
             eval_id = eval_def.get("id", f"#{i}")
             eval_name = eval_def.get("name", eval_id)
