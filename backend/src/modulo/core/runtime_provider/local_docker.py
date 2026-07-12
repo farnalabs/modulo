@@ -245,15 +245,21 @@ class LocalDockerRuntimeProvider(RuntimeProvider):
         return None
 
     async def close(self) -> None:
+        try:
+            client = await self._get_client()
+        except RuntimeError:
+            _log.warning("Docker client not available during close, skipping workspace cleanup")
+            self._workspaces.clear()
+            return
+
         for cid in list(self._workspaces.values()):
             try:
-                container = await asyncio.to_thread(lambda c=cid: self._client.containers.get(c))
+                container = await asyncio.to_thread(lambda c=cid: client.containers.get(c))
                 await asyncio.to_thread(lambda cont=container: cont.stop(timeout=5))
             except NotFound:
                 pass
             except Exception:
                 _log.warning("Failed to destroy container %s during close", cid, exc_info=True)
         self._workspaces.clear()
-        if self._client is not None:
-            await asyncio.to_thread(self._client.close)
-            self._client = None
+        await asyncio.to_thread(client.close)
+        self._client = None
