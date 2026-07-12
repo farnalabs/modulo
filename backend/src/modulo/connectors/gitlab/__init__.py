@@ -3,6 +3,7 @@
 import asyncio
 import base64
 import json
+import random
 from typing import Any
 from urllib.parse import quote
 
@@ -30,7 +31,7 @@ _MAX_DELAY = 30.0
 
 def _parse_retry_after(response: httpx.Response) -> float | None:
     """Parse Retry-After header from GitLab API response."""
-    value = response.headers.get("Retry-After") or response.headers.get("retry-after")
+    value = response.headers.get("Retry-After")
     if value:
         try:
             return float(value)
@@ -90,11 +91,15 @@ class GitLabConnector(ConnectorBase):
     def __init__(self, token: str) -> None:
         self._token = token
 
+    @staticmethod
+    def _jitter(delay: float) -> float:
+        return random.uniform(0, delay)  # noqa: S311 — non-cryptographic jitter for retry delays
+
     def _require_filter(self, filters: dict[str, Any], key: str, resource: str) -> Any:
         try:
             return filters[key]
         except KeyError:
-            raise ValueError(f"Missing required filter {key!r} for GitLab resource {resource!r}")
+            raise ValueError(f"Missing required filter {key!r} for GitLab resource {resource!r}") from None
 
     async def _call_api(self, method: str, path: str, **kwargs: Any) -> httpx.Response:
         """Call GitLab API with retry/backoff for retryable statuses.
@@ -114,7 +119,7 @@ class GitLabConnector(ConnectorBase):
                         delay = (
                             min(retry_after, _MAX_DELAY) if retry_after else min(_BASE_DELAY * (2**attempt), _MAX_DELAY)
                         )
-                        await asyncio.sleep(delay)
+                        await asyncio.sleep(self._jitter(delay))
                         continue
                     r.raise_for_status()
                     return r
@@ -123,28 +128,28 @@ class GitLabConnector(ConnectorBase):
                 if exc.response.status_code in _RETRYABLE_STATUSES and attempt < _MAX_RETRIES:
                     retry_after = _parse_retry_after(exc.response)
                     delay = min(retry_after, _MAX_DELAY) if retry_after else min(_BASE_DELAY * (2**attempt), _MAX_DELAY)
-                    await asyncio.sleep(delay)
+                    await asyncio.sleep(self._jitter(delay))
                     continue
                 raise ValueError(f"GitLab API HTTP {exc.response.status_code}: {exc.response.text[:200]}") from exc
             except httpx.TimeoutException as exc:
                 last_exc = exc
                 if attempt < _MAX_RETRIES:
                     delay = min(_BASE_DELAY * (2**attempt), _MAX_DELAY)
-                    await asyncio.sleep(delay)
+                    await asyncio.sleep(self._jitter(delay))
                     continue
                 raise ValueError("GitLab API timeout") from exc
             except httpx.ConnectError as exc:
                 last_exc = exc
                 if attempt < _MAX_RETRIES:
                     delay = min(_BASE_DELAY * (2**attempt), _MAX_DELAY)
-                    await asyncio.sleep(delay)
+                    await asyncio.sleep(self._jitter(delay))
                     continue
                 raise ValueError("GitLab API connection error") from exc
             except httpx.HTTPError as exc:
                 last_exc = exc
                 if attempt < _MAX_RETRIES:
                     delay = min(_BASE_DELAY * (2**attempt), _MAX_DELAY)
-                    await asyncio.sleep(delay)
+                    await asyncio.sleep(self._jitter(delay))
                     continue
                 raise ValueError(f"GitLab API HTTP error: {exc}") from exc
         raise ValueError("GitLab API request failed after retries") from last_exc
@@ -397,8 +402,7 @@ class GitLabConnector(ConnectorBase):
                     f"/projects/{encoded}/repository/files/{quote(path, safe='')}",
                     json=body,
                 )
-                result = _safe_json(r)
-                return result
+                return _safe_json(r)
             case "mr" | "merge_request":
                 project = self._require_filter(payload.data, "project", payload.resource)
                 source_branch = self._require_filter(payload.data, "source_branch", payload.resource)
@@ -416,8 +420,7 @@ class GitLabConnector(ConnectorBase):
                     f"/projects/{encoded}/merge_requests",
                     json=body,
                 )
-                mr = _safe_json(r)
-                return mr
+                return _safe_json(r)
             case "issue":
                 project = self._require_filter(payload.data, "project", payload.resource)
                 title = self._require_filter(payload.data, "title", payload.resource)
@@ -438,8 +441,7 @@ class GitLabConnector(ConnectorBase):
                     f"/projects/{encoded}/issues",
                     json=body,
                 )
-                issue = _safe_json(r)
-                return issue
+                return _safe_json(r)
             case "issue_update":
                 project = self._require_filter(payload.data, "project", payload.resource)
                 issue_iid = self._require_filter(payload.data, "iid", payload.resource)
@@ -453,8 +455,7 @@ class GitLabConnector(ConnectorBase):
                     f"/projects/{encoded}/issues/{issue_iid}",
                     json=body,
                 )
-                updated = _safe_json(r)
-                return updated
+                return _safe_json(r)
             case "issue_note":
                 project = self._require_filter(payload.data, "project", payload.resource)
                 issue_iid = self._require_filter(payload.data, "iid", payload.resource)
@@ -468,8 +469,7 @@ class GitLabConnector(ConnectorBase):
                     f"/projects/{encoded}/issues/{issue_iid}/notes",
                     json=body,
                 )
-                note = _safe_json(r)
-                return note
+                return _safe_json(r)
             case "issue_label":
                 project = self._require_filter(payload.data, "project", payload.resource)
                 issue_iid = self._require_filter(payload.data, "iid", payload.resource)
@@ -483,8 +483,7 @@ class GitLabConnector(ConnectorBase):
                     f"/projects/{encoded}/issues/{issue_iid}",
                     json=body,
                 )
-                labeled = _safe_json(r)
-                return labeled
+                return _safe_json(r)
             case "label":
                 project = self._require_filter(payload.data, "project", payload.resource)
                 name = self._require_filter(payload.data, "name", payload.resource)
@@ -500,8 +499,7 @@ class GitLabConnector(ConnectorBase):
                     f"/projects/{encoded}/labels",
                     json=body,
                 )
-                label_res = _safe_json(r)
-                return label_res
+                return _safe_json(r)
             case "milestone":
                 project = self._require_filter(payload.data, "project", payload.resource)
                 title = self._require_filter(payload.data, "title", payload.resource)
@@ -518,8 +516,7 @@ class GitLabConnector(ConnectorBase):
                     f"/projects/{encoded}/milestones",
                     json=body,
                 )
-                ms = _safe_json(r)
-                return ms
+                return _safe_json(r)
             case "pipeline_run":
                 project = self._require_filter(payload.data, "project", payload.resource)
                 ref = self._require_filter(payload.data, "ref", payload.resource)
@@ -534,7 +531,6 @@ class GitLabConnector(ConnectorBase):
                     f"/projects/{encoded}/pipeline",
                     json=body,
                 )
-                pipeline = _safe_json(r)
-                return pipeline
+                return _safe_json(r)
             case _:
                 raise ValueError(f"Unsupported GitLab write resource: {payload.resource!r}")
