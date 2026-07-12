@@ -119,6 +119,8 @@
       @update:open="showCreate = false"
       title="Create User"
       confirmText="Create"
+      :loading="createLoading"
+      :confirmDisabled="createLoading"
       @confirm="createUser"
     >
       <form @submit.prevent="createUser">
@@ -144,6 +146,7 @@
           </select>
         </div>
         <p v-if="createError" class="text-sm text-destructive">{{ createError }}</p>
+        <button type="submit" hidden>Create</button>
       </form>
     </FormDialog>
 
@@ -226,6 +229,7 @@ const users = computed(() => usersResp.value?.items ?? [])
 const total = computed(() => usersResp.value?.total ?? 0)
 const showCreate = ref(false)
 const createError = ref('')
+const createLoading = ref(false)
 const newUser = ref({ email: '', display_name: '', password: '', org_role: 'runner' })
 const showResetDialog = ref(false)
 const tempPassword = ref('')
@@ -366,6 +370,7 @@ async function createUser() {
     createError.value = 'Password must contain at least one uppercase letter, one lowercase letter, and one digit'
     return
   }
+  createLoading.value = true
   try {
     await post('/api/v1/admin/users', newUser.value)
     showCreate.value = false
@@ -373,7 +378,10 @@ async function createUser() {
     showFlash('success', `User ${email} created`)
     loadUsers()
   } catch (e: any) {
+    console.error('Create user failed:', e)
     createError.value = e instanceof Error ? e.message : 'Failed to create user'
+  } finally {
+    createLoading.value = false
   }
 }
 
