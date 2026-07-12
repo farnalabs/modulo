@@ -74,7 +74,7 @@
 
 <script setup lang="ts">
 import { reactive, computed, watch } from 'vue'
-import { GraduationCapIcon } from '@lucide/vue'
+import { GraduationCap as GraduationCapIcon } from '@lucide/vue'
 import { Input } from '@/components/ui/input'
 import { Button } from '@/components/ui/button'
 import type { StageType, PipelineSummary } from '../../../types/lifecycleMap'

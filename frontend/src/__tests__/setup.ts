@@ -1,6 +1,7 @@
 import { markRaw } from 'vue'
 import { config } from '@vue/test-utils'
 import { createI18n } from 'vue-i18n'
+import { vi } from 'vitest'
 import enUS from '../locales/en-US.js'
 
 const i18n = createI18n({

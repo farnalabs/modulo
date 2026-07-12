@@ -8,6 +8,12 @@ import { usePlanStore } from '../stores/planStore'
 
 const mockFetch = vi.fn()
 
+function expectRecord(value: unknown): asserts value is Record<string, unknown> {
+  expect(value).toBeDefined()
+  expect(typeof value).toBe('object')
+  expect(value).not.toBeNull()
+}
+
 function mockSessionKey(key = 'test-session-key') {
   mockFetch.mockImplementation((url: string) => {
     if (url.includes('/api/v1/errors/session-key')) {
@@ -39,7 +45,7 @@ afterEach(() => {
   vi.restoreAllMocks()
   vi.useRealTimers()
   if (typeof window !== 'undefined') {
-    delete (window as any).fetch
+    Reflect.deleteProperty(window, 'fetch')
   }
 })
 
@@ -375,10 +381,10 @@ describe('Context enrichment', () => {
     tracker.captureError(error)
 
     expect(captureSpy).toHaveBeenCalledTimes(1)
-    const event = captureSpy.mock.calls[0][0] as any
-    expect(event.context_json).toBeDefined()
+    const event = captureSpy.mock.calls[0]?.[0]
+    expectRecord(event?.context_json)
     expect(event.context_json.url).toBeTypeOf('string')
-    expect(event.context_json.viewport).toBeDefined()
+    expectRecord(event.context_json.viewport)
     expect(event.context_json.viewport.width).toBeTypeOf('number')
     expect(event.context_json.viewport.height).toBeTypeOf('number')
 
@@ -397,7 +403,8 @@ describe('Context enrichment', () => {
     tracker.captureError(error)
 
     expect(captureSpy).toHaveBeenCalledTimes(1)
-    const event = captureSpy.mock.calls[0][0] as any
+    const event = captureSpy.mock.calls[0]?.[0]
+    expectRecord(event?.context_json)
     expect(event.context_json.tier).toBe('enterprise')
 
     tracker.dispose()
