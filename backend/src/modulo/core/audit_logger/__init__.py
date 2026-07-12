@@ -207,6 +207,7 @@ async def append_audit_event(
                 APPEND_MAX_RETRIES,
                 org_id,
                 event_type,
+                exc_info=True,
             )
             if attempt == APPEND_MAX_RETRIES - 1:
                 _log.error(
@@ -484,6 +485,7 @@ async def list_audit_events(
             _log.warning(
                 "list_audit_events: failed to decode cursor %r — falling back to first page",
                 cursor,
+                exc_info=True,
             )
 
     query = query.order_by(AuditEvent.created_at.desc(), AuditEvent.id.desc()).limit(resolved_limit + 1)
