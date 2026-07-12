@@ -1,10 +1,9 @@
-from __future__ import annotations
-
 """CRUD for error tracking (error_events + error_groups).
 
 All functions enforce org scoping via organisation_id filter.
 """
 
+from __future__ import annotations
 
 import uuid
 from datetime import UTC, datetime
