@@ -542,8 +542,10 @@ class Notifier:
 
     async def close(self) -> None:
         """Close the underlying HTTP client, if one was created."""
+        client: httpx.AsyncClient | None = None
         async with self._http_client_lock:
-            client = self._http_client
-            if client is not None and not client.is_closed:
+            if self._http_client is not None and not self._http_client.is_closed:
+                client = self._http_client
                 self._http_client = None
-                await client.aclose()
+        if client is not None:
+            await client.aclose()
