@@ -189,7 +189,7 @@ async def license_info(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to retrieve license information",
-        )
+        ) from None
 
 
 @router.get("/api/v1/me", response_model=MeResponse)
@@ -206,13 +206,13 @@ async def me(
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
-        )
+        ) from None
     except SQLAlchemyError:
         logger.exception("me.failed")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database error while loading user info.",
-        )
+        ) from None
     except HTTPException:
         raise
     except Exception:
@@ -220,7 +220,7 @@ async def me(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to load user info.",
-        )
+        ) from None
 
     return MeResponse(
         user=UserInfo(username=current_user.username),
@@ -337,13 +337,13 @@ async def viewmodel_current(
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
-        )
+        ) from None
     except SQLAlchemyError:
         logger.exception("viewmodel.current_failed")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database error while loading viewmodel data.",
-        )
+        ) from None
     except HTTPException:
         raise
     except Exception:
@@ -351,7 +351,7 @@ async def viewmodel_current(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to load viewmodel data.",
-        )
+        ) from None
     enabled_features = plan_ctx.list_enabled_features()
     feature_flags = [
         FeatureFlagInfo(
@@ -408,13 +408,13 @@ async def viewmodel_list_views(
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
-        )
+        ) from None
     except SQLAlchemyError:
         logger.exception("viewmodel.list_views_failed")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database error while listing views.",
-        )
+        ) from None
     except HTTPException:
         raise
     except Exception:
@@ -422,7 +422,7 @@ async def viewmodel_list_views(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to list views.",
-        )
+        ) from None
 
     items = [_enrich_view(v, current_user.account_id) for v in result.items]
     return ViewModelViewsResponse(
