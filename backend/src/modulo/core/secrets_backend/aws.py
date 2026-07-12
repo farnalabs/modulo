@@ -98,7 +98,7 @@ class AWSSecretsManagerBackend(SecretsBackend):
             response = await run_sync(
                 client.get_secret_value,
                 SecretId=key,
-                timeout=_TIMEOUT,
+                timeout_seconds=_TIMEOUT,
             )
         except client.exceptions.ResourceNotFoundException:
             raise KeyError(key) from None
@@ -134,7 +134,7 @@ class AWSSecretsManagerBackend(SecretsBackend):
                 Name=key,
                 SecretString=value,
                 Description=_SECRET_DESCRIPTION,
-                timeout=_TIMEOUT,
+                timeout_seconds=_TIMEOUT,
             )
         except client.exceptions.ResourceExistsException:
             try:
@@ -142,7 +142,7 @@ class AWSSecretsManagerBackend(SecretsBackend):
                     client.update_secret,
                     SecretId=key,
                     SecretString=value,
-                    timeout=_TIMEOUT,
+                    timeout_seconds=_TIMEOUT,
                 )
             except TimeoutError:
                 logger.error("AWSSecretsManagerBackend: timeout writing secret %s", key)
@@ -171,7 +171,7 @@ class AWSSecretsManagerBackend(SecretsBackend):
                 SecretId=key,
                 RecoveryWindowInDays=_RECOVERY_WINDOW_DAYS,
                 ForceDeleteWithoutRecovery=_FORCE_DELETE_WITHOUT_RECOVERY,
-                timeout=_TIMEOUT,
+                timeout_seconds=_TIMEOUT,
             )
         except client.exceptions.ResourceNotFoundException:
             pass
