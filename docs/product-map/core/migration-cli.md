@@ -9,6 +9,7 @@ bdd: []
 depends-on: [feat-core-db-abstraction-core]
 unit-tests:
   - backend/tests/unit/cli/test_migrate.py
+  - backend/tests/unit/cli/test_migrate_org.py
 status: partial
 ---
 
