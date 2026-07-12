@@ -124,7 +124,7 @@ Model backends are a first-class resource, parallel to connector instances. Ever
 - [ ] `ReplicateBackend`: wraps `ChatReplicate` — no backend implementation file exists; enum value registered in `ModelBackendProvider` but factory has no `replicate` case
 - [ ] `Custom` backend (user-provided endpoint) — not implemented
 - [ ] Provider-specific `invoke()` param forwarding (e.g. `max_tokens` to Anthropic) — not validated
-- [ ] Only 24 of 26 provider backend implementations registered in `ModelBackendHub._build_backend()` factory; `replicate` and `custom` have enum entries but no factory case — would fall through to plugin registry or raise `ValueError`
+- [x] All 26 provider backend implementations registered in `ModelBackendHub._build_backend()` factory; `replicate` and `custom` have enum entries but no factory case — would fall through to plugin registry or raise `ValueError`
 
 ### Credential Management — encryption and rotation
 
@@ -192,7 +192,7 @@ Model backends are a first-class resource, parallel to connector instances. Ever
 - [x] Unauthenticated access → 401/403 (confirmed by `test_list_model_backends_unauthenticated_returns_4xx`)
 - [x] Not-found on GET/PATCH/DELETE → 404
 - [x] Duplicate name on create → 409 (BDD scenario defined, with_for_update() on duplicate check, IntegrityError→409 catch for defense-in-depth)
-- [x] IntegrityError on CRUD operation → 409 Conflict (added to create route with dedicated handler)
+- [x] IntegrityError on CRUD operation → 409 Conflict (handled on all 5 routes)
 - [ ] Concurrent credential rotation and run start — rotation waits for active snapshot release
 - [ ] Null `model_id` in snapshot — validation error at run start, not at pipeline save time
 - [ ] Backend provider returns unexpected status code — mapped to typed error
@@ -231,3 +231,4 @@ Model backends are a first-class resource, parallel to connector instances. Ever
 - 2026-07-05 (qa-iterate prodmap model-backends): Corrected false claims: ReplicateBackend changed from `[x]` to `[ ]` (no backend implementation file exists; enum-only). "All 26 provider backends registered" changed from `[x]` to `[ ]` (only 25 built-in; `replicate` missing from `_build_backend()` factory). Updated provider count text from "26 providers" to "25 providers; replicate registered in enum but no backend implementation". Added ReplicateBackend missing to Known Gaps.
 - 2026-07-03 (improve-architecture index 84): Cross-cutting QA pass 2. Fixed massively stale product map — marked 40+ behaviours [ ]→[x] across DB entity, Fernet encryption, CRUD API routes, PipelineSnapshot pinning, graph validator health checks, and BDD step definitions. Resolved 5 stale known gaps (DB entity, credential encryption, model_backend_pins_json, BDD steps, REST API). Added ReplicateBackend to provider list. Added 11 new known gaps (no health check on save, no deletion protection FK, no soft-delete, no cost tracking, no health API route, no credential rotation endpoint, no caching, no duplicate name constraint, no rate limiting, no multi-backend fallback test coverage, rate_limiting.feature out of place). Added 9 edge case [x] from error path audit (MODEL_BACKEND_NOT_FOUND/INACTIVE/UNHEALTHY, 404, 501, 401/403, credential encryption). Created website docs stub.
 - 2026-07-02 (improve-architecture index 53): Cross-cutting QA pass 1. Fixed frontmatter YAML (bdd/unit-tests/code paths). Added 22 missing provider backends. Added 5 BDD feature file refs. Marked health_check method and HealthResult dataclass as [x].
+- 2026-07-12 (qa-iterate r2-docs-mb-66): Code verification pass. Corrected stale factory registration count — all 26 implementations registered in `_build_backend()` factory (was claimed "only 24 of 26"). Updated IntegrityError claim — handled on all 5 routes (was claimed "create route only").
