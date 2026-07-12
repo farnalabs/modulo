@@ -43,3 +43,9 @@ Prevent accidental deletion of schemas that are in use by agents, pipeline snaps
 - **Delete only checks 3 reference types** — other entities may reference schemas (e.g. environment profiles, run templates)
 - **No integration test** verifying that deletion protection works across actual DB constraints
 - **No concurrency test** for force-delete racing with reference creation
+
+## QA History
+
+### 2026-07-12 — Round 3 (systemic sweep: B904, exc_info, dead code)
+- No code issues found in entry code paths (schemas.py clean from earlier passes)
+- Frontmatter valid; Known Gaps remain accurate

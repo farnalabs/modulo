@@ -39,3 +39,9 @@ Parse raw JSON Schema content and extract fields for use in the schema builder U
 - **No bundle export** — no endpoint to export schema + versions as a single bundle
 - **Import validation uses Draft 2020-12** — older drafts may produce false validation errors
 - **No BDD scenarios for import endpoint** — create.feature covers schema CRUD but not import specifically
+
+## QA History
+
+### 2026-07-12 — Round 3 (systemic sweep: B904, exc_info, dead code)
+- No code issues found in entry code paths (schemas.py clean from earlier passes)
+- Frontmatter valid; Known Gaps remain accurate
