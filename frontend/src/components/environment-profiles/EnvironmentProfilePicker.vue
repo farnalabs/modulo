@@ -93,7 +93,7 @@ watch(
 
 onMounted(() => {
   if (store.profiles.length === 0) {
-    store.fetchProfiles()
+    store.fetchProfiles().catch(() => {})
   }
 })
 </script>

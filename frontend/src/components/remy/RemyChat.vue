@@ -421,10 +421,7 @@ function onInputKeydown(e: KeyboardEvent) {
         inputText.value = cmd.command + ' '
         showSlashMenu.value = false
         nextTick(() => {
-          const textarea = document.querySelector('.remy-input') as HTMLTextAreaElement | null
-          if (textarea) {
-            textarea.focus()
-          }
+          textareaRef.value?.focus()
         })
       }
       return
@@ -605,7 +602,7 @@ async function handleSend() {
 
 function resizeInput() {
   nextTick(() => {
-    const el = document.querySelector('.remy-input') as HTMLTextAreaElement | null
+    const el = textareaRef.value
     if (el) {
       el.style.height = 'auto'
       el.style.height = Math.min(el.scrollHeight, 200) + 'px'
@@ -614,7 +611,7 @@ function resizeInput() {
 }
 
 function syncHighlightScroll() {
-  const el = document.querySelector('.remy-input') as HTMLTextAreaElement | null
+  const el = textareaRef.value
   const hl = document.querySelector('.remy-input-highlight') as HTMLElement | null
   if (el && hl) {
     hl.scrollTop = el.scrollTop
