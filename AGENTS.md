@@ -695,6 +695,14 @@ If a UI element needs multi-line text (like a textarea placeholder with multiple
 
 - **`package-lock.json` must be regenerated when new dependencies are added to imports.** The gate.ps1 lockfile sync only bumps versions — it doesn't add missing dependencies. If a file imports `@tanstack/vue-query` or `date-fns` but neither is in `package.json`, the Docker build fails silently with Rolldown resolution errors. Run `npm install <package> --save` and commit the updated lockfile alongside the code that uses it. The `pre-commit` ESLint hook doesn't catch unresolved imports — this is a manual check. For CI, add a step that runs `node -e "require('./package.json').dependencies"` and cross-references against imports in `src/`.
 
+### entrypoint.sh: migration revision IDs must match actual Alembic filenames
+
+`backend/entrypoint.sh` referenced `alembic upgrade 0001_initial_schema` but the actual revision ID is `0001_v2_identity_org` (post-squash). Alembic hangs (doesn't error) when it can't find the target revision, causing the Docker backend container to never start. When renaming or squashing migrations, update `entrypoint.sh` to match.
+
+### Fix Workers must be scoped to specific files only
+
+The fix/pipelines-copy Worker touched files that were already modified by other Workers (LibraryView.vue, ABTestModelsView.vue, VariantCompareView.vue), causing merge conflicts on sequential merges. Worker prompts must explicitly list which files to modify and instruct the Worker not to touch any others. If a Worker needs to also fix related files, it should be split into a separate batch.
+
 ### Eval Engine / Error Handling Audit
 
 - **StrEnum validates at the Pydantic model level, not at the engine level.** `EvalType` is a `StrEnum`, so passing `"nonexistent_type"` to `EvalDefinition(eval_type="nonexistent_type")` raises `ValidationError` at construction, never reaching the `UnknownEvalTypeError` handler in the engine's `match/case` dispatch. The `UnknownEvalTypeError` is dead code for normal usage through the Pydantic model — it would only trigger if someone bypasses Pydantic (e.g. `object.__setattr__(eval_def, "eval_type", "bad")`). Tests for unknown-type dispatch must bypass Pydantic validation with `object.__setattr__`.
