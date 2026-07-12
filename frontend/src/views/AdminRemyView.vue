@@ -745,7 +745,7 @@ const availableProviders = ref<{ native: ProviderInfo[]; customTypes: ProviderIn
   customTypes: [],
 })
 
-const { data: configData, loading: configLoading, error: configError, load: loadConfig } = useDataFetch(
+const { data: configData, loading: configLoading, load: loadConfig } = useDataFetch(
   () => (api as any).GET('/api/v1/admin/remy/config'),
   { immediate: false }
 )

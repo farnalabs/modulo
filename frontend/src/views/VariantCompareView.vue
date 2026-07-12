@@ -250,8 +250,20 @@ const { t } = useI18n()
 type VariantGroup = components['schemas']['VariantGroupResponse']
 type RunResponse = components['schemas']['RunResponse']
 type RunIOResponse = components['schemas']['RunIOResponse']
-type RunEvalItem = components['schemas']['RunEvalItem']
-type RunEvalListResponse = components['schemas']['RunEvalListResponse']
+interface RunEvalItem {
+  eval_id: string
+  node_id: string
+  passed: boolean
+  score: number | null
+  detail?: string | null
+}
+
+interface RunEvalListResponse { items?: RunEvalItem[] }
+interface VariantDefinition {
+  [key: string]: unknown
+  name: string
+  weight: number
+}
 
 interface RunEntry {
   runId: string
@@ -263,7 +275,7 @@ interface RunEntry {
   evalResults: RunEvalItem[]
 }
 
-const { loading, error, data: groupsResp, load: fetchGroups } = useDataFetch(
+const { loading, error, data: groupsResp } = useDataFetch(
   () => api.GET('/api/v1/variant-groups'),
   { initialValue: [] as VariantGroup[] },
 )
@@ -286,7 +298,12 @@ const diffVarB = ref<string | null>(null)
 
 const terminalStatuses = new Set(['complete', 'failed', 'cancelled', 'eval_failed'])
 
-const variants = computed(() => selectedGroup.value?.variants ?? [])
+const variants = computed<VariantDefinition[]>(() =>
+  (selectedGroup.value?.variants ?? []).filter(
+    (variant): variant is VariantDefinition =>
+      typeof variant.name === 'string' && typeof variant.weight === 'number',
+  ),
+)
 
 const nodeNames = computed(() => {
   const names = new Set<string>()
@@ -501,8 +518,8 @@ async function pollRunStatus(runId: string, variantName: string) {
           runEntries.value.set(variantName, {
             ...existing,
             runStatus: status,
-            totalCostUsd: runResp.total_cost_usd,
-            tokenConsumption: runResp.token_consumption,
+            totalCostUsd: runResp.total_cost_usd == null ? null : Number(runResp.total_cost_usd),
+            tokenConsumption: runResp.token_consumption ?? null,
           })
         }
 
@@ -535,7 +552,7 @@ async function fetchRunIO(runId: string, variantName: string) {
       if (existing) {
         runEntries.value.set(variantName, {
           ...existing,
-          nodeOutputs: ioResp.outputs_json,
+          nodeOutputs: ioResp.outputs_json ?? null,
         })
       }
 

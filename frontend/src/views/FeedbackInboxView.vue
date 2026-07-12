@@ -231,11 +231,24 @@ import {
 } from '../components/ui/tooltip'
 import { formatDateShortWithTime } from '../lib/formatDate'
 
-type FeedbackRecordItem = components['schemas']['FeedbackRecordItem']
-type FeedbackRecordDetail = components['schemas']['FeedbackRecordDetail']
-type PipelineItem = components['schemas']['PipelineItem']
+interface FeedbackRecordItem {
+  id: string
+  created_at: string
+  pipeline_name?: string | null
+  rejection_reason?: string | null
+  feedback_handler_type: string
+  feedback_status: string
+}
 
-const { t, locale } = useI18n()
+interface FeedbackRecordDetail extends FeedbackRecordItem {
+  annotation?: string | null
+  rejected_output?: unknown
+  correction_proposal?: unknown
+}
+
+type PipelineItem = components['schemas']['PipelineResponse']
+
+const { t } = useI18n()
 
 const statusFilter = ref('')
 const pipelineFilter = ref('')
@@ -300,13 +313,19 @@ const { loading, error, data: feedbackResp, load: loadFeedback } = useDataFetch(
   { immediate: false },
 )
 
-const records = computed(() => (feedbackResp.value as any)?.items ?? [])
+const records = computed<FeedbackRecordItem[]>(() => {
+  const response = feedbackResp.value as { items?: FeedbackRecordItem[] } | null
+  return response?.items ?? []
+})
 
-const { loading: pipelinesLoading, error: pipelinesError, data: pipelinesResp, load: loadPipelines } = useDataFetch(
+const { error: pipelinesError, data: pipelinesResp, load: loadPipelines } = useDataFetch(
   () => api.GET('/api/v1/pipelines'),
 )
 
-const pipelines = computed(() => (pipelinesResp.value as any)?.items ?? [])
+const pipelines = computed<PipelineItem[]>(() => {
+  const response = pipelinesResp.value as { items?: PipelineItem[] } | null
+  return response?.items ?? []
+})
 
 async function loadDetail(recordId: string) {
   detailLoading.value[recordId] = true
@@ -318,8 +337,9 @@ async function loadDetail(recordId: string) {
     if (err) {
       detailError.value[recordId] = `${t('views.FeedbackInboxView.failed_to_load_detail')} ${formatApiError(err)}`
     } else if (data) {
-      detailMap.value[recordId] = data
-      annotations.value[recordId] = data.annotation || ''
+      const detail = data as unknown as FeedbackRecordDetail
+      detailMap.value[recordId] = detail
+      annotations.value[recordId] = detail.annotation || ''
     }
   } catch (e: unknown) {
     detailError.value[recordId] = `${t('views.FeedbackInboxView.failed_to_load_detail')} ${formatApiError(e)}`
@@ -350,7 +370,7 @@ async function saveAnnotation(recordId: string) {
     if (err) {
       annotationMessage.value[recordId] = { type: 'error', text: `${t('views.FeedbackInboxView.save_failed')} ${formatApiError(err)}` }
     } else if (data) {
-      detailMap.value[recordId] = data
+      detailMap.value[recordId] = data as unknown as FeedbackRecordDetail
       annotationMessage.value[recordId] = { type: 'success', text: t('views.FeedbackInboxView.annotation_saved') }
       if (feedbackTimeouts.value[recordId]) clearTimeout(feedbackTimeouts.value[recordId])
       feedbackTimeouts.value[recordId] = setTimeout(() => { annotationMessage.value[recordId] = null }, 3000)
@@ -373,7 +393,7 @@ async function resolveRecord(recordId: string) {
     if (err) {
       annotationMessage.value[recordId] = { type: 'error', text: `${t('views.FeedbackInboxView.resolve_failed')} ${formatApiError(err)}` }
     } else if (data) {
-      detailMap.value[recordId] = data
+      detailMap.value[recordId] = data as unknown as FeedbackRecordDetail
       annotationMessage.value[recordId] = { type: 'success', text: t('views.FeedbackInboxView.marked_as_resolved') }
       const rec = records.value.find(r => r.id === recordId)
       if (rec) rec.feedback_status = 'resolved'
@@ -398,7 +418,7 @@ async function triggerCorrection(recordId: string) {
     if (err) {
       annotationMessage.value[recordId] = { type: 'error', text: `${t('views.FeedbackInboxView.trigger_failed')} ${formatApiError(err)}` }
     } else if (data) {
-      detailMap.value[recordId] = data
+      detailMap.value[recordId] = data as unknown as FeedbackRecordDetail
       annotationMessage.value[recordId] = { type: 'success', text: t('views.FeedbackInboxView.correction_run_triggered') }
       const rec = records.value.find(r => r.id === recordId)
       if (rec) rec.feedback_status = 'correcting'
@@ -423,7 +443,7 @@ async function dismissRecord(recordId: string) {
     if (err) {
       annotationMessage.value[recordId] = { type: 'error', text: `${t('views.FeedbackInboxView.dismiss_failed')} ${formatApiError(err)}` }
     } else if (data) {
-      detailMap.value[recordId] = data
+      detailMap.value[recordId] = data as unknown as FeedbackRecordDetail
       annotationMessage.value[recordId] = { type: 'success', text: t('views.FeedbackInboxView.dismissed') }
       const rec = records.value.find(r => r.id === recordId)
       if (rec) rec.feedback_status = 'dismissed'

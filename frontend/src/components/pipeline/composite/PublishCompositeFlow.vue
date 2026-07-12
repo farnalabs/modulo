@@ -16,7 +16,7 @@ const emit = defineEmits<{
   (e: "published"): void;
 }>();
 
-const { patch } = useApi();
+const { patch, post } = useApi();
 const router = useRouter();
 
 const step = ref(1);
@@ -72,7 +72,31 @@ async function nextStep() {
     } finally {
       loading.value = false;
     }
+  } else if (step.value < 4) {
+    step.value += 1;
+  } else {
+    loading.value = true;
+    error.value = null;
+    try {
+      await post(`/api/v1/composite-templates/${props.compositeId}/publish`, {
+        version: version.value.trim(),
+      });
+      success.value = true;
+      emit("published");
+    } catch (e) {
+      error.value = formatApiError(e);
+    } finally {
+      loading.value = false;
+    }
   }
+}
+
+function prevStep() {
+  step.value = Math.max(1, step.value - 1);
+}
+
+function portRef(port: { name: string }) {
+  return `{{parameter.${port.name}}}`;
 }
 
 function goToLibrary() {

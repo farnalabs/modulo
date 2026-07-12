@@ -138,14 +138,10 @@
 import { ref, computed } from 'vue'
 import { api } from '../lib/api/client'
 import { useDataFetch } from '../composables/useDataFetch'
-import { formatApiError } from '../lib/api/formatError'
-import type { components } from '../lib/api/client'
 import PageHeader from '../components/shared/PageHeader.vue'
 import LoadingSpinner from '../components/shared/LoadingSpinner.vue'
 import ErrorAlert from '../components/shared/ErrorAlert.vue'
 import { Button } from '@/components/ui/button'
-
-type DeliveryLogEntry = components['schemas']['DeliveryLogEntry']
 
 const cursorStack = ref<(string | null)[]>([])
 const currentCursor = ref<string | null>(null)

@@ -144,6 +144,7 @@
 <script setup lang="ts">
 import { ref, computed } from 'vue'
 import { api } from '../lib/api/client'
+import { useApi } from '../composables/useApi'
 import { useDataFetch } from '../composables/useDataFetch'
 import { useMutation } from '../composables/useMutation'
 import type { components } from '../lib/api/client'
@@ -167,8 +168,9 @@ interface RecentRun {
   created_at: string
 }
 
+const { get: getUntyped } = useApi()
 const { loading: loadingRuns, data: summaryResp } = useDataFetch(
-  () => api.GET('/api/v1/admin/dashboard/summary'),
+  async () => ({ data: await getUntyped<{ recent_runs: RecentRun[] }>('/api/v1/admin/dashboard/summary') }),
   { immediate: true },
 )
 

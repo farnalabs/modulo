@@ -334,7 +334,7 @@ function emptyForm(): ProfileFormState {
 
 const { data: profilesData, loading, error, load: loadProfiles } = useDataFetch(
   () => api.GET('/api/v1/environments') as Promise<{ data?: { items?: ProfileItem[] }; error?: { detail?: string } }>,
-  { initialValue: [] as ProfileItem[] }
+  { initialValue: { items: [] as ProfileItem[] } }
 )
 
 const profiles = computed(() => {
@@ -551,8 +551,8 @@ async function deleteProfile() {
     if (err) {
       deleteError.value = String(err)
     } else if (response.status === 204 || response.ok) {
-      profiles.value = profiles.value.filter(p => p.id !== deleteConfirmProfileId.value)
       deleteConfirmProfileId.value = null
+      await loadProfiles()
     }
   } catch (e: unknown) {
     deleteError.value = formatApiError(e)

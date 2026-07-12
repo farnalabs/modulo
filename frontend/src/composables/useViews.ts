@@ -7,8 +7,8 @@ export interface SavedView {
   name: string
   view_type: string
   filters: Record<string, any>
-  columns?: string[]
-  sort_by?: string
+  columns?: string[] | null
+  sort_by?: string | null
   sort_order: string
   created_by: string
   created_at: string

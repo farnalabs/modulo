@@ -145,7 +145,10 @@ interface ProposalsResponse {
 const { patch } = useApi()
 
 const { loading, error: pageError, data: proposalsResp, load: loadProposals } = useDataFetch<ProposalsResponse>(
-  () => api.GET('/api/v1/feedback/proposals', { params: {} as any }),
+  async () => {
+    const response = await api.GET('/api/v1/feedback/proposals')
+    return { data: response.data as unknown as ProposalsResponse | undefined, error: response.error }
+  },
   { initialValue: { items: [] as EvalProposalItem[], total: 0, page: 1, page_size: 20 } },
 )
 

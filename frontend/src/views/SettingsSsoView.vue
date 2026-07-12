@@ -16,7 +16,7 @@
 
       <LoadingSpinner v-if="loading" />
 
-      <ErrorAlert v-else-if="error" :message="error" :on-retry="loadProviders" :retryable="errorRetryable" />
+      <ErrorAlert v-else-if="error" :message="error" :on-retry="loadProviders" />
 
       <template v-else>
         <div v-if="formMode === 'add'" class="card p-6">
@@ -219,7 +219,6 @@ function emptyForm(): SsoFormState {
 const { loading, error, data: providers, load: loadProviders } = useDataFetch<SsoProviderResponse[]>(
   async () => {
     const resp = await api.GET('/api/v1/admin/sso/providers')
-    if (resp.error) return { error: resp.error }
     return { data: (Array.isArray(resp.data) ? resp.data : (resp.data as any)?.items ?? []) }
   },
   { initialValue: [] as SsoProviderResponse[] }
@@ -298,6 +297,7 @@ function buildCreateBody(): SsoProviderCreate {
     name: formData.name.trim(),
     auto_provision: formData.auto_provision,
     default_role: formData.default_role,
+    enabled: true,
   }
 
   if (formData.provider_type === 'oidc') {

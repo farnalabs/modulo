@@ -211,13 +211,14 @@
         v-if="showSlashMenu"
         class="remy-slash-menu"
       >
-        <button @focus="showCopyButton = true"
+        <button
           v-for="(cmd, idx) in filteredSlashCommands"
           :key="cmd.command"
           class="remy-slash-item"
           :class="{ active: slashHighlightIdx === idx }"
           @click="executeSlashCommand(cmd)"
           @mouseenter="slashHighlightIdx = idx"
+          @focus="slashHighlightIdx = idx"
         >
           <span class="remy-slash-command">{{ cmd.command }}</span>
           <span class="remy-slash-desc">{{ cmd.description }}</span>

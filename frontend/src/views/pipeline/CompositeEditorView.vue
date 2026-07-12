@@ -199,14 +199,14 @@ function convertBackendEdge(e: any, i: number): any {
   }
 }
 
-const { loading, error: pageError, load: loadEditor } = useDataFetch(
+const { loading, error: pageError } = useDataFetch(
   async () => {
     const [{ data: templateData }, { data: editorData }] = await Promise.all([
-      api.GET('/api/v1/composite-templates/{composite_id}', {
-        params: { path: { composite_id: compositeId } },
+      api.GET('/api/v1/composite-templates/{template_id}', {
+        params: { path: { template_id: compositeId } },
       }),
-      api.GET('/api/v1/composite-templates/{composite_id}/editor', {
-        params: { path: { composite_id: compositeId } },
+      api.GET('/api/v1/composite-templates/{template_id}/editor', {
+        params: { path: { template_id: compositeId } },
       }),
     ])
 
@@ -258,6 +258,7 @@ async function handleSaveAs() {
       body: {
         name: saveAsName.value,
         description: saveAsDescription.value || null,
+        version: '1.0.0',
         sub_pipeline_graph_json: {
           nodes: rawNodes.value,
           edges: rawEdges.value,
@@ -270,6 +271,8 @@ async function handleSaveAs() {
           type: p.type,
           required: p.required,
           default_value: p.default_value ?? null,
+          multiline: p.multiline,
+          options: p.options ?? null,
           target_injection: {
             mode: 'prompt_replace',
             node_id: '',

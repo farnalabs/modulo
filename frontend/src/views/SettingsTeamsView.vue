@@ -203,7 +203,11 @@ const planStore = usePlanStore()
 
 type AdminTeamItem = components['schemas']['AdminTeamItem']
 type MembershipResponse = components['schemas']['MembershipResponse']
-type AdminUserListItem = components['schemas']['AdminUserListItem']
+interface AdminUserListItem {
+  id: string
+  display_name: string | null
+  email: string
+}
 
 const { loading, error, data: teams, load: loadTeams } = useDataFetch<AdminTeamItem[]>(
   async () => {

@@ -336,7 +336,7 @@ import { Button } from '@/components/ui/button'
 
 const { t } = useI18n()
 
-type SchemaItem = components['schemas']['SchemaItem']
+type SchemaItem = components['schemas']['SchemaResponse']
 
 interface SchemaField {
   _key: number

@@ -12,7 +12,7 @@
         </Button>
       </div>
 
-      <form v-else @submit.prevent="submit" class="space-y-4">
+      <form v-else @submit.prevent="() => submit()" class="space-y-4">
         <div>
           <span class="mb-1 block text-sm font-medium">API Key</span>
           <Input aria-label="Form control"

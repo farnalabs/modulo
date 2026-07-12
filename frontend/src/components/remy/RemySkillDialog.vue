@@ -140,8 +140,8 @@ import {
 export interface SkillFormItem {
   id: string;
   name: string;
-  description?: string;
-  triggers?: string[];
+  description?: string | null;
+  triggers?: string[] | null;
   body?: string;
   active: boolean;
 }
