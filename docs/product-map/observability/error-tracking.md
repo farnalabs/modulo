@@ -250,7 +250,7 @@ Datadog, PagerDuty, Rollbar, OpsGenie, Loki) sources.
   on restart
 - **Append-only trigger conflicts with CASCADE delete:** On org deletion, cascade
   FK conflicts with append-only trigger on `error_events`
-- **Public ingest daily cap memory leak:** `_public_daily_event_count` entries for stale IPs are never cleaned up, causing unbounded memory growth under sustained public error ingestion.
+- **Public ingest daily cap memory leak (fixed 2026-07-07):** `_public_daily_event_count` entries for stale IPs are now pruned by `_prune_stale_ip_counters()`. See QA History 2026-07-07.
 
 ## QA History
 
