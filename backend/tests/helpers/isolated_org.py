@@ -7,11 +7,12 @@ rather than mock sessions.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import os
 import secrets
-from typing import Any, cast
+from typing import Any
 
 import httpx
 
@@ -96,7 +97,11 @@ def _extract_token(data: dict[str, Any]) -> str:
         raise RuntimeError(
             f"Auth response missing access_token and token keys; got keys: {list(data.keys())}",
         )
-    return cast(str, token)
+    if not isinstance(token, str):
+        raise RuntimeError(
+            f"Auth token has unexpected type: {type(token).__name__}",
+        )
+    return token
 
 
 def _parse_json_response(response: httpx.Response, action: str) -> dict[str, Any]:
@@ -170,6 +175,8 @@ async def create_isolated_org(
                         _DELETION_REQUEST_PATH,
                         json={"org_id": org_id},
                     )
+            except asyncio.CancelledError:
+                raise
             except Exception:
                 _log.warning(
                     "Cleanup org deletion request failed for %s",
