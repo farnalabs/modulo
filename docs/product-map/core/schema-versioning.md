@@ -51,3 +51,6 @@ Manage schema version lifecycle: create, list, and retrieve specific versions of
 - **version.feature BDD scenarios use placeholder-style paths** (`/api/schemas/review-input/versions/1` instead of actual UUID-based API) — may not execute correctly
 - **No deprecation version lifecycle** — versions cannot be individually deprecated (only the parent schema)
 - **No concurrency tests** for schema version creation race conditions
+
+## QA History
+- 2026-07-12: Round 3 QA (improve-architecture batch 4). Fixed MINOR — removed unused `import logging` and `_log = logging.getLogger(__name__)` from `crud/schema.py` (dead code, never referenced). B904 audit: `crud/schema.py` clean (ProgrammingError handlers return PageResult, no bare re-raises). `schemas.py` version endpoints (list_versions, create_version, get_version) have proper B904 (`from None`), CancelledError guards, and HTTPException re-raise pattern. `models/schema.py` clean — no dead code. All frontmatter paths verified on disk. Status: partial.

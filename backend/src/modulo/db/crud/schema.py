@@ -5,7 +5,6 @@ or LibraryPrimitive references this schema. Use force=True to skip all checks.
 All functions require RLS org context to be set by the caller.
 """
 
-import logging
 import uuid
 from datetime import UTC, datetime
 from typing import Any
@@ -20,8 +19,6 @@ from modulo.db.models.agent import Agent
 from modulo.db.models.library_primitive import LibraryPrimitive
 from modulo.db.models.pipeline_snapshot import PipelineSnapshot
 from modulo.db.models.schema import Schema, SchemaVersion
-
-_log = logging.getLogger(__name__)
 
 
 class SchemaDeletionProtectedError(Exception):
