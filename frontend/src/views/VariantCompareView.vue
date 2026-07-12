@@ -501,10 +501,8 @@ async function pollRunStatus(runId: string, variantName: string) {
 
         if (terminalStatuses.has(status)) {
           if (status === 'complete') {
-            await Promise.all([
-              fetchRunIO(runId, variantName),
-              fetchRunEvals(runId, variantName),
-            ])
+            await fetchRunIO(runId, variantName)
+            await fetchRunEvals(runId, variantName)
           } else {
             error.value = `${t('views.variantCompare.runFailedStatus')} ${status}`
           }
@@ -512,7 +510,7 @@ async function pollRunStatus(runId: string, variantName: string) {
         }
       }
     } catch (e) {
-      console.warn('Failed to run variant', e)
+      error.value = `${t('views.variantCompare.runFailed')} ${formatApiError(e)}`
     }
   }
 
@@ -542,7 +540,7 @@ async function fetchRunIO(runId: string, variantName: string) {
       }
     }
   } catch (e) {
-    console.warn('Failed to fetch run IO', e)
+    error.value = `${t('views.variantCompare.failedToLoadGroup')} ${formatApiError(e)}`
   }
 }
 
@@ -562,7 +560,7 @@ async function fetchRunEvals(runId: string, variantName: string) {
       }
     }
   } catch (e) {
-    console.warn('Failed to fetch run evals', e)
+    error.value = `${t('views.variantCompare.failedToLoadGroup')} ${formatApiError(e)}`
   }
 }
 
