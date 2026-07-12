@@ -17,7 +17,7 @@ import copy
 import json
 import logging
 import uuid
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from typing import Any, Self, cast
 
 from opentelemetry import trace
@@ -108,6 +108,7 @@ class ConnectorHub:
     """Decrypts connector credentials once at run-start; discards them on exit.
 
     Not thread-safe. Each run gets its own ConnectorHub instance.
+    All public methods raise ConnectorNotFoundError if called before initialise().
     """
 
     def __init__(
@@ -195,6 +196,8 @@ class ConnectorHub:
                         ci.connector_type_id,
                         exc_info=True,
                     )
+                except asyncio.CancelledError:
+                    raise
                 except Exception:
                     logger.error(
                         "Unexpected error skipping connector %s (%s) — programming bug",
@@ -205,6 +208,8 @@ class ConnectorHub:
             self._initialised = True
 
     def _get_or_raise(self, connector_id: uuid.UUID) -> ConnectorBase:
+        if not self._initialised:
+            raise ConnectorNotFoundError(connector_id)
         try:
             return self._connectors[connector_id]
         except KeyError:
@@ -292,7 +297,7 @@ class _TracedConnector(ConnectorBase):
         method: Any,
         *args: Any,
         extra_attrs: dict[str, Any] | None = None,
-        post_span: Any = None,
+        post_span: Callable[..., Any] | None = None,
         acl_operation: str | None = None,
         **kwargs: Any,
     ) -> Any:
@@ -314,6 +319,9 @@ class _TracedConnector(ConnectorBase):
                     except Exception as meta_exc:
                         logger.warning("post_span callback failed: %s", meta_exc, exc_info=True)
                 return result
+            except asyncio.CancelledError:
+                span.set_status(Status(StatusCode.ERROR, f"{operation} cancelled"))
+                raise
             except Exception as exc:
                 span.set_status(Status(StatusCode.ERROR, f"{operation} failed"))
                 span.set_attribute("connector.error_type", type(exc).__name__)
