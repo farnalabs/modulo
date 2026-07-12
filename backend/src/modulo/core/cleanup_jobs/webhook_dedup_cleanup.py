@@ -16,11 +16,8 @@ from modulo.settings import get_settings
 
 try:
     from celery import Task as _CeleryTask
-
-    CELERY_AVAILABLE = True
 except ImportError:
     _CeleryTask = object  # type: ignore[assignment,misc]
-    CELERY_AVAILABLE = False
 
 _log = logging.getLogger(__name__)
 
@@ -93,10 +90,7 @@ class WebhookDedupCleanupTask(_CeleryTask):  # type: ignore[misc]
 
     def run(self) -> dict[str, Any]:
         """Run one iteration of cleanup, batching until fewer than BATCH_SIZE rows remain."""
-        try:
-            return asyncio.run(_run_cleanup())
-        except asyncio.CancelledError:
-            raise
+        return asyncio.run(_run_cleanup())
 
 
 async def _run_cleanup() -> dict[str, Any]:
