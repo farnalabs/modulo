@@ -248,7 +248,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, onUnmounted, ref } from 'vue'
+import { computed, onUnmounted, ref } from 'vue'
 import { useRoute } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import { api } from '../lib/api/client'
@@ -267,7 +267,11 @@ import Button from '../components/ui/button/Button.vue'
 import { formatApiError } from '../lib/api/formatError'
 import { shortId, formatRun } from '../utils/format'
 
-type RunResponse = components['schemas']['RunResponse']
+type RunResponse = components['schemas']['RunResponse'] & {
+  created_at?: string | null
+  started_at?: string | null
+  completed_at?: string | null
+}
 type RunIOResponse = components['schemas']['RunIOResponse']
 
 interface NodeTokenUsage {
@@ -388,7 +392,10 @@ async function revealPrompt(nodeName: string) {
     const d = data as components['schemas']['PromptRevealResponse']
     const revealed = {
       prompt: d.prompt,
-      messages: d.messages,
+      messages: d.messages.map(message => ({
+        role: message.role ?? '',
+        content: message.content ?? '',
+      })),
       tokenCount: d.token_count,
       promptAlwaysVisible: d.prompt_always_visible,
     }
@@ -596,19 +603,6 @@ async function fetchRunData(runId: string) {
   }
 }
 
-async function fetchWorkspaceLease(runId: string) {
-  try {
-    const { data } = await api.GET('/api/v1/runs/{run_id}/workspace-lease', {
-      params: { path: { run_id: runId } },
-    })
-    if (data) {
-      workspaceLease.value = data as unknown as WorkspaceLeaseInfo
-    }
-  } catch (e) {
-    console.warn('No workspace lease for this run', e)
-  }
-}
-
 function startPolling(runId: string) {
   pollInterval.value = setInterval(async () => {
     if (run.value && TERMINAL_STATUSES.includes(run.value.status)) {
@@ -628,7 +622,7 @@ interface RunFetchResult {
   workspace: WorkspaceLeaseInfo | null
 }
 
-const { loading, error, load: runLoad } = useDataFetch<RunFetchResult>(
+const { loading, error } = useDataFetch<RunFetchResult>(
   async () => {
     const runId = route.params.id as string
     if (!runId) {

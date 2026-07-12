@@ -432,8 +432,8 @@ async function toggleAutoUpdate(prim: LibraryPrimitive) {
   const newValue = !prim.auto_update
   toggleLoading.value[prim.id] = true
   try {
-    const { data } = await api.PATCH('/api/v1/libraries/{library_id}', {
-      params: { path: { library_id: prim.id } },
+    const { data } = await api.PATCH('/api/v1/libraries/{primitive_id}', {
+      params: { path: { primitive_id: prim.id } },
       body: { auto_update: newValue },
     })
     const idx = primitives.value.findIndex(x => x.id === prim.id)

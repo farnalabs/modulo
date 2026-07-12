@@ -392,8 +392,8 @@ async function deleteView() {
       const errData = await res.json().catch(() => null)
       throw new Error(errData?.detail ?? `Delete failed (${res.status})`)
     }
-    views.value = views.value.filter(v => v.id !== deleteConfirmId.value)
     deleteConfirmId.value = null
+    await loadViews()
   } catch (e: unknown) {
     deleteError.value = formatApiError(e)
   } finally {

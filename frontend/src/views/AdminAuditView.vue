@@ -295,7 +295,6 @@ import { ref, computed } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { api } from '../lib/api/client'
 import { useDataFetch } from '../composables/useDataFetch'
-import type { components } from '../lib/api/client'
 import LoadingSpinner from '../components/shared/LoadingSpinner.vue'
 import ErrorAlert from '../components/shared/ErrorAlert.vue'
 import { formatError } from '../lib/utils'
@@ -304,6 +303,7 @@ import FeatureGate from '../components/FeatureGate.vue'
 import { formatApiError } from '../lib/api/formatError'
 import { Button } from '@/components/ui/button'
 import { formatDateFilename } from '../lib/formatDate'
+import { shortId } from '../utils/format'
 
 const { t } = useI18n()
 import {
@@ -314,7 +314,23 @@ import {
 
 const planStore = usePlanStore()
 
-type AuditEvent = components['schemas']['AuditEventResponse']
+interface AuditEvent {
+  id: string
+  event_type: string
+  actor_user_id: string | null
+  created_at: string | null
+  resource_type: string | null
+  resource_id: string | null
+  payload_json: Record<string, unknown> | null
+  request_id: string | null
+  previous_hash: string | null
+}
+interface AuditPage {
+  items: AuditEvent[]
+  total: number
+  next_cursor: string | null
+  prev_cursor: string | null
+}
 
 const cursor = ref<string | null>(null)
 const currentPage = ref(1)
@@ -324,10 +340,11 @@ const { data: auditData, loading, error, load: loadEvents } = useDataFetch(
   { initialValue: { items: [] as AuditEvent[], total: 0, next_cursor: null as string | null, prev_cursor: null as string | null } }
 )
 
-const events = computed(() => auditData.value?.items ?? [])
-const total = computed(() => auditData.value?.total ?? 0)
-const nextCursor = computed(() => auditData.value?.next_cursor ?? null)
-const prevCursor = computed(() => auditData.value?.prev_cursor ?? null)
+const auditPage = computed(() => auditData.value as unknown as AuditPage)
+const events = computed(() => auditPage.value.items ?? [])
+const total = computed(() => auditPage.value.total ?? 0)
+const nextCursor = computed(() => auditPage.value.next_cursor ?? null)
+const prevCursor = computed(() => auditPage.value.prev_cursor ?? null)
 
 const filterEventType = ref('')
 const filterActor = ref('')
@@ -463,8 +480,9 @@ async function exportCsv() {
         return
       }
       if (!data) break
-      allEvents.push(...data.items)
-      totalPages = Math.ceil(data.total / pageSize)
+      const exportPage = data as unknown as AuditPage
+      allEvents.push(...exportPage.items)
+      totalPages = Math.ceil(exportPage.total / pageSize)
       page++
     }
 
@@ -549,8 +567,9 @@ async function exportJsonl() {
         return
       }
       if (!data) break
-      allEvents.push(...data.items)
-      totalPages = Math.ceil(data.total / pageSize)
+      const exportPage = data as unknown as AuditPage
+      allEvents.push(...exportPage.items)
+      totalPages = Math.ceil(exportPage.total / pageSize)
       page++
     }
 

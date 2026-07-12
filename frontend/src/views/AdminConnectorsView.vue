@@ -266,7 +266,7 @@
 
 <script setup lang="ts">
 import PageHeader from '../components/shared/PageHeader.vue'
-import { ref, reactive, computed, onMounted } from 'vue'
+import { ref, reactive, computed, onMounted, watch } from 'vue'
 import { api } from '../lib/api/client'
 import { formatApiError } from '../lib/api/formatError'
 import type { components } from '../lib/api/client'
@@ -280,7 +280,11 @@ import TableActions from '../components/shared/TableActions.vue'
 
 const planStore = usePlanStore()
 
-type ConnectorItem = components['schemas']['ConnectorItem'] & {
+interface ConnectorItem {
+  id: string
+  name: string
+  connector_type: string
+  description?: string | null
   enabled?: boolean
   tier?: 'native' | 'preview' | 'in_dev'
 }
@@ -306,7 +310,17 @@ const { loading, error, data, load: loadConnectors } = useDataFetch(
   { immediate: false },
 )
 
-const connectors = computed(() => data.value?.items ?? [])
+const connectors = ref<ConnectorItem[]>([])
+watch(data, response => {
+  const items = (response as { items?: components['schemas']['ConnectorResponse'][] } | null)?.items ?? []
+  connectors.value = items.map(item => ({
+    id: item.id,
+    name: item.name,
+    connector_type: item.connector_type_id,
+    description: typeof item.config_json.description === 'string' ? item.config_json.description : null,
+    tier: item.tier === 'preview' || item.tier === 'in_dev' ? item.tier : 'native',
+  }))
+}, { immediate: true })
 const nativeConnectors = computed(() => connectors.value.filter(c => (c.tier ?? 'native') !== 'preview' && (c.tier ?? 'native') !== 'in_dev'))
 const previewConnectors = computed(() => connectors.value.filter(c => c.tier === 'preview'))
 
@@ -358,17 +372,20 @@ function closeEditForm() {
 function buildCreateBody() {
   return {
     name: formData.name.trim(),
-    connector_type: formData.connector_type,
-    description: formData.description.trim() || null,
-    config_json: formData.config_json.trim() || null,
+    connector_type_id: formData.connector_type,
+    credentials: formData.config_json,
+    config_json: { description: formData.description.trim() },
+    allowed_operations: [],
+    visibility: 'org',
+    tier: 'native' as const,
   }
 }
 
 function buildUpdateBody() {
   return {
     name: formData.name.trim() || null,
-    description: formData.description.trim() || null,
-    config_json: formData.config_json.trim() || null,
+    credentials: formData.config_json.trim() || null,
+    config_json: { description: formData.description.trim() },
   }
 }
 
@@ -386,8 +403,8 @@ async function createConnector() {
       connectors.value.push({
         id: data.id,
         name: data.name,
-        connector_type: data.connector_type,
-        description: data.description,
+        connector_type: data.connector_type_id,
+        description: typeof data.config_json.description === 'string' ? data.config_json.description : null,
       })
       closeForm()
     }
@@ -403,7 +420,7 @@ async function updateConnector() {
   saving.value = true
   formError.value = null
   try {
-    const { data, error: err } = await api.PUT('/api/v1/connectors/{connector_id}', {
+    const { data, error: err } = await api.PATCH('/api/v1/connectors/{connector_id}', {
       params: { path: { connector_id: editConnectorId.value } },
       body: buildUpdateBody(),
     })
@@ -415,8 +432,8 @@ async function updateConnector() {
         connectors.value[idx] = {
           id: data.id,
           name: data.name,
-          connector_type: data.connector_type,
-          description: data.description,
+          connector_type: data.connector_type_id,
+          description: typeof data.config_json.description === 'string' ? data.config_json.description : null,
         }
       }
       closeEditForm()

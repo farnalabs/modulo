@@ -68,10 +68,10 @@
                 </button>
               </td>
               <td class="px-4 py-3 text-muted-foreground">
-                {{ formatTimestamp(t.last_fired_at) }}
+                {{ formatTimestamp(t.last_fired_at ?? null) }}
               </td>
               <td class="px-4 py-3 text-muted-foreground">
-                {{ formatTimestamp(t.next_fire_at) }}
+                {{ formatTimestamp(t.next_fire_at ?? null) }}
               </td>
               <td class="px-4 py-3 text-right">
                 <TableActions :actions="triggerActions(t)" />
@@ -315,8 +315,18 @@ import { shortId } from '../utils/format'
 
 const planStore = usePlanStore()
 
-type TriggerItem = components['schemas']['TriggerItem']
-type PipelineItem = components['schemas']['PipelineItem']
+interface TriggerItem {
+  id: string
+  pipeline_id: string
+  trigger_type: string
+  active: boolean
+  config_json: Record<string, unknown>
+  cron_expression?: string | null
+  cron_timezone?: string | null
+  last_fired_at?: string | null
+  next_fire_at?: string | null
+}
+type PipelineItem = components['schemas']['PipelineResponse']
 
 interface TriggerForm {
   pipeline_id: string
@@ -343,8 +353,12 @@ const { data: pipelinesData, load: loadPipelines } = useDataFetch(
   () => api.GET('/api/v1/pipelines', {}),
   { immediate: false }
 )
-const items = computed(() => (triggersData.value as any)?.items ?? [])
-const pipelines = computed(() => (pipelinesData.value as any)?.items ?? [])
+const items = computed<TriggerItem[]>(() =>
+  ((triggersData.value as { items?: TriggerItem[] } | null)?.items ?? []),
+)
+const pipelines = computed<PipelineItem[]>(() =>
+  ((pipelinesData.value as { items?: PipelineItem[] } | null)?.items ?? []),
+)
 
 const dialogOpen = ref(false)
 const deleteDialogOpen = ref(false)

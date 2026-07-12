@@ -251,24 +251,32 @@ import { ref, computed } from 'vue'
 import { api } from '../lib/api/client'
 import { useDataFetch } from '../composables/useDataFetch'
 import { formatApiError } from '../lib/api/formatError'
-import type { components } from '../lib/api/client'
+import type { components, paths } from '../lib/api/client'
 import LoadingSpinner from '../components/shared/LoadingSpinner.vue'
 import ErrorAlert from '../components/shared/ErrorAlert.vue'
 import { Button } from '@/components/ui/button'
 
 type DeliveryLogEntry = components['schemas']['DeliveryLogEntry']
+interface DeliveryLogPage {
+  items: DeliveryLogEntry[]
+  total: number
+  next_cursor: string | null
+  prev_cursor?: string | null
+}
+type DeliveryLogQuery = NonNullable<paths['/api/v1/admin/notifications/deliveries']['get']>['parameters']['query']
 
 const cursor = ref<string | null>(null)
 
-const { data: deliveriesData, loading, error, load: loadDeliveries } = useDataFetch(
-  () => {
-    const params: Record<string, unknown> = { limit: 50 }
+const { data: deliveriesData, loading, error, load: loadDeliveries } = useDataFetch<DeliveryLogPage>(
+  async () => {
+    const params: DeliveryLogQuery = { limit: 50 }
     if (cursor.value) params.cursor = cursor.value
     if (filterStatus.value) params.status = filterStatus.value
     if (filterEventType.value) params.event_type = filterEventType.value
     if (filterDateFrom.value) params.from = filterDateFrom.value
     if (filterDateTo.value) params.to = filterDateTo.value
-    return api.GET('/api/v1/admin/notifications/deliveries', { params: { query: params as any } })
+    const response = await api.GET('/api/v1/admin/notifications/deliveries', { params: { query: params } })
+    return { data: response.data as unknown as DeliveryLogPage | undefined, error: response.error }
   },
   { initialValue: { items: [] as DeliveryLogEntry[], total: 0, next_cursor: null as string | null, prev_cursor: null as string | null } }
 )
@@ -407,8 +415,9 @@ async function retryAllFailed() {
       error.value = `Retry all failed: ${formatApiError(err)}`
     } else if (data) {
       await loadDeliveries()
-      const msg = `Retried ${data.retried} deliver${data.retried === 1 ? 'y' : 'ies'}`
-      retrySuccessMessage.value = data.success ? msg : `${msg} with ${data.errors?.length || 0} error(s)`
+      const result = data as unknown as { retried: number; success: boolean; errors?: unknown[] }
+      const msg = `Retried ${result.retried} deliver${result.retried === 1 ? 'y' : 'ies'}`
+      retrySuccessMessage.value = result.success ? msg : `${msg} with ${result.errors?.length || 0} error(s)`
     }
   } catch (e: unknown) {
     error.value = `Retry all request failed: ${formatApiError(e)}`

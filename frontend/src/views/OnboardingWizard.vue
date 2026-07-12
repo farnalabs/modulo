@@ -65,7 +65,7 @@
             </div>
             <div>
               <p class="text-sm font-medium">{{ c.name }}</p>
-              <p class="text-xs text-muted-foreground">{{ c.connector_type }}{{ c.description ? ' — ' + c.description : '' }}</p>
+              <p class="text-xs text-muted-foreground">{{ c.connector_type_id }}</p>
             </div>
           </div>
         </div>
@@ -403,7 +403,7 @@ import PageHeader from '../components/shared/PageHeader.vue'
 import { formatApiError } from '../lib/api/formatError'
 import { Button } from '@/components/ui/button'
 
-type ConnectorItem = components['schemas']['ConnectorItem']
+type ConnectorItem = components['schemas']['ConnectorResponse']
 
 interface DraftSchema {
   name: string
@@ -560,7 +560,7 @@ async function inferSchema() {
       wizardState.rawDefinitionJson = data.definition_json
       wizardState.draftSchema = {
         name: data.suggestion_name,
-        description: data.suggestion_description,
+        description: data.suggestion_description ?? null,
         fields: extractFieldsFromDefinition(data.definition_json),
       }
       editableSchemaName.value = data.suggestion_name
@@ -638,6 +638,11 @@ async function createPipeline() {
       body: {
         name: wizardState.pipelineName.trim(),
         description: wizardState.pipelineDescription.trim() || null,
+        visibility: 'org',
+        max_concurrent_runs: 10,
+        lock_wait_timeout_seconds: 30,
+        node_timeout_seconds: 300,
+        default_autonomy_level: 'balanced',
       },
     })
     if (err) throw err
@@ -656,7 +661,12 @@ async function runPipeline() {
   pipelineRunError.value = null
   runResult.value = null
   try {
-    const { error: err } = await api.POST(`/api/v1/pipelines/${wizardState.createdPipelineId}/run`, {})
+    const { error: err } = await api.POST('/api/v1/runs', {
+      body: {
+        pipeline_id: wizardState.createdPipelineId,
+        input_payload: {},
+      },
+    })
     if (err) throw err
     runResult.value = 'Pipeline started successfully.'
   } catch (e) {

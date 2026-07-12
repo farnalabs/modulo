@@ -29,7 +29,7 @@
                 :key="connector.id"
                 :value="connector.id"
               >
-                {{ connector.name }} ({{ connector.connector_type }})
+                  {{ connector.name }} ({{ connector.connector_type_id }})
               </option>
             </select>
             <p v-if="connectors.length === 0" class="mt-2 text-sm text-muted-foreground">
@@ -177,7 +177,7 @@ import PageHeader from '../components/shared/PageHeader.vue'
 import PageTabs from "../components/PageTabs.vue"
 import { Button } from '@/components/ui/button'
 
-type ConnectorItem = components['schemas']['ConnectorItem']
+type ConnectorItem = components['schemas']['ConnectorResponse']
 
 interface DraftSchema {
   name: string
@@ -267,7 +267,7 @@ async function inferSchema() {
       rawDefinitionJson.value = data.definition_json
       draftSchema.value = {
         name: data.suggestion_name,
-        description: data.suggestion_description,
+        description: data.suggestion_description ?? null,
         fields: extractFieldsFromDefinition(data.definition_json),
       }
     }

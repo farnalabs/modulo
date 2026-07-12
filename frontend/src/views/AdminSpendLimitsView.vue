@@ -173,7 +173,7 @@ watch(() => limitsData.value, (data) => {
   }
 })
 
-const { data: costsResp, loading: costsLoading, error: costsError, load: loadCosts } = useDataFetch(
+const { data: costsResp, loading: costsLoading, error: costsError } = useDataFetch(
   () => (api as any).GET('/api/v1/admin/costs'),
   { initialValue: { org_total_usd: 0, teams: [] } }
 )

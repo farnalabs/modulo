@@ -216,6 +216,7 @@ import LoadingSpinner from '../components/shared/LoadingSpinner.vue'
 import ErrorAlert from '../components/shared/ErrorAlert.vue'
 import BackLink from '../components/BackLink.vue'
 import { formatApiError } from '../lib/api/formatError'
+import { shortId } from '../utils/format'
 
 const route = useRoute()
 const router = useRouter()

@@ -28,7 +28,7 @@
         {{ error }}
       </div>
 
-      <form @submit.prevent="login" class="rounded-xl border bg-card p-6 space-y-4 shadow-sm">
+      <form @submit.prevent="() => login()" class="rounded-xl border bg-card p-6 space-y-4 shadow-sm">
         <div class="space-y-2">
           <label for="loginview-field-2" class="text-sm font-medium">{{ $t('common.email') }}</label>
           <input id="loginview-field-2"

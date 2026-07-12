@@ -136,7 +136,7 @@
 <script setup lang="ts">
 import PageHeader from '../components/shared/PageHeader.vue'
 import SectionCard from '../components/shared/SectionCard.vue'
-import { ref, computed } from 'vue'
+import { ref, computed, reactive } from 'vue'
 import { useRouter } from 'vue-router'
 import { Button } from '@/components/ui/button'
 import { api } from '../lib/api/client'
@@ -254,12 +254,6 @@ function resetExport() {
   exportStatus.value = 'idle'
   exportData.raw = null
   exportData.exportedAt = ''
-}
-
-function cancelDelete() {
-  deleteDialogOpen.value = false
-  confirmName.value = ''
-  deleteError.value = null
 }
 
 async function confirmDelete() {

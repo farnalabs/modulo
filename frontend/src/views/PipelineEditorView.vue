@@ -538,6 +538,7 @@ import BackLink from '../components/BackLink.vue'
 import FormDialog from '../components/shared/FormDialog.vue'
 import { shortId } from '../utils/format'
 import { api } from '../lib/api/client'
+import { useApi } from '../composables/useApi'
 import { Button } from '@/components/ui/button'
 
 const planStore = usePlanStore()
@@ -568,6 +569,7 @@ const pickerAgentId = ref<string>('')
 const pickerConnectorId = ref<string>('')
 const revertSnapshotId = ref<string>('')
 const convertError = ref<string | null>(null)
+const { post: postUntyped } = useApi()
 const revertError = ref<string | null>(null)
 const revertLoading = ref(false)
 
@@ -906,8 +908,10 @@ async function revertToManual() {
   try {
     const nodeId = selectedNodeData.value.id
     await api.POST('/api/v1/pipelines/{pipeline_id}/nodes/{node_id}/revert-to-manual', {
-      params: { path: { pipeline_id: pipelineId, node_id: nodeId } },
-      body: { snapshot_id: revertSnapshotId.value },
+      params: {
+        path: { pipeline_id: pipelineId, node_id: nodeId },
+        query: { snapshot_id: revertSnapshotId.value },
+      },
     })
     showRevertDialog.value = false
     await loadGraph()
@@ -956,10 +960,7 @@ async function handleRename() {
 
 async function handleArchive() {
   try {
-    const { data } = await api.POST('/api/v1/pipelines/{pipeline_id}/archive', {
-      params: { path: { pipeline_id: pipelineId } },
-    })
-    pipeline.value = data as any
+    pipeline.value = await postUntyped<Record<string, unknown>>(`/api/v1/pipelines/${pipelineId}/archive`)
   } catch (e: unknown) {
     pageError.value = `Failed to archive pipeline: ${formatApiError(e)}`
   }
@@ -967,10 +968,7 @@ async function handleArchive() {
 
 async function handleUnarchive() {
   try {
-    const { data } = await api.POST('/api/v1/pipelines/{pipeline_id}/unarchive', {
-      params: { path: { pipeline_id: pipelineId } },
-    })
-    pipeline.value = data as any
+    pipeline.value = await postUntyped<Record<string, unknown>>(`/api/v1/pipelines/${pipelineId}/unarchive`)
   } catch (e: unknown) {
     pageError.value = `Failed to unarchive pipeline: ${formatApiError(e)}`
   }
@@ -988,7 +986,7 @@ async function handleDelete() {
   }
 }
 
-const { loading, error: pageErrorRef, load: loadAll } = useDataFetch(
+const { loading, error: pageErrorRef } = useDataFetch(
   async () => {
     await Promise.all([loadPipeline(), loadGraph(), loadCatalog()])
     return {}

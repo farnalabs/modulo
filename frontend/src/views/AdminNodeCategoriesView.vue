@@ -143,7 +143,7 @@ interface NodeCategory {
 
 const { data: categoriesData, loading, error, load: loadCategories } = useDataFetch(
   () => api.GET('/api/v1/node-categories') as Promise<{ data?: { items?: NodeCategory[] }; error?: { detail?: string } }>,
-  { initialValue: [] as NodeCategory[] }
+  { initialValue: { items: [] as NodeCategory[] } }
 )
 
 const categories = computed(() => {
@@ -208,8 +208,8 @@ async function deleteCategory() {
     if (err) {
       deleteError.value = String(err)
     } else if (response.status === 204 || response.ok) {
-      categories.value = categories.value.filter(c => c.id !== deleteConfirmCategoryId.value)
       deleteConfirmCategoryId.value = null
+      await loadCategories()
     }
   } catch (e: unknown) {
     deleteError.value = formatApiError(e)

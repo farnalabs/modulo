@@ -21,7 +21,7 @@ interface DataFetchOptions<T> {
   immediate?: boolean
 }
 
-type FetcherResult<T> = { data?: T; error?: { detail?: string } }
+type FetcherResult<T> = { data?: T; error?: { detail?: unknown } }
 
 export function useDataFetch<T>(
   fetcher: () => Promise<FetcherResult<T>> | FetcherResult<T>,

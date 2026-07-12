@@ -44,7 +44,7 @@ function setupDefaultMock() {
       return Promise.resolve({ data: mockTiersData, error: undefined })
     }
     return Promise.resolve({ data: null, error: undefined })
-  })
+  }) as unknown as typeof api.GET
 }
 
 async function mountView() {
@@ -189,7 +189,7 @@ describe('AdminFeatureFlagsView', () => {
         return Promise.resolve({ data: mockTiersData, error: undefined })
       }
       return Promise.resolve({ data: null, error: undefined })
-    })
+    }) as unknown as typeof api.GET
     const pinia = createPinia()
     setActivePinia(pinia)
     const wrapper = mount(AdminFeatureFlagsView, {

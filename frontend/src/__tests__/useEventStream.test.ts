@@ -32,7 +32,7 @@ beforeEach(() => {
   vi.spyOn(globalThis, 'fetch').mockResolvedValue({
     ok: true,
     body: { getReader: () => mockReader },
-  } as Response)
+  } as unknown as Response)
 
   pushEvent = (eventType: string, data: Record<string, unknown>) => {
     const sse = `event: ${eventType}\ndata: ${JSON.stringify(data)}\n\n`

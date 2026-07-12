@@ -293,13 +293,20 @@ import EmptyState from '../components/shared/EmptyState.vue'
 import { shortId } from '../utils/format'
 import { formatApiError } from '../lib/api/formatError'
 
-type PipelineItem = components['schemas']['PipelineItem']
+type PipelineItem = components['schemas']['PipelineResponse']
 type VariantGroup = components['schemas']['VariantGroupResponse']
 type ModelBackend = components['schemas']['ModelBackendResponse']
 type RunResponse = components['schemas']['RunResponse']
 type RunIOResponse = components['schemas']['RunIOResponse']
-type RunEvalItem = components['schemas']['RunEvalItem']
-type RunEvalListResponse = components['schemas']['RunEvalListResponse']
+interface RunEvalItem {
+  eval_id: string
+  node_id: string
+  passed: boolean
+  score: number | null
+  detail?: string | null
+}
+
+interface RunEvalListResponse { items?: RunEvalItem[] }
 
 interface VariantForm {
   id: string
@@ -512,6 +519,9 @@ async function saveGroup() {
           name: groupName.value.trim(),
           description: groupDescription.value || null,
           variants: variantDefs as unknown as components['schemas']['VariantDef'][],
+          selection_strategy: 'weighted',
+          max_concurrent_runs: 10,
+          degraded_evals: false,
         },
       })
       if (err) {
@@ -528,6 +538,9 @@ async function saveGroup() {
           name: groupName.value.trim(),
           description: groupDescription.value || null,
           variants: variantDefs as unknown as components['schemas']['VariantDef'][],
+          selection_strategy: 'weighted',
+          max_concurrent_runs: 10,
+          degraded_evals: false,
         },
       })
       if (err) {
@@ -618,8 +631,8 @@ async function pollRunStatus(runId: string, variantName: string) {
           runEntries.value.set(variantName, {
             ...existing,
             runStatus: status,
-            totalCostUsd: runResp.total_cost_usd,
-            tokenConsumption: runResp.token_consumption,
+            totalCostUsd: runResp.total_cost_usd == null ? null : Number(runResp.total_cost_usd),
+            tokenConsumption: runResp.token_consumption ?? null,
           })
         }
 
@@ -652,7 +665,7 @@ async function fetchRunIO(runId: string, variantName: string) {
       if (existing) {
         runEntries.value.set(variantName, {
           ...existing,
-          nodeOutputs: ioResp.outputs_json,
+          nodeOutputs: ioResp.outputs_json ?? null,
         })
       }
     }
@@ -711,6 +724,9 @@ async function promoteWinner(variantName: string) {
         name: `${groupName.value.trim()} (default: ${variantName})`,
         description: groupDescription.value || null,
         variants: [variantDef] as unknown as components['schemas']['VariantDef'][],
+        selection_strategy: 'weighted',
+        max_concurrent_runs: 10,
+        degraded_evals: false,
       },
     })
 
@@ -765,16 +781,6 @@ watch(selectedGroupId, async (id) => {
     savedGroupId.value = null
   }
 })
-
-async function fetchVariantGroups() {
-  try {
-    const { data, error: err } = await api.GET('/api/v1/variant-groups')
-    if (err) return
-    variantGroups.value = (Array.isArray(data) ? data : (data as any)?.items ?? []) as unknown as VariantGroup[]
-  } catch (e) {
-    console.warn('Failed to fetch variant groups', e)
-  }
-}
 
 async function fetchSnapshotForPipeline(pipelineId: string) {
   try {

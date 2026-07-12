@@ -45,6 +45,7 @@ export interface SkillItem extends SkillBase {
 }
 
 export interface UserSkill extends SkillBase {
+  active?: boolean
   created_at: string
   updated_at: string
 }

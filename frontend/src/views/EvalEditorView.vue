@@ -309,19 +309,6 @@ interface EvalDefinition {
   created_by: string
 }
 
-interface EvalListResponse {
-  items: EvalDefinition[]
-  total: number
-  page: number
-  page_size: number
-}
-
-interface GraphResponse {
-  nodes: GraphNode[]
-  edges: unknown[]
-  validation_issues: string[]
-}
-
 const selectedPipelineId = ref('')
 const nodes = ref<GraphNode[]>([])
 const nodesLoading = ref(false)
@@ -455,18 +442,15 @@ async function saveEval() {
     return
   }
 
-  const body: Record<string, unknown> = {
+  const body = {
     pipeline_id: selectedPipelineId.value,
+    node_id: form.node_id || null,
     name: form.name.trim(),
     eval_type: form.eval_type,
     config_json: configParsed,
     failure_behaviour: form.failure_behaviour,
     pass_threshold: form.pass_threshold,
   }
-  if (form.node_id) {
-    body.node_id = form.node_id
-  }
-
   try {
     if (editingEvalId.value) {
       await api.PUT('/api/v1/evals/{eval_id}', {

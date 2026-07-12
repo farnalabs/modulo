@@ -346,6 +346,7 @@ import ErrorAlert from '../components/shared/ErrorAlert.vue'
 import { formatApiError } from '../lib/api/formatError'
 import { Button } from '@/components/ui/button'
 import { api } from '../lib/api/client'
+import { useApi } from '../composables/useApi'
 import { formatDateShort } from '../lib/formatDate'
 
 interface PipelineItem {
@@ -368,9 +369,13 @@ interface PipelineListResponse {
 
 const router = useRouter()
 const planStore = usePlanStore()
+const { post: postUntyped } = useApi()
 
 const { loading, error, data: pipelinesResp, load: loadPipelines } = useDataFetch<PipelineListResponse>(
-  () => api.GET('/api/v1/pipelines', { params: { query: { page_size: 100 } } }),
+  async () => {
+    const response = await api.GET('/api/v1/pipelines', { params: { query: { page_size: 100 } } })
+    return { data: response.data as unknown as PipelineListResponse | undefined, error: response.error }
+  },
   { initialValue: { items: [] as PipelineItem[], total: 0, page: 1, page_size: 100 } },
 )
 
@@ -467,9 +472,7 @@ async function handleRename() {
 
 async function handleArchive(p: PipelineItem) {
   try {
-    await api.POST('/api/v1/pipelines/{pipeline_id}/archive', {
-      params: { path: { pipeline_id: p.id } },
-    })
+    await postUntyped(`/api/v1/pipelines/${p.id}/archive`)
     showActionMenu.value = null
     await loadPipelines()
   } catch (e) {
@@ -479,9 +482,7 @@ async function handleArchive(p: PipelineItem) {
 
 async function handleUnarchive(p: PipelineItem) {
   try {
-    await api.POST('/api/v1/pipelines/{pipeline_id}/unarchive', {
-      params: { path: { pipeline_id: p.id } },
-    })
+    await postUntyped(`/api/v1/pipelines/${p.id}/unarchive`)
     showActionMenu.value = null
     await loadPipelines()
   } catch (e) {
