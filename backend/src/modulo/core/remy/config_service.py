@@ -175,7 +175,7 @@ class RemyConfigService:
         if user_id in allowed_user_ids:
             return True
 
-        if user_role.lower() in (r.lower() for r in access.get("org_roles", [])):
+        if user_role.lower() in (r.lower() for r in (access.get("org_roles") or [])):
             return True
 
         allowed_team_ids = _normalize_uuids(access.get("team_ids", []))
