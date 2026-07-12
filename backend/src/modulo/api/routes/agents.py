@@ -5,7 +5,7 @@ import json
 import logging
 import uuid
 from datetime import datetime
-from typing import Any, cast
+from typing import Any, cast, ClassVar
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from langchain_core.messages import BaseMessage
@@ -35,6 +35,7 @@ from modulo.db.rls import set_rls_org
 from modulo.settings import get_settings
 
 _log = logging.getLogger(__name__)
+
 router = APIRouter(prefix="/api/v1/agents", tags=["agents"])
 
 
@@ -48,9 +49,9 @@ class AgentCreate(BaseModel):
     output_schema_version: str
     prompt_template: str = Field(min_length=1)
     model_backend_id: uuid.UUID
-    connector_type_refs: list[dict[str, Any]] = []
-    evals: list[dict[str, Any]] = []
-    retry_policy: dict[str, Any] = {}
+    connector_type_refs: ClassVar[list[dict[str, Any]]] = []
+    evals: ClassVar[list[dict[str, Any]]] = []
+    retry_policy: ClassVar[dict[str, Any]] = {}
     token_budget: int | None = Field(default=None, ge=0)
     max_input_length: int | None = Field(default=None, ge=0)
     library_id: uuid.UUID | None = None
@@ -132,7 +133,7 @@ class PromptVersionListEntry(BaseModel):
     created_at: str
     notes: str
     optimized_from: str | None = None
-    eval_result_ids: list[str] = []
+    eval_result_ids: ClassVar[list[str]] = []
 
 
 class PromptVersionDetail(BaseModel):
@@ -141,7 +142,7 @@ class PromptVersionDetail(BaseModel):
     created_at: str
     notes: str
     optimized_from: str | None = None
-    eval_result_ids: list[str] = []
+    eval_result_ids: ClassVar[list[str]] = []
 
 
 class PromptDiffRequest(BaseModel):
@@ -783,7 +784,7 @@ async def diff_prompt_versions(
     lines_b = template_b.splitlines(keepends=True)
 
     differ = difflib.SequenceMatcher(None, lines_a, lines_b)
-    diff_lines: list[DiffLine] = []
+    diff_lines: ClassVar[list[DiffLine]] = []
     line_a = 1
     line_b = 1
 

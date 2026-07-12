@@ -1,10 +1,10 @@
-from __future__ import annotations
-
 """SSE endpoint for real-time event streaming.
 
 Latency: sub-second for all normal event delivery.
 Zombie cleanup: 2s keepalive heartbeat detects dead clients within 2s.
 """
+
+from __future__ import annotations
 
 
 import asyncio

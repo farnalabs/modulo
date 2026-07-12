@@ -3,7 +3,7 @@
 import logging
 import uuid
 from datetime import datetime
-from typing import Any
+from typing import Any, ClassVar
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, Field
@@ -22,6 +22,7 @@ from modulo.db.crud.template import (
 )
 from modulo.db.models.library_primitive import LibraryPrimitive
 from modulo.db.rls import set_rls_org
+
 
 logger = logging.getLogger(__name__)
 
@@ -98,19 +99,19 @@ async def list_templates_endpoint(
         )
     except HTTPException:
         raise
-    except IntegrityError:
+    except IntegrityError as exc:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="A resource with this value already exists",
-        )
-    except ProgrammingError:
+        ) from exc
+    except ProgrammingError as exc:
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="This feature is not available. Run database migrations to enable it.",
-        )
+        ) from exc
     except Exception as e:
         logger.error("Unexpected error in list_templates_endpoint: %s", str(e))
-        raise HTTPException(status_code=500, detail="Internal server error")
+        raise HTTPException(status_code=500, detail="Internal server error") from e
 
 
 @router.post(
@@ -138,8 +139,8 @@ async def create_pipeline_from_template_endpoint(
         graph_nodes: list[dict[str, Any]] = content.get("graph_nodes", [])
         edges: list[dict[str, Any]] = content.get("edges", [])
 
-        agent_ids: dict[int, uuid.UUID] = {}
-        created_agents: list[dict[str, Any]] = []
+        agent_ids: ClassVar[dict[int, uuid.UUID]] = {}
+        created_agents: ClassVar[list[dict[str, Any]]] = []
 
         async with session.begin():
             await set_rls_org(session, principal.organisation_id)
@@ -163,7 +164,7 @@ async def create_pipeline_from_template_endpoint(
                 description=template.description or f"Created from template: {template.name}",
             )
 
-            resolved_nodes: list[dict[str, Any]] = []
+            resolved_nodes: ClassVar[list[dict[str, Any]]] = []
             for node in graph_nodes:
                 agent_idx = node.get("agent_index", -1)
                 resolved_id_str = str(uuid.uuid4())
@@ -192,12 +193,12 @@ async def create_pipeline_from_template_endpoint(
 
             from modulo.db.models.pipeline_edge import PipelineEdge
 
-            persisted_edges: list[PipelineEdge] = []
-            node_id_by_label: dict[str, str] = {}
+            persisted_edges: ClassVar[list[PipelineEdge]] = []
+            node_id_by_label: ClassVar[dict[str, str]] = {}
             for n in resolved_nodes:
                 node_id_by_label[n["label"]] = n["id"]
 
-            source_map: dict[str, str] = {}
+            source_map: ClassVar[dict[str, str]] = {}
             for i, n in enumerate(graph_nodes):
                 source_map[n.get("id", str(i))] = resolved_nodes[i]["id"]
 
@@ -228,16 +229,16 @@ async def create_pipeline_from_template_endpoint(
         )
     except HTTPException:
         raise
-    except IntegrityError:
+    except IntegrityError as exc:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="A resource with this value already exists",
-        )
-    except ProgrammingError:
+        ) from exc
+    except ProgrammingError as exc:
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="This feature is not available. Run database migrations to enable it.",
-        )
+        ) from exc
     except Exception as e:
         logger.error("Unexpected error in create_pipeline_from_template_endpoint: %s", str(e))
-        raise HTTPException(status_code=500, detail="Internal server error")
+        raise HTTPException(status_code=500, detail="Internal server error") from e

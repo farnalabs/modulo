@@ -4,7 +4,6 @@ import asyncio
 import logging
 from dataclasses import dataclass
 
-logger = logging.getLogger(__name__)
 import uuid
 from typing import Any, cast
 
@@ -21,6 +20,8 @@ from modulo.db.crud.pipeline import create_pipeline, replace_pipeline_graph
 from modulo.db.crud.schema import create_schema
 from modulo.db.models.pipeline import Pipeline
 from modulo.db.rls import set_rls_org, set_rls_user_context
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/v1/onboarding", tags=["onboarding"])
 
@@ -321,7 +322,9 @@ async def create_starter_pipeline(
                 org_id=principal.organisation_id,
                 name="SDLC Starter Pipeline",
                 account_id=principal.account_id,
-                description="A starter pipeline mapping your SDLC workflow. Customise each stage to match your team's process.",
+                description=(
+                    "A starter pipeline mapping your SDLC workflow. Customise each stage to match your team's process."
+                ),
             )
 
             schema_id = schema.id

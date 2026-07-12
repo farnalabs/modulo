@@ -5,6 +5,7 @@ import logging
 import secrets
 import uuid
 from datetime import UTC, datetime, timedelta
+from typing import ClassVar
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, Field
@@ -56,6 +57,7 @@ from modulo.db.models.team import Team
 from modulo.db.models.team_membership import TeamMembership
 from modulo.db.rls import set_rls_org, set_rls_user_context
 
+
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/v1/admin", tags=["admin"])
@@ -102,7 +104,7 @@ async def global_search(
 
             search_types: list[str] = ["pipeline", "run", "audit", "library"] if type_filter == "all" else [type_filter]
 
-            all_items: list[tuple[int, SearchResultItem]] = []
+            all_items: ClassVar[list[tuple[int, SearchResultItem]]] = []
             total_by_type: dict[str, int] = {"pipeline": 0, "run": 0, "audit": 0, "library": 0}
 
             for st in search_types:
@@ -636,7 +638,7 @@ async def admin_update_org(
                     detail="Organisation not found",
                 )
 
-            updates: dict[str, object] = {}
+            updates: ClassVar[dict[str, object]] = {}
             if req.name is not None:
                 updates["name"] = req.name
             if req.logo_url is not None:
@@ -1228,7 +1230,7 @@ async def admin_list_teams(
 
             # Enrich with member counts via ORM (avoids raw SQL type binding issues)
             team_ids = [t.id for t in result.items]
-            member_counts: dict[uuid.UUID, int] = {}
+            member_counts: ClassVar[dict[uuid.UUID, int]] = {}
             if team_ids:
                 count_rows = (
                     await session.execute(
@@ -1400,7 +1402,7 @@ async def admin_delete_team(
             await set_rls_org(session, current_user.organisation_id)
             await set_rls_user_context(session, current_user.account_id, current_user.org_role)
 
-            resource_checks: list[tuple[str, int]] = []
+            resource_checks: ClassVar[list[tuple[str, int]]] = []
             for model_cls, label in [
                 (Pipeline, "pipeline"),
                 (Stage, "stage"),
@@ -2033,7 +2035,7 @@ async def eval_dashboard(
                 )
             ).all()
 
-            covered_pairs: set[tuple[uuid.UUID, str]] = set()
+            covered_pairs: ClassVar[set[tuple[uuid.UUID, str]]] = set()
             eval_defs = (
                 await session.execute(
                     select(EvalDefinition.pipeline_id, EvalDefinition.node_id).where(
@@ -2045,7 +2047,7 @@ async def eval_dashboard(
                 if ed.node_id is not None:
                     covered_pairs.add((ed.pipeline_id, str(ed.node_id)))
 
-            coverage_gaps: list[CoverageGap] = []
+            coverage_gaps: ClassVar[list[CoverageGap]] = []
             for pl in pipelines:
                 for node in pl.graph_nodes_json or []:
                     node_id = node.get("id")
@@ -2940,7 +2942,7 @@ async def admin_get_storage(
             detail="This feature is not available. Run database migrations to enable it.",
         ) from None
 
-    breakdown: dict[str, int] = {}
+    breakdown: ClassVar[dict[str, int]] = {}
     for row in status_rows:
         breakdown[row.status] = row.cnt
 
