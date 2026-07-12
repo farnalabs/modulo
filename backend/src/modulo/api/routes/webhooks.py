@@ -17,9 +17,10 @@ from typing import Any
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request, status
 from sqlalchemy import select
 from sqlalchemy.exc import ProgrammingError, SQLAlchemyError
-from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession
+from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
-from modulo.api.dependencies import _get_engine, get_db_session, pg_connection_string
+from modulo.api.dependencies import _get_engine, get_db_session, get_or_create_engine, pg_connection_string
+from modulo.settings import get_settings
 from modulo.auth.dependencies import get_current_user
 from modulo.auth.jwt import AuthenticatedPrincipal
 from modulo.core.pipeline_engine.executor import PipelineExecutor
