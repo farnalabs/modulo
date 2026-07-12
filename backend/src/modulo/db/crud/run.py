@@ -326,7 +326,7 @@ async def batch_delete_old_terminal_runs(
 ) -> int:
     """Delete terminal runs older than *max_age_days* in batches.
 
-    Only affects runs with status in (complete, failed, cancelled).
+    Only affects runs with status in (complete, failed, eval_failed, cancelled).
     Returns total deleted count.
     """
     cutoff = datetime.now(UTC) - timedelta(days=max_age_days)

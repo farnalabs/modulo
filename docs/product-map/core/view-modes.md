@@ -44,3 +44,10 @@ The UI supports Simple and Advanced view modes toggled via the sidebar. Simple m
 - [ ] Team-gating (`view_modes` feature flag) — feature flag constant exists but tier enforcement not end-to-end tested
 - [ ] Admin-customisable views (assign views to users/teams/roles)
 - [ ] Default Simple/Advanced seed on first setup
+
+## QA History
+
+### 2026-07-12 — Round 3 QA
+
+- **Fixed (MINOR):** No stale frontmatter or resolved gaps found. All `code:`, `bdd:`, `unit-tests:` entries verified as accurate.
+- **Finding (MINOR):** View CRUD routes (`views.py`) handle `ProgrammingError→501`, `SQLAlchemyError→503`, `HTTPException→re-raise`, and `Exception→500`, but are missing explicit `asyncio.CancelledError` guard. In practice, `except Exception` catches `CancelledError` on Python < 3.12 and wraps it as a misleading 500. Consider adding `except asyncio.CancelledError: raise` as the first exception handler.

@@ -6,7 +6,7 @@ from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, Field
-from sqlalchemy.exc import IntegrityError, ProgrammingError
+from sqlalchemy.exc import IntegrityError, ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.api.dependencies import get_db_session
@@ -51,6 +51,13 @@ async def admin_list_config(
         raise
     except ProgrammingError:
         raise HTTPException(status_code=501, detail="Database not available. Run migrations.") from None
+    except SQLAlchemyError:
+        logger.exception("routes.admin_system_config")
+
+        raise HTTPException(
+            status_code=503,
+            detail="A database error occurred. Please try again later.",
+        ) from None
     except Exception:
         logger.exception("Unexpected error in admin_list_config")
         raise HTTPException(status_code=500, detail="Internal server error") from None
@@ -90,6 +97,13 @@ async def admin_set_config(
         ) from None
     except ProgrammingError:
         raise HTTPException(status_code=501, detail="Database not available. Run migrations.") from None
+    except SQLAlchemyError:
+        logger.exception("routes.admin_system_config")
+
+        raise HTTPException(
+            status_code=503,
+            detail="A database error occurred. Please try again later.",
+        ) from None
     except Exception:
         logger.exception("Unexpected error in admin_set_config")
         raise HTTPException(status_code=500, detail="Internal server error") from None
@@ -119,6 +133,13 @@ async def admin_delete_config(
         raise
     except ProgrammingError:
         raise HTTPException(status_code=501, detail="Database not available. Run migrations.") from None
+    except SQLAlchemyError:
+        logger.exception("routes.admin_system_config")
+
+        raise HTTPException(
+            status_code=503,
+            detail="A database error occurred. Please try again later.",
+        ) from None
     except Exception:
         logger.exception("Unexpected error in admin_delete_config")
         raise HTTPException(status_code=500, detail="Internal server error") from None
