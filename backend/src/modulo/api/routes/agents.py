@@ -537,6 +537,7 @@ async def optimize_prompt(
             detail="Prompt optimization failed: LLM call failed after retries",
         ) from None
     except Exception:
+        _log.exception("Unexpected error during prompt optimization")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Prompt optimization failed unexpectedly",
