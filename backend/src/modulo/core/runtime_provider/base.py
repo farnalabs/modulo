@@ -1,7 +1,6 @@
-from __future__ import annotations
-
 """RuntimeProvider ABC — abstract interface for agent execution environments."""
 
+from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from typing import Any

@@ -1,7 +1,6 @@
-from __future__ import annotations
-
 """E2B RuntimeProvider — sandboxed execution environments via E2B."""
 
+from __future__ import annotations
 
 import asyncio
 import logging
@@ -84,6 +83,7 @@ class E2BRuntimeProvider(RuntimeProvider):
             try:
                 await self._clone_repo(sandbox, repo_url, spec.labels or {})
             except asyncio.CancelledError:
+                await sandbox.kill()
                 raise
             except Exception:
                 await sandbox.kill()
@@ -179,7 +179,12 @@ class E2BRuntimeProvider(RuntimeProvider):
         if repo_ref:
             cmds.append(f"cd /home/user/repo && git checkout {shlex.quote(repo_ref)}")
         combined = " && ".join(cmds)
-        result = await sandbox.commands.run(combined, timeout=_REPO_CLONE_TIMEOUT)
+        try:
+            result = await sandbox.commands.run(combined, timeout=_REPO_CLONE_TIMEOUT)
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            raise RuntimeError(f"Repo clone failed for {repo_url}: {exc}") from exc
         exit_code = getattr(result, "exit_code", 1)
         if exit_code != 0:
             stderr = getattr(result, "stderr", "") or ""
