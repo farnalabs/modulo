@@ -158,13 +158,14 @@ export const usePlanStore = defineStore("plan", () => {
 
   async function fetchOrgFlagOverride(flagName: string): Promise<boolean | null> {
     try {
-      const { data, error: err } = await (api.GET as any)(
+      const res = await (api.GET as any)(
         '/api/v1/admin/feature-flags/{flag_name}/org-override',
         { params: { path: { flag_name: flagName } } },
-      );
-      if (err) return null;
-      return data?.override ?? null;
-    } catch {
+      ) as { data?: { override: boolean | null }; error?: unknown };
+      if (res.error) return null;
+      return res.data?.override ?? null;
+    } catch (err) {
+      console.warn('[plan] Failed to fetch org flag override', err);
       return null;
     }
   }
@@ -172,24 +173,25 @@ export const usePlanStore = defineStore("plan", () => {
   async function setOrgFlagOverride(flagName: string, enabled: boolean | null): Promise<boolean> {
     try {
       if (enabled === null) {
-        const { error: err } = await (api.DELETE as any)(
+        const res = await (api.DELETE as any)(
           '/api/v1/admin/feature-flags/{flag_name}/org-override',
           { params: { path: { flag_name: flagName } } },
-        );
-        if (err) return false;
+        ) as { error?: unknown };
+        if (res.error) return false;
       } else {
-        const { error: err } = await (api.PUT as any)(
+        const res = await (api.PUT as any)(
           '/api/v1/admin/feature-flags/{flag_name}/org-override',
           {
             params: { path: { flag_name: flagName } },
             body: { enabled },
           },
-        );
-        if (err) return false;
+        ) as { error?: unknown };
+        if (res.error) return false;
       }
       orgOverrides.value[flagName] = enabled;
       return true;
-    } catch {
+    } catch (err) {
+      console.warn('[plan] Failed to set org flag override', err);
       return false;
     }
   }
