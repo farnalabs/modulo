@@ -80,6 +80,8 @@ def _rls(method: Callable[..., Any]) -> Callable[..., Any]:
     async def wrapper(self: "FeedbackManager", *args: Any, **kwargs: Any) -> Any:
         try:
             await set_rls_org(self._session, self._org_id)
+        except asyncio.CancelledError:
+            raise
         except Exception:
             logger.exception("RLS setup failed for org %s on method %s", self._org_id, method.__name__)
             raise
