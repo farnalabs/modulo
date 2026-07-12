@@ -158,7 +158,7 @@ async def _set_rls_org(session: AsyncSession, org_id: uuid.UUID) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Celery task — fire one scheduled report
+# Celery task â€” fire one scheduled report
 # ---------------------------------------------------------------------------
 
 celery_app_global: Any = None
@@ -177,7 +177,7 @@ def get_celery_app() -> Any:
 
 
 class ReportFireTask(Task):
-    """Task that fires a single scheduled report — generates and delivers."""
+    """Task that fires a single scheduled report â€” generates and delivers."""
 
     name = "modulo.reports.fire_report"
     autoretry_for = (httpx.RequestError, DBAPIError, TimeoutError)
@@ -198,7 +198,7 @@ async def _fire_scheduled_report(
     report_id: uuid.UUID,
     org_id: uuid.UUID,
 ) -> dict[str, Any]:
-    """Core fire logic — runs inside asyncio.run() inside the Celery task."""
+    """Core fire logic â€” runs inside asyncio.run() inside the Celery task."""
     engine = _get_engine()
     factory = async_sessionmaker(engine, expire_on_commit=False, autobegin=False)
 
@@ -254,6 +254,7 @@ async def _fire_scheduled_report(
                 report.cron_expression,
                 report_id,
                 exc,
+                exc_info=True,
             )
             await session.execute(update(ScheduledReport).where(ScheduledReport.id == report_id).values(active=False))
             return {"status": "failed", "reason": f"invalid_cron: {exc}"}
@@ -365,6 +366,7 @@ async def _deliver_to_urls(
                         exc,
                         attempt + 1,
                         _REPORT_MAX_RETRIES,
+                        exc_info=True,
                     )
                     last_resp_or_exc = exc
                     if attempt < _REPORT_MAX_RETRIES - 1:
@@ -555,5 +557,5 @@ class DatabaseReportScheduler(Scheduler):
 
     @property
     def max_interval(self) -> int:
-        """Maximum sleep between ticks — 60 seconds."""
+        """Maximum sleep between ticks â€” 60 seconds."""
         return 60
