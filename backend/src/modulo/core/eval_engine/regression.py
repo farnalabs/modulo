@@ -145,7 +145,7 @@ async def detect_regressions(
                 drop_pct=round(drop, 4),
                 trend=trend,
                 affected_run_ids=list(row.affected_run_ids),
-            )
+            ),
         )
 
     return alerts
