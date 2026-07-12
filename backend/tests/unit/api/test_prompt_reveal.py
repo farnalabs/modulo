@@ -325,8 +325,8 @@ class TestRevealNodePrompt:
 
         with patch("modulo.api.routes.runs.get_run", return_value=run), patch("modulo.api.routes.runs.set_rls_org"):
             resp = client.post(
-                    f"/api/v1/runs/{_RUN_ID}/nodes/nonexistent-node/prompt/reveal",
-                )
+                f"/api/v1/runs/{_RUN_ID}/nodes/nonexistent-node/prompt/reveal",
+            )
 
         assert resp.status_code == 404
         assert "not found" in resp.json()["detail"].lower()
@@ -339,8 +339,8 @@ class TestRevealNodePrompt:
 
         with patch("modulo.api.routes.runs.get_run", return_value=run), patch("modulo.api.routes.runs.set_rls_org"):
             resp = client.post(
-                    f"/api/v1/runs/{_RUN_ID}/nodes/{_NODE_ID}/prompt/reveal",
-                )
+                f"/api/v1/runs/{_RUN_ID}/nodes/{_NODE_ID}/prompt/reveal",
+            )
 
         assert resp.status_code == 404
         assert "Snapshot" in resp.json()["detail"]
@@ -360,8 +360,8 @@ class TestRevealNodePrompt:
 
         with patch("modulo.api.routes.runs.get_run", return_value=run), patch("modulo.api.routes.runs.set_rls_org"):
             resp = client.post(
-                    f"/api/v1/runs/{_RUN_ID}/nodes/{_NODE_ID}/prompt/reveal",
-                )
+                f"/api/v1/runs/{_RUN_ID}/nodes/{_NODE_ID}/prompt/reveal",
+            )
 
         assert resp.status_code == 404
         assert "Agent" in resp.json()["detail"]
@@ -403,8 +403,8 @@ class TestRevealNodePrompt:
 
         with patch("modulo.api.routes.runs.get_run", return_value=run), patch("modulo.api.routes.runs.set_rls_org"):
             resp = client.post(
-                    f"/api/v1/runs/{_RUN_ID}/nodes/{_NODE_ID}/prompt/reveal",
-                )
+                f"/api/v1/runs/{_RUN_ID}/nodes/{_NODE_ID}/prompt/reveal",
+            )
 
         assert resp.status_code == 200
         body = resp.json()
@@ -431,8 +431,8 @@ class TestRevealNodePrompt:
 
         with patch("modulo.api.routes.runs.get_run", return_value=run), patch("modulo.api.routes.runs.set_rls_org"):
             resp = client.post(
-                    f"/api/v1/runs/{_RUN_ID}/nodes/{_NODE_ID}/prompt/reveal",
-                )
+                f"/api/v1/runs/{_RUN_ID}/nodes/{_NODE_ID}/prompt/reveal",
+            )
 
         assert resp.status_code == 200
         body = resp.json()
@@ -462,8 +462,8 @@ class TestRevealNodePrompt:
 
         with patch("modulo.api.routes.runs.get_run", return_value=run), patch("modulo.api.routes.runs.set_rls_org"):
             resp = client.post(
-                    f"/api/v1/runs/{_RUN_ID}/nodes/{_NODE_ID}/prompt/reveal",
-                )
+                f"/api/v1/runs/{_RUN_ID}/nodes/{_NODE_ID}/prompt/reveal",
+            )
 
         assert resp.status_code == 200
         body = resp.json()
@@ -480,8 +480,8 @@ class TestRevealNodePrompt:
 
         with patch("modulo.api.routes.runs.get_run", return_value=run), patch("modulo.api.routes.runs.set_rls_org"):
             resp = client.post(
-                    f"/api/v1/runs/{_RUN_ID}/nodes/{_NODE_ID}/prompt/reveal",
-                )
+                f"/api/v1/runs/{_RUN_ID}/nodes/{_NODE_ID}/prompt/reveal",
+            )
 
         assert resp.status_code == 200
         body = resp.json()
@@ -536,8 +536,8 @@ class TestRevealNodePrompt:
 
         with patch("modulo.api.routes.runs.get_run", return_value=run), patch("modulo.api.routes.runs.set_rls_org"):
             resp = client.post(
-                    f"/api/v1/runs/{_RUN_ID}/nodes/{_NODE_ID}/prompt/reveal",
-                )
+                f"/api/v1/runs/{_RUN_ID}/nodes/{_NODE_ID}/prompt/reveal",
+            )
 
         assert resp.status_code == 200
         messages = resp.json()["messages"]

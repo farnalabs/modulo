@@ -457,7 +457,10 @@ class TestRevertToManual:
         setup_execute_side_effect(session, [make_pipeline_row(nodes=[make_agent_node()])])
         principal = make_principal()
 
-        with patch("modulo.api.routes.pipelines.get_snapshot_detail", return_value=None), pytest.raises(HTTPException) as excinfo:  # noqa: E501
+        with (
+            patch("modulo.api.routes.pipelines.get_snapshot_detail", return_value=None),
+            pytest.raises(HTTPException) as excinfo,
+        ):
             await revert_node_to_manual_endpoint(
                 pipeline_id=PIPELINE_ID,
                 node_id=NODE_ID,
@@ -478,7 +481,10 @@ class TestRevertToManual:
             ]
         )
 
-        with patch("modulo.api.routes.pipelines.get_snapshot_detail", return_value=snapshot), pytest.raises(HTTPException) as excinfo:  # noqa: E501
+        with (
+            patch("modulo.api.routes.pipelines.get_snapshot_detail", return_value=snapshot),
+            pytest.raises(HTTPException) as excinfo,
+        ):
             await revert_node_to_manual_endpoint(
                 pipeline_id=PIPELINE_ID,
                 node_id=NODE_ID,
@@ -499,7 +505,10 @@ class TestRevertToManual:
             ]
         )
 
-        with patch("modulo.api.routes.pipelines.get_snapshot_detail", return_value=snapshot), pytest.raises(HTTPException) as excinfo:  # noqa: E501
+        with (
+            patch("modulo.api.routes.pipelines.get_snapshot_detail", return_value=snapshot),
+            pytest.raises(HTTPException) as excinfo,
+        ):
             await revert_node_to_manual_endpoint(
                 pipeline_id=PIPELINE_ID,
                 node_id=NODE_ID,
@@ -520,7 +529,10 @@ class TestRevertToManual:
             ]
         )
 
-        with patch("modulo.api.routes.pipelines.get_snapshot_detail", return_value=snapshot), pytest.raises(HTTPException) as excinfo:  # noqa: E501
+        with (
+            patch("modulo.api.routes.pipelines.get_snapshot_detail", return_value=snapshot),
+            pytest.raises(HTTPException) as excinfo,
+        ):
             await revert_node_to_manual_endpoint(
                 pipeline_id=PIPELINE_ID,
                 node_id=NODE_ID,
