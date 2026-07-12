@@ -127,11 +127,26 @@ _VALID_32 = "a" * 32
 
 @pytest.fixture()
 def webhook_client() -> Generator[TestClient, None, None]:
-    from modulo.api.dependencies import _get_engine, get_db_session
-    from modulo.api.main import app
-    from modulo.auth.dependencies import get_current_user
-    from modulo.auth.jwt import AuthenticatedPrincipal
-    from modulo.settings import Settings, get_settings
+    import sys
+    import types
+
+    # Mock langchain_google_vertexai to prevent the import chain from
+    # hanging on google.cloud.aiplatform file I/O during app import.
+    _mock_lgv = types.ModuleType("langchain_google_vertexai")
+    _mock_lgv.ChatVertexAI = type("ChatVertexAI", (), {})
+    _was_in_sys = "langchain_google_vertexai" in sys.modules
+    if not _was_in_sys:
+        sys.modules["langchain_google_vertexai"] = _mock_lgv
+
+    try:
+        from modulo.api.dependencies import _get_engine, get_db_session
+        from modulo.api.main import app
+        from modulo.auth.dependencies import get_current_user
+        from modulo.auth.jwt import AuthenticatedPrincipal
+        from modulo.settings import Settings, get_settings
+    finally:
+        if not _was_in_sys:
+            sys.modules.pop("langchain_google_vertexai", None)
 
     _fake_org_id = uuid.uuid4()
     _fake_user_id = uuid.uuid4()
