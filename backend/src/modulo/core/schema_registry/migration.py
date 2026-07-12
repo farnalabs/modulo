@@ -185,24 +185,25 @@ class MigrationRegistry:
         self._migrations: dict[tuple[str, str], SchemaMigration] = {}
         self._lock = asyncio.Lock()
 
-    def register(
+    async def register(
         self,
         source_version: str,
         target_version: str,
         func: Callable[[dict[str, Any]], dict[str, Any]],
         description: str = "",
     ) -> SchemaMigration:
-        key = (source_version, target_version)
-        if key in self._migrations:
-            raise ValueError(f"Migration from {source_version} to {target_version} already registered")
-        m = SchemaMigration(
-            source_version=source_version,
-            target_version=target_version,
-            func=func,
-            description=description,
-        )
-        self._migrations[key] = m
-        return m
+        async with self._lock:
+            key = (source_version, target_version)
+            if key in self._migrations:
+                raise ValueError(f"Migration from {source_version} to {target_version} already registered")
+            m = SchemaMigration(
+                source_version=source_version,
+                target_version=target_version,
+                func=func,
+                description=description,
+            )
+            self._migrations[key] = m
+            return m
 
     def get_migration(self, source_version: str, target_version: str) -> SchemaMigration | None:
         return self._migrations.get((source_version, target_version))

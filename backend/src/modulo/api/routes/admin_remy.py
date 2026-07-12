@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import logging
 import uuid
-from typing import Any
+from typing import Any, ClassVar
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, Field
@@ -19,10 +19,11 @@ from modulo.db.models.remy_skill import RemySkill
 from modulo.db.models.system_config import SystemConfig
 from modulo.db.rls import set_rls_org
 
-logger = logging.getLogger(__name__)
 
 # Labels for all known providers (both native and custom).
 # Derived from _SIMPLE_BACKENDS (native) and ModelBackendProvider enum (custom).
+logger = logging.getLogger(__name__)
+
 _PROVIDER_LABELS: dict[str, str] = {
     "ai21": "AI21",
     "anthropic": "Anthropic",
@@ -82,7 +83,7 @@ class RemyConfigResponse(BaseModel):
     default_model: str = "claude-sonnet-4-20250514"
     default_context_window: int = 200000
     allowed_providers: list[str] = ["anthropic", "openai", "gemini", "deepseek", "groq"]
-    allowed_models: list[str] = []
+    allowed_models: ClassVar[list[str]] = []
 
 
 class RemyConfigUpdate(BaseModel):

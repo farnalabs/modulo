@@ -126,6 +126,11 @@ class AdvisoryLockService:
         Always attempts ``pg_advisory_unlock`` regardless of ownership to
         prevent PG-side lock leaks.
         """
+        if self._resource_id is not None and resource_id != self._resource_id:
+            raise ConnectorLockError(
+                resource_id,
+                f"Cannot release lock on resource {resource_id} — currently holding lock on {self._resource_id}",
+            )
         if self._owner_task_id is not None:
             current_task = asyncio.current_task()
             current = id(current_task) if current_task is not None else None

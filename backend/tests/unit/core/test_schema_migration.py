@@ -245,13 +245,13 @@ class TestTransformField:
 
 
 class TestMigrationRegistry:
-    def test_register_and_retrieve(self) -> None:
+    async def test_register_and_retrieve(self) -> None:
         registry = MigrationRegistry()
 
         def _migrate(data: dict[str, Any]) -> dict[str, Any]:
             return {**data, "version": "2.0.0"}
 
-        m = registry.register("1.0.0", "2.0.0", _migrate, "Upgrade to v2")
+        m = await registry.register("1.0.0", "2.0.0", _migrate, "Upgrade to v2")
         assert isinstance(m, SchemaMigration)
         assert m.source_version == "1.0.0"
         assert m.target_version == "2.0.0"
@@ -261,32 +261,32 @@ class TestMigrationRegistry:
         assert retrieved is not None
         assert retrieved.func is _migrate
 
-    def test_register_duplicate_raises(self) -> None:
+    async def test_register_duplicate_raises(self) -> None:
         registry = MigrationRegistry()
-        registry.register("1.0.0", "2.0.0", lambda d: d)
+        await registry.register("1.0.0", "2.0.0", lambda d: d)
         with pytest.raises(ValueError, match="already registered"):
-            registry.register("1.0.0", "2.0.0", lambda d: d)
+            await registry.register("1.0.0", "2.0.0", lambda d: d)
 
-    def test_register_multiple_versions(self) -> None:
+    async def test_register_multiple_versions(self) -> None:
         registry = MigrationRegistry()
-        registry.register("1.0.0", "2.0.0", lambda d: d)
-        registry.register("2.0.0", "3.0.0", lambda d: d)
+        await registry.register("1.0.0", "2.0.0", lambda d: d)
+        await registry.register("2.0.0", "3.0.0", lambda d: d)
         assert len(registry) == 2
 
-    def test_get_migration_nonexistent(self) -> None:
+    async def test_get_migration_nonexistent(self) -> None:
         registry = MigrationRegistry()
         assert registry.get_migration("1.0.0", "9.9.9") is None
 
-    def test_clear(self) -> None:
+    async def test_clear(self) -> None:
         registry = MigrationRegistry()
-        registry.register("1.0.0", "2.0.0", lambda d: d)
+        await registry.register("1.0.0", "2.0.0", lambda d: d)
         registry.clear()
         assert len(registry) == 0
 
-    def test_list_migrations(self) -> None:
+    async def test_list_migrations(self) -> None:
         registry = MigrationRegistry()
-        registry.register("1.0.0", "2.0.0", lambda d: d, "first")
-        registry.register("2.0.0", "3.0.0", lambda d: d, "second")
+        await registry.register("1.0.0", "2.0.0", lambda d: d, "first")
+        await registry.register("2.0.0", "3.0.0", lambda d: d, "second")
         migrations = registry.list_migrations()
         assert len(migrations) == 2
         descriptions = {m.description for m in migrations}
@@ -298,7 +298,7 @@ class TestMigrationChain:
 
     async def test_single_step_v1_to_v2(self) -> None:
         registry = MigrationRegistry()
-        registry.register("1.0.0", "2.0.0", rename_field("full_name", "display_name"))
+        await registry.register("1.0.0", "2.0.0", rename_field("full_name", "display_name"))
 
         data = {"full_name": "Alice", "age": 30}
         result = await registry.apply(data, "1.0.0", "2.0.0")
@@ -307,7 +307,7 @@ class TestMigrationChain:
 
     async def test_rename_does_not_mutate_original(self) -> None:
         registry = MigrationRegistry()
-        registry.register("1.0.0", "2.0.0", rename_field("full_name", "display_name"))
+        await registry.register("1.0.0", "2.0.0", rename_field("full_name", "display_name"))
 
         data = {"full_name": "Alice"}
         result = await registry.apply(data, "1.0.0", "2.0.0")
@@ -316,7 +316,7 @@ class TestMigrationChain:
 
     async def test_rename_missing_field_noop(self) -> None:
         registry = MigrationRegistry()
-        registry.register("1.0.0", "2.0.0", rename_field("full_name", "display_name"))
+        await registry.register("1.0.0", "2.0.0", rename_field("full_name", "display_name"))
 
         data = {"age": 30}
         result = await registry.apply(data, "1.0.0", "2.0.0")
@@ -328,7 +328,7 @@ class TestTypeConversionMigration:
 
     async def test_convert_string_to_int(self) -> None:
         registry = MigrationRegistry()
-        registry.register("1.0.0", "2.0.0", convert_field("count", int))
+        await registry.register("1.0.0", "2.0.0", convert_field("count", int))
 
         data = {"count": "42", "name": "Alice"}
         result = await registry.apply(data, "1.0.0", "2.0.0")
@@ -341,7 +341,7 @@ class TestTypeConversionMigration:
         def _to_bool(val: Any) -> bool:
             return val.lower() in ("true", "yes", "1")
 
-        registry.register("1.0.0", "2.0.0", convert_field("active", _to_bool))
+        await registry.register("1.0.0", "2.0.0", convert_field("active", _to_bool))
 
         data = {"active": "true", "name": "Alice"}
         result = await registry.apply(data, "1.0.0", "2.0.0")
@@ -353,7 +353,7 @@ class TestTypeConversionMigration:
 
     async def test_convert_missing_field_noop(self) -> None:
         registry = MigrationRegistry()
-        registry.register("1.0.0", "2.0.0", convert_field("missing", int))
+        await registry.register("1.0.0", "2.0.0", convert_field("missing", int))
 
         data = {"name": "Alice"}
         result = await registry.apply(data, "1.0.0", "2.0.0")
@@ -365,8 +365,8 @@ class TestChainedMigrations:
 
     async def test_two_step_chain(self) -> None:
         registry = MigrationRegistry()
-        registry.register("1.0.0", "2.0.0", rename_field("full_name", "display_name"))
-        registry.register("2.0.0", "3.0.0", convert_field("count", int))
+        await registry.register("1.0.0", "2.0.0", rename_field("full_name", "display_name"))
+        await registry.register("2.0.0", "3.0.0", convert_field("count", int))
 
         data = {"full_name": "Alice", "count": "42"}
         result = await registry.apply(data, "1.0.0", "3.0.0")
@@ -375,9 +375,9 @@ class TestChainedMigrations:
 
     async def test_three_step_chain(self) -> None:
         registry = MigrationRegistry()
-        registry.register("1.0.0", "2.0.0", rename_field("full_name", "display_name"))
-        registry.register("2.0.0", "2.5.0", set_default("middle_name", ""))
-        registry.register("2.5.0", "3.0.0", convert_field("count", int))
+        await registry.register("1.0.0", "2.0.0", rename_field("full_name", "display_name"))
+        await registry.register("2.0.0", "2.5.0", set_default("middle_name", ""))
+        await registry.register("2.5.0", "3.0.0", convert_field("count", int))
 
         data = {"full_name": "Alice", "count": "42"}
         result = await registry.apply(data, "1.0.0", "3.0.0")
@@ -386,8 +386,8 @@ class TestChainedMigrations:
 
     async def test_chain_from_intermediate_version(self) -> None:
         registry = MigrationRegistry()
-        registry.register("1.0.0", "2.0.0", rename_field("full_name", "display_name"))
-        registry.register("2.0.0", "3.0.0", convert_field("count", int))
+        await registry.register("1.0.0", "2.0.0", rename_field("full_name", "display_name"))
+        await registry.register("2.0.0", "3.0.0", convert_field("count", int))
 
         data = {"display_name": "Alice", "count": "42"}
         result = await registry.apply(data, "2.0.0", "3.0.0")
@@ -406,7 +406,7 @@ class TestMissingMigration:
 
     async def test_missing_intermediate_raises(self) -> None:
         registry = MigrationRegistry()
-        registry.register("1.0.0", "2.0.0", rename_field("full_name", "display_name"))
+        await registry.register("1.0.0", "2.0.0", rename_field("full_name", "display_name"))
         # No migration from 2.0.0 to 3.0.0
 
         data = {"full_name": "Alice"}
@@ -415,7 +415,7 @@ class TestMissingMigration:
 
     async def test_missing_source(self) -> None:
         registry = MigrationRegistry()
-        registry.register("2.0.0", "3.0.0", lambda d: d)
+        await registry.register("2.0.0", "3.0.0", lambda d: d)
 
         data = {"name": "Alice"}
         with pytest.raises(MissingMigrationError):
@@ -423,7 +423,7 @@ class TestMissingMigration:
 
     async def test_missing_target(self) -> None:
         registry = MigrationRegistry()
-        registry.register("1.0.0", "2.0.0", lambda d: d)
+        await registry.register("1.0.0", "2.0.0", lambda d: d)
 
         data = {"name": "Alice"}
         with pytest.raises(MissingMigrationError):
@@ -435,8 +435,8 @@ class TestValidateChain:
 
     async def test_complete_chain_returns_empty(self) -> None:
         registry = MigrationRegistry()
-        registry.register("1.0.0", "2.0.0", lambda d: d)
-        registry.register("2.0.0", "3.0.0", lambda d: d)
+        await registry.register("1.0.0", "2.0.0", lambda d: d)
+        await registry.register("2.0.0", "3.0.0", lambda d: d)
         assert await registry.validate_chain("1.0.0", "3.0.0") == []
 
     async def test_same_version_returns_empty(self) -> None:
@@ -445,9 +445,9 @@ class TestValidateChain:
 
     async def test_gap_detected(self) -> None:
         registry = MigrationRegistry()
-        registry.register("1.0.0", "2.0.0", lambda d: d)
+        await registry.register("1.0.0", "2.0.0", lambda d: d)
         # Missing 2.0.0 -> 3.0.0
-        registry.register("3.0.0", "4.0.0", lambda d: d)
+        await registry.register("3.0.0", "4.0.0", lambda d: d)
 
         gaps = await registry.validate_chain("1.0.0", "4.0.0")
         assert len(gaps) > 0
@@ -461,14 +461,14 @@ class TestValidateChain:
 
     async def test_partial_chain_from_source_only(self) -> None:
         registry = MigrationRegistry()
-        registry.register("2.0.0", "3.0.0", lambda d: d)
+        await registry.register("2.0.0", "3.0.0", lambda d: d)
 
         gaps = await registry.validate_chain("1.0.0", "3.0.0")
         assert any("No outgoing migration from 1.0.0" in g for g in gaps)
 
     async def test_single_migration_completes_chain(self) -> None:
         registry = MigrationRegistry()
-        registry.register("1.0.0", "3.0.0", lambda d: d)
+        await registry.register("1.0.0", "3.0.0", lambda d: d)
         assert await registry.validate_chain("1.0.0", "3.0.0") == []
 
 
@@ -494,8 +494,8 @@ class TestRoundTrip:
                 result["count"] = str(result["count"])
             return result
 
-        registry.register("1.0.0", "2.0.0", _forward)
-        registry.register("2.0.0", "1.0.0", _reverse)
+        await registry.register("1.0.0", "2.0.0", _forward)
+        await registry.register("2.0.0", "1.0.0", _reverse)
 
         original = {"full_name": "Alice", "count": "42"}
         migrated = await registry.apply(original, "1.0.0", "2.0.0")
@@ -531,10 +531,10 @@ class TestRoundTrip:
                 result["full_name"] = result.pop("name")
             return result
 
-        registry.register("1.0.0", "2.0.0", _v1_to_v2)
-        registry.register("2.0.0", "3.0.0", _v2_to_v3)
-        registry.register("3.0.0", "2.0.0", _v3_to_v2)
-        registry.register("2.0.0", "1.0.0", _v2_to_v1)
+        await registry.register("1.0.0", "2.0.0", _v1_to_v2)
+        await registry.register("2.0.0", "3.0.0", _v2_to_v3)
+        await registry.register("3.0.0", "2.0.0", _v3_to_v2)
+        await registry.register("2.0.0", "1.0.0", _v2_to_v1)
 
         original = {"full_name": "Alice", "count": "42"}
         result = await registry.apply(original, "1.0.0", "3.0.0")
@@ -695,7 +695,7 @@ class TestIntegrationWithExistingMigration:
             return apply_migration(data, plan)
 
         registry = MigrationRegistry()
-        registry.register("1.0.0", "2.0.0", _auto_migrate)
+        await registry.register("1.0.0", "2.0.0", _auto_migrate)
 
         data = {"full_name": "Alice", "count": 42}
         result = await registry.apply(data, "1.0.0", "2.0.0")
@@ -717,8 +717,8 @@ class TestDryRun:
 
     async def test_describe_chain_returns_step_descriptions(self) -> None:
         registry = MigrationRegistry()
-        registry.register("1.0.0", "2.0.0", rename_field("full_name", "display_name"), "Rename full_name")
-        registry.register("2.0.0", "3.0.0", convert_field("count", int), "Convert count to int")
+        await registry.register("1.0.0", "2.0.0", rename_field("full_name", "display_name"), "Rename full_name")
+        await registry.register("2.0.0", "3.0.0", convert_field("count", int), "Convert count to int")
 
         steps = await registry.describe_chain("1.0.0", "3.0.0")
         assert len(steps) == 2
@@ -735,14 +735,14 @@ class TestDryRun:
 
     async def test_describe_chain_missing_raises(self) -> None:
         registry = MigrationRegistry()
-        registry.register("1.0.0", "2.0.0", lambda d: d)
+        await registry.register("1.0.0", "2.0.0", lambda d: d)
         with pytest.raises(MissingMigrationError):
             await registry.describe_chain("1.0.0", "3.0.0")
 
     async def test_dry_run_returns_per_step_diff(self) -> None:
         registry = MigrationRegistry()
-        registry.register("1.0.0", "2.0.0", rename_field("full_name", "display_name"))
-        registry.register("2.0.0", "3.0.0", convert_field("count", int))
+        await registry.register("1.0.0", "2.0.0", rename_field("full_name", "display_name"))
+        await registry.register("2.0.0", "3.0.0", convert_field("count", int))
 
         data = {"full_name": "Alice", "count": "42", "email": "a@b.com"}
         steps = await registry.dry_run(data, "1.0.0", "3.0.0")
@@ -768,7 +768,7 @@ class TestDryRun:
 
     async def test_dry_run_does_not_mutate_original(self) -> None:
         registry = MigrationRegistry()
-        registry.register("1.0.0", "2.0.0", rename_field("full_name", "display_name"))
+        await registry.register("1.0.0", "2.0.0", rename_field("full_name", "display_name"))
 
         data = {"full_name": "Alice"}
         original = deepcopy(data)
@@ -790,7 +790,7 @@ class TestDryRun:
 
     async def test_dry_run_set_default_appears_as_addition(self) -> None:
         registry = MigrationRegistry()
-        registry.register("1.0.0", "2.0.0", set_default("middle_name", ""))
+        await registry.register("1.0.0", "2.0.0", set_default("middle_name", ""))
 
         data = {"first_name": "Alice"}
         steps = await registry.dry_run(data, "1.0.0", "2.0.0")
@@ -801,7 +801,7 @@ class TestDryRun:
 
     async def test_dry_run_remove_field_appears_as_removal(self) -> None:
         registry = MigrationRegistry()
-        registry.register("1.0.0", "2.0.0", remove_field("legacy"))
+        await registry.register("1.0.0", "2.0.0", remove_field("legacy"))
 
         data = {"name": "Alice", "legacy": "old"}
         steps = await registry.dry_run(data, "1.0.0", "2.0.0")
@@ -811,14 +811,14 @@ class TestDryRun:
 
     async def test_dry_run_uses_description_from_registration(self) -> None:
         registry = MigrationRegistry()
-        registry.register("1.0.0", "2.0.0", rename_field("a", "b"), "Rename field a to b")
+        await registry.register("1.0.0", "2.0.0", rename_field("a", "b"), "Rename field a to b")
 
         steps = await registry.dry_run({"a": 1}, "1.0.0", "2.0.0")
         assert steps[0]["description"] == "Rename field a to b"
 
     async def test_dry_run_falls_back_to_function_name(self) -> None:
         registry = MigrationRegistry()
-        registry.register("1.0.0", "2.0.0", rename_field("a", "b"))
+        await registry.register("1.0.0", "2.0.0", rename_field("a", "b"))
 
         steps = await registry.dry_run({"a": 1}, "1.0.0", "2.0.0")
         assert "rename_a_to_b" in steps[0]["description"]

@@ -135,8 +135,8 @@ def _session_update(
     # For the claim() UPDATE RETURNING id
     update_result.scalar_one_or_none.return_value = uuid.uuid4() if rows_returned > 0 else None
     # For expire_stale() UPDATE RETURNING run_id, gate_id
-    Row = type("Row", (), {"run_id": _RUN, "gate_id": _GATE})
-    update_result.all.return_value = [Row()] * rows_returned
+    row = type("Row", (), {"run_id": _RUN, "gate_id": _GATE})
+    update_result.all.return_value = [row()] * rows_returned
 
     get_result = MagicMock()
     get_result.scalar_one_or_none.return_value = gate
@@ -695,9 +695,9 @@ async def test_deliver_manual_null_expires_at_raises_expired():
 async def test_expire_stale_returns_expired_gates():
     session = AsyncMock()
     expired_result = MagicMock()
-    Row = type("Row", (), {"run_id": _RUN, "gate_id": "gate-a"})
-    Row2 = type("Row", (), {"run_id": _RUN, "gate_id": "gate-b"})
-    expired_result.all.return_value = [Row(), Row2()]
+    row = type("Row", (), {"run_id": _RUN, "gate_id": "gate-a"})
+    row2 = type("Row", (), {"run_id": _RUN, "gate_id": "gate-b"})
+    expired_result.all.return_value = [row(), row2()]
     session.execute = AsyncMock(return_value=expired_result)
 
     mgr = HITLManager()

@@ -20,9 +20,12 @@ def _get_hub_connector_types() -> set[str]:
 
     hub_types: set[str] = set()
     for node in ast.walk(tree):
-        if isinstance(node, ast.match_case) and isinstance(node.pattern, ast.MatchValue):
-            if isinstance(node.pattern.value, ast.Constant):
-                hub_types.add(node.pattern.value.value)
+        if (
+            isinstance(node, ast.match_case)
+            and isinstance(node.pattern, ast.MatchValue)
+            and isinstance(node.pattern.value, ast.Constant)
+        ):
+            hub_types.add(node.pattern.value.value)
     return hub_types
 
 

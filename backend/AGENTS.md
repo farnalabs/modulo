@@ -175,3 +175,33 @@ The Remy in-memory event registries (`_pending_ui_results`, `_pending_permission
 ### `set_rls_org` must be called inside `session.begin()`
 
 - `set_rls_org(session, org_id)` calls `_ensure_active_transaction()` which raises `RuntimeError` if there is no active transaction. With `session.autobegin=False` (the DI default), calling `set_rls_org` before `async with session.begin():` will always crash. Always place `set_rls_org` inside the `async with session.begin():` block, never before it.
+
+### Module docstring must precede `from __future__ import annotations` (E402)
+
+- Placing the module docstring AFTER `from __future__ import annotations` causes the triple-quoted string to be treated as a bare expression statement (not a docstring), triggering ruff E402 on ALL subsequent imports ("module-level import not at top of file"). The fix is always: docstring → `from __future__ import annotations` → other imports. This was the single most common finding across the QA sweep (~200+ occurrences in error_tracking, pipeline_engine, connectors, model_backends, otel_bridge, secrets_backend, and many more modules).
+
+### Tests using `require_feature` routers must override `get_plan_context`
+
+- When a FastAPI route uses `dependencies=[require_feature("error_forwarders")]` (or any feature name), the `require_feature` dependency runs before the route handler. If the test mocks a DB query to produce e.g. `ProgrammingError`, the mock returns `None` for feature checks, causing a 402 `FEATURE_REQUIRED` instead of the expected 501/503. Fix: override `get_plan_context` in the test app's `dependency_overrides` to return a `PlanContext` that enables all features:
+  ```python
+  class _AllFeatures:
+      def feature_enabled(self, name: str) -> bool: return True
+      def list_enabled_features(self) -> list: return []
+      def tier(self) -> str: return "enterprise"
+      def has_license_key(self) -> bool: return True
+  async def _override_plan_context() -> _AllFeatures:
+      return _AllFeatures()
+  app.dependency_overrides[get_plan_context] = _override_plan_context
+  ```
+
+### Health check API keys must use headers, not URL query parameters
+
+- When a backend passes its API key as a URL query parameter (`?key=...` or `params={"key": self._api_key}`), the credential is exposed in server logs, proxy logs, and error messages via `str(exc)`. Always use header-based auth (`Authorization: Bearer` or provider-specific header like `x-goog-api-key`). Found in the Gemini model backend during R2 QA.
+
+### Docker on Windows: NTFS junctions are not followed in build context
+
+- Docker for Windows does NOT follow NTFS junctions/reparse points when resolving files in a build context. If you create a junction at `backend/frontend/ → ../frontend`, the Docker build (`build: ./backend`) will not see `frontend/src/manifest.yaml` through the junction — COPY fails with "not found". Fix: either (a) remove the COPY from the Dockerfile and rely on runtime volume mount (the compose file already has `./frontend/src/manifest.yaml:/app/manifest.yaml`), or (b) change the build context to the repo root and adjust COPY paths accordingly.
+
+### Module-level raises for optional deps block the entire application
+
+- Never `raise ImportError(...)` at module level for an optional dependency. A module-level raise prevents the module from loading, which cascades up to crash the entire uvicorn process (or any caller that imports the module). Instead, use a graceful fallback pattern: catch `ImportError`, set a boolean flag (e.g. `CELERY_AVAILABLE = False`), and replace the imported class with a stub (`_CeleryTask = object`). Guard the optional-class definition behind the flag, and let consumers check `CELERY_AVAILABLE` at call time. Found in `webhook_dedup_cleanup.py` where `from celery import Task` raised at import time, blocking uvicorn startup.

@@ -1,11 +1,10 @@
-from __future__ import annotations
-
 """Redis-backed sliding-window rate limiter.
 
 Uses ZADD + ZREMRANGEBYSCORE on a sorted set per key.
 Window duration and max requests are configurable per-route.
 """
 
+from __future__ import annotations
 
 import asyncio
 import logging

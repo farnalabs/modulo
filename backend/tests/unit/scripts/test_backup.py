@@ -19,7 +19,7 @@ for parent in Path(__file__).resolve().parents:
         break
 else:
     raise RuntimeError("Could not find repo root (scripts/backup.py)")
-from scripts.backup import (
+from scripts.backup import (  # noqa: E402
     collect_secrets,
     create_archive,
     encrypt_archive,

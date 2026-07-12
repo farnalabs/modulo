@@ -24,6 +24,7 @@ from modulo.db.models.sso_provider import SsoProvider
 from modulo.db.rls import set_rls_org
 from modulo.settings import Settings, get_settings
 
+
 _log = logging.getLogger(__name__)
 
 SENSITIVE_VALUE_MASK = "\u2022\u2022\u2022\u2022\u2022\u2022"

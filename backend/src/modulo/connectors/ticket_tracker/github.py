@@ -70,16 +70,16 @@ class GitHubTicketTracker(TicketTrackerBase):
             result = resp.json()
             return {"ticket_id": str(result["number"]), "url": result["html_url"]}
 
-    async def list_tickets(self, filter: TicketFilter | None = None) -> list[Ticket]:
+    async def list_tickets(self, ticket_filter: TicketFilter | None = None) -> list[Ticket]:
         params: dict[str, Any] = {
-            "per_page": min((filter.limit if filter else 20), 100),
-            "page": ((filter.offset if filter else 0) // 20) + 1,
+            "per_page": min((ticket_filter.limit if ticket_filter else 20), 100),
+            "page": ((ticket_filter.offset if ticket_filter else 0) // 20) + 1,
             "state": "all",
         }
-        if filter and filter.status and filter.status.lower() in ("open", "closed"):
-            params["state"] = filter.status.lower()
-        if filter and filter.labels:
-            params["labels"] = ",".join(filter.labels)
+        if ticket_filter and ticket_filter.status and ticket_filter.status.lower() in ("open", "closed"):
+            params["state"] = ticket_filter.status.lower()
+        if ticket_filter and ticket_filter.labels:
+            params["labels"] = ",".join(ticket_filter.labels)
         async with httpx.AsyncClient() as client:
             resp = await client.get(
                 f"{self._base_url}/repos/{self._repo}/issues",

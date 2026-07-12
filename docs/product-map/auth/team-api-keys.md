@@ -8,7 +8,7 @@ code:
   - backend/src/modulo/db/models/api_key.py
   - backend/src/modulo/auth/api_key.py
   - backend/src/modulo/api/routes/api_keys.py
-  - backend/src/modulo/db/migrations/versions/0001_initial_schema.py
+  - backend/src/modulo/db/migrations/versions/0001_v2_identity_org.py
   - backend/src/modulo/api/mcp_server.py
   - backend/src/modulo/db/rls.py
 unit-tests:

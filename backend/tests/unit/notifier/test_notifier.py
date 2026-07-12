@@ -67,12 +67,16 @@ def _session_factory(entries: list[Any] | None = None) -> MagicMock:
     def _execute_side_effect(stmt: Any) -> Any:
         if hasattr(stmt, "_where_criteria"):
             for c in stmt._where_criteria:
-                if hasattr(c, "right") and hasattr(c.right, "value"):
-                    if c.right.value is True:  # auto_disabled == False
-                        return all_result
-        if hasattr(stmt, "_returning"):
-            if hasattr(stmt, "_values") and "consecutive_dead_letter_count" in str(stmt._values):
-                return scalar_result
+                if (
+                    hasattr(c, "right") and hasattr(c.right, "value") and c.right.value is True
+                ):  # auto_disabled == False
+                    return all_result
+        if (
+            hasattr(stmt, "_returning")
+            and hasattr(stmt, "_values")
+            and "consecutive_dead_letter_count" in str(stmt._values)
+        ):
+            return scalar_result
         return all_result
 
     session.execute = AsyncMock(side_effect=_execute_side_effect)

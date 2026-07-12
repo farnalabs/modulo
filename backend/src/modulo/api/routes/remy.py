@@ -29,7 +29,7 @@ import time as _time
 import uuid
 from collections.abc import AsyncGenerator
 from datetime import UTC, datetime, timedelta
-from typing import Any
+from typing import Any, ClassVar
 
 import httpx
 from cryptography.fernet import Fernet
@@ -76,6 +76,7 @@ from modulo.model_backends.perplexity import PerplexityBackend
 from modulo.model_backends.qwen import QwenBackend
 from modulo.model_backends.togetherai import TogetherAIBackend
 from modulo.settings import Settings, get_settings
+
 
 logger = logging.getLogger(__name__)
 
@@ -349,7 +350,7 @@ async def _call_mcp_tool(
 
 
 def _reconstruct_tool_calls(buffers: dict[int, dict[str, Any]]) -> list[dict[str, Any]]:
-    tool_calls: list[dict[str, Any]] = []
+    tool_calls: ClassVar[list[dict[str, Any]]] = []
     for idx in sorted(buffers):
         buf = buffers[idx]
         try:
@@ -423,25 +424,26 @@ def _check_nogo(config: RemyConfig, tool_name: str, args: dict[str, Any], page_c
 def _resolve_tool_permission(config: RemyConfig, tool_name: str, args: dict[str, Any], page_context: str = "") -> str:
     """Returns 'always_allowed', 'requires_approval', 'nogo_requires_approval', or 'disabled'."""
     # 0. No-go zone check (highest priority)
-    if _check_nogo(config, tool_name, args, page_context):
-        if config.permission_mode == "full_auto":
-            return "disabled"
+    if _check_nogo(config, tool_name, args, page_context) and config.permission_mode == "full_auto":
+        return "disabled"
         return "nogo_requires_approval"
 
     # 0b. Allowlist enforcement (second priority — restricts which elements/pages are auto-allowed)
     if config.allowed_selectors and tool_name in ("click", "fill", "select", "extract"):
         selector = args.get("selector", "") or args.get("data-testid", "")
-        if not any(allowed in selector for allowed in config.allowed_selectors):
-            if config.permission_mode == "full_auto":
-                return "disabled"
-            return "requires_approval"
+        if (
+            not any(allowed in selector for allowed in config.allowed_selectors)
+            and config.permission_mode == "full_auto"
+        ):
+            return "disabled"
 
     if config.allowed_page_patterns and tool_name == "navigate":
         path = args.get("path", "")
-        if not any(pattern in path for pattern in config.allowed_page_patterns):
-            if config.permission_mode == "full_auto":
-                return "disabled"
-            return "requires_approval"
+        if (
+            not any(pattern in path for pattern in config.allowed_page_patterns)
+            and config.permission_mode == "full_auto"
+        ):
+            return "disabled"
 
     # 1. Per-tool user override
     overrides = config.tool_permissions or {}
@@ -519,7 +521,7 @@ def clear_all_session_approvals() -> None:
 
 def _get_all_tool_definitions(include_ui_tools: bool = True) -> list[dict[str, Any]]:
     """Combine UI tool and MCP tool definitions for the LLM's tools parameter."""
-    tools: list[dict[str, Any]] = []
+    tools: ClassVar[list[dict[str, Any]]] = []
     if include_ui_tools:
         for name, schema in _UI_TOOLS.items():
             tools.append(
@@ -1033,7 +1035,7 @@ async def stream_chat(
                 # ── Agentic loop ────────────────────────────────────────
                 while True:
                     full_content = ""
-                    tool_call_buffers: dict[int, dict[str, Any]] = {}
+                    tool_call_buffers: ClassVar[dict[int, dict[str, Any]]] = {}
 
                     tools_param = None
                     if getattr(backend, "supports_tools", False):
@@ -1045,10 +1047,9 @@ async def stream_chat(
                     async for chunk in backend.stream(langchain_messages, tools=tools_param):
                         if await request.is_disconnected():
                             return
-                        if isinstance(chunk, AIMessageChunk):
-                            if chunk.content:
-                                full_content += chunk.content
-                                yield f"event: token\ndata: {json.dumps({'token': chunk.content})}\n\n"
+                        if isinstance(chunk, AIMessageChunk) and chunk.content:
+                            full_content += chunk.content
+                            yield f"event: token\ndata: {json.dumps({'token': chunk.content})}\n\n"
                             if chunk.tool_call_chunks:
                                 for tc in chunk.tool_call_chunks:
                                     idx = tc.get("index", 0)
@@ -1131,17 +1132,16 @@ async def stream_chat(
                     ui_tool_calls = [tc for tc in tool_calls if tc["name"] in UI_TOOL_NAMES]
                     mcp_tool_calls = [tc for tc in tool_calls if tc["name"] not in UI_TOOL_NAMES]
 
-                    tool_results: list[dict[str, Any]] = []
+                    tool_results: ClassVar[list[dict[str, Any]]] = []
 
                     # Execute MCP tools
-                    if mcp_tool_calls:
-                        if not req.mcp_api_key:
-                            yield (
-                                "event: error\ndata: "
-                                + json.dumps({"detail": "Tool execution requires an MCP API key"})
-                                + "\n\n"
-                            )
-                            return
+                    if mcp_tool_calls and not req.mcp_api_key:
+                        yield (
+                            "event: error\ndata: "
+                            + json.dumps({"detail": "Tool execution requires an MCP API key"})
+                            + "\n\n"
+                        )
+                        return
                         for tc in mcp_tool_calls:
                             try:
                                 result = await _call_mcp_tool(
@@ -1247,8 +1247,8 @@ async def stream_chat(
                                     with contextlib.suppress(TimeoutError):
                                         await asyncio.wait_for(resume_ev.wait(), timeout=300.0)
 
-                        approved_calls: list[dict[str, Any]] = []
-                        pending_permission_calls: list[dict[str, Any]] = []
+                        approved_calls: ClassVar[list[dict[str, Any]]] = []
+                        pending_permission_calls: ClassVar[list[dict[str, Any]]] = []
 
                         for tc in ui_tool_calls:
                             perm = _resolve_tool_permission(config, tc["name"], tc["args"], req.page_context or "")

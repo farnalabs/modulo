@@ -209,7 +209,7 @@ async def get_cost_report(
         result = await session.execute(q)
         rows = result.all()
 
-        team_ids = [row.team_id for row in rows]
+        team_ids = [row.team_id for row in rows if row.team_id is not None]
         teams_result = await session.execute(select(Team).where(Team.id.in_(team_ids)))
         teams_map = {t.id: t for t in teams_result.scalars().all()}
 

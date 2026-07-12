@@ -166,7 +166,7 @@ def get_admin_costs_limits(request: Any, ctx: dict[str, Any], client: Any) -> No
     with (
         patch("modulo.api.routes.costs.set_rls_org"),
         patch("modulo.api.routes.costs.get_organisation", return_value=MagicMock(id=_ORG_ID, daily_spend_limit=None)),
-        patch("modulo.db.crud.team.list_teams", return_value=mock_page),
+        patch("modulo.api.routes.costs.list_teams", return_value=mock_page),
     ):
         resp = client.get("/api/v1/admin/costs/limits")
         _store_response(request, ctx, resp)

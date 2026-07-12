@@ -1,6 +1,6 @@
-"""Polling trigger â€” connector-driven condition evaluation and run creation.
+"""Polling trigger -- connector-driven condition evaluation and run creation.
 
-Fire logic lives in ``fire_polling_trigger()`` â€” used by both Celery beat
+Fire logic lives in ``fire_polling_trigger()`` -- used by both Celery beat
 (``PollingFireTask`` / ``DatabasePollingScheduler``) and the in-process
 scheduler (``InProcessPollingScheduler`` in ``modulo.core.in_process_scheduler``).
 """
@@ -258,6 +258,8 @@ async def fire_polling_trigger(
                 connector_instance.config_json,
                 creds,
             )
+        except asyncio.CancelledError:
+            raise
         except Exception as exc:
             _log.warning(
                 "Failed to initialise connector for polling trigger %s: %s", trigger_id, str(exc)[:200], exc_info=True
@@ -287,6 +289,8 @@ async def fire_polling_trigger(
             )
             await _update_next_fire_no_last(session, trigger)
             return {"status": "error", "reason": "query_timeout"}
+        except asyncio.CancelledError:
+            raise
         except Exception as exc:
             _log.warning("Poll query failed for trigger %s: %s", trigger_id, str(exc)[:200], exc_info=True)
             await _log_poll_event(
@@ -302,6 +306,8 @@ async def fire_polling_trigger(
         # Evaluate condition
         try:
             condition_met = evaluate_condition(query_result, condition_expression)
+        except asyncio.CancelledError:
+            raise
         except Exception as exc:
             _log.warning("Condition evaluation failed for trigger %s: %s", trigger_id, exc, exc_info=True)
             await _log_poll_event(
@@ -373,7 +379,7 @@ async def fire_polling_trigger(
         await _update_next_fire(session, trigger)
 
         _log.info(
-            "Polling trigger %s fired â†’ run %s (condition met)",
+            "Polling trigger %s fired -> run %s (condition met)",
             trigger_id,
             run.id,
         )
@@ -489,7 +495,7 @@ class DatabasePollingScheduler(Scheduler):  # type: ignore[misc]
 
     def __init__(self, app: Celery, **kwargs: Any) -> None:
         # _schedule must exist before super().__init__ because it calls
-        # setup_schedule() â†’ _sync_with_db() which accesses self._schedule.
+        # setup_schedule() -> _sync_with_db() which accesses self._schedule.
         self._schedule: dict[str, DatabasePollingEntry] = {}
         super().__init__(app, **kwargs)
         # Re-set max_interval after super().__init__ since Celery's base
@@ -597,6 +603,8 @@ class DatabasePollingScheduler(Scheduler):  # type: ignore[misc]
                         }
                     )
                 return triggers
+        except asyncio.CancelledError:
+            raise
         except Exception:
             _log.exception("Failed to fetch polling triggers from database")
             return []

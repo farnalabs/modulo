@@ -7,7 +7,7 @@ in any response — only a boolean `has_credentials` field indicates presence.
 import logging
 import uuid
 from datetime import datetime
-from typing import Any, Literal
+from typing import Any, Literal, ClassVar
 
 from cryptography.fernet import Fernet
 from fastapi import APIRouter, Depends, HTTPException, Query, status
@@ -45,8 +45,8 @@ class ConnectorCreate(BaseModel):
     name: str = Field(..., min_length=1, max_length=255)
     connector_type_id: str = Field(..., min_length=1, max_length=128)
     credentials: str = Field(..., min_length=1)
-    config_json: dict[str, Any] = {}
-    allowed_operations: list[str] = []
+    config_json: ClassVar[dict[str, Any]] = {}
+    allowed_operations: ClassVar[list[str]] = []
     visibility: str = Field(default="org")
     owner_team_id: uuid.UUID | None = None
     tier: Literal["native", "preview", "in_dev"] = Field(default="native")

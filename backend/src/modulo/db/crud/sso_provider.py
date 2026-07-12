@@ -1,5 +1,6 @@
 """CRUD for SSO provider configuration."""
 
+import asyncio
 import json
 import logging
 import uuid
@@ -63,7 +64,8 @@ async def create_provider(
     )
     existing = result.scalar_one_or_none()
     if existing:
-        raise ValueError(f"An SSO provider with name '{name}' already exists in this organisation")
+        msg = f"An SSO provider with name '{name}' already exists in this organisation"
+        raise ValueError(msg)
 
     provider = SsoProvider(
         provider_type=provider_type,
@@ -93,6 +95,8 @@ async def create_provider(
             resource_id=provider.id,
             payload_json={"provider_name": name},
         )
+    except asyncio.CancelledError:
+        raise
     except Exception:
         logger.exception("Failed to record audit event for SSO provider %s", name)
 
@@ -125,7 +129,8 @@ async def update_provider(
             .limit(1)
         )
         if result.scalar_one_or_none() is not None:
-            raise ValueError(f"An SSO provider with name '{updates['name']}' already exists in this organisation")
+            msg = f"An SSO provider with name '{updates['name']}' already exists in this organisation"
+            raise ValueError(msg)
 
     filtered = {k: v for k, v in updates.items() if k in _UPDATABLE_SSO_FIELDS}
     apply_updates(provider, filtered)
@@ -142,6 +147,8 @@ async def update_provider(
             resource_id=provider.id,
             payload_json={"provider_name": provider.name},
         )
+    except asyncio.CancelledError:
+        raise
     except Exception:
         logger.exception("Failed to record audit event for SSO provider %s", provider.name)
 
@@ -175,6 +182,8 @@ async def delete_provider(
             resource_id=provider_id_val,
             payload_json={"provider_name": provider_name},
         )
+    except asyncio.CancelledError:
+        raise
     except Exception:
         logger.exception("Failed to record audit event for SSO provider %s", provider_name)
 
@@ -203,6 +212,8 @@ async def toggle_provider(
             resource_id=provider.id,
             payload_json={"provider_name": provider.name},
         )
+    except asyncio.CancelledError:
+        raise
     except Exception:
         logger.exception("Failed to record audit event for SSO provider %s", provider.name)
 

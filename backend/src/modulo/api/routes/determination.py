@@ -3,6 +3,7 @@
 import asyncio
 import logging
 import uuid
+from typing import ClassVar
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel
@@ -66,7 +67,7 @@ class DraftNodeResponse(BaseModel):
     node_type: str
     label: str
     connector_type: str | None = None
-    required_capabilities: list[str] = []
+    required_capabilities: ClassVar[list[str]] = []
 
 
 class DraftEdgeResponse(BaseModel):

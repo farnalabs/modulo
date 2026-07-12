@@ -47,8 +47,10 @@ if config is not None:
     if config.config_file_name is not None:
         fileConfig(config.config_file_name)
 
-    # Allow DATABASE_URL env var to override the alembic.ini connection string.
-    _db_url = os.environ.get("DATABASE_URL")
+    # Allow DATABASE_ADMIN_URL env var to override the alembic.ini connection string.
+    # Migrations connect with the owner role (not modulo_app runtime role) to
+    # run DDL without RLS interference. Falls back to DATABASE_URL for compat.
+    _db_url = os.environ.get("DATABASE_ADMIN_URL") or os.environ.get("DATABASE_URL")
     if _db_url:
         config.set_main_option("sqlalchemy.url", _to_sync_url(_db_url))
 

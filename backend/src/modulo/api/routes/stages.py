@@ -4,7 +4,6 @@ import logging
 import uuid
 from datetime import datetime
 
-_log = logging.getLogger(__name__)
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, Field
@@ -22,6 +21,8 @@ from modulo.db.crud.stage import (
     update_stage,
 )
 from modulo.db.rls import set_rls_org, set_rls_user_context
+
+_log = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/v1/stages", tags=["stages"])
 
@@ -77,16 +78,16 @@ async def list_stages_endpoint(
             await set_rls_org(session, principal.organisation_id)
             await set_rls_user_context(session, principal.account_id, principal.org_role)
             result = await list_stages(session, page=page, page_size=page_size, owner_team_id=owner_team_id)
-    except ProgrammingError:
+    except ProgrammingError as exc:
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
-        )
-    except SQLAlchemyError:
+        ) from exc
+    except SQLAlchemyError as exc:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database temporarily unavailable.",
-        )
+        ) from exc
     except HTTPException:
         raise
     except Exception:
@@ -123,16 +124,16 @@ async def create_stage_endpoint(
                 owner_team_id=req.owner_team_id,
                 visibility=req.visibility,
             )
-    except ProgrammingError:
+    except ProgrammingError as exc:
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
-        )
-    except SQLAlchemyError:
+        ) from exc
+    except SQLAlchemyError as exc:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database temporarily unavailable.",
-        )
+        ) from exc
     except HTTPException:
         raise
     except Exception:
@@ -155,16 +156,16 @@ async def get_stage_endpoint(
             await set_rls_org(session, principal.organisation_id)
             await set_rls_user_context(session, principal.account_id, principal.org_role)
             stage = await get_stage(session, stage_id)
-    except ProgrammingError:
+    except ProgrammingError as exc:
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
-        )
-    except SQLAlchemyError:
+        ) from exc
+    except SQLAlchemyError as exc:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database temporarily unavailable.",
-        )
+        ) from exc
     except HTTPException:
         raise
     except Exception:
@@ -191,16 +192,16 @@ async def update_stage_endpoint(
             await set_rls_org(session, principal.organisation_id)
             await set_rls_user_context(session, principal.account_id, principal.org_role)
             stage = await update_stage(session, stage_id, updates)
-    except ProgrammingError:
+    except ProgrammingError as exc:
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
-        )
-    except SQLAlchemyError:
+        ) from exc
+    except SQLAlchemyError as exc:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database temporarily unavailable.",
-        )
+        ) from exc
     except HTTPException:
         raise
     except Exception:
@@ -225,16 +226,16 @@ async def delete_stage_endpoint(
             await set_rls_org(session, principal.organisation_id)
             await set_rls_user_context(session, principal.account_id, principal.org_role)
             deleted = await delete_stage(session, stage_id)
-    except ProgrammingError:
+    except ProgrammingError as exc:
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
-        )
-    except SQLAlchemyError:
+        ) from exc
+    except SQLAlchemyError as exc:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database temporarily unavailable.",
-        )
+        ) from exc
     except HTTPException:
         raise
     except Exception:

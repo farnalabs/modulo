@@ -14,6 +14,16 @@ if [ -f /tmp/database_url.env ]; then
   echo "DATABASE_URL fixed: $(echo $DATABASE_URL | cut -c1-80)..."
 fi
 
+# Read the fixed admin URL for migration connections
+if [ -f /tmp/database_admin_url.env ]; then
+  ADMIN_URL=$(cat /tmp/database_admin_url.env)
+  export DATABASE_ADMIN_URL="$ADMIN_URL"
+  echo "DATABASE_ADMIN_URL fixed: $(echo $DATABASE_ADMIN_URL | cut -c1-80)..."
+fi
+
+echo "=== Bootstrapping modulo_app role ==="
+.venv/bin/python3 -m modulo.db.bootstrap_role
+
 echo "=== Running DB migrations ==="
 .venv/bin/alembic upgrade head && echo "  Migrations complete"
 

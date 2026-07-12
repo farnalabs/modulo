@@ -34,11 +34,13 @@ def _env():
 
 @pytest.fixture
 def mock_hvac():
-    with patch("modulo.core.secrets_backend.vault._MODULE_AVAILABLE", True):
-        with patch("modulo.core.secrets_backend.vault._hvac") as mh:
-            mh.exceptions.InvalidPath = type("InvalidPath", (Exception,), {})
-            mh.exceptions.Forbidden = type("Forbidden", (Exception,), {})
-            yield mh
+    with (
+        patch("modulo.core.secrets_backend.vault._MODULE_AVAILABLE", True),
+        patch("modulo.core.secrets_backend.vault._hvac") as mh,
+    ):
+        mh.exceptions.InvalidPath = type("InvalidPath", (Exception,), {})
+        mh.exceptions.Forbidden = type("Forbidden", (Exception,), {})
+        yield mh
 
 
 def _make_backend(mock_hvac):
@@ -98,9 +100,11 @@ class TestVaultSecretsBackend:
 
         backend = _make_backend(mock_hvac)
 
-        with patch.object(asyncio, "wait_for", side_effect=TimeoutError()):
-            with pytest.raises(RuntimeError, match="timeout reading secret"):
-                await backend.get_secret("my-key")
+        with (
+            patch.object(asyncio, "wait_for", side_effect=TimeoutError()),
+            pytest.raises(RuntimeError, match="timeout reading secret"),
+        ):
+            await backend.get_secret("my-key")
 
     async def test_get_secret_network_error_wraps_as_runtime_error(self, mock_hvac):
         backend = _make_backend(mock_hvac)

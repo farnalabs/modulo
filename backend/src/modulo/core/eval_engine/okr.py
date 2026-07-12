@@ -26,9 +26,9 @@ class OkrSuite(BaseModel):
 
     id: str
     name: str
-    pass_threshold: float = Field(ge=0.0, le=1.0)  # 0.0-1.0
+    pass_threshold: float = Field(ge=0.0, le=1.0)
     eval_definition_ids: list[UUID]
-    target_date: str | None = None  # ISO 8601 date e.g. "2026-09-30"
+    target_date: str | None = None
     owner: str | None = None
 
 

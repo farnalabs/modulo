@@ -447,7 +447,10 @@ async def test_custom_base_url():
 @respx.mock
 async def test_query_repos_pagination_cursor(connector):
     repos = [{"id": 1, "name": "repo-a"}]
-    link_header = '<https://api.github.com/user/repos?page=2&per_page=5>; rel="next", <https://api.github.com/user/repos?page=1&per_page=5>; rel="first"'
+    link_header = (
+        '<https://api.github.com/user/repos?page=2&per_page=5>; rel="next", '
+        '<https://api.github.com/user/repos?page=1&per_page=5>; rel="first"'
+    )
     respx.get("https://api.github.com/user/repos?per_page=5").mock(
         return_value=httpx.Response(200, json=repos, headers={"Link": link_header})
     )

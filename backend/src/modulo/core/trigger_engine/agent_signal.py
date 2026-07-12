@@ -130,7 +130,7 @@ async def fire_agent_signal(
                 )
                 continue
         else:
-            snapshot_id = uuid.uuid4()
+            snapshot_id = uuid.UUID(int=0)
 
         # Create child run linked to source via parent_run_id.
         try:
