@@ -1,4 +1,4 @@
-"""Unit tests for Remy context tools — get_documentation, get_integration_status, get_org_config, get_available_features."""
+"""Unit tests for Remy context tools — get_documentation, get_integration_status, get_org_config, get_available_features."""  # noqa: E501
 
 import json
 from unittest.mock import MagicMock
