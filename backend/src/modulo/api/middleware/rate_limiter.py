@@ -23,9 +23,10 @@ RATELIMIT_BYPASS_HEADER = "MODULO_RATELIMIT_BYPASS_TOKEN"
 
 redis_available: bool = False
 
-_log = logging.getLogger(__name__)
 
 # Tracked Redis clients for graceful shutdown.
+_log = logging.getLogger(__name__)
+
 _redis_clients: set[Any] = set()
 
 
@@ -138,9 +139,8 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
 
         # 1. Auth principal set by outer middleware (MCP sub-app)
         principal = request.scope.get("auth_principal")
-        if principal:
-            if principal["type"] == "api_key":
-                return f"ak:{principal['org_id']}:{principal['prefix']}:{path}"
+        if principal and principal["type"] == "api_key":
+            return f"ak:{principal['org_id']}:{principal['prefix']}:{path}"
             if principal["type"] == "user":
                 return f"user:{principal['org_id']}:{principal['user_id']}:{path}"
 

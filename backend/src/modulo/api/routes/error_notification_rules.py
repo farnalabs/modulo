@@ -1,6 +1,6 @@
-from __future__ import annotations
-
 """CRUD for error notification rules."""
+
+from __future__ import annotations
 
 
 import logging
@@ -86,23 +86,23 @@ async def list_notification_rules(
             total = count_result.scalar_one() or 0
     except HTTPException:
         raise
-    except ProgrammingError:
+    except ProgrammingError as exc:
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Error tracking is not available. Run database migrations to enable it.",
-        )
-    except SQLAlchemyError:
+        ) from exc
+    except SQLAlchemyError as exc:
         _log.warning("error_tracking.list_rules_db_error")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Error tracking is temporarily unavailable. Please try again.",
-        )
-    except Exception:
+        ) from exc
+    except Exception as exc:
         _log.exception("error_tracking.list_rules_error")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="An unexpected error occurred while processing your request.",
-        )
+        ) from exc
 
     return {
         "items": [_serialize_rule(r) for r in rules],
@@ -156,23 +156,23 @@ async def create_notification_rule(
             await session.flush()
     except HTTPException:
         raise
-    except ProgrammingError:
+    except ProgrammingError as exc:
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Error tracking is not available. Run database migrations to enable it.",
-        )
-    except SQLAlchemyError:
+        ) from exc
+    except SQLAlchemyError as exc:
         _log.warning("error_tracking.create_rule_db_error")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Error tracking is temporarily unavailable. Please try again.",
-        )
-    except Exception:
+        ) from exc
+    except Exception as exc:
         _log.exception("error_tracking.create_rule_error")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="An unexpected error occurred while processing your request.",
-        )
+        ) from exc
 
     return _serialize_rule(rule)
 
@@ -226,23 +226,23 @@ async def update_notification_rule(
             await session.flush()
     except HTTPException:
         raise
-    except ProgrammingError:
+    except ProgrammingError as exc:
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Error tracking is not available. Run database migrations to enable it.",
-        )
-    except SQLAlchemyError:
+        ) from exc
+    except SQLAlchemyError as exc:
         _log.warning("error_tracking.update_rule_db_error")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Error tracking is temporarily unavailable. Please try again.",
-        )
-    except Exception:
+        ) from exc
+    except Exception as exc:
         _log.exception("error_tracking.update_rule_error")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="An unexpected error occurred while processing your request.",
-        )
+        ) from exc
 
     return _serialize_rule(rule)
 
@@ -277,20 +277,20 @@ async def delete_notification_rule(
             await session.delete(rule)
     except HTTPException:
         raise
-    except ProgrammingError:
+    except ProgrammingError as exc:
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Error tracking is not available. Run database migrations to enable it.",
-        )
-    except SQLAlchemyError:
+        ) from exc
+    except SQLAlchemyError as exc:
         _log.warning("error_tracking.delete_rule_db_error")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Error tracking is temporarily unavailable. Please try again.",
-        )
-    except Exception:
+        ) from exc
+    except Exception as exc:
         _log.exception("error_tracking.delete_rule_error")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="An unexpected error occurred while processing your request.",
-        )
+        ) from exc

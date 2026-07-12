@@ -9,7 +9,7 @@ Usage:
     tools = get_mcp_tool_definitions()
 """
 
-from typing import Any
+from typing import Any, ClassVar
 
 _tool_definitions: list[dict[str, Any]] | None = None
 _registry_built = False
@@ -23,7 +23,7 @@ async def build_tool_registry() -> None:
 
     from modulo.api.mcp_server import mcp
 
-    tool_defs: list[dict[str, Any]] = []
+    tool_defs: ClassVar[list[dict[str, Any]]] = []
     for name, tool in mcp._tool_manager._tools.items():
         params = tool.parameters or {"type": "object", "properties": {}}
         if not isinstance(params, dict):

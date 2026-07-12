@@ -15,7 +15,7 @@ URLs:
 import logging
 import uuid
 from datetime import UTC, datetime
-from typing import Any
+from typing import Any, ClassVar
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel
@@ -40,6 +40,7 @@ from modulo.db.models.pipeline_snapshot import PipelineSnapshot
 from modulo.db.models.run import Run
 from modulo.db.rls import set_rls_org
 
+
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/v1", tags=["feedback"])
@@ -48,7 +49,7 @@ router = APIRouter(prefix="/api/v1", tags=["feedback"])
 class CreateFeedbackRequest(BaseModel):
     gate_id: str
     rejection_reason: str
-    rejected_output: dict[str, Any] = {}
+    rejected_output: ClassVar[dict[str, Any]] = {}
     producing_node_id: str
     producing_agent_id: uuid.UUID | None = None
     feedback_handler_type: str = "human"
@@ -295,7 +296,7 @@ async def list_eval_proposals(
             result = await mgr.get_eval_proposals(page=page, page_size=page_size)
 
             items = result["items"]
-            node_name_map: dict[str, str] = {}
+            node_name_map: ClassVar[dict[str, str]] = {}
             run_ids = [r.run_id for r in items if r.run_id]
             if run_ids:
                 run_rows = await session.execute(select(Run.id, Run.snapshot_id).where(Run.id.in_(run_ids)))
@@ -452,7 +453,7 @@ async def detect_eval_gap(
             if record is None:
                 raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Feedback record not found")
 
-            eval_suite: list[EvalDefinition] = []
+            eval_suite: ClassVar[list[EvalDefinition]] = []
             if record.run_id:
                 run = (await session.execute(select(Run).where(Run.id == record.run_id))).scalar_one_or_none()
                 if run is not None:
