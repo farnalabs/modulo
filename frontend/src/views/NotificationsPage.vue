@@ -1,4 +1,4 @@
-﻿<template>
+<template>
   <div class="page-wide">
     <PageHeader title="Notifications" :subtitle="$t('views.NotificationsPage.view_and_manage_your_notifications')" />
 

@@ -1,4 +1,4 @@
-﻿<template>
+<template>
   <div class="dashboard-notifications rounded-lg border bg-background">
     <button
       type="button"

@@ -1,4 +1,4 @@
-﻿<template>
+<template>
   <div class="page-wide">
     <FeatureGate feature-name="environment_profiles" required-tier="team" show-disabled>
 
@@ -24,8 +24,8 @@
           <form @submit.prevent="formMode === 'add' ? createProfile() : updateProfile()">
             <div class="space-y-4">
               <div>
-                <label class="mb-1 block text-sm font-medium">Name</label>
-                <input
+                <label for="adminenvironmentprofilesview-field-8" class="mb-1 block text-sm font-medium">Name</label>
+                <input id="adminenvironmentprofilesview-field-8"
                   v-model="formData.name"
                   type="text"
                   class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm"
@@ -34,8 +34,8 @@
                 />
               </div>
               <div>
-                <label class="mb-1 block text-sm font-medium">Description</label>
-                <input
+                <label for="adminenvironmentprofilesview-field-7" class="mb-1 block text-sm font-medium">Description</label>
+                <input id="adminenvironmentprofilesview-field-7"
                   v-model="formData.description"
                   type="text"
                   class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm"
@@ -44,8 +44,8 @@
                 />
               </div>
               <div>
-                <label class="mb-1 block text-sm font-medium">Provider Type</label>
-                <select
+                <label for="adminenvironmentprofilesview-field-6" class="mb-1 block text-sm font-medium">Provider Type</label>
+                <select id="adminenvironmentprofilesview-field-6"
                   v-model="formData.provider_type"
                   aria-label="Provider type"
                   class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm"
@@ -57,8 +57,8 @@
                 </select>
               </div>
               <div v-if="formData.provider_type === 'custom'">
-                <label class="mb-1 block text-sm font-medium">Image Reference</label>
-                <input
+                <label for="adminenvironmentprofilesview-field-5" class="mb-1 block text-sm font-medium">Image Reference</label>
+                <input id="adminenvironmentprofilesview-field-5"
                   v-model="formData.image_ref"
                   type="text"
                   class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm"
@@ -67,8 +67,8 @@
                 />
               </div>
               <div>
-                <label class="mb-1 block text-sm font-medium">Timeout (seconds)</label>
-                <input
+                <label for="adminenvironmentprofilesview-field-4" class="mb-1 block text-sm font-medium">Timeout (seconds)</label>
+                <input id="adminenvironmentprofilesview-field-4"
                   v-model.number="formData.timeout_seconds"
                   type="number"
                   min="60"
@@ -79,8 +79,8 @@
               </div>
               <div class="grid grid-cols-2 gap-4">
                 <div>
-                  <label class="mb-1 block text-sm font-medium">Memory Limit (MB)</label>
-                  <input
+                  <label for="adminenvironmentprofilesview-field-3" class="mb-1 block text-sm font-medium">Memory Limit (MB)</label>
+                  <input id="adminenvironmentprofilesview-field-3"
                     v-model.number="formData.memory_mb"
                     type="number"
                     min="128"
@@ -89,8 +89,8 @@
                   />
                 </div>
                 <div>
-                  <label class="mb-1 block text-sm font-medium">CPU Cores</label>
-                  <input
+                  <label for="adminenvironmentprofilesview-field-2" class="mb-1 block text-sm font-medium">CPU Cores</label>
+                  <input id="adminenvironmentprofilesview-field-2"
                     v-model.number="formData.cpu_cores"
                     type="number"
                     min="0.25"
@@ -102,7 +102,7 @@
               </div>
               <div>
                 <div class="mb-1 flex items-center justify-between">
-                  <label class="block text-sm font-medium">Environment Variables</label>
+                  <label for="adminenvironmentprofilesview-field-1" class="block text-sm font-medium">Environment Variables</label>
                   <button
                     type="button"
                     class="text-xs text-primary hover:underline"
@@ -117,14 +117,14 @@
                     :key="idx"
                     class="flex items-center gap-2"
                   >
-                    <input
+                    <input id="adminenvironmentprofilesview-field-1"
                       v-model="env.key"
                       type="text"
                       class="flex-1 rounded-lg border border-input bg-background px-3 py-2 text-sm font-mono"
                       placeholder="KEY"
                       :data-testid="`admin-envprofiles-env-key-${idx}`"
                     />
-                    <input
+                    <input aria-label="value"
                       v-model="env.value"
                       type="text"
                       class="flex-1 rounded-lg border border-input bg-background px-3 py-2 text-sm font-mono"

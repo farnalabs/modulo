@@ -1,4 +1,4 @@
-﻿<template>
+<template>
   <div class="page-wide">
     <header class="flex items-center justify-between">
       <PageHeader :title="$t('views.AdminSystemConfigView.system_admin_config')" :subtitle="$t('views.AdminSystemConfigView.deploymentwide_system_configuration_system_admin_only')" />

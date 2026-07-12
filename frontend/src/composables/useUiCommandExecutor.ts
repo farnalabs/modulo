@@ -1,4 +1,4 @@
-﻿import { formatApiError } from '../lib/api/formatError'
+import { formatApiError } from '../lib/api/formatError'
 
 import router from '@/router'
 
@@ -621,4 +621,3 @@ export function waitForDomStable(timeout = 10000): Promise<void> {
     }, timeout)
   })
 }
-

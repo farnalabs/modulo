@@ -1,4 +1,4 @@
-﻿<template>
+<template>
   <div
     class="notification-card group relative flex items-start gap-3 rounded-lg border p-3 transition-colors hover:bg-muted/50"
   >

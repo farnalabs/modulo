@@ -1,4 +1,4 @@
-﻿<template>
+<template>
   <FeatureGate feature-name="plugin_management" required-tier="community" show-disabled>
 
     <div class="page-narrow">
@@ -24,8 +24,8 @@
         <form @submit.prevent="createConnector">
           <div class="space-y-4">
             <div>
-              <label class="mb-1 block text-sm font-medium">Name</label>
-              <input
+              <label for="adminconnectorsview-field-7" class="mb-1 block text-sm font-medium">Name</label>
+              <input id="adminconnectorsview-field-7"
                 v-model="formData.name"
                 type="text"
                 class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm"
@@ -34,8 +34,8 @@
               />
             </div>
             <div>
-              <label class="mb-1 block text-sm font-medium">Type</label>
-              <select
+              <label for="adminconnectorsview-field-6" class="mb-1 block text-sm font-medium">Type</label>
+              <select id="adminconnectorsview-field-6"
                 v-model="formData.connector_type"
                 class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm"
                 data-testid="admin-connectors-type-select"
@@ -50,8 +50,8 @@
               </select>
             </div>
             <div>
-              <label class="mb-1 block text-sm font-medium">Description</label>
-              <input
+              <label for="adminconnectorsview-field-5" class="mb-1 block text-sm font-medium">Description</label>
+              <input id="adminconnectorsview-field-5"
                 v-model="formData.description"
                 type="text"
                 class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm"
@@ -60,8 +60,8 @@
               />
             </div>
             <div>
-              <label class="mb-1 block text-sm font-medium">Configuration (JSON)</label>
-              <textarea
+              <label for="adminconnectorsview-field-4" class="mb-1 block text-sm font-medium">Configuration (JSON)</label>
+              <textarea id="adminconnectorsview-field-4"
                 v-model="formData.config_json"
                 rows="6"
                 class="w-full rounded-lg border border-input bg-background px-3 py-2 font-mono text-sm"
@@ -188,8 +188,8 @@
         <form @submit.prevent="updateConnector">
           <div class="space-y-4">
             <div>
-              <label class="mb-1 block text-sm font-medium">Name</label>
-              <input
+              <label for="adminconnectorsview-field-3" class="mb-1 block text-sm font-medium">Name</label>
+              <input id="adminconnectorsview-field-3"
                 v-model="formData.name"
                 type="text"
                 class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm"
@@ -197,8 +197,8 @@
               />
             </div>
             <div>
-              <label class="mb-1 block text-sm font-medium">Description</label>
-              <input
+              <label for="adminconnectorsview-field-2" class="mb-1 block text-sm font-medium">Description</label>
+              <input id="adminconnectorsview-field-2"
                 v-model="formData.description"
                 type="text"
                 class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm"
@@ -206,8 +206,8 @@
               />
             </div>
             <div>
-              <label class="mb-1 block text-sm font-medium">Configuration (JSON)</label>
-              <textarea
+              <label for="adminconnectorsview-field-1" class="mb-1 block text-sm font-medium">Configuration (JSON)</label>
+              <textarea id="adminconnectorsview-field-1"
                 v-model="formData.config_json"
                 rows="6"
                 class="w-full rounded-lg border border-input bg-background px-3 py-2 font-mono text-sm"

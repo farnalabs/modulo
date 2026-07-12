@@ -12,9 +12,9 @@
       <PageHeader :title="$t('views.ABTestModelsView.ab_test_models')" subtitle="Compare model backends side by side with weighted A/B testing — eval scores, costs, and token usage" />
 
       <div class="flex flex-wrap items-center gap-4">
-        <label class="flex items-center gap-2 text-sm">
+        <label for="abtestmodelsview-field-7" class="flex items-center gap-2 text-sm">
           <span class="text-muted-foreground">{{ $t('views.ABTestModelsView.pipeline') }}</span>
-          <select
+          <select id="abtestmodelsview-field-7"
             v-model="selectedPipelineId"
             data-testid="ab-test-models-pipeline-select"
             aria-label="Pipeline"
@@ -27,9 +27,9 @@
           </select>
         </label>
 
-        <label class="flex items-center gap-2 text-sm">
+        <label for="abtestmodelsview-field-6" class="flex items-center gap-2 text-sm">
           <span class="text-muted-foreground">{{ $t('views.ABTestModelsView.existing_group') }}</span>
-          <select
+          <select id="abtestmodelsview-field-6"
             v-model="selectedGroupId"
             data-testid="ab-test-models-group-select"
             aria-label="Existing group"
@@ -50,8 +50,8 @@
           </h2>
           <div class="grid gap-4 sm:grid-cols-2">
             <div>
-              <label class="mb-1 block text-sm font-medium text-muted-foreground">{{ $t('views.ABTestModelsView.group_name') }}</label>
-              <input
+              <label for="abtestmodelsview-field-5" class="mb-1 block text-sm font-medium text-muted-foreground">{{ $t('views.ABTestModelsView.group_name') }}</label>
+              <input id="abtestmodelsview-field-5"
                 v-model="groupName"
                 data-testid="ab-test-models-group-name"
                 type="text"
@@ -60,8 +60,8 @@
               />
             </div>
             <div>
-              <label class="mb-1 block text-sm font-medium text-muted-foreground">{{ $t('views.ABTestModelsView.description') }}</label>
-              <input
+              <label for="abtestmodelsview-field-4" class="mb-1 block text-sm font-medium text-muted-foreground">{{ $t('views.ABTestModelsView.description') }}</label>
+              <input id="abtestmodelsview-field-4"
                 v-model="groupDescription"
                 data-testid="ab-test-models-group-description"
                 type="text"
@@ -112,8 +112,8 @@
               </div>
               <div class="grid gap-3 sm:grid-cols-3">
                 <div>
-                  <label class="mb-1 block text-xs font-medium text-muted-foreground">{{ $t('views.ABTestModelsView.name_label') }}</label>
-                  <input
+                  <label for="abtestmodelsview-field-3" class="mb-1 block text-xs font-medium text-muted-foreground">{{ $t('views.ABTestModelsView.name_label') }}</label>
+                  <input id="abtestmodelsview-field-3"
                     v-model="v.name"
                     :data-testid="`ab-test-models-variant-name-${i}`"
                     type="text"
@@ -122,8 +122,8 @@
                   />
                 </div>
                 <div>
-                  <label class="mb-1 block text-xs font-medium text-muted-foreground">{{ $t('views.ABTestModelsView.model_backend') }}</label>
-                  <select
+                  <label for="abtestmodelsview-field-2" class="mb-1 block text-xs font-medium text-muted-foreground">{{ $t('views.ABTestModelsView.model_backend') }}</label>
+                  <select id="abtestmodelsview-field-2"
                     v-model="v.modelBackendId"
                     :data-testid="`ab-test-models-model-backend-${i}`"
                     aria-label="Model backend"
@@ -140,10 +140,10 @@
                   </select>
                 </div>
                 <div>
-                  <label class="mb-1 block text-xs font-medium text-muted-foreground">
+                  <label for="abtestmodelsview-field-1" class="mb-1 block text-xs font-medium text-muted-foreground">
                     Weight: <span class="font-mono tabular-nums">{{ v.weight }}%</span>
                   </label>
-                    <input
+                    <input id="abtestmodelsview-field-1"
                         v-model.number="v.weight"
                         :data-testid="`ab-test-models-weight-${i}`"
                         type="range"

@@ -105,7 +105,7 @@
                         class="inline-flex items-center gap-0.5 rounded bg-muted px-1.5 py-0.5 text-[10px] tabular-nums text-muted-foreground"
                         :title="er.detail ?? undefined"
                       >
-                        {{ er.score !== null ? er.score.toFixed(2) : '�' }}
+                        {{ er.score !== null ? er.score.toFixed(2) : '-' }}
                       </span>
                     </div>
                   </div>
@@ -164,9 +164,9 @@
         <div v-if="nodeNames.length > 0 && diffVariantsAvailable.length >= 2" class="space-y-4">
           <h2 class="text-base font-semibold">{{ $t('views.variantCompare.outputDiffViewer') }}</h2>
           <div class="flex flex-wrap gap-4">
-            <label class="flex items-center gap-2 text-sm">
+            <label for="variantcompareview-field-3" class="flex items-center gap-2 text-sm">
               <span class="text-muted-foreground">{{ $t('views.variantCompare.node') }}:</span>
-              <select
+              <select id="variantcompareview-field-3"
                 v-model="diffNode"
                 data-testid="variant-compare-diff-node"
                 aria-label="Diff node"
@@ -175,9 +175,9 @@
                 <option v-for="n in nodeNames" :key="n" :value="n">{{ n }}</option>
               </select>
             </label>
-            <label class="flex items-center gap-2 text-sm">
+            <label for="variantcompareview-field-2" class="flex items-center gap-2 text-sm">
               <span class="text-muted-foreground">{{ $t('views.variantCompare.variantA') }}:</span>
-              <select
+              <select id="variantcompareview-field-2"
                 v-model="diffVarA"
                 data-testid="variant-compare-diff-variant-a"
                 aria-label="Variant A"
@@ -186,9 +186,9 @@
                 <option v-for="v in diffVariantsAvailable" :key="v" :value="v">{{ v }}</option>
               </select>
             </label>
-            <label class="flex items-center gap-2 text-sm">
+            <label for="variantcompareview-field-1" class="flex items-center gap-2 text-sm">
               <span class="text-muted-foreground">{{ $t('views.variantCompare.variantB') }}:</span>
-              <select
+              <select id="variantcompareview-field-1"
                 v-model="diffVarB"
                 data-testid="variant-compare-diff-variant-b"
                 aria-label="Variant B"
@@ -201,13 +201,13 @@
           <div class="grid grid-cols-1 gap-4 md:grid-cols-2">
             <div class="overflow-auto rounded-lg border bg-card">
               <div class="border-b bg-muted/50 px-3 py-2 text-xs font-medium text-muted-foreground">
-                {{ diffVarA || '�' }}
+                {{ diffVarA || '-' }}
               </div>
               <pre class="overflow-x-auto p-3 text-xs leading-relaxed"><code>{{ diffContentA }}</code></pre>
             </div>
             <div class="overflow-auto rounded-lg border bg-card">
               <div class="border-b bg-muted/50 px-3 py-2 text-xs font-medium text-muted-foreground">
-                {{ diffVarB || '�' }}
+                {{ diffVarB || '-' }}
               </div>
               <pre class="overflow-x-auto p-3 text-xs leading-relaxed"><code>{{ diffContentB }}</code></pre>
             </div>

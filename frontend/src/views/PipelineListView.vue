@@ -20,7 +20,7 @@
       </div>
     </header>
 
-    <main class="page-wide" @click.self="showActionMenu = null">
+    <main role="button" tabindex="0" @keydown.enter="($event.currentTarget as HTMLElement).click()" @keydown.space.prevent="($event.currentTarget as HTMLElement).click()" class="page-wide" @click.self="showActionMenu = null">
       <div v-if="loading" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
         <div v-for="i in 6" :key="i" class="card p-5 animate-pulse">
           <div class="h-5 w-3/4 bg-muted rounded mb-2" />
@@ -65,7 +65,7 @@
       </div>
 
       <div v-else class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-        <div
+        <div role="button" tabindex="0" @keydown.enter="($event.currentTarget as HTMLElement).click()" @keydown.space.prevent="($event.currentTarget as HTMLElement).click()"
           v-for="p in pagedPipelines"
           :key="p.id"
           class="card card-hover p-5 cursor-pointer"
@@ -163,7 +163,7 @@
       </div>
     </main>
       <!-- Run dialog modal -->
-      <div
+      <div role="button" tabindex="0" @keydown.enter="($event.currentTarget as HTMLElement).click()" @keydown.space.prevent="($event.currentTarget as HTMLElement).click()"
         v-if="showRunDialog"
         class="fixed inset-0 z-50 flex items-center justify-center bg-black/50"
         @click.self="closeRunDialog"
@@ -186,8 +186,8 @@
           </p>
 
           <div class="space-y-2">
-            <label class="block text-sm font-medium text-foreground">{{ $t('views.PipelineListView.prompt') }}</label>
-            <textarea
+            <label for="pipelinelistview-field-3" class="block text-sm font-medium text-foreground">{{ $t('views.PipelineListView.prompt') }}</label>
+            <textarea id="pipelinelistview-field-3"
               v-model="prompt"
               placeholder="Enter a prompt (optional)"
               rows="4"
@@ -218,8 +218,8 @@
           </div>
 
           <div v-if="showAdvanced" class="space-y-2">
-            <label class="block text-sm font-medium text-foreground">Input Payload (JSON)</label>
-            <textarea
+            <label for="pipelinelistview-field-2" class="block text-sm font-medium text-foreground">Input Payload (JSON)</label>
+            <textarea id="pipelinelistview-field-2"
               v-model="advancedPayload"
               placeholder='{"prompt": "...", "temperature": 0.7}'
               rows="4"
@@ -264,7 +264,7 @@
       </div>
 
       <!-- Rename dialog -->
-      <div
+      <div role="button" tabindex="0" @keydown.enter="($event.currentTarget as HTMLElement).click()" @keydown.space.prevent="($event.currentTarget as HTMLElement).click()"
         v-if="showRenameDialog"
         class="fixed inset-0 z-50 flex items-center justify-center bg-black/50"
         @click.self="showRenameDialog = false"
@@ -273,8 +273,8 @@
           <h3 class="mb-4 text-lg font-semibold">Rename Pipeline</h3>
           <div class="space-y-4">
             <div>
-              <label class="mb-1 block text-sm font-medium">Name</label>
-              <input
+              <label for="pipelinelistview-field-1" class="mb-1 block text-sm font-medium">Name</label>
+              <input id="pipelinelistview-field-1"
                 v-model="renameName"
                 class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm"
                 placeholder="Pipeline name"
@@ -303,7 +303,7 @@
       </div>
 
       <!-- Delete confirmation dialog -->
-      <div
+      <div role="button" tabindex="0" @keydown.enter="($event.currentTarget as HTMLElement).click()" @keydown.space.prevent="($event.currentTarget as HTMLElement).click()"
         v-if="showDeleteConfirm"
         class="fixed inset-0 z-50 flex items-center justify-center bg-black/50"
         @click.self="showDeleteConfirm = false"

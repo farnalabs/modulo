@@ -211,7 +211,7 @@
         v-if="showSlashMenu"
         class="remy-slash-menu"
       >
-        <button
+        <button @focus="showCopyButton = true"
           v-for="(cmd, idx) in filteredSlashCommands"
           :key="cmd.command"
           class="remy-slash-item"

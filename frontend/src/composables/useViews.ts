@@ -1,4 +1,4 @@
-﻿import { ref, computed, readonly } from 'vue'
+import { ref, computed, readonly } from 'vue'
 import { api } from '../lib/api/client'
 import { formatApiError } from '../lib/api/formatError'
 
@@ -58,4 +58,3 @@ export function useViews(viewType: string) {
     setCurrentView,
   }
 }
-

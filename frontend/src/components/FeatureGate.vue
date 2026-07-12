@@ -1,4 +1,4 @@
-﻿<template>
+<template>
   <div class="relative" data-testid="feature-gate">
     <slot v-if="enabled" />
 

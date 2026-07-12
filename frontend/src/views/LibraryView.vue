@@ -69,11 +69,6 @@
       </div>
 
       <EmptyState
-        v-else-if="section === 'native' && nativePrimitives.length === 0 && previewPrimitives.length === 0"
-        :title="$t('views.LibraryView.no_primitives_found')"
-      />
-
-      <EmptyState
         v-else-if="section === 'community' && communityPrimitives.length === 0"
         :title="$t('views.LibraryView.no_primitives_found')"
       />

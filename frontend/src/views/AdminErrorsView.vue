@@ -1,4 +1,4 @@
-﻿<template>
+<template>
   <PageTabs :tabs="[
     { label: 'Dashboard', to: '/admin/errors' },
   ]" />

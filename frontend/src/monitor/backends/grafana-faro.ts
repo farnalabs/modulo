@@ -46,7 +46,7 @@ export class GrafanaFaroMonitorBackend implements MonitorBackend {
       })
 
       this.initialized = true
-      console.info('[monitor] Grafana Faro backend initialized')
+      console.warn('[monitor] Grafana Faro backend initialized')
       return true
     } catch (e: any) {
       if (e?.code === 'MODULE_NOT_FOUND' || e?.message?.includes('Cannot find module')) {

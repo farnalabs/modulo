@@ -78,14 +78,14 @@
         @update:filter="(key, value) => { if (key === 'event_type') filterEventType = value }"
       >
         <template #after>
-          <input
+          <input aria-label="$t("
             v-model="filterActor"
             type="text"
             :placeholder="$t('views.AdminAuditView.actor_id')"
             class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring"
             data-testid="admin-audit-actor"
           />
-          <input
+          <input aria-label="date"
             v-model="filterDateFrom"
             type="date"
             class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring"
@@ -93,8 +93,8 @@
           />
         </template>
         <div>
-          <label class="mb-1 block text-xs font-medium text-muted-foreground">{{ $t('views.AdminAuditView.to') }}</label>
-          <input
+          <label for="adminauditview-field-2" class="mb-1 block text-xs font-medium text-muted-foreground">{{ $t('views.AdminAuditView.to') }}</label>
+          <input id="adminauditview-field-2"
             v-model="filterDateTo"
             type="date"
             class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring"
@@ -102,8 +102,8 @@
           />
         </div>
         <div>
-          <label class="mb-1 block text-xs font-medium text-muted-foreground">{{ $t('views.AdminAuditView.target_type') }}</label>
-          <select
+          <label for="adminauditview-field-1" class="mb-1 block text-xs font-medium text-muted-foreground">{{ $t('views.AdminAuditView.target_type') }}</label>
+          <select id="adminauditview-field-1"
             v-model="filterTargetType"
             class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring"
             data-testid="admin-audit-target-type"

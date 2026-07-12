@@ -1,4 +1,4 @@
-﻿<template>
+<template>
   <BackLink to="/admin/errors" label="Back to Error Dashboard" />
   <div class="page-wide">
     <header class="flex items-center justify-between">

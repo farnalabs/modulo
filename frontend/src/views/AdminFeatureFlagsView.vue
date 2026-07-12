@@ -1,4 +1,4 @@
-﻿<template>
+<template>
   <div data-theme="agent" class="page-wide">
     <header>
       <PageHeader :title="$t('views.AdminFeatureFlagsView.feature_flags')" :subtitle="$t('views.AdminFeatureFlagsView.all_known_feature_flags_and_their_current_activation_status')" />
@@ -202,7 +202,7 @@
       @confirm="saveOverride"
     >
       <div class="py-4">
-        <Select v-model="overrideDialogValue">
+        <Select aria-label="Form control" v-model="overrideDialogValue">
           <SelectTrigger>
             <SelectValue :placeholder="$t('views.AdminFeatureFlagsView.select_override')" />
           </SelectTrigger>

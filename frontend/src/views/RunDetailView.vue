@@ -1,4 +1,4 @@
-﻿<template>
+<template>
   <BackLink to="/" :label="$t('views.RunDetailView.back_to_dashboard')" />
     <div class="page-wide">
     <LoadingSpinner v-if="loading" />

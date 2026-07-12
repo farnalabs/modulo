@@ -1,4 +1,4 @@
-﻿<template>
+<template>
   <FeatureGate feature-name="mcp_server" show-disabled>
 
     <div data-theme="agent" class="page-narrow">
@@ -113,8 +113,8 @@
         </CardHeader>
         <CardContent class="space-y-4">
           <div class="flex items-center gap-2">
-            <label class="text-sm font-medium whitespace-nowrap">Client:</label>
-            <select v-model="selectedMcpClient" aria-label="Client" class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm">
+            <label for="settingsmcpview-field-3" class="text-sm font-medium whitespace-nowrap">Client:</label>
+            <select id="settingsmcpview-field-3" v-model="selectedMcpClient" aria-label="Client" class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm">
               <option value="opencode">opencode / Claude Code</option>
               <option value="claude">Claude Desktop</option>
               <option value="cursor">Cursor</option>
@@ -153,8 +153,8 @@
     >
       <div class="space-y-4 py-2">
         <div>
-          <label class="mb-1 block text-sm font-medium">Key Name</label>
-          <input
+          <label for="settingsmcpview-field-2" class="mb-1 block text-sm font-medium">Key Name</label>
+          <input id="settingsmcpview-field-2"
             v-model="createKeyName"
             type="text"
             data-testid="settings-mcp-create-key-name"
@@ -168,8 +168,8 @@
           >Key name is required.</p>
         </div>
         <div>
-          <label class="mb-1 block text-sm font-medium">Role</label>
-          <select
+          <label for="settingsmcpview-field-1" class="mb-1 block text-sm font-medium">Role</label>
+          <select id="settingsmcpview-field-1"
             v-model="createKeyRole"
             data-testid="settings-mcp-create-key-role"
             aria-label="Role"
@@ -199,7 +199,7 @@
           <div>
             <p class="mb-1 text-sm font-medium">API Key</p>
             <div class="relative">
-              <input
+              <input aria-label="keyMasked ? "
                 :type="keyMasked ? 'password' : 'text'"
                 :value="createdKeyValue"
                 readonly

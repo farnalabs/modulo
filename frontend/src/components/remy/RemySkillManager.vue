@@ -1,4 +1,4 @@
-﻿<template>
+<template>
   <div class="remy-skills flex flex-col flex-1 overflow-hidden">
     <div class="flex items-center justify-between p-3 border-b">
       <h3
@@ -45,7 +45,7 @@
         class="remy-skill-input"
         :placeholder="$t('components.remy.RemySkillManager.triggers_commaseparated')"
       />
-      <textarea
+      <textarea aria-label="$t("
         v-model="form.body"
         class="remy-skill-textarea"
         :placeholder="$t('components.remy.RemySkillManager.skill_body_markdown')"

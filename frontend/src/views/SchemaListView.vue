@@ -1,4 +1,4 @@
-﻿<template>
+<template>
   <PageTabs :tabs="[
     { label: 'Browse', to: '/schemas' },
     { label: 'Editor', to: '/schemas/editor' },

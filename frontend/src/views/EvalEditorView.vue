@@ -1,4 +1,4 @@
-﻿<template>
+<template>
   <FeatureGate feature-name="eval_system" required-tier="community" show-disabled>
 
     <PageTabs :tabs="[
@@ -18,8 +18,8 @@
     <template v-else>
       <div class="grid gap-6 lg:grid-cols-2">
         <div>
-          <label class="mb-1.5 block text-sm font-medium">{{ $t('views.EvalEditorView.pipeline') }}</label>
-          <select
+          <label for="evaleditorview-field-8" class="mb-1.5 block text-sm font-medium">{{ $t('views.EvalEditorView.pipeline') }}</label>
+          <select id="evaleditorview-field-8"
             v-model="selectedPipelineId"
             data-testid="eval-editor-pipeline"
             aria-label="Pipeline"
@@ -32,8 +32,8 @@
         </div>
 
         <div>
-          <label class="mb-1.5 block text-sm font-medium">{{ $t('views.EvalEditorView.node') }} <span class="text-muted-foreground">({{ $t('views.EvalEditorView.node_optional') }})</span></label>
-          <select
+          <label for="evaleditorview-field-7" class="mb-1.5 block text-sm font-medium">{{ $t('views.EvalEditorView.node') }} <span class="text-muted-foreground">({{ $t('views.EvalEditorView.node_optional') }})</span></label>
+          <select id="evaleditorview-field-7"
             v-model="form.node_id"
             :disabled="!selectedPipelineId || nodesLoading"
             data-testid="eval-editor-node"
@@ -55,8 +55,8 @@
 
             <div class="space-y-4">
               <div>
-                <label class="mb-1 block text-sm font-medium">{{ $t('views.EvalEditorView.name') }}</label>
-                <input
+                <label for="evaleditorview-field-6" class="mb-1 block text-sm font-medium">{{ $t('views.EvalEditorView.name') }}</label>
+                <input id="evaleditorview-field-6"
                   v-model="form.name"
                   type="text"
                   data-testid="eval-editor-name"
@@ -66,8 +66,8 @@
               </div>
 
               <div>
-                <label class="mb-1 block text-sm font-medium">{{ $t('views.EvalEditorView.eval_type') }}</label>
-                <select
+                <label for="evaleditorview-field-5" class="mb-1 block text-sm font-medium">{{ $t('views.EvalEditorView.eval_type') }}</label>
+                <select id="evaleditorview-field-5"
                   v-model="form.eval_type"
                   data-testid="eval-editor-eval-type"
                   aria-label="Eval type"
@@ -81,8 +81,8 @@
               </div>
 
               <div>
-                <label class="mb-1 block text-sm font-medium">{{ $t('views.EvalEditorView.config_json') }} <span class="text-muted-foreground">(JSON)</span></label>
-                <textarea
+                <label for="evaleditorview-field-4" class="mb-1 block text-sm font-medium">{{ $t('views.EvalEditorView.config_json') }} <span class="text-muted-foreground">(JSON)</span></label>
+                <textarea id="evaleditorview-field-4"
                   v-model="form.config_json"
                   rows="6"
                   data-testid="eval-editor-config"
@@ -93,13 +93,13 @@
               </div>
 
               <div>
-                <label class="mb-1 block text-sm font-medium">
+                <label for="evaleditorview-field-3" class="mb-1 block text-sm font-medium">
                   {{ $t('views.EvalEditorView.pass_threshold') }}
                   <span class="text-muted-foreground">({{ form.pass_threshold.toFixed(2) }})</span>
                 </label>
                 <div class="flex items-center gap-3">
                   <span class="text-xs text-muted-foreground">0.0</span>
-                  <input
+                  <input id="evaleditorview-field-3"
                     v-model.number="form.pass_threshold"
                     type="range"
                     min="0"
@@ -114,10 +114,10 @@
               </div>
 
               <div>
-                <label class="mb-1 block text-sm font-medium">{{ $t('views.EvalEditorView.failure_behaviour') }}</label>
+                <span class="mb-1 block text-sm font-medium">{{ $t('views.EvalEditorView.failure_behaviour') }}</span>
                 <div class="flex items-center gap-4">
-                  <label class="flex cursor-pointer items-center gap-2 text-sm">
-                    <input
+                  <label for="evaleditorview-field-2" class="flex cursor-pointer items-center gap-2 text-sm">
+                    <input id="evaleditorview-field-2"
                       v-model="form.failure_behaviour"
                       type="radio"
                       value="warn"
@@ -126,8 +126,8 @@
                     />
                     {{ $t('views.EvalEditorView.warn') }}
                   </label>
-                  <label class="flex cursor-pointer items-center gap-2 text-sm">
-                    <input
+                  <label for="evaleditorview-field-1" class="flex cursor-pointer items-center gap-2 text-sm">
+                    <input id="evaleditorview-field-1"
                       v-model="form.failure_behaviour"
                       type="radio"
                       value="block"

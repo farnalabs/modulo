@@ -71,7 +71,7 @@ export class DatadogRumMonitorBackend implements MonitorBackend {
       }
 
       this.initialized = true
-      console.info('[monitor] Datadog RUM backend initialized')
+      console.warn('[monitor] Datadog RUM backend initialized')
       return true
     } catch (e: any) {
       if (e?.code === 'MODULE_NOT_FOUND' || e?.message?.includes('Cannot find module')) {

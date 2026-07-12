@@ -14,8 +14,8 @@
         </div>
 
         <div>
-          <label class="mb-2 flex items-center gap-2 text-sm font-medium">
-            <input
+          <label for="graduationdialog-field-2" class="mb-2 flex items-center gap-2 text-sm font-medium">
+            <input id="graduationdialog-field-2"
               v-model="mode"
               type="radio"
               value="existing"
@@ -23,7 +23,7 @@
             />
             Link to existing pipeline
           </label>
-          <select
+          <select aria-label="Form control"
             v-if="mode === 'existing'"
             v-model="selectedPipelineId"
             class="ml-6 w-full rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
@@ -34,8 +34,8 @@
         </div>
 
         <div>
-          <label class="mb-2 flex items-center gap-2 text-sm font-medium">
-            <input
+          <label for="graduationdialog-field-1" class="mb-2 flex items-center gap-2 text-sm font-medium">
+            <input id="graduationdialog-field-1"
               v-model="mode"
               type="radio"
               value="new"
@@ -43,7 +43,7 @@
             />
             Create new pipeline from template
           </label>
-          <select
+          <select aria-label="Form control"
             v-if="mode === 'new'"
             v-model="selectedTemplateId"
             class="ml-6 w-full rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"

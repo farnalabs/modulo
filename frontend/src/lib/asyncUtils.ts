@@ -1,4 +1,4 @@
-﻿import { formatApiError } from './api/formatError'
+import { formatApiError } from './api/formatError'
 
 export async function withTimeout<T>(
   promise: Promise<T>,
@@ -17,4 +17,3 @@ export async function withTimeout<T>(
 export function asErrorMessage(e: unknown): string {
   return formatApiError(e);
 }
-

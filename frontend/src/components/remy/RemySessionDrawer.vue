@@ -1,4 +1,4 @@
-﻿<template>
+<template>
   <div class="remy-sessions">
     <div class="flex items-center justify-between p-3 border-b">
       <h3

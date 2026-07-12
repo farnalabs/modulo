@@ -34,14 +34,14 @@
             {{ p.name }}
           </option>
         </select>
-        <input
+        <input aria-label="date"
           v-model="dateFrom"
           type="date"
           data-testid="hitl-review-date-from"
           class="rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
           @change="loadGates"
         />
-        <input
+        <input aria-label="date"
           v-model="dateTo"
           type="date"
           data-testid="hitl-review-date-to"
@@ -178,7 +178,7 @@
                   </div>
                   <div v-if="gateStatus(gate) === 'claimed'">
                     <div class="space-y-2">
-                      <textarea
+                      <textarea aria-label="Review notes..."
                         v-model="reviewNotes[expandKey(gate)]"
                         rows="2"
                         data-testid="hitl-review-notes"

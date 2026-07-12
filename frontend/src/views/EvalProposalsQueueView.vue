@@ -1,4 +1,4 @@
-﻿<template>
+<template>
   <FeatureGate feature-name="eval_system" required-tier="community" show-disabled>
 
     <PageTabs :tabs="[

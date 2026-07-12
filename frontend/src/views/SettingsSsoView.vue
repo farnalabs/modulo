@@ -1,4 +1,4 @@
-﻿<template>
+<template>
   <FeatureGate feature-name="sso" required-tier="team" show-disabled>
 
     <div class="page-narrow">
@@ -85,7 +85,7 @@
                   </svg>
                 </button>
                 <TableActions :actions="ssoActions(provider)" />
-                <label
+                <span tabindex="0"
                   class="relative inline-flex cursor-pointer items-center"
                   data-testid="settings-sso-toggle"
                   :aria-label="$t('views.SettingsSsoView.toggle_provider')"
@@ -93,6 +93,8 @@
                   :aria-checked="provider.enabled"
                   :class="{ 'opacity-50 pointer-events-none': togglingId === provider.id }"
                   @click.prevent.stop="toggleProvider(provider)"
+                  @keydown.enter.prevent.stop="toggleProvider(provider)"
+                  @keydown.space.prevent.stop="toggleProvider(provider)"
                 >
                   <div
                     class="h-6 w-11 rounded-full transition-colors"
@@ -104,7 +106,7 @@
                       style="margin-top: 2px;"
                     />
                   </div>
-                </label>
+                </span>
               </div>
             </div>
 
