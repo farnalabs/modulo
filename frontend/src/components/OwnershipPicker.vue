@@ -47,7 +47,7 @@ const selectedLabel = computed(() => {
   if (!props.modelValue) return null;
   if (props.modelValue.visibility === "org") return t("components.OwnershipPicker.orgwide");
   const team = teams.value.find(
-    (t) => t.id === props.modelValue!.owner_team_id,
+    (t) => t.id === props.modelValue?.owner_team_id,
   );
   return team?.name ?? t("components.OwnershipPicker.unknown_team");
 });
