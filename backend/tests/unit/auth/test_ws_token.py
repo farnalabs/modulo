@@ -5,7 +5,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from modulo.auth.ws_token import WsTokenConsumeError, WsTokenExpired, consume_ws_token, create_ws_token
+from modulo.auth.ws_token import WsTokenConsumeError, WsTokenExpiredError, consume_ws_token, create_ws_token
 
 
 @pytest.fixture
@@ -87,13 +87,13 @@ class TestConsumeWsToken:
     async def test_raises_expired_for_missing_token(self, mock_redis: AsyncMock) -> None:
         mock_redis.getdel.return_value = None
 
-        with pytest.raises(WsTokenExpired):
+        with pytest.raises(WsTokenExpiredError):
             await consume_ws_token(mock_redis, "nonexistent-token")
 
     async def test_raises_expired_for_wrong_key(self, mock_redis: AsyncMock) -> None:
         mock_redis.getdel.return_value = None
 
-        with pytest.raises(WsTokenExpired):
+        with pytest.raises(WsTokenExpiredError):
             await consume_ws_token(mock_redis, "wrong-key")
 
     async def test_single_use(self, mock_redis: AsyncMock) -> None:
@@ -103,7 +103,7 @@ class TestConsumeWsToken:
         mock_redis.getdel.side_effect = [json.dumps(_PRINCIPAL), None]
 
         first = await consume_ws_token(mock_redis, token)
-        with pytest.raises(WsTokenExpired):
+        with pytest.raises(WsTokenExpiredError):
             await consume_ws_token(mock_redis, token)
 
         assert first == _PRINCIPAL
@@ -116,7 +116,7 @@ class TestConsumeWsToken:
         mock_redis.getdel.side_effect = [json.dumps(_PRINCIPAL), None]
 
         first = await consume_ws_token(mock_redis, token)
-        with pytest.raises(WsTokenExpired):
+        with pytest.raises(WsTokenExpiredError):
             await consume_ws_token(mock_redis, token)
 
         assert first == _PRINCIPAL
