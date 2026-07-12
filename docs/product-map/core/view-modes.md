@@ -20,7 +20,7 @@ code:
   - frontend/src/components/ViewModeToggle.vue
 depends-on:
   - feat-core-auth
-  - feat-feature-flags
+  - feat-core-feature-flag-ui
 status: partial
 ---
 
