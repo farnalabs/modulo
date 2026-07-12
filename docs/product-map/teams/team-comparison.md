@@ -1,6 +1,6 @@
 ---
 id: feat-teams-team-comparison
-prd: 8
+prd: 8.26
 delivery-tasks: [task-nv7-team-comparison]
 bdd:
   - backend/tests/bdd/features/personas/elena-engineering-director.feature
