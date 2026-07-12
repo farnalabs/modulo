@@ -24,6 +24,8 @@ export const usePlanStore = defineStore("plan", () => {
   const isTeam = computed(() => isAtMinimumTier("team"));
 
   function featureEnabled(name: string): boolean {
+    const override = orgOverrides.value[name];
+    if (override !== undefined && override !== null) return override;
     return features.value[name] ?? false;
   }
 

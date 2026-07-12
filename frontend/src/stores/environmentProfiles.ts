@@ -52,6 +52,7 @@ export const useEnvironmentProfilesStore = defineStore('environmentProfiles', ()
   }
 
   async function fetchProfile(id: string): Promise<void> {
+    if (isLoading.value) return
     isLoading.value = true
     error.value = null
     try {
