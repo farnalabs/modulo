@@ -106,6 +106,9 @@ def _build_failure_context(
         eval_id = er.get("eval_id")
         eval_id_str = str(eval_id) if eval_id is not None else ""
         edef = eval_definitions.get(eval_id_str, {})
+        if not isinstance(edef, dict):
+            _log.warning("Skipping non-dict eval definition for %s: got %s", eval_id_str, type(edef).__name__)
+            edef = {}
         failures.append(
             {
                 "eval_name": edef.get("name", _UNKNOWN_LABEL),
