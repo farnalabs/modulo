@@ -102,7 +102,7 @@ class LibraryPrimitiveResponse(BaseModel):
     created_at: datetime
     updated_at: datetime
 
-    model_config = {"from_attributes": True}
+    model_config = {"from_attributes": True, "populate_by_name": True}
 
     @model_validator(mode="after")
     @classmethod
