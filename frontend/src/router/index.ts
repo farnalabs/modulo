@@ -36,7 +36,8 @@ for (const [path, entry] of Object.entries(manifestRoutes)) {
   }
 }
 
-function decodeJwtPayload(token: string): Record<string, unknown> | null {
+function decodeJwtPayload(token: string | null): Record<string, unknown> | null {
+  if (!token) return null
   try {
     return JSON.parse(atob(token.split('.')[1].replace(/-/g, '+').replace(/_/g, '/')))
   } catch (e) {
@@ -472,8 +473,11 @@ const router = createRouter({
       redirect: '/',
     },
   ],
-  scrollBehavior(_to, _from, savedPosition) {
+  scrollBehavior(to, _from, savedPosition) {
     if (savedPosition) return savedPosition
+    if (to.hash) {
+      return { el: to.hash, behavior: 'smooth' }
+    }
     return { top: 0 }
   },
 })
@@ -516,6 +520,9 @@ router.beforeEach((to) => {
 })
 
 let _chunkRetryCount = 0
+router.afterEach(() => {
+  _chunkRetryCount = 0
+})
 router.onError((err) => {
   console.error('[router] navigation error:', err)
   const msg = formatApiError(err)
@@ -527,6 +534,7 @@ router.onError((err) => {
       return
     }
     window.location.reload()
+    return
   }
 })
 
