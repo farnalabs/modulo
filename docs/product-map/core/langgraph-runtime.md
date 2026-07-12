@@ -34,11 +34,8 @@ unit-tests:
   - backend/tests/unit/pipeline_engine/test_run_crud.py
   - backend/tests/unit/core/test_pipeline_engine.py
 depends-on:
-  - feat-foundation-otel-bridge
-  - feat-db-models
-  - feat-db-rls
   - feat-connectors-hub
-  - feat-model-backend-hub
+  - feat-model-backends-hub
 status: partial
 ---
 
