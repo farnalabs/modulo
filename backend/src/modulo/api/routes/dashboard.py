@@ -16,6 +16,7 @@ from modulo.api.dependencies import get_db_session
 from modulo.auth.dependencies import get_current_user
 from modulo.auth.jwt import AuthenticatedPrincipal
 from modulo.core.remy.config_service import RemyConfigService
+from modulo.db.crud.pipeline import count_pipelines as _count_pipelines
 from modulo.db.models.daily_run_count import OrgDailyRunCount
 from modulo.db.models.eval_result import EvalResult
 from modulo.db.models.feedback_record import FeedbackRecord
@@ -26,7 +27,6 @@ from modulo.db.models.run import Run
 from modulo.db.models.team import Team
 from modulo.db.rls import set_rls_org
 from modulo.settings import get_settings
-
 
 _log = logging.getLogger(__name__)
 
@@ -124,10 +124,7 @@ async def dashboard_summary(
 
             # --- Queries that can all run independently (no dependencies between them) ---
 
-            active_pipelines_result = await session.execute(
-                select(func.count()).select_from(Pipeline).where(Pipeline.organisation_id == org_id)
-            )
-            active_pipelines = _safe_int(active_pipelines_result.scalar_one())
+            active_pipelines = await _count_pipelines(session, org_id=org_id, include_archived=False)
 
             status_count_query = (
                 select(
