@@ -27,16 +27,16 @@
                   <p class="text-xs text-muted-foreground">{{ b.description }}</p>
                   <p v-if="!b.enabled" class="text-xs text-muted-foreground/60 mt-1">{{ b.hint }}</p>
                 </div>
-                <label class="relative inline-flex items-center cursor-pointer">
-                  <input type="checkbox" v-model="b.enabled" class="sr-only peer" @change="onDirty" />
+                <label for="settingsmonitorconfigview-field-2" class="relative inline-flex items-center cursor-pointer">
+                  <input id="settingsmonitorconfigview-field-2" type="checkbox" v-model="b.enabled" class="sr-only peer" @change="onDirty" />
                   <div class="w-9 h-5 bg-muted rounded-full peer peer-checked:bg-primary peer-focus:ring-2 peer-focus:ring-primary/20 after:content-[''] after:absolute after:top-0.5 after:start-0.5 after:bg-background after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:after:translate-x-full" />
                 </label>
               </div>
 
               <div v-if="b.enabled" class="space-y-3">
                 <div v-for="field in b.fields" :key="field.key">
-                  <label class="block text-xs text-muted-foreground mb-1">{{ field.label }}</label>
-                  <input
+                  <label for="settingsmonitorconfigview-field-1" class="block text-xs text-muted-foreground mb-1">{{ field.label }}</label>
+                  <input id="settingsmonitorconfigview-field-1"
                     v-model="field.value"
                     :type="field.secret && !field.revealed ? 'password' : 'text'"
                     :placeholder="field.placeholder"

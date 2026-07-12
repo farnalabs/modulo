@@ -1,4 +1,4 @@
-﻿<template>
+<template>
   <div class="page-narrow">
     <header class="flex items-center justify-between">
       <PageHeader :title="$t('components.ViewToggle.saved_views')" :subtitle="$t('views.AdminViewsView.manage_saved_views_for_organizing_and_filtering_data')" />
@@ -23,8 +23,8 @@
         <h2 class="mb-4 text-base font-semibold" data-testid="admin-views-form-title">{{ editingId ? 'Edit View' : 'New View' }}</h2>
         <form class="space-y-4" @submit.prevent="handleSave">
           <div>
-            <label class="mb-1 block text-sm font-medium">Name</label>
-            <input
+            <label for="adminviewsview-field-6" class="mb-1 block text-sm font-medium">Name</label>
+            <input id="adminviewsview-field-6"
               v-model="form.name"
               class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary/50"
               :placeholder="$t('views.AdminViewsView.my_view')"
@@ -33,8 +33,8 @@
             />
           </div>
           <div>
-            <label class="mb-1 block text-sm font-medium">{{ $t('views.AdminViewsView.view_type') }}</label>
-            <select
+            <label for="adminviewsview-field-5" class="mb-1 block text-sm font-medium">{{ $t('views.AdminViewsView.view_type') }}</label>
+            <select id="adminviewsview-field-5"
               v-model="form.view_type"
               class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary/50"
               data-testid="admin-views-type-select"
@@ -47,8 +47,8 @@
             </select>
           </div>
           <div>
-            <label class="mb-1 block text-sm font-medium">{{ $t('views.AdminViewsView.filters_json') }}</label>
-            <textarea
+            <label for="adminviewsview-field-4" class="mb-1 block text-sm font-medium">{{ $t('views.AdminViewsView.filters_json') }}</label>
+            <textarea id="adminviewsview-field-4"
               v-model="form.filters"
               class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-primary/50"
               rows="4"
@@ -57,8 +57,8 @@
             />
           </div>
           <div>
-            <label class="mb-1 block text-sm font-medium">Columns</label>
-            <input
+            <label for="adminviewsview-field-3" class="mb-1 block text-sm font-medium">Columns</label>
+            <input id="adminviewsview-field-3"
               v-model="form.columns"
               class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary/50"
               :placeholder="$t('views.AdminViewsView.name_status_createdat')"
@@ -67,8 +67,8 @@
           </div>
           <div class="grid grid-cols-2 gap-4">
             <div>
-              <label class="mb-1 block text-sm font-medium">{{ $t('views.AdminViewsView.sort_by') }}</label>
-              <input
+              <label for="adminviewsview-field-2" class="mb-1 block text-sm font-medium">{{ $t('views.AdminViewsView.sort_by') }}</label>
+              <input id="adminviewsview-field-2"
                 v-model="form.sort_by"
                 class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary/50"
                 placeholder="created_at"
@@ -76,8 +76,8 @@
               />
             </div>
             <div>
-              <label class="mb-1 block text-sm font-medium">{{ $t('components.NodeCategoryEditor.sort_order') }}</label>
-            <select
+              <label for="adminviewsview-field-1" class="mb-1 block text-sm font-medium">{{ $t('components.NodeCategoryEditor.sort_order') }}</label>
+            <select id="adminviewsview-field-1"
               v-model="form.sort_order"
               class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary/50"
               data-testid="admin-views-sort-order-select"

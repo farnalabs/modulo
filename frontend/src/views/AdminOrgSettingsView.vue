@@ -1,4 +1,4 @@
-﻿<template>
+<template>
   <FeatureGate feature-name="team_rbac" required-tier="team" show-disabled>
 
     <div data-theme="agent" class="page-wide">
@@ -243,7 +243,7 @@ function downloadExport() {
   const url = URL.createObjectURL(blob)
   const a = document.createElement('a')
   a.href = url
-  a.download = `org-export-${orgInfo.slug || orgInfo.id}-${formatDateFilename(new Date())}.json`
+  a.download = `org-export-${orgInfo.value.slug || orgInfo.value.id}-${formatDateFilename(new Date())}.json`
   document.body.appendChild(a)
   a.click()
   document.body.removeChild(a)
@@ -263,7 +263,7 @@ function cancelDelete() {
 }
 
 async function confirmDelete() {
-  if (confirmName.value !== orgInfo.name) return
+  if (confirmName.value !== orgInfo.value.name) return
   deleting.value = true
   deleteError.value = null
   try {

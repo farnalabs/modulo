@@ -44,7 +44,7 @@ export class SentryMonitorBackend implements MonitorBackend {
       })
 
       this.initialized = true
-      console.info('[monitor] Sentry backend initialized')
+      console.warn('[monitor] Sentry backend initialized')
       return true
     } catch (e: any) {
       if (e?.code === 'MODULE_NOT_FOUND' || e?.message?.includes('Cannot find module')) {

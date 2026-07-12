@@ -3,7 +3,7 @@ import { enqueueError } from '../../lib/error-tracking/transport'
 import type { ErrorEventInput } from '../../lib/error-tracking/types'
 
 export class TransportBackend implements MonitorBackend {
-  captureError(event: MonitorEvent, error: Error, context?: Record<string, unknown>): void {
+  captureError(event: MonitorEvent, _error: Error, context?: Record<string, unknown>): void {
     enqueueError(event as unknown as ErrorEventInput)
   }
 

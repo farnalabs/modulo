@@ -1,4 +1,4 @@
-﻿<template>
+<template>
   <div class="page-narrow">
     <PageHeader :title="$t('views.OnboardingWizard.sdlc_onboarding')" :subtitle="$t('views.OnboardingWizard.guided_setup_wizard_mdash_connect_tools_infer_schemas_browse')" />
 
@@ -51,8 +51,8 @@
           No connectors found. <a href="/settings/connectors" data-testid="onboarding-wizard-create-connector" class="text-primary underline">Create one</a> first, then come back.
         </div>
         <div v-else class="space-y-2">
-          <label class="mb-1 block text-sm font-medium">{{ $t('views.OnboardingWizard.select_connector_instance') }}</label>
-          <div
+          <span class="mb-1 block text-sm font-medium">{{ $t('views.OnboardingWizard.select_connector_instance') }}</span>
+          <div role="button" tabindex="0" @keydown.enter="($event.currentTarget as HTMLElement).click()" @keydown.space.prevent="($event.currentTarget as HTMLElement).click()"
             v-for="c in connectors"
             :key="c.id"
             data-testid="onboarding-wizard-connector-card"
@@ -77,8 +77,8 @@
           {{ $t('views.OnboardingWizard.connector_label') }} <strong>{{ wizardState.connectorName }}</strong>
         </div>
         <div>
-          <label class="mb-1 block text-sm font-medium">{{ $t('views.OnboardingWizard.resource_type') }}</label>
-          <input
+          <label for="onboardingwizard-field-7" class="mb-1 block text-sm font-medium">{{ $t('views.OnboardingWizard.resource_type') }}</label>
+          <input id="onboardingwizard-field-7"
             v-model="wizardState.resourceType"
             type="text"
             data-testid="onboarding-wizard-resource-type"
@@ -87,8 +87,8 @@
           />
         </div>
         <div>
-          <label class="mb-1 block text-sm font-medium">{{ $t('views.OnboardingWizard.sample_query') }} <span class="text-muted-foreground">{{ $t('views.OnboardingWizard.optional') }}</span></label>
-          <textarea
+          <label for="onboardingwizard-field-6" class="mb-1 block text-sm font-medium">{{ $t('views.OnboardingWizard.sample_query') }} <span class="text-muted-foreground">{{ $t('views.OnboardingWizard.optional') }}</span></label>
+          <textarea id="onboardingwizard-field-6"
             v-model="wizardState.sampleQuery"
             rows="2"
             data-testid="onboarding-wizard-sample-query"
@@ -145,8 +145,8 @@
         <template v-else>
           <div class="flex items-center gap-4">
             <div>
-              <label class="mb-1 block text-sm font-medium">{{ $t('views.OnboardingWizard.schema_name') }}</label>
-              <input
+              <label for="onboardingwizard-field-5" class="mb-1 block text-sm font-medium">{{ $t('views.OnboardingWizard.schema_name') }}</label>
+              <input id="onboardingwizard-field-5"
                 v-model="editableSchemaName"
                 type="text"
                 data-testid="onboarding-wizard-schema-name"
@@ -154,8 +154,8 @@
               />
             </div>
             <div class="flex-1">
-              <label class="mb-1 block text-sm font-medium">{{ $t('views.OnboardingWizard.description') }}</label>
-              <input
+              <label for="onboardingwizard-field-4" class="mb-1 block text-sm font-medium">{{ $t('views.OnboardingWizard.description') }}</label>
+              <input id="onboardingwizard-field-4"
                 v-model="editableSchemaDescription"
                 type="text"
                 data-testid="onboarding-wizard-schema-description"
@@ -164,7 +164,7 @@
             </div>
           </div>
           <div>
-            <label class="mb-2 block text-sm font-medium">{{ $t('views.OnboardingWizard.fields') }} <span class="text-muted-foreground">{{ $t('views.OnboardingWizard.fields_hint') }}</span></label>
+            <label for="onboardingwizard-field-3" class="mb-2 block text-sm font-medium">{{ $t('views.OnboardingWizard.fields') }} <span class="text-muted-foreground">{{ $t('views.OnboardingWizard.fields_hint') }}</span></label>
             <table class="w-full text-sm">
               <thead>
                 <tr class="border-b text-left text-muted-foreground">
@@ -214,7 +214,7 @@
         </div>
         <div v-else class="space-y-2">
           <div class="flex items-center gap-3">
-            <input
+            <input id="onboardingwizard-field-3"
               v-model="librarySearch"
               type="text"
               placeholder="Filter items..."
@@ -235,7 +235,7 @@
             </select>
           </div>
           <div class="grid grid-cols-1 gap-3 sm:grid-cols-2">
-            <div
+            <div role="button" tabindex="0" @keydown.enter="($event.currentTarget as HTMLElement).click()" @keydown.space.prevent="($event.currentTarget as HTMLElement).click()"
               v-for="item in filteredLibraryItems"
               :key="item.id"
               data-testid="onboarding-wizard-library-item"
@@ -264,8 +264,8 @@
       <!-- Step 5: Wire Pipeline -->
       <div v-if="currentStep === 5" class="space-y-4">
         <div>
-          <label class="mb-1 block text-sm font-medium">Pipeline name</label>
-          <input
+          <label for="onboardingwizard-field-2" class="mb-1 block text-sm font-medium">Pipeline name</label>
+          <input id="onboardingwizard-field-2"
             v-model="wizardState.pipelineName"
             type="text"
             data-testid="onboarding-wizard-pipeline-name"
@@ -274,8 +274,8 @@
           />
         </div>
         <div>
-          <label class="mb-1 block text-sm font-medium">Description</label>
-          <textarea
+          <label for="onboardingwizard-field-1" class="mb-1 block text-sm font-medium">Description</label>
+          <textarea id="onboardingwizard-field-1"
             v-model="wizardState.pipelineDescription"
             rows="3"
             data-testid="onboarding-wizard-pipeline-description"

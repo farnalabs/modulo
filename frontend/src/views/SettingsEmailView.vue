@@ -1,4 +1,4 @@
-﻿<template>
+<template>
   <div data-theme="agent" class="page-narrow">
     <PageHeader :title="$t('views.SettingsEmailView.email_settings')" :subtitle="$t('views.SettingsEmailView.configure_smtp_provider_for_transactional_emails')" />
 
@@ -12,8 +12,8 @@
         <div class="rounded-lg border bg-card shadow-sm">
           <div class="p-6 space-y-4">
             <div>
-              <label class="mb-1 block text-sm font-medium">{{ $t('views.SettingsEmailView.smtp_host') }}</label>
-              <input
+              <label for="settingsemailview-field-5" class="mb-1 block text-sm font-medium">{{ $t('views.SettingsEmailView.smtp_host') }}</label>
+              <input id="settingsemailview-field-5"
                 v-model="form.smtp_host"
                 type="text"
                 class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
@@ -21,8 +21,8 @@
               />
             </div>
             <div>
-              <label class="mb-1 block text-sm font-medium">{{ $t('views.SettingsEmailView.smtp_port') }}</label>
-              <input
+              <label for="settingsemailview-field-4" class="mb-1 block text-sm font-medium">{{ $t('views.SettingsEmailView.smtp_port') }}</label>
+              <input id="settingsemailview-field-4"
                 v-model.number="form.smtp_port"
                 type="number"
                 class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
@@ -30,8 +30,8 @@
               />
             </div>
             <div>
-              <label class="mb-1 block text-sm font-medium">{{ $t('views.SettingsEmailView.smtp_username') }}</label>
-              <input
+              <label for="settingsemailview-field-3" class="mb-1 block text-sm font-medium">{{ $t('views.SettingsEmailView.smtp_username') }}</label>
+              <input id="settingsemailview-field-3"
                 v-model="form.smtp_username"
                 type="text"
                 class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
@@ -39,8 +39,8 @@
               />
             </div>
             <div>
-              <label class="mb-1 block text-sm font-medium">{{ $t('views.SettingsEmailView.smtp_password') }}</label>
-              <input
+              <label for="settingsemailview-field-2" class="mb-1 block text-sm font-medium">{{ $t('views.SettingsEmailView.smtp_password') }}</label>
+              <input id="settingsemailview-field-2"
                 v-model="form.smtp_password"
                 type="password"
                 class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
@@ -48,8 +48,8 @@
               />
             </div>
             <div>
-              <label class="mb-1 block text-sm font-medium">{{ $t('views.SettingsEmailView.email_from') }}</label>
-              <input
+              <label for="settingsemailview-field-1" class="mb-1 block text-sm font-medium">{{ $t('views.SettingsEmailView.email_from') }}</label>
+              <input id="settingsemailview-field-1"
                 v-model="form.email_from"
                 type="email"
                 class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"

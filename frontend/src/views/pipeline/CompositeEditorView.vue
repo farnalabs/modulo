@@ -81,7 +81,7 @@
     </template>
 
     <!-- Save as composite dialog -->
-    <div
+    <div role="button" tabindex="0" @keydown.enter="($event.currentTarget as HTMLElement).click()" @keydown.space.prevent="($event.currentTarget as HTMLElement).click()"
       v-if="showSaveAsComposite"
       class="fixed inset-0 z-50 flex items-center justify-center bg-black/50"
       @click.self="showSaveAsComposite = false"
@@ -90,16 +90,16 @@
         <h3 class="mb-4 text-base font-semibold">Save as Composite</h3>
         <div class="space-y-4">
           <div>
-            <label class="mb-1 block text-sm font-medium">Name</label>
-            <input
+            <label for="compositeeditorview-field-2" class="mb-1 block text-sm font-medium">Name</label>
+            <input id="compositeeditorview-field-2"
               v-model="saveAsName"
               class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm"
               placeholder="My Composite"
             />
           </div>
           <div>
-            <label class="mb-1 block text-sm font-medium">Description</label>
-            <textarea
+            <label for="compositeeditorview-field-1" class="mb-1 block text-sm font-medium">Description</label>
+            <textarea id="compositeeditorview-field-1"
               v-model="saveAsDescription"
               class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm"
               rows="3"

@@ -1,4 +1,4 @@
-﻿<template>
+<template>
   <div class="page-wide">
     <LoadingSpinner v-if="loading" />
     <ErrorAlert v-else-if="error" :message="error" />
@@ -21,7 +21,7 @@
                 {{ run.pipeline_name }} — {{ run.status }} ({{ run.created_at }})
               </option>
             </select>
-            <input
+            <input aria-label="Paste a run ID (or select from dropdown)"
               v-model="runIdA"
               data-testid="diff-run-id-a"
               type="text"
@@ -30,9 +30,9 @@
             />
           </div>
         </div>
-        <label class="flex flex-col gap-1.5">
+        <label for="agentoutputdiffview-field-1" class="flex flex-col gap-1.5">
           <span class="text-xs font-medium text-muted-foreground">{{ $t('views.AgentOutputDiffView.node_id') }}</span>
-          <input
+          <input id="agentoutputdiffview-field-1"
             v-model="nodeId"
             data-testid="diff-node-id"
             type="text"
@@ -55,7 +55,7 @@
                 {{ run.pipeline_name }} — {{ run.status }} ({{ run.created_at }})
               </option>
             </select>
-            <input
+            <input aria-label="Paste a run ID (or select from dropdown)"
               v-model="runIdB"
               data-testid="diff-run-id-b"
               type="text"

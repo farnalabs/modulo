@@ -8,7 +8,7 @@
         <circle cx="11" cy="11" r="8" />
         <path d="m21 21-4.3-4.3" />
       </svg>
-      <input
+      <input aria-label="search.placeholder || "
         :value="searchValue"
         type="text"
         :placeholder="search.placeholder || 'Search...'"

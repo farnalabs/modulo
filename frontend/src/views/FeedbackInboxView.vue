@@ -1,4 +1,4 @@
-﻿<template>
+<template>
   <div class="page-wide">
     <PageHeader :title="$t('views.FeedbackInboxView.feedback_inbox')" :subtitle="$t('views.FeedbackInboxView.review_and_resolve_pending_feedback_from_pipeline_evaluation')" data-testid="feedback-inbox-title" />
 
@@ -25,14 +25,14 @@
             <option value="">{{ $t('views.FeedbackInboxView.all_pipelines') }}</option>
             <option v-for="p in pipelines" :key="p.id" :value="p.id">{{ p.name }}</option>
           </select>
-          <input
+          <input aria-label="date"
             v-model="dateFrom"
             type="date"
             data-testid="feedback-inbox-date-from"
             class="rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
             @change="loadFeedback"
           />
-          <input
+          <input aria-label="date"
             v-model="dateTo"
             type="date"
             data-testid="feedback-inbox-date-to"
@@ -165,7 +165,7 @@
 
                 <div>
                   <h3 class="mb-2 text-sm font-semibold text-muted-foreground uppercase tracking-wider">{{ $t('views.FeedbackInboxView.annotation_heading') }}</h3>
-                  <textarea
+                  <textarea aria-label="$t("
                     v-model="annotations[record.id]"
                     rows="3"
                     maxlength="2000"

@@ -1,4 +1,4 @@
-﻿<template>
+<template>
   <TooltipProvider :delay-duration="300">
   <div class="flex items-start min-h-screen">
     <!-- Sidebar -->
@@ -37,7 +37,7 @@
         </div>
 
         <div class="flex items-center justify-between pb-2 mb-1">
-          <label class="toggle-switch" :class="isLight ? 'light' : 'dark'">
+          <label for="applayout-field-2" class="toggle-switch" :class="isLight ? 'light' : 'dark'">
             <span class="track">
               <span class="thumb" />
             </span>
@@ -76,7 +76,7 @@
               </svg>
               <span>{{ isLight ? $t('common.light') : $t('common.dark') }}</span>
             </span>
-            <input
+            <input id="applayout-field-2"
               type="checkbox"
               class="sr-only"
               @change="toggleTheme"
@@ -160,6 +160,8 @@
     />
 
     <!-- Mobile sidebar -->
+    <!-- The sidebar owns Escape handling while focus is within its descendants. -->
+    <!-- eslint-disable-next-line vuejs-accessibility/no-static-element-interactions -->
     <aside
       id="mobile-sidebar"
       ref="mobileSidebarRef"
@@ -186,7 +188,7 @@
       </div>
 
       <div class="flex items-center justify-between pb-2 mb-1">
-        <label class="toggle-switch" :class="isLight ? 'light' : 'dark'">
+        <label for="applayout-field-1" class="toggle-switch" :class="isLight ? 'light' : 'dark'">
           <span class="track">
             <span class="thumb" />
           </span>
@@ -225,7 +227,7 @@
             </svg>
             <span>{{ isLight ? $t('common.light') : $t('common.dark') }}</span>
           </span>
-          <input
+          <input id="applayout-field-1"
             type="checkbox"
             class="sr-only"
             @change="toggleTheme"

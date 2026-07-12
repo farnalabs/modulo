@@ -1,12 +1,12 @@
-﻿<template>
+<template>
     <div class="page-wide">
     <PageHeader :title="$t('views.AdminNotificationDeliveryLogView.notification_delivery_log')" :subtitle="$t('views.AdminNotificationDeliveryLogView.admin_view_of_all_webhook_notification_deliveries')" data-test-id="admin-notification-log-title" />
 
     <div class="rounded-lg border bg-card p-4 shadow-sm">
       <div class="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-5">
         <div>
-          <label class="mb-1 block text-xs font-medium text-muted-foreground">Status</label>
-          <select
+          <label for="adminnotificationdeliverylogview-field-4" class="mb-1 block text-xs font-medium text-muted-foreground">Status</label>
+          <select id="adminnotificationdeliverylogview-field-4"
             v-model="filterStatus"
             data-testid="admin-notification-log-status"
             aria-label="Status"
@@ -20,8 +20,8 @@
           </select>
         </div>
         <div>
-          <label class="mb-1 block text-xs font-medium text-muted-foreground">{{ $t('views.AdminAuditView.event_type') }}</label>
-          <select
+          <label for="adminnotificationdeliverylogview-field-3" class="mb-1 block text-xs font-medium text-muted-foreground">{{ $t('views.AdminAuditView.event_type') }}</label>
+          <select id="adminnotificationdeliverylogview-field-3"
             v-model="filterEventType"
             data-testid="admin-notification-log-event-type"
             aria-label="Event Type"
@@ -35,8 +35,8 @@
           </select>
         </div>
         <div>
-          <label class="mb-1 block text-xs font-medium text-muted-foreground">From</label>
-          <input
+          <label for="adminnotificationdeliverylogview-field-2" class="mb-1 block text-xs font-medium text-muted-foreground">From</label>
+          <input id="adminnotificationdeliverylogview-field-2"
             v-model="filterDateFrom"
             type="date"
             data-testid="admin-notification-log-date-from"
@@ -44,8 +44,8 @@
           />
         </div>
         <div>
-          <label class="mb-1 block text-xs font-medium text-muted-foreground">To</label>
-          <input
+          <label for="adminnotificationdeliverylogview-field-1" class="mb-1 block text-xs font-medium text-muted-foreground">To</label>
+          <input id="adminnotificationdeliverylogview-field-1"
             v-model="filterDateTo"
             type="date"
             data-testid="admin-notification-log-date-to"

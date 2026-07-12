@@ -1,8 +1,8 @@
 <template>
   <div class="space-y-4">
     <div>
-      <label class="mb-1 block text-sm font-medium">Trigger Type</label>
-      <select
+      <label for="edgeconfigpanel-field-5" class="mb-1 block text-sm font-medium">Trigger Type</label>
+      <select id="edgeconfigpanel-field-5"
         v-model="form.trigger_type"
         class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
       >
@@ -13,8 +13,8 @@
     </div>
 
     <div>
-      <label class="mb-1 block text-sm font-medium">Description</label>
-      <textarea
+      <label for="edgeconfigpanel-field-4" class="mb-1 block text-sm font-medium">Description</label>
+      <textarea id="edgeconfigpanel-field-4"
         v-model="form.description"
         rows="2"
         class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
@@ -23,8 +23,8 @@
     </div>
 
     <div>
-      <label class="mb-1 block text-sm font-medium">Condition Expression (JMESPath)</label>
-      <input
+      <label for="edgeconfigpanel-field-3" class="mb-1 block text-sm font-medium">Condition Expression (JMESPath)</label>
+      <input id="edgeconfigpanel-field-3"
         v-model="form.condition_expression"
         class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm font-mono ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
         placeholder="e.g. result.status == 'success'"
@@ -32,8 +32,8 @@
     </div>
 
     <div>
-      <label class="mb-1 block text-sm font-medium">Estimated Frequency</label>
-      <select
+      <label for="edgeconfigpanel-field-2" class="mb-1 block text-sm font-medium">Estimated Frequency</label>
+      <select id="edgeconfigpanel-field-2"
         v-model="form.estimated_frequency"
         class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
       >
@@ -46,8 +46,8 @@
     </div>
 
     <div>
-      <label class="mb-1 block text-sm font-medium">Trigger Link (optional)</label>
-      <input
+      <label for="edgeconfigpanel-field-1" class="mb-1 block text-sm font-medium">Trigger Link (optional)</label>
+      <input id="edgeconfigpanel-field-1"
         v-model="form.trigger_link"
         class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
         placeholder="Link to Modulo trigger config"

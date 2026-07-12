@@ -41,7 +41,7 @@
     </div>
 
     <div v-else class="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-      <div
+      <div role="button" tabindex="0" @keydown.enter="($event.currentTarget as HTMLElement).click()" @keydown.space.prevent="($event.currentTarget as HTMLElement).click()"
         v-for="map in maps"
         :key="map.id"
         class="cursor-pointer rounded-lg border bg-card p-4 shadow-sm transition-shadow hover:shadow-md"
@@ -58,7 +58,7 @@
     </div>
 
     <!-- Create dialog -->
-    <div
+    <div role="button" tabindex="0" @keydown.enter="($event.currentTarget as HTMLElement).click()" @keydown.space.prevent="($event.currentTarget as HTMLElement).click()"
       v-if="showCreateDialog"
       class="fixed inset-0 z-50 flex items-center justify-center bg-black/50"
       @click.self="showCreateDialog = false"
@@ -67,16 +67,16 @@
         <h3 class="mb-4 text-base font-semibold">Create Lifecycle Map</h3>
         <div class="space-y-4">
           <div>
-            <label class="mb-1 block text-sm font-medium">Name</label>
-            <input
+            <label for="lifecyclemapsview-field-2" class="mb-1 block text-sm font-medium">Name</label>
+            <input id="lifecyclemapsview-field-2"
               v-model="newName"
               class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm"
               placeholder="My Delivery Lifecycle"
             />
           </div>
           <div>
-            <label class="mb-1 block text-sm font-medium">Description</label>
-            <textarea
+            <label for="lifecyclemapsview-field-1" class="mb-1 block text-sm font-medium">Description</label>
+            <textarea id="lifecyclemapsview-field-1"
               v-model="newDescription"
               class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm"
               rows="3"

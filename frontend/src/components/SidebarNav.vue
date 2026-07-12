@@ -1,4 +1,4 @@
-﻿<template>
+<template>
   <nav :aria-label="$t('components.SidebarNav.main_navigation')" class="flex-1 space-y-6">
     <template v-for="group in visibleSidebarGroups" :key="group.id">
       <SidebarGroup

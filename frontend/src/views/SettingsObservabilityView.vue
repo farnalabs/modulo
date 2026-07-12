@@ -1,4 +1,4 @@
-﻿<template>
+<template>
   <div class="page-narrow">
     <PageHeader :title="$t('views.SettingsObservabilityView.observability')" :subtitle="$t('views.SettingsObservabilityView.configure_opentelemetry_export_and_langsmith_integration')" />
 
@@ -23,8 +23,8 @@
         <div class="rounded-lg border bg-card p-6 shadow-sm">
           <h2 class="mb-4 text-base font-semibold">{{ $t('views.SettingsObservabilityView.otlp_endpoint') }}</h2>
           <div>
-            <label class="mb-1 block text-sm font-medium">{{ $t('views.SettingsObservabilityView.endpoint_url') }}</label>
-            <input
+            <label for="settingsobservabilityview-field-3" class="mb-1 block text-sm font-medium">{{ $t('views.SettingsObservabilityView.endpoint_url') }}</label>
+            <input id="settingsobservabilityview-field-3"
               v-model="otlpEndpoint"
               type="url"
               data-testid="settings-observability-otlp-endpoint"
@@ -51,14 +51,14 @@
             {{ $t('views.SettingsObservabilityView.no_custom_headers_configured') }}
           </div>
           <div v-for="(header, index) in otlpHeaders" :key="index" class="mb-2 flex items-center gap-2">
-            <input
+            <input aria-label="$t("
               v-model="header.key"
               type="text"
               data-testid="settings-observability-header-key"
               class="flex-1 rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
               :placeholder="$t('views.SettingsObservabilityView.header_name')"
             />
-            <input
+            <input aria-label="$t("
               v-model="header.value"
               type="text"
               data-testid="settings-observability-header-value"
@@ -83,8 +83,8 @@
         <div class="rounded-lg border bg-card p-6 shadow-sm">
           <h2 class="mb-4 text-base font-semibold">{{ $t('views.SettingsObservabilityView.export_interval') }}</h2>
           <div>
-            <label class="mb-1 block text-sm font-medium">{{ $t('views.SettingsObservabilityView.interval_seconds') }}</label>
-            <input
+            <label for="settingsobservabilityview-field-2" class="mb-1 block text-sm font-medium">{{ $t('views.SettingsObservabilityView.interval_seconds') }}</label>
+            <input id="settingsobservabilityview-field-2"
               v-model.number="exportIntervalSeconds"
               type="number"
               min="1"
@@ -120,8 +120,8 @@
               <span class="text-sm font-medium">{{ $t('views.SettingsObservabilityView.enable_langsmith_tracing') }}</span>
             </div>
             <div v-if="langsmithEnabled">
-              <label class="mb-1 block text-sm font-medium">{{ $t('views.SettingsObservabilityView.api_key') }}</label>
-              <textarea
+              <label for="settingsobservabilityview-field-1" class="mb-1 block text-sm font-medium">{{ $t('views.SettingsObservabilityView.api_key') }}</label>
+              <textarea id="settingsobservabilityview-field-1"
                 v-model="langsmithApiKey"
                 data-testid="settings-observability-langsmith-api-key"
                 rows="3"

@@ -45,7 +45,7 @@ onMounted(async () => {
         })
       }
     } else {
-      console.debug('[App.vue] Login response has no user field — skipping error tracker setUser')
+      console.warn('[App.vue] Login response has no user field — skipping error tracker setUser')
       // TODO: fetch /me after login to set user info on error tracker
     }
     router.push('/')

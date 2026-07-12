@@ -21,8 +21,8 @@
         <h2 class="mb-4 text-base font-semibold">New Team</h2>
         <div class="space-y-4">
           <div>
-            <label class="mb-1 block text-sm font-medium">Name</label>
-            <input
+            <label for="settingsteamsview-field-2" class="mb-1 block text-sm font-medium">Name</label>
+            <input id="settingsteamsview-field-2"
               v-model="createName"
               type="text"
               data-testid="settings-teams-create-name"
@@ -31,8 +31,8 @@
             />
           </div>
           <div>
-            <label class="mb-1 block text-sm font-medium">Description</label>
-            <textarea
+            <label for="settingsteamsview-field-1" class="mb-1 block text-sm font-medium">Description</label>
+            <textarea id="settingsteamsview-field-1"
               v-model="createDescription"
               rows="2"
               data-testid="settings-teams-create-description"
@@ -78,7 +78,7 @@
 
           <div v-if="expandedTeamId === team.id" class="p-4">
             <div v-if="renameTeamId === team.id" class="mb-4 flex items-center gap-2">
-              <input v-model="renameName" type="text" data-testid="settings-teams-rename-name" class="flex-1 rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring" @keyup.enter="saveRename" />
+              <input aria-label="text" v-model="renameName" type="text" data-testid="settings-teams-rename-name" class="flex-1 rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring" @keyup.enter="saveRename" />
               <Button :disabled="!renameName.trim() || renamingTeam" data-testid="settings-teams-rename-save" @click="saveRename">
                 {{ renamingTeam ? 'Saving...' : 'Save' }}
               </Button>

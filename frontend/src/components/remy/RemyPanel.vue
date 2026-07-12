@@ -5,7 +5,7 @@
     :class="panelClasses"
     :style="panelStyle"
   >
-    <div class="remy-titlebar" @mousedown="startDrag">
+    <div role="button" tabindex="0" @keydown.enter="($event.currentTarget as HTMLElement).click()" @keydown.space.prevent="($event.currentTarget as HTMLElement).click()" class="remy-titlebar" @mousedown="startDrag">
       <div class="flex items-center gap-2 flex-1 min-w-0">
         <template v-if="editingName && store.activeSession">
           <input
@@ -20,7 +20,7 @@
           />
         </template>
         <template v-else>
-          <span
+          <span role="button" tabindex="0" @keydown.enter="($event.currentTarget as HTMLElement).click()" @keydown.space.prevent="($event.currentTarget as HTMLElement).click()"
             class="text-sm font-semibold truncate cursor-pointer hover:opacity-80"
             :title="$t('components.remy.RemyPanel.click_to_rename')"
             @click.stop="startEditName"
@@ -249,7 +249,7 @@
       </div>
     </div>
 
-    <div
+    <div role="button" tabindex="0" @keydown.enter="($event.currentTarget as HTMLElement).click()" @keydown.space.prevent="($event.currentTarget as HTMLElement).click()"
       v-if="store.panelState === 'floating' || store.panelState === 'docked'"
       class="remy-resize-handle"
       @mousedown="startResize"

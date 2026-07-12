@@ -1,4 +1,4 @@
-﻿<template>
+<template>
   <PageTabs :tabs="[
     { label: 'Browse', to: '/schemas' },
     { label: 'Editor', to: '/schemas/editor' },
@@ -23,7 +23,7 @@
           {{ $t('views.SchemaEditorView.no_schemas_yet') }}
         </div>
         <template v-else>
-          <div
+          <div role="button" tabindex="0" @keydown.enter="($event.currentTarget as HTMLElement).click()" @keydown.space.prevent="($event.currentTarget as HTMLElement).click()"
             v-for="schema in filteredSchemas"
             :key="schema.id"
             class="cursor-pointer border-b px-4 py-3 transition-colors hover:bg-muted/50"
@@ -104,8 +104,8 @@
                 <h2 class="mb-4 text-base font-semibold">{{ $t('views.SchemaEditorView.schema_details') }}</h2>
                 <div class="space-y-4">
                   <div>
-                    <label class="mb-1 block text-sm font-medium">{{ $t('views.SchemaEditorView.name') }}</label>
-                    <input
+                    <label for="schemaeditorview-field-8" class="mb-1 block text-sm font-medium">{{ $t('views.SchemaEditorView.name') }}</label>
+                    <input id="schemaeditorview-field-8"
                       v-model="schemaName"
                       type="text"
                       data-testid="schema-editor-name"
@@ -114,8 +114,8 @@
                     />
                   </div>
                   <div>
-                    <label class="mb-1 block text-sm font-medium">{{ $t('views.SchemaEditorView.description') }}</label>
-                    <input
+                    <label for="schemaeditorview-field-7" class="mb-1 block text-sm font-medium">{{ $t('views.SchemaEditorView.description') }}</label>
+                    <input id="schemaeditorview-field-7"
                       v-model="schemaDescription"
                       type="text"
                       data-testid="schema-editor-description"
@@ -124,8 +124,8 @@
                     />
                   </div>
                   <div>
-                    <label class="mb-1 block text-sm font-medium">{{ $t('views.SchemaEditorView.version') }}</label>
-                    <input
+                    <label for="schemaeditorview-field-6" class="mb-1 block text-sm font-medium">{{ $t('views.SchemaEditorView.version') }}</label>
+                    <input id="schemaeditorview-field-6"
                       v-model="schemaVersion"
                       type="text"
                       data-testid="schema-editor-version"
@@ -186,8 +186,8 @@
 
                         <div class="grid grid-cols-2 gap-3">
                           <div>
-                            <label class="mb-1 block text-xs text-muted-foreground">{{ $t('views.SchemaEditorView.field_name') }}</label>
-                            <input
+                            <label for="schemaeditorview-field-5" class="mb-1 block text-xs text-muted-foreground">{{ $t('views.SchemaEditorView.field_name') }}</label>
+                            <input id="schemaeditorview-field-5"
                               v-model="field.name"
                               type="text"
                               data-testid="schema-editor-field-name"
@@ -196,8 +196,8 @@
                             />
                           </div>
                           <div>
-                            <label class="mb-1 block text-xs text-muted-foreground">{{ $t('views.SchemaEditorView.field_type') }}</label>
-                            <select
+                            <label for="schemaeditorview-field-4" class="mb-1 block text-xs text-muted-foreground">{{ $t('views.SchemaEditorView.field_type') }}</label>
+                            <select id="schemaeditorview-field-4"
                               v-model="field.type"
                               data-testid="schema-editor-field-type"
                               aria-label="Field type"
@@ -214,8 +214,8 @@
 
                         <div class="grid grid-cols-2 gap-3">
                           <div>
-                            <label class="mb-1 block text-xs text-muted-foreground">{{ $t('views.SchemaEditorView.field_description') }}</label>
-                            <input
+                            <label for="schemaeditorview-field-3" class="mb-1 block text-xs text-muted-foreground">{{ $t('views.SchemaEditorView.field_description') }}</label>
+                            <input id="schemaeditorview-field-3"
                               v-model="field.description"
                               type="text"
                               data-testid="schema-editor-field-description"
@@ -224,8 +224,8 @@
                             />
                           </div>
                           <div>
-                            <label class="mb-1 block text-xs text-muted-foreground">{{ $t('views.SchemaEditorView.default_value') }}</label>
-                            <input
+                            <label for="schemaeditorview-field-2" class="mb-1 block text-xs text-muted-foreground">{{ $t('views.SchemaEditorView.default_value') }}</label>
+                            <input id="schemaeditorview-field-2"
                               v-model="field.defaultValue"
                               type="text"
                               data-testid="schema-editor-field-default"
@@ -236,8 +236,8 @@
                         </div>
 
                         <div class="flex items-center gap-4">
-                          <label class="flex items-center gap-1.5 text-xs text-muted-foreground">
-                            <input
+                          <label for="schemaeditorview-field-1" class="flex items-center gap-1.5 text-xs text-muted-foreground">
+                            <input id="schemaeditorview-field-1"
                               v-model="field.required"
                               type="checkbox"
                               data-testid="schema-editor-field-required"

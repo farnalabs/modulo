@@ -53,6 +53,7 @@ function buildManifestMap() {
       }
     }
   } catch {
+    // A missing or malformed build manifest leaves the breadcrumb map empty.
   }
   return map
 }

@@ -141,8 +141,8 @@ function removeMapping(sourceKey: string) {
         <div v-else class="mt-2 space-y-2 rounded-md border border-border/50 bg-muted/20 p-3">
           <div class="grid grid-cols-2 gap-3">
             <div>
-              <label class="mb-1 block text-xs font-medium text-muted-foreground">Source field</label>
-              <select
+              <label for="fieldmappingpair-field-2" class="mb-1 block text-xs font-medium text-muted-foreground">Source field</label>
+              <select id="fieldmappingpair-field-2"
                 v-model="selectedSource"
                 aria-label="Source field"
                 class="w-full rounded-md border border-border bg-background px-2 py-1 text-xs"
@@ -154,8 +154,8 @@ function removeMapping(sourceKey: string) {
               </select>
             </div>
             <div>
-              <label class="mb-1 block text-xs font-medium text-muted-foreground">Target field</label>
-              <select
+              <label for="fieldmappingpair-field-1" class="mb-1 block text-xs font-medium text-muted-foreground">Target field</label>
+              <select id="fieldmappingpair-field-1"
                 v-model="selectedTarget"
                 aria-label="Target field"
                 class="w-full rounded-md border border-border bg-background px-2 py-1 text-xs"

@@ -1,4 +1,4 @@
-﻿<template>
+<template>
   <div class="page-wide">
     <PageHeader :title="$t('views.TeamComparisonView.team_comparison')" :subtitle="$t('views.TeamComparisonView.sidebyside_eval_pass_rates_and_pipeline_metrics_across_teams')" />
 

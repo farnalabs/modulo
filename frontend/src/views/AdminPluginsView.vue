@@ -1,4 +1,4 @@
-﻿<template>
+<template>
   <FeatureGate feature-name="plugin_management" show-disabled>
     <div class="page-narrow">
       <header class="flex items-center justify-between">
@@ -79,11 +79,11 @@
                   </td>
                   <td class="table-cell-numeric">
                     <div class="flex items-center justify-end gap-1">
-                      <label
+                      <label for="adminpluginsview-field-1"
                         class="relative inline-flex cursor-pointer items-center"
                         :title="activeStates[plugin.PLUGIN_ID] !== false ? 'Disable plugin' : 'Enable plugin'"
                       >
-                        <input
+                        <input id="adminpluginsview-field-1"
                           type="checkbox"
                           class="sr-only peer"
                           :checked="activeStates[plugin.PLUGIN_ID] !== false"
