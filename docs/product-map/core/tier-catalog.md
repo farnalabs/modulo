@@ -13,7 +13,7 @@ code:
   - backend/src/modulo/core/feature_flags.py
   - backend/scripts/seed_tier_catalog.py
 depends-on:
-  - feat-core-feature-flags
+  - feat-core-feature-flag-ui
 status: partial
 ---
 
