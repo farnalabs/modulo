@@ -2140,13 +2140,13 @@ async def eval_regressions(
             detail="Feature is not available. Run database migrations to enable it.",
         ) from None
     except TimeoutError:
-        logger.error("Eval regressions query timed out", exc_info=True)
+        logger.exception("Eval regressions query timed out")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Query timed out. Please try again or reduce the lookback period.",
         ) from None
     except SQLAlchemyError:
-        logger.error("Eval regressions DB error", exc_info=True)
+        logger.exception("Eval regressions DB error")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database error. Please try again later.",
@@ -2242,7 +2242,7 @@ async def okr_progress(
             detail="Feature is not available. Run database migrations to enable it.",
         ) from None
     except SQLAlchemyError:
-        logger.warning("OKR progress DB error", exc_info=True)
+        logger.exception("OKR progress DB error")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database error. Please try again later.",
