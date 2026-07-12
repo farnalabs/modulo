@@ -203,7 +203,7 @@ export const useLifecycleMapsStore = defineStore('lifecycleMaps', () => {
       pipelines.value = data.items || []
     } catch (e: unknown) {
       pipelines.value = []
-      console.warn('Failed to fetch pipelines:', e)
+      error.value = formatApiError(e)
     }
   }
 
