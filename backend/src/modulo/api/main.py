@@ -243,6 +243,10 @@ async def _seed_modulo_users(settings: Settings) -> None:
                     logger.info("startup.user_membership_created", extra={"email": email})
                 continue
 
+            if existing_account is not None:
+                logger.info("startup.user_exists", extra={"email": email})
+                continue
+
             account = Account(
                 email=email,
                 display_name=email.split("@")[0],
