@@ -274,7 +274,7 @@ async def get_step_data(
                         for t in templates
                     ]
             except ProgrammingError:
-                logger.warning("onboarding.get_step_data.select_template_missing", exc_info=1)
+                logger.warning("onboarding.get_step_data.select_template_missing", exc_info=True)
                 raise HTTPException(
                     status_code=status.HTTP_501_NOT_IMPLEMENTED,
                     detail="Feature is not available. Run database migrations to enable it.",
@@ -381,13 +381,13 @@ async def create_starter_pipeline(
             name=pipeline.name,
         )
     except ProgrammingError:
-        logger.warning("onboarding.get_onboarding_status.table_missing", exc_info=1)
+        logger.warning("onboarding.get_onboarding_status.table_missing", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
         ) from None
     except SQLAlchemyError:
-        logger.warning("onboarding.get_onboarding_status.db_error", exc_info=1)
+        logger.warning("onboarding.get_onboarding_status.db_error", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database error. Please try again.",
