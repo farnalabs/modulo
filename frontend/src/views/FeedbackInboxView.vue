@@ -260,6 +260,7 @@ function statusBadgeClass(status: string): string {
     routing: 'badge badge-status-warning',
     correcting: 'badge badge-context-purple',
     resolved: 'badge badge-status-success',
+    dismissed: 'badge badge-context-slate',
     escalated: 'badge badge-status-destructive',
   }
   return classMap[status] ?? 'badge badge-context-slate'
@@ -425,7 +426,7 @@ async function dismissRecord(recordId: string) {
       detailMap.value[recordId] = data
       annotationMessage.value[recordId] = { type: 'success', text: t('views.FeedbackInboxView.dismissed') }
       const rec = records.value.find(r => r.id === recordId)
-      if (rec) rec.feedback_status = 'resolved'
+      if (rec) rec.feedback_status = 'dismissed'
       if (feedbackTimeouts.value[recordId]) clearTimeout(feedbackTimeouts.value[recordId])
       feedbackTimeouts.value[recordId] = setTimeout(() => { annotationMessage.value[recordId] = null }, 3000)
     }
