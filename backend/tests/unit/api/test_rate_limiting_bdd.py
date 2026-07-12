@@ -234,9 +234,7 @@ class TestDifferentEndpointLimits:
         registry = MagicMock(spec=RateLimiterRegistry)
 
         async def side_effect(key: str, **kwargs: object) -> bool:
-            if "runs" in key:
-                return False
-            return True
+            return "runs" not in key
 
         registry.check = AsyncMock(side_effect=side_effect)
         app = _build_app(registry=registry)
@@ -261,10 +259,7 @@ class TestPerApiKeyRateLimiting:
         tracked: dict[str, int] = {"key_one_": 60, "key_two_": 0}
 
         async def check(key: str, max_requests: int = 60, window_s: int = 60) -> bool:
-            for prefix, count in tracked.items():
-                if prefix in key and count >= max_requests:
-                    return False
-            return True
+            return all(not (prefix in key and count >= max_requests) for prefix, count in tracked.items())
 
         registry.check = AsyncMock(side_effect=check)
         app = _build_app(registry=registry)

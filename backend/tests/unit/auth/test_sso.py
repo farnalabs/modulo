@@ -458,7 +458,7 @@ class TestJitProvisioningExtended:
             session.execute.side_effect = [exec_mock1, exec_mock2]
             mock_select.return_value.order_by.return_value.limit.return_value = "query"
 
-            account, actual_org_id, org_role = await jit_provision_user(
+            account, _actual_org_id, org_role = await jit_provision_user(
                 session, settings, "new@example.com", "New User", "oidc", "google:456"
             )
 
