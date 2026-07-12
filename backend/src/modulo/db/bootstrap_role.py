@@ -31,7 +31,10 @@ async def _bootstrap(admin_url: str, app_url: str) -> None:
     app_user = _parse_role(app_url)
     app_pass = app_url.split(":")[2].split("@")[0]  # password between 2nd : and @
 
-    conn = await asyncpg.connect(admin_conn_str, ssl=False)
+    try:
+        conn = await asyncpg.connect(admin_conn_str, ssl=False)
+    except asyncpg.exceptions.CantChangeRuntimeParamError:
+        conn = await asyncpg.connect(admin_conn_str)
     try:
         # Idempotent role creation — skips if already exists
         row = await conn.fetchrow("SELECT 1 FROM pg_roles WHERE rolname = $1", app_user)
