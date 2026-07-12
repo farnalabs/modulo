@@ -1,5 +1,6 @@
 """SentryConnector — async Sentry API connector (v0)."""
 
+import asyncio
 from typing import Any
 
 import httpx
@@ -42,6 +43,8 @@ class SentryConnector(ConnectorBase):
                 if resp.status_code == 401:
                     return HealthResult(ok=False, detail="Invalid Sentry auth token")
                 return HealthResult(ok=False, detail=f"HTTP {resp.status_code}: {resp.text[:200]}")
+        except asyncio.CancelledError:
+            raise
         except Exception as exc:
             return HealthResult(ok=False, detail=str(exc)[:200])
 

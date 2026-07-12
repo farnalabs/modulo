@@ -109,7 +109,8 @@ class AzurePipelinesConnector(ConnectorBase):
             return HealthResult(ok=False, detail=f"HTTP {r.status_code}: {r.text[:200]}")
         except httpx.HTTPStatusError as exc:
             return HealthResult(
-                ok=False, detail=f"Azure Pipelines API HTTP {exc.response.status_code}: {exc.response.text[:200]}"
+                ok=False,
+                detail=f"Azure Pipelines API HTTP {exc.response.status_code}: {exc.response.text[:200]}",
             )
         except httpx.TimeoutException:
             return HealthResult(ok=False, detail="Azure Pipelines API timeout")
@@ -293,7 +294,7 @@ class AzurePipelinesConnector(ConnectorBase):
                         json=body,
                     )
                     r.raise_for_status()
-                    return cast(dict[str, Any], r.json())
+                    return cast("dict[str, Any]", r.json())
                 case "release":
                     definition_id = payload.data.get("definition_id", "")
                     body = {
@@ -308,7 +309,7 @@ class AzurePipelinesConnector(ConnectorBase):
                         json=body,
                     )
                     r.raise_for_status()
-                    return cast(dict[str, Any], r.json())
+                    return cast("dict[str, Any]", r.json())
                 case _:
                     raise ValueError(f"Unsupported write resource: {payload.resource!r}")
 
@@ -356,14 +357,14 @@ class _AzurePipelinesTestDouble(AzurePipelinesConnector):
             status=self._status,
         )
 
-    async def get_run_logs(self, run_id: str, cursor: str | None = None) -> CIRunLog:
+    async def get_run_logs(self, run_id: str, _cursor: str | None = None) -> CIRunLog:
         return CIRunLog(run_id=run_id, lines=self._run_logs)
 
     async def list_runs(
         self,
         pipeline_id: str | None = None,
         status: CIRunStatus | None = None,
-        limit: int = 20,
+        _limit: int = 20,
     ) -> list[CIRun]:
         return [
             CIRun(
@@ -373,8 +374,8 @@ class _AzurePipelinesTestDouble(AzurePipelinesConnector):
             ),
         ]
 
-    async def query(self, q: ConnectorQuery) -> ConnectorResult:
+    async def query(self, _q: ConnectorQuery) -> ConnectorResult:
         return ConnectorResult(records=[])
 
-    async def write(self, payload: ConnectorPayload) -> dict[str, Any]:
+    async def write(self, _payload: ConnectorPayload) -> dict[str, Any]:
         return {}

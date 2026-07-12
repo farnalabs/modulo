@@ -82,7 +82,7 @@ class JiraConnector(ConnectorBase):
             self._auth = httpx.BasicAuth(username=creds["email"], password=creds["api_token"])
         else:
             raise ValueError(
-                "Jira credentials must contain either 'token' (PAT/OAuth) or 'email' + 'api_token' (Basic auth)"
+                "Jira credentials must contain either 'token' (PAT/OAuth) or 'email' + 'api_token' (Basic auth)",
             )
 
     @property
@@ -163,6 +163,8 @@ class JiraConnector(ConnectorBase):
             return HealthResult(ok=True, detail=display_name)
         except ValueError as exc:
             return HealthResult(ok=False, detail=str(exc)[:200])
+        except asyncio.CancelledError:
+            raise
         except Exception as exc:
             return HealthResult(ok=False, detail=str(exc)[:200])
 

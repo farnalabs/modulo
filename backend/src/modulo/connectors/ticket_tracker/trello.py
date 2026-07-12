@@ -7,6 +7,7 @@ Cards are organised into lists (idList). Status is derived from the
 otherwise it's "open".
 """
 
+import asyncio
 import logging
 from datetime import datetime
 from typing import Any
@@ -50,6 +51,8 @@ class TrelloTicketTracker(TicketTrackerBase):
                 )
                 resp.raise_for_status()
                 return HealthResult(ok=True, detail=resp.json().get("name", ""))
+        except asyncio.CancelledError:
+            raise
         except Exception as e:
             return HealthResult(ok=False, detail=str(e)[:200])
 
@@ -65,7 +68,7 @@ class TrelloTicketTracker(TicketTrackerBase):
                 search=filters.get("search"),
                 limit=filters.get("limit", 20),
                 offset=filters.get("offset", 0),
-            )
+            ),
         )
         return ConnectorResult(records=[t.__dict__ for t in tickets], total=len(tickets))
 
