@@ -102,7 +102,7 @@ correction trigger, and resolution.
 - [x] Empty feedback list shows empty state with icon and explanatory text
 - [x] Detail loading shows spinner while fetching
 - [x] Concurrent operations prevented via disabled state on action buttons
-- [x] Annotation textarea has no maxlength attribute — added as client-side hint only (backend uses Text column, unlimited)
+- [x] Annotation textarea has `maxlength="2000"` as client-side hint (backend uses Text column, unlimited)
 - [ ] No status staleness handling — if another session resolves a record, user's action may get 409
 - [ ] No producing_agent filter in frontend (API schema includes `agent_id` but UI does not expose it)
 - [ ] No ai_correction_with_human_review accept/reject UI (PRD requires it for that handler type)
