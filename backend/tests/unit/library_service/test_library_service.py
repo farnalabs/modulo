@@ -191,7 +191,7 @@ def test_dogfood_agents_exist():
 
     slugs = {p.slug for p in dogfood}
     assert slugs == {
-        "issue-reader",
+        "ticket-reader",
         "code-generator",
         "code-applier",
         "test-runner",
@@ -214,7 +214,7 @@ def test_dogfood_workflow_has_correct_nodes():
     assert len(workflows) == 1
     nodes = workflows[0].content_json["nodes"]
     node_ids = {n["id"] for n in nodes}
-    assert node_ids == {"issue-reader", "code-generator", "code-applier", "test-runner", "pr-creator"}
+    assert node_ids == {"ticket-reader", "code-generator", "code-applier", "test-runner", "pr-creator"}
 
 
 def test_dogfood_workflow_has_correct_edges():
@@ -222,7 +222,7 @@ def test_dogfood_workflow_has_correct_edges():
     assert len(workflows) == 1
     edges = workflows[0].content_json["edges"]
     assert len(edges) == 4
-    assert edges[0]["source"] == "issue-reader"
+    assert edges[0]["source"] == "ticket-reader"
     assert edges[0]["target"] == "code-generator"
     assert edges[1]["source"] == "code-generator"
     assert edges[1]["target"] == "code-applier"
@@ -245,15 +245,15 @@ def test_dogfood_workflow_has_hitl_gate():
 
 def test_dogfood_workflow_entry_point():
     workflows = _filter_modulo(primitive_type="workflow", search="dogfood")
-    assert workflows[0].content_json["entry"] == "issue-reader"
+    assert workflows[0].content_json["entry"] == "ticket-reader"
 
 
 def test_dogfood_agents_reference_correct_schemas():
     agents = _filter_modulo(primitive_type="agent", search=None)
     dogfood_agents = {a.slug: a for a in agents if "dogfood" in (a.tags or [])}
 
-    assert dogfood_agents["issue-reader"].content_json["input_schema"] == "github-issue-input"
-    assert dogfood_agents["issue-reader"].content_json["output_schema"] == "structured-requirements"
+    assert dogfood_agents["ticket-reader"].content_json["input_schema"] == "github-issue-input"
+    assert dogfood_agents["ticket-reader"].content_json["output_schema"] == "structured-requirements"
     assert dogfood_agents["code-generator"].content_json["input_schema"] == "structured-requirements"
     assert dogfood_agents["code-generator"].content_json["output_schema"] == "code-diff-output"
     assert dogfood_agents["code-applier"].content_json["input_schema"] == "code-diff-output"
@@ -268,8 +268,8 @@ def test_dogfood_agents_have_connector_refs():
     agents = _filter_modulo(primitive_type="agent", search=None)
     dogfood_agents = {a.slug: a for a in agents if "dogfood" in (a.tags or [])}
 
-    assert dogfood_agents["issue-reader"].content_json["connector_type_refs"] == [
-        {"connector_type": "github", "capabilities": ["issue_read"]}
+    assert dogfood_agents["ticket-reader"].content_json["connector_type_refs"] == [
+        {"connector_type": "ticket-tracker", "capabilities": ["issue_read"]}
     ]
     assert dogfood_agents["code-generator"].content_json["connector_type_refs"] == []
     assert dogfood_agents["code-applier"].content_json["connector_type_refs"] == [
@@ -287,7 +287,7 @@ def test_dogfood_agents_have_environment_capabilities():
     agents = _filter_modulo(primitive_type="agent", search=None)
     dogfood_agents = {a.slug: a for a in agents if "dogfood" in (a.tags or [])}
 
-    assert dogfood_agents["issue-reader"].content_json["required_environment_capabilities"] == ["egress:github.com"]
+    assert dogfood_agents["ticket-reader"].content_json["required_environment_capabilities"] == ["egress:github.com"]
     assert dogfood_agents["code-generator"].content_json["required_environment_capabilities"] == []
     assert dogfood_agents["code-applier"].content_json["required_environment_capabilities"] == [
         "git",
@@ -581,9 +581,9 @@ async def test_copy_to_adapt_community_via_mcp_raises():
     with (
         patch("modulo.core.library_service.set_rls_org", new_callable=AsyncMock),
         patch("modulo.core.library_service.get_library_primitive", new_callable=AsyncMock, return_value=None),
+        pytest.raises(CommunityPrimitiveReadOnlyError),
     ):
-        with pytest.raises(CommunityPrimitiveReadOnlyError):
-            await copy_to_adapt(session, org_id, community_prim.id, via_mcp=True)
+        await copy_to_adapt(session, org_id, community_prim.id, via_mcp=True)
 
 
 async def test_copy_to_adapt_community_via_browser_succeeds():
@@ -626,9 +626,9 @@ async def test_copy_to_adapt_not_found_raises():
     with (
         patch("modulo.core.library_service.set_rls_org", new_callable=AsyncMock),
         patch("modulo.core.library_service.get_library_primitive", new_callable=AsyncMock, return_value=None),
+        pytest.raises(LookupError, match=str(missing_id)),
     ):
-        with pytest.raises(LookupError, match=str(missing_id)):
-            await copy_to_adapt(session, org_id, missing_id)
+        await copy_to_adapt(session, org_id, missing_id)
 
 
 async def test_copy_to_adapt_bumps_version():
@@ -935,9 +935,9 @@ async def test_publish_contribution_raises_for_published_status():
     with (
         patch("modulo.core.library_service.set_rls_org", new_callable=AsyncMock),
         patch("modulo.core.library_service.get_library_primitive", new_callable=AsyncMock, return_value=prim),
+        pytest.raises(ContributionInvalidTransitionError),
     ):
-        with pytest.raises(ContributionInvalidTransitionError):
-            await publish_contribution(session, org_id, prim_id, approved_by=approved_by)
+        await publish_contribution(session, org_id, prim_id, approved_by=approved_by)
 
 
 async def test_publish_contribution_raises_for_none_status():
@@ -952,9 +952,9 @@ async def test_publish_contribution_raises_for_none_status():
     with (
         patch("modulo.core.library_service.set_rls_org", new_callable=AsyncMock),
         patch("modulo.core.library_service.get_library_primitive", new_callable=AsyncMock, return_value=prim),
+        pytest.raises(ContributionInvalidTransitionError),
     ):
-        with pytest.raises(ContributionInvalidTransitionError):
-            await publish_contribution(session, org_id, prim_id, approved_by=approved_by)
+        await publish_contribution(session, org_id, prim_id, approved_by=approved_by)
 
 
 async def test_publish_contribution_raises_not_found():
@@ -966,9 +966,9 @@ async def test_publish_contribution_raises_not_found():
     with (
         patch("modulo.core.library_service.set_rls_org", new_callable=AsyncMock),
         patch("modulo.core.library_service.get_library_primitive", new_callable=AsyncMock, return_value=None),
+        pytest.raises(ContributionNotFoundError),
     ):
-        with pytest.raises(ContributionNotFoundError):
-            await publish_contribution(session, org_id, prim_id, approved_by=approved_by)
+        await publish_contribution(session, org_id, prim_id, approved_by=approved_by)
 
 
 async def test_publish_contribution_updates_in_memory_cache():
