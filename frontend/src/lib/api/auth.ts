@@ -65,7 +65,8 @@ export async function attemptTokenRefresh(): Promise<boolean> {
       setAccessToken(data.access_token)
       if (data.refresh_token) setRefreshToken(data.refresh_token)
       return true
-    } catch {
+    } catch (err) {
+      console.warn('[auth] Token refresh failed:', err)
       return false
     }
   })()
