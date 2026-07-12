@@ -1,9 +1,9 @@
 export type ParameterPortType = 'string' | 'number' | 'boolean' | 'select' | 'model_backend_ref' | 'schema_ref'
 
 export interface TargetInjection {
-  mode: string
+  mode: 'prompt_replace' | 'header_replace' | 'body_append' | 'system_prompt'
   node_id: string
-  injection_point: string
+  injection_point: 'prompt_template' | 'before_output' | 'system_prompt'
 }
 
 export interface ParameterPort {
@@ -13,8 +13,8 @@ export interface ParameterPort {
   description?: string | null
   type: ParameterPortType
   required: boolean
-  default_value: unknown
-  options: { label: string; value: string }[] | null
+  default_value?: unknown
+  options?: { label: string; value: string }[] | null
   multiline: boolean
   target_injection: TargetInjection
 }
