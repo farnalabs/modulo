@@ -107,23 +107,6 @@ sensitive data.
 
 ## QA History
 
-### 2026-07-08 — Cross-cutting QA (feat-pipelines-prompt-reveal, index 265)
-- **Finding 1 (CRITICAL)**: `reveal_node_prompt` endpoint only caught `ProgrammingError`→501.
-  Missing `SQLAlchemyError`→503 (connection/deadlock failures propagated as raw 500) and
-  generic `Exception`→500 (Python-level errors propagated as raw 500). Fixed: added both
-  catches with `except HTTPException: raise` guard and structured logging.
-- **Finding 2 (MAJOR)**: 4 hardcoded English strings in `RunDetailView.vue` (Hide/Show,
-  [Prompt hidden — click to reveal], dialog description, Copy Prompt/Copied!). Fixed:
-  wrapped in `$t()` with 6 new i18n keys.
-- **Finding 3 (MAJOR)**: `revealPrompt` silently swallowed API errors (set
-  `revealedPrompts[nodeName] = null` with no user feedback). Fixed: added `console.warn`
-  and set `error.value` with translated error message + API detail.
-- Added 2 unit tests (SQLAlchemyError→503, Exception→500) to
-  `test_prompt_reveal_programming_error.py`. Updated product map Error Handling section
-  with 3 new [x] checkboxes. All 30 prompt reveal tests pass.
-
-## QA History
-
 ### 2026-07-03 — Cross-cutting QA (feat-pipelines-prompt-reveal-104)
 - **Finding 1 (CRITICAL)**: `reveal_node_prompt` endpoint didn't catch `ProgrammingError`
   — Fixed: wrapped function body in try/except ProgrammingError returning 501.
@@ -139,3 +122,18 @@ sensitive data.
   — Fixed: added `showPrompt(nodeName)` call in `revealPrompt()` after successful API response when flag is true.
 - **Finding 7 (MINOR)**: No website docs stub for prompt-reveal
   — Fixed: created stub at Website/modulo-website/src/docs/pipelines/prompt-reveal.md.
+
+### 2026-07-08 — Cross-cutting QA (feat-pipelines-prompt-reveal, index 265)
+- **Finding 1 (CRITICAL)**: `reveal_node_prompt` endpoint only caught `ProgrammingError`→501.
+  Missing `SQLAlchemyError`→503 (connection/deadlock failures propagated as raw 500) and
+  generic `Exception`→500 (Python-level errors propagated as raw 500). Fixed: added both
+  catches with `except HTTPException: raise` guard and structured logging.
+- **Finding 2 (MAJOR)**: 4 hardcoded English strings in `RunDetailView.vue` (Hide/Show,
+  [Prompt hidden — click to reveal], dialog description, Copy Prompt/Copied!). Fixed:
+  wrapped in `$t()` with 6 new i18n keys.
+- **Finding 3 (MAJOR)**: `revealPrompt` silently swallowed API errors (set
+  `revealedPrompts[nodeName] = null` with no user feedback). Fixed: added `console.warn`
+  and set `error.value` with translated error message + API detail.
+- Added 2 unit tests (SQLAlchemyError→503, Exception→500) to
+  `test_prompt_reveal_programming_error.py`. Updated product map Error Handling section
+  with 3 new [x] checkboxes. All 30 prompt reveal tests pass.
