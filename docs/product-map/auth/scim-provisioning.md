@@ -1,6 +1,8 @@
 ---
 id: feat-auth-scim-provisioning
-prd: 9.2, 9.4
+prd:
+  - 9.2
+  - 9.4
 delivery-tasks: [task-nv10-scim-provisioning, task-test-scim-provisioning]
 bdd:
   - backend/tests/bdd/features/scim/scim_provisioning.feature
