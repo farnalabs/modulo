@@ -43,17 +43,7 @@ Weighted random variant selection, run_context_overrides merging, quota enforcem
 
 ### Error Handling
 
-- [x] `except ProgrammingError → 501 Not Implemented` on all route handlers (create, list, get, update, delete, run, coverage-gaps, prompt-diffs)
-- [x] `except SQLAlchemyError → 503 Service Unavailable` on all route handlers
-- [x] `except IntegrityError → 409 Conflict` on create, update, delete, and run endpoints
-- [x] `except Exception → 500 Internal Server Error` on all route handlers (guards against Python-level errors)
-- [x] 404 on GET/PUT/DELETE/run/coverage-gaps/prompt-diffs for unknown group_id
-- [x] 204 No Content on successful DELETE
-- [x] 429 on run_variant when pipeline concurrent run quota exceeded
-- [x] 429 when no variant selected or quota exceeded in run_variant_weighted
-- [x] 429 with "no variants configured" when variant group has empty variants list
-- [x] `with_for_update()` row lock prevents concurrent quota races in `run_variant_weighted` and `increment_run_count`
-- [x] `_snapshot_uuid` helper safely handles variants without `snapshot_id` in prompt-diffs
+See [`variant-groups.md`](variant-groups.md#error-handling) for the canonical error handling patterns shared across all variant route handlers (ProgrammingError→501, SQLAlchemyError→503, IntegrityError→409, Exception→500, 404, 429, row locking).
 
 ## QA History
 
