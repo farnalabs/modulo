@@ -4,10 +4,12 @@ import uuid
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
-from fastapi import HTTPException
 
 from modulo.db.crud.base import PageResult
 from modulo.db.crud.rating import (
+    CopyToAdaptError,
+    RatingCooldownError,
+    SelfRatingError,
     get_rating_aggregate,
     list_abuse_reports,
     list_ratings_for_primitive,
@@ -85,7 +87,7 @@ class TestSelfRatingGuard:
         result.scalar_one_or_none.return_value = prim
         _given_execute(mock_session, result)
 
-        with pytest.raises(HTTPException) as exc:
+        with pytest.raises(SelfRatingError, match="own primitive"):
             await submit_rating(
                 mock_session,
                 org_id=uuid.uuid4(),
@@ -93,16 +95,14 @@ class TestSelfRatingGuard:
                 thumbs_up=True,
                 account_id=user_id,
             )
-        assert exc.value.status_code == 403
-        assert "own primitive" in exc.value.detail
 
     async def test_allows_rating_others_primitive(self, mock_session):
         """Rating another user's primitive should be allowed (after other guards)."""
         user_id = uuid.uuid4()
         prim = MagicMock(spec=LibraryPrimitive)
-        prim.created_by = uuid.uuid4()  # different user
+        prim.account_id = uuid.uuid4()  # different user
 
-        # Set up: self-rating query (returns prim), cooldown count (0), copy count (1)
+        # Set up: self-rating query (returns prim), duplicate count (0), cooldown count (0), copy count (1)
         result = MagicMock()
         result.scalar_one_or_none.return_value = prim
         count_0 = MagicMock()
@@ -110,7 +110,7 @@ class TestSelfRatingGuard:
         count_1 = MagicMock()
         count_1.scalar_one.return_value = 1
 
-        _given_execute(mock_session, result, count_0, count_1)
+        _given_execute(mock_session, result, count_0, count_0, count_1)
 
         result = await submit_rating(
             mock_session,
@@ -127,16 +127,18 @@ class TestCooldownGuard:
         """User cannot rate the same primitive within 10 minutes."""
         user_id = uuid.uuid4()
         prim = MagicMock(spec=LibraryPrimitive)
-        prim.created_by = uuid.uuid4()
+        prim.account_id = uuid.uuid4()
 
         result = MagicMock()
         result.scalar_one_or_none.return_value = prim
+        count_0 = MagicMock()
+        count_0.scalar_one.return_value = 0
         count_1 = MagicMock()
         count_1.scalar_one.return_value = 1  # recent rating exists
 
-        _given_execute(mock_session, result, count_1)
+        _given_execute(mock_session, result, count_0, count_1)
 
-        with pytest.raises(HTTPException) as exc:
+        with pytest.raises(RatingCooldownError, match="wait"):
             await submit_rating(
                 mock_session,
                 org_id=uuid.uuid4(),
@@ -144,8 +146,6 @@ class TestCooldownGuard:
                 thumbs_up=True,
                 account_id=user_id,
             )
-        assert exc.value.status_code == 429
-        assert "wait" in exc.value.detail.lower()
 
 
 class TestCopyToAdaptGuard:
@@ -153,18 +153,18 @@ class TestCopyToAdaptGuard:
         """User must copy a primitive before rating it."""
         user_id = uuid.uuid4()
         prim = MagicMock(spec=LibraryPrimitive)
-        prim.created_by = uuid.uuid4()
+        prim.account_id = uuid.uuid4()
 
         result = MagicMock()
         result.scalar_one_or_none.return_value = prim
         count_0 = MagicMock()
-        count_0.scalar_one.return_value = 0  # no recent rating
+        count_0.scalar_one.return_value = 0
         count_0b = MagicMock()
         count_0b.scalar_one.return_value = 0  # no copy made
 
-        _given_execute(mock_session, result, count_0, count_0b)
+        _given_execute(mock_session, result, count_0, count_0, count_0b)
 
-        with pytest.raises(HTTPException) as exc:
+        with pytest.raises(CopyToAdaptError, match="copy"):
             await submit_rating(
                 mock_session,
                 org_id=uuid.uuid4(),
@@ -172,14 +172,12 @@ class TestCopyToAdaptGuard:
                 thumbs_up=True,
                 account_id=user_id,
             )
-        assert exc.value.status_code == 403
-        assert "copy" in exc.value.detail.lower()
 
     async def test_allows_after_copy(self, mock_session):
         """User who has copied the primitive can rate it."""
         user_id = uuid.uuid4()
         prim = MagicMock(spec=LibraryPrimitive)
-        prim.created_by = uuid.uuid4()
+        prim.account_id = uuid.uuid4()
 
         result = MagicMock()
         result.scalar_one_or_none.return_value = prim
@@ -188,7 +186,7 @@ class TestCopyToAdaptGuard:
         count_1 = MagicMock()
         count_1.scalar_one.return_value = 1  # has copy
 
-        _given_execute(mock_session, result, count_0, count_1)
+        _given_execute(mock_session, result, count_0, count_0, count_1)
 
         result = await submit_rating(
             mock_session,
