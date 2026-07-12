@@ -748,7 +748,7 @@ class TestAuthBeforeFileRead:
         mock_session_local.return_value.__aenter__.return_value = mock_session
 
         input_path = tmp_path / "should_not_exist.jsonl"
-        input_path.write_text("garbage")
+        input_path.write_text(json.dumps({"__meta__": {"version": 1}}) + "\n")
 
         runner = CliRunner()
         result = runner.invoke(
@@ -765,8 +765,6 @@ class TestAuthBeforeFileRead:
         assert result.exit_code != 0
         assert "Admin account not found" in result.output
         assert input_path.exists(), "File should still exist (auth fail occurred before any file access)"
-
-
 class TestAdminSecretAuth:
     @patch.dict("os.environ", {"MODULO_ADMIN_SECRET": "super_secret", "MODULO_ADMIN_TOKEN": ""})
     @patch("modulo.cli.migrate.AsyncSessionLocal")
