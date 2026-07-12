@@ -17,6 +17,20 @@ depends-on:
 status: partial
 ---
 
+### 2026-07-12 — Round 3 QA (improve-architecture batch 2)
+
+**Fixed (MAJOR):** Added `_jitter()` static method and applied random jitter to all 5 retry sleep calls in `_call_api()`. The product map claimed "exponential backoff + jitter" but the code had pure exponential backoff without jitter, creating a thundering-herd risk on coordinated retries (e.g. webhook-triggered deployments). This was fixed in GitHub/Linear/Jira/Slack connectors in previous Round 3 passes but was missed for GitLab.
+
+**Fixed (MINOR):** Removed redundant `or response.headers.get("retry-after")` from `_parse_retry_after()` — httpx response headers are case-insensitive so the second lookup was redundant. (GitHub connector already had this pattern fixed.)
+
+**Fixed (MINOR):** Fixed B904 — added `from None` to `raise ValueError(...)` in `_require_filter()` `except KeyError` handler.
+
+**Fixed (MINOR):** Inlined 9 `_safe_json(r)` assignments in `write()` method — replaced `X = _safe_json(r); return X` with `return _safe_json(r)` to fix RET504 flags.
+
+**Product map fixed:** Added `# noqa: S311` to `_jitter()` — same suppression as GitHub connector.
+
+**Status:** partial (6 known gaps unchanged).
+
 # GitLab Connector
 
 Async GitLab REST API v4 connector implementing `ConnectorBase`. Provides read/write access to GitLab projects for agent pipelines. Authenticated via Personal Access Token. Part of the `git-host` connector type family alongside `FilesystemConnector` and `GitHubConnector`.
