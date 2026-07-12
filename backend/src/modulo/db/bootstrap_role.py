@@ -28,7 +28,7 @@ async def _bootstrap(admin_url: str, app_url: str) -> None:
     parsed = urlparse(app_url)
     app_pass = unquote(parsed.password) if parsed.password else ""
 
-    conn = await asyncpg.connect(admin_conn_str, ssl="prefer")
+    conn = await asyncpg.connect(admin_conn_str)
     try:
         # Idempotent role creation — skips if already exists
         row = await conn.fetchrow("SELECT 1 FROM pg_roles WHERE rolname = $1", app_user)
