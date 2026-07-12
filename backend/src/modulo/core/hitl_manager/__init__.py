@@ -25,6 +25,7 @@ alpha are still accepted for backwards compatibility.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import secrets
 import uuid
@@ -281,6 +282,32 @@ class HITLManager:
         gate = await session.get(HitlClaim, claimed_id, populate_existing=True)
         if gate is None:
             raise GateVanishedError(run_id, gate_id, "claimed")
+
+        # Re-verify team membership — the check above ran before the atomic
+        # UPDATE, creating a TOCTOU window where the user could have been
+        # removed from the team.  If they're no longer a member, undo the
+        # claim and raise.
+        if gate_check is not None and gate_check.required_team_id is not None:
+            tm_still = await session.execute(
+                select(TeamMembership).where(
+                    TeamMembership.team_id == gate_check.required_team_id,
+                    TeamMembership.account_id == claimant_id,
+                    TeamMembership.organisation_id == org_id,
+                )
+            )
+            if tm_still.scalar_one_or_none() is None:
+                await session.execute(
+                    update(HitlClaim)
+                    .where(HitlClaim.id == claimed_id)
+                    .values(account_id=None, claimed_at=None, claim_token=None, expires_at=None)
+                )
+                raise NotTeamMemberError(
+                    run_id=run_id,
+                    gate_id=gate_id,
+                    team_id=gate_check.required_team_id,
+                    user_id=claimant_id,
+                )
+
         return gate
 
     # ------------------------------------------------------------------
@@ -679,6 +706,8 @@ class HITLManager:
             if gate.decision != _DECISION_REJECTED:
                 gate.delivered_at = datetime.now(UTC)
             await session.flush()
+        except asyncio.CancelledError:
+            raise
         except Exception:
             _log.exception("Failed to log audit event for claim %s", gate.id)
             raise
