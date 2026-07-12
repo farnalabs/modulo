@@ -33,7 +33,10 @@ import asyncpg
 
 async def _bootstrap():
     pg_url = admin_url.replace("postgresql+asyncpg://", "postgres://")
-    conn = await asyncpg.connect(pg_url, ssl=False)
+    try:
+        conn = await asyncpg.connect(pg_url, ssl=False)
+    except asyncpg.exceptions.CantChangeRuntimeParamError:
+        conn = await asyncpg.connect(pg_url)
     try:
         await conn.execute(
             "CREATE TABLE IF NOT EXISTS alembic_version ("
