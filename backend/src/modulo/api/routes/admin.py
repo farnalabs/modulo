@@ -111,10 +111,10 @@ async def global_search(
                         await session.execute(
                             text("""
                                 SELECT id, name, description,
-                                    CASE WHEN name ILIKE :prefix THEN 2 ELSE 1 END AS relevance
+                                    CASE WHEN LOWER(name) LIKE LOWER(:prefix) THEN 2 ELSE 1 END AS relevance
                                 FROM pipelines
                                 WHERE organisation_id = :org_id
-                                    AND (name ILIKE :like OR description ILIKE :like)
+                                    AND (LOWER(name) LIKE LOWER(:like) OR LOWER(description) LIKE LOWER(:like))
                                 ORDER BY relevance DESC, name ASC
                                 LIMIT :lim OFFSET :off
                             """),
@@ -132,7 +132,7 @@ async def global_search(
                             text("""
                                 SELECT COUNT(*) FROM pipelines
                                 WHERE organisation_id = :org_id
-                                    AND (name ILIKE :like OR description ILIKE :like)
+                                    AND (LOWER(name) LIKE LOWER(:like) OR LOWER(description) LIKE LOWER(:like))
                             """),
                             {"org_id": org_id, "like": like},
                         )
@@ -157,13 +157,16 @@ async def global_search(
                     rows = (
                         await session.execute(
                             text("""
-                                SELECT r.id, r.run_number, r.id::text AS display_id, p.name AS pipeline_name,
-                                    CASE WHEN r.id::text ILIKE :prefix THEN 2
-                                         WHEN p.name ILIKE :like THEN 1 ELSE 0 END AS relevance
+                                SELECT r.id, r.run_number, CAST(r.id AS TEXT) AS display_id, p.name AS pipeline_name,
+                                    CASE WHEN LOWER(CAST(r.id AS TEXT)) LIKE LOWER(:prefix) THEN 2
+                                         WHEN LOWER(p.name) LIKE LOWER(:like) THEN 1 ELSE 0 END AS relevance
                                 FROM runs r
                                 JOIN pipelines p ON p.id = r.pipeline_id
                                 WHERE r.organisation_id = :org_id
-                                    AND (r.id::text ILIKE :prefix OR p.name ILIKE :like)
+                                    AND (
+                                        LOWER(CAST(r.id AS TEXT)) LIKE LOWER(:prefix)
+                                        OR LOWER(p.name) LIKE LOWER(:like)
+                                    )
                                 ORDER BY relevance DESC, r.created_at DESC
                                 LIMIT :lim OFFSET :off
                             """),
@@ -182,7 +185,10 @@ async def global_search(
                                 SELECT COUNT(*) FROM runs r
                                 JOIN pipelines p ON p.id = r.pipeline_id
                                 WHERE r.organisation_id = :org_id
-                                    AND (r.id::text ILIKE :prefix OR p.name ILIKE :like)
+                                    AND (
+                                        LOWER(CAST(r.id AS TEXT)) LIKE LOWER(:prefix)
+                                        OR LOWER(p.name) LIKE LOWER(:like)
+                                    )
                             """),
                             {"org_id": org_id, "like": like, "prefix": prefix},
                         )
@@ -209,14 +215,20 @@ async def global_search(
                         await session.execute(
                             text("""
                                 SELECT id, event_type, resource_type,
-                                    CASE WHEN event_type ILIKE :prefix THEN 2
-                                         WHEN event_type ILIKE :like OR resource_type ILIKE :like
-                                              OR payload_json::text ILIKE :like THEN 1
-                                         ELSE 0 END AS relevance
+                                    CASE
+                                        WHEN LOWER(event_type) LIKE LOWER(:prefix) THEN 2
+                                        WHEN LOWER(event_type) LIKE LOWER(:like)
+                                             OR LOWER(resource_type) LIKE LOWER(:like)
+                                             OR LOWER(CAST(payload_json AS TEXT)) LIKE LOWER(:like) THEN 1
+                                        ELSE 0
+                                    END AS relevance
                                 FROM audit_events
                                 WHERE organisation_id = :org_id
-                                    AND (event_type ILIKE :like OR resource_type ILIKE :like
-                                         OR payload_json::text ILIKE :like)
+                                    AND (
+                                        LOWER(event_type) LIKE LOWER(:like)
+                                        OR LOWER(resource_type) LIKE LOWER(:like)
+                                        OR LOWER(CAST(payload_json AS TEXT)) LIKE LOWER(:like)
+                                    )
                                 ORDER BY relevance DESC, created_at DESC
                                 LIMIT :lim OFFSET :off
                             """),
@@ -234,8 +246,11 @@ async def global_search(
                             text("""
                                 SELECT COUNT(*) FROM audit_events
                                 WHERE organisation_id = :org_id
-                                    AND (event_type ILIKE :like OR resource_type ILIKE :like
-                                         OR payload_json::text ILIKE :like)
+                                    AND (
+                                        LOWER(event_type) LIKE LOWER(:like)
+                                        OR LOWER(resource_type) LIKE LOWER(:like)
+                                        OR LOWER(CAST(payload_json AS TEXT)) LIKE LOWER(:like)
+                                    )
                             """),
                             {"org_id": org_id, "like": like},
                         )
@@ -264,10 +279,10 @@ async def global_search(
                         await session.execute(
                             text("""
                                 SELECT id, name, description,
-                                    CASE WHEN name ILIKE :prefix THEN 2 ELSE 1 END AS relevance
+                                    CASE WHEN LOWER(name) LIKE LOWER(:prefix) THEN 2 ELSE 1 END AS relevance
                                 FROM library_primitives
                                 WHERE organisation_id = :org_id
-                                    AND (name ILIKE :like OR description ILIKE :like)
+                                    AND (LOWER(name) LIKE LOWER(:like) OR LOWER(description) LIKE LOWER(:like))
                                 ORDER BY relevance DESC, name ASC
                                 LIMIT :lim OFFSET :off
                             """),
@@ -285,7 +300,7 @@ async def global_search(
                             text("""
                                 SELECT COUNT(*) FROM library_primitives
                                 WHERE organisation_id = :org_id
-                                    AND (name ILIKE :like OR description ILIKE :like)
+                                    AND (LOWER(name) LIKE LOWER(:like) OR LOWER(description) LIKE LOWER(:like))
                             """),
                             {"org_id": org_id, "like": like},
                         )
@@ -352,53 +367,68 @@ async def admin_create_user(
             detail=(f"Invalid role: {req.org_role}. Must be one of: admin, operator, runner, viewer"),
         )
 
-    existing = await get_account_by_email(session, req.email)
-    if existing is not None:
-        from modulo.db.crud.org_membership import get_membership_by_account_and_org
+    try:
+        async with session.begin():
+            existing = await get_account_by_email(session, req.email)
+            if existing is not None:
+                from modulo.db.crud.org_membership import get_membership_by_account_and_org
 
-        membership = await get_membership_by_account_and_org(session, existing.id, current_user.organisation_id)
-        if membership is not None:
+                membership = await get_membership_by_account_and_org(session, existing.id, current_user.organisation_id)
+                if membership is not None:
+                    raise HTTPException(
+                        status_code=status.HTTP_409_CONFLICT,
+                        detail="A user with this email already exists in this organisation",
+                    )
+
+        try:
+            validate_password_strength(req.password)
+        except ValueError as exc:
             raise HTTPException(
-                status_code=status.HTTP_409_CONFLICT,
-                detail="A user with this email already exists in this organisation",
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=str(exc),
+            ) from exc
+
+        pw_hash = hash_password(req.password)
+
+        async with session.begin():
+            from modulo.db.crud.account import create_account
+
+            if existing is not None:
+                account = existing
+                account.password_hash = pw_hash
+            else:
+                account = await create_account(
+                    session,
+                    email=req.email,
+                    display_name=req.display_name,
+                    password_hash=pw_hash,
+                )
+
+            membership = await create_membership(
+                session,
+                account_id=account.id,
+                org_id=current_user.organisation_id,
+                role=req.org_role,
             )
 
-    try:
-        validate_password_strength(req.password)
-    except ValueError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail=str(exc),
-        ) from exc
-
-    pw_hash = hash_password(req.password)
-
-    if existing is not None:
-        account = existing
-        account.password_hash = pw_hash
-    else:
-        from modulo.db.crud.account import create_account
-
-        account = await create_account(
-            session,
-            email=req.email,
-            display_name=req.display_name,
-            password_hash=pw_hash,
+        return CreateUserResponse(
+            id=str(account.id),
+            email=account.email,
+            display_name=account.display_name,
+            org_role=membership.role,
         )
-
-    membership = await create_membership(
-        session,
-        account_id=account.id,
-        org_id=current_user.organisation_id,
-        role=req.org_role,
-    )
-
-    return CreateUserResponse(
-        id=str(account.id),
-        email=account.email,
-        display_name=account.display_name,
-        org_role=membership.role,
-    )
+    except ProgrammingError:
+        logger.warning("admin_create_user: DB migration may be missing", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="Database migration incomplete. Please run database migrations.",
+        ) from None
+    except SQLAlchemyError:
+        logger.exception("admin_create_user: DB error")
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Database error occurred. Please try again later.",
+        ) from None
 
 
 class AdminCreateTeamRequest(BaseModel):
