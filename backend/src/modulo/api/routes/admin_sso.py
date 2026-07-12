@@ -1,4 +1,4 @@
-import json
+﻿import json
 import logging
 import uuid
 from typing import Any
@@ -130,13 +130,13 @@ async def get_providers(
         providers = await list_providers(session)
         return [SsoProviderResponse.from_orm(p) for p in providers]
     except ProgrammingError as exc:
-        _log.warning("SSO providers table not available: %s", exc)
+        _log.warning("SSO providers table not available: %s", exc, exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
         ) from exc
     except SQLAlchemyError as exc:
-        _log.warning("SSO providers DB error on list: %s", exc)
+        _log.warning("SSO providers DB error on list: %s", exc, exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database error. Please try again.",
@@ -180,18 +180,18 @@ async def create_provider_endpoint(
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
     except IntegrityError as exc:
-        _log.warning("SSO provider duplicate name on create: %s", exc)
+        _log.warning("SSO provider duplicate name on create: %s", exc, exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT, detail="An SSO provider with this name already exists."
         ) from exc
     except ProgrammingError as exc:
-        _log.warning("SSO providers table not available on create: %s", exc)
+        _log.warning("SSO providers table not available on create: %s", exc, exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
         ) from exc
     except SQLAlchemyError as exc:
-        _log.warning("SSO providers DB error on create: %s", exc)
+        _log.warning("SSO providers DB error on create: %s", exc, exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database error. Please try again.",
@@ -225,19 +225,19 @@ async def update_provider_endpoint(
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
     except IntegrityError as exc:
-        _log.warning("SSO provider duplicate name on update: %s", exc)
+        _log.warning("SSO provider duplicate name on update: %s", exc, exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="An SSO provider with this name already exists.",
         ) from exc
     except ProgrammingError as exc:
-        _log.warning("SSO providers table not available on update: %s", exc)
+        _log.warning("SSO providers table not available on update: %s", exc, exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
         ) from exc
     except SQLAlchemyError as exc:
-        _log.warning("SSO providers DB error on update: %s", exc)
+        _log.warning("SSO providers DB error on update: %s", exc, exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database error. Please try again.",
@@ -274,13 +274,13 @@ async def delete_provider_endpoint(
             detail="A resource with this value already exists",
         ) from None
     except ProgrammingError as exc:
-        _log.warning("SSO providers table not available on delete: %s", exc)
+        _log.warning("SSO providers table not available on delete: %s", exc, exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
         ) from exc
     except SQLAlchemyError as exc:
-        _log.warning("SSO providers DB error on delete: %s", exc)
+        _log.warning("SSO providers DB error on delete: %s", exc, exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database error. Please try again.",
@@ -317,13 +317,13 @@ async def test_provider_connection(
             detail="A resource with this value already exists",
         ) from None
     except ProgrammingError as exc:
-        _log.warning("SSO providers table not available on test connection: %s", exc)
+        _log.warning("SSO providers table not available on test connection: %s", exc, exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
         ) from exc
     except SQLAlchemyError as exc:
-        _log.warning("SSO providers DB error on test connection: %s", exc)
+        _log.warning("SSO providers DB error on test connection: %s", exc, exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database error. Please try again.",
@@ -349,7 +349,7 @@ async def test_provider_connection(
     except HTTPException:
         raise
     except Exception as exc:
-        _log.warning("SSO test connection failed: %s", exc)
+        _log.warning("SSO test connection failed: %s", exc, exc_info=True)
         return SsoProviderTestResult(
             success=False,
             message=str(exc),
@@ -368,8 +368,6 @@ async def _test_oidc_connection(provider: Any) -> SsoProviderTestResult:
             resp = await client.get(provider.discovery_url, timeout=httpx.Timeout(10.0, connect=5.0))
             resp.raise_for_status()
             disc = resp.json()
-    except HTTPException:
-        raise
     except Exception as exc:
         return SsoProviderTestResult(
             success=False,
@@ -418,8 +416,6 @@ async def _test_saml_connection(provider: Any) -> SsoProviderTestResult:
                 resp = await client.get(provider.metadata_url, timeout=httpx.Timeout(10.0, connect=5.0))
                 resp.raise_for_status()
                 metadata_xml = resp.text
-        except HTTPException:
-            raise
         except Exception as exc:
             return SsoProviderTestResult(
                 success=False,
@@ -434,8 +430,6 @@ async def _test_saml_connection(provider: Any) -> SsoProviderTestResult:
 
     try:
         root = ET.fromstring(metadata_xml)
-    except HTTPException:
-        raise
     except Exception as exc:
         return SsoProviderTestResult(
             success=False,
@@ -505,13 +499,13 @@ async def toggle_provider_endpoint(
             detail="A resource with this value already exists",
         ) from None
     except ProgrammingError as exc:
-        _log.warning("SSO providers table not available on toggle: %s", exc)
+        _log.warning("SSO providers table not available on toggle: %s", exc, exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
         ) from exc
     except SQLAlchemyError as exc:
-        _log.warning("SSO providers DB error on toggle: %s", exc)
+        _log.warning("SSO providers DB error on toggle: %s", exc, exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database error. Please try again.",
@@ -564,13 +558,13 @@ async def set_group_mappings_endpoint(
             detail="A resource with this value already exists",
         ) from None
     except ProgrammingError as exc:
-        _log.warning("SSO providers table not available on set_group_mappings: %s", exc)
+        _log.warning("SSO providers table not available on set_group_mappings: %s", exc, exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
         ) from exc
     except SQLAlchemyError as exc:
-        _log.warning("SSO providers DB error on set_group_mappings: %s", exc)
+        _log.warning("SSO providers DB error on set_group_mappings: %s", exc, exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database error. Please try again.",
@@ -602,13 +596,13 @@ async def get_group_mappings_endpoint(
     try:
         provider = await get_provider(session, provider_id)
     except ProgrammingError as exc:
-        _log.warning("SSO providers table not available on get_group_mappings: %s", exc)
+        _log.warning("SSO providers table not available on get_group_mappings: %s", exc, exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
         ) from exc
     except SQLAlchemyError as exc:
-        _log.warning("SSO providers DB error on get_group_mappings: %s", exc)
+        _log.warning("SSO providers DB error on get_group_mappings: %s", exc, exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database error. Please try again.",
@@ -627,3 +621,4 @@ async def get_group_mappings_endpoint(
             detail="SSO provider not found",
         )
     return GroupMappingsResponse(mappings=[GroupMappingItem(**m) for m in provider.group_mappings])
+
