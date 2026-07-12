@@ -18,8 +18,6 @@ from datetime import UTC, datetime
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
-
-logger = logging.getLogger(__name__)
 from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy import update as sa_update
@@ -41,6 +39,8 @@ from modulo.db.models.feedback_record import FeedbackRecord
 from modulo.db.models.pipeline_snapshot import PipelineSnapshot
 from modulo.db.models.run import Run
 from modulo.db.rls import set_rls_org
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/v1", tags=["feedback"])
 
@@ -224,7 +224,7 @@ async def list_feedback_inbox(
             raise HTTPException(
                 status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
                 detail=f"Invalid date_from format: '{date_from}'. Use ISO 8601 format (e.g. 2024-01-01T00:00:00).",
-            )
+            ) from None
     if date_to:
         try:
             date_to_dt = datetime.fromisoformat(date_to).replace(tzinfo=UTC)
@@ -232,7 +232,7 @@ async def list_feedback_inbox(
             raise HTTPException(
                 status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
                 detail=f"Invalid date_to format: '{date_to}'. Use ISO 8601 format (e.g. 2024-01-01T00:00:00).",
-            )
+            ) from None
 
     try:
         async with session.begin():
@@ -264,12 +264,12 @@ async def list_feedback_inbox(
         ) from exc
     except HTTPException:
         raise
-    except Exception as exc:
+    except Exception:
         logger.exception("Unexpected error listing feedback inbox")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="An unexpected error occurred. Please try again later.",
-        )
+        ) from None
 
     pipeline_map = result.get("pipeline_map", {})
 
@@ -308,7 +308,7 @@ async def list_eval_proposals(
                         )
                     )
                     snap_rows_result = snap_rows.all()
-                    for snap_id, graph_json in snap_rows_result:
+                    for _, graph_json in snap_rows_result:
                         if graph_json:
                             for node in graph_json.get("nodes", []):
                                 node_name_map[str(node.get("id"))] = node.get("name") or node.get("label", "")
@@ -329,12 +329,12 @@ async def list_eval_proposals(
         ) from exc
     except HTTPException:
         raise
-    except Exception as exc:
+    except Exception:
         logger.exception("Unexpected error listing eval proposals")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="An unexpected error occurred. Please try again later.",
-        )
+        ) from None
 
     return {
         "items": [_serialise_record(r, producing_node_name=node_name_map.get(r.producing_node_id)) for r in items],
@@ -372,12 +372,12 @@ async def get_feedback(
         ) from exc
     except HTTPException:
         raise
-    except Exception as exc:
+    except Exception:
         logger.exception("Unexpected error getting feedback record %s", record_id)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="An unexpected error occurred. Please try again later.",
-        )
+        ) from None
 
     if record is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Feedback record not found")
@@ -421,12 +421,12 @@ async def update_feedback_status(
         ) from exc
     except HTTPException:
         raise
-    except Exception as exc:
+    except Exception:
         logger.exception("Unexpected error updating feedback status for record %s", record_id)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="An unexpected error occurred. Please try again later.",
-        )
+        ) from None
 
     if record is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Feedback record not found")
@@ -485,12 +485,12 @@ async def detect_eval_gap(
         ) from exc
     except HTTPException:
         raise
-    except Exception as exc:
+    except Exception:
         logger.exception("Unexpected error detecting eval gap for record %s", record_id)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="An unexpected error occurred. Please try again later.",
-        )
+        ) from None
 
     return {
         "id": str(record.id),
@@ -536,12 +536,12 @@ async def get_inbox_item(
         ) from exc
     except HTTPException:
         raise
-    except Exception as exc:
+    except Exception:
         logger.exception("Unexpected error getting inbox item %s", record_id)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="An unexpected error occurred. Please try again later.",
-        )
+        ) from None
 
     if record is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Feedback record not found")
@@ -574,10 +574,7 @@ async def review_feedback(
             if record is None:
                 raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Feedback record not found")
 
-            if req.action == "mark_reviewed":
-                record = await mgr.update_status(record_id, "resolved")
-
-            elif req.action == "dismiss":
+            if req.action in ("mark_reviewed", "dismiss"):
                 record = await mgr.update_status(record_id, "resolved")
 
             elif req.action == "create_correction_run":
@@ -621,17 +618,17 @@ async def review_feedback(
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="A resource conflict occurred. Please try again.",
-        )
+        ) from None
     except ProgrammingError:
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feedback system is not available. Run database migrations to enable this feature.",
-        )
+        ) from None
     except SQLAlchemyError:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database error occurred. Please try again later.",
-        )
+        ) from None
     except (InvalidTransitionError, ConcurrentModificationError) as exc:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
@@ -649,7 +646,7 @@ async def review_feedback(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="An unexpected error occurred. Please try again later.",
-        )
+        ) from None
 
     return {
         "id": str(record.id),
