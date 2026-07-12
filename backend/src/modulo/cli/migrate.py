@@ -204,7 +204,7 @@ def _write_jsonl(bundle: dict[str, Any], path: Path) -> dict[str, str]:
 
 
 async def _read_jsonl(path: Path) -> tuple[dict[str, Any], list[dict[str, Any]]]:
-    if not path.exists():
+    if not await asyncio.to_thread(path.exists):
         raise click.ClickException(f"Input file not found: {path}")
     meta: dict[str, Any] = {}
     records: list[dict[str, Any]] = []
@@ -463,8 +463,8 @@ async def _async_export_org(
     except Exception as exc:
         raise click.ClickException(f"Export failed: {exc}") from exc
     finally:
-        if not export_completed and output.exists():
-            output.unlink(missing_ok=True)
+        if not export_completed and await asyncio.to_thread(output.exists):
+            await asyncio.to_thread(output.unlink, missing_ok=True)
 
 
 @cli.command()
@@ -507,16 +507,6 @@ async def _async_import_org(
     pipelines_only: bool,
     users_only: bool,
 ) -> None:
-    try:
-        async with AsyncSessionLocal() as session:
-            await _verify_admin_access(session, org_id, ctx.obj["admin_user_id"])
-    except asyncio.CancelledError:
-        raise
-    except click.ClickException:
-        raise
-    except Exception as exc:
-        raise click.ClickException(f"Auth verification failed: {exc}") from exc
-
     _meta, records = await _read_jsonl(input_path)
     click.echo(f"Loaded {len(records)} records from {input_path}")
 
@@ -525,6 +515,7 @@ async def _async_import_org(
 
     try:
         async with AsyncSessionLocal() as session:
+            await _verify_admin_access(session, org_id, ctx.obj["admin_user_id"])
             counts = await _import_org_data(
                 session,
                 org_id,
