@@ -45,6 +45,7 @@ import json
 import logging
 import uuid
 from collections.abc import Callable, Sequence
+from contextlib import suppress
 from typing import Any
 
 import jmespath
@@ -163,10 +164,8 @@ def make_node_fn(
         content = response.content if hasattr(response, "content") else str(response)
         output_data: Any = content
         if isinstance(content, str):
-            try:
+            with suppress(json.JSONDecodeError, ValueError):
                 output_data = json.loads(content)
-            except (json.JSONDecodeError, ValueError):
-                pass
 
         # Validate against output schema if defined.
         if isinstance(output_schema_json, dict) and isinstance(output_data, dict):
