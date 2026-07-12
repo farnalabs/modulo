@@ -27,7 +27,6 @@ from modulo.db.models.pipeline import Pipeline
 from modulo.db.models.run import Run
 from modulo.db.rls import set_rls_org, set_rls_user_context
 
-
 _log = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/v1", tags=["evals"])

@@ -57,7 +57,6 @@ from modulo.db.models.team import Team
 from modulo.db.models.team_membership import TeamMembership
 from modulo.db.rls import set_rls_org, set_rls_user_context
 
-
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/v1/admin", tags=["admin"])

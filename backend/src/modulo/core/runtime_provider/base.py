@@ -59,3 +59,4 @@ class RuntimeProvider(ABC):
 
     async def close(self) -> None:
         """Release provider-level resources. Override in subclasses that hold connections."""
+        return

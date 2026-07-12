@@ -7,7 +7,7 @@ in any response — only a boolean `has_credentials` field indicates presence.
 import logging
 import uuid
 from datetime import datetime
-from typing import Any, Literal, ClassVar
+from typing import Any, ClassVar, Literal
 
 from cryptography.fernet import Fernet
 from fastapi import APIRouter, Depends, HTTPException, Query, status

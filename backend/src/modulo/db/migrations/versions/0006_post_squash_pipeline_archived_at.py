@@ -12,7 +12,6 @@ Create Date: 2026-07-12
 
 from collections.abc import Sequence
 
-import sqlalchemy as sa
 from alembic import op
 
 revision: str = "0006_post_squash_pipeline_archived_at"
@@ -22,10 +21,7 @@ depends_on: str | Sequence[str] | None = None
 
 
 def upgrade() -> None:
-    op.execute(
-        "ALTER TABLE pipelines ADD COLUMN IF NOT EXISTS archived_at "
-        "TIMESTAMP WITH TIME ZONE"
-    )
+    op.execute("ALTER TABLE pipelines ADD COLUMN IF NOT EXISTS archived_at TIMESTAMP WITH TIME ZONE")
 
 
 def downgrade() -> None:

@@ -1143,6 +1143,7 @@ def get_available_providers(request, ctx) -> None:
         return
 
     from modulo.api.main import app
+
     app.dependency_overrides[get_current_user] = lambda: AuthenticatedPrincipal(
         username="testuser",
         organisation_id=ORG_ID,

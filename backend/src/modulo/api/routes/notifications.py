@@ -5,13 +5,12 @@ Secrets are Fernet-encrypted at rest and never exposed in responses.
 """
 
 from __future__ import annotations
-from typing import ClassVar
-
 
 import contextlib
 import json
 import logging
 import uuid
+from typing import ClassVar
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, Field, field_validator
@@ -25,7 +24,6 @@ from modulo.auth.jwt import AuthenticatedPrincipal
 from modulo.db.models.notification_endpoint import NotificationEndpoint
 from modulo.db.rls import set_rls_org, set_rls_user_context
 from modulo.settings import Settings, get_settings
-
 
 logger = logging.getLogger(__name__)
 

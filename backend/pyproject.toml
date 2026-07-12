@@ -177,9 +177,13 @@ ignore = [
 "src/modulo/api/routes/scim.py" = ["N815", "N803"]
 "tests/unit/scim/test_scim_provisioning.py" = ["N815", "N803"]
 "src/modulo/db/repositories/locks.py" = ["ASYNC109"]
-"scripts/*" = ["T20"]
-"deploy/*" = ["T20"]
+"src/modulo/core/runtime_provider/*.py" = ["ASYNC109"]
 "src/modulo/db/bootstrap_role.py" = ["T20"]
+"scripts/*" = ["T20"]
+"scripts/gen_seed_sql.py" = ["S608"]
+"scripts/generate_remy_primer.py" = ["ASYNC240"]
+"deploy/*" = ["T20"]
+"tests/bdd/check-bdd-coverage.py" = ["N999"]
 
 [tool.mypy]
 strict = true

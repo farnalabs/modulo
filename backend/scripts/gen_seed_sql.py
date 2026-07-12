@@ -1,4 +1,5 @@
 """Generate SQL INSERT statements for seeding pipeline templates."""
+
 import json
 
 from modulo.core.library_service import _MODULO_PRIMITIVES

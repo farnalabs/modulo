@@ -4715,11 +4715,8 @@ async def step_initialise_with_instance(ctx):
         visibility: str = "org"
         allowed_operations: object = None
 
-    if ctx.get("malformed_json"):
-        # Valid Fernet ciphertext but invalid JSON content
-        ciphertext = Fernet(key.encode()).encrypt(b"not-json")
-    else:
-        ciphertext = b""
+    # Valid Fernet ciphertext but invalid JSON content when requested.
+    ciphertext = Fernet(key.encode()).encrypt(b"not-json") if ctx.get("malformed_json") else b""
 
     ci = _FakeCI(
         id=connector_id,

@@ -4,7 +4,7 @@ import uuid
 from typing import Any
 
 import httpx
-from defusedxml import ElementTree as ET
+from defusedxml import ElementTree
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, Field
 from sqlalchemy.exc import IntegrityError, ProgrammingError, SQLAlchemyError
@@ -429,7 +429,7 @@ async def _test_saml_connection(provider: Any) -> SsoProviderTestResult:
         )
 
     try:
-        root = ET.fromstring(metadata_xml)
+        root = ElementTree.fromstring(metadata_xml)
     except Exception as exc:
         return SsoProviderTestResult(
             success=False,

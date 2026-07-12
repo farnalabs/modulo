@@ -98,7 +98,7 @@ class E2BRuntimeProvider(RuntimeProvider):
         provider_ref: str,
         command: list[str],
         *,
-        timeout: int | None = None,  # noqa: ASYNC109
+        timeout: int | None = None,
     ) -> ExecResult:
         """Execute a shell command inside the sandbox.
 
