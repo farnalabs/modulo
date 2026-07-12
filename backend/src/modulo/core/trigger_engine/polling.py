@@ -61,13 +61,6 @@ def _get_engine() -> Any:
     return _engine
 
 
-async def _dispose_engine() -> None:
-    global _engine
-    if _engine is not None:
-        await _engine.dispose()
-        _engine = None
-
-
 # ---------------------------------------------------------------------------
 # Connector builder (standalone copy to avoid circular imports)
 # ---------------------------------------------------------------------------
@@ -152,12 +145,6 @@ def evaluate_condition(
 # ---------------------------------------------------------------------------
 # Celery task â€” fire one polling trigger
 # ---------------------------------------------------------------------------
-
-
-def get_celery_app() -> Celery:
-    from modulo.celery_app import get_celery_app as _get_celery_app
-
-    return _get_celery_app()
 
 
 class PollingFireTask(Task):  # type: ignore[misc]
@@ -418,25 +405,6 @@ async def _update_next_fire_no_last(session: AsyncSession, trigger: Trigger) -> 
     now = datetime.datetime.now(datetime.UTC)
     next_fire = now + datetime.timedelta(seconds=interval)
     await session.execute(update(Trigger).where(Trigger.id == trigger.id).values(next_fire_at=next_fire))
-
-
-def _validate_poll_config(config: dict[str, Any]) -> None:
-    """Validate polling trigger configuration.
-    Raises ValueError on invalid config."""
-    interval = config.get("poll_interval_seconds")
-    if interval is not None and (not isinstance(interval, (int, float)) or interval < 1):
-        raise ValueError(f"poll_interval_seconds must be >= 1, got {interval!r}")
-
-    ci_id = config.get("connector_instance_id")
-    if ci_id is not None:
-        try:
-            uuid.UUID(ci_id)
-        except (ValueError, TypeError):
-            raise ValueError(f"connector_instance_id must be a valid UUID, got {ci_id!r}") from None
-
-    poll_query = config.get("poll_query")
-    if poll_query is not None and not isinstance(poll_query, str):
-        raise ValueError(f"poll_query must be a string, got {poll_query!r}")
 
 
 # ---------------------------------------------------------------------------

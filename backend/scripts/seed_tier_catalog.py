@@ -115,8 +115,14 @@ FLAGS = [
     },
     {
         "name": "view_modes",
-        "description": "Multiple named UI views with admin-defined feature visibility",
+        "description": "Multiple named UI views with admin-defined feature visibility per view and user/team/role assignment",
         "tier_id": "team",
+        "depends_on": None,
+    },
+    {
+        "name": "remy_ui_driving",
+        "description": "Remy browser UI driving — allows Remy to navigate, click, and fill forms on your behalf.",
+        "tier_id": "community",
         "depends_on": None,
     },
     {
