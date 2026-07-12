@@ -27,7 +27,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from modulo.db.models.oauth_client import OAuthClient
 from modulo.db.models.oauth_token import OAuthAuthorizationCode, OAuthTokenFamily
 
-logger = logging.getLogger(__name__)
 _log = logging.getLogger(__name__)
 
 _ALGORITHM = "HS256"
@@ -265,7 +264,7 @@ async def consume_authorization_code(
             auth_code.used = True
             await session.flush()
     except ProgrammingError:
-        logger.exception("auth.oauth")
+        _log.exception("auth.oauth")
 
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
