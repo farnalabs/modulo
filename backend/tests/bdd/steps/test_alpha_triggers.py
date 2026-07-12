@@ -1,32 +1,23 @@
 """BDD step definitions: Manual trigger, webhook HMAC, payload mapping,
 flood protection, trigger event log."""
 
+import contextlib
 import json
 import uuid
 from unittest.mock import MagicMock, patch
 
 from pytest_bdd import given, parsers, scenarios, then, when
 
-try:
+with contextlib.suppress(FileNotFoundError, OSError):
     scenarios("../features/triggers/manual.feature")
-except (FileNotFoundError, OSError):
-    pass
-try:
+with contextlib.suppress(FileNotFoundError, OSError):
     scenarios("../features/triggers/webhook_hmac.feature")
-except (FileNotFoundError, OSError):
-    pass
-try:
+with contextlib.suppress(FileNotFoundError, OSError):
     scenarios("../features/triggers/webhook_payload_mapping.feature")
-except (FileNotFoundError, OSError):
-    pass
-try:
+with contextlib.suppress(FileNotFoundError, OSError):
     scenarios("../features/triggers/flood_protection.feature")
-except (FileNotFoundError, OSError):
-    pass
-try:
+with contextlib.suppress(FileNotFoundError, OSError):
     scenarios("../features/triggers/trigger_event_log.feature")
-except (FileNotFoundError, OSError):
-    pass
 
 from tests.bdd.conftest import make_mock_pipeline
 

@@ -1,5 +1,6 @@
 """Step definitions for run retention features: TTL-based cleanup, nightly purge job, admin manual purge."""
 
+import contextlib
 import uuid
 from typing import Any
 from unittest.mock import AsyncMock, patch
@@ -10,10 +11,8 @@ from pytest_bdd import given, parsers, scenarios, then, when
 # ---------------------------------------------------------------------------
 # Register feature files
 # ---------------------------------------------------------------------------
-try:
+with contextlib.suppress(FileNotFoundError, OSError):
     scenarios("../features/operations/run_retention.feature")
-except (FileNotFoundError, OSError):
-    pass
 
 # ---------------------------------------------------------------------------
 # Constants matching conftest.py

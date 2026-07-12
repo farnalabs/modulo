@@ -1,18 +1,15 @@
 """BDD step definitions: Pipeline creation & concurrency."""
 
+import contextlib
 import uuid
 from unittest.mock import MagicMock, patch
 
 from pytest_bdd import given, parsers, scenarios, then, when
 
-try:
+with contextlib.suppress(FileNotFoundError, OSError):
     scenarios("../features/pipelines/create.feature")
-except (FileNotFoundError, OSError):
-    pass
-try:
+with contextlib.suppress(FileNotFoundError, OSError):
     scenarios("../features/pipelines/concurrency.feature")
-except (FileNotFoundError, OSError):
-    pass
 
 from tests.bdd.conftest import make_mock_pipeline
 
