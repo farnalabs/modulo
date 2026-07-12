@@ -22,9 +22,14 @@ class RemyRedisRegistry:
     def __init__(self, redis_url: str) -> None:
         self._redis: aioredis.Redis | None = None
         self._redis_url = redis_url
+        self._lock = asyncio.Lock()
 
     async def _get_redis(self) -> aioredis.Redis | None:
-        if self._redis is None:
+        if self._redis is not None:
+            return self._redis
+        async with self._lock:
+            if self._redis is not None:
+                return self._redis
             try:
                 self._redis = aioredis.Redis.from_url(self._redis_url, decode_responses=True)
             except asyncio.CancelledError:
@@ -56,7 +61,12 @@ class RemyRedisRegistry:
         data = await r.hgetall(f"remy:permission:{request_id}")
         if not data:
             return None
-        return {"session_id": data.get("session_id", ""), "tools": json.loads(data.get("tools", "[]"))}
+        try:
+            tools = json.loads(data.get("tools", "[]"))
+        except (ValueError, TypeError, json.JSONDecodeError):
+            logger.warning("Invalid JSON in permission request tools for %s", request_id)
+            tools = []
+        return {"session_id": data.get("session_id", ""), "tools": tools}
 
     async def set_permission_decision(self, request_id: str, decision: dict, ttl: int = 120) -> None:
         r = await self._get_redis()
@@ -72,7 +82,11 @@ class RemyRedisRegistry:
         if val is None:
             return None
         await r.delete(f"remy:decision:{request_id}")
-        return json.loads(val)
+        try:
+            return json.loads(val)
+        except (ValueError, TypeError, json.JSONDecodeError):
+            logger.warning("Invalid JSON in permission decision for %s", request_id)
+            return None
 
     # ── UI command results state ───────────────────────────────────────────
 
@@ -91,7 +105,11 @@ class RemyRedisRegistry:
         if val is None:
             return []
         await r.delete(key)
-        return json.loads(val)
+        try:
+            return json.loads(val)
+        except (ValueError, TypeError, json.JSONDecodeError):
+            logger.warning("Invalid JSON in UI command results for %s", session_id)
+            return []
 
     # ── Session approvals ──────────────────────────────────────────────────
 
@@ -152,7 +170,11 @@ class RemyRedisRegistry:
         try:
             message = await pubsub.get_message(ignore_subscribe_messages=True, timeout=timeout)
             if message and message.get("data"):
-                return json.loads(message["data"])
+                try:
+                    return json.loads(message["data"])
+                except (ValueError, TypeError, json.JSONDecodeError):
+                    logger.warning("Invalid JSON in permission pubsub response for %s", request_id)
+                    return None
             return None
         finally:
             await pubsub.unsubscribe(f"remy:channel:permission:{request_id}")
