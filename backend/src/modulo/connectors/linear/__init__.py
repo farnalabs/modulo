@@ -329,9 +329,9 @@ class LinearConnector(ConnectorBase):
     async def query(self, q: ConnectorQuery) -> ConnectorResult:
         match q.resource:
             case "issue":
-                issue_id = q.filters.get("id")
-                if not issue_id:
+                if "id" not in q.filters:
                     raise ValueError("Linear issue query requires 'id' filter")
+                issue_id = q.filters["id"]
                 data = await self._graphql(_GET_ISSUE_QUERY, {"id": issue_id})
                 issue = data.get("issue")
                 if issue is None:
