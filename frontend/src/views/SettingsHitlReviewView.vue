@@ -333,6 +333,7 @@ function statusBadgeClass(status: string): string {
 function formatDate(dateStr: string | null | undefined): string {
   if (!dateStr) return '-'
   const d = new Date(dateStr)
+  if (isNaN(d.getTime())) return '-'
   return formatDateShortWithTime(d)
 }
 
@@ -352,14 +353,18 @@ const filteredGates = computed(() => {
     }
     if (dateFrom.value) {
       const from = new Date(dateFrom.value)
-      const created = new Date(gate.created_at || gate.claimed_at || '')
-      if (created < from) return false
+      const ts = gate.created_at || gate.claimed_at
+      if (!ts) return false
+      const created = new Date(ts)
+      if (isNaN(created.getTime()) || created < from) return false
     }
     if (dateTo.value) {
       const to = new Date(dateTo.value)
       to.setHours(23, 59, 59, 999)
-      const created = new Date(gate.created_at || gate.claimed_at || '')
-      if (created > to) return false
+      const ts = gate.created_at || gate.claimed_at
+      if (!ts) return false
+      const created = new Date(ts)
+      if (isNaN(created.getTime()) || created > to) return false
     }
     return true
   })

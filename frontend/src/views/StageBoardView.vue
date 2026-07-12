@@ -424,14 +424,10 @@
 import { ref, computed } from 'vue'
 import PageHeader from '../components/shared/PageHeader.vue'
 import { useDataFetch } from '../composables/useDataFetch'
-import { usePlanStore } from '../stores/planStore'
 import { formatApiError } from '../lib/api/formatError'
 import { api } from '../lib/api/client'
 import { formatDateShort } from '../lib/formatDate'
 import { Button } from '@/components/ui/button'
-
-const planStore = usePlanStore()
-const { patch } = { patch: async (url: string, body: any) => { return api.PATCH(url as any, { body }) } }
 
 const selectedStageId = ref<string | null>(null)
 const selectedPipeline = ref<any | null>(null)
@@ -493,7 +489,9 @@ function statusBadgeClass(status: string): string {
 
 function formatDate(dateStr: string | null | undefined): string {
   if (!dateStr) return '-'
-  return formatDateShort(new Date(dateStr))
+  const d = new Date(dateStr)
+  if (isNaN(d.getTime())) return '-'
+  return formatDateShort(d)
 }
 
 function stageName(stageId: string | null | undefined): string {
@@ -582,8 +580,8 @@ async function movePipeline(pipeline: any, direction: number) {
     })
     pipeline.stage_id = targetStage.id
   } catch (e) {
-    console.warn('Failed to move pipeline', e)
     pipeline.stage_id = prevStageId
+    pageError.value = 'Failed to move pipeline: ' + formatApiError(e)
   } finally {
     movingPipelines.value[pipeline.id] = false
   }
@@ -651,7 +649,7 @@ async function saveEditingName() {
       if (idx !== -1) stages.value[idx] = data
     }
   } catch (e) {
-    console.warn('Failed to rename stage', e)
+    pageError.value = 'Failed to rename stage: ' + formatApiError(e)
   } finally {
     updatingStages.value[stageId] = false
   }
@@ -686,7 +684,7 @@ async function saveEditingPosition() {
     }
     stages.value.sort((a, b) => a.position - b.position)
   } catch (e) {
-    console.warn('Failed to update stage position', e)
+    pageError.value = 'Failed to update stage position: ' + formatApiError(e)
   } finally {
     updatingStages.value[stageId] = false
   }
@@ -723,7 +721,7 @@ async function moveStage(stage: any, direction: number) {
     stage.position = myPos
     target.position = targetPos
     stages.value.sort((a, b) => a.position - b.position)
-    console.warn('Failed to reorder stages', e)
+    pageError.value = 'Failed to reorder stages: ' + formatApiError(e)
   } finally {
     updatingStages.value[stage.id] = false
   }
