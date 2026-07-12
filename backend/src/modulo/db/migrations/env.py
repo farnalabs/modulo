@@ -1,6 +1,7 @@
 import logging
 import os
 from logging.config import fileConfig
+from urllib.parse import parse_qs, urlencode, urlparse, urlunparse
 
 from alembic import context
 from alembic.config import Config
@@ -11,22 +12,27 @@ from modulo.db.models import Base
 
 _log = logging.getLogger(__name__)
 
+_DRIVER_MAP: dict[str, str] = {
+    "postgresql+asyncpg": "postgresql+psycopg",
+    "sqlite+aiosqlite": "sqlite",
+    "mysql+asyncmy": "mysql+pymysql",
+    "postgresql": "postgresql+psycopg",
+    "postgres": "postgresql+psycopg",
+    "mysql": "mysql+pymysql",
+}
+
 
 def _to_sync_url(url: str) -> str:
-    if url.startswith("postgresql+asyncpg://"):
-        url = url.replace("postgresql+asyncpg://", "postgresql+psycopg://", 1)
-    elif url.startswith("sqlite+aiosqlite://"):
-        url = url.replace("sqlite+aiosqlite://", "sqlite://", 1)
-    elif url.startswith("mysql+asyncmy://"):
-        url = url.replace("mysql+asyncmy://", "mysql+pymysql://", 1)
-    elif url.startswith("postgresql://"):
-        url = url.replace("postgresql://", "postgresql+psycopg://", 1)
-    elif url.startswith("postgres://"):
-        url = url.replace("postgres://", "postgresql+psycopg://", 1)
-    elif url.startswith("mysql://"):
-        url = url.replace("mysql://", "mysql+pymysql://", 1)
-    url = url.replace("?sslmode=disable", "").replace("&sslmode=disable", "")
-    return url.replace("?ssl=disable", "").replace("&ssl=disable", "")
+    parsed = urlparse(url)
+    if parsed.scheme in _DRIVER_MAP:
+        parsed = parsed._replace(scheme=_DRIVER_MAP[parsed.scheme])
+    qs = parse_qs(parsed.query, keep_blank_values=True)
+    if qs.get("sslmode") == ["disable"]:
+        del qs["sslmode"]
+    if qs.get("ssl") == ["disable"]:
+        del qs["ssl"]
+    new_query = urlencode(qs, doseq=True) if qs else ""
+    return urlunparse(parsed._replace(query=new_query))
 
 
 target_metadata = Base.metadata
