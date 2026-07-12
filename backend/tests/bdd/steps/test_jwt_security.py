@@ -1,6 +1,7 @@
 """Step definitions for JWT security feature — access tokens, refresh tokens, token family invalidation."""
 
 import base64
+import contextlib
 import json as json_mod
 import time as time_mod
 import uuid
@@ -20,10 +21,8 @@ from modulo.settings import Settings
 # ---------------------------------------------------------------------------
 # Register feature file
 # ---------------------------------------------------------------------------
-try:
+with contextlib.suppress(FileNotFoundError, OSError):
     scenarios("../features/auth/jwt_security.feature")
-except (FileNotFoundError, OSError):
-    pass
 
 # ---------------------------------------------------------------------------
 # Constants

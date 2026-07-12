@@ -1,15 +1,15 @@
 """BDD step definitions for Trivy connector scenarios."""
 
+import contextlib
+
 import pytest
 from pytest_bdd import given, parsers, scenarios, then, when
 
 from modulo.connectors.base import ConnectorPayload, ConnectorQuery
 from modulo.connectors.trivy import TrivyConnector
 
-try:
+with contextlib.suppress(FileNotFoundError, OSError):
     scenarios("../features/connectors/trivy.feature")
-except (FileNotFoundError, OSError):
-    pass
 
 _last_health_result = None
 _last_query_result = None

@@ -1,6 +1,7 @@
 """Step definitions for the Complexity Reviewer / determination scanner feature."""
 
 import asyncio
+import contextlib
 import uuid
 from typing import Any
 from unittest.mock import AsyncMock
@@ -14,10 +15,8 @@ from modulo.determination.scanner import ScanSample
 # ---------------------------------------------------------------------------
 # Register feature file
 # ---------------------------------------------------------------------------
-try:
+with contextlib.suppress(FileNotFoundError, OSError):
     scenarios("../features/complexity/complexity_reviewer.feature")
-except (FileNotFoundError, OSError):
-    pass
 
 # ---------------------------------------------------------------------------
 # Fixtures

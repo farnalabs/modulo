@@ -4,6 +4,7 @@ Maps Gherkin scenarios from features/scim/scim_provisioning.feature to
 API calls against /scim/v2/Users and /scim/v2/Groups.
 """
 
+import contextlib
 import uuid
 from collections.abc import AsyncGenerator, Generator
 from typing import Any
@@ -19,10 +20,8 @@ from modulo.settings import Settings, get_settings
 # ---------------------------------------------------------------------------
 # Register feature files
 # ---------------------------------------------------------------------------
-try:
+with contextlib.suppress(FileNotFoundError, OSError):
     scenarios("../features/scim/scim_provisioning.feature")
-except (FileNotFoundError, OSError):
-    pass
 
 # ---------------------------------------------------------------------------
 # Constants matching SCIM unit test patterns

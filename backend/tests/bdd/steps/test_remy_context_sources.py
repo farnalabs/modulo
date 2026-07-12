@@ -1,5 +1,6 @@
 """BDD step definitions: Remy Context Sources — source mode control, user overrides, MCP context tools."""
 
+import contextlib
 import uuid
 from typing import Any
 from unittest.mock import MagicMock
@@ -9,10 +10,8 @@ from pytest_bdd import given, parsers, scenarios, then, when
 
 from modulo.core.documentation_indexer import DocEntry, DocumentationIndex
 
-try:
+with contextlib.suppress(FileNotFoundError, OSError):
     scenarios("../features/remy/remy_context_sources.feature")
-except (FileNotFoundError, OSError):
-    pass
 
 
 # ── Fixtures ────────────────────────────────────────────────────────────

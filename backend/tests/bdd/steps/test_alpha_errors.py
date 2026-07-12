@@ -1,22 +1,17 @@
 """BDD step definitions: Run retry, failed state, recovery."""
 
+import contextlib
 import uuid
 from unittest.mock import MagicMock, patch
 
 from pytest_bdd import given, parsers, scenarios, then, when
 
-try:
+with contextlib.suppress(FileNotFoundError, OSError):
     scenarios("../features/errors/retry.feature")
-except (FileNotFoundError, OSError):
-    pass
-try:
+with contextlib.suppress(FileNotFoundError, OSError):
     scenarios("../features/errors/failed_state.feature")
-except (FileNotFoundError, OSError):
-    pass
-try:
+with contextlib.suppress(FileNotFoundError, OSError):
     scenarios("../features/errors/recovery.feature")
-except (FileNotFoundError, OSError):
-    pass
 
 from tests.bdd.conftest import make_mock_run
 

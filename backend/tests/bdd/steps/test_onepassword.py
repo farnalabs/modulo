@@ -1,6 +1,7 @@
 """BDD step definitions for 1Password Connect connector scenarios."""
 
 import asyncio
+import contextlib
 
 import httpx
 import pytest
@@ -10,10 +11,8 @@ from pytest_bdd import given, parsers, scenarios, then, when
 from modulo.connectors.base import ConnectorPayload, ConnectorQuery
 from modulo.connectors.onepassword import OnePasswordConnector
 
-try:
+with contextlib.suppress(FileNotFoundError, OSError):
     scenarios("../features/connectors/onepassword.feature")
-except (FileNotFoundError, OSError):
-    pass
 
 TOKEN = "op_test_token"
 BASE_URL = "http://localhost:8080"

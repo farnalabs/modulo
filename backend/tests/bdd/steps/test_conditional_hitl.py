@@ -1,6 +1,7 @@
 """Step definitions for Conditional HITL Gating feature."""
 
 import asyncio
+import contextlib
 import json
 import uuid
 from typing import Any
@@ -15,10 +16,8 @@ from modulo.core.eval_engine import EvalBlockedError
 # ---------------------------------------------------------------------------
 # Active features
 # ---------------------------------------------------------------------------
-try:
+with contextlib.suppress(FileNotFoundError, OSError):
     scenarios("../features/evals/conditional_hitl.feature")
-except (FileNotFoundError, OSError):
-    pass
 
 # ---------------------------------------------------------------------------
 # Fixtures

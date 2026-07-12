@@ -1,6 +1,7 @@
 """BDD step definitions: cron trigger create, schedule, spend limit,
 input template, event logging, timezone support, and disable."""
 
+import contextlib
 import datetime
 import json
 import uuid
@@ -9,10 +10,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 from pytest_bdd import given, parsers, scenarios, then, when
 
-try:
+with contextlib.suppress(FileNotFoundError, OSError):
     scenarios("../features/triggers/cron.feature")
-except (FileNotFoundError, OSError):
-    pass
 
 from modulo.db.models.trigger import Trigger
 from tests.bdd.conftest import make_mock_run
