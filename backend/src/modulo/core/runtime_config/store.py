@@ -64,15 +64,6 @@ _NO_DEFAULT_KEYS: frozenset[str] = frozenset(k for k, v in _KEY_CONFIG.items() i
 DEFAULT_VALUES: dict[str, str] = {k: v.default for k, v in _KEY_CONFIG.items() if v.default is not None}
 
 
-def _validate_key_registries() -> None:
-    orphans = HOT_RELOADABLE_KEYS - set(KNOWN_KEYS)
-    if orphans:
-        _log.warning("HOT_RELOADABLE_KEYS contains keys not in KNOWN_KEYS: %s", orphans)
-    missing_defaults = set(KNOWN_KEYS) - set(DEFAULT_VALUES) - _NO_DEFAULT_KEYS
-    if missing_defaults:
-        _log.warning("KNOWN_KEYS has entries missing from DEFAULT_VALUES: %s", missing_defaults)
-
-
 @dataclass
 class ConfigEntry:
     key: str
@@ -99,8 +90,6 @@ class RuntimeConfigStore:
         for key in KNOWN_KEYS:
             self._defaults[key] = DEFAULT_VALUES.get(key)
         self._refresh_env_values()
-
-        _validate_key_registries()
 
     @classmethod
     def reset(cls) -> None:
@@ -143,6 +132,9 @@ class RuntimeConfigStore:
 
     def clear_override(self, key: str) -> None:
         """Remove a runtime override for a single key."""
+        if not key or key.strip() != key:
+            _log.warning("Runtime config override clear rejected: invalid key %r", key)
+            return
         with self._lock:
             removed = self._overrides.pop(key, None)
             if removed is not None:
@@ -165,7 +157,6 @@ class RuntimeConfigStore:
         """Re-read os.environ to detect drift for all known keys."""
         with self._lock:
             self._refresh_env_values()
-        _validate_key_registries()
         _log.info("Runtime config reloaded from environment")
 
     def get_all(self) -> list[ConfigEntry]:
