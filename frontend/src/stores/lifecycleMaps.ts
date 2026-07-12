@@ -140,7 +140,7 @@ export const useLifecycleMapsStore = defineStore('lifecycleMaps', () => {
     try {
       const data = await get<LifecycleMap>(`/api/v1/lifecycle-maps/${id}/versions/${version}`)
       currentMap.value = data
-      currentMapVersion.value = data.current_version
+      currentMapVersion.value = version
     } catch (e: unknown) {
       detailError.value = formatApiError(e)
     } finally {
@@ -198,6 +198,7 @@ export const useLifecycleMapsStore = defineStore('lifecycleMaps', () => {
   }
 
   async function fetchPipelines() {
+    error.value = null
     try {
       const data = await get<{ items: PipelineSummary[] }>('/api/v1/pipelines?limit=200')
       pipelines.value = data.items || []
