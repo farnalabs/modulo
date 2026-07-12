@@ -85,6 +85,14 @@ is edited, re-run `npm install` (not just the script) to ensure the hook fires.
 
 - When a UI overlay (e.g. the Remy panel) covers an element, Playwright's `locator.click()` refuses to click because the element is not actionable. `click({ force: true })` dispatches the event but Vue's `@click` handler may not fire if an overlay captures the event. Use `locator.evaluate((el) => el.click())` to dispatch a native DOM click that always triggers the handler, regardless of overlays.
 
+### HTML entities in Vue directives: never use `&amp;&amp;` — use raw `&&`
+
+- `&amp;&amp;` HTML-encoded entities inside Vue `v-if`/`v-else-if`/`v-show` expressions cause template compilation errors (ReferenceError). Vue directives expect raw JavaScript expressions — HTML entities are never decoded. Always write `v-if="conditionA && conditionB"`, never `v-if="conditionA &amp;&amp; conditionB"`. This applies to ALL directive bindings (`v-for`, `v-bind`, `v-on`, `:class`, etc.).
+
+### i18n key paths must match the locale object structure exactly
+
+- When using `$t('remy.send_message')` in a template, the locale object must have a root-level `remy.send_message` key. If the locale file nests `remy` under `components` (e.g. `components.remy.send_message`), the short path `$t('remy.*')` silently returns the raw key string instead of the translation. Always check the actual structure in `frontend/src/locales/en-US.js` before writing `$t()` calls. For `components/remy/*.vue` components, the correct path is `$t('components.remy.<key>')`.
+
 ### Concurrent save guard: use a shared `configSaving` mutex
 
 - When multiple save functions (`saveAccessList`, `saveModelConfig`, `saveToolPerms`, etc.) all PUT to the same API endpoint, they must share a `configSaving` flag to prevent concurrent requests. Without the guard, clicking "Save" in two sections simultaneously fires parallel PUT calls — one section's changes silently overwrite the other's. Pattern: `if (configSaving.value) return; configSaving.value = true; ... configSaving.value = false` at the start and end of every save function that targets the shared endpoint.
