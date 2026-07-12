@@ -119,6 +119,10 @@ status: partial
 - **CI secrets hardcoded in workflow YAML**: SECRET_KEY and FERNET_KEY are plaintext in alpha-exit-report.yml. Acceptable for test-only CI where the runner is isolated, but would be a security concern if the repo were public.
 - **SkipBDD cannot distinguish "skipped because CI passed" from "skipped because CI didn't run"**: The verification script logs "assumed passing" but has no mechanism to verify the CI step outcome. A future improvement could parse CI step annotations or accept an explicit pass/fail status parameter.
 
+### 2026-07-12 — Round 3 improve-architecture
+
+Reviewed for B904, exc_info=True, stale frontmatter, dead code. No Python code in this entry (PowerShell/YAML only — `verify-alpha-exit.ps1` and `alpha-exit-report.yml`). No code changes needed. Frontmatter intact, QA History already complete through Round 2.
+
 ### Index 332 (2026-07-08)
 - **BUG fix**: Added `$dateStr = Get-Date -Format 'yyyy-MM-dd HH:mm:ss'` initialization before the report header renders the timestamp (was undefined variable → empty string in report header)
 - **STALE**: Marked "Alpha documentation exists" checkbox as `[x]` — docs/dev-setup.md now confirmed on disk
