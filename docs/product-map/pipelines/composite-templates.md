@@ -71,7 +71,7 @@ Parameterised pipeline templates that can be instantiated at runtime with user-s
 
 - No BDD scenarios for composite template CRUD error paths
 - No BDD scenarios for composite template parameter validation at runtime
-- [x] No unit tests for ProgrammingError or SQLAlchemyError on composite template routes (2026-07-11: Added SQLAlchemyError→503 catches to all 7 DB-accessing endpoints. ProgrammingError→501 was already present. No dedicated unit tests yet for error-path coverage — relies on existing test patterns.)
+- No dedicated unit tests for ProgrammingError or SQLAlchemyError on composite template routes (2026-07-11: Added SQLAlchemyError→503 catches to all 7 DB-accessing endpoints. ProgrammingError→501 was already present. Error-path coverage relies on existing test patterns, not dedicated unit tests.)
 - No integration tests for composite template expansion with real parameter injection
 
 ## QA History
