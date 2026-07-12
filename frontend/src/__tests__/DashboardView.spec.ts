@@ -70,7 +70,6 @@ vi.mock('../lib/api/client', () => ({
 }))
 
 import DashboardView from '../views/DashboardView.vue'
-import { usePlanStore } from '../stores/planStore'
 
 function setupDefaultMocks() {
   mockGet.mockImplementation((url: string) => {

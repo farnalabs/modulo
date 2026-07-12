@@ -21,10 +21,10 @@
 
 <script setup lang="ts">
 import {
-  CogIcon,
-  GlobeIcon,
-  UserIcon,
-  HelpCircleIcon,
+  Cog as CogIcon,
+  Globe as GlobeIcon,
+  User as UserIcon,
+  CircleHelp as HelpCircleIcon,
 } from '@lucide/vue'
 import type { StageType } from '../../../types/lifecycleMap'
 

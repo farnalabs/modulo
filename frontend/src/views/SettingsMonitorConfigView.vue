@@ -195,9 +195,15 @@ function toMonitorConfig(): MonitorConfig {
 
   return {
     monitorBackends: activeKeys,
-    sentry: activeKeys.includes('sentry') ? (perBackend.sentry ?? { dsn: '' }) : undefined,
-    'datadog-rum': activeKeys.includes('datadog_rum') ? (perBackend.datadog_rum ?? { clientToken: '' }) : undefined,
-    'grafana-faro': activeKeys.includes('grafana_faro') ? (perBackend.grafana_faro ?? { url: '' }) : undefined,
+    sentry: activeKeys.includes('sentry')
+      ? { dsn: perBackend.sentry?.dsn ?? '' }
+      : undefined,
+    datadogRum: activeKeys.includes('datadog_rum')
+      ? { clientToken: perBackend.datadog_rum?.clientToken ?? '' }
+      : undefined,
+    grafanaFaro: activeKeys.includes('grafana_faro')
+      ? { url: perBackend.grafana_faro?.url ?? '' }
+      : undefined,
   }
 }
 

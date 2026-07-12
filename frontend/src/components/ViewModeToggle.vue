@@ -13,12 +13,14 @@
 </template>
 
 <script setup lang="ts">
+import type { ViewMode } from '../composables/useSidebar'
+
 defineProps<{
-  modelValue: string;
-  options: { label: string; value: string }[];
+  modelValue: ViewMode;
+  options: readonly { label: string; value: ViewMode }[];
 }>();
 
 defineEmits<{
-  "update:modelValue": [value: string];
+  "update:modelValue": [value: ViewMode];
 }>();
 </script>

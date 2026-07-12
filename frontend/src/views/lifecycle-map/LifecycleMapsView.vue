@@ -25,7 +25,7 @@
       {{ error }}
     </div>
 
-    <div v-else-if="maps.length === 0" class="rounded-lg border border-dashed border-border bg-card py-12 text-center">
+    <div v-else-if="(maps ?? []).length === 0" class="rounded-lg border border-dashed border-border bg-card py-12 text-center">
       <MapIcon class="mx-auto mb-3 h-10 w-10 text-muted-foreground/50" />
       <h3 class="text-sm font-medium">No lifecycle maps yet</h3>
       <p class="mt-1 text-xs text-muted-foreground">
@@ -42,7 +42,7 @@
 
     <div v-else class="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
       <div role="button" tabindex="0" @keydown.enter="($event.currentTarget as HTMLElement).click()" @keydown.space.prevent="($event.currentTarget as HTMLElement).click()"
-        v-for="map in maps"
+        v-for="map in (maps ?? [])"
         :key="map.id"
         class="cursor-pointer rounded-lg border bg-card p-4 shadow-sm transition-shadow hover:shadow-md"
         @click="openMap(map.id)"
@@ -110,16 +110,17 @@
 <script setup lang="ts">
 import { ref, onMounted } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
-import { PlusIcon, MapIcon } from '@lucide/vue'
+import { Plus as PlusIcon, Map as MapIcon } from '@lucide/vue'
 import { useDataFetch } from '../../composables/useDataFetch'
 import { formatApiError } from '../../lib/api/formatError'
 import type { LifecycleMap } from '../../types/lifecycleMap'
-import { api } from '../../lib/api/client'
+import { useApi } from '../../composables/useApi'
 import { formatDateShort } from '../../lib/formatDate'
 import { Button } from '@/components/ui/button'
 
 const router = useRouter()
 const route = useRoute()
+const { get, post } = useApi()
 
 onMounted(() => {
   if (route.query.create === 'true') {
@@ -127,8 +128,8 @@ onMounted(() => {
   }
 })
 
-const { loading, error, data: maps, load: loadMaps } = useDataFetch<LifecycleMap[]>(
-  () => api.GET('/api/v1/lifecycle-maps'),
+const { loading, error, data: maps } = useDataFetch<LifecycleMap[]>(
+  async () => ({ data: await get<LifecycleMap[]>('/api/v1/lifecycle-maps') }),
   { initialValue: [] as LifecycleMap[] },
 )
 
@@ -154,11 +155,9 @@ async function handleCreateConfirm() {
   creating.value = true
   createError.value = null
   try {
-    const { data } = await api.POST('/api/v1/lifecycle-maps', {
-      body: {
+    const data = await post<LifecycleMap>('/api/v1/lifecycle-maps', {
         name: newName.value.trim(),
         description: newDescription.value.trim() || null,
-      },
     })
     showCreateDialog.value = false
     if (data) router.push({ name: 'lifecycle-map-editor', params: { id: (data as LifecycleMap).id } })

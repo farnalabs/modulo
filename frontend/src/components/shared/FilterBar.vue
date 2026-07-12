@@ -32,7 +32,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, reactive, watch } from 'vue'
+import { computed } from 'vue'
 
 const props = defineProps<{
   search?: { placeholder?: string }
@@ -41,7 +41,7 @@ const props = defineProps<{
   filterValues?: Record<string, string>
 }>()
 
-const emit = defineEmits<{
+defineEmits<{
   (e: 'update:search', value: string): void
   (e: 'update:filter', key: string, value: string): void
 }>()

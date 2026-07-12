@@ -108,7 +108,6 @@ import { shortId } from '../utils/format'
 import { useApi } from '../composables/useApi'
 import LoadingSpinner from '../components/shared/LoadingSpinner.vue'
 import ErrorAlert from '../components/shared/ErrorAlert.vue'
-import { usePlanStore } from '../stores/planStore'
 import FeatureGate from '../components/FeatureGate.vue'
 import PageHeader from '../components/shared/PageHeader.vue'
 import { Button } from '@/components/ui/button'
@@ -116,7 +115,6 @@ import PageTabs from "../components/PageTabs.vue"
 import EmptyState from '../components/shared/EmptyState.vue'
 import { formatDateShortWithTime } from '../lib/formatDate'
 
-const planStore = usePlanStore()
 
 interface EvalProposalItem {
   id: string

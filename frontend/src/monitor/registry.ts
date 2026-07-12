@@ -1,6 +1,6 @@
-import type { MonitorBackend, MonitorEvent, UserInfo } from './types'
+import type { ErrorEventInput, MonitorBackend, MonitorLevel, UserInfo } from './types'
 
-export class MonitorBackendRegistry implements MonitorBackend {
+export class MonitorBackendRegistry {
   private backends: MonitorBackend[] = []
 
   add(backend: MonitorBackend): void {
@@ -12,18 +12,22 @@ export class MonitorBackendRegistry implements MonitorBackend {
     if (idx >= 0) this.backends.splice(idx, 1)
   }
 
-  captureError(event: MonitorEvent, error: Error, context?: Record<string, unknown>): void {
+  captureError(event: ErrorEventInput, error?: Error, context?: Record<string, unknown>): void {
     for (const backend of this.backends) {
-      if (typeof backend.captureError === 'function') {
+      try {
         backend.captureError(event, error, context)
+      } catch (error) {
+        console.error('[MonitorBackendRegistry] Backend error:', error)
       }
     }
   }
 
-  captureMessage(message: string, level: string): void {
+  captureMessage(message: string, level: MonitorLevel): void {
     for (const backend of this.backends) {
-      if (typeof backend.captureMessage === 'function') {
+      try {
         backend.captureMessage(message, level)
+      } catch (error) {
+        console.error('[MonitorBackendRegistry] Backend error:', error)
       }
     }
   }

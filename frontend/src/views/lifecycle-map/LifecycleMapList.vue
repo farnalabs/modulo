@@ -183,7 +183,6 @@
 <script setup lang="ts">
 import { ref, computed, onMounted } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
-import { _PlusIcon, MapIcon } from '@lucide/vue'
 import PageHeader from '../../components/shared/PageHeader.vue'
 import FilterBar from '../../components/shared/FilterBar.vue'
 import { useLifecycleMapsStore } from '../../stores/lifecycleMaps'
@@ -192,12 +191,13 @@ import EmptyState from '../../components/shared/EmptyState.vue'
 import { Button } from '@/components/ui/button'
 import type { LifecycleMapSummary } from '../../stores/lifecycleMaps'
 import { formatDateShort } from '../../lib/formatDate'
-import { api } from '../../lib/api/client'
+import { useApi } from '../../composables/useApi'
 import { formatApiError } from '../../lib/api/formatError'
 
 const router = useRouter()
 const route = useRoute()
 const store = useLifecycleMapsStore()
+const { post } = useApi()
 
 const search = ref('')
 const ownerFilter = ref('')
@@ -273,11 +273,9 @@ async function handleCreateConfirm(): Promise<void> {
   creating.value = true
   createError.value = null
   try {
-    const { data } = await api.POST('/api/v1/lifecycle-maps', {
-      body: {
+    const data = await post<LifecycleMapSummary>('/api/v1/lifecycle-maps', {
         name: newName.value.trim(),
         description: newDescription.value.trim() || null,
-      },
     })
     showCreateDialog.value = false
     if (data) router.push({ name: 'lifecycle-map-editor', params: { id: (data as LifecycleMapSummary).id } })
