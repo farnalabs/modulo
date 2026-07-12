@@ -1,7 +1,6 @@
-from __future__ import annotations
-
 """Admin license endpoint — view and update the deployment license key."""
 
+from __future__ import annotations
 
 import logging
 
@@ -136,7 +135,7 @@ async def get_license_status(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to retrieve license status.",
-        )
+        ) from None
 
 
 @router.post("", response_model=LicenseUploadResponse, status_code=status.HTTP_200_OK)
