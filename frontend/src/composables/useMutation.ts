@@ -6,7 +6,7 @@ export function useMutation<TInput = void, TOutput = void>(
 ): { loading: ReturnType<typeof computed<boolean>>; error: ReturnType<typeof computed<string | null>>; mutate: (input: TInput) => Promise<TOutput | undefined> } {
   const mutation = useTanStackMutation({
     mutationFn: async (input: TInput) => {
-      return await fn(input) as TOutput
+      return await fn(input)
     },
   })
 

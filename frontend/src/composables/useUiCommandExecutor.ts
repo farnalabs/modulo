@@ -65,6 +65,7 @@ async function acquireElementLock(selector: string, timeout = 5000): Promise<boo
 
     function cleanup() {
       if (timer) clearTimeout(timer)
+      channel.removeEventListener('message', handleMessage)
       resolved = true
     }
 
@@ -90,7 +91,6 @@ async function acquireElementLock(selector: string, timeout = 5000): Promise<boo
     })
 
     timer = setTimeout(() => {
-      channel.removeEventListener('message', handleMessage)
       if (!resolved) {
         resolved = true
         resolve(false)
