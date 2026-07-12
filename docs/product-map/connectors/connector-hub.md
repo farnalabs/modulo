@@ -240,7 +240,7 @@ All connectors receive `_TracedConnector` wrapping at construction time. All use
 
 - [x] `ConnectorType.GITLAB` with capabilities: `read`, `write`, `git_push`, `create_pr`
 - [x] Built-in connector type in `ConnectorType` enum and `_build_connector` switch
-- [x] Missing: comprehensive BDD scenarios — no GitLab-specific feature file exists
+- [x] BDD coverage via `gitlab_issues.feature` (8 scenarios) — issues, issue, projects, search, error paths
 
 ### Jira Connector
 
