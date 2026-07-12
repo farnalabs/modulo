@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 """AWSSecretsManagerBackend — AWS Secrets Manager backend.
 
 Requires the *boto3* package (optional dependency). If *boto3* is not installed
@@ -13,6 +11,7 @@ Configured via environment variables:
 - ``AWS_PROFILE`` — AWS profile name (alternative to static credentials).
 """
 
+from __future__ import annotations
 
 import asyncio
 import os
