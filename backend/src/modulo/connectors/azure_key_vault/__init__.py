@@ -1,5 +1,6 @@
 """AzureKeyVaultConnector — async Azure Key Vault REST API connector."""
 
+import asyncio
 from typing import Any
 
 import httpx
@@ -47,6 +48,8 @@ class AzureKeyVaultConnector(ConnectorBase):
                 if resp.status_code == 401:
                     return HealthResult(ok=False, detail="Invalid Azure Key Vault access token")
                 return HealthResult(ok=False, detail=f"HTTP {resp.status_code}: {resp.text[:200]}")
+        except asyncio.CancelledError:
+            raise
         except Exception as exc:
             return HealthResult(ok=False, detail=str(exc)[:200])
 

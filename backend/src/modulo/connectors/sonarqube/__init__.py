@@ -1,5 +1,6 @@
 """SonarQubeConnector — async SonarQube REST API connector."""
 
+import asyncio
 from typing import Any
 
 import httpx
@@ -56,6 +57,8 @@ class SonarQubeConnector(ConnectorBase):
                 return HealthResult(ok=False, detail=f"SonarQube health: {status_text}")
         except httpx.HTTPStatusError as e:
             return HealthResult(ok=False, detail=f"HTTP {e.response.status_code}: {e.response.text[:200]}")
+        except asyncio.CancelledError:
+            raise
         except Exception as e:
             return HealthResult(ok=False, detail=str(e))
 
@@ -203,7 +206,7 @@ class SonarQubeConnector(ConnectorBase):
             next_cursor=_next_page_cursor(body, q.limit),
         )
 
-    async def _list_quality_gates(self, c: httpx.AsyncClient, q: ConnectorQuery) -> ConnectorResult:
+    async def _list_quality_gates(self, c: httpx.AsyncClient, _q: ConnectorQuery) -> ConnectorResult:
         resp = await c.get("/qualitygates/list")
         resp.raise_for_status()
         body = resp.json()
@@ -238,7 +241,7 @@ class SonarQubeConnector(ConnectorBase):
             next_cursor=_next_page_cursor(body, q.limit),
         )
 
-    async def _list_plugins(self, c: httpx.AsyncClient, q: ConnectorQuery) -> ConnectorResult:
+    async def _list_plugins(self, c: httpx.AsyncClient, _q: ConnectorQuery) -> ConnectorResult:
         resp = await c.get("/plugins/installed")
         resp.raise_for_status()
         body = resp.json()
