@@ -107,7 +107,6 @@ from modulo.db.session import engine as db_engine
 from modulo.otel_bridge import setup_otel, shutdown_otel
 from modulo.settings import Settings, get_settings
 
-
 # Uptime tracking — set at module import time, read by health endpoints.
 logger = logging.getLogger(__name__)
 
@@ -214,10 +213,8 @@ async def _seed_modulo_users(settings: Settings) -> None:
             pw_hash = pw_part if pw_part.startswith("$2") else hash_password(pw_part)
 
             if (
-                existing_account is not None
-                and not existing_account.password_hash
-                or not existing_account.password_hash.startswith("$2")
-            ):
+                existing_account is not None and not existing_account.password_hash
+            ) or not existing_account.password_hash.startswith("$2"):
                 existing_account.password_hash = pw_hash
                 logger.info("startup.user_rehashed", extra={"email": email})
 
@@ -731,6 +728,12 @@ app.include_router(errors_router)
 app.include_router(events_router)
 app.include_router(remy_router)
 app.include_router(manifest_router)
+
+# Strip router lifespan contexts — none of the 68+ routers register
+# on_startup/on_shutdown handlers, so every _DefaultLifespan is a no-op.
+# Keeping the deeply nested _merge_lifespan_context chain causes infinite
+# recursion in Docker builds (FastAPI 0.139.0, Python 3.12, Linux).
+app.router.lifespan_context = _lifespan
 
 # Remote MCP server — mounted as a Starlette sub-app at /mcp.
 # Auth is enforced by McpAuthMiddleware inside the sub-app.
