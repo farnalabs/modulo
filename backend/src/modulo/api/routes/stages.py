@@ -4,7 +4,6 @@ import logging
 import uuid
 from datetime import datetime
 
-
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, Field
 from sqlalchemy.exc import ProgrammingError, SQLAlchemyError

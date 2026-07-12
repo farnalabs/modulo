@@ -90,7 +90,7 @@ class LocalRuntimeProvider(RuntimeProvider):
         provider_ref: str,
         command: list[str],
         *,
-        timeout: int | None = None,  # noqa: ASYNC109
+        timeout: int | None = None,
     ) -> ExecResult:
         cwd = self._workspaces.get(provider_ref)
         if cwd is None:
@@ -116,7 +116,7 @@ class LocalRuntimeProvider(RuntimeProvider):
         self,
         command: list[str],
         cwd: str,
-        timeout: int | None = None,  # noqa: ASYNC109
+        timeout: int | None = None,
     ) -> ExecResult:
         """Run a command, respecting the concurrency semaphore."""
         effective_timeout = timeout if timeout is not None else _DEFAULT_CMD_TIMEOUT

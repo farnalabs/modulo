@@ -36,9 +36,7 @@ def build_fixture_map(
     inp = input_payload or {}
     out = outputs_json or {}
 
-    if isinstance(out, dict) and any(
-        isinstance(v, dict) and "input" in v and "output" in v for v in out.values()
-    ):
+    if isinstance(out, dict) and any(isinstance(v, dict) and "input" in v and "output" in v for v in out.values()):
         for _node_id, node_io in out.items():
             if isinstance(node_io, dict):
                 node_input = node_io.get("input", str(inp))
@@ -69,9 +67,7 @@ async def fetch_run_fixture_data(run_id: str) -> dict:
         sys.exit(1)
 
     async with factory() as session:
-        snap_result = await session.execute(
-            select(PipelineSnapshot).where(PipelineSnapshot.id == run.snapshot_id)
-        )
+        snap_result = await session.execute(select(PipelineSnapshot).where(PipelineSnapshot.id == run.snapshot_id))
         snapshot = snap_result.scalar_one_or_none()
 
     graph_json = snapshot.graph_json if snapshot else {}
@@ -94,7 +90,8 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Copy run as test fixture")
     parser.add_argument("run_id", help="Run UUID to export")
     parser.add_argument(
-        "--output", "-o",
+        "--output",
+        "-o",
         default="tests/fixtures/runs",
         help="Output directory (default: tests/fixtures/runs)",
     )

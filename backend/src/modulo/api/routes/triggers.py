@@ -31,7 +31,6 @@ from modulo.db.models.trigger import Trigger
 from modulo.db.models.trigger_event import TriggerEvent
 from modulo.db.rls import set_rls_org
 
-
 _log = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/v1", tags=["triggers"])
@@ -171,7 +170,7 @@ async def update_cron_config(
                 trigger.cron_timezone = req.cron_timezone
 
             # Recompute next_fire_at if relevant
-            if req.cron_expression is not None or req.cron_timezone is not None and trigger.cron_expression:
+            if req.cron_expression is not None or (req.cron_timezone is not None and trigger.cron_expression):
                 tz = trigger.cron_timezone or "UTC"
                 err = validate_cron_expression(trigger.cron_expression, tz)
                 if err is None:
@@ -580,7 +579,7 @@ async def update_trigger(
                 trigger.cron_expression = req.cron_expression
             if req.cron_timezone is not None:
                 trigger.cron_timezone = req.cron_timezone
-            if req.cron_expression is not None or req.cron_timezone is not None and trigger.cron_expression:
+            if req.cron_expression is not None or (req.cron_timezone is not None and trigger.cron_expression):
                 tz = trigger.cron_timezone or "UTC"
                 err = validate_cron_expression(trigger.cron_expression, tz)
                 if err is None:

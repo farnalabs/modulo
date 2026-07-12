@@ -6,7 +6,6 @@ Zombie cleanup: 2s keepalive heartbeat detects dead clients within 2s.
 
 from __future__ import annotations
 
-
 import asyncio
 import json
 import logging

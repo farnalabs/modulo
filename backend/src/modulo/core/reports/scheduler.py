@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 """Celery beat scheduler for scheduled reports.
 
 Architecture
@@ -19,6 +17,7 @@ a ``ReportFireTask`` that:
 Report generators are registered via ``register_report_type()``.
 """
 
+from __future__ import annotations
 
 import asyncio
 import datetime

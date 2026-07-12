@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-
 import json
 import logging
 import time as _time
@@ -41,7 +40,6 @@ from modulo.db.models.error_event import ErrorEvent
 from modulo.db.models.error_group import ErrorGroup
 from modulo.db.rls import set_rls_org
 from modulo.settings import Settings, get_settings
-
 
 _log = logging.getLogger(__name__)
 

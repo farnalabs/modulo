@@ -20,4 +20,4 @@ rules:
     severity: WARNING
     paths:
       include:
-        - "frontend/src/**/*.vue"
+        - "**/frontend/src/**/*.vue"

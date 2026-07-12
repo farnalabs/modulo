@@ -121,7 +121,7 @@ class DockerRuntimeProvider(RuntimeProvider):
         provider_ref: str,
         command: list[str],
         *,
-        timeout: int | None = None,  # noqa: ASYNC109
+        timeout: int | None = None,
     ) -> ExecResult:
         """Run a command inside the workspace container."""
         container_id = self._get_container_id(provider_ref)

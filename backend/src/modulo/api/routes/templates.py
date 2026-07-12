@@ -23,7 +23,6 @@ from modulo.db.crud.template import (
 from modulo.db.models.library_primitive import LibraryPrimitive
 from modulo.db.rls import set_rls_org
 
-
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/v1", tags=["templates"])

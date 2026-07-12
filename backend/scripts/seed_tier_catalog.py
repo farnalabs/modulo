@@ -115,7 +115,9 @@ FLAGS = [
     },
     {
         "name": "view_modes",
-        "description": "Multiple named UI views with admin-defined feature visibility per view and user/team/role assignment",
+        "description": (
+            "Multiple named UI views with admin-defined feature visibility per view and user/team/role assignment"
+        ),
         "tier_id": "team",
         "depends_on": None,
     },

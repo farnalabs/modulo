@@ -11,7 +11,6 @@ from modulo.api.models.problem import ProblemDetail, ProblemType
 from modulo.core.logging_config import correlation_id_var
 from modulo.version import get_version
 
-
 logger = logging.getLogger(__name__)
 
 

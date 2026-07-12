@@ -40,6 +40,7 @@ __all__ = [
     "get_celery_app",
 ]
 
+
 def _get_engine() -> Any:
     """Return an async engine from settings.
 

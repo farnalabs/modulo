@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-
 import logging
 from uuid import UUID as _UUID
 
@@ -10,7 +9,6 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel
 from sqlalchemy.exc import ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
-
 
 from modulo.api.dependencies import get_db_session, require_feature
 from modulo.auth.dependencies import get_current_user

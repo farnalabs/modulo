@@ -18,7 +18,6 @@ from modulo.core.feature_flags import FeatureFlagRegistry
 from modulo.db.crud.organisation import get_organisation
 from modulo.settings import Settings, get_settings
 
-
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/v1/admin/feature-flags", tags=["admin-feature-flags"])
