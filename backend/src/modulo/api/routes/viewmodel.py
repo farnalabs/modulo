@@ -31,7 +31,6 @@ from modulo.db.models.view import SavedView
 from modulo.db.rls import set_rls_org, set_rls_user_context
 from modulo.settings import Settings, get_settings
 
-
 logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=["viewmodel"])
@@ -258,6 +257,8 @@ async def viewmodel_current(
                     status_code=status.HTTP_400_BAD_REQUEST,
                     detail="Cannot use view_as_team without an organisation",
                 )
+
+            if view_as_team is not None:
                 team_result = await session.execute(
                     select(Team).where(
                         Team.id == view_as_team,
