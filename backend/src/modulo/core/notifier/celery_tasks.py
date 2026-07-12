@@ -41,6 +41,24 @@ __all__ = [
     "get_celery_app",
 ]
 
+_get_engine_lock = asyncio.Lock()
+_engine_cache: dict[str, Any] = {}
+
+
+def _get_engine() -> Any:
+    """Return a cached async engine from settings.
+
+    The engine is cached so that multiple ``enqueue_dispatch`` calls
+    within the same process reuse the connection pool.
+    """
+    global _engine_cache
+    settings = get_settings()
+    key = settings.database_url
+    if key not in _engine_cache:
+        _engine_cache[key] = create_async_engine(settings.database_url)
+    return _engine_cache[key]
+
+
 _log = logging.getLogger(__name__)
 
 
@@ -155,11 +173,42 @@ async def enqueue_dispatch(
     """Enqueue a notification dispatch to Celery.
 
     This is the entry point called by ``Notifier.dispatch_event()`` when
-    Celery mode is enabled. The caller handles fallback to inline dispatch.
+    Celery mode is enabled. Falls back to inline dispatch if Celery is
+    unavailable.
     """
-    app = get_celery_app()
+    try:
+        app = get_celery_app()
+    except ImportError:
+        app = None
     if app is None:
-        raise RuntimeError("Celery is not available")
+        _log.info(
+            "notifier.celery_unavailable_fallback",
+            extra={"event_type": event_type, "org_id": str(org_id)},
+        )
+        engine = _get_engine()
+        notifier = Notifier(engine, get_settings().fernet_key)
+        try:
+            results = await notifier.dispatch_event(
+                org_id,
+                event_type,
+                payload,
+                run_id=run_id,
+                retain_payload=retain_payload,
+                team_id=team_id,
+            )
+        finally:
+            await notifier.close()
+            await engine.dispose()
+        return [
+            {
+                "endpoint_id": str(r.endpoint_id),
+                "status": r.status,
+                "attempt_count": r.attempt_count,
+                "response_code": r.response_code,
+                "last_error": r.last_error,
+            }
+            for r in results
+        ]
     app.send_task(
         "modulo.notifier.dispatch",
         args=[
