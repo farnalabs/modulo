@@ -1,4 +1,4 @@
-import { ref } from 'vue'
+import { ref, readonly } from 'vue'
 
 interface ConfirmDialogOptions {
   onOpen?: () => void
@@ -28,5 +28,5 @@ export function useConfirmDialog(options?: ConfirmDialogOptions) {
     }
   }
 
-  return { isOpen, isConfirming, open, close, confirm }
+  return { isOpen: readonly(isOpen), isConfirming: readonly(isConfirming), open, close, confirm }
 }
