@@ -105,6 +105,21 @@ class TestBuildFailureContext:
         context = _build_failure_context("prompt", results, {})
         assert "unknown" in context
 
+    def test_handles_non_dict_eval_definitions(self) -> None:
+        eval_id = str(uuid.uuid4())
+        results = [
+            {
+                "id": str(uuid.uuid4()),
+                "eval_id": eval_id,
+                "passed": False,
+                "score": 0.0,
+                "detail": "fail",
+            }
+        ]
+        defs = {eval_id: "not_a_dict"}
+        context = _build_failure_context("prompt", results, defs)
+        assert "unknown" in context
+
 
 class TestParseLLMResponse:
     def test_parses_plain_json(self) -> None:
