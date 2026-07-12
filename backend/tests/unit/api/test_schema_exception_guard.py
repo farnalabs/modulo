@@ -2,6 +2,7 @@
 
 import uuid
 from collections.abc import AsyncGenerator, Generator
+from typing import ClassVar
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -67,7 +68,7 @@ class TestSchemaListExceptionGuard:
 
 
 class TestSchemaCreateExceptionGuard:
-    SCHEMA_CREATE_JSON = {"name": "TestSchema", "description": "test"}
+    SCHEMA_CREATE_JSON: ClassVar[dict] = {"name": "TestSchema", "description": "test"}
 
     def test_create_schema_exception_returns_500(self, client: TestClient) -> None:
         mock_create = AsyncMock(side_effect=TypeError("wrong type"))
@@ -93,7 +94,7 @@ class TestSchemaGetExceptionGuard:
 
 class TestSchemaUpdateExceptionGuard:
     SCHEMA_ID = str(uuid.UUID("00000000-0000-0000-0000-000000000099"))
-    SCHEMA_UPDATE_JSON = {"name": "RenamedSchema"}
+    SCHEMA_UPDATE_JSON: ClassVar[dict] = {"name": "RenamedSchema"}
 
     def test_update_schema_exception_returns_500(self, client: TestClient) -> None:
         mock_update = AsyncMock(side_effect=ValueError("bad update"))
@@ -150,7 +151,8 @@ class TestSchemaVersionListExceptionGuard:
 
 class TestSchemaVersionCreateExceptionGuard:
     SCHEMA_ID = str(uuid.UUID("00000000-0000-0000-0000-000000000099"))
-    VERSION_CREATE_JSON = {"version": "1.0.0", "version_number": 1, "definition_json": {"type": "object"}}
+    VERSION_CREATE_JSON: ClassVar[dict] = {"version": "1.0.0", "version_number": 1,
+                                           "definition_json": {"type": "object"}}
 
     def test_create_version_exception_returns_500(self, client: TestClient) -> None:
         with (

@@ -2,6 +2,7 @@
 
 import uuid
 from collections.abc import AsyncGenerator, Generator
+from typing import ClassVar
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -61,11 +62,11 @@ def client() -> Generator[TestClient, None, None]:
 
 
 class TestChangePasswordSQLAlchemyError:
-    _PASSWORD_PAYLOAD = {
+    _PASSWORD_PAYLOAD: ClassVar[dict] = {
         "current_password": "correct-horse-battery",
         "new_password": "new-strong-password-42",
     }
-    _SETTINGS_PAYLOAD = {"theme": "dark"}
+    _SETTINGS_PAYLOAD: ClassVar[dict] = {"theme": "dark"}
 
     def test_change_password_programming_error_returns_501(self, client: TestClient) -> None:
         with (
