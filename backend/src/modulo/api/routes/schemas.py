@@ -140,7 +140,7 @@ async def list_schemas_endpoint(
     try:
         async with session.begin():
             await set_rls_org(session, principal.organisation_id)
-            result = await list_schemas(session, page=page, page_size=page_size)
+            result = await list_schemas(session, cursor=None, limit=page_size)
     except IntegrityError:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
@@ -758,6 +758,8 @@ async def infer_schema_endpoint(
 
     try:
         secrets_backend = create_secrets_backend(fernet_key=settings.fernet_key)
+    except asyncio.CancelledError:
+        raise
     except Exception:
         logger.exception("schemas.infer.secrets_backend")
         raise HTTPException(
@@ -768,6 +770,8 @@ async def infer_schema_endpoint(
     async with ConnectorHub(secrets_backend=secrets_backend) as ch:
         try:
             await ch.initialise([ci])
+        except asyncio.CancelledError:
+            raise
         except Exception:
             logger.exception("schemas.infer.connector_init_failed")
             raise HTTPException(
@@ -797,6 +801,8 @@ async def infer_schema_endpoint(
     async with ModelBackendHub() as mh:
         try:
             await mh.initialise(mbs.items, secrets_backend=secrets_backend)
+        except asyncio.CancelledError:
+            raise
         except Exception:
             logger.exception("schemas.infer.backend_init_failed")
             raise HTTPException(
@@ -811,6 +817,8 @@ async def infer_schema_endpoint(
         first_backend_id = next(iter(mh.backend_ids))
         try:
             backend = await mh.get(first_backend_id)
+        except asyncio.CancelledError:
+            raise
         except Exception:
             logger.exception("schemas.infer.backend_get_failed")
             raise HTTPException(
@@ -850,13 +858,12 @@ async def infer_schema_endpoint(
                     },
                 )
         except ProgrammingError:
-            logger.exception("routes.schemas")
+            logger.warning("Audit event not recorded — schema inference table missing")
 
-            raise HTTPException(
-                status_code=status.HTTP_501_NOT_IMPLEMENTED,
-                detail="This feature is not available. Run database migrations to enable it.",
-            ) from None
-
+    except HTTPException:
+        raise
+    except asyncio.CancelledError:
+        raise
     except Exception:
         logger.exception("schemas.infer.audit_failed")
 
@@ -934,6 +941,8 @@ async def generate_schema_endpoint(
 
     try:
         secrets_backend = create_secrets_backend(fernet_key=settings.fernet_key)
+    except asyncio.CancelledError:
+        raise
     except Exception:
         logger.exception("schemas.generate.secrets_backend")
         raise HTTPException(
@@ -944,6 +953,8 @@ async def generate_schema_endpoint(
     async with ModelBackendHub() as mh:
         try:
             await mh.initialise(mbs.items, secrets_backend=secrets_backend)
+        except asyncio.CancelledError:
+            raise
         except Exception:
             logger.exception("schemas.generate.backend_init_failed")
             raise HTTPException(
@@ -958,6 +969,8 @@ async def generate_schema_endpoint(
         first_backend_id = next(iter(mh.backend_ids))
         try:
             backend = await mh.get(first_backend_id)
+        except asyncio.CancelledError:
+            raise
         except Exception:
             logger.exception("schemas.generate.backend_get_failed")
             raise HTTPException(
@@ -995,12 +1008,7 @@ async def generate_schema_endpoint(
                     },
                 )
         except ProgrammingError:
-            logger.exception("routes.schemas")
-
-            raise HTTPException(
-                status_code=status.HTTP_501_NOT_IMPLEMENTED,
-                detail="This feature is not available. Run database migrations to enable it.",
-            ) from None
+            logger.warning("Audit event not recorded — schema generation table missing")
 
     except HTTPException:
         raise
@@ -1095,6 +1103,10 @@ async def migrate_data_endpoint(
 
     try:
         plan = create_migration(from_sv.definition_json, to_sv.definition_json)
+    except HTTPException:
+        raise
+    except asyncio.CancelledError:
+        raise
     except Exception:
         logger.exception("schemas.migrate_create_plan")
         raise HTTPException(
@@ -1118,6 +1130,10 @@ async def migrate_data_endpoint(
 
     try:
         migrated = apply_migration(req.data, plan)
+    except HTTPException:
+        raise
+    except asyncio.CancelledError:
+        raise
     except Exception:
         logger.exception("schemas.migrate_apply")
         raise HTTPException(
@@ -1168,7 +1184,7 @@ async def _get_latest_version(session: AsyncSession, schema_id: uuid.UUID) -> An
 
 
 class SchemaValidateRequest(BaseModel):
-    definition: dict[str, Any] = Field(alias="definition")
+    definition: dict[str, Any]
 
 
 class SchemaValidationError(BaseModel):
