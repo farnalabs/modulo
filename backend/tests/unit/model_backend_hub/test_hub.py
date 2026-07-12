@@ -11,7 +11,6 @@ from cryptography.fernet import Fernet
 from langchain_core.messages import AIMessage, BaseMessage
 
 from modulo.core.model_backend_hub import (
-    BackendDecryptError,
     BackendNotFoundError,
     BackendUnavailableError,
     ModelBackendHub,
@@ -233,7 +232,7 @@ async def test_initialise_openai():
     assert mb.id in hub.backend_ids
 
 
-async def test_initialise_wrong_key_raises():
+async def test_initialise_wrong_key_skips_backend():
     other_key = Fernet.generate_key().decode()
     mb = _FakeMB(
         id=uuid.uuid4(),
@@ -244,9 +243,8 @@ async def test_initialise_wrong_key_raises():
     backend = create_secrets_backend(fernet_key=other_key, backend_name="fernet")
     with patch.object(backend, "get_secret", side_effect=KeyError(str(mb.id))):
         hub = ModelBackendHub()
-        with pytest.raises(BackendDecryptError) as exc_info:
-            await hub.initialise([mb], secrets_backend=backend)
-    assert exc_info.value.backend_id == mb.id
+        await hub.initialise([mb], secrets_backend=backend)
+    assert mb.id not in hub.backend_ids
 
 
 async def test_initialise_ollama():
@@ -337,8 +335,8 @@ async def test_initialise_plugin_fallback_backend():
     assert isinstance(backend_obj, _PluginBackend)
 
 
-async def test_initialise_plugin_fallback_not_registered_raises():
-    """When a provider is not built-in and not in the plugin registry, raise ValueError."""
+async def test_initialise_plugin_fallback_not_registered_skips_backend():
+    """When a provider is not built-in and not in the plugin registry, skip and continue."""
     mb = _FakeMB(
         id=uuid.uuid4(),
         provider="unknown_provider",
@@ -348,11 +346,11 @@ async def test_initialise_plugin_fallback_not_registered_raises():
     backend = create_secrets_backend(fernet_key=_KEY, backend_name="fernet")
     with patch.object(backend, "get_secret", return_value='{"api_key": "x"}'):
         hub = ModelBackendHub()
-        with pytest.raises(ValueError, match="Unknown model backend provider"):
-            await hub.initialise([mb], secrets_backend=backend)
+        await hub.initialise([mb], secrets_backend=backend)
+    assert mb.id not in hub.backend_ids
 
 
-async def test_initialise_missing_api_key_raises():
+async def test_initialise_missing_api_key_skips_backend():
     mb = _FakeMB(
         id=uuid.uuid4(),
         provider="anthropic",
@@ -362,8 +360,8 @@ async def test_initialise_missing_api_key_raises():
     backend = create_secrets_backend(fernet_key=_KEY, backend_name="fernet")
     with patch.object(backend, "get_secret", return_value="{}"):
         hub = ModelBackendHub()
-        with pytest.raises(ValueError, match="api_key"):
-            await hub.initialise([mb], secrets_backend=backend)
+        await hub.initialise([mb], secrets_backend=backend)
+    assert mb.id not in hub.backend_ids
 
 
 async def test_get_with_rotation_raises_for_unregistered_id():
@@ -403,9 +401,9 @@ async def test_initialise_self_referencing_fallback_does_not_crash():
     assert hub._fallbacks.get(primary_id) == [primary_id]
 
 
-async def test_initialise_plugin_build_failure_propagates():
-    """When registry.build_model_backend raises, the error propagates from
-    initialise rather than silently failing."""
+async def test_initialise_plugin_build_failure_skips_backend():
+    """When registry.build_model_backend raises, the backend is skipped
+    and initialise continues without propagating the error."""
     mb = _FakeMB(
         id=uuid.uuid4(),
         provider="my_custom_provider",
@@ -420,5 +418,5 @@ async def test_initialise_plugin_build_failure_propagates():
         mock_reg.return_value.has_model_backend.return_value = True
         mock_reg.return_value.build_model_backend.side_effect = RuntimeError("Plugin crash")
         hub = ModelBackendHub()
-        with pytest.raises(RuntimeError, match="Plugin crash"):
-            await hub.initialise([mb], secrets_backend=secrets_backend)
+        await hub.initialise([mb], secrets_backend=secrets_backend)
+    assert mb.id not in hub.backend_ids
