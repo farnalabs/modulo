@@ -192,7 +192,8 @@ class GitLabConnector(ConnectorBase):
                     return HealthResult(ok=False, detail="Missing scopes: API access not granted")
                 if not projects_r.is_success:
                     return HealthResult(
-                        ok=False, detail=f"Projects API returned HTTP {projects_r.status_code}: {projects_r.text[:200]}"
+                        ok=False,
+                        detail=f"Projects API returned HTTP {projects_r.status_code}: {projects_r.text[:200]}",
                     )
 
             return HealthResult(ok=True, detail=username)

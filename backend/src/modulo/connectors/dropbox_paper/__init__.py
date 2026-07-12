@@ -65,7 +65,8 @@ class DropboxPaperConnector(ConnectorBase):
             return HealthResult(ok=True, detail=f"Authenticated as {email}")
         except httpx.HTTPStatusError as exc:
             return HealthResult(
-                ok=False, detail=f"Dropbox API HTTP {exc.response.status_code}: {exc.response.text[:200]}"
+                ok=False,
+                detail=f"Dropbox API HTTP {exc.response.status_code}: {exc.response.text[:200]}",
             )
         except httpx.TimeoutException:
             return HealthResult(ok=False, detail="Dropbox API timeout")

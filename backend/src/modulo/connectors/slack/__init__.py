@@ -258,7 +258,9 @@ class SlackConnector(ConnectorBase):
             raise ValueError("Missing 'thread_ts' in thread_reply payload")
         body_data = {k: v for k, v in data.items() if k not in ("channel", "thread_ts")}
         r = await self._call_api(
-            "POST", "/chat.postMessage", json={"channel": channel, "thread_ts": thread_ts, **body_data}
+            "POST",
+            "/chat.postMessage",
+            json={"channel": channel, "thread_ts": thread_ts, **body_data},
         )
         body: dict[str, Any] = await self._parse_json(r)
         _check_slack_ok(body, "chat.postMessage (thread)")

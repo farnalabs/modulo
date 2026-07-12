@@ -1,5 +1,6 @@
 """MicrosoftTeamsConnector — async Microsoft Graph API connector for Teams."""
 
+import asyncio
 from typing import Any, cast
 from urllib.parse import parse_qs, urlparse
 
@@ -44,6 +45,8 @@ class MicrosoftTeamsConnector(ConnectorBase):
                 if resp.status_code == 401:
                     return HealthResult(ok=False, detail="Invalid Microsoft Graph API token")
                 return HealthResult(ok=False, detail=f"HTTP {resp.status_code}: {resp.text[:200]}")
+        except asyncio.CancelledError:
+            raise
         except Exception as exc:
             return HealthResult(ok=False, detail=str(exc)[:200])
 
@@ -92,7 +95,7 @@ class MicrosoftTeamsConnector(ConnectorBase):
         resp = await c.get("/teams", params=params)
         resp.raise_for_status()
         body = resp.json()
-        records = cast(list[dict[str, Any]], body.get("value", []))
+        records = cast("list[dict[str, Any]]", body.get("value", []))
         next_link = body.get("@odata.nextLink", "")
         skiptoken = ""
         if next_link:
@@ -112,7 +115,7 @@ class MicrosoftTeamsConnector(ConnectorBase):
         resp = await c.get(f"/teams/{team_id}")
         resp.raise_for_status()
         body = resp.json()
-        return ConnectorResult(records=[cast(dict[str, Any], body)])
+        return ConnectorResult(records=[cast("dict[str, Any]", body)])
 
     async def _list_channels(self, c: httpx.AsyncClient, q: ConnectorQuery) -> ConnectorResult:
         team_id = q.filters.get("team_id", "")
@@ -124,7 +127,7 @@ class MicrosoftTeamsConnector(ConnectorBase):
         resp = await c.get(f"/teams/{team_id}/channels", params=params)
         resp.raise_for_status()
         body = resp.json()
-        records = cast(list[dict[str, Any]], body.get("value", []))
+        records = cast("list[dict[str, Any]]", body.get("value", []))
         return ConnectorResult(
             records=records[: q.limit or len(records)],
             total=len(records),
@@ -138,7 +141,7 @@ class MicrosoftTeamsConnector(ConnectorBase):
         resp = await c.get(f"/teams/{team_id}/channels/{channel_id}")
         resp.raise_for_status()
         body = resp.json()
-        return ConnectorResult(records=[cast(dict[str, Any], body)])
+        return ConnectorResult(records=[cast("dict[str, Any]", body)])
 
     async def _list_messages(self, c: httpx.AsyncClient, q: ConnectorQuery) -> ConnectorResult:
         team_id = q.filters.get("team_id", "")
@@ -153,7 +156,7 @@ class MicrosoftTeamsConnector(ConnectorBase):
         resp = await c.get(f"/teams/{team_id}/channels/{channel_id}/messages", params=params)
         resp.raise_for_status()
         body = resp.json()
-        records = cast(list[dict[str, Any]], body.get("value", []))
+        records = cast("list[dict[str, Any]]", body.get("value", []))
         return ConnectorResult(
             records=records[: q.limit or len(records)],
             total=len(records),
@@ -168,7 +171,7 @@ class MicrosoftTeamsConnector(ConnectorBase):
         resp = await c.get(f"/teams/{team_id}/members")
         resp.raise_for_status()
         body = resp.json()
-        records = cast(list[dict[str, Any]], body.get("value", []))
+        records = cast("list[dict[str, Any]]", body.get("value", []))
         return ConnectorResult(
             records=records[: q.limit or len(records)],
             total=len(records),
@@ -183,7 +186,7 @@ class MicrosoftTeamsConnector(ConnectorBase):
         resp = await c.get("/users", params=params)
         resp.raise_for_status()
         body = resp.json()
-        records = cast(list[dict[str, Any]], body.get("value", []))
+        records = cast("list[dict[str, Any]]", body.get("value", []))
         return ConnectorResult(
             records=records[: q.limit or len(records)],
             total=len(records),
@@ -198,7 +201,7 @@ class MicrosoftTeamsConnector(ConnectorBase):
         resp = await c.get("/groups", params=params)
         resp.raise_for_status()
         body = resp.json()
-        records = cast(list[dict[str, Any]], body.get("value", []))
+        records = cast("list[dict[str, Any]]", body.get("value", []))
         return ConnectorResult(
             records=records[: q.limit or len(records)],
             total=len(records),
@@ -214,11 +217,11 @@ class MicrosoftTeamsConnector(ConnectorBase):
             "body": {
                 "contentType": "html" if data.get("content_type") == "html" else "text",
                 "content": body_content,
-            }
+            },
         }
         resp = await c.post(f"/teams/{team_id}/channels/{channel_id}/messages", json=body)
         resp.raise_for_status()
-        return cast(dict[str, Any], resp.json())
+        return cast("dict[str, Any]", resp.json())
 
     async def _create_channel(self, c: httpx.AsyncClient, data: dict[str, Any]) -> dict[str, Any]:
         team_id = data.get("team_id", "")
@@ -234,4 +237,4 @@ class MicrosoftTeamsConnector(ConnectorBase):
             body["membershipType"] = data["membershipType"]
         resp = await c.post(f"/teams/{team_id}/channels", json=body)
         resp.raise_for_status()
-        return cast(dict[str, Any], resp.json())
+        return cast("dict[str, Any]", resp.json())

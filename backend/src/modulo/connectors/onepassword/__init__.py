@@ -1,5 +1,6 @@
 """OnePasswordConnector — async 1Password Connect REST API connector."""
 
+import asyncio
 from typing import Any
 
 import httpx
@@ -45,6 +46,8 @@ class OnePasswordConnector(ConnectorBase):
                 if resp.status_code == 401:
                     return HealthResult(ok=False, detail="Invalid 1Password Connect API token")
                 return HealthResult(ok=False, detail=f"HTTP {resp.status_code}: {resp.text[:200]}")
+        except asyncio.CancelledError:
+            raise
         except Exception as exc:
             return HealthResult(ok=False, detail=str(exc)[:200])
 
