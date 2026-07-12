@@ -119,7 +119,7 @@ LLM-driven prompt improvement from eval failures, with full version history, rol
 - [ ] No circuit breaker if the LLM backend is persistently unavailable
 
 ## Known Gaps
-- No unit test for get_prompt_diffs hash comparison logic as a standalone function — diff logic is inlined in the route handler (SequenceMatcher) and tested via the API endpoint, but not as an independent unit
+- No unit test for get_prompt_diffs SequenceMatcher diff logic as a standalone function — hash comparison has dedicated tests in `TestGetPromptDiffs` but the diff comparison (SequenceMatcher) logic is inlined in the route handler and only tested via the API endpoint, not as an independent unit
 - No integration test exercising the full optimize→LLM→parse→response chain with a real model backend
 - No performance or regression tests for large version histories (100+ entries)
 - No unauthorized access scenarios for prompt history (non-member org, viewer role)
@@ -160,4 +160,4 @@ LLM-driven prompt improvement from eval failures, with full version history, rol
 - Added 2 edge case checkboxes for diff endpoint error rollover
 - Added Resilience & Integration Robustness section with 5 checkboxes
 - Updated Known Gaps: refined gap #1, added 4 new gaps (no integration test, response length bound check, no retry/backoff, no website docs stub)
-- Status: partial (6 known gaps remain) 
+- Status: partial (6 known gaps remain)

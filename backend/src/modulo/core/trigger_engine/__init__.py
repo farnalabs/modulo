@@ -217,7 +217,7 @@ class TriggerEngine:
         try:
             ts = _verify_timestamp(modulo_timestamp)
         except TimestampExpiredError as exc:
-            _log.warning("Webhook timestamp validation failed for trigger %s: %s", trigger_id, exc)
+            _log.warning("Webhook timestamp validation failed for trigger %s: %s", trigger_id, exc, exc_info=True)
             await self._log_event(
                 session,
                 trigger=trigger,
