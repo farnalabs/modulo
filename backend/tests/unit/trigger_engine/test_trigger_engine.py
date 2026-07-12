@@ -157,6 +157,7 @@ def webhook_client() -> Generator[TestClient, None, None]:
             secret_key=_VALID_32,
             fernet_key=_VALID_32,
             modulo_admin_password="pw",
+            redis_url="",
         )
 
     def _principal() -> AuthenticatedPrincipal:
@@ -167,7 +168,22 @@ def webhook_client() -> Generator[TestClient, None, None]:
             org_role="admin",
         )
 
+    trigger_mock = MagicMock()
+    trigger_mock.id = uuid.uuid4()
+    trigger_mock.pipeline_id = uuid.uuid4()
+    trigger_mock.active = True
+    trigger_mock.config_json = {}
+    trigger_mock.max_concurrent_runs = 5
+
+    execute_result = MagicMock()
+    execute_result.scalar_one_or_none.return_value = trigger_mock
+    execute_result.scalar_one.return_value = trigger_mock
+
+    snapshot_mock = MagicMock()
+    snapshot_mock.id = uuid.uuid4()
+
     session = AsyncMock()
+    session.execute = AsyncMock(return_value=execute_result)
     begin_cm = AsyncMock()
     begin_cm.__aenter__ = AsyncMock(return_value=None)
     begin_cm.__aexit__ = AsyncMock(return_value=False)
@@ -181,7 +197,11 @@ def webhook_client() -> Generator[TestClient, None, None]:
     app.dependency_overrides[_get_engine] = lambda: MagicMock()
     app.dependency_overrides[get_current_user] = _principal
 
-    yield TestClient(app, raise_server_exceptions=False)
+    with (
+        patch("modulo.db.crud.pipeline_snapshot.create_snapshot_from_live_graph", return_value=snapshot_mock),
+        patch("modulo.core.rate_limiter.RateLimiterRegistry.check", return_value=True),
+    ):
+        yield TestClient(app, raise_server_exceptions=False)
 
     app.dependency_overrides.clear()
 
