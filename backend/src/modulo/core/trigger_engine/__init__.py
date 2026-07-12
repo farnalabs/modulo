@@ -14,6 +14,7 @@ All outcomes (pass and fail) are recorded as a TriggerEvent row.
 The caller is responsible for background execution of the created run.
 """
 
+import asyncio
 import hashlib
 import hmac
 import json
@@ -497,17 +498,23 @@ class TriggerEngine:
                 instance.config_json,
                 creds,
             )
+        except asyncio.CancelledError:
+            raise
         except Exception as exc:
             return {"status": "error", "error": f"Connector init failed: {str(exc)[:200]}"}
 
         try:
             query = ConnectorQuery(resource=poll_query)
             query_result = await connector.query(query)
+        except asyncio.CancelledError:
+            raise
         except Exception as exc:
             return {"status": "error", "error": f"Query failed: {str(exc)[:200]}"}
 
         try:
             matched = _evaluate_condition(query_result, condition_expression)
+        except asyncio.CancelledError:
+            raise
         except Exception as exc:
             return {"status": "error", "error": f"Condition evaluation failed: {str(exc)[:200]}"}
 
