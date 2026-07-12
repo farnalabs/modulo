@@ -64,12 +64,16 @@ def _make_mock_session() -> AsyncMock:
 
 class _AllFeatures:
     """Stub that enables every feature — used to override ``get_plan_context``."""
+
     def feature_enabled(self, name: str) -> bool:
         return True
+
     def list_enabled_features(self) -> list:
         return []
+
     def tier(self) -> str:
         return "enterprise"
+
     def has_license_key(self) -> bool:
         return True
 
