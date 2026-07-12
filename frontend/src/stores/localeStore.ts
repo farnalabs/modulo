@@ -67,11 +67,9 @@ export const useLocaleStore = defineStore('locale', () => {
           10000,
           'Locale fetch request',
         )
-        if (res.data) {
-          const backendLocale = (res.data as Record<string, unknown>).locale as string | undefined
-          if (backendLocale && isSupportedLocale(backendLocale)) {
-            detected = backendLocale
-          }
+        const settingsData = res.data as { locale?: string } | undefined
+        if (settingsData?.locale && isSupportedLocale(settingsData.locale)) {
+          detected = settingsData.locale
         }
       } catch (err) {
         console.warn('[locale] Failed to fetch locale from backend', err)
