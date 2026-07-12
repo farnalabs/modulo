@@ -22,9 +22,9 @@ depends_on: str | Sequence[str] | None = None
 
 
 def upgrade() -> None:
-    op.add_column(
-        "pipelines",
-        sa.Column("archived_at", sa.DateTime(timezone=True), nullable=True),
+    op.execute(
+        "ALTER TABLE pipelines ADD COLUMN IF NOT EXISTS archived_at "
+        "TIMESTAMP WITH TIME ZONE"
     )
 
 
