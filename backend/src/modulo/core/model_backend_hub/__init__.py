@@ -140,10 +140,14 @@ class ModelBackendHub:
                 except KeyError as exc:
                     raise BackendDecryptError(mb.id) from exc
                 try:
-                    creds: dict[str, Any] = json.loads(raw_str)
+                    raw_creds: Any = json.loads(raw_str)
                 except json.JSONDecodeError as exc:
                     logger.warning("Malformed secret JSON for backend %s: %s", mb.id, exc)
                     continue
+                if not isinstance(raw_creds, dict):
+                    logger.warning("Secret for backend %s is not a JSON object", mb.id)
+                    continue
+                creds: dict[str, Any] = raw_creds
                 backend = _build_backend(mb.provider, mb.model_id, creds, mb.default_params or {})
                 backends_to_register.append((mb.id, backend))
 
@@ -231,6 +235,8 @@ class ModelBackendHub:
                             "fallback_id": str(fallback_id),
                         }
                     )
+                except asyncio.CancelledError:
+                    raise
                 except Exception:
                     logger.exception("Audit logger failed during failover for backend %s", backend_id)
             return self._backends[fallback_id]
@@ -273,6 +279,8 @@ class ModelBackendHub:
                             "fallback_id": str(fallback_id),
                         }
                     )
+                except asyncio.CancelledError:
+                    raise
                 except Exception:
                     logger.exception("Audit logger failed during failover for backend %s", backend_id)
             return RotatedResult(
@@ -307,6 +315,8 @@ class ModelBackendHub:
             )
             self._healthy[backend_id] = result.ok
             return result
+        except asyncio.CancelledError:
+            raise
         except TimeoutError:
             self._healthy[backend_id] = False
             return HealthResult(ok=False, detail="Health check timed out")
@@ -452,6 +462,8 @@ def _build_backend(
             raise ValueError(f"Missing 'api_key' in credentials for provider {provider!r}")
         try:
             return registry.build_model_backend(provider, model_id, api_key, **default_params)
+        except asyncio.CancelledError:
+            raise
         except Exception as exc:
             raise ValueError(f"Failed to build plugin model backend for provider {provider!r}: {exc}") from exc
     raise ValueError(f"Unknown model backend provider: {provider!r}")
