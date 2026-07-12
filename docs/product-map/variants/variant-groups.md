@@ -114,16 +114,16 @@ A/B test variant management — named sets of runs against the same pipeline tha
 - [x] ForeignKey `RESTRICT` prevents deletion of pipelines that have variant groups
 - [x] Check constraint enforces `selection_strategy IN ('weighted', 'single')` at DB level
 
-## Missing implementations (gaps relative to PRD 8.19)
+## Known Gaps
 
-- [ ] Batch run: PRD specifies "fires one run per variant" — current code fires only one run per API call, not N variants
-- [ ] Comparison view: no frontend, no endpoint for side-by-side eval scores / token cost / HITL outcomes / per-node output diff
-- [ ] Eval coverage signal warning: `coverage-gaps` endpoint exists but no UI surfaces the "Variants diverged but evals did not differentiate" warning
-- [ ] HITL partial completion: no handling for one variant reaching `awaiting_human` while others complete
-- [ ] Cancel/abandon variant: no endpoint or status for marking a variant run as abandoned and excluding from aggregates
-- [ ] All-or-nothing pre-flight quota: PRD says check all N variants before firing any — current code checks per-run only
-- [ ] Prompt versioning library guide: `get_prompt_diffs` exists but documented library pattern for prompt versioning does not
-- [ ] `base_snapshot_ids` parameter for prompt diffs exists in CRUD layer but not exposed as route query parameter
+- No batch run endpoint: PRD specifies "fires one run per variant" — current code fires only one run per API call, not N variants
+- No comparison view: no frontend, no endpoint for side-by-side eval scores / token cost / HITL outcomes / per-node output diff
+- No eval coverage signal UI: `coverage-gaps` endpoint exists but no UI surfaces the "Variants diverged but evals did not differentiate" warning
+- No HITL partial completion: no handling for one variant reaching `awaiting_human` while others complete
+- No cancel/abandon variant: no endpoint or status for marking a variant run as abandoned and excluding from aggregates
+- No all-or-nothing N-variant pre-flight quota: PRD says check all N variants before firing any — current code checks per-run only
+- No prompt versioning library guide: `get_prompt_diffs` exists but documented library pattern for prompt versioning does not
+- `base_snapshot_ids` parameter for prompt diffs exists in CRUD layer but not exposed as route query parameter
 
 ## Test coverage gaps
 
@@ -133,10 +133,3 @@ A/B test variant management — named sets of runs against the same pipeline tha
 ## QA History
 
 - 2026-07-06: qa-iterate — Fixed CRITICAL: consolidated error handling sections into one complete section with all exception types (ProgrammingError→501, SQLAlchemyError→503, IntegrityError→409, Exception→500). Fixed MAJOR: designated this file as canonical for weighted selection, coverage gap, and prompt diff behaviours; removed duplicate copies from variant-execution.md and variant-ab-testing.md. Status: partial.
-
-## Known Gaps
-
-- No frontend exists for variant group creation, comparison view, or coverage signal
-- No all-or-nothing N-variant quota pre-flight
-- No HITL partial completion handling
-- `base_snapshot_ids` parameter for prompt diffs is implemented in CRUD but not wired to the HTTP route
