@@ -31,4 +31,4 @@ The determination endpoint scans a team's connected tools (GitHub, GitLab, Jira,
 
 - **No BDD coverage** — No .feature files for determination endpoints.
 - **Dead code** — `_load_and_scan()` helper function in determination.py is defined but never called by either route.
-- **No unit test coverage** — No tests found for the determination endpoints or the determination module.
+- **Unit tests exist for core logic** — `test_draft.py`, `test_inference.py`, `test_scanner.py` cover the determination module, but no endpoint-level tests exist for the two route handlers.
