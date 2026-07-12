@@ -1,6 +1,6 @@
 ---
 id: feat-infra-extensibility
-prd: 10,10.2,10.3,10.3a,10.4
+prd: 10,10.2,10.3,10.3a,10.4,10.5
 delivery-tasks:
   - task-fable-first-run
 bdd:
@@ -44,7 +44,6 @@ Extensibility architecture — plugin system (§10.2), first-run experience/onbo
 - **§10.3b Alpha Exit Criteria**: The `verify-alpha-exit.ps1` script exists but 5 of 6 criteria require human sign-off. No CI workflow triggers the report automatically.
 - **§10.4 Documentation (Public Launch)**: The plugin API guide (`docs/plugin-api.md`) is comprehensive, but the full suite (quickstart, deployment guide, connector/model backend authoring guides, schema reference) is not yet assembled for public launch.
 - **Onboarding state stored in local file, not DB**: `onboarding.py` uses `.onboarding-state.json` instead of the database. Per-instance, lost on restart, not shared across replicas.
-- **`_seed_demo_data` not wrapped in try/except**: Unlike `_seed_environment_profiles`, a crash here blocks app startup. (Fixed in previous QA pass.)
 - **4 of 7 plugin BDD scenarios tagged `@awaiting-implementation`**: No step definitions exist for plugin discovery, detail, startup scanning, or manifest validation.
 - **SDLC onboarding BDD feature describes unimplemented 5-step flow**: The feature file at `backend/tests/bdd/features/onboarding/sdlc_onboarding.feature` describes a schema-inference-based flow that doesn't match the implemented 4-step general onboarding.
 - **`modulo.evals` and `modulo.schema_types` entry-point groups documented but not implemented**: Only `modulo.connectors` and `modulo.model_backends` are supported.
