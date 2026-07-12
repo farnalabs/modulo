@@ -74,6 +74,7 @@ const routeConfigMap: Record<string, { icon: string; labelKey: string }> = {
   'api-changelog': { icon: 'History', labelKey: 'components.SidebarNav.item_api_changelog' },
   'team-comparison': { icon: 'BarChart', labelKey: 'components.SidebarNav.item_team_comparison' },
   'admin-plugins': { icon: 'Puzzle', labelKey: 'components.SidebarNav.item_plugins' },
+  'environment-profiles': { icon: 'Container', labelKey: 'components.SidebarNav.item_environment_profiles' },
   'feedback-inbox': { icon: 'MessageSquare', labelKey: 'components.SidebarNav.item_feedback_inbox' },
 }
 
@@ -111,6 +112,7 @@ interface ManifestSidebarGroup {
   default_expanded: boolean
   simple_mode: boolean
   labelKey?: string
+  system_admin_only?: boolean
 }
 
 interface Manifest {
@@ -183,6 +185,7 @@ function buildSidebarGroups(): NavGroup[] {
       items: itemsByGroup[id] || [],
       defaultCollapsed: !sg.default_expanded,
       simpleMode: sg.simple_mode,
+      systemAdminOnly: sg.system_admin_only || undefined,
     }))
     .filter((g) => g.items.length > 0)
 }
