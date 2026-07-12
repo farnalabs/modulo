@@ -1,5 +1,6 @@
 """NpmConnector — async npm Registry API connector for package metadata."""
 
+import asyncio
 from typing import Any
 
 import httpx
@@ -47,6 +48,8 @@ class NpmConnector(ConnectorBase):
                 return HealthResult(ok=False, detail=f"HTTP {resp.status_code}: {resp.text[:200]}")
         except httpx.ConnectError:
             return HealthResult(ok=False, detail="Cannot connect to npm registry")
+        except asyncio.CancelledError:
+            raise
         except Exception as exc:
             return HealthResult(ok=False, detail=str(exc)[:200])
 

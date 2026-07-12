@@ -1,5 +1,6 @@
 """GitHub Issues implementation of the TicketTrackerBase ABC."""
 
+import asyncio
 from datetime import datetime
 from typing import Any
 
@@ -35,6 +36,8 @@ class GitHubTicketTracker(TicketTrackerBase):
                 resp.raise_for_status()
                 data = resp.json()
                 return HealthResult(ok=True, detail=data.get("full_name", self._repo))
+        except asyncio.CancelledError:
+            raise
         except Exception as e:
             return HealthResult(ok=False, detail=str(e)[:200])
 
@@ -50,7 +53,7 @@ class GitHubTicketTracker(TicketTrackerBase):
                 search=filters.get("search"),
                 limit=filters.get("limit", 20),
                 offset=filters.get("offset", 0),
-            )
+            ),
         )
         return ConnectorResult(records=[t.__dict__ for t in tickets], total=len(tickets))
 

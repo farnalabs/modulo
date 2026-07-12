@@ -68,19 +68,19 @@ class ShellConnector(ConnectorBase):
     def _check_workspace_lease(self) -> None:
         if self._workspace_lease_id is None:
             raise ConnectorPermissionError(
-                "No active workspace lease. Shell access is only available inside a running pipeline."
+                "No active workspace lease. Shell access is only available inside a running pipeline.",
             )
 
     def _check_command_allowed(self, command: list[str]) -> None:
         if not self._allowed_commands:
             raise ConnectorPermissionError(
                 "No commands are allowed (deny-all). "
-                "Operator must configure permitted commands in the environment profile."
+                "Operator must configure permitted commands in the environment profile.",
             )
         base = command[0] if command else ""
         if base not in self._allowed_commands:
             raise ConnectorPermissionError(
-                f"Command {base!r} is not in the allowed list: {sorted(self._allowed_commands)}"
+                f"Command {base!r} is not in the allowed list: {sorted(self._allowed_commands)}",
             )
 
     async def query(self, q: ConnectorQuery) -> ConnectorResult:
@@ -96,7 +96,9 @@ class ShellConnector(ConnectorBase):
                 path = q.filters["path"]
                 safe_path = shlex.quote(path)
                 result = await self._runtime_provider.execute_command(
-                    provider_ref, f"cat {safe_path}", timeout_seconds=30
+                    provider_ref,
+                    f"cat {safe_path}",
+                    timeout_seconds=30,
                 )
                 if result["exit_code"] != 0:
                     raise ValueError(f"Failed to read file {path!r}: {(result['stderr'] or '').strip()}")
@@ -106,7 +108,9 @@ class ShellConnector(ConnectorBase):
                 dir_path = q.filters.get("path", ".")
                 safe_path = shlex.quote(dir_path)
                 result = await self._runtime_provider.execute_command(
-                    provider_ref, f"ls -1a {safe_path}", timeout_seconds=30
+                    provider_ref,
+                    f"ls -1a {safe_path}",
+                    timeout_seconds=30,
                 )
                 entries: list[dict[str, Any]] = []
                 for line in (result["stdout"] or "").strip().split("\n"):

@@ -321,6 +321,8 @@ class LinearConnector(ConnectorBase):
                 return HealthResult(ok=False, detail="No viewer returned — invalid API key?")
             name = viewer.get("name") or viewer.get("email") or viewer.get("id", "")
             return HealthResult(ok=True, detail=name)
+        except asyncio.CancelledError:
+            raise
         except Exception as exc:
             return HealthResult(ok=False, detail=str(exc)[:200])
 
