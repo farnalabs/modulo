@@ -20,7 +20,7 @@ class WsTokenConsumeError(Exception):
     """Raised when a Redis error prevents WS token consumption."""
 
 
-class WsTokenExpired(Exception):
+class WsTokenExpiredError(Exception):
     """Raised when a WS token has expired or was already consumed."""
 
 
@@ -60,12 +60,12 @@ async def consume_ws_token(
         data = await redis.getdel(key)
     except RedisTimeoutError:
         _log.error("ws_token.consume_timeout")
-        raise WsTokenConsumeError("Redis timeout while consuming WS token")
+        raise WsTokenConsumeError("Redis timeout while consuming WS token") from None
     except RedisError as exc:
         _log.error("ws_token.consume_failed", extra={"error": str(exc)})
         raise WsTokenConsumeError(f"Redis error: {exc}") from exc
     if data is None:
-        raise WsTokenExpired("WS token expired or already used")
+        raise WsTokenExpiredError("WS token expired or already used")
     try:
         if isinstance(data, bytes):
             return json.loads(data.decode())

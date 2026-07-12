@@ -29,7 +29,7 @@ from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from modulo.api.dependencies import _get_engine
 from modulo.auth.jwt import AuthenticatedPrincipal, decode_principal
-from modulo.auth.ws_token import WsTokenExpired, consume_ws_token
+from modulo.auth.ws_token import WsTokenExpiredError, consume_ws_token
 from modulo.core.pipeline_engine.event_broker import get_registry
 from modulo.db.crud.run import get_run
 from modulo.db.rls import set_rls_org
@@ -80,7 +80,7 @@ async def run_websocket(
                     user_id=uuid.UUID(payload["user_id"]),
                     org_role=payload["org_role"],
                 )
-            except WsTokenExpired:
+            except WsTokenExpiredError:
                 pass
         except Exception as exc:
             _log.warning("ws_token.consume_failed", extra={"error": str(exc)})
