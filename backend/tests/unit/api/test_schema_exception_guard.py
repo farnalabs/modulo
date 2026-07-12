@@ -151,8 +151,11 @@ class TestSchemaVersionListExceptionGuard:
 
 class TestSchemaVersionCreateExceptionGuard:
     SCHEMA_ID = str(uuid.UUID("00000000-0000-0000-0000-000000000099"))
-    VERSION_CREATE_JSON: ClassVar[dict] = {"version": "1.0.0", "version_number": 1,
-                                           "definition_json": {"type": "object"}}
+    VERSION_CREATE_JSON: ClassVar[dict] = {
+        "version": "1.0.0",
+        "version_number": 1,
+        "definition_json": {"type": "object"},
+    }
 
     def test_create_version_exception_returns_500(self, client: TestClient) -> None:
         with (

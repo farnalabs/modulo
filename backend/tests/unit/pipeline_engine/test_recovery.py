@@ -97,7 +97,10 @@ async def test_recover_node_with_valid_input():
     run = _make_run(status="failed", outputs_json={})
     session = _mock_session()
 
-    with patch("modulo.core.pipeline_engine.recovery.get_run", return_value=run), patch("modulo.core.pipeline_engine.recovery.append_audit_event", AsyncMock()) as mock_audit:  # noqa: E501
+    with (
+        patch("modulo.core.pipeline_engine.recovery.get_run", return_value=run),
+        patch("modulo.core.pipeline_engine.recovery.append_audit_event", AsyncMock()) as mock_audit,
+    ):
         pipeline_result = MagicMock()
         pipeline_result.scalar_one.return_value = MagicMock()
         snapshot_result = MagicMock()
@@ -114,13 +117,13 @@ async def test_recover_node_with_valid_input():
         )
 
         result = await recover_node(
-                session,
-                org_id=_ORG_ID,
-                run_id=_RUN_ID,
-                node_id=_NODE_ID,
-                input_data={"review": "approved", "comments": "LGTM"},
-                actor_id=_ACTOR_ID,
-            )
+            session,
+            org_id=_ORG_ID,
+            run_id=_RUN_ID,
+            node_id=_NODE_ID,
+            input_data={"review": "approved", "comments": "LGTM"},
+            actor_id=_ACTOR_ID,
+        )
 
     assert result is not None
     assert result.status == "running"
@@ -142,7 +145,10 @@ async def test_skip_node_on_awaiting_human():
     session = _mock_session()
     snap = _make_snapshot()
 
-    with patch("modulo.core.pipeline_engine.recovery.get_run", return_value=run), patch("modulo.core.pipeline_engine.recovery.append_audit_event", AsyncMock()):  # noqa: E501
+    with (
+        patch("modulo.core.pipeline_engine.recovery.get_run", return_value=run),
+        patch("modulo.core.pipeline_engine.recovery.append_audit_event", AsyncMock()),
+    ):
         pipeline_result = MagicMock()
         pipeline_result.scalar_one.return_value = MagicMock()
         snapshot_result = MagicMock()
@@ -159,13 +165,13 @@ async def test_skip_node_on_awaiting_human():
         )
 
         result = await recover_node(
-                session,
-                org_id=_ORG_ID,
-                run_id=_RUN_ID,
-                node_id=_NODE_ID,
-                input_data=None,
-                actor_id=_ACTOR_ID,
-            )
+            session,
+            org_id=_ORG_ID,
+            run_id=_RUN_ID,
+            node_id=_NODE_ID,
+            input_data=None,
+            actor_id=_ACTOR_ID,
+        )
 
     assert result is not None
     assert result.status == "running"
@@ -179,7 +185,10 @@ async def test_recover_node_not_found():
     """Recover on a non-existent run raises RecoveryNotAllowedError."""
     session = _mock_session()
 
-    with patch("modulo.core.pipeline_engine.recovery.get_run", return_value=None), pytest.raises(RecoveryNotAllowedError) as exc_info:  # noqa: E501
+    with (
+        patch("modulo.core.pipeline_engine.recovery.get_run", return_value=None),
+        pytest.raises(RecoveryNotAllowedError) as exc_info,
+    ):
         await recover_node(
             session,
             org_id=_ORG_ID,

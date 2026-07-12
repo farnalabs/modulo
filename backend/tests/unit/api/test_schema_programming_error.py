@@ -124,8 +124,11 @@ class TestSchemaGetErrors:
 
 class TestSchemaVersionCreateErrors:
     SCHEMA_ID = str(uuid.UUID("00000000-0000-0000-0000-000000000099"))
-    VERSION_CREATE_JSON: ClassVar[dict] = {"version": "1.0.0", "version_number": 1,
-                                           "definition_json": {"type": "object"}}
+    VERSION_CREATE_JSON: ClassVar[dict] = {
+        "version": "1.0.0",
+        "version_number": 1,
+        "definition_json": {"type": "object"},
+    }
 
     def test_create_version_programming_error_returns_501(self, client: TestClient) -> None:
         with (
