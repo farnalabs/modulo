@@ -1,4 +1,4 @@
-import { markRaw } from 'vue'
+import { markRaw, type App } from 'vue'
 import { config } from '@vue/test-utils'
 import { createI18n } from 'vue-i18n'
 import { QueryClient, VueQueryPlugin } from '@tanstack/vue-query'
@@ -11,17 +11,22 @@ const i18n = createI18n({
   messages: { 'en-US': enUS },
 })
 
-const queryClient = new QueryClient({
-  defaultOptions: {
-    queries: { retry: false },
-    mutations: { retry: false },
+const isolatedVueQueryPlugin = {
+  install(app: App) {
+    const queryClient = new QueryClient({
+      defaultOptions: {
+        queries: { retry: false },
+        mutations: { retry: false },
+      },
+    })
+    app.use(VueQueryPlugin, { queryClient })
   },
-})
+}
 
 config.global.plugins = [
   ...(config.global.plugins || []),
   i18n,
-  [VueQueryPlugin, { queryClient }],
+  isolatedVueQueryPlugin,
 ]
 
 const mockRoute = {

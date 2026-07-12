@@ -36,6 +36,6 @@ describe('VariantCompareView', () => {
     await nextTick()
     await nextTick()
     expect(wrapper.exists()).toBe(true)
-    expect(wrapper.text()).toContain('views.variantCompare.title')
+    expect(wrapper.text()).toContain('Variants')
   })
 })

@@ -40,10 +40,6 @@ export function useDataFetch<T>(
   const fetched = ref(false)
   const errorOverride = ref<string | null>(null)
 
-  if (options?.initialValue !== undefined) {
-    queryClient.setQueryData<T>(key, options.initialValue)
-  }
-
   const { data, error, isLoading, isFetching, refetch } = useQuery<T, Error>({
     queryKey: key,
     queryFn: async () => {
@@ -53,7 +49,7 @@ export function useDataFetch<T>(
       return result.data as T
     },
     enabled: options?.immediate !== false,
-    retry: 1,
+    retry: import.meta.env.MODE === 'test' ? false : 1,
     staleTime: 30_000,
   })
 
@@ -64,7 +60,7 @@ export function useDataFetch<T>(
       set: value => { errorOverride.value = value },
     }),
     data: computed({
-      get: () => data.value,
+      get: () => data.value ?? options?.initialValue,
       set: value => queryClient.setQueryData<T | undefined>(key, value),
     }),
     fetched: computed(() => fetched.value),

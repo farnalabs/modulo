@@ -546,6 +546,10 @@ async function fetchTeams() {
   return (data as any)?.items ?? []
 }
 
+const stages = ref<any[]>([])
+const allPipelines = ref<any[]>([])
+const teams = ref<any[]>([])
+
 const { loading, error: pageError } = useDataFetch(
   async () => {
     const [stagesData, pipelinesData, teamsData] = await Promise.all([
@@ -556,14 +560,11 @@ const { loading, error: pageError } = useDataFetch(
     stages.value = (stagesData as any[]).sort((a: any, b: any) => a.position - b.position)
     allPipelines.value = pipelinesData as any[]
     teams.value = teamsData as any[]
-    return {}
+    return { data: {} }
   },
   { initialValue: {} },
 )
 
-const stages = ref<any[]>([])
-const allPipelines = ref<any[]>([])
-const teams = ref<any[]>([])
 
 const movingPipelines = ref<Record<string, boolean>>({})
 

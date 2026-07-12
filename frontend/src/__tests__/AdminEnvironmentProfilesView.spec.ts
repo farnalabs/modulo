@@ -1,8 +1,10 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { mount } from '@vue/test-utils'
-import { nextTick } from 'vue'
+import { flushPromises, mount } from '@vue/test-utils'
+import { nextTick as vueNextTick } from 'vue'
 import { setActivePinia, createPinia } from 'pinia'
 import { usePlanStore } from '../stores/planStore'
+
+async function nextTick() { await vueNextTick(); await flushPromises() }
 
 vi.mock('../lib/api/client', () => ({
   api: {
@@ -21,7 +23,7 @@ describe('AdminEnvironmentProfilesView', () => {
     vi.clearAllMocks()
     setActivePinia(createPinia())
     const store = usePlanStore()
-    store.$patch({ features: { 'environment-profiles': true } })
+    store.$patch({ features: { environment_profiles: true }, currentTier: 'team' })
   })
 
   it('renders without crashing', async () => {

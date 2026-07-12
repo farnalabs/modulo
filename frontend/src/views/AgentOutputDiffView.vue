@@ -69,7 +69,7 @@
           data-testid="diff-compare-btn"
           variant="default"
           class="px-5 py-2"
-          @click="compare"
+          @click="handleCompare"
         >
           Compare
         </Button>
@@ -144,6 +144,7 @@
 <script setup lang="ts">
 import { ref, computed } from 'vue'
 import { api } from '../lib/api/client'
+import { formatApiError } from '../lib/api/formatError'
 import { useApi } from '../composables/useApi'
 import { useDataFetch } from '../composables/useDataFetch'
 import { useMutation } from '../composables/useMutation'
@@ -227,7 +228,7 @@ function diffMarker(line: NodeOutputDiffLine): string {
 }
 
 const { loading, error, mutate: compare } = useMutation(async () => {
-  const { data } = await api.POST('/api/v1/runs/diff', {
+  const { data, error: apiError } = await api.POST('/api/v1/runs/diff', {
     body: {
       run_id_a: runIdA.value.trim(),
       node_id_a: nodeId.value.trim(),
@@ -235,7 +236,16 @@ const { loading, error, mutate: compare } = useMutation(async () => {
       node_id_b: nodeId.value.trim(),
     },
   })
+  if (apiError) throw new Error(formatApiError(apiError))
   result.value = data as unknown as NodeOutputDiffResponse
   return data
 })
+
+async function handleCompare() {
+  try {
+    await compare()
+  } catch {
+    // useMutation exposes the error for the page-level alert.
+  }
+}
 </script>

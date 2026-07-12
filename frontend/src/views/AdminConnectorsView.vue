@@ -317,7 +317,7 @@ watch(data, response => {
     id: item.id,
     name: item.name,
     connector_type: item.connector_type_id,
-    description: typeof item.config_json.description === 'string' ? item.config_json.description : null,
+    description: typeof item.config_json?.description === 'string' ? item.config_json.description : null,
     tier: item.tier === 'preview' || item.tier === 'in_dev' ? item.tier : 'native',
   }))
 }, { immediate: true })

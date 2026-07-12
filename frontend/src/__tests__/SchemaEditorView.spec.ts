@@ -138,7 +138,7 @@ describe('SchemaEditorView', () => {
     })
     await flushPromises()
 
-    const searchInput = wrapper.find('[data-testid="schema-editor-search"]')
+    const searchInput = wrapper.find('[data-testid="filter-bar-search"]')
     await searchInput.setValue('User')
     await nextTick()
 

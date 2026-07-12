@@ -332,6 +332,15 @@ interface ListResponse {
 const router = useRouter()
 const route = useRoute()
 
+const search = ref('')
+const typeFilter = ref('')
+const page = ref(1)
+const pageSize = ref(12)
+const total = ref(0)
+
+type LibrarySection = 'native' | 'community'
+const section = ref<LibrarySection>('native')
+
 const { loading, error, data: loadResp, load: loadPrimitives } = useDataFetch<ListResponse>(
   async () => {
     const params = new URLSearchParams({
@@ -357,7 +366,7 @@ type LibrarySection = 'native' | 'community'
 const section = ref<LibrarySection>('native')
 const total = ref(0)
 
-watch(loadResp, (d) => {
+watch([loadResp, section], ([d]) => {
   if (d) {
     primitives.value = section.value === 'native' ? d.items.filter(p => p.source !== 'community') : d.items
     total.value = section.value === 'native' ? primitives.value.length : d.total
