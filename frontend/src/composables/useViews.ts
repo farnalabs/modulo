@@ -24,8 +24,8 @@ export function useViews(viewType: string) {
     views.value.find(v => v.id === currentViewId.value) ?? null
   )
 
-  async function fetchViews() {
-    if (loading.value) return
+  async function fetchViews(force?: boolean) {
+    if (!force && loading.value) return
     loading.value = true
     error.value = null
     try {
