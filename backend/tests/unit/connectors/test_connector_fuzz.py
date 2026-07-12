@@ -217,7 +217,7 @@ async def _assert_safe_query(connector, q: ConnectorQuery) -> None:
 
 
 @settings(
-    max_examples=5, suppress_health_check=[HealthCheck.too_slow, HealthCheck.function_scoped_fixture], deadline=None
+    max_examples=5, suppress_health_check=[HealthCheck.too_slow, HealthCheck.function_scoped_fixture], deadline=5000
 )
 @given(data=st.data())
 async def test_github_repos_fuzz(gh_connector, data):
@@ -229,7 +229,7 @@ async def test_github_repos_fuzz(gh_connector, data):
 
 
 @settings(
-    max_examples=5, suppress_health_check=[HealthCheck.too_slow, HealthCheck.function_scoped_fixture], deadline=None
+    max_examples=5, suppress_health_check=[HealthCheck.too_slow, HealthCheck.function_scoped_fixture], deadline=5000
 )
 @given(data=st.data())
 async def test_github_pulls_fuzz(gh_connector, data):
@@ -247,7 +247,7 @@ async def test_github_pulls_fuzz(gh_connector, data):
 
 
 @settings(
-    max_examples=5, suppress_health_check=[HealthCheck.too_slow, HealthCheck.function_scoped_fixture], deadline=None
+    max_examples=5, suppress_health_check=[HealthCheck.too_slow, HealthCheck.function_scoped_fixture], deadline=5000
 )
 @given(data=st.data())
 async def test_github_file_fuzz(gh_connector, data):
@@ -265,7 +265,7 @@ async def test_github_file_fuzz(gh_connector, data):
 
 
 @settings(
-    max_examples=5, suppress_health_check=[HealthCheck.too_slow, HealthCheck.function_scoped_fixture], deadline=None
+    max_examples=5, suppress_health_check=[HealthCheck.too_slow, HealthCheck.function_scoped_fixture], deadline=5000
 )
 @given(data=st.data())
 async def test_github_issues_fuzz(gh_connector, data):
@@ -283,7 +283,7 @@ async def test_github_issues_fuzz(gh_connector, data):
 
 
 @settings(
-    max_examples=5, suppress_health_check=[HealthCheck.too_slow, HealthCheck.function_scoped_fixture], deadline=None
+    max_examples=5, suppress_health_check=[HealthCheck.too_slow, HealthCheck.function_scoped_fixture], deadline=5000
 )
 @given(data=st.data())
 async def test_github_single_issue_fuzz(gh_connector, data):
@@ -306,7 +306,7 @@ async def test_github_single_issue_fuzz(gh_connector, data):
 
 
 @settings(
-    max_examples=5, suppress_health_check=[HealthCheck.too_slow, HealthCheck.function_scoped_fixture], deadline=None
+    max_examples=5, suppress_health_check=[HealthCheck.too_slow, HealthCheck.function_scoped_fixture], deadline=5000
 )
 @given(data=st.data())
 async def test_linear_issue_fuzz(linear_connector, data):
@@ -324,7 +324,7 @@ async def test_linear_issue_fuzz(linear_connector, data):
 
 
 @settings(
-    max_examples=5, suppress_health_check=[HealthCheck.too_slow, HealthCheck.function_scoped_fixture], deadline=None
+    max_examples=5, suppress_health_check=[HealthCheck.too_slow, HealthCheck.function_scoped_fixture], deadline=5000
 )
 @given(data=st.data())
 async def test_linear_search_fuzz(linear_connector, data):
@@ -347,7 +347,7 @@ async def test_linear_search_fuzz(linear_connector, data):
 
 
 @settings(
-    max_examples=5, suppress_health_check=[HealthCheck.too_slow, HealthCheck.function_scoped_fixture], deadline=None
+    max_examples=5, suppress_health_check=[HealthCheck.too_slow, HealthCheck.function_scoped_fixture], deadline=5000
 )
 @given(data=st.data())
 async def test_notion_database_fuzz(notion_connector, data):
@@ -365,7 +365,7 @@ async def test_notion_database_fuzz(notion_connector, data):
 
 
 @settings(
-    max_examples=5, suppress_health_check=[HealthCheck.too_slow, HealthCheck.function_scoped_fixture], deadline=None
+    max_examples=5, suppress_health_check=[HealthCheck.too_slow, HealthCheck.function_scoped_fixture], deadline=5000
 )
 @given(data=st.data())
 async def test_notion_page_fuzz(notion_connector, data):
@@ -383,7 +383,7 @@ async def test_notion_page_fuzz(notion_connector, data):
 
 
 @settings(
-    max_examples=5, suppress_health_check=[HealthCheck.too_slow, HealthCheck.function_scoped_fixture], deadline=None
+    max_examples=5, suppress_health_check=[HealthCheck.too_slow, HealthCheck.function_scoped_fixture], deadline=5000
 )
 @given(data=st.data())
 async def test_notion_databases_search_fuzz(notion_connector, data):
@@ -395,7 +395,7 @@ async def test_notion_databases_search_fuzz(notion_connector, data):
 
 
 @settings(
-    max_examples=5, suppress_health_check=[HealthCheck.too_slow, HealthCheck.function_scoped_fixture], deadline=None
+    max_examples=5, suppress_health_check=[HealthCheck.too_slow, HealthCheck.function_scoped_fixture], deadline=5000
 )
 @given(data=st.data())
 async def test_notion_blocks_fuzz(notion_connector, data):
@@ -418,7 +418,7 @@ async def test_notion_blocks_fuzz(notion_connector, data):
 
 
 @settings(
-    max_examples=5, suppress_health_check=[HealthCheck.too_slow, HealthCheck.function_scoped_fixture], deadline=None
+    max_examples=5, suppress_health_check=[HealthCheck.too_slow, HealthCheck.function_scoped_fixture], deadline=5000
 )
 @given(data=st.data())
 async def test_slack_channels_fuzz(slack_connector, data):
@@ -430,7 +430,7 @@ async def test_slack_channels_fuzz(slack_connector, data):
 
 
 @settings(
-    max_examples=5, suppress_health_check=[HealthCheck.too_slow, HealthCheck.function_scoped_fixture], deadline=None
+    max_examples=5, suppress_health_check=[HealthCheck.too_slow, HealthCheck.function_scoped_fixture], deadline=5000
 )
 @given(data=st.data())
 async def test_slack_messages_fuzz(slack_connector, data):
@@ -448,7 +448,7 @@ async def test_slack_messages_fuzz(slack_connector, data):
 
 
 @settings(
-    max_examples=5, suppress_health_check=[HealthCheck.too_slow, HealthCheck.function_scoped_fixture], deadline=None
+    max_examples=5, suppress_health_check=[HealthCheck.too_slow, HealthCheck.function_scoped_fixture], deadline=5000
 )
 @given(data=st.data())
 async def test_slack_users_fuzz(slack_connector, data):
@@ -465,7 +465,7 @@ async def test_slack_users_fuzz(slack_connector, data):
 
 
 @settings(
-    max_examples=5, suppress_health_check=[HealthCheck.too_slow, HealthCheck.function_scoped_fixture], deadline=None
+    max_examples=5, suppress_health_check=[HealthCheck.too_slow, HealthCheck.function_scoped_fixture], deadline=5000
 )
 @given(data=st.data())
 async def test_jira_issue_fuzz(jira_connector, data):
@@ -483,7 +483,7 @@ async def test_jira_issue_fuzz(jira_connector, data):
 
 
 @settings(
-    max_examples=5, suppress_health_check=[HealthCheck.too_slow, HealthCheck.function_scoped_fixture], deadline=None
+    max_examples=5, suppress_health_check=[HealthCheck.too_slow, HealthCheck.function_scoped_fixture], deadline=5000
 )
 @given(data=st.data())
 async def test_jira_search_fuzz(jira_connector, data):
@@ -528,7 +528,7 @@ _JIRA_ISSUE_TPL = {
 
 
 @settings(
-    max_examples=5, suppress_health_check=[HealthCheck.too_slow, HealthCheck.function_scoped_fixture], deadline=None
+    max_examples=5, suppress_health_check=[HealthCheck.too_slow, HealthCheck.function_scoped_fixture], deadline=5000
 )
 @given(data=st.data())
 async def test_github_single_issue_mutated_fuzz(gh_connector, data):
@@ -547,7 +547,7 @@ async def test_github_single_issue_mutated_fuzz(gh_connector, data):
 
 
 @settings(
-    max_examples=5, suppress_health_check=[HealthCheck.too_slow, HealthCheck.function_scoped_fixture], deadline=None
+    max_examples=5, suppress_health_check=[HealthCheck.too_slow, HealthCheck.function_scoped_fixture], deadline=5000
 )
 @given(data=st.data())
 async def test_linear_single_issue_mutated_fuzz(linear_connector, data):
@@ -567,7 +567,7 @@ async def test_linear_single_issue_mutated_fuzz(linear_connector, data):
 
 
 @settings(
-    max_examples=5, suppress_health_check=[HealthCheck.too_slow, HealthCheck.function_scoped_fixture], deadline=None
+    max_examples=5, suppress_health_check=[HealthCheck.too_slow, HealthCheck.function_scoped_fixture], deadline=5000
 )
 @given(data=st.data())
 async def test_notion_page_mutated_fuzz(notion_connector, data):
@@ -584,7 +584,7 @@ async def test_notion_page_mutated_fuzz(notion_connector, data):
 
 
 @settings(
-    max_examples=5, suppress_health_check=[HealthCheck.too_slow, HealthCheck.function_scoped_fixture], deadline=None
+    max_examples=5, suppress_health_check=[HealthCheck.too_slow, HealthCheck.function_scoped_fixture], deadline=5000
 )
 @given(data=st.data())
 async def test_slack_message_mutated_fuzz(slack_connector, data):
@@ -602,7 +602,7 @@ async def test_slack_message_mutated_fuzz(slack_connector, data):
 
 
 @settings(
-    max_examples=5, suppress_health_check=[HealthCheck.too_slow, HealthCheck.function_scoped_fixture], deadline=None
+    max_examples=5, suppress_health_check=[HealthCheck.too_slow, HealthCheck.function_scoped_fixture], deadline=5000
 )
 @given(data=st.data())
 async def test_jira_issue_mutated_fuzz(jira_connector, data):
