@@ -845,7 +845,7 @@ async def list_trigger_events(
                         | ((TriggerEvent.created_at == cursor_dt) & (TriggerEvent.id < cursor_uuid))
                     )
                 except (ValueError, AttributeError):
-                    _log.warning("Malformed cursor ignored: %s", cursor)
+                    _log.warning("Malformed cursor ignored: %s", cursor, exc_info=True)
 
             q = q.order_by(TriggerEvent.created_at.desc(), TriggerEvent.id.desc()).limit(limit + 1)
             rows = (await session.execute(q)).scalars().all()
