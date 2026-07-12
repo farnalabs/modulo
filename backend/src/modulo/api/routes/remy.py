@@ -61,43 +61,31 @@ from modulo.db.models.model_backend import ModelBackend
 from modulo.db.models.remy_message import ChatMessage
 from modulo.db.models.remy_session import ChatSession
 from modulo.db.rls import set_rls_org
-from modulo.model_backends.ai21 import Ai21Backend
-from modulo.model_backends.anthropic import AnthropicBackend
 from modulo.model_backends.base import ModelBackendBase
-from modulo.model_backends.deepseek import DeepSeekBackend
-from modulo.model_backends.fireworks import FireworksBackend
-from modulo.model_backends.gemini import GeminiBackend
-from modulo.model_backends.grok import GrokBackend
-from modulo.model_backends.groq import GroqBackend
-from modulo.model_backends.openai import OpenAIBackend
-from modulo.model_backends.opencode import OpenCodeBackend
-from modulo.model_backends.openrouter import OpenRouterBackend
-from modulo.model_backends.perplexity import PerplexityBackend
-from modulo.model_backends.qwen import QwenBackend
-from modulo.model_backends.togetherai import TogetherAIBackend
 from modulo.settings import Settings, get_settings
-
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/v1/remy", tags=["remy"])
 
 # ── Provider → backend class mapping ──────────────────────────────────────
-_SIMPLE_BACKENDS: dict[str, type[ModelBackendBase]] = {
-    "ai21": Ai21Backend,
-    "anthropic": AnthropicBackend,
-    "deepseek": DeepSeekBackend,
-    "fireworks": FireworksBackend,
-    "gemini": GeminiBackend,
-    "grok": GrokBackend,
-    "groq": GroqBackend,
-    "openai": OpenAIBackend,
-    "opencode": OpenCodeBackend,
-    "openrouter": OpenRouterBackend,
-    "perplexity": PerplexityBackend,
-    "qwen": QwenBackend,
-    "togetherai": TogetherAIBackend,
-}
+_SUPPORTED_PROVIDERS: frozenset[str] = frozenset(
+    {
+        "ai21",
+        "anthropic",
+        "deepseek",
+        "fireworks",
+        "gemini",
+        "grok",
+        "groq",
+        "openai",
+        "opencode",
+        "openrouter",
+        "perplexity",
+        "qwen",
+        "togetherai",
+    }
+)
 
 # ── In-memory event registry (single-worker only) ────────────────────────
 # For multi-worker deployments, replace with Redis pub/sub.
@@ -274,13 +262,69 @@ def _message_to_langchain(m: ChatMessage) -> BaseMessage:
 
 
 def _build_backend(provider: str, model: str, api_key: str, **kwargs: Any) -> ModelBackendBase:
-    cls = _SIMPLE_BACKENDS.get(provider)
-    if cls is None:
+    if provider not in _SUPPORTED_PROVIDERS:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Unsupported provider: {provider!r}. Supported: {', '.join(sorted(_SIMPLE_BACKENDS))}",
+            detail=f"Unsupported provider: {provider!r}. Supported: {', '.join(sorted(_SUPPORTED_PROVIDERS))}",
         )
-    return cls(api_key=api_key, model_id=model, **kwargs)
+
+    if provider == "ai21":
+        from modulo.model_backends.ai21 import Ai21Backend
+
+        return Ai21Backend(api_key=api_key, model_id=model, **kwargs)
+    if provider == "anthropic":
+        from modulo.model_backends.anthropic import AnthropicBackend
+
+        return AnthropicBackend(api_key=api_key, model_id=model, **kwargs)
+    if provider == "deepseek":
+        from modulo.model_backends.deepseek import DeepSeekBackend
+
+        return DeepSeekBackend(api_key=api_key, model_id=model, **kwargs)
+    if provider == "fireworks":
+        from modulo.model_backends.fireworks import FireworksBackend
+
+        return FireworksBackend(api_key=api_key, model_id=model, **kwargs)
+    if provider == "gemini":
+        from modulo.model_backends.gemini import GeminiBackend
+
+        return GeminiBackend(api_key=api_key, model_id=model, **kwargs)
+    if provider == "grok":
+        from modulo.model_backends.grok import GrokBackend
+
+        return GrokBackend(api_key=api_key, model_id=model, **kwargs)
+    if provider == "groq":
+        from modulo.model_backends.groq import GroqBackend
+
+        return GroqBackend(api_key=api_key, model_id=model, **kwargs)
+    if provider == "openai":
+        from modulo.model_backends.openai import OpenAIBackend
+
+        return OpenAIBackend(api_key=api_key, model_id=model, **kwargs)
+    if provider == "opencode":
+        from modulo.model_backends.opencode import OpenCodeBackend
+
+        return OpenCodeBackend(api_key=api_key, model_id=model, **kwargs)
+    if provider == "openrouter":
+        from modulo.model_backends.openrouter import OpenRouterBackend
+
+        return OpenRouterBackend(api_key=api_key, model_id=model, **kwargs)
+    if provider == "perplexity":
+        from modulo.model_backends.perplexity import PerplexityBackend
+
+        return PerplexityBackend(api_key=api_key, model_id=model, **kwargs)
+    if provider == "qwen":
+        from modulo.model_backends.qwen import QwenBackend
+
+        return QwenBackend(api_key=api_key, model_id=model, **kwargs)
+    if provider == "togetherai":
+        from modulo.model_backends.togetherai import TogetherAIBackend
+
+        return TogetherAIBackend(api_key=api_key, model_id=model, **kwargs)
+
+    raise HTTPException(
+        status_code=status.HTTP_400_BAD_REQUEST,
+        detail=f"Unsupported provider: {provider!r}",
+    )
 
 
 async def _resolve_api_key(
