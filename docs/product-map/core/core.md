@@ -141,3 +141,13 @@ Existing SDLC onboarding: teams can map their current process (even manual steps
 - **No frontend component smoke test** for OnboardingWizard.vue.
 - **test_sdlc_onboarding.py is mocking-only:** BDD step definitions use MagicMock responses rather than real API calls, so scenarios validate UI logic but not true HTTP contract.
 - **No website docs page:** No onboarding documentation exists at `Website/modulo-website/src/docs/core/`. The feature is user-facing and should have a stub page linking to PRD §8.16.
+
+## QA History
+
+### 2026-07-12 — Round 3 improve-architecture
+
+**Fixes applied:**
+- Fixed `exc_info=1` → `exc_info=True` in 3 logger.warning calls in `onboarding.py` (lines 277, 384, 390)
+- Added QA History section (this entry had no prior QA tracking)
+
+**Status:** partial (many unchecked behaviours remain — onboarding wizard frontend completed but backend step data simplified; known gaps well-documented)
