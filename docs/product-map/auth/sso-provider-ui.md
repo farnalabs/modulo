@@ -98,7 +98,7 @@ Admin settings page for configuring OIDC and SAML 2.0 identity providers. Enterp
 - [x] Test connection on SAML provider with invalid/empty metadata shows error inline
 - [ ] Delete provider warns about effect on active user sessions ("This action cannot be undone" only — no SSO session warning)
 - [x] SAML endpoints return 402 when enterprise license is absent
-- [ ] Form state is preserved on validation failure (no page loss)
+- [x] Form state is preserved on validation failure (no page loss)
 - [x] Test connection results show success or failure details inline (no page navigation)
 - [x] Empty provider list shows "No SSO providers configured" empty state
 - [x] Loading state shows LoadingSpinner component
