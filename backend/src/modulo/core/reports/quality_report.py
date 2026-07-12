@@ -1,13 +1,11 @@
-from __future__ import annotations
-
-import asyncio
-
 """Weekly quality report for Slack — run volume, eval pass rate, cost summary, week-over-week deltas.
 
 All functions assume an active transaction with RLS org context set by the caller.
 """
 
+from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import uuid

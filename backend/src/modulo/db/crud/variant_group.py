@@ -67,7 +67,7 @@ async def list_variant_groups(
     try:
         total = (await session.execute(count_q)).scalar_one()
     except ProgrammingError:
-        _log.warning("variant_group table not found — returning empty list")
+        _log.warning("variant_group table not found — returning empty list", exc_info=True)
         return [], 0
     items = list(
         (await session.execute(q.order_by(VariantGroup.created_at.desc()).offset(offset).limit(page_size))).scalars()

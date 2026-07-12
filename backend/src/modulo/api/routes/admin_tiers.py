@@ -3,8 +3,8 @@
 import asyncio
 import logging
 
-from fastapi import APIRouter, Depends, HTTPException, status
-from sqlalchemy.exc import IntegrityError, ProgrammingError, SQLAlchemyError
+from fastapi import APIRouter, Depends, HTTPException
+from sqlalchemy.exc import ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.api.dependencies import get_db_session
@@ -30,11 +30,6 @@ async def list_tiers_endpoint(
         raise
     except HTTPException:
         raise
-    except IntegrityError:
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail="A resource with this value already exists",
-        ) from None
     except ProgrammingError:
         raise HTTPException(status_code=501, detail="Database not available. Run migrations.") from None
     except SQLAlchemyError:
