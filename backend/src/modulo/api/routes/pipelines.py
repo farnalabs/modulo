@@ -10,7 +10,7 @@ import logging
 import re
 import uuid
 from datetime import datetime
-from typing import Any, Literal, ClassVar
+from typing import Any, ClassVar, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, Field, ValidationError, model_validator
@@ -165,8 +165,9 @@ class PipelineGraphNode(BaseModel):
 
     @model_validator(mode="after")
     def validate_node_type(self) -> "PipelineGraphNode":
-        if self.node_type == "manual" and self.agent_id is not None:
-            raise ValueError("Manual nodes cannot reference an agent")
+        if self.node_type == "manual":
+            if self.agent_id is not None:
+                raise ValueError("Manual nodes cannot reference an agent")
             if self.connector_binding is not None:
                 raise ValueError("Manual nodes cannot have connector bindings")
             if self.output_schema_id is None:
@@ -180,8 +181,9 @@ class PipelineGraphNode(BaseModel):
                 raise ValueError("Composite nodes cannot reference an agent")
             if self.connector_binding is not None:
                 raise ValueError("Composite nodes cannot have connector bindings")
-        elif self.agent_id is None:
-            raise ValueError("Agent nodes require an agent")
+        elif self.node_type == "agent":
+            if self.agent_id is None:
+                raise ValueError("Agent nodes require an agent")
         return self
 
 
@@ -1485,9 +1487,7 @@ def _find_node_in_list(nodes: list[dict[str, Any]], node_id: uuid.UUID) -> dict[
         raw_id = n.get("id")
         if raw_id is None:
             continue
-        if isinstance(raw_id, uuid.UUID) and raw_id == node_id:
-            return n
-        elif str(raw_id) == node_id_str:
+        if (isinstance(raw_id, uuid.UUID) and raw_id == node_id) or str(raw_id) == node_id_str:
             return n
     return None
 

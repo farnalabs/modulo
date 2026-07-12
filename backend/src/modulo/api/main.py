@@ -107,7 +107,6 @@ from modulo.db.session import engine as db_engine
 from modulo.otel_bridge import setup_otel, shutdown_otel
 from modulo.settings import Settings, get_settings
 
-
 # Uptime tracking — set at module import time, read by health endpoints.
 logger = logging.getLogger(__name__)
 
@@ -214,10 +213,8 @@ async def _seed_modulo_users(settings: Settings) -> None:
             pw_hash = pw_part if pw_part.startswith("$2") else hash_password(pw_part)
 
             if (
-                existing_account is not None
-                and not existing_account.password_hash
-                or not existing_account.password_hash.startswith("$2")
-            ):
+                existing_account is not None and not existing_account.password_hash
+            ) or not existing_account.password_hash.startswith("$2"):
                 existing_account.password_hash = pw_hash
                 logger.info("startup.user_rehashed", extra={"email": email})
 
