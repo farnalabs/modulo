@@ -16,7 +16,6 @@ from fastapi.testclient import TestClient
 from sqlalchemy.exc import ProgrammingError, SQLAlchemyError
 
 from modulo.api.dependencies import _get_engine, get_db_session
-from modulo.api.main import app
 from modulo.auth.scim_auth import ScimPrincipal, get_scim_principal
 from modulo.settings import Settings, get_settings
 
@@ -65,6 +64,8 @@ def _make_mock_session() -> AsyncMock:
 
 @pytest.fixture()
 def client() -> Generator[TestClient, None, None]:
+    from modulo.api.main import app
+
     mock_session = _make_mock_session()
 
     async def override_session() -> AsyncGenerator[AsyncMock, None]:
@@ -598,6 +599,8 @@ class TestGetBaseUrlMissing:
     """_get_base_url should raise 500 when modulo_public_url is not configured."""
 
     def test_list_users_returns_500(self) -> None:
+        from modulo.api.main import app
+
         app.dependency_overrides[get_settings] = _make_settings_no_public_url
         app.dependency_overrides[get_db_session] = lambda: _make_mock_session()
         app.dependency_overrides[_get_engine] = lambda: MagicMock()
@@ -617,6 +620,8 @@ class TestGetBaseUrlMissing:
         assert "MODULO_PUBLIC_URL" in detail, f"Expected mention of MODULO_PUBLIC_URL, got: {detail}"
 
     def test_get_user_returns_500(self) -> None:
+        from modulo.api.main import app
+
         app.dependency_overrides[get_settings] = _make_settings_no_public_url
         app.dependency_overrides[get_db_session] = lambda: _make_mock_session()
         app.dependency_overrides[_get_engine] = lambda: MagicMock()
