@@ -1022,7 +1022,7 @@ class SnapshotResponse(BaseModel):
     created_at: datetime | None
     created_by: uuid.UUID | None = Field(default=None, validation_alias="account_id")
 
-    model_config = {"from_attributes": True}
+    model_config = {"from_attributes": True, "populate_by_name": True}
 
 
 class SnapshotDetailResponse(SnapshotResponse):
