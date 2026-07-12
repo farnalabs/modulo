@@ -1,5 +1,6 @@
 """BDD step definitions: View-as-Team — admin temporarily views org as a specific team."""
 
+import contextlib
 import uuid
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -14,10 +15,8 @@ from modulo.db.crud.base import PageResult
 from modulo.settings import get_settings
 from tests.bdd.conftest import make_mock_pipeline, make_mock_session, make_settings
 
-try:
+with contextlib.suppress(FileNotFoundError, OSError):
     scenarios("../features/teams/view_as_team.feature")
-except (FileNotFoundError, OSError):
-    pass
 
 ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
 
@@ -56,10 +55,8 @@ def patches():
     collectors: list[Any] = []
     yield collectors
     for p in reversed(collectors):
-        try:
+        with contextlib.suppress(RuntimeError):
             p.stop()
-        except RuntimeError:
-            pass
 
 
 @pytest.fixture

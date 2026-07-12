@@ -1,5 +1,6 @@
 """Step definitions for Eval Gate Enforcement feature."""
 
+import contextlib
 import json
 import uuid
 
@@ -11,10 +12,8 @@ from modulo.core.eval_engine import EvalBlockedError
 # ---------------------------------------------------------------------------
 # Active features
 # ---------------------------------------------------------------------------
-try:
+with contextlib.suppress(FileNotFoundError, OSError):
     scenarios("../features/evals/eval_block.feature")
-except (FileNotFoundError, OSError):
-    pass
 
 # ---------------------------------------------------------------------------
 # Fixtures

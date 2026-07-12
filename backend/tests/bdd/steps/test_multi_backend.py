@@ -1,6 +1,7 @@
 """Step definitions for multi-backend database support — ADR 002."""
 
 import asyncio
+import contextlib
 import uuid
 from unittest.mock import AsyncMock, MagicMock
 
@@ -21,10 +22,8 @@ from modulo.db.repositories.postgres import PostgresRepository
 # ---------------------------------------------------------------------------
 # Register feature file
 # ---------------------------------------------------------------------------
-try:
+with contextlib.suppress(FileNotFoundError, OSError):
     scenarios("../features/organisation/multi_backend.feature")
-except (FileNotFoundError, OSError):
-    pass
 
 # ---------------------------------------------------------------------------
 # Shared test entities

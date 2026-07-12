@@ -1,21 +1,16 @@
 """BDD step definitions: HITL webhook, failure webhook, signing."""
 
+import contextlib
 import uuid
 
 from pytest_bdd import given, parsers, scenarios, then, when
 
-try:
+with contextlib.suppress(FileNotFoundError, OSError):
     scenarios("../features/notifications/hitl_webhook.feature")
-except (FileNotFoundError, OSError):
-    pass
-try:
+with contextlib.suppress(FileNotFoundError, OSError):
     scenarios("../features/notifications/failure_webhook.feature")
-except (FileNotFoundError, OSError):
-    pass
-try:
+with contextlib.suppress(FileNotFoundError, OSError):
     scenarios("../features/notifications/signing.feature")
-except (FileNotFoundError, OSError):
-    pass
 
 
 @given(parsers.parse('pipeline "{name}" has an approval gate at node "{node}"'))

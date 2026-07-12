@@ -1,6 +1,7 @@
 """Step definitions for PyPI Connector BDD scenarios."""
 
 import asyncio
+import contextlib
 from unittest.mock import AsyncMock
 
 import pytest
@@ -13,10 +14,8 @@ from modulo.connectors.base import (
     HealthResult,
 )
 
-try:
+with contextlib.suppress(FileNotFoundError, OSError):
     scenarios("../features/connectors/pypi.feature")
-except (FileNotFoundError, OSError):
-    pass
 
 
 @pytest.fixture

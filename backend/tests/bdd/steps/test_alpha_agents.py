@@ -1,18 +1,15 @@
 """BDD step definitions: Agent configure, prompt versioning, schema assignment."""
 
+import contextlib
 import uuid
 from unittest.mock import MagicMock, patch
 
 from pytest_bdd import given, parsers, scenarios, then, when
 
-try:
+with contextlib.suppress(FileNotFoundError, OSError):
     scenarios("../features/agents/configure.feature")
-except (FileNotFoundError, OSError):
-    pass
-try:
+with contextlib.suppress(FileNotFoundError, OSError):
     scenarios("../features/agents/schema_assignment.feature")
-except (FileNotFoundError, OSError):
-    pass
 
 
 @given(parsers.parse('I create an agent named "{name}" with system prompt "{prompt}"'))

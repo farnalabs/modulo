@@ -1,5 +1,6 @@
 """BDD step definitions: Team membership management."""
 
+import contextlib
 import uuid
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -9,10 +10,8 @@ from pytest_bdd import given, parsers, scenarios, then, when
 
 from tests.bdd.conftest import make_settings
 
-try:
+with contextlib.suppress(FileNotFoundError, OSError):
     scenarios("../features/teams/team_membership.feature")
-except (FileNotFoundError, OSError):
-    pass
 
 
 @pytest.fixture
@@ -29,10 +28,8 @@ def patches():
     collectors = []
     yield collectors
     for p in reversed(collectors):
-        try:
+        with contextlib.suppress(RuntimeError):
             p.stop()
-        except RuntimeError:
-            pass
 
 
 @given(parsers.parse('I am authenticated as a team operator of team "{team_name}"'))
@@ -115,13 +112,12 @@ def add_user_to_team(username: str, team_name: str, role: str, request, ctx) -> 
         request.node._resp = resp
         return
 
-    if auth_role == "team_operator":
-        if role == "operator":
-            resp = MagicMock()
-            resp.status_code = 403
-            resp.json = lambda: {"detail": "Cannot grant role higher than your own"}
-            request.node._resp = resp
-            return
+    if auth_role == "team_operator" and role == "operator":
+        resp = MagicMock()
+        resp.status_code = 403
+        resp.json = lambda: {"detail": "Cannot grant role higher than your own"}
+        request.node._resp = resp
+        return
 
     mock_membership = {
         "user_id": user_id,

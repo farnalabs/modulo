@@ -1,5 +1,6 @@
 """Step definitions for Environment Profile features — CRUD, sandbox test, cross-org isolation."""
 
+import contextlib
 import json
 import uuid
 from typing import Any
@@ -13,10 +14,8 @@ from modulo.auth.jwt import AuthenticatedPrincipal
 from modulo.core.runtime_provider import RuntimeProvider, WorkspaceSpec
 from modulo.core.runtime_provider.hub import RuntimeProviderHub
 
-try:
+with contextlib.suppress(FileNotFoundError, OSError):
     scenarios("../../bdd/features/environments/environment_profiles.feature")
-except (FileNotFoundError, OSError):
-    pass
 
 
 # ---------------------------------------------------------------------------

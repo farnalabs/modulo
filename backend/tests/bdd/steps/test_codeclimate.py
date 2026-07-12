@@ -1,15 +1,15 @@
 """BDD step definitions for Code Climate connector scenarios."""
 
+import contextlib
+
 import pytest
 from pytest_bdd import given, parsers, scenarios, then, when
 
 from modulo.connectors.base import ConnectorPayload, ConnectorQuery
 from modulo.connectors.codeclimate import CodeClimateConnector
 
-try:
+with contextlib.suppress(FileNotFoundError, OSError):
     scenarios("../features/connectors/codeclimate.feature")
-except (FileNotFoundError, OSError):
-    pass
 
 # ---------------------------------------------------------------------------
 # Fixtures

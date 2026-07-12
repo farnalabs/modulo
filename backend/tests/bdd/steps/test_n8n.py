@@ -1,6 +1,7 @@
 """BDD step definitions for n8n connector scenarios."""
 
 import asyncio
+import contextlib
 
 import httpx
 import pytest
@@ -10,10 +11,8 @@ from pytest_bdd import given, parsers, scenarios, then, when
 from modulo.connectors.base import ConnectorPayload, ConnectorQuery
 from modulo.connectors.n8n import N8NConnector
 
-try:
+with contextlib.suppress(FileNotFoundError, OSError):
     scenarios("../features/connectors/n8n.feature")
-except (FileNotFoundError, OSError):
-    pass
 
 TOKEN = "n8n_test_token"
 BASE_URL = "http://localhost:5678"
