@@ -292,8 +292,8 @@ def _graph_response(
         _log.exception("Pipeline graph data validation failed")
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail="Pipeline graph contains invalid data. This may be caused by a schema migration or manual DB edit. Please check the pipeline nodes and edges.",
-        )
+            detail="Pipeline graph contains invalid data. This may be caused by a schema migration.",
+        ) from None
 
 
 async def _resolve_graph_references(
@@ -404,11 +404,10 @@ async def list_pipelines_endpoint(
             )
     except ProgrammingError:
         logger.exception("routes.pipelines")
-
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="This feature is not available. Run database migrations to enable it.",
-        )
+        ) from None
 
     return PipelineListResponse(
         items=[PipelineResponse.model_validate(p) for p in result.items],
@@ -451,7 +450,7 @@ async def create_pipeline_endpoint(
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="This feature is not available. Run database migrations to enable it.",
-        )
+        ) from None
 
     return PipelineResponse.model_validate(pipeline)
 
@@ -474,7 +473,7 @@ async def get_pipeline_endpoint(
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="This feature is not available. Run database migrations to enable it.",
-        )
+        ) from None
 
     if pipeline is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Pipeline not found")
@@ -499,7 +498,7 @@ async def get_pipeline_graph_endpoint(
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="This feature is not available. Run database migrations to enable it.",
-        )
+        ) from None
 
     if graph is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Pipeline not found")
@@ -583,7 +582,7 @@ async def replace_pipeline_graph_endpoint(
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="This feature is not available. Run database migrations to enable it.",
-        )
+        ) from None
 
     if graph is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Pipeline not found")
@@ -637,7 +636,7 @@ async def update_pipeline_endpoint(
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="This feature is not available. Run database migrations to enable it.",
-        )
+        ) from None
 
     if pipeline is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Pipeline not found")
@@ -662,7 +661,7 @@ async def delete_pipeline_endpoint(
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="This feature is not available. Run database migrations to enable it.",
-        )
+        ) from None
 
     if not deleted:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Pipeline not found")
@@ -685,7 +684,7 @@ async def archive_pipeline_endpoint(
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="This feature is not available. Run database migrations to enable it.",
-        )
+        ) from None
     if pipeline is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Pipeline not found")
     return PipelineResponse.model_validate(pipeline)
@@ -708,7 +707,7 @@ async def unarchive_pipeline_endpoint(
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="This feature is not available. Run database migrations to enable it.",
-        )
+        ) from None
     if pipeline is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Pipeline not found")
     return PipelineResponse.model_validate(pipeline)
@@ -771,7 +770,9 @@ async def clone_pipeline_endpoint(
                 _log.warning("Copy aborted: name '%s' already exists in org %s", target_name, principal.organisation_id)
                 raise HTTPException(
                     status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-                    detail=f"pipeline_copy_failed: A pipeline named '{target_name}' already exists in this organisation",
+                    detail=(
+                        f"pipeline_copy_failed: A pipeline named '{target_name}' already exists in this organisation"
+                    ),
                 )
 
             # Step 3 — execute copy
@@ -787,7 +788,9 @@ async def clone_pipeline_endpoint(
                 _log.warning("Step 3/4 failed: source pipeline %s disappeared during copy", pipeline_id)
                 raise HTTPException(
                     status_code=status.HTTP_404_NOT_FOUND,
-                    detail=f"pipeline_copy_failed: Source pipeline disappeared during copy [pipeline_id: {pipeline_id}]",
+                    detail=(
+                        f"pipeline_copy_failed: Source pipeline disappeared during copy [pipeline_id: {pipeline_id}]"
+                    ),
                 )
 
             # Step 4 — audit event
@@ -810,7 +813,7 @@ async def clone_pipeline_endpoint(
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="This feature is not available. Run database migrations to enable it.",
-        )
+        ) from None
 
     _log.info("Copy complete: %s -> %s (%s)", pipeline_id, cloned.id, target_name)
     return PipelineResponse.model_validate(cloned)
@@ -922,7 +925,7 @@ async def save_as_composite_endpoint(
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="This feature is not available. Run database migrations to enable it.",
-        )
+        ) from None
 
     return {
         "id": str(template.id),
@@ -993,7 +996,7 @@ async def trigger_quality_report(
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="This feature is not available. Run database migrations to enable it.",
-        )
+        ) from None
 
     return QualityReportResponse(
         period=report["period"],
@@ -1109,7 +1112,7 @@ async def list_snapshot_endpoint(
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="This feature is not available. Run database migrations to enable it.",
-        )
+        ) from None
 
     return SnapshotListResponse(
         items=[_snapshot_to_response(s) for s in snapshots],
@@ -1136,7 +1139,7 @@ async def get_snapshot_detail_endpoint(
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="This feature is not available. Run database migrations to enable it.",
-        )
+        ) from None
 
     if snapshot is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Snapshot not found")
@@ -1163,7 +1166,7 @@ async def tag_snapshot_endpoint(
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="This feature is not available. Run database migrations to enable it.",
-        )
+        ) from None
 
     if snapshot is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Snapshot not found")
@@ -1191,7 +1194,7 @@ async def rollback_snapshot_endpoint(
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="This feature is not available. Run database migrations to enable it.",
-        )
+        ) from None
 
     if new_snapshot is None:
         raise HTTPException(
@@ -1225,7 +1228,7 @@ async def delete_snapshot_endpoint(
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="This feature is not available. Run database migrations to enable it.",
-        )
+        ) from None
 
     if not deleted:
         raise HTTPException(
@@ -1253,7 +1256,7 @@ async def diff_snapshot_endpoint(
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="This feature is not available. Run database migrations to enable it.",
-        )
+        ) from None
 
     if result is None:
         raise HTTPException(
@@ -1374,7 +1377,7 @@ async def convert_node_to_agent_endpoint(
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="This feature is not available. Run database migrations to enable it.",
-        )
+        ) from None
 
     if saved is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Pipeline not found")
@@ -1468,7 +1471,7 @@ async def revert_node_to_manual_endpoint(
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="This feature is not available. Run database migrations to enable it.",
-        )
+        ) from None
 
     if saved is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Pipeline not found")
