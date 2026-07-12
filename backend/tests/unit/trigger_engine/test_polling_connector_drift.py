@@ -71,6 +71,7 @@ def test_all_connector_types_have_polling_parity():
         "microsoft_teams": "not yet implemented in _build_polling_connector",
         "n8n": "not yet implemented in _build_polling_connector",
         "bitbucket": "not yet implemented in _build_polling_connector",
+        "ticket-tracker": "not yet implemented in _build_polling_connector",
     }
 
     hub_types = _get_hub_connector_types()
