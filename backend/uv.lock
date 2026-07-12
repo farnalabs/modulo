@@ -1290,7 +1290,7 @@ requires-dist = [
     { name = "docker", specifier = ">=7.0.0,<8.0.0" },
     { name = "e2b", specifier = ">=0.15.0" },
     { name = "factory-boy", marker = "extra == 'dev'", specifier = ">=3.3.0" },
-    { name = "fastapi", specifier = ">=0.115.0" },
+    { name = "fastapi", specifier = ">=0.111.0" },
     { name = "httpx", specifier = ">=0.28.1" },
     { name = "httpx", marker = "extra == 'dev'", specifier = ">=0.27.0" },
     { name = "hypothesis", marker = "extra == 'dev'", specifier = ">=6.100.0" },
