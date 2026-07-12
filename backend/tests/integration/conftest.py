@@ -85,6 +85,14 @@ def migrated_db_url(db_url: str) -> str:
                     ),
                 )
 
+            # organisations: otel_config_json has no server default, causing NOT NULL
+            # violations on raw SQL INSERTs that don't include the column.
+            cols = await _existing_cols(conn, "organisations")
+            if "otel_config_json" in cols:
+                await conn.execute(
+                    text("ALTER TABLE organisations ALTER COLUMN otel_config_json SET DEFAULT '{}'::json"),
+                )
+
             # webhook_payloads: ORM expects raw_body + raw_payload (migration has payload_ciphertext)
             cols = await _existing_cols(conn, "webhook_payloads")
             if "raw_body" not in cols:
