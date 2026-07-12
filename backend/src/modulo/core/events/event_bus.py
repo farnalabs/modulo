@@ -97,6 +97,8 @@ class EventBus:
         """Fire-and-forget: publish event to Redis channel (best-effort)."""
         try:
             await broker.publish(f"resource:{org_id}", event)
+        except asyncio.CancelledError:
+            raise
         except Exception:
             _log.exception("event_bus.redis_broadcast_failed", extra={"org_id": org_id})
 
@@ -163,5 +165,7 @@ async def configure_event_bus(redis_broker: RedisEventBroker | None = None) -> N
     if old is not None and old is not redis_broker:
         try:
             await old.close()
+        except asyncio.CancelledError:
+            raise
         except Exception:
             _log.warning("event_bus.close_old_broker_failed", exc_info=True)
