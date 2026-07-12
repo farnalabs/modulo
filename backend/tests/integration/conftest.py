@@ -95,8 +95,9 @@ def migrated_db_url(db_url: str) -> str:
                 await conn.execute(text("ALTER TABLE webhook_payloads ALTER COLUMN payload_ciphertext DROP NOT NULL"))
 
             # Force RLS on all org-scoped tables so it applies to the testcontainers
-            # superuser too. Without FORCE, PostgreSQL superusers bypass ENABLE RLS,
-            # which breaks cross-tenant isolation tests that rely on SET LOCAL ROLE.
+            # superuser role too. In production, the modulo_app role is not a superuser
+            # so RLS applies automatically — but testcontainers run as the DB superuser
+            # which bypasses ENABLE RLS, hence the explicit FORCE in tests.
             for _tbl in (
                 "org_daily_run_counts",
                 "org_memberships",
