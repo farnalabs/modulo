@@ -153,27 +153,6 @@ def _fail_result(
     )
 
 
-def _log_and_fail(
-    eval_def: EvalDefinition,
-    run_id: UUID,
-    detail: str,
-    *,
-    level: int = logging.WARNING,
-    exc_info: bool = False,
-) -> EvalResult:
-    """Log a warning/error and return a failed EvalResult.
-
-    Saves ~3 lines per call site vs. manual _log.warning + _fail_result.
-    """
-    _log.log(level, "Eval %s (%s): %s", eval_def.id, eval_def.name, detail, exc_info=exc_info)
-    return _fail_result(
-        run_id=run_id,
-        node_id=eval_def.node_id or "",
-        eval_id=eval_def.id,
-        detail=detail,
-    )
-
-
 def _result_from_dict(
     raw: dict[str, Any],
     run_id: UUID,
