@@ -43,13 +43,21 @@ interface ManifestEntry {
 const route = useRoute()
 const router = useRouter()
 
-const rawRoutes = (manifest as { routes?: Record<string, Omit<ManifestEntry, 'path'>> })?.routes ?? {}
-const manifestByName = new Map<string, ManifestEntry>()
-for (const [path, entry] of Object.entries(rawRoutes)) {
-  if (entry.name) {
-    manifestByName.set(entry.name, { ...entry, path })
+function buildManifestMap() {
+  const map = new Map<string, ManifestEntry>()
+  try {
+    const rawRoutes = (manifest as { routes?: Record<string, Omit<ManifestEntry, 'path'>> })?.routes ?? {}
+    for (const [path, entry] of Object.entries(rawRoutes)) {
+      if (entry.name) {
+        map.set(entry.name, { ...entry, path })
+      }
+    }
+  } catch {
   }
+  return map
 }
+
+const manifestByName = buildManifestMap()
 
 const segments = computed<BreadcrumbSegment[]>(() => {
   const meta = route.meta as Record<string, unknown> | undefined

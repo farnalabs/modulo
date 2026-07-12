@@ -95,12 +95,14 @@ async function fetchViews() {
   try {
     const { data, error } = await (api as any).GET("/api/v1/views");
     if (error) {
+      console.warn("ViewToggle: failed to fetch views", error);
       return;
     }
     if (data && Array.isArray(data.views)) {
       views.value = data.views;
     }
   } catch {
+    console.warn("ViewToggle: exception fetching views");
   }
 }
 

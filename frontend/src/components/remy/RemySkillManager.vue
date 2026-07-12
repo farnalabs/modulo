@@ -192,7 +192,7 @@ function editSkill(skill: UserSkill) {
     description: skill.description,
     triggersText: (skill.triggers ?? []).join(", "),
     body: skill.body,
-    active: skill.active,
+    active: skill.active ?? true,
   };
   showForm.value = true;
 }
