@@ -139,6 +139,5 @@ Existing SDLC onboarding: teams can map their current process (even manual steps
 - **Demo pipeline + first-run walkthrough (Phase 5, item 25):** `MODULO_DEMO_MODE` and pre-loaded `prd-to-requirements` demo not yet built per the delivery tracker.
 - **No E2E test** covering the full connect→infer→review→library→wire→run flow.
 - **No frontend component smoke test** for OnboardingWizard.vue.
-- **`depends-on` references feature IDs** (`feat-core-schema-inference-ui`, `feat-core-replace-step-agent`) — previously pointed to raw task IDs.
 - **test_sdlc_onboarding.py is mocking-only:** BDD step definitions use MagicMock responses rather than real API calls, so scenarios validate UI logic but not true HTTP contract.
 - **No website docs page:** No onboarding documentation exists at `Website/modulo-website/src/docs/core/`. The feature is user-facing and should have a stub page linking to PRD §8.16.
