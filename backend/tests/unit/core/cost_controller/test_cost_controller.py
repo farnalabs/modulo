@@ -267,6 +267,27 @@ class TestCheckAndRecordSpend:
         # run_count still increments even at zero cost
         assert org_count.run_count == 2
 
+    async def test_rejects_none_cost(self, mock_session: AsyncMock) -> None:
+        approved, reason = await check_and_record_spend(mock_session, org_id=_ORG_ID, cost_usd=None, team_id=None)
+
+        assert approved is False
+        assert "none" in (reason or "").lower()
+        mock_session.execute.assert_not_called()
+
+    async def test_rejects_nan_cost(self, mock_session: AsyncMock) -> None:
+        approved, _ = await check_and_record_spend(mock_session, org_id=_ORG_ID, cost_usd=Decimal("NaN"), team_id=None)
+
+        assert approved is False
+        mock_session.execute.assert_not_called()
+
+    async def test_rejects_infinite_cost(self, mock_session: AsyncMock) -> None:
+        approved, _ = await check_and_record_spend(
+            mock_session, org_id=_ORG_ID, cost_usd=Decimal("Infinity"), team_id=None
+        )
+
+        assert approved is False
+        mock_session.execute.assert_not_called()
+
 
 # ---------------------------------------------------------------------------
 # get_cost_report
