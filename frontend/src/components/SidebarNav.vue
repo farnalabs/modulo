@@ -74,7 +74,7 @@ const visibleSidebarGroups = computed(() =>
       ...group,
       items: group.items.filter((item) => {
         if (!item.requiredRoles && !item.requiredTier) return true
-        if (item.requiredTier && !tierInfoLoaded.value) return true
+        if (item.requiredTier && !tierInfoLoaded.value) return false
         return canSeeItem(
           item,
           {
