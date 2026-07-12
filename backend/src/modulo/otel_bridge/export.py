@@ -8,6 +8,7 @@ Configures the global TracerProvider with exporters based on environment:
 Sensitive data (credentials, API keys, user content) is never written to span attributes.
 """
 
+import asyncio
 import logging
 import os
 from urllib.parse import urlparse, urlunparse
@@ -62,9 +63,13 @@ def setup_otel(
             otlp_exporter = OTLPSpanExporter(endpoint=otlp_endpoint)
             provider.add_span_processor(BatchSpanProcessor(otlp_exporter))
             _log.info("OTel OTLP exporter configured: endpoint=%s", _sanitise_url(otlp_endpoint))
+        except asyncio.CancelledError:
+            raise
         except Exception:
-            _log.exception("Failed to configure OTLP exporter; continuing without it")
-            _log.info("OTLP endpoint: %s", _sanitise_url(otlp_endpoint))
+            _log.exception(
+                "Failed to configure OTLP exporter at %s; continuing without it",
+                _sanitise_url(otlp_endpoint),
+            )
 
     trace.set_tracer_provider(provider)
 
@@ -90,5 +95,7 @@ def shutdown_otel() -> None:
     if hasattr(provider, "shutdown"):
         try:
             provider.shutdown()
+        except asyncio.CancelledError:
+            raise
         except Exception:
             _log.exception("Failed to shut down OTel provider")
