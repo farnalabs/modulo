@@ -146,6 +146,10 @@ Union type validation (oneOf/anyOf) and array schema validation for the Schema R
 
 ## QA History
 
+### 2026-07-12 — Round 3 (systemic sweep: B904, exc_info, dead code)
+- No B904 violations or exc_info issues in schema_registry code paths
+- Frontmatter valid with extensive test coverage; Known Gaps accurate
+
 ### 2026-07-04 — Cross-cutting QA (index 166)
 
 **Behaviour corrections:**
