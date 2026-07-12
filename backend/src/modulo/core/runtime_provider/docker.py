@@ -1,7 +1,6 @@
-from __future__ import annotations
-
 """Docker RuntimeProvider — ephemeral containers via aiodocker."""
 
+from __future__ import annotations
 
 import asyncio
 import logging
@@ -75,9 +74,12 @@ class DockerRuntimeProvider(RuntimeProvider):
         client = await self._get_client()
         image = spec.image_ref.strip() if spec.image_ref else self._default_image
         ref = uuid.uuid4().hex[:_UUID_TRUNC_LEN]
-        memory_mb = spec.resource_limits.get("memory_mb", _DEFAULT_MEMORY_MB)
-        if not isinstance(memory_mb, int) or memory_mb < 4:
+        raw_memory = spec.resource_limits.get("memory_mb", _DEFAULT_MEMORY_MB)
+        try:
+            memory_mb = int(raw_memory)
+        except (ValueError, TypeError):
             memory_mb = _DEFAULT_MEMORY_MB
+        memory_mb = max(4, min(memory_mb, 131072))
         container_name = f"{_WORKSPACE_PREFIX}{ref}"
 
         env = []

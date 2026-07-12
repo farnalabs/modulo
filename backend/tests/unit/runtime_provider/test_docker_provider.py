@@ -18,7 +18,7 @@ def mock_container() -> MagicMock:
     container.delete = AsyncMock()
 
     exec_stream = MagicMock()
-    exec_stream.read_out = AsyncMock(return_value=(b"Hello, Docker!", b""))
+    exec_stream.read_out = AsyncMock(side_effect=[(b"Hello, Docker!", b""), None])
 
     exec_instance = MagicMock()
     exec_instance.start = AsyncMock(return_value=exec_stream)
