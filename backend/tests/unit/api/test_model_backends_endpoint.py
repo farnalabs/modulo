@@ -281,10 +281,13 @@ def test_list_model_backends_unauthenticated_returns_4xx(unauth_client: TestClie
 
 
 def test_list_model_backends_programming_error_returns_501(client: TestClient) -> None:
-    from sqlalchemy.exc import ProgrammingError as PE
+    from sqlalchemy.exc import ProgrammingError as ProgrammingError_
 
     with (
-        patch("modulo.api.routes.model_backends.list_model_backends", side_effect=PE("mock", "mock", "mock")),
+        patch(
+            "modulo.api.routes.model_backends.list_model_backends",
+            side_effect=ProgrammingError_("mock", "mock", "mock"),
+        ),
         patch("modulo.api.routes.model_backends.set_rls_org"),
         patch("modulo.api.routes.model_backends.set_rls_user_context"),
     ):
@@ -294,10 +297,13 @@ def test_list_model_backends_programming_error_returns_501(client: TestClient) -
 
 
 def test_create_model_backend_programming_error_returns_501(client: TestClient) -> None:
-    from sqlalchemy.exc import ProgrammingError as PE
+    from sqlalchemy.exc import ProgrammingError as ProgrammingError_
 
     with (
-        patch("modulo.api.routes.model_backends.create_model_backend", side_effect=PE("mock", "mock", "mock")),
+        patch(
+            "modulo.api.routes.model_backends.create_model_backend",
+            side_effect=ProgrammingError_("mock", "mock", "mock"),
+        ),
         patch("modulo.api.routes.model_backends.set_rls_org"),
         patch("modulo.api.routes.model_backends.set_rls_user_context"),
     ):
@@ -315,10 +321,12 @@ def test_create_model_backend_programming_error_returns_501(client: TestClient) 
 
 
 def test_get_model_backend_programming_error_returns_501(client: TestClient) -> None:
-    from sqlalchemy.exc import ProgrammingError as PE
+    from sqlalchemy.exc import ProgrammingError as ProgrammingError_
 
     with (
-        patch("modulo.api.routes.model_backends.get_model_backend", side_effect=PE("mock", "mock", "mock")),
+        patch(
+            "modulo.api.routes.model_backends.get_model_backend", side_effect=ProgrammingError_("mock", "mock", "mock")
+        ),
         patch("modulo.api.routes.model_backends.set_rls_org"),
         patch("modulo.api.routes.model_backends.set_rls_user_context"),
     ):
@@ -327,10 +335,13 @@ def test_get_model_backend_programming_error_returns_501(client: TestClient) -> 
 
 
 def test_update_model_backend_programming_error_returns_501(client: TestClient) -> None:
-    from sqlalchemy.exc import ProgrammingError as PE
+    from sqlalchemy.exc import ProgrammingError as ProgrammingError_
 
     with (
-        patch("modulo.api.routes.model_backends.update_model_backend", side_effect=PE("mock", "mock", "mock")),
+        patch(
+            "modulo.api.routes.model_backends.update_model_backend",
+            side_effect=ProgrammingError_("mock", "mock", "mock"),
+        ),
         patch("modulo.api.routes.model_backends.set_rls_org"),
         patch("modulo.api.routes.model_backends.set_rls_user_context"),
     ):
@@ -339,10 +350,13 @@ def test_update_model_backend_programming_error_returns_501(client: TestClient) 
 
 
 def test_delete_model_backend_programming_error_returns_501(client: TestClient) -> None:
-    from sqlalchemy.exc import ProgrammingError as PE
+    from sqlalchemy.exc import ProgrammingError as ProgrammingError_
 
     with (
-        patch("modulo.api.routes.model_backends.delete_model_backend", side_effect=PE("mock", "mock", "mock")),
+        patch(
+            "modulo.api.routes.model_backends.delete_model_backend",
+            side_effect=ProgrammingError_("mock", "mock", "mock"),
+        ),
         patch("modulo.api.routes.model_backends.set_rls_org"),
         patch("modulo.api.routes.model_backends.set_rls_user_context"),
     ):
@@ -421,10 +435,12 @@ def test_create_azure_openai_model_backend_round_trips(client: TestClient) -> No
 
 
 def test_list_model_backends_sqlalchemy_error_returns_503(client: TestClient) -> None:
-    from sqlalchemy.exc import SQLAlchemyError as SAE
+    from sqlalchemy.exc import SQLAlchemyError as SQLAlchemyError_
 
     with (
-        patch("modulo.api.routes.model_backends.list_model_backends", side_effect=SAE("mock", "mock", "mock")),
+        patch(
+            "modulo.api.routes.model_backends.list_model_backends", side_effect=SQLAlchemyError_("mock", "mock", "mock")
+        ),
         patch("modulo.api.routes.model_backends.set_rls_org"),
         patch("modulo.api.routes.model_backends.set_rls_user_context"),
     ):
@@ -433,10 +449,13 @@ def test_list_model_backends_sqlalchemy_error_returns_503(client: TestClient) ->
 
 
 def test_create_model_backend_sqlalchemy_error_returns_503(client: TestClient) -> None:
-    from sqlalchemy.exc import SQLAlchemyError as SAE
+    from sqlalchemy.exc import SQLAlchemyError as SQLAlchemyError_
 
     with (
-        patch("modulo.api.routes.model_backends.create_model_backend", side_effect=SAE("mock", "mock", "mock")),
+        patch(
+            "modulo.api.routes.model_backends.create_model_backend",
+            side_effect=SQLAlchemyError_("mock", "mock", "mock"),
+        ),
         patch("modulo.api.routes.model_backends.set_rls_org"),
         patch("modulo.api.routes.model_backends.set_rls_user_context"),
     ):
@@ -454,10 +473,12 @@ def test_create_model_backend_sqlalchemy_error_returns_503(client: TestClient) -
 
 
 def test_get_model_backend_sqlalchemy_error_returns_503(client: TestClient) -> None:
-    from sqlalchemy.exc import SQLAlchemyError as SAE
+    from sqlalchemy.exc import SQLAlchemyError as SQLAlchemyError_
 
     with (
-        patch("modulo.api.routes.model_backends.get_model_backend", side_effect=SAE("mock", "mock", "mock")),
+        patch(
+            "modulo.api.routes.model_backends.get_model_backend", side_effect=SQLAlchemyError_("mock", "mock", "mock")
+        ),
         patch("modulo.api.routes.model_backends.set_rls_org"),
         patch("modulo.api.routes.model_backends.set_rls_user_context"),
     ):
@@ -466,10 +487,13 @@ def test_get_model_backend_sqlalchemy_error_returns_503(client: TestClient) -> N
 
 
 def test_update_model_backend_sqlalchemy_error_returns_503(client: TestClient) -> None:
-    from sqlalchemy.exc import SQLAlchemyError as SAE
+    from sqlalchemy.exc import SQLAlchemyError as SQLAlchemyError_
 
     with (
-        patch("modulo.api.routes.model_backends.update_model_backend", side_effect=SAE("mock", "mock", "mock")),
+        patch(
+            "modulo.api.routes.model_backends.update_model_backend",
+            side_effect=SQLAlchemyError_("mock", "mock", "mock"),
+        ),
         patch("modulo.api.routes.model_backends.set_rls_org"),
         patch("modulo.api.routes.model_backends.set_rls_user_context"),
     ):
@@ -478,10 +502,13 @@ def test_update_model_backend_sqlalchemy_error_returns_503(client: TestClient) -
 
 
 def test_delete_model_backend_sqlalchemy_error_returns_503(client: TestClient) -> None:
-    from sqlalchemy.exc import SQLAlchemyError as SAE
+    from sqlalchemy.exc import SQLAlchemyError as SQLAlchemyError_
 
     with (
-        patch("modulo.api.routes.model_backends.delete_model_backend", side_effect=SAE("mock", "mock", "mock")),
+        patch(
+            "modulo.api.routes.model_backends.delete_model_backend",
+            side_effect=SQLAlchemyError_("mock", "mock", "mock"),
+        ),
         patch("modulo.api.routes.model_backends.set_rls_org"),
         patch("modulo.api.routes.model_backends.set_rls_user_context"),
     ):
@@ -565,12 +592,14 @@ def test_get_model_backend_empty_fallback_ids_round_trips(client: TestClient) ->
 
 def test_create_model_backend_integrity_error_returns_409(client: TestClient) -> None:
     """IntegrityError (FK/unique violation) on create returns 409."""
-    from sqlalchemy.exc import IntegrityError as IE
+    from sqlalchemy.exc import IntegrityError as IntegrityError_
 
     with (
         patch("modulo.api.routes.model_backends.set_rls_org"),
         patch("modulo.api.routes.model_backends.set_rls_user_context"),
-        patch("modulo.api.routes.model_backends.create_model_backend", side_effect=IE("mock", "mock", "mock")),
+        patch(
+            "modulo.api.routes.model_backends.create_model_backend", side_effect=IntegrityError_("mock", "mock", "mock")
+        ),
     ):
         resp = client.post(
             "/api/v1/model-backends",

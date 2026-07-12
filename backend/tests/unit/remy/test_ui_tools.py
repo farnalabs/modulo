@@ -87,7 +87,9 @@ class TestToolConstants:
     def test_all_tools_covered_by_categories(self):
         categorized = READ_TOOLS | NAV_TOOLS | WRITE_TOOLS
         uncategorized = UI_TOOL_NAMES - categorized
-        assert uncategorized == {"wait", "get_manifest", "undo_last_action"}, f"Unexpected uncategorized tools: {uncategorized}"
+        assert uncategorized == {"wait", "get_manifest", "undo_last_action"}, (
+            f"Unexpected uncategorized tools: {uncategorized}"
+        )
 
     def test_destructive_patterns(self):
         assert "delete" in DESTRUCTIVE_PATTERNS
