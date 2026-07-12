@@ -69,6 +69,29 @@ def _serialise_for_json(obj: Any) -> Any:
     return obj
 
 
+def _serialise_export_row(row: dict[str, Any]) -> dict[str, Any]:
+    serialised: dict[str, Any] = {}
+    for key, val in row.items():
+        if isinstance(val, uuid.UUID):
+            serialised[key] = str(val)
+        elif isinstance(val, bytes | memoryview):
+            serialised[key] = bytes(val).hex()
+        elif isinstance(val, datetime):
+            serialised[key] = val.isoformat()
+        else:
+            serialised[key] = val
+    return serialised
+
+
+def _parse_org_id(raw: str | None) -> uuid.UUID | None:
+    if raw:
+        try:
+            return uuid.UUID(raw)
+        except (ValueError, TypeError):
+            raise RuntimeError(f"Invalid organisation_id: {raw!r}") from None
+    return None
+
+
 def _write_json(path: Path, data: Any) -> None:
     with path.open("w", encoding="utf-8") as f:
         json.dump(data, f, ensure_ascii=False, indent=2, default=_serialise_for_json)
@@ -166,11 +189,8 @@ def _export_checkpoint_blobs_sync(raw_url: str) -> list[dict[str, Any]]:
             "SELECT * FROM checkpoint_blobs ORDER BY organisation_id, thread_id, checkpoint_ns, channel, version"
         )
         for row in cur:
-            org_id = row.get("organisation_id")
-            row["organisation_id"] = str(org_id) if org_id is not None else None
-            if isinstance(row.get("blob"), bytes | memoryview):
-                row["blob"] = bytes(row["blob"]).hex()
-            rows.append(row)
+            serialised = _serialise_export_row(row)
+            rows.append(serialised)
     return rows
 
 
@@ -181,17 +201,7 @@ def _export_checkpoints_sync(raw_url: str) -> list[dict[str, Any]]:
     with psycopg.connect(raw_url, row_factory=dict_row, connect_timeout=10) as conn, conn.cursor() as cur:
         cur.execute("SELECT * FROM checkpoints ORDER BY organisation_id, thread_id, checkpoint_ns, checkpoint_id")
         for row in cur:
-            serialised: dict[str, Any] = {}
-            for key, val in row.items():
-                if isinstance(val, uuid.UUID):
-                    serialised[key] = str(val)
-                elif isinstance(val, bytes | memoryview):
-                    serialised[key] = bytes(val).hex()
-                elif isinstance(val, datetime):
-                    serialised[key] = val.isoformat()
-                else:
-                    serialised[key] = val
-            rows.append(serialised)
+            rows.append(_serialise_export_row(row))
     return rows
 
 
@@ -205,17 +215,7 @@ def _export_checkpoint_writes_sync(raw_url: str) -> list[dict[str, Any]]:
             "ORDER BY organisation_id, thread_id, checkpoint_ns, checkpoint_id, task_id, idx"
         )
         for row in cur:
-            serialised: dict[str, Any] = {}
-            for key, val in row.items():
-                if isinstance(val, uuid.UUID):
-                    serialised[key] = str(val)
-                elif isinstance(val, bytes | memoryview):
-                    serialised[key] = bytes(val).hex()
-                elif isinstance(val, datetime):
-                    serialised[key] = val.isoformat()
-                else:
-                    serialised[key] = val
-            rows.append(serialised)
+            rows.append(_serialise_export_row(row))
     return rows
 
 
@@ -255,14 +255,7 @@ def _restore_checkpoint_blobs_sync(raw_url: str, blobs: list[dict[str, Any]]) ->
                 raw_blob = row.get("blob")
                 if raw_blob is not None:
                     blob = bytes.fromhex(raw_blob) if raw_blob else b""
-                org_id_raw = row.get("organisation_id")
-                if org_id_raw:
-                    try:
-                        org_uuid = uuid.UUID(org_id_raw)
-                    except (ValueError, TypeError) as exc:
-                        raise RuntimeError(f"Invalid organisation_id in checkpoint_blobs: {org_id_raw!r}") from exc
-                else:
-                    org_uuid = None
+                org_uuid = _parse_org_id(row.get("organisation_id"))
                 cur.execute(
                     "INSERT INTO checkpoint_blobs "
                     "(organisation_id, thread_id, checkpoint_ns, channel, version, type, blob) "
@@ -288,14 +281,7 @@ def _restore_checkpoints_sync(raw_url: str, checkpoints: list[dict[str, Any]]) -
         with conn.cursor() as cur:
             cur.execute("TRUNCATE TABLE checkpoints CASCADE")
             for row in checkpoints:
-                org_id_raw = row.get("organisation_id")
-                if org_id_raw:
-                    try:
-                        org_uuid = uuid.UUID(org_id_raw)
-                    except (ValueError, TypeError) as exc:
-                        raise RuntimeError(f"Invalid organisation_id in checkpoints: {org_id_raw!r}") from exc
-                else:
-                    org_uuid = None
+                org_uuid = _parse_org_id(row.get("organisation_id"))
                 cur.execute(
                     "INSERT INTO checkpoints "
                     "(organisation_id, thread_id, checkpoint_ns, checkpoint_id, "
@@ -326,14 +312,7 @@ def _restore_checkpoint_writes_sync(raw_url: str, writes: list[dict[str, Any]]) 
                 raw_blob = row.get("blob")
                 if raw_blob is not None:
                     blob = bytes.fromhex(raw_blob) if raw_blob else b""
-                org_id_raw = row.get("organisation_id")
-                if org_id_raw:
-                    try:
-                        org_uuid = uuid.UUID(org_id_raw)
-                    except (ValueError, TypeError) as exc:
-                        raise RuntimeError(f"Invalid organisation_id in checkpoint_writes: {org_id_raw!r}") from exc
-                else:
-                    org_uuid = None
+                org_uuid = _parse_org_id(row.get("organisation_id"))
                 cur.execute(
                     "INSERT INTO checkpoint_writes "
                     "(organisation_id, thread_id, checkpoint_ns, checkpoint_id, "
@@ -407,7 +386,7 @@ def _re_encrypt_credentials_sync(
 def _print_size(backup_dir: Path) -> None:
     try:
         total = sum(f.stat().st_size for f in backup_dir.rglob("*") if f.is_file())
-    except (OSError, PermissionError) as exc:
+    except OSError as exc:
         _log.warning("Could not compute backup size: %s", exc)
         return
     click.echo(f"Total size: {_human_size(total)}")
