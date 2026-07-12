@@ -32,12 +32,13 @@ async def _bootstrap(admin_url: str, app_url: str) -> None:
     try:
         # Idempotent role creation — skips if already exists
         row = await conn.fetchrow("SELECT 1 FROM pg_roles WHERE rolname = $1", app_user)
+        quoted_pass = app_pass.replace("'", "''")
         if not row:
-            await conn.execute(f'CREATE ROLE "{app_user}" WITH LOGIN PASSWORD $1 INHERIT', app_pass)
+            await conn.execute(f"CREATE ROLE \"{app_user}\" WITH LOGIN PASSWORD '{quoted_pass}' INHERIT")
             print(f"Created role: {app_user}")
         else:
             # Ensure password is up to date
-            await conn.execute(f'ALTER ROLE "{app_user}" WITH PASSWORD $1', app_pass)
+            await conn.execute(f"ALTER ROLE \"{app_user}\" WITH PASSWORD '{quoted_pass}'")
             print(f"Updated password for role: {app_user}")
 
         # Grant DML on existing tables
