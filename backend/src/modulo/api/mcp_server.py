@@ -69,7 +69,6 @@ from modulo.db.models.pipeline_edge import PipelineEdge
 from modulo.db.rls import set_rls_org, set_rls_user_context
 from modulo.settings import get_settings
 
-
 # ContextVars populated by McpAuthMiddleware before each request.
 # Propagation: this server runs FastMCP in stateless HTTP mode, where each request
 # spawns a fresh per-request server task *from the already-authenticated request
@@ -1395,6 +1394,197 @@ async def create_model_backend(
     except Exception:
         _log.exception("create_model_backend failed")
         return _tool_error("Failed to create model backend")
+
+
+@mcp.tool(
+    description="Create a new connector instance (provider configuration). "
+    "Credentials are encrypted at rest. Returns the created connector details."
+)
+async def create_connector(
+    name: str,
+    connector_type_id: str,
+    credentials: str,
+    config_json: dict[str, Any] | None = None,
+    allowed_operations: list[str] | None = None,
+    visibility: str = "org",
+) -> dict[str, Any]:
+    try:
+        if not await validate_current_auth():
+            return _tool_auth_error("Token revoked or expired — re-authenticate")
+        check_tool_scope(_ctx_role_val(), "create_connector")
+
+        from cryptography.fernet import Fernet
+
+        from modulo.db.crud.connector_instance import create_connector_instance
+
+        org_id = _ctx_org_id_val()
+        account_id = _ctx_user_id_val()
+        settings = get_settings()
+        credentials_ciphertext = Fernet(settings.fernet_key.encode()).encrypt(credentials.encode())
+
+        async with _session(org_id) as s:
+            ci = await create_connector_instance(
+                s,
+                org_id=org_id,
+                name=name,
+                connector_type_id=connector_type_id,
+                owner_id=account_id,
+                credentials_ciphertext=credentials_ciphertext,
+                config_json=config_json or {},
+                allowed_operations=allowed_operations or [],
+                visibility=visibility,
+            )
+
+        return {
+            "id": str(ci.id),
+            "name": ci.name,
+            "connector_type_id": ci.connector_type_id,
+            "visibility": ci.visibility,
+            "status": "created",
+        }
+    except MCPAuthorizationError as exc:
+        return {"error": "insufficient_scope", "detail": str(exc)}
+    except Exception:
+        _log.exception("create_connector failed")
+        return _tool_error("Failed to create connector")
+
+
+@mcp.tool(description="Create a new trigger for a pipeline.")
+async def create_trigger(
+    pipeline_id: str,
+    trigger_type: str = "manual",
+    active: bool = True,
+    cron_expression: str | None = None,
+    config_json: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    try:
+        if not await validate_current_auth():
+            return _tool_auth_error("Token revoked or expired — re-authenticate")
+        check_tool_scope(_ctx_role_val(), "create_trigger")
+
+        org_id = _ctx_org_id_val()
+        account_id = _ctx_user_id_val()
+        try:
+            pid = uuid.UUID(pipeline_id)
+        except ValueError:
+            return {"error": "invalid_id", "field": "pipeline_id", "detail": f"Invalid UUID format: {pipeline_id}"}
+
+        from modulo.db.models.trigger import Trigger
+
+        async with _session(org_id) as s:
+            trigger = Trigger(
+                organisation_id=org_id,
+                pipeline_id=pid,
+                trigger_type=trigger_type,
+                active=active,
+                config_json=config_json or {},
+                account_id=account_id,
+            )
+            if cron_expression:
+                trigger.cron_expression = cron_expression
+            s.add(trigger)
+            await s.flush()
+
+        return {
+            "id": str(trigger.id),
+            "pipeline_id": str(trigger.pipeline_id),
+            "trigger_type": trigger.trigger_type,
+            "active": trigger.active,
+            "cron_expression": trigger.cron_expression,
+        }
+    except MCPAuthorizationError as exc:
+        return {"error": "insufficient_scope", "detail": str(exc)}
+    except Exception:
+        _log.exception("create_trigger failed")
+        return _tool_error("Failed to create trigger")
+
+
+@mcp.tool(description="Delete a pipeline by ID.")
+async def delete_pipeline(
+    pipeline_id: str,
+) -> dict[str, Any]:
+    try:
+        if not await validate_current_auth():
+            return _tool_auth_error("Token revoked or expired — re-authenticate")
+        check_tool_scope(_ctx_role_val(), "delete_pipeline")
+
+        org_id = _ctx_org_id_val()
+        try:
+            pid = uuid.UUID(pipeline_id)
+        except ValueError:
+            return {"error": "invalid_id", "field": "pipeline_id", "detail": f"Invalid UUID format: {pipeline_id}"}
+
+        from modulo.db.crud.pipeline import delete_pipeline as db_delete_pipeline
+
+        async with _session(org_id) as s:
+            deleted = await db_delete_pipeline(s, pid)
+
+        if not deleted:
+            return {"error": "pipeline_not_found", "pipeline_id": pipeline_id}
+
+        return {"status": "deleted", "pipeline_id": pipeline_id}
+    except MCPAuthorizationError as exc:
+        return {"error": "insufficient_scope", "detail": str(exc)}
+    except Exception:
+        _log.exception("delete_pipeline failed")
+        return _tool_error("Failed to delete pipeline")
+
+
+@mcp.tool(description="Create a new agent. Returns the created agent details.")
+async def create_agent(
+    name: str,
+    prompt_template: str,
+    description: str | None = None,
+    model_backend_id: str | None = None,
+    input_schema_id: str | None = None,
+    output_schema_id: str | None = None,
+    connector_type_refs: list[dict[str, Any]] | None = None,
+    required_environment_capabilities: list[str] | None = None,
+    is_executable: bool = True,
+) -> dict[str, Any]:
+    try:
+        if not await validate_current_auth():
+            return _tool_auth_error("Token revoked or expired — re-authenticate")
+        check_tool_scope(_ctx_role_val(), "create_agent")
+
+        from modulo.db.crud.agent import create_agent as db_create_agent
+
+        org_id = _ctx_org_id_val()
+        account_id = _ctx_user_id_val()
+
+        parsed_model_backend_id = uuid.UUID(model_backend_id) if model_backend_id else uuid.UUID(int=0)
+        parsed_input_schema_id = uuid.UUID(input_schema_id) if input_schema_id else uuid.UUID(int=0)
+        parsed_output_schema_id = uuid.UUID(output_schema_id) if output_schema_id else uuid.UUID(int=0)
+
+        async with _session(org_id) as s:
+            agent = await db_create_agent(
+                s,
+                org_id=org_id,
+                name=name,
+                account_id=account_id,
+                is_executable=is_executable,
+                input_schema_id=parsed_input_schema_id,
+                input_schema_version="1",
+                output_schema_id=parsed_output_schema_id,
+                output_schema_version="1",
+                prompt_template=prompt_template,
+                model_backend_id=parsed_model_backend_id,
+                description=description,
+                connector_type_refs=connector_type_refs or [],
+            )
+
+        return {
+            "id": str(agent.id),
+            "name": agent.name,
+            "description": agent.description,
+            "is_executable": agent.is_executable,
+            "created_at": agent.created_at.isoformat() if agent.created_at else None,
+        }
+    except MCPAuthorizationError as exc:
+        return {"error": "insufficient_scope", "detail": str(exc)}
+    except Exception:
+        _log.exception("create_agent failed")
+        return _tool_error("Failed to create agent")
 
 
 # ---------------------------------------------------------------------------

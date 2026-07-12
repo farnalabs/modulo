@@ -31,7 +31,6 @@ from modulo.db.models.view import SavedView
 from modulo.db.rls import set_rls_org, set_rls_user_context
 from modulo.settings import Settings, get_settings
 
-
 logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=["viewmodel"])
@@ -104,7 +103,7 @@ class PendingHitlGate(BaseModel):
 
 class LicenseInfo(BaseModel):
     tier: str = "community"
-    features: ClassVar[list[str]] = []
+    features: list[str] = []
     is_valid: bool = True
 
 
@@ -177,7 +176,7 @@ async def license_info(
 ) -> LicenseInfo:
     try:
         has_license_key = bool(settings.modulo_license_key)
-        features: ClassVar[list[str]] = []
+        features: list[str] = []
         if has_license_key:
             features = ["notifications"]
         return LicenseInfo(
@@ -258,6 +257,8 @@ async def viewmodel_current(
                     status_code=status.HTTP_400_BAD_REQUEST,
                     detail="Cannot use view_as_team without an organisation",
                 )
+
+            if view_as_team is not None:
                 team_result = await session.execute(
                     select(Team).where(
                         Team.id == view_as_team,
