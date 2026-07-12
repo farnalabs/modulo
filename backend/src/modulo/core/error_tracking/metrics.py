@@ -1,7 +1,6 @@
-from __future__ import annotations
-
 """Prometheus-style metrics for error tracking — wired to the OTel meter provider."""
 
+from __future__ import annotations
 
 import logging
 from typing import Any
