@@ -25,7 +25,7 @@ from modulo.db.models.library_primitive import LibraryPrimitive
 from modulo.db.rls import set_rls_org, set_rls_user_context
 
 logger = logging.getLogger(__name__)
-_log = logging.getLogger(__name__)
+
 
 __all__ = [
     "CONTRIBUTION_DRAFT",
@@ -498,14 +498,14 @@ _MODULO_PRIMITIVES: list[LibraryPrimitive] = [
         ),
         content_json={
             "nodes": [
-                {"id": "issue-reader", "agent": "issue-reader"},
+                {"id": "ticket-reader", "agent": "ticket-reader"},
                 {"id": "code-generator", "agent": "code-generator"},
                 {"id": "code-applier", "agent": "code-applier"},
                 {"id": "test-runner", "agent": "test-runner"},
                 {"id": "pr-creator", "agent": "pr-creator"},
             ],
             "edges": [
-                {"source": "issue-reader", "target": "code-generator"},
+                {"source": "ticket-reader", "target": "code-generator"},
                 {"source": "code-generator", "target": "code-applier"},
                 {"source": "code-applier", "target": "test-runner"},
                 {
@@ -518,7 +518,7 @@ _MODULO_PRIMITIVES: list[LibraryPrimitive] = [
                     },
                 },
             ],
-            "entry": "issue-reader",
+            "entry": "ticket-reader",
         },
         tags=["workflow", "dogfood", "modulo", "pipeline"],
     ),
@@ -1042,13 +1042,13 @@ _MODULO_PRIMITIVES: list[LibraryPrimitive] = [
 def _bump_version(version: str) -> str:
     """Increment the last segment of a version string."""
     if not version:
-        _log.warning("_bump_version called with empty string, defaulting to 1.0")
+        logger.warning("_bump_version called with empty string, defaulting to 1.0")
         return "1.0"
     parts = version.split(".")
     try:
         parts[-1] = str(int(parts[-1]) + 1)
     except ValueError:
-        _log.warning("_bump_version: non-numeric last segment in '%s', defaulting to 1.0", version)
+        logger.warning("_bump_version: non-numeric last segment in '%s', defaulting to 1.0", version)
         parts = ["1", "0"]
     return ".".join(parts)
 
@@ -1076,7 +1076,9 @@ def _filter_primitives(
     if search:
         term = search.strip().lower()
         if term:
-            primitives = [p for p in primitives if term in p.name.lower() or term in (p.description or "").lower()]
+            primitives = [
+                p for p in primitives if term in (p.name or "").lower() or term in (p.description or "").lower()
+            ]
     return primitives
 
 
@@ -1140,9 +1142,11 @@ async def list_primitives(
                     search=search,
                 )
     except ProgrammingError:
-        _log.warning("list_primitives — DB not migrated for org %s", org_id)
+        logger.warning("list_primitives — DB not migrated for org %s", org_id)
+    except asyncio.CancelledError:
+        raise
     except Exception:
-        _log.exception("list_primitives — DB query failed for org %s", org_id)
+        logger.exception("list_primitives — DB query failed for org %s", org_id)
 
     org_items = list(org_page.items)
     org_total = org_page.total
@@ -1199,10 +1203,10 @@ async def get_primitive(
                 await set_rls_org(session, org_id)
                 item = await get_library_primitive(session, primitive_id)
     except ProgrammingError:
-        _log.warning("get_primitive — DB not migrated or table missing for %s", primitive_id)
+        logger.warning("get_primitive — DB not migrated or table missing for %s", primitive_id)
         return None
     except SQLAlchemyError:
-        _log.exception("get_primitive — DB error for %s", primitive_id)
+        logger.exception("get_primitive — DB error for %s", primitive_id)
         raise
     if item is not None:
         return item
@@ -1239,10 +1243,10 @@ async def get_primitive_by_slug(
                 result = await session.execute(stmt)
                 item = result.scalar_one_or_none()
     except ProgrammingError:
-        _log.warning("get_primitive_by_slug — DB not migrated for %s/%s", primitive_type, slug)
+        logger.warning("get_primitive_by_slug — DB not migrated for %s/%s", primitive_type, slug)
         return None
     except SQLAlchemyError:
-        _log.exception("get_primitive_by_slug — DB error for %s/%s", primitive_type, slug)
+        logger.exception("get_primitive_by_slug — DB error for %s/%s", primitive_type, slug)
         raise
     if item is not None:
         return item
@@ -1320,9 +1324,6 @@ async def copy_to_adapt(
                 account_id=created_by,
                 auto_update=True,
             )
-
-    # ---------------------------------------------------------------------------
-    # Starter pipeline templates
 
     except ProgrammingError:
         logger.exception("core.library_service")
@@ -1871,10 +1872,12 @@ async def _fetch_published_community_from_db(
             if saved_tenant is not None:
                 session.info["org_id"] = saved_tenant
     except ProgrammingError:
-        _log.warning("_fetch_published_community_from_db: ProgrammingError — missing DB table or migration")
+        logger.warning("_fetch_published_community_from_db: ProgrammingError — missing DB table or migration")
         return []
+    except asyncio.CancelledError:
+        raise
     except Exception:
-        _log.exception("_fetch_published_community_from_db: unexpected error")
+        logger.exception("_fetch_published_community_from_db: unexpected error")
         return []
 
 
@@ -2341,8 +2344,10 @@ async def notify_importers_of_update(
                         {"update_available_version_id": prim.id},
                     )
                 except SQLAlchemyError:
-                    _log.exception("notify_importers_of_update: failed to update copy %s", copy.id)
+                    logger.exception("notify_importers_of_update: failed to update copy %s", copy.id)
     except ProgrammingError:
-        _log.warning("notify_importers_of_update failed (DB not migrated): %s", primitive_id)
+        logger.warning("notify_importers_of_update failed (DB not migrated): %s", primitive_id)
+    except asyncio.CancelledError:
+        raise
     except Exception:
-        _log.exception("notify_importers_of_update: unexpected error for primitive %s", primitive_id)
+        logger.exception("notify_importers_of_update: unexpected error for primitive %s", primitive_id)
