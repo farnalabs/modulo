@@ -1,4 +1,4 @@
-"""SSO routes: OIDC and SAML 2.0 login flows."""
+﻿"""SSO routes: OIDC and SAML 2.0 login flows."""
 
 import logging
 from typing import Any
@@ -132,19 +132,19 @@ async def oidc_callback(
     try:
         tokens = await oidc_process_callback(code, state, settings, session, redirect_uri)
     except ValueError as exc:
-        _log.warning("OIDC callback failed for provider %s: %s", provider, exc)
+        _log.warning("OIDC callback failed for provider %s: %s", provider, exc, exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail=str(exc),
         ) from None
     except ProgrammingError as exc:
-        _log.warning("OIDC callback failed — DB table missing: %s", exc)
+        _log.warning("OIDC callback failed â€” DB table missing: %s", exc, exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
         ) from exc
     except SQLAlchemyError as exc:
-        _log.warning("OIDC callback DB error: %s", exc)
+        _log.warning("OIDC callback DB error: %s", exc, exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database error. Please try again.",
@@ -184,13 +184,13 @@ async def saml_login(
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from None
     except ProgrammingError as exc:
-        _log.warning("SAML login failed — DB table missing: %s", exc)
+        _log.warning("SAML login failed â€” DB table missing: %s", exc, exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
         ) from exc
     except SQLAlchemyError as exc:
-        _log.warning("SAML login DB error: %s", exc)
+        _log.warning("SAML login DB error: %s", exc, exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database error. Please try again.",
@@ -231,19 +231,19 @@ async def saml_acs(
     try:
         tokens = await saml_process_response(raw_saml, settings, session)
     except ValueError as exc:
-        _log.warning("SAML ACS failed: %s", exc)
+        _log.warning("SAML ACS failed: %s", exc, exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail=str(exc),
         ) from None
     except ProgrammingError as exc:
-        _log.warning("SAML ACS failed — DB table missing: %s", exc)
+        _log.warning("SAML ACS failed â€” DB table missing: %s", exc, exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
         ) from exc
     except SQLAlchemyError as exc:
-        _log.warning("SAML ACS DB error: %s", exc)
+        _log.warning("SAML ACS DB error: %s", exc, exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database error. Please try again.",
@@ -302,3 +302,4 @@ async def saml_metadata(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="An unexpected error occurred",
         ) from e
+
