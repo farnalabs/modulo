@@ -112,13 +112,11 @@ Reverting an agent node back to a manual node, using a pipeline snapshot to rest
 - BDD feature files (node_types.feature, manual_node.feature) lack revert-to-manual scenarios
 - `test_revert_to_manual_steps.py` exists but tests a PATCH /graph endpoint, not the real revert-to-manual POST endpoint
 - Persona scenario `@goal-alice-rollback-step` is tagged @delivered but steps use mocked endpoints, not real revert-to-manual
-- [x] 4 error path unit tests exist for the revert-to-manual API endpoint (IntegrityError→409, ProgrammingError→501, SQLAlchemyError→503, Exception→500)
 - No integration tests verifying snapshot-based restore of a reverted node
 - Frontend snapshot picker does not show snapshot creation date or diff preview
 - No visual diff between current agent config and selected snapshot's manual config
 - Revert confirmation has no "are you sure?" step before execution
 - Revert-to-manual does not create a new snapshot (the code updates the graph in-place but does not create a PipelineSnapshot)
-- [x] All revert UI strings use `$t()` and `formatApiError` — i18n gap resolved (PipelineEditorView.vue:864, L111-L127, L374-L421)
 - Website docs: no page exists for rollback-agent-replacement feature
 
 ## QA History
