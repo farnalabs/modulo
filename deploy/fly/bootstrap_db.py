@@ -4,8 +4,11 @@
 3. Write the fixed DATABASE_ADMIN_URL to a file for the shell script
 """
 
+import asyncio
 import os
 import sys
+
+import asyncpg
 
 # Step 1: Fix DATABASE_ADMIN_URL and DATABASE_URL
 admin_url = os.environ.get("DATABASE_ADMIN_URL") or os.environ.get("DATABASE_URL", "")
@@ -27,16 +30,11 @@ if runtime_url:
 
 # Step 2: Create alembic_version table with VARCHAR(255)
 # Branch migration IDs exceed the default VARCHAR(32).
-import asyncio
-import asyncpg
 
 
 async def _bootstrap():
     pg_url = admin_url.replace("postgresql+asyncpg://", "postgres://")
-    try:
-        conn = await asyncpg.connect(pg_url, ssl=False)
-    except asyncpg.exceptions.CantChangeRuntimeParamError:
-        conn = await asyncpg.connect(pg_url)
+    conn = await asyncpg.connect(pg_url, ssl="prefer")
     try:
         await conn.execute(
             "CREATE TABLE IF NOT EXISTS alembic_version ("

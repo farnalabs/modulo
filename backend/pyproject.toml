@@ -179,6 +179,7 @@ ignore = [
 "src/modulo/db/repositories/locks.py" = ["ASYNC109"]
 "scripts/*" = ["T20"]
 "deploy/*" = ["T20"]
+"src/modulo/db/bootstrap_role.py" = ["T20"]
 
 [tool.mypy]
 strict = true
