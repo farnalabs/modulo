@@ -120,4 +120,4 @@ status: partial
 - Missing UI behaviour specs for snapshot version display in pipeline history view
 - Missing deletion protection lifecycle: what happens to snapshots when a referenced schema version is deprecated?
 - No dedicated admin UI page for browsing snapshot history — version numbers only shown in revert-to-manual dialog
-- ABTestModelsView does not display snapshot version number — only shows truncated snapshot ID (shortId) with no version. Snapshot tag is fetched from API but not wired (availableSnapshotTag hardcoded to null).
+- ABTestModelsView version number display and snapshot tag wiring — fixed in 2026-07-08 QA (index 335)

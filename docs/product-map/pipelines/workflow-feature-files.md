@@ -138,14 +138,13 @@ import it into another organisation with schema/connector/model backend binding.
 - [x] export_pipeline uses single transaction for pipeline lookup and bundle building
 - [x] _get_latest_published_version catches SQLAlchemyError and logs warning
 - [x] export_pipeline_bundle catches SQLAlchemyError and logs warning
-- [ ] Non-existent owner_team_id on import: 400 validation error
+- [x] Non-existent owner_team_id on import: validation error
 
 ### Additional Edge Cases (added in cross-cutting QA)
 
 - [x] Bundle format version mismatch raises ValueError at materialize step
 - [x] Oversized bundle (>100MB in core function, >50MB at API boundary) rejected
 - [x] Edge with missing source/target node IDs raises ValueError → 500
-- [x] Export pipeline race condition fixed (single transaction)
 - [x] Concurrency: non-existent owner_team_id produces validation error, not cryptic FK violation
 - [ ] Import with already-deleted team produces clear validation error
 - [x] `hitl_gate_config` now preserved in edge export (fixed in cross-cutting QA)
