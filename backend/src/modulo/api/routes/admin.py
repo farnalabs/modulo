@@ -315,7 +315,7 @@ async def global_search(
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="This feature is not available. Run database migrations to enable it.",
-        )
+        ) from None
 
     return SearchResponse(results=paginated, total_by_type=total_by_type)
 
@@ -498,7 +498,7 @@ async def admin_create_team(
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="A resource with this value already exists",
-        )
+        ) from None
     except ProgrammingError:
         logger.warning(
             "admin_create_team audit event ProgrammingError — team was created",
@@ -561,17 +561,17 @@ async def admin_get_org(
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="A resource with this value already exists",
-        )
+        ) from None
     except ProgrammingError:
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
-        )
+        ) from None
     except SQLAlchemyError:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database error while fetching org profile.",
-        )
+        ) from None
 
     current_settings = org.settings_json or {}
     return OrgProfileResponse(
@@ -624,17 +624,17 @@ async def admin_update_org(
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="A resource with this value already exists",
-        )
+        ) from None
     except ProgrammingError:
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
-        )
+        ) from None
     except SQLAlchemyError:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database error while updating org profile.",
-        )
+        ) from None
 
     current_settings = org.settings_json or {}
     return OrgProfileResponse(
@@ -675,17 +675,17 @@ async def admin_regenerate_api_key(
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="A resource with this value already exists",
-        )
+        ) from None
     except ProgrammingError:
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
-        )
+        ) from None
     except SQLAlchemyError:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database error while regenerating API key.",
-        )
+        ) from None
 
     return {"api_key": raw_key, "lookup_prefix": raw_key[3:11]}
 
@@ -744,7 +744,7 @@ async def admin_list_users(
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="This feature is not available. Run database migrations to enable it.",
-        )
+        ) from None
 
     return UserListResponse(
         items=[
@@ -881,7 +881,7 @@ async def admin_update_user(
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="This feature is not available. Run database migrations to enable it.",
-        )
+        ) from None
 
     org_role = req.org_role or (await _get_org_role(session, user_id, current_user.organisation_id))
     return UserListItem(
@@ -997,7 +997,7 @@ async def admin_deactivate_user(
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="A resource with this value already exists",
-        )
+        ) from None
     except ProgrammingError:
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
@@ -1075,7 +1075,7 @@ async def admin_reactivate_user(
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="A resource with this value already exists",
-        )
+        ) from None
     except ProgrammingError:
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
@@ -1152,7 +1152,7 @@ async def admin_reset_password(
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="This feature is not available. Run database migrations to enable it.",
-        )
+        ) from None
 
     return AdminResetPasswordResponse(temporary_password=temporary_password)
 
@@ -1213,7 +1213,7 @@ async def admin_list_teams(
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="A resource with this value already exists",
-        )
+        ) from None
     except ProgrammingError:
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
@@ -1283,7 +1283,7 @@ async def admin_update_team(
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="A resource with this value already exists",
-        )
+        ) from None
     except ProgrammingError:
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
@@ -1332,7 +1332,7 @@ async def admin_update_team(
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="A resource with this value already exists",
-        )
+        ) from None
     except ProgrammingError:
         logger.warning(
             "admin_update_team audit event ProgrammingError — team was updated",
@@ -1398,7 +1398,7 @@ async def admin_delete_team(
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="A resource with this value already exists",
-        )
+        ) from None
     except ProgrammingError:
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
@@ -1447,7 +1447,7 @@ async def admin_delete_team(
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="A resource with this value already exists",
-        )
+        ) from None
     except ProgrammingError:
         logger.warning("Failed to record team_deleted audit event for team %s", team_id)
 
@@ -1605,17 +1605,17 @@ async def request_org_deletion(
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="A resource with this value already exists",
-        )
+        ) from None
     except ProgrammingError:
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
-        )
+        ) from None
     except SQLAlchemyError:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database error while requesting org deletion.",
-        )
+        ) from None
 
     export = result["export"]
     return DeletionRequestResponse(
@@ -1672,17 +1672,17 @@ async def confirm_org_deletion(
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="A resource with this value already exists",
-        )
+        ) from None
     except ProgrammingError:
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
-        )
+        ) from None
     except SQLAlchemyError:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database error while confirming org deletion.",
-        )
+        ) from None
 
     return ConfirmDeletionResponse(
         message="Organisation has been permanently deleted.",
@@ -1720,17 +1720,17 @@ async def cancel_org_deletion(
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="A resource with this value already exists",
-        )
+        ) from None
     except ProgrammingError:
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
-        )
+        ) from None
     except SQLAlchemyError:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database error while cancelling org deletion.",
-        )
+        ) from None
 
     return CancelDeletionResponse(**result)
 
@@ -1756,17 +1756,17 @@ async def export_org_data(
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="A resource with this value already exists",
-        )
+        ) from None
     except ProgrammingError:
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
-        )
+        ) from None
     except SQLAlchemyError:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database error while exporting org data.",
-        )
+        ) from None
 
     org_info = (bundle.get("organisation") or [{}])[0]
     return OrgExportResponse(
@@ -1825,17 +1825,17 @@ async def delete_org_immediate(
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="A resource with this value already exists",
-        )
+        ) from None
     except ProgrammingError:
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
-        )
+        ) from None
     except SQLAlchemyError:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database error while deleting org.",
-        )
+        ) from None
 
     return ConfirmDeletionResponse(
         message="Organisation has been permanently deleted.",
@@ -2064,18 +2064,18 @@ async def eval_dashboard(
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="A resource with this value already exists",
-        )
+        ) from None
     except ProgrammingError:
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
-        )
+        ) from None
     except SQLAlchemyError:
         logger.warning("Eval dashboard DB error", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database error. Please try again later.",
-        )
+        ) from None
 
     return EvalDashboardResponse(
         summary=summary,
@@ -2132,31 +2132,31 @@ async def eval_regressions(
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="A resource with this value already exists",
-        )
+        ) from None
     except ProgrammingError:
         logger.warning("Eval regressions unavailable — DB may need migration")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
-        )
+        ) from None
     except TimeoutError:
         logger.error("Eval regressions query timed out", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Query timed out. Please try again or reduce the lookback period.",
-        )
+        ) from None
     except SQLAlchemyError:
         logger.error("Eval regressions DB error", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database error. Please try again later.",
-        )
+        ) from None
     except Exception:
         logger.exception("Eval regressions unexpected error")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="An unexpected error occurred while checking eval regressions.",
-        )
+        ) from None
 
     return RegressionAlertsResponse(
         alerts=[
@@ -2235,24 +2235,24 @@ async def okr_progress(
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="A resource with this value already exists",
-        )
+        ) from None
     except ProgrammingError:
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
-        )
+        ) from None
     except SQLAlchemyError:
         logger.warning("OKR progress DB error", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database error. Please try again later.",
-        )
+        ) from None
     except Exception:
         logger.exception("Unexpected error in OKR progress endpoint")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="An unexpected error occurred. Please try again later.",
-        )
+        ) from None
 
     return OkrProgressResponse(
         suite_id=progress.suite_id,
@@ -2908,7 +2908,7 @@ async def admin_get_storage(
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="This feature is not available. Run database migrations to enable it.",
-        )
+        ) from None
 
     breakdown: dict[str, int] = {}
     for row in status_rows:
@@ -2964,6 +2964,6 @@ async def admin_overdue_hitl_claims(
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="This feature is not available. Run database migrations to enable it.",
-        )
+        ) from None
 
     return OverdueClaimsResponse(claims=[OverdueClaimItem(**c) for c in claims])
