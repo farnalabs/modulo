@@ -150,9 +150,11 @@ async def test_traced_connector_without_org_id(traced: _TracedConnector, exporte
 async def test_query_error_records_exception(traced: _TracedConnector, exporter: InMemorySpanExporter) -> None:
     inner = traced._inner
 
-    with patch.object(inner, "query", AsyncMock(side_effect=ValueError("connection failed"))):
-        with pytest.raises(ValueError, match="connection failed"):
-            await traced.query(ConnectorQuery(resource="/test"))
+    with (
+        patch.object(inner, "query", AsyncMock(side_effect=ValueError("connection failed"))),
+        pytest.raises(ValueError, match="connection failed"),
+    ):
+        await traced.query(ConnectorQuery(resource="/test"))
 
     spans = exporter.get_finished_spans()
     assert len(spans) == 1
@@ -165,9 +167,11 @@ async def test_query_error_records_exception(traced: _TracedConnector, exporter:
 async def test_write_error_records_exception(traced: _TracedConnector, exporter: InMemorySpanExporter) -> None:
     inner = traced._inner
 
-    with patch.object(inner, "write", AsyncMock(side_effect=PermissionError("access denied"))):
-        with pytest.raises(PermissionError, match="access denied"):
-            await traced.write(ConnectorPayload(resource="/test", data={}))
+    with (
+        patch.object(inner, "write", AsyncMock(side_effect=PermissionError("access denied"))),
+        pytest.raises(PermissionError, match="access denied"),
+    ):
+        await traced.write(ConnectorPayload(resource="/test", data={}))
 
     spans = exporter.get_finished_spans()
     assert len(spans) == 1

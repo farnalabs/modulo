@@ -457,16 +457,17 @@ class TestRevertToManual:
         setup_execute_side_effect(session, [make_pipeline_row(nodes=[make_agent_node()])])
         principal = make_principal()
 
-        with patch("modulo.api.routes.pipelines.get_snapshot_detail", return_value=None):
-            with pytest.raises(HTTPException) as excinfo:
-                await revert_node_to_manual_endpoint(
-                    pipeline_id=PIPELINE_ID,
-                    node_id=NODE_ID,
-                    snapshot_id=SNAPSHOT_ID,
-                    session=session,
-                    principal=principal,
-                )
-
+        with (
+            patch("modulo.api.routes.pipelines.get_snapshot_detail", return_value=None),
+            pytest.raises(HTTPException) as excinfo,
+        ):
+            await revert_node_to_manual_endpoint(
+                pipeline_id=PIPELINE_ID,
+                node_id=NODE_ID,
+                snapshot_id=SNAPSHOT_ID,
+                session=session,
+                principal=principal,
+            )
         assert excinfo.value.status_code == status.HTTP_404_NOT_FOUND
         assert "Snapshot not found" in excinfo.value.detail
 
@@ -480,15 +481,17 @@ class TestRevertToManual:
             ]
         )
 
-        with patch("modulo.api.routes.pipelines.get_snapshot_detail", return_value=snapshot):
-            with pytest.raises(HTTPException) as excinfo:
-                await revert_node_to_manual_endpoint(
-                    pipeline_id=PIPELINE_ID,
-                    node_id=NODE_ID,
-                    snapshot_id=SNAPSHOT_ID,
-                    session=session,
-                    principal=principal,
-                )
+        with (
+            patch("modulo.api.routes.pipelines.get_snapshot_detail", return_value=snapshot),
+            pytest.raises(HTTPException) as excinfo,
+        ):
+            await revert_node_to_manual_endpoint(
+                pipeline_id=PIPELINE_ID,
+                node_id=NODE_ID,
+                snapshot_id=SNAPSHOT_ID,
+                session=session,
+                principal=principal,
+            )
 
         assert excinfo.value.status_code == status.HTTP_422_UNPROCESSABLE_ENTITY
 
@@ -502,15 +505,17 @@ class TestRevertToManual:
             ]
         )
 
-        with patch("modulo.api.routes.pipelines.get_snapshot_detail", return_value=snapshot):
-            with pytest.raises(HTTPException) as excinfo:
-                await revert_node_to_manual_endpoint(
-                    pipeline_id=PIPELINE_ID,
-                    node_id=NODE_ID,
-                    snapshot_id=SNAPSHOT_ID,
-                    session=session,
-                    principal=principal,
-                )
+        with (
+            patch("modulo.api.routes.pipelines.get_snapshot_detail", return_value=snapshot),
+            pytest.raises(HTTPException) as excinfo,
+        ):
+            await revert_node_to_manual_endpoint(
+                pipeline_id=PIPELINE_ID,
+                node_id=NODE_ID,
+                snapshot_id=SNAPSHOT_ID,
+                session=session,
+                principal=principal,
+            )
 
         assert excinfo.value.status_code == status.HTTP_422_UNPROCESSABLE_ENTITY
 
@@ -524,15 +529,17 @@ class TestRevertToManual:
             ]
         )
 
-        with patch("modulo.api.routes.pipelines.get_snapshot_detail", return_value=snapshot):
-            with pytest.raises(HTTPException) as excinfo:
-                await revert_node_to_manual_endpoint(
-                    pipeline_id=PIPELINE_ID,
-                    node_id=NODE_ID,
-                    snapshot_id=SNAPSHOT_ID,
-                    session=session,
-                    principal=principal,
-                )
+        with (
+            patch("modulo.api.routes.pipelines.get_snapshot_detail", return_value=snapshot),
+            pytest.raises(HTTPException) as excinfo,
+        ):
+            await revert_node_to_manual_endpoint(
+                pipeline_id=PIPELINE_ID,
+                node_id=NODE_ID,
+                snapshot_id=SNAPSHOT_ID,
+                session=session,
+                principal=principal,
+            )
 
         assert excinfo.value.status_code == status.HTTP_422_UNPROCESSABLE_ENTITY
 

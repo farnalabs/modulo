@@ -598,11 +598,11 @@ class TestDatabasePollingScheduler:
         with (
             patch.object(scheduler, "_sync_with_db") as mock_sync,
             patch.object(scheduler, "_schedule", {}),
+            patch.object(type(scheduler).__bases__[0], "tick", return_value=30.0),
         ):
-            with patch.object(type(scheduler).__bases__[0], "tick", return_value=30.0):
-                result = scheduler.tick()
-                mock_sync.assert_called_once()
-                assert result == 30.0
+            result = scheduler.tick()
+            mock_sync.assert_called_once()
+            assert result == 30.0
 
 
 # ---------------------------------------------------------------------------

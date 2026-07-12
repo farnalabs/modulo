@@ -31,11 +31,13 @@ class TestMigration0049Upgrade:
     def test_upgrade_creates_three_tables(self, migration) -> None:
         mock_op = MagicMock()
 
-        with patch("alembic.op.create_table", mock_op.create_table):
-            with patch("alembic.op.create_index", mock_op.create_index):
-                with patch("alembic.op.create_check_constraint", mock_op.create_check_constraint):
-                    with patch.object(migration, "op", mock_op, create=True):
-                        migration.upgrade()
+        with (
+            patch("alembic.op.create_table", mock_op.create_table),
+            patch("alembic.op.create_index", mock_op.create_index),
+            patch("alembic.op.create_check_constraint", mock_op.create_check_constraint),
+            patch.object(migration, "op", mock_op, create=True),
+        ):
+            migration.upgrade()
 
         assert mock_op.create_table.call_count == 3
         table_names = [call[0][0] for call in mock_op.create_table.call_args_list]
@@ -46,11 +48,13 @@ class TestMigration0049Upgrade:
     def test_upgrade_creates_four_indexes(self, migration) -> None:
         mock_op = MagicMock()
 
-        with patch("alembic.op.create_table", mock_op.create_table):
-            with patch("alembic.op.create_index", mock_op.create_index):
-                with patch("alembic.op.create_check_constraint", mock_op.create_check_constraint):
-                    with patch.object(migration, "op", mock_op, create=True):
-                        migration.upgrade()
+        with (
+            patch("alembic.op.create_table", mock_op.create_table),
+            patch("alembic.op.create_index", mock_op.create_index),
+            patch("alembic.op.create_check_constraint", mock_op.create_check_constraint),
+            patch.object(migration, "op", mock_op, create=True),
+        ):
+            migration.upgrade()
 
         assert mock_op.create_index.call_count == 4
         index_names = [call[0][0] for call in mock_op.create_index.call_args_list]
@@ -62,11 +66,13 @@ class TestMigration0049Upgrade:
     def test_upgrade_creates_two_check_constraints(self, migration) -> None:
         mock_op = MagicMock()
 
-        with patch("alembic.op.create_table", mock_op.create_table):
-            with patch("alembic.op.create_index", mock_op.create_index):
-                with patch("alembic.op.create_check_constraint", mock_op.create_check_constraint):
-                    with patch.object(migration, "op", mock_op, create=True):
-                        migration.upgrade()
+        with (
+            patch("alembic.op.create_table", mock_op.create_table),
+            patch("alembic.op.create_index", mock_op.create_index),
+            patch("alembic.op.create_check_constraint", mock_op.create_check_constraint),
+            patch.object(migration, "op", mock_op, create=True),
+        ):
+            migration.upgrade()
 
         assert mock_op.create_check_constraint.call_count == 2
         names = [call[0][0] for call in mock_op.create_check_constraint.call_args_list]
@@ -76,11 +82,13 @@ class TestMigration0049Upgrade:
     def test_upgrade_chat_sessions_has_all_columns(self, migration) -> None:
         mock_op = MagicMock()
 
-        with patch("alembic.op.create_table", mock_op.create_table):
-            with patch("alembic.op.create_index", mock_op.create_index):
-                with patch("alembic.op.create_check_constraint", mock_op.create_check_constraint):
-                    with patch.object(migration, "op", mock_op, create=True):
-                        migration.upgrade()
+        with (
+            patch("alembic.op.create_table", mock_op.create_table),
+            patch("alembic.op.create_index", mock_op.create_index),
+            patch("alembic.op.create_check_constraint", mock_op.create_check_constraint),
+            patch.object(migration, "op", mock_op, create=True),
+        ):
+            migration.upgrade()
 
         chat_sessions_call = next(c for c in mock_op.create_table.call_args_list if c[0][0] == "chat_sessions")
         columns = chat_sessions_call[0][1:]
@@ -101,10 +109,12 @@ class TestMigration0049Downgrade:
     def test_downgrade_drops_constraints_before_tables(self, migration) -> None:
         mock_op = MagicMock()
 
-        with patch("alembic.op.drop_constraint", mock_op.drop_constraint):
-            with patch("alembic.op.drop_table", mock_op.drop_table):
-                with patch.object(migration, "op", mock_op, create=True):
-                    migration.downgrade()
+        with (
+            patch("alembic.op.drop_constraint", mock_op.drop_constraint),
+            patch("alembic.op.drop_table", mock_op.drop_table),
+            patch.object(migration, "op", mock_op, create=True),
+        ):
+            migration.downgrade()
 
         assert mock_op.drop_constraint.call_count == 2
         constraint_names = [call[0][0] for call in mock_op.drop_constraint.call_args_list]
@@ -114,10 +124,12 @@ class TestMigration0049Downgrade:
     def test_downgrade_drops_tables_in_reverse_order(self, migration) -> None:
         mock_op = MagicMock()
 
-        with patch("alembic.op.drop_constraint", mock_op.drop_constraint):
-            with patch("alembic.op.drop_table", mock_op.drop_table):
-                with patch.object(migration, "op", mock_op, create=True):
-                    migration.downgrade()
+        with (
+            patch("alembic.op.drop_constraint", mock_op.drop_constraint),
+            patch("alembic.op.drop_table", mock_op.drop_table),
+            patch.object(migration, "op", mock_op, create=True),
+        ):
+            migration.downgrade()
 
         assert mock_op.drop_table.call_count == 3
         table_names = [call[0][0] for call in mock_op.drop_table.call_args_list]
