@@ -122,9 +122,9 @@ Make Celery and Redis optional dependencies so Modulo runs without a Redis proce
 - `modulo[redis]` extras group defined but not tested end-to-end
 - `_scheduler_engine` (in `cron_scheduler.py`) AND `_engine` (in `polling.py`) are created via module-level `_get_engine()` and never explicitly disposed — connection pools live for the Celery beat process lifetime
 - `asyncio.run()` in `_sync_with_db()` (cron_scheduler.py:356, polling.py:526, reports/scheduler.py:415) raises `RuntimeError` if called from within an already-running event loop — no guard present (Celery beat only runs in sync context, so this is low-risk)
-- `CronFireTask.run()` calls `asyncio.run()` without checking for existing event loop — will crash if Celery is started with async pool (e.g. `--pool=asyncio`). `PollingFireTask.run()` handles both sync and async pools correctly
-- `cron_scheduler.py:_set_rls_org()` uses Postgres-only `set_config()` without dialect fallback — will crash on SQLite/MariaDB. `polling.py:_set_rls_org()` handles both backends correctly
-
+- [RESOLVED in improve-architecture index 236] `CronFireTask.run()` now handles async Celery pool via `try/except RuntimeError` — matching the PollingFireTask pattern. Gap is resolved.
+- [RESOLVED in improve-architecture index 236] `cron_scheduler._set_rls_org()` now checks dialect and falls back to `session.info["organisation_id"]` on non-Postgres. Gap is resolved.
+- `_ENGINE` in `reports/scheduler.py:57` is module-level, created via `_get_engine()`, and never explicitly disposed — same engine leak pattern as cron_scheduler.py and polling.py (undocumented additional gap)
 ## QA History
 
 - 2026-07-01 (improve-architecture index 38): Added guarded imports to celery_app.py, cron_scheduler.py, celery_tasks.py, webhook_dedup_cleanup.py, reports/scheduler.py. Moved celery+redis to [redis] extras. Created 11 import-guard unit tests and 14 in-process scheduler unit tests. Replaced 2 @awaiting-implementation BDD scenarios with real ones + step definitions. Removed stale "branch not merged" gap (code already on main).
