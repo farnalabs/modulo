@@ -55,11 +55,17 @@ Plan tier definitions and feature flag catalog governing which features are avai
 - [x] `seed_tier_catalog.py` seeds Community (rank 0) and Team (rank 1) tiers
 - [x] Seeds all feature flags assigned to known tiers
 
+## QA History
+
+### 2026-07-12 — Round 3 QA
+
+- **Fixed (MAJOR):** Removed duplicate `admin_cost_controls` entry in `seed_tier_catalog.py` (appeared twice — same tier_id, description, and name). The duplicate would cause `ON CONFLICT DO NOTHING` to silently skip it on insert, so it was harmless at runtime but misleading.
+- **Fixed (MINOR):** No stale frontmatter found. All `code:`, `bdd:`, `unit-tests:` entries verified as accurate.
+
 ## Known Gaps
 
 - No dedicated unit tests for `admin_tiers` route or `tier_catalog` CRUD. Tier catalog functions are tested indirectly through `test_feature_flag_registry.py` and `test_plan_context.py` (which mock `tier_catalog` functions).
 - No BDD feature files for tier catalog operations.
-- `seed_tier_catalog.py` has a duplicate `admin_cost_controls` entry (appears at lines 111-114 and 170-175).
 - `seed_tier_catalog.py` is out of sync with `_KNOWN_FLAGS` in `feature_flags.py`:
   - `observability` is `community` in `_KNOWN_FLAGS` but `team` in seed
   - `remy_ui_driving`, `notification_log`, `api_changelog`, `email_config`, `error_tracking`, `scim`, `external_secrets`, `schema_union_types`, `migration_cli`, `checkpoint_encryption`, `audit_crypto_chain`, `community_registry`, `prompt_optimization`, `pipeline_diff_rollback`, `pipeline_delete`, `rate_limits`, `runtime_config` are in `_KNOWN_FLAGS` but missing from the seed
