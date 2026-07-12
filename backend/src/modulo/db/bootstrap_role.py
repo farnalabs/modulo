@@ -23,12 +23,12 @@ def _parse_role(url: str) -> str:
 
 
 async def _bootstrap(admin_url: str, app_url: str) -> None:
-    admin_conn_str = admin_url.replace("postgresql+asyncpg://", "postgres://")
+    admin_conn_str = admin_url.replace("postgresql+asyncpg://", "postgres://").split("?")[0]
     app_user = _parse_role(app_url)
     parsed = urlparse(app_url)
     app_pass = unquote(parsed.password) if parsed.password else ""
 
-    conn = await asyncpg.connect(admin_conn_str)
+    conn = await asyncpg.connect(admin_conn_str, ssl=False)
     try:
         # Idempotent role creation — skips if already exists
         row = await conn.fetchrow("SELECT 1 FROM pg_roles WHERE rolname = $1", app_user)
