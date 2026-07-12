@@ -1,7 +1,6 @@
-from __future__ import annotations
-
 """Error ingestion service — fingerprinting, batch ingest, HMAC session key store."""
 
+from __future__ import annotations
 
 import asyncio
 import hashlib

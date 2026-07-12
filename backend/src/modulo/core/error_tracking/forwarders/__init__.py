@@ -1,3 +1,5 @@
+"""Error forwarder registry and factory."""
+
 from __future__ import annotations
 
 import logging
