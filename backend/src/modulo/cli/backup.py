@@ -168,7 +168,7 @@ def _export_checkpoint_blobs_sync(raw_url: str) -> list[dict[str, Any]]:
         for row in cur:
             org_id = row.get("organisation_id")
             row["organisation_id"] = str(org_id) if org_id is not None else None
-            if isinstance(row.get("blob"), (bytes, memoryview)):
+            if isinstance(row.get("blob"), bytes | memoryview):
                 row["blob"] = bytes(row["blob"]).hex()
             rows.append(row)
     return rows
@@ -185,7 +185,7 @@ def _export_checkpoints_sync(raw_url: str) -> list[dict[str, Any]]:
             for key, val in row.items():
                 if isinstance(val, uuid.UUID):
                     serialised[key] = str(val)
-                elif isinstance(val, (bytes, memoryview)):
+                elif isinstance(val, bytes | memoryview):
                     serialised[key] = bytes(val).hex()
                 elif isinstance(val, datetime):
                     serialised[key] = val.isoformat()
@@ -209,7 +209,7 @@ def _export_checkpoint_writes_sync(raw_url: str) -> list[dict[str, Any]]:
             for key, val in row.items():
                 if isinstance(val, uuid.UUID):
                     serialised[key] = str(val)
-                elif isinstance(val, (bytes, memoryview)):
+                elif isinstance(val, bytes | memoryview):
                     serialised[key] = bytes(val).hex()
                 elif isinstance(val, datetime):
                     serialised[key] = val.isoformat()
@@ -236,7 +236,7 @@ def _export_credentials_references_sync(raw_url: str) -> dict[str, list[dict[str
                     org_id = row.get("organisation_id")
                     row["id"] = str(row["id"])
                     row["organisation_id"] = str(org_id) if org_id is not None else None
-                    if isinstance(row.get("credentials_ciphertext"), (bytes, memoryview)):
+                    if isinstance(row.get("credentials_ciphertext"), bytes | memoryview):
                         ct = bytes(row["credentials_ciphertext"])
                         row["credentials_ciphertext"] = ct.hex()  # nosemgrep: credential-not-in-state
                     rows.append(row)
@@ -391,8 +391,6 @@ def _re_encrypt_credentials_sync(
                     except (ValueError, TypeError):
                         _log.warning("Invalid UUID in credentials row: %s", row.get("id", "?"))
                         continue
-                    if table not in _CREDENTIALS_TABLES:
-                        raise RuntimeError(f"Unexpected credentials table: {table}")
                     cur.execute(
                         f"UPDATE {table} SET credentials_ciphertext = %s WHERE id = %s",  # noqa: S608 — guarded by whitelist assertion
                         (new_ct, row_id),
