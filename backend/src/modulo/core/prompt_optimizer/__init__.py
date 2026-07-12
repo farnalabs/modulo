@@ -167,9 +167,7 @@ def _parse_llm_response(raw: str) -> OptimizationResult:
             f"LLM response 'suggested_prompt' must be a string, got {type(suggested_prompt).__name__}"
         )
     if not isinstance(rationale, str):
-        raise OptimizationFailedError(
-            f"LLM response 'rationale' must be a string, got {type(rationale).__name__}"
-        )
+        raise OptimizationFailedError(f"LLM response 'rationale' must be a string, got {type(rationale).__name__}")
     analysis = parsed.get("analysis")
     if not isinstance(analysis, str):
         analysis = ""
@@ -235,6 +233,7 @@ class PromptOptimizer:
                     _LLM_TIMEOUT,
                     attempt + 1,
                     _MAX_RETRIES,
+                    exc_info=True,
                 )
                 last_exc = exc
             except OptimizationFailedError:

@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 """Feature flag registry — catalogs all known feature flags and their current status.
 
 Tier structure (matching the DB tier_catalog):
@@ -7,7 +5,9 @@ Tier structure (matching the DB tier_catalog):
     team      (1) — The one paid tier
 """
 
+from __future__ import annotations
 
+import asyncio
 import logging
 import uuid
 from dataclasses import asdict, dataclass
@@ -376,6 +376,8 @@ async def resolve_plan_context(settings: Any, session: Any, org: Any | None = No
                         has_license_key=True,
                         license_features=set(validation.license_data.features),
                     )
+            except asyncio.CancelledError:
+                raise
             except Exception:
                 logger.warning("Failed to parse org-level license key", exc_info=True)
 
@@ -401,6 +403,8 @@ async def resolve_plan_context(settings: Any, session: Any, org: Any | None = No
                     has_license_key=True,
                     license_features=set(validation.license_data.features),
                 )
+        except asyncio.CancelledError:
+            raise
         except Exception:
             logger.warning("Failed to parse env-var license key", exc_info=True)
 
@@ -567,6 +571,8 @@ class FeatureFlagRegistry:
                     overrides = org.settings_json.get("feature_overrides", {})
                     if flag_name in overrides:
                         return bool(overrides[flag_name])
+        except asyncio.CancelledError:
+            raise
         except Exception:
             logger.exception("Failed to check org flag override")
         return None
@@ -587,6 +593,8 @@ class FeatureFlagRegistry:
                     overrides = team.settings.get("feature_overrides", {})
                     if flag_name in overrides:
                         return bool(overrides[flag_name])
+        except asyncio.CancelledError:
+            raise
         except Exception:
             logger.exception("Failed to check team flag override")
         return None
@@ -607,6 +615,8 @@ class FeatureFlagRegistry:
                     overrides = account.preferences.get("feature_overrides", {})
                     if flag_name in overrides:
                         return bool(overrides[flag_name])
+        except asyncio.CancelledError:
+            raise
         except Exception:
             logger.exception("Failed to check user flag override")
         return None
