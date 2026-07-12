@@ -132,6 +132,12 @@ WebSocket auth tokens, algorithm pinning, and SECRET_KEY entropy enforcement (PR
 
 ## QA History
 
+### 2026-07-12 — Round 3 re-QA (improve-architecture auth remaining)
+- Fixed operator precedence bug in auth.py:100 (`not a or not b and c` → `not a or (limiter is not None and not b)`)
+- Removed unused `# noqa: S106` directives on ws_token_type lines, then re-added with proper intent coverage
+- Verified all claimed Round 2 fixes (B904, CancelledError, dead code removal) are correctly applied
+- Status: partial
+
 ### 2026-07-01 — Cross-cutting QA (improve-architecture index 25)
 - Fixed access token expiry: 60m → 15m (PRD §7.10 compliance)
 - Fixed refresh token expiry: 24h → 168h (7 days, PRD §7.10 compliance)
