@@ -3,13 +3,14 @@ Connects as the migration/owner user to (re)create the modulo_app role,
 then grants SELECT, INSERT, UPDATE, DELETE on all existing and future
 tables/sequences, plus USAGE on the public schema.
 
-Safe to run multiple times — uses CREATE ROLE ... WITH LOGIN ... INHERIT
-wrapped in a DO block so it's idempotent.
+Safe to run multiple times — checks pg_roles before creating,
+and updates the password on each run for consistency.
 """
 
 import asyncio
 import os
 import sys
+from urllib.parse import unquote, urlparse
 
 import asyncpg
 
@@ -17,24 +18,17 @@ REQUIRED_VARS = ["DATABASE_ADMIN_URL", "DATABASE_URL"]
 
 
 def _parse_role(url: str) -> str:
-    """Extract the username from a postgres:// or postgresql+asyncpg:// URL."""
-    u = url.replace("postgresql+asyncpg://", "postgres://")
-    # userinfo is before the @
-    userinfo = u.split("@")[0]
-    # Remove the scheme
-    userinfo = userinfo.split("://")[-1] if "://" in userinfo else userinfo
-    return userinfo.split(":")[0]
+    """Extract the username from a database URL."""
+    return urlparse(url).username or ""
 
 
 async def _bootstrap(admin_url: str, app_url: str) -> None:
     admin_conn_str = admin_url.replace("postgresql+asyncpg://", "postgres://")
     app_user = _parse_role(app_url)
-    app_pass = app_url.split(":")[2].split("@")[0]  # password between 2nd : and @
+    parsed = urlparse(app_url)
+    app_pass = unquote(parsed.password) if parsed.password else ""
 
-    try:
-        conn = await asyncpg.connect(admin_conn_str, ssl=False)
-    except asyncpg.exceptions.CantChangeRuntimeParamError:
-        conn = await asyncpg.connect(admin_conn_str)
+    conn = await asyncpg.connect(admin_conn_str, ssl="prefer")
     try:
         # Idempotent role creation — skips if already exists
         row = await conn.fetchrow("SELECT 1 FROM pg_roles WHERE rolname = $1", app_user)
