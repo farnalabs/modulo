@@ -7,6 +7,7 @@ implementations yet.
 
 from __future__ import annotations
 
+import contextlib
 from typing import Any
 
 import pytest
@@ -15,22 +16,14 @@ from pytest_bdd import given, parsers, scenarios, then, when
 # ---------------------------------------------------------------------------
 # Register feature files
 # ---------------------------------------------------------------------------
-try:
+with contextlib.suppress(FileNotFoundError, OSError):
     scenarios("../features/in_app_notifications/dashboard_panel.feature")
-except (FileNotFoundError, OSError):
-    pass
-try:
+with contextlib.suppress(FileNotFoundError, OSError):
     scenarios("../features/in_app_notifications/dismiss_flow.feature")
-except (FileNotFoundError, OSError):
-    pass
-try:
+with contextlib.suppress(FileNotFoundError, OSError):
     scenarios("../features/in_app_notifications/notification_filters.feature")
-except (FileNotFoundError, OSError):
-    pass
-try:
+with contextlib.suppress(FileNotFoundError, OSError):
     scenarios("../features/in_app_notifications/sse_integration.feature")
-except (FileNotFoundError, OSError):
-    pass
 
 
 # ===========================================================================

@@ -77,8 +77,8 @@ def audit_events_with_types(types: str, request) -> None:
 
 @given(parsers.parse("audit events exist from {from_date} to {to_date}"))
 def audit_events_date_range(from_date: str, to_date: str, request) -> None:
-    start = datetime.fromisoformat(from_date.strip('"').replace("Z", "+00:00"))
-    end = datetime.fromisoformat(to_date.strip('"').replace("Z", "+00:00"))
+    start = datetime.fromisoformat(from_date.strip('"'))
+    end = datetime.fromisoformat(to_date.strip('"'))
     mid = start + (end - start) / 2
     events = [
         _fake_event(created_at=start),
@@ -208,8 +208,8 @@ def get_audit_list_with_params(client, request, query: str) -> None:
         filtered = [e for e in filtered if e["actor_user_id"] == params["user_id"]]
 
     if "from_date" in params and "to_date" in params:
-        fd = datetime.fromisoformat(params["from_date"].replace("Z", "+00:00"))
-        td = datetime.fromisoformat(params["to_date"].replace("Z", "+00:00"))
+        fd = datetime.fromisoformat(params["from_date"])
+        td = datetime.fromisoformat(params["to_date"])
         filtered = [e for e in filtered if fd <= datetime.fromisoformat(e["created_at"]) <= td]
 
     with (

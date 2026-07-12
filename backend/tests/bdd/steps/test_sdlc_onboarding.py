@@ -1,15 +1,14 @@
 """BDD step definitions: SDLC Onboarding Path (PRD §8.16)."""
 
+import contextlib
 import uuid
 from datetime import datetime
 from unittest.mock import AsyncMock, MagicMock, patch
 
 from pytest_bdd import given, parsers, scenarios, then, when
 
-try:
+with contextlib.suppress(FileNotFoundError, OSError):
     scenarios("../features/onboarding/sdlc_onboarding.feature")
-except (FileNotFoundError, OSError):
-    pass
 
 _SDLC_STEPS = [
     "connect_tools",

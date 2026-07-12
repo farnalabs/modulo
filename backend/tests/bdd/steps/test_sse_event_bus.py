@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import os as _os
 import time
 import uuid
@@ -43,10 +44,8 @@ def _publish_sync(
         "org_id": org_id,
     }
     for q in list(bus._subscribers.get(org_id, [])):
-        try:
+        with contextlib.suppress(Exception):
             q.put_nowait(event)
-        except Exception:
-            pass
 
 
 def _queue_get_with_timeout(q, timeout: float = 2.0) -> dict[str, Any]:
@@ -170,10 +169,8 @@ def client_disconnects(ctx) -> None:
     q = ctx.get("queue")
     if q is not None:
         subs = bus._subscribers.get(_ORG_ID, [])
-        try:
+        with contextlib.suppress(ValueError):
             subs.remove(q)
-        except ValueError:
-            pass
 
 
 @when(parsers.parse("a new pipeline is created"))

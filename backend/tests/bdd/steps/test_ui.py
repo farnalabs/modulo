@@ -4,36 +4,25 @@ Uses Playwright's Page fixture. Every interactive element has a data-testid.
 Never uses waitForTimeout — always waits for '[data-loading="false"]'.
 """
 
+import contextlib
 from typing import Any
 
 import pytest
 from playwright.sync_api import Page
 from pytest_bdd import given, parsers, scenarios, then, when
 
-try:
+with contextlib.suppress(FileNotFoundError, OSError):
     scenarios("../features/ui/theme_switching.feature")
-except (FileNotFoundError, OSError):
-    pass
-try:
+with contextlib.suppress(FileNotFoundError, OSError):
     scenarios("../features/ui/real_time_updates.feature")
-except (FileNotFoundError, OSError):
-    pass
-try:
+with contextlib.suppress(FileNotFoundError, OSError):
     scenarios("../features/ui/run_detail.feature")
-except (FileNotFoundError, OSError):
-    pass
-try:
+with contextlib.suppress(FileNotFoundError, OSError):
     scenarios("../features/ui/org_settings.feature")
-except (FileNotFoundError, OSError):
-    pass
-try:
+with contextlib.suppress(FileNotFoundError, OSError):
     scenarios("../features/ui/pipeline_builder.feature")
-except (FileNotFoundError, OSError):
-    pass
-try:
+with contextlib.suppress(FileNotFoundError, OSError):
     scenarios("../features/ui/eval_dashboard.feature")
-except (FileNotFoundError, OSError):
-    pass
 
 
 # ============================================================================

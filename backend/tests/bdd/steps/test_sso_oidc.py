@@ -1,6 +1,7 @@
 """Step definitions for SSO OIDC integration — login redirect, callback, JIT provisioning, gating."""
 
 import base64
+import contextlib
 import json
 import uuid
 from typing import Any
@@ -13,10 +14,8 @@ from modulo.api.dependencies import get_plan_context
 from modulo.core.feature_flags import CommunityTier, LicenseData, LicenseKeyTier
 from modulo.settings import Settings, get_settings
 
-try:
+with contextlib.suppress(FileNotFoundError, OSError):
     scenarios("../features/auth/sso_oidc.feature")
-except (FileNotFoundError, OSError):
-    pass
 
 _VALID_32 = "a" * 32
 _ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")

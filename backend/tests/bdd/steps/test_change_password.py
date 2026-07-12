@@ -1,5 +1,6 @@
 """Step definitions for auth/change_password.feature."""
 
+import contextlib
 import uuid
 from typing import Any
 from unittest.mock import MagicMock, patch
@@ -7,10 +8,8 @@ from unittest.mock import MagicMock, patch
 import pytest
 from pytest_bdd import parsers, scenarios, then, when
 
-try:
+with contextlib.suppress(FileNotFoundError, OSError):
     scenarios("../features/auth/change_password.feature")
-except (FileNotFoundError, OSError):
-    pass
 
 _ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
 _USER_ID = uuid.UUID("00000000-0000-0000-0000-000000000002")

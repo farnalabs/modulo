@@ -1,15 +1,15 @@
 """BDD step definitions for Snyk connector scenarios."""
 
+import contextlib
+
 import pytest
 from pytest_bdd import given, parsers, scenarios, then, when
 
 from modulo.connectors.base import ConnectorPayload, ConnectorQuery
 from modulo.connectors.snyk import SnykConnector
 
-try:
+with contextlib.suppress(FileNotFoundError, OSError):
     scenarios("../features/connectors/snyk.feature")
-except (FileNotFoundError, OSError):
-    pass
 
 # ---------------------------------------------------------------------------
 # Fixtures

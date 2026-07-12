@@ -1,20 +1,17 @@
 """BDD step definitions: Schema Inference (AI-assisted schema drafting)."""
 
+import contextlib
 import uuid
 from datetime import datetime
 from unittest.mock import MagicMock, PropertyMock, patch
 
 from pytest_bdd import given, parsers, scenarios, then, when
 
-try:
+with contextlib.suppress(FileNotFoundError, OSError):
     scenarios("../features/schemas/schema_inference.feature")
-except (FileNotFoundError, OSError):
-    pass
 
-try:
+with contextlib.suppress(FileNotFoundError, OSError):
     scenarios("../features/connectors/schema_inference.feature")
-except (FileNotFoundError, OSError):
-    pass
 
 _ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
 _CONNECTOR_INSTANCES: dict[str, dict] = {}

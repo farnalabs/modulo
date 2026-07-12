@@ -4,6 +4,7 @@ Covers cross-pipeline signal triggers (PRD §8.5).
 """
 
 import asyncio
+import contextlib
 import uuid
 from typing import Any, cast
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -13,10 +14,8 @@ from pytest_bdd import given, parsers, scenarios, then, when
 from modulo.core.trigger_engine.agent_signal import fire_agent_signal
 from tests.bdd.conftest import ALT_ORG_ID, ORG_ID
 
-try:
+with contextlib.suppress(FileNotFoundError, OSError):
     scenarios("../features/triggers/agent_signal.feature")
-except (FileNotFoundError, OSError):
-    pass
 
 # ---------------------------------------------------------------------------
 # Helpers

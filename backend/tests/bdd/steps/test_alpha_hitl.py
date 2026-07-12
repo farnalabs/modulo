@@ -5,15 +5,14 @@ duplicated in test_hitl.py. Claim and approve scenarios are handled by
 test_hitl.py to avoid StepDefinitionAlreadyRegistered errors.
 """
 
+import contextlib
 import uuid
 from unittest.mock import MagicMock
 
 from pytest_bdd import given, parsers, scenarios, then, when
 
-try:
+with contextlib.suppress(FileNotFoundError, OSError):
     scenarios("../features/hitl/reject.feature")
-except (FileNotFoundError, OSError):
-    pass
 
 
 @given(parsers.parse('I am authenticated as an approver in org "{org}"'))

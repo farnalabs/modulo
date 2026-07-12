@@ -1,28 +1,21 @@
 """BDD step definitions: MCP trigger, review_hitl, human_only,
 library_browse, onboarding."""
 
+import contextlib
 import json
 import uuid
 from unittest.mock import MagicMock, patch
 
 from pytest_bdd import given, parsers, scenarios, then, when
 
-try:
+with contextlib.suppress(FileNotFoundError, OSError):
     scenarios("../features/mcp/trigger.feature")
-except (FileNotFoundError, OSError):
-    pass
-try:
+with contextlib.suppress(FileNotFoundError, OSError):
     scenarios("../features/mcp/review_hitl.feature")
-except (FileNotFoundError, OSError):
-    pass
-try:
+with contextlib.suppress(FileNotFoundError, OSError):
     scenarios("../features/mcp/human_only.feature")
-except (FileNotFoundError, OSError):
-    pass
-try:
+with contextlib.suppress(FileNotFoundError, OSError):
     scenarios("../features/mcp/library_browse.feature")
-except (FileNotFoundError, OSError):
-    pass
 from tests.bdd.conftest import make_mock_pipeline
 
 

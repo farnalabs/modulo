@@ -1,5 +1,6 @@
 """Step definitions for Eval Run and related eval features."""
 
+import contextlib
 import json
 import uuid
 from types import SimpleNamespace
@@ -14,10 +15,8 @@ USER_ID = uuid.UUID("00000000-0000-0000-0000-000000000002")
 # ---------------------------------------------------------------------------
 # Active features
 # ---------------------------------------------------------------------------
-try:
+with contextlib.suppress(FileNotFoundError, OSError):
     scenarios("../features/eval/eval_run.feature")
-except (FileNotFoundError, OSError):
-    pass
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -216,10 +215,8 @@ def see_per_case_scores_and_aggregate(request, ctx):
 # ============================================================================
 # eval/eval_scorer.feature  —  5 scenarios
 # ============================================================================
-try:
+with contextlib.suppress(FileNotFoundError, OSError):
     scenarios("../features/eval/eval_scorer.feature")
-except (FileNotFoundError, OSError):
-    pass
 
 
 @given("an eval suite with multiple scorer types")
@@ -356,10 +353,8 @@ def step_valid_data_passes_json_schema(ctx):
 # ============================================================================
 # eval/eval_suite_crud.feature  —  5 scenarios
 # ============================================================================
-try:
+with contextlib.suppress(FileNotFoundError, OSError):
     scenarios("../features/eval/eval_suite_crud.feature")
-except (FileNotFoundError, OSError):
-    pass
 
 
 def _eval_resp(status_code, **kwargs):
@@ -464,10 +459,8 @@ def step_response_contains_eval_def(name, request, ctx):
 # ============================================================================
 # eval/feedback_system.feature  —  5 scenarios
 # ============================================================================
-try:
+with contextlib.suppress(FileNotFoundError, OSError):
     scenarios("../features/eval/feedback_system.feature")
-except (FileNotFoundError, OSError):
-    pass
 
 
 @given("a pipeline run produced output")
