@@ -71,7 +71,7 @@ async def list_audit_events_endpoint(
             raise HTTPException(
                 status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
                 detail=f"Invalid user_id format: {actor_user_id!r}. Must be a valid UUID.",
-            )
+            ) from None
     _require_admin(principal)
     try:
         async with session.begin():
@@ -91,13 +91,13 @@ async def list_audit_events_endpoint(
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
-        )
+        ) from None
     except SQLAlchemyError:
         _log.exception("list_audit_events: database error")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database connection failed. Please try again.",
-        )
+        ) from None
     except HTTPException:
         raise
     except Exception:
@@ -129,13 +129,13 @@ async def batch_detail_endpoint(
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
-        )
+        ) from None
     except SQLAlchemyError:
         _log.exception("batch_detail: database error")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database connection failed. Please try again.",
-        )
+        ) from None
     except HTTPException:
         raise
     except Exception:
@@ -162,13 +162,13 @@ async def verify_chain_endpoint(
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
-        )
+        ) from None
     except SQLAlchemyError:
         _log.exception("verify_chain: database error")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database connection failed. Please try again.",
-        )
+        ) from None
     except HTTPException:
         raise
     except Exception:
@@ -201,7 +201,7 @@ async def export_chain_endpoint(
             raise HTTPException(
                 status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
                 detail=f"Invalid user_id format: {actor_user_id!r}. Must be a valid UUID.",
-            )
+            ) from None
     try:
         async with session.begin():
             _require_admin(principal)
@@ -221,13 +221,13 @@ async def export_chain_endpoint(
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
-        )
+        ) from None
     except SQLAlchemyError:
         _log.exception("export_chain: database error")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database connection failed. Please try again.",
-        )
+        ) from None
     except HTTPException:
         raise
     except Exception:
