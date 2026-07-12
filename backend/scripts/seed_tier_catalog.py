@@ -168,12 +168,6 @@ FLAGS = [
         "depends_on": None,
     },
     {
-        "name": "admin_cost_controls",
-        "description": "Budget overview, team budgets, alert thresholds, and billing settings",
-        "tier_id": "team",
-        "depends_on": None,
-    },
-    {
         "name": "admin_run_retention",
         "description": "Configure run retention policies and manual purge",
         "tier_id": "team",
