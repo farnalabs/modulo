@@ -169,6 +169,13 @@ Cryptographic signing, verification, and fork tracking for community library pri
 
 ## QA History
 
+### 2026-07-12 — Round 3 (systemic sweep: B904, exc_info, dead code)
+- Fixed 16 B904 violations in `routes/library.py` (except IntegrityError → raise ... from None)
+- Fixed dead code: unreachable second `except IntegrityError` in `create_library_primitive_endpoint` (merged slug detail into first handler)
+- Added `exc_info=True` to 6 `_log.warning` calls in except blocks across `routes/library.py`
+- Fixed indentation bug in `routes/registry.py:321` (invalid-syntax)
+- Frontmatter valid; Known Gaps remain accurate
+
 ### 2026-07-09 — Cross-cutting QA (index 350)
 - Verified all error handling assertions against code
 - Fixed: PrimitiveRating model now has UniqueConstraint + app-layer duplicate guard
