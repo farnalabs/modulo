@@ -78,7 +78,7 @@ class PipelineCreate(BaseModel):
     visibility: str = Field(default="org", pattern=r"^(org|team)$")
     owner_team_id: uuid.UUID | None = None
     max_concurrent_runs: int = Field(default=5, ge=1)
-    lock_wait_timeout_seconds: int = Field(default=300, ge=1)
+    lock_wait_timeout_seconds: int = Field(default=300, ge=30, le=3600)
     node_timeout_seconds: int = Field(default=300, ge=1)
     run_context_defaults: dict[str, Any] = Field(default_factory=dict)
     default_autonomy_level: str = "manual_approval"
@@ -96,7 +96,7 @@ class PipelineUpdate(BaseModel):
     visibility: str | None = Field(None, pattern=r"^(org|team)$")
     owner_team_id: uuid.UUID | None = None
     max_concurrent_runs: int | None = Field(None, ge=1)
-    lock_wait_timeout_seconds: int | None = Field(None, ge=1)
+    lock_wait_timeout_seconds: int | None = Field(None, ge=30, le=3600)
     node_timeout_seconds: int | None = Field(None, ge=1)
     run_context_defaults: dict[str, Any] | None = None
     default_autonomy_level: str | None = None
