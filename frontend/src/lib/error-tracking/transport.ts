@@ -69,7 +69,8 @@ async function fetchSessionKey(): Promise<string | null> {
     if (!res.ok) return null
     const data: SessionKeyResponse = await res.json()
     return data.key
-  } catch {
+  } catch (err) {
+    console.warn('[error-tracking] Failed to fetch session key:', err)
     return null
   }
 }
@@ -86,13 +87,15 @@ async function signPayload(payload: string, key: string): Promise<string> {
     )
     const sig = await crypto.subtle.sign('HMAC', cryptoKey, encoder.encode(payload))
     return bytesToHex(new Uint8Array(sig))
-  } catch {
+  } catch (err) {
+    console.warn('[error-tracking] HMAC sign failed, falling back to SHA-256:', err)
     try {
       const encoder = new TextEncoder()
       const data = encoder.encode(payload + key)
       const hash = await crypto.subtle.digest('SHA-256', data)
       return bytesToHex(new Uint8Array(hash))
-    } catch {
+    } catch (err2) {
+      console.warn('[error-tracking] SHA-256 digest fallback also failed:', err2)
       return ''
     }
   }
