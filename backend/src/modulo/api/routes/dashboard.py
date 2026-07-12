@@ -73,8 +73,8 @@ async def _get_cached_dashboard(org_id: str) -> dict[str, Any] | None:
             if cached:
                 cached_data: dict[str, Any] = json.loads(cached)
                 return cached_data
-        except Exception as exc:
-            _log.warning("dashboard.cache_read_failed — %s", exc)
+        except Exception:
+            _log.warning("dashboard.cache_read_failed", exc_info=True)
         finally:
             if redis is not None:
                 await redis.aclose()
@@ -95,8 +95,8 @@ async def _set_cached_dashboard(org_id: str, data: dict[str, Any]) -> None:
             key = f"dashboard:summary:{org_id}"
             await redis.setex(key, _DASHBOARD_CACHE_TTL, json.dumps(data, default=str))
             return
-        except Exception as exc:
-            _log.warning("dashboard.cache_write_failed — %s", exc)
+        except Exception:
+            _log.warning("dashboard.cache_write_failed", exc_info=True)
         finally:
             if redis is not None:
                 await redis.aclose()
@@ -142,8 +142,8 @@ async def dashboard_summary(
             for tracked_status in _TRACKED_STATUSES:
                 status_counts.setdefault(tracked_status, 0)
 
-            _IDLE_STATUSES = ("pending", "claimed", "waiting_for_lock")
-            idle_count = sum(status_counts.get(s, 0) for s in _IDLE_STATUSES)
+            _idle_statuses = ("pending", "claimed", "waiting_for_lock")
+            idle_count = sum(status_counts.get(s, 0) for s in _idle_statuses)
             status_counts["idle"] = idle_count
 
             teams_result = await session.execute(select(Team).where(Team.organisation_id == org_id).order_by(Team.name))
@@ -193,8 +193,6 @@ async def dashboard_summary(
                 team_statuses: dict[str, int] = {}
                 for tracked_status in _TRACKED_STATUSES:
                     team_statuses[tracked_status] = run_data.get(tracked_status, 0)
-                team_active_in_tracked = sum(run_data.get(s, 0) for s in ("running", "awaiting_human"))
-                team_failed = run_data.get("failed", 0)
                 team_idle_from_db = sum(run_data.get(s, 0) for s in ("pending", "claimed", "waiting_for_lock"))
                 team_statuses["idle"] = team_idle_from_db
 
@@ -439,22 +437,22 @@ async def dashboard_summary(
 
         await _set_cached_dashboard(org_id_str, result)
         return result
-    except ProgrammingError:
+    except ProgrammingError as exc:
         raise HTTPException(
             status_code=http_status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
-        )
-    except SQLAlchemyError:
+        ) from exc
+    except SQLAlchemyError as exc:
         raise HTTPException(
             status_code=http_status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="The database is temporarily unavailable.",
-        )
-    except Exception:
+        ) from exc
+    except Exception as exc:
         _log.exception("dashboard.summary_failed")
         raise HTTPException(
             status_code=http_status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="An unexpected error occurred while loading the dashboard.",
-        )
+        ) from exc
 
 
 @router.get("/trends")
@@ -655,22 +653,22 @@ async def dashboard_trends(
             "correlation": correlation,
             "feedback_volume": feedback_volume,
         }
-    except ProgrammingError:
+    except ProgrammingError as exc:
         raise HTTPException(
             status_code=http_status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
-        )
-    except SQLAlchemyError:
+        ) from exc
+    except SQLAlchemyError as exc:
         raise HTTPException(
             status_code=http_status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="The database is temporarily unavailable.",
-        )
-    except Exception:
+        ) from exc
+    except Exception as exc:
         _log.exception("dashboard.trends_failed")
         raise HTTPException(
             status_code=http_status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="An unexpected error occurred while loading trends.",
-        )
+        ) from exc
 
 
 @router.get("/daily-run-counts")
@@ -708,19 +706,19 @@ async def daily_run_counts(
             daily[day][dr_row.status] = dr_row.cnt
 
         return {"daily_counts": daily, "days": days}
-    except ProgrammingError:
+    except ProgrammingError as exc:
         raise HTTPException(
             status_code=http_status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
-        )
-    except SQLAlchemyError:
+        ) from exc
+    except SQLAlchemyError as exc:
         raise HTTPException(
             status_code=http_status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="The database is temporarily unavailable.",
-        )
-    except Exception:
+        ) from exc
+    except Exception as exc:
         _log.exception("dashboard.daily_run_counts_failed")
         raise HTTPException(
             status_code=http_status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="An unexpected error occurred while loading daily run counts.",
-        )
+        ) from exc
