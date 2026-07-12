@@ -43,7 +43,7 @@ export function useDataFetch<T>(
 
   return {
     loading: computed(() => isLoading.value || isFetching.value),
-    error: computed(() => error.value ? (error.value?.message ?? 'An error occurred') : null),
+    error: computed(() => error.value ? (error.value.message ?? 'An error occurred') : null),
     data: computed(() => data.value),
     fetched: computed(() => fetched.value),
     load: async () => { await refetch() },
