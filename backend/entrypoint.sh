@@ -1,6 +1,9 @@
 #!/bin/sh
 set -e
 
+echo "=== Bootstrapping modulo_app role ==="
+python -m modulo.db.bootstrap_role
+
 echo "Running database migrations..."
 
 # Phase 1: apply the initial schema (creates version table with VARCHAR(32))

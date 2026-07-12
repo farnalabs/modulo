@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 """Notifier — dispatch webhook notifications with HMAC signing, retry, and dead-letter tracking.
 
 Event types dispatched:
@@ -19,6 +17,7 @@ For each event, the notifier:
   8. Auto-disables endpoint after ``MAX_DEAD_LETTERS`` consecutive failures.
 """
 
+from __future__ import annotations
 
 import asyncio
 import hashlib
@@ -371,7 +370,7 @@ class Notifier:
                         "last_error": last_error,
                     },
                 )
-                if response_code == 429:
+                if response_code == 429 and resp is not None:
                     retry_after = resp.headers.get("Retry-After")
                     if retry_after is not None:
                         try:

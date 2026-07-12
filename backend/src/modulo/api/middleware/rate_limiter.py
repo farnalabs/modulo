@@ -23,9 +23,10 @@ RATELIMIT_BYPASS_HEADER = "MODULO_RATELIMIT_BYPASS_TOKEN"
 
 redis_available: bool = False
 
-_log = logging.getLogger(__name__)
 
 # Tracked Redis clients for graceful shutdown.
+_log = logging.getLogger(__name__)
+
 _redis_clients: set[Any] = set()
 
 

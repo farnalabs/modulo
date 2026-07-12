@@ -96,9 +96,8 @@ async def login(
     try:
         async with session.begin():
             account = await get_account_by_email(session, req.email)
-            if not account or not authenticate_db_user(req.password, account):
-                if limiter is not None:
-                    await limiter.record_failure(ip)
+            if not account or (limiter is not None and not authenticate_db_user(req.password, account)):
+                await limiter.record_failure(ip)
                 raise HTTPException(
                     status_code=status.HTTP_401_UNAUTHORIZED,
                     detail="Incorrect email or password",

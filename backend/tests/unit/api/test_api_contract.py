@@ -154,7 +154,6 @@ class TestResponseModelCoverage:
         with_rm = [r for r in routes if r["response_model"] is not None]
         missing_rm = [r for r in routes if r["response_model"] is None]
 
-
         if missing_rm:
             for r in sorted(missing_rm, key=lambda x: (x["methods"], x["path"])):
                 pass

@@ -4,6 +4,7 @@ import logging
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager, suppress
 from datetime import UTC, datetime
+from typing import ClassVar
 
 from fastapi import FastAPI
 from fastapi.exceptions import RequestValidationError
@@ -106,9 +107,10 @@ from modulo.db.session import engine as db_engine
 from modulo.otel_bridge import setup_otel, shutdown_otel
 from modulo.settings import Settings, get_settings
 
-logger = logging.getLogger(__name__)
 
 # Uptime tracking — set at module import time, read by health endpoints.
+logger = logging.getLogger(__name__)
+
 _START_TIME = datetime.now(UTC)
 
 # Graceful shutdown manager — resources registered during lifespan startup.
@@ -211,10 +213,13 @@ async def _seed_modulo_users(settings: Settings) -> None:
             existing_account = result.scalar_one_or_none()
             pw_hash = pw_part if pw_part.startswith("$2") else hash_password(pw_part)
 
-            if existing_account is not None:
-                if not existing_account.password_hash or not existing_account.password_hash.startswith("$2"):
-                    existing_account.password_hash = pw_hash
-                    logger.info("startup.user_rehashed", extra={"email": email})
+            if (
+                existing_account is not None
+                and not existing_account.password_hash
+                or not existing_account.password_hash.startswith("$2")
+            ):
+                existing_account.password_hash = pw_hash
+                logger.info("startup.user_rehashed", extra={"email": email})
 
                 # Ensure OrgMembership exists and role is correct
                 mem_result = await session.execute(
@@ -492,7 +497,7 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
             "caching, and session state. Provision Upstash Redis and set REDIS_URL in fly.toml."
         )
     logger.info("startup.redis_configured — Celery beat available for distributed scheduling")
-    _scheduler_tasks: list[asyncio.Task] = []
+    _scheduler_tasks: ClassVar[list[asyncio.Task]] = []
 
     setup_otel(
         service_name=settings.modulo_otel_service_name,

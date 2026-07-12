@@ -11,6 +11,7 @@ Tests that all 6 environment profile route handlers gracefully return:
 
 import uuid
 from collections.abc import AsyncGenerator
+from typing import ClassVar
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -102,7 +103,7 @@ class TestListProfilesProgrammingError:
 
 class TestCreateProfileDBErrors:
     URL = "/api/v1/environments"
-    PAYLOAD = {
+    PAYLOAD: ClassVar[dict] = {
         "name": "test-env",
         "image_ref": "python:3.12-slim",
     }

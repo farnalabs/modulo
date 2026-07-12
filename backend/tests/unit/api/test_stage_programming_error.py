@@ -2,6 +2,7 @@
 
 import uuid
 from collections.abc import AsyncGenerator, Generator
+from typing import ClassVar
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -88,7 +89,7 @@ class TestListStagesProgrammingError:
 
 class TestCreateStageProgrammingError:
     ENDPOINT = "/api/v1/stages"
-    PAYLOAD = {"name": "Test Stage"}
+    PAYLOAD: ClassVar[dict] = {"name": "Test Stage"}
 
     def test_returns_501_on_programming_error(self, client: TestClient) -> None:
         with (
@@ -133,7 +134,7 @@ class TestGetStageProgrammingError:
 
 class TestUpdateStageProgrammingError:
     ENDPOINT = f"/api/v1/stages/{_STAGE_ID}"
-    PAYLOAD = {"name": "Updated Stage"}
+    PAYLOAD: ClassVar[dict] = {"name": "Updated Stage"}
 
     def test_returns_501_on_programming_error(self, client: TestClient) -> None:
         with (

@@ -10,7 +10,7 @@ URLs:
 
 import logging
 import uuid
-from typing import Any
+from typing import Any, ClassVar
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, Field
@@ -27,6 +27,7 @@ from modulo.db.models.pipeline import Pipeline
 from modulo.db.models.run import Run
 from modulo.db.rls import set_rls_org, set_rls_user_context
 
+
 _log = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/v1", tags=["evals"])
@@ -42,13 +43,14 @@ class CreateEvalRequest(BaseModel):
     node_id: uuid.UUID | None = None
     name: str = Field(min_length=1, max_length=255)
     eval_type: str = Field(pattern=r"^(llm_judge|regex|json_schema|custom_function)$")
-    config_json: dict[str, Any] = {}
+    config_json: ClassVar[dict[str, Any]] = {}
     failure_behaviour: str = "warn"
     pass_threshold: float | None = Field(None, ge=0.0, le=1.0)
     suite_id: str | None = None
 
 
 class EvalDefinitionResponse(BaseModel):
+    model_config = {"populate_by_name": True}
     id: uuid.UUID
     pipeline_id: uuid.UUID
     node_id: uuid.UUID | None
@@ -154,24 +156,24 @@ async def create_eval_definition(
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="Eval definition references a resource that does not exist.",
-        )
+        ) from None
     except ProgrammingError:
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
-        )
+        ) from None
     except SQLAlchemyError:
         _log.warning("evals.create_eval_definition_db_error", extra={"org_id": str(principal.organisation_id)})
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database operation failed. Please try again later.",
-        )
+        ) from None
     except Exception:
         _log.exception("evals.create_eval_definition_error", extra={"org_id": str(principal.organisation_id)})
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="An unexpected error occurred while creating the eval definition.",
-        )
+        ) from None
 
     return _eval_def_to_dict(eval_def)
 
@@ -218,24 +220,24 @@ async def list_eval_definitions(
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="A resource with this value already exists",
-        )
+        ) from None
     except ProgrammingError:
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
-        )
+        ) from None
     except SQLAlchemyError:
         _log.warning("evals.list_eval_definitions_db_error", extra={"org_id": str(principal.organisation_id)})
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database operation failed. Please try again later.",
-        )
+        ) from None
     except Exception:
         _log.exception("evals.list_eval_definitions_error", extra={"org_id": str(principal.organisation_id)})
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="An unexpected error occurred while listing eval definitions.",
-        )
+        ) from None
 
     return EvalDefinitionListResponse(
         items=[EvalDefinitionResponse(**_eval_def_to_dict(d)) for d in rows],
@@ -294,32 +296,32 @@ async def eval_coverage(
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="A resource with this value already exists",
-        )
+        ) from None
     except ProgrammingError:
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
-        )
+        ) from None
     except SQLAlchemyError:
         _log.warning("evals.eval_coverage_db_error", extra={"org_id": str(principal.organisation_id)})
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database operation failed. Please try again later.",
-        )
+        ) from None
     except Exception:
         _log.exception("evals.eval_coverage_error", extra={"org_id": str(principal.organisation_id)})
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="An unexpected error occurred while computing eval coverage.",
-        )
+        ) from None
 
-    eval_count_by_node: dict[str, int] = {}
+    eval_count_by_node: ClassVar[dict[str, int]] = {}
     for ed in eval_defs_rows:
         nid = str(ed.node_id)
         eval_count_by_node[nid] = eval_count_by_node.get(nid, 0) + 1
 
     covered_count = 0
-    nodes_result: list[dict[str, Any]] = []
+    nodes_result: ClassVar[list[dict[str, Any]]] = []
     for n in nodes_raw:
         nid = str(n.get("id", ""))
         name = n.get("name") or n.get("label", "") or nid
@@ -374,24 +376,24 @@ async def get_eval_definition(
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="A resource with this value already exists",
-        )
+        ) from None
     except ProgrammingError:
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
-        )
+        ) from None
     except SQLAlchemyError:
         _log.warning("evals.get_eval_definition_db_error", extra={"org_id": str(principal.organisation_id)})
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database operation failed. Please try again later.",
-        )
+        ) from None
     except Exception:
         _log.exception("evals.get_eval_definition_error", extra={"org_id": str(principal.organisation_id)})
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="An unexpected error occurred while fetching the eval definition.",
-        )
+        ) from None
     if eval_def is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Eval definition not found")
     return _eval_def_to_dict(eval_def)
@@ -432,24 +434,24 @@ async def update_eval_definition(
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="Update would violate a constraint. Check that the referenced pipeline or suite exists.",
-        )
+        ) from None
     except ProgrammingError:
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
-        )
+        ) from None
     except SQLAlchemyError:
         _log.warning("evals.update_eval_definition_db_error", extra={"org_id": str(principal.organisation_id)})
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database operation failed. Please try again later.",
-        )
+        ) from None
     except Exception:
         _log.exception("evals.update_eval_definition_error", extra={"org_id": str(principal.organisation_id)})
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="An unexpected error occurred while updating the eval definition.",
-        )
+        ) from None
 
     return _eval_def_to_dict(eval_def)
 
@@ -484,24 +486,24 @@ async def delete_eval_definition(
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="A resource with this value already exists",
-        )
+        ) from None
     except ProgrammingError:
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
-        )
+        ) from None
     except SQLAlchemyError:
         _log.warning("evals.delete_eval_definition_db_error", extra={"org_id": str(principal.organisation_id)})
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database operation failed. Please try again later.",
-        )
+        ) from None
     except Exception:
         _log.exception("evals.delete_eval_definition_error", extra={"org_id": str(principal.organisation_id)})
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="An unexpected error occurred while deleting the eval definition.",
-        )
+        ) from None
 
 
 @router.get("/runs/{run_id}/evals", response_model=dict[str, Any], status_code=status.HTTP_200_OK)
@@ -559,24 +561,24 @@ async def list_run_evals(
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="A resource with this value already exists",
-        )
+        ) from None
     except ProgrammingError:
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
-        )
+        ) from None
     except SQLAlchemyError:
         _log.warning("evals.list_run_evals_db_error", extra={"org_id": str(principal.organisation_id)})
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database operation failed. Please try again later.",
-        )
+        ) from None
     except Exception:
         _log.exception("evals.list_run_evals_error", extra={"org_id": str(principal.organisation_id)})
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="An unexpected error occurred while listing run eval results.",
-        )
+        ) from None
 
     return {
         "items": [
@@ -606,10 +608,6 @@ async def list_run_evals(
 class CompareEvalsRequest(BaseModel):
     run_id_a: uuid.UUID
     run_id_b: uuid.UUID
-
-
-class CoverageQueryParams(BaseModel):
-    pipeline_id: uuid.UUID
 
 
 class CreateEvalFromRunRequest(BaseModel):
@@ -671,24 +669,24 @@ async def compare_evals(
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="A resource with this value already exists",
-        )
+        ) from None
     except ProgrammingError:
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
-        )
+        ) from None
     except SQLAlchemyError:
         _log.warning("evals.compare_evals_first_block_db_error", extra={"org_id": str(principal.organisation_id)})
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database operation failed. Please try again later.",
-        )
+        ) from None
     except Exception:
         _log.exception("evals.compare_evals_first_block_error", extra={"org_id": str(principal.organisation_id)})
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="An unexpected error occurred while comparing eval results.",
-        )
+        ) from None
 
     eval_ids = {r.eval_id for r in results_a} | {r.eval_id for r in results_b}
     eval_defs = {}
@@ -710,34 +708,34 @@ async def compare_evals(
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
                 detail="A resource with this value already exists",
-            )
+            ) from None
         except ProgrammingError:
             raise HTTPException(
                 status_code=status.HTTP_501_NOT_IMPLEMENTED,
                 detail="Feature is not available. Run database migrations to enable it.",
-            )
+            ) from None
         except SQLAlchemyError:
             _log.warning("evals.compare_evals_second_block_db_error", extra={"org_id": str(principal.organisation_id)})
             raise HTTPException(
                 status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
                 detail="Database operation failed. Please try again later.",
-            )
+            ) from None
         except Exception:
             _log.exception("evals.compare_evals_second_block_error", extra={"org_id": str(principal.organisation_id)})
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail="An unexpected error occurred while comparing eval results.",
-            )
+            ) from None
 
-    results_by_eval_a: dict[uuid.UUID, Any] = {}
+    results_by_eval_a: ClassVar[dict[uuid.UUID, Any]] = {}
     for r in results_a:
         results_by_eval_a[r.eval_id] = r
 
-    results_by_eval_b: dict[uuid.UUID, Any] = {}
+    results_by_eval_b: ClassVar[dict[uuid.UUID, Any]] = {}
     for r in results_b:
         results_by_eval_b[r.eval_id] = r
 
-    compared: list[dict[str, Any]] = []
+    compared: ClassVar[list[dict[str, Any]]] = []
     all_eval_ids = sorted(eval_ids)
     for eid in all_eval_ids:
         ra = results_by_eval_a.get(eid)
@@ -834,12 +832,12 @@ async def create_eval_from_run(
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="A resource with this value already exists",
-        )
+        ) from None
     except ProgrammingError:
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
-        )
+        ) from None
     except SQLAlchemyError:
         _log.warning(
             "evals.create_eval_from_run_first_block_db_error", extra={"org_id": str(principal.organisation_id)}
@@ -847,15 +845,15 @@ async def create_eval_from_run(
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database operation failed. Please try again later.",
-        )
+        ) from None
     except Exception:
         _log.exception("evals.create_eval_from_run_first_block_error", extra={"org_id": str(principal.organisation_id)})
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="An unexpected error occurred while creating an eval from run output.",
-        )
+        ) from None
 
-    config_json: dict[str, Any] = {}
+    config_json: ClassVar[dict[str, Any]] = {}
     if req.eval_type == "regex":
         config_json = {
             "field": next(iter(sample_output.keys())) if sample_output else "",
@@ -897,12 +895,12 @@ async def create_eval_from_run(
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="Eval definition references a resource that does not exist.",
-        )
+        ) from None
     except ProgrammingError:
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
-        )
+        ) from None
     except SQLAlchemyError:
         _log.warning(
             "evals.create_eval_from_run_second_block_db_error", extra={"org_id": str(principal.organisation_id)}
@@ -910,7 +908,7 @@ async def create_eval_from_run(
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database operation failed. Please try again later.",
-        )
+        ) from None
     except Exception:
         _log.exception(
             "evals.create_eval_from_run_second_block_error", extra={"org_id": str(principal.organisation_id)}
@@ -918,7 +916,7 @@ async def create_eval_from_run(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="An unexpected error occurred while creating an eval from run output.",
-        )
+        ) from None
 
     result = _eval_def_to_dict(eval_def)
     result["sample_output"] = sample_output

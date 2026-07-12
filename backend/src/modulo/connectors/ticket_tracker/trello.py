@@ -82,14 +82,14 @@ class TrelloTicketTracker(TicketTrackerBase):
         )
         return {"ticket_id": ticket.id, "url": ticket.url or ""}
 
-    async def list_tickets(self, filter: TicketFilter | None = None) -> list[Ticket]:
+    async def list_tickets(self, ticket_filter: TicketFilter | None = None) -> list[Ticket]:
         async with httpx.AsyncClient() as client:
             params: dict[str, Any] = self._auth()
             params["fields"] = TRELLO_CARD_FIELDS
-            if filter and filter.limit:
-                params["limit"] = str(min(filter.limit, 100))
-            if filter and filter.offset:
-                logger.warning("offset is not supported by Trello's API; ignoring offset=%s", filter.offset)
+            if ticket_filter and ticket_filter.limit:
+                params["limit"] = str(min(ticket_filter.limit, 100))
+        if ticket_filter and ticket_filter.offset:
+            logger.warning("offset is not supported by Trello's API; ignoring offset=%s", ticket_filter.offset)
             try:
                 resp = await client.get(
                     f"{self._base_url}/boards/{self._board_id}/cards",
@@ -103,15 +103,17 @@ class TrelloTicketTracker(TicketTrackerBase):
             except httpx.RequestError as e:
                 raise ValueError(f"Trello network error: {e}") from None
 
-        if filter and filter.search:
+        if ticket_filter and ticket_filter.search:
             raw_cards = [
-                c for c in raw_cards if filter.search.lower() in (c.get("name", "") + (c.get("desc") or "")).lower()
+                c
+                for c in raw_cards
+                if ticket_filter.search.lower() in (c.get("name", "") + (c.get("desc") or "")).lower()
             ]
 
         tickets = [self._to_ticket(c) for c in raw_cards]
 
-        if filter and filter.status:
-            tickets = [t for t in tickets if t.status and t.status.lower() == filter.status.lower()]
+        if ticket_filter and ticket_filter.status:
+            tickets = [t for t in tickets if t.status and t.status.lower() == ticket_filter.status.lower()]
 
         return tickets
 

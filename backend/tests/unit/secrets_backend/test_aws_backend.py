@@ -35,9 +35,11 @@ def _env():
 
 @pytest.fixture
 def mock_boto3():
-    with patch("modulo.core.secrets_backend.aws._MODULE_AVAILABLE", True):
-        with patch("modulo.core.secrets_backend.aws._boto3") as mb:
-            yield mb
+    with (
+        patch("modulo.core.secrets_backend.aws._MODULE_AVAILABLE", True),
+        patch("modulo.core.secrets_backend.aws._boto3") as mb,
+    ):
+        yield mb
 
 
 def _make_backend():
@@ -124,9 +126,11 @@ class TestAWSSecretsManagerBackend:
 
         backend = _make_backend()
 
-        with patch.object(asyncio, "wait_for", side_effect=TimeoutError()):
-            with pytest.raises(RuntimeError, match="timeout reading secret"):
-                await backend.get_secret("my-key")
+        with (
+            patch.object(asyncio, "wait_for", side_effect=TimeoutError()),
+            pytest.raises(RuntimeError, match="timeout reading secret"),
+        ):
+            await backend.get_secret("my-key")
 
     async def test_get_secret_network_error_wraps_as_runtime_error(self, mock_boto3):
         backend = _make_backend()

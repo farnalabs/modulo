@@ -4,7 +4,7 @@ import json
 import logging
 import time as _time
 from datetime import UTC, date, datetime, timedelta
-from typing import Any
+from typing import Any, ClassVar
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi import status as http_status
@@ -26,6 +26,7 @@ from modulo.db.models.run import Run
 from modulo.db.models.team import Team
 from modulo.db.rls import set_rls_org
 from modulo.settings import get_settings
+
 
 _log = logging.getLogger(__name__)
 
@@ -176,21 +177,21 @@ async def dashboard_summary(
             )
             team_pipeline_rows = (await session.execute(team_pipeline_query)).all()
 
-            team_run_data: dict[str, dict[str, int]] = {}
+            team_run_data: ClassVar[dict[str, dict[str, int]]] = {}
             for tr_row in team_run_rows:
                 tid = str(tr_row.owner_team_id)
                 team_run_data.setdefault(tid, {})[tr_row.status] = _safe_int(tr_row.cnt)
 
-            team_pipeline_data: dict[str, int] = {}
+            team_pipeline_data: ClassVar[dict[str, int]] = {}
             for tp_row in team_pipeline_rows:
                 team_pipeline_data[str(tp_row.owner_team_id)] = int(tp_row.pipeline_cnt)
 
-            team_metrics: list[dict[str, Any]] = []
+            team_metrics: ClassVar[list[dict[str, Any]]] = []
             for team in teams:
                 tid = str(team.id)
                 run_data = team_run_data.get(tid, {})
                 team_total = sum(run_data.get(s, 0) for s in _TRACKED_STATUSES)
-                team_statuses: dict[str, int] = {}
+                team_statuses: ClassVar[dict[str, int]] = {}
                 for tracked_status in _TRACKED_STATUSES:
                     team_statuses[tracked_status] = run_data.get(tracked_status, 0)
                 team_idle_from_db = sum(run_data.get(s, 0) for s in ("pending", "claimed", "waiting_for_lock"))
@@ -236,9 +237,9 @@ async def dashboard_summary(
                 .group_by(Run.owner_team_id, Run.pipeline_id)
             )
             per_team_pipeline_rows = (await session.execute(per_team_pipeline_query)).all()
-            per_team_pipeline: dict[str, dict[str, dict[str, Any]]] = {}
-            per_team_eval: dict[str, dict[str, Any]] = {}
-            per_pipeline: dict[str, dict[str, Any]] = {}
+            per_team_pipeline: ClassVar[dict[str, dict[str, dict[str, Any]]]] = {}
+            per_team_eval: ClassVar[dict[str, dict[str, Any]]] = {}
+            per_pipeline: ClassVar[dict[str, dict[str, Any]]] = {}
             for row in per_team_pipeline_rows:
                 team_id = str(row.owner_team_id)
                 pipeline_id = str(row.pipeline_id)
@@ -302,7 +303,7 @@ async def dashboard_summary(
                 .order_by(OrgDailyRunCount.run_date)
             )
             daily_rows = (await session.execute(daily_query)).all()
-            daily_map: dict[date, tuple[int, float]] = {}
+            daily_map: ClassVar[dict[date, tuple[int, float]]] = {}
             for dr_row in daily_rows:
                 daily_map[dr_row.run_date] = (
                     int(dr_row.run_count) if dr_row.run_count else 0,
@@ -323,13 +324,13 @@ async def dashboard_summary(
                 .order_by(cast(EvalResult.evaluated_at, Date))
             )
             daily_eval_rows = (await session.execute(daily_eval_query)).all()
-            daily_eval_map: dict[date, float | None] = {}
+            daily_eval_map: ClassVar[dict[date, float | None]] = {}
             for de_row in daily_eval_rows:
                 total = int(de_row.total)
                 passed = int(de_row.passed)
                 daily_eval_map[de_row.eval_date] = round(passed / total * 100, 1) if total > 0 else None
 
-            trend: list[dict[str, Any]] = []
+            trend: ClassVar[list[dict[str, Any]]] = []
             for i in range(7):
                 d = seven_days_ago + timedelta(days=i)
                 rc, sp = daily_map.get(d, (0, 0.0))
@@ -370,7 +371,7 @@ async def dashboard_summary(
             ]
 
             # ── Config warnings ───────────────────────────────────────────
-            config_warnings: list[dict[str, Any]] = []
+            config_warnings: ClassVar[list[dict[str, Any]]] = []
 
             try:
                 mb_with_creds_result = await session.execute(
@@ -390,7 +391,9 @@ async def dashboard_summary(
                     {
                         "type": "no_model_backends",
                         "severity": "high",
-                        "message": "No AI providers configured. Add a model backend with API credentials to run pipelines.",
+                        "message": (
+                            "No AI providers configured. Add a model backend with API credentials to run pipelines."
+                        ),
                         "action_label": "Configure provider",
                         "action_url": "/admin/model-backends",
                     }
@@ -414,8 +417,11 @@ async def dashboard_summary(
                             {
                                 "type": "remy_provider_not_configured",
                                 "severity": "low",
-                                "message": f"Remy is configured to use {default_provider} but no API key is set for that provider. "
-                                "Remy will auto-detect the first configured provider. Change the default in Remy Config.",
+                                "message": (
+                                    f"Remy is configured to use {default_provider} but no API key is set "
+                                    "for that provider. Remy will auto-detect the first configured "
+                                    "provider. Change the default in Remy Config."
+                                ),
                                 "action_label": f"Configure {default_provider}",
                                 "action_url": "/admin/model-backends",
                             }
@@ -484,7 +490,7 @@ async def dashboard_trends(
                 .order_by(cast(EvalResult.evaluated_at, Date))
             )
             eval_result = await session.execute(eval_query)
-            eval_rates: list[dict[str, Any]] = []
+            eval_rates: ClassVar[list[dict[str, Any]]] = []
             for row in eval_result.all():
                 total = int(row.total)
                 passed = int(row.passed)
@@ -543,7 +549,7 @@ async def dashboard_trends(
             )
             hitl_rows = (await session.execute(hitl_decision_query)).all()
 
-            hitl_by_date: dict[str, dict[str, Any]] = {}
+            hitl_by_date: ClassVar[dict[str, dict[str, Any]]] = {}
             for row in hitl_rows:
                 d = str(row.decision_date)
                 total = int(row.total_decisions)
@@ -560,7 +566,7 @@ async def dashboard_trends(
                 }
 
             # Build daily hitl series aligned with the trend date range
-            hitl_volume: list[dict[str, Any]] = []
+            hitl_volume: ClassVar[list[dict[str, Any]]] = []
             for i in range(days):
                 d = (start_date + timedelta(days=i)).isoformat()
                 entry = hitl_by_date.get(
@@ -578,7 +584,7 @@ async def dashboard_trends(
 
             # Rejection-rate trend (rolling 3-day average for smoothing)
             raw_rates = [h["rejection_rate"] for h in hitl_volume]
-            rejection_trend: list[dict[str, Any]] = []
+            rejection_trend: ClassVar[list[dict[str, Any]]] = []
             for i, h in enumerate(hitl_volume):
                 window = raw_rates[max(0, i - 2) : i + 1]
                 smoothed = round(sum(window) / len(window), 1) if window else 0.0
@@ -592,7 +598,7 @@ async def dashboard_trends(
 
             # Correlation: eval pass rate vs rejection rate per day
             eval_rate_map: dict[str, float | None] = {r["date"]: r.get("pass_rate") for r in eval_rates}
-            correlation: list[dict[str, Any]] = []
+            correlation: ClassVar[list[dict[str, Any]]] = []
             for h in hitl_volume:
                 eval_rate = eval_rate_map.get(h["date"])
                 correlation.append(
@@ -621,7 +627,7 @@ async def dashboard_trends(
                 .order_by(cast(FeedbackRecord.created_at, Date))
             )
             feedback_rows = (await session.execute(feedback_volume_query)).all()
-            feedback_by_date: dict[str, dict[str, Any]] = {}
+            feedback_by_date: ClassVar[dict[str, dict[str, Any]]] = {}
             for row in feedback_rows:
                 feedback_by_date[str(row.feedback_date)] = {
                     "feedback_count": int(row.feedback_count),
@@ -629,7 +635,7 @@ async def dashboard_trends(
                     "correcting_count": int(row.correcting_count),
                 }
 
-            feedback_volume: list[dict[str, Any]] = []
+            feedback_volume: ClassVar[list[dict[str, Any]]] = []
             for i in range(days):
                 d = (start_date + timedelta(days=i)).isoformat()
                 entry = feedback_by_date.get(
@@ -698,7 +704,7 @@ async def daily_run_counts(
                 .order_by(cast(Run.created_at, Date))
             )
 
-        daily: dict[str, dict[str, int]] = {}
+        daily: ClassVar[dict[str, dict[str, int]]] = {}
         for dr_row in result:
             day = dr_row.day.isoformat()
             if day not in daily:

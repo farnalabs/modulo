@@ -3,7 +3,7 @@ import logging
 import os
 import time as _time
 import uuid
-from typing import Any
+from typing import Any, ClassVar
 
 import httpx
 from cryptography.fernet import Fernet
@@ -56,7 +56,7 @@ class OtelSettingsResponse(BaseModel):
 
 class TestOtelConfig(BaseModel):
     otlp_endpoint: str
-    otlp_headers: dict[str, str] = {}
+    otlp_headers: ClassVar[dict[str, str]] = {}
 
 
 class TestSpanResult(BaseModel):
@@ -146,11 +146,11 @@ async def get_observability_settings(
                 await set_rls_org(session, principal.organisation_id)
                 merged = await _fetch_and_cache(session, principal.organisation_id)
         return _config_to_response(merged)
-    except ProgrammingError:
+    except ProgrammingError as exc:
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
-        )
+        ) from exc
     except TimeoutError:
         _log.warning(
             "observability.get.timeout",
@@ -171,7 +171,7 @@ async def update_observability_settings(
     principal: AuthenticatedPrincipal = Depends(get_current_user),
     settings: Settings = Depends(get_settings),
 ) -> OtelSettingsResponse:
-    updates: dict[str, Any] = {}
+    updates: ClassVar[dict[str, Any]] = {}
     if req.otlp_endpoint is not None:
         updates["otlp_endpoint"] = req.otlp_endpoint
     if req.otlp_headers is not None:
@@ -194,12 +194,12 @@ async def update_observability_settings(
                 merged = await update_otel_config(session, principal.organisation_id, updates)
         _invalidate_cache(str(principal.organisation_id))
         return _config_to_response(merged)
-    except ProgrammingError:
+    except ProgrammingError as exc:
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
-        )
-    except SQLAlchemyError:
+        ) from exc
+    except SQLAlchemyError as exc:
         _log.warning(
             "observability.put.db_error",
             extra={"org_id": str(principal.organisation_id)},
@@ -207,7 +207,7 @@ async def update_observability_settings(
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database service is temporarily unavailable. Please try again later.",
-        )
+        ) from exc
     except TimeoutError:
         _log.warning(
             "observability.put.timeout",
@@ -300,11 +300,11 @@ async def get_export_preview(
             async with session.begin():
                 await set_rls_org(session, principal.organisation_id)
                 merged = await _fetch_and_cache(session, principal.organisation_id)
-    except ProgrammingError:
+    except ProgrammingError as exc:
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
-        )
+        ) from exc
     except TimeoutError:
         _log.warning(
             "observability.preview.timeout",

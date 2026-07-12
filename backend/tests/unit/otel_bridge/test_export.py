@@ -4,7 +4,6 @@ Uses OTel's InMemorySpanExporter to verify the global TracerProvider is
 configured correctly without needing real OTLP or stdout I/O.
 """
 
-import os
 from collections.abc import Generator
 
 import pytest
@@ -59,15 +58,12 @@ def test_setup_otel_no_otlp_without_env(monkeypatch: pytest.MonkeyPatch) -> None
     assert isinstance(provider, TracerProvider)
 
 
-def test_setup_otel_handles_bad_otlp_endpoint() -> None:
+def test_setup_otel_handles_bad_otlp_endpoint(monkeypatch: pytest.MonkeyPatch) -> None:
     """Should not crash when OTLP endpoint is invalid."""
-    os.environ["OTEL_EXPORTER_OTLP_ENDPOINT"] = "http://nonexistent.local:4318/v1/traces"
-    try:
-        setup_otel(service_name="bad-otlp")
-        provider = trace.get_tracer_provider()
-        assert isinstance(provider, TracerProvider)
-    finally:
-        os.environ.pop("OTEL_EXPORTER_OTLP_ENDPOINT", None)
+    monkeypatch.setenv("OTEL_EXPORTER_OTLP_ENDPOINT", "http://nonexistent.local:4318/v1/traces")
+    setup_otel(service_name="bad-otlp")
+    provider = trace.get_tracer_provider()
+    assert isinstance(provider, TracerProvider)
 
 
 def test_shutdown_otel_multi_call_safe() -> None:

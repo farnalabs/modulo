@@ -5,7 +5,7 @@ import json
 import logging
 import uuid
 from datetime import datetime
-from typing import Any, Literal
+from typing import Any, Literal, ClassVar
 
 from fastapi import APIRouter, Depends, File, HTTPException, Query, Response, UploadFile, status
 from pydantic import BaseModel, Field, model_validator
@@ -102,7 +102,7 @@ class LibraryPrimitiveResponse(BaseModel):
     created_at: datetime
     updated_at: datetime
 
-    model_config = {"from_attributes": True}
+    model_config = {"from_attributes": True, "populate_by_name": True}
 
     @model_validator(mode="after")
     @classmethod
@@ -647,11 +647,11 @@ async def _analyse_bundle(
 ) -> ImportBundleResponse:
     """Shared analysis logic — validates a bundle and returns resolution state."""
     bundle = copy.deepcopy(bundle)  # avoid mutating caller's dict
-    warnings: list[str] = []
-    resolved_schemas: list[dict[str, Any]] = []
-    resolved_connectors: list[dict[str, Any]] = []
-    resolved_model_backends_list: list[dict[str, Any]] = []
-    name_conflicts: list[dict[str, str]] = []
+    warnings: ClassVar[list[str]] = []
+    resolved_schemas: ClassVar[list[dict[str, Any]]] = []
+    resolved_connectors: ClassVar[list[dict[str, Any]]] = []
+    resolved_model_backends_list: ClassVar[list[dict[str, Any]]] = []
+    name_conflicts: ClassVar[list[dict[str, str]]] = []
 
     try:
         async with session.begin():
@@ -682,8 +682,8 @@ async def _analyse_bundle(
                 if result.get("warning"):
                     warnings.append(result["warning"])
 
-            seen_connector_types: set[str] = set()
-            connector_instance_map: dict[str, str] = {}
+            seen_connector_types: ClassVar[set[str]] = set()
+            connector_instance_map: ClassVar[dict[str, str]] = {}
             for agent in bundle.get("agents", []):
                 for ref in agent.get("connector_type_refs", []):
                     ctid = ref.get("connector_type_id", ref.get("type", ""))
@@ -706,7 +706,7 @@ async def _analyse_bundle(
 
             # Check for duplicate agent names within the bundle
             agent_names_in_bundle = [a.get("name", "") for a in bundle.get("agents", [])]
-            seen_names: set[str] = set()
+            seen_names: ClassVar[set[str]] = set()
             for aname in agent_names_in_bundle:
                 if aname and aname in seen_names:
                     warnings.append(
@@ -736,7 +736,7 @@ async def _analyse_bundle(
                     if ctid and ctid in connector_instance_map:
                         binding["instance_id"] = connector_instance_map[ctid]
 
-            mb_id_by_name: dict[str, str] = {}
+            mb_id_by_name: ClassVar[dict[str, str]] = {}
             for mb in bundle.get("model_backends", []):
                 rid = mb.get("_resolved_model_backend_id")
                 if rid:
@@ -1093,7 +1093,7 @@ def _build_pipeline_from_template(
 
     # Build a map from template string IDs to stable UUIDs so PipelineEdge
     # foreign keys (Uuid columns) don't crash on human-readable IDs.
-    node_id_map: dict[str, str] = {}
+    node_id_map: ClassVar[dict[str, str]] = {}
     for node in graph_nodes:
         tid = node.get("id", "")
         if tid:
@@ -1103,7 +1103,7 @@ def _build_pipeline_from_template(
     # Template nodes use agent_index to reference template agents.
     # We embed the agent definition in the node metadata so the frontend
     # can resolve it later when the user configures real agents.
-    pipeline_nodes: list[dict[str, Any]] = []
+    pipeline_nodes: ClassVar[list[dict[str, Any]]] = []
     for node in graph_nodes:
         tid = node.get("id", "")
         pipeline_node: dict[str, Any] = {
@@ -1126,7 +1126,7 @@ def _build_pipeline_from_template(
 
     # Convert template edges to pipeline edge format, mapping source/target
     # through node_id_map so human-readable template IDs become UUIDs.
-    pipeline_edges: list[dict[str, Any]] = []
+    pipeline_edges: ClassVar[list[dict[str, Any]]] = []
     for edge in edges:
         old_source = edge.get("source", edge.get("source_node_id", ""))
         old_target = edge.get("target", edge.get("target_node_id", ""))

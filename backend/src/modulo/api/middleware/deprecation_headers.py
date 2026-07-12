@@ -3,6 +3,7 @@ and returns 410 Gone after the sunset date has passed.
 
 Usage:
     from modulo.api.middleware.deprecation_headers import DeprecationHeaderMiddleware
+from typing import ClassVar
 
     app.add_middleware(DeprecationHeaderMiddleware)
     DeprecationHeaderMiddleware.deprecate(
@@ -14,6 +15,7 @@ Usage:
 
 from collections.abc import Awaitable, Callable
 from datetime import date
+from typing import ClassVar
 
 from fastapi import FastAPI, Request, Response
 from starlette.middleware.base import BaseHTTPMiddleware
@@ -33,7 +35,7 @@ class DeprecationHeaderMiddleware(BaseHTTPMiddleware):
     for the 30-day grace period described in the deprecation policy.
     """
 
-    _registry: _DeprecationRegistry = {}
+    _registry: ClassVar[_DeprecationRegistry] = {}
 
     @classmethod
     def deprecate(

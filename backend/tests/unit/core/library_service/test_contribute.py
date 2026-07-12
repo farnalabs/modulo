@@ -647,19 +647,19 @@ class TestSubmitContributionVersion:
         with (
             patch("modulo.core.library_service.set_rls_org", new_callable=AsyncMock),
             patch("modulo.core.library_service.get_library_primitive", new_callable=AsyncMock, return_value=None),
+            pytest.raises(ContributionNotFoundError),
         ):
-            with pytest.raises(ContributionNotFoundError):
-                await submit_contribution_version(
-                    session,
-                    org_id,
-                    uuid.uuid4(),
-                    created_by=uuid.uuid4(),
-                    name="X",
-                    slug="x",
-                    description=None,
-                    tags=[],
-                    fixture_map={"a": "b"},
-                )
+            await submit_contribution_version(
+                session,
+                org_id,
+                uuid.uuid4(),
+                created_by=uuid.uuid4(),
+                name="X",
+                slug="x",
+                description=None,
+                tags=[],
+                fixture_map={"a": "b"},
+            )
 
     async def test_submit_version_on_draft_raises_invalid_transition(self):
         session = _mock_session()
@@ -670,19 +670,19 @@ class TestSubmitContributionVersion:
         with (
             patch("modulo.core.library_service.set_rls_org", new_callable=AsyncMock),
             patch("modulo.core.library_service.get_library_primitive", new_callable=AsyncMock, return_value=existing),
+            pytest.raises(ContributionInvalidTransitionError),
         ):
-            with pytest.raises(ContributionInvalidTransitionError):
-                await submit_contribution_version(
-                    session,
-                    org_id,
-                    prim_id,
-                    created_by=uuid.uuid4(),
-                    name="X",
-                    slug="x",
-                    description=None,
-                    tags=[],
-                    fixture_map={"a": "b"},
-                )
+            await submit_contribution_version(
+                session,
+                org_id,
+                prim_id,
+                created_by=uuid.uuid4(),
+                name="X",
+                slug="x",
+                description=None,
+                tags=[],
+                fixture_map={"a": "b"},
+            )
 
     async def test_submit_version_update_returns_none_raises_not_found(self):
         session = _mock_session()
@@ -699,19 +699,19 @@ class TestSubmitContributionVersion:
                 "modulo.core.library_service.create_library_primitive", new_callable=AsyncMock, return_value=new_prim
             ),
             patch("modulo.core.library_service.update_library_primitive", new_callable=AsyncMock, return_value=None),
+            pytest.raises(ContributionNotFoundError),
         ):
-            with pytest.raises(ContributionNotFoundError):
-                await submit_contribution_version(
-                    session,
-                    org_id,
-                    prim_id,
-                    created_by=created_by,
-                    name="X",
-                    slug="x",
-                    description=None,
-                    tags=[],
-                    fixture_map={"a": "b"},
-                )
+            await submit_contribution_version(
+                session,
+                org_id,
+                prim_id,
+                created_by=created_by,
+                name="X",
+                slug="x",
+                description=None,
+                tags=[],
+                fixture_map={"a": "b"},
+            )
 
     async def test_submit_version_seeds_version_group_id(self):
         """When existing has no version_group_id, it gets seeded to its own id."""
@@ -782,9 +782,9 @@ class TestListContributionVersions:
         with (
             patch("modulo.core.library_service.set_rls_org", new_callable=AsyncMock),
             patch("modulo.core.library_service.get_library_primitive", new_callable=AsyncMock, return_value=None),
+            pytest.raises(ContributionNotFoundError),
         ):
-            with pytest.raises(ContributionNotFoundError):
-                await list_contribution_versions(session, org_id, uuid.uuid4())
+            await list_contribution_versions(session, org_id, uuid.uuid4())
 
     async def test_list_versions_no_group_id_returns_single(self):
         session = _mock_session()

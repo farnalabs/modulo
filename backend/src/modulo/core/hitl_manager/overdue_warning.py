@@ -13,7 +13,6 @@ from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from sqlalchemy import select
-from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.db.models.hitl_claim import HitlClaim
@@ -58,7 +57,7 @@ async def get_overdue_claims(
                 HitlClaim.claimed_at < warning_cutoff,
             )
         )
-    except SQLAlchemyError:
+    except Exception:
         _log.exception("Failed to query overdue claims for org %s", org_id)
         return []
 

@@ -19,7 +19,7 @@ import logging
 import uuid
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
-from typing import Any
+from typing import Any, ClassVar
 
 from jose import JWTError
 from mcp.server.fastmcp import FastMCP
@@ -69,7 +69,6 @@ from modulo.db.models.pipeline_edge import PipelineEdge
 from modulo.db.rls import set_rls_org, set_rls_user_context
 from modulo.settings import get_settings
 
-_log = logging.getLogger(__name__)
 
 # ContextVars populated by McpAuthMiddleware before each request.
 # Propagation: this server runs FastMCP in stateless HTTP mode, where each request
@@ -81,6 +80,8 @@ _log = logging.getLogger(__name__)
 # CLOSED (auth error) — there must never be a process-global fallback, because
 # under concurrent multi-tenant load a global would resolve to whichever org
 # authenticated last, leaking cross-tenant data.
+_log = logging.getLogger(__name__)
+
 _ctx_org_id: contextvars.ContextVar[uuid.UUID] = contextvars.ContextVar("mcp_org_id")
 _ctx_role: contextvars.ContextVar[str] = contextvars.ContextVar("mcp_role")
 _ctx_key_id: contextvars.ContextVar[uuid.UUID] = contextvars.ContextVar("mcp_key_id")
@@ -671,10 +672,10 @@ async def get_run_status(run_id: str, detail: bool = False) -> dict[str, Any]:
         if detail:
             token_usage = run.node_token_usage or {}
             outputs_json = run.outputs_json or {}
-            node_ids: set[str] = set()
+            node_ids: ClassVar[set[str]] = set()
             node_ids.update(token_usage.keys())
             node_ids.update(outputs_json.keys())
-            nodes: list[dict[str, Any]] = []
+            nodes: ClassVar[list[dict[str, Any]]] = []
             for nid in sorted(node_ids):
                 usage = token_usage.get(nid, {})
                 t_in = usage.get("tokens_in", 0) if usage else 0
@@ -724,7 +725,7 @@ async def get_run_output(run_id: str, node_id: str) -> dict[str, Any]:
         masked = _mask_output_value(node_output)
 
         # Detect masked fields by scanning for the bullet mask character.
-        masked_fields: list[str] = []
+        masked_fields: ClassVar[list[str]] = []
         if isinstance(masked, dict):
             for k, v in masked.items():
                 if isinstance(v, str) and "\u2022" in v:
@@ -1500,7 +1501,7 @@ async def get_integration_status() -> dict[str, Any]:
             )
             trigger_count = trigger_count_result.scalar_one()
 
-        connector_list: list[dict[str, Any]] = []
+        connector_list: ClassVar[list[dict[str, Any]]] = []
         connector_lines = [
             "| Name | Type | Status | Last Check | Error |",
             "|------|------|--------|------------|-------|",
@@ -1519,7 +1520,7 @@ async def get_integration_status() -> dict[str, Any]:
                 }
             )
 
-        backend_list: list[dict[str, Any]] = []
+        backend_list: ClassVar[list[dict[str, Any]]] = []
         backend_lines = [
             "| Name | Provider | Model | Has Credentials | Status |",
             "|------|----------|-------|-----------------|--------|",
@@ -2027,7 +2028,7 @@ async def resource_schema_detail(schema_id: str, version: str) -> str:
     defn = sv.definition_json or {}
     schema_type = defn.get("type", "object")
 
-    fields: list[dict[str, Any]] = []
+    fields: ClassVar[list[dict[str, Any]]] = []
     if "properties" in defn:
         required_set = set(defn.get("required", []))
         for name, prop in defn["properties"].items():
@@ -2121,7 +2122,7 @@ async def resource_library() -> str:
             )
         if not result.items:
             return "Library is empty."
-        lines: list[str] = []
+        lines: ClassVar[list[str]] = []
         for p in result.items:
             tags_str = ", ".join(p.tags) if p.tags else ""
             rating_str = f"{p.average_rating:.1f}" if p.average_rating is not None else "N/A"

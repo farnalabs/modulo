@@ -43,7 +43,7 @@
           class="remy-titlebar-btn"
           @click="exportTranscript"
           title="Export Transcript"
-          :aria-label="$t('remy.export_transcript')"
+          :aria-label="$t('components.remy.export_transcript')"
         >
           <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
             <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
@@ -56,7 +56,7 @@
           class="remy-titlebar-btn"
           @click="store.resetSessionPermissions()"
           title="Reset Permissions"
-          :aria-label="$t('remy.reset_permissions')"
+          :aria-label="$t('components.remy.reset_permissions')"
         >
           <svg
             xmlns="http://www.w3.org/2000/svg"
@@ -75,7 +75,7 @@
           class="remy-titlebar-btn"
           @click="store.setPanelState('docked')"
           title="Dock"
-          :aria-label="$t('remy.dock_panel')"
+          :aria-label="$t('components.remy.dock_panel')"
         >
           <svg
             xmlns="http://www.w3.org/2000/svg"
@@ -95,7 +95,7 @@
           class="remy-titlebar-btn"
           @click="store.setPanelState('floating')"
           title="Undock"
-          :aria-label="$t('remy.undock_panel')"
+          :aria-label="$t('components.remy.undock_panel')"
         >
           <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
             <rect x="3" y="3" width="18" height="18" rx="2" />
@@ -117,7 +117,7 @@
           class="remy-titlebar-btn"
           @click="store.setPanelState('maximised')"
           title="Maximise"
-          :aria-label="$t('remy.maximise')"
+          :aria-label="$t('components.remy.maximise')"
         >
           <svg
             xmlns="http://www.w3.org/2000/svg"
@@ -136,7 +136,7 @@
           class="remy-titlebar-btn"
           @click="store.setPanelState('docked')"
           title="Minimise"
-          :aria-label="$t('remy.minimise')"
+          :aria-label="$t('components.remy.minimise')"
         >
           <svg
             xmlns="http://www.w3.org/2000/svg"
@@ -155,7 +155,7 @@
           class="remy-titlebar-btn"
           @click="store.setPanelState('closed')"
           title="Close"
-          :aria-label="$t('remy.close_panel')"
+          :aria-label="$t('components.remy.close_panel')"
         >
           <svg
             xmlns="http://www.w3.org/2000/svg"
@@ -190,7 +190,7 @@
         class="shrink-0 ml-2 hover:opacity-80"
         :class="isRateLimitError ? 'text-orange-600' : 'text-destructive'"
         @click="store.error = null"
-        :aria-label="$t('remy.dismiss_error')"
+        :aria-label="$t('components.remy.dismiss_error')"
       >
         &times;
       </button>
@@ -261,7 +261,7 @@
     class="remy-floating-btn"
     @click="store.setPanelState('floating')"
     title="Open Remy"
-    :aria-label="$t('remy.open_remy')"
+    :aria-label="$t('components.remy.open_remy')"
   >
     <svg
       xmlns="http://www.w3.org/2000/svg"

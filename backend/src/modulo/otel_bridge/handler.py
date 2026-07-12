@@ -8,7 +8,7 @@ Import contract (enforced by import-linter):
   eval_engine. It is a pure instrumentation adapter with no business logic.
 """
 
-import contextlib
+import asyncio
 import logging
 import threading
 from typing import Any
@@ -65,15 +65,6 @@ class LangGraphOtelBridge(BaseCallbackHandler):
     # Internal helpers
     # ------------------------------------------------------------------
 
-    def _parent_context(self, parent_run_id: UUID | None) -> context_api.Context | None:
-        if parent_run_id is None:
-            return None
-        with self._lock:
-            parent = self._spans.get(str(parent_run_id))
-        if parent is None:
-            return None
-        return trace.set_span_in_context(parent)
-
     def _start_span(
         self,
         name: str,
@@ -82,16 +73,28 @@ class LangGraphOtelBridge(BaseCallbackHandler):
         attributes: dict[str, str | int | float | bool] | None = None,
         tags: list[str] | None = None,
     ) -> None:
-        ctx = self._parent_context(parent_run_id)
         with self._lock:
+            ctx: context_api.Context | None = None
+            if parent_run_id is not None:
+                parent = self._spans.get(str(parent_run_id))
+                if parent is not None:
+                    ctx = trace.set_span_in_context(parent)
             existing = self._spans.pop(str(run_id), None)
             org_id = self._org_id
             pipeline_id = self._pipeline_id
         if existing is not None:
-            with contextlib.suppress(Exception):
+            try:
                 existing.set_status(Status(StatusCode.OK))
-            with contextlib.suppress(Exception):
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                _log.exception("Failed to finalize stale span %s", run_id)
+            try:
                 existing.end()
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                _log.exception("Failed to end stale span %s", run_id)
 
         attrs = dict(attributes or {})
         if org_id is not None:
@@ -115,11 +118,15 @@ class LangGraphOtelBridge(BaseCallbackHandler):
                 span.record_exception(error)
             else:
                 span.set_status(Status(StatusCode.OK))
+        except asyncio.CancelledError:
+            raise
         except Exception:
             _log.exception("Failed to finalize span %s", run_id)
         finally:
             try:
                 span.end()
+            except asyncio.CancelledError:
+                raise
             except Exception:
                 _log.exception("Failed to end span %s", run_id)
 
@@ -241,11 +248,15 @@ class LangGraphOtelBridge(BaseCallbackHandler):
         self._record_token_usage(span, llm_output)
         try:
             span.set_status(Status(StatusCode.OK))
+        except asyncio.CancelledError:
+            raise
         except Exception:
             _log.exception("Failed to set status on LLM span %s", run_id)
         finally:
             try:
                 span.end()
+            except asyncio.CancelledError:
+                raise
             except Exception:
                 _log.exception("Failed to end LLM span %s", run_id)
 
