@@ -1,7 +1,10 @@
-"""PyPIConnector — async PyPI JSON/XML-RPC API connector for package metadata."""
+"""PyPI connector for package metadata.
+
+The defusedxml monkey patch is installed at import time before the XML-RPC client makes any request.
+"""
 
 import asyncio
-import xmlrpc.client
+import xmlrpc.client  # nosec B411
 from typing import Any, cast
 
 import defusedxml.xmlrpc
