@@ -451,6 +451,7 @@ def _validate_registry_inputs(
     author: str,
     name: str,
     primitive_type: str,
+    description: str,
     tags: list[str],
     content_json: dict[str, Any],
 ) -> None:
@@ -463,6 +464,8 @@ def _validate_registry_inputs(
         raise ValueError("primitive_type must be a non-empty string")
     if not isinstance(tags, list) or any(not isinstance(t, str) for t in tags):
         raise ValueError("tags must be a list of strings")
+    if not isinstance(description, str) or not description.strip():
+        raise ValueError("description must be a non-empty string")
     if not isinstance(content_json, dict):
         raise ValueError("content_json must be a dict")
     try:
@@ -487,7 +490,7 @@ def publish_primitive(
     In production this would POST to the hosted Modulo registry API.
     The signing key must correspond to the author's registered key.
     """
-    _validate_registry_inputs(author, name, primitive_type, tags, content_json)
+    _validate_registry_inputs(author, name, primitive_type, description, tags, content_json)
 
     try:
         private_bytes = bytes.fromhex(signing_key_hex)
