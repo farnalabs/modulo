@@ -6,7 +6,6 @@ bdd:
   - backend/tests/bdd/features/personas/marcus-ciso.feature
   - backend/tests/bdd/features/observability/otel_traces.feature
   - backend/tests/bdd/features/observability/metrics.feature
-  - backend/tests/bdd/steps/test_observability.py
 unit-tests:
   - backend/tests/unit/otel_bridge/test_telemetry_toggle.py
   - backend/tests/unit/otel_bridge/test_export.py
@@ -103,7 +102,7 @@ configuration at every layer.
 - Multi-region data residency (V3 SaaS) is documented but not implemented
 - No automated test enforces that telemetry is opt-in at the integration level
 - No air-gapped deployment integration test exists
-- PRD §10.5 describes an anonymous startup ping (`MODULO_TELEMETRY_ENABLED`) that is not implemented — no code sends an anonymous ping on startup
+- PRD §10.5 describes an anonymous startup ping (`MODULO_TELEMETRY`) that is not implemented — no code sends an anonymous ping on startup
 - Environment variable name mismatch: PRD §10.5 says `MODULO_TELEMETRY`, code uses `MODULO_TELEMETRY_ENABLED`
 - No integration test verifies null egress_policy defaults to `deny_all` at runtime (code in _build_workspace_spec treats null as deny_all, diverging from model default of null=unrestricted)
 - Library primitives declaring `required_environment_capabilities` is unimplemented
