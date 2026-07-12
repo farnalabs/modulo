@@ -119,7 +119,11 @@ export function useRemyStream() {
             try {
               const results = await executeCommandBatch(commands)
               store.isExecutingUi = false
+              const streamSignal = abortController?.signal
+              const pauseDeadline = Date.now() + 60000
               while (isExecutorPaused()) {
+                if (Date.now() > pauseDeadline) break
+                if (streamSignal?.aborted) break
                 await new Promise(r => setTimeout(r, 200))
               }
               const body = JSON.stringify({ results })
