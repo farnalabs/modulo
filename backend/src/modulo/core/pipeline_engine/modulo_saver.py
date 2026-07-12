@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 """ModuloPostgresSaver — AsyncPostgresSaver with org_id column isolation.
 
 Adds ``organisation_id`` to all ``langgraph.*`` checkpoint tables, enforces
@@ -8,6 +6,7 @@ Fernet. Resolves the alpha limitation where DB-privileged admins could read
 any tenant's checkpoints.
 """
 
+from __future__ import annotations
 
 import json
 import logging
