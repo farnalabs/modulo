@@ -1,7 +1,6 @@
-from __future__ import annotations
-
 """Registry API — browse, publish, pull, and trust-verify registry primitives."""
 
+from __future__ import annotations
 
 import base64
 import hashlib
@@ -317,13 +316,13 @@ async def download_registry_primitive_endpoint(
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
-        )
+        ) from None
     except SQLAlchemyError:
         _log.warning("DB error in download_registry_primitive_endpoint for slug=%s", slug)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database operation failed. Please try again.",
-        )
+        ) from None
     except HTTPException:
         raise
     except Exception as e:
@@ -590,7 +589,7 @@ async def verify_registry_primitive_v2(
             raise HTTPException(
                 status_code=status.HTTP_501_NOT_IMPLEMENTED,
                 detail="Feature is not available. Run database migrations to enable it.",
-            )
+            ) from None
         except SQLAlchemyError:
             _log.warning(
                 "DB error in verify_registry_primitive_v2: public_key_hex path, slug=%s, fp=%s",
@@ -600,7 +599,7 @@ async def verify_registry_primitive_v2(
             raise HTTPException(
                 status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
                 detail="Database operation failed. Please try again.",
-            )
+            ) from None
         except HTTPException:
             raise
         except Exception as e:
