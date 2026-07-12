@@ -180,7 +180,7 @@ class TestOverrides:
 
 class TestFromDb:
     def test_from_db_loads_flags(self) -> None:
-        session = _make_session()
+        _make_session()
         registry = FeatureFlagRegistry()
         assert registry is not None
 

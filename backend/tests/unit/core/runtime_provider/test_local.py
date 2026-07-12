@@ -1,6 +1,7 @@
 """Unit tests for LocalRuntimeProvider."""
 
 import asyncio
+import contextlib
 import sys
 import uuid
 
@@ -95,10 +96,8 @@ class TestLocalRuntimeProvider:
         can_finish_event.set()
 
         task.cancel()
-        try:
+        with contextlib.suppress(asyncio.CancelledError):
             await task
-        except asyncio.CancelledError:
-            pass
 
         await tight_provider.destroy_workspace(ref)
 

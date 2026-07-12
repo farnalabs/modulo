@@ -413,7 +413,7 @@ class TestReviewFeedback:
 
         assert resp.status_code == 200
         assert resp.json()["feedback_status"] == "dismissed"
-        call_args, call_kwargs = mock_update.call_args
+        call_args, _call_kwargs = mock_update.call_args
         assert call_args[1] == "dismissed"
 
     def test_rejects_invalid_action(self, client: TestClient) -> None:

@@ -134,7 +134,7 @@ class TestAuditGating:
 
         with patch("modulo.api.routes.audit.list_audit_events", return_value={"items": [], "total": 0}):
             resp = client_no_audit.get("/api/v1/admin/audit")
-        assert resp.status_code in (200,), f"Expected free-tier access, got {resp.status_code}"
+        assert resp.status_code == 200, f"Expected free-tier access, got {resp.status_code}"
 
     def test_batch_detail_returns_402_when_disabled(self, client_no_audit: TestClient) -> None:
         _assert_feature_402(client_no_audit.post("/api/v1/admin/audit/batch-detail", json={"event_ids": []}))
@@ -145,7 +145,7 @@ class TestAuditGating:
 
         with patch("modulo.api.routes.audit.verify_chain", return_value={"valid": True}):
             resp = client_no_audit.get("/api/v1/admin/audit/verify")
-        assert resp.status_code in (200,), f"Expected free-tier access, got {resp.status_code}"
+        assert resp.status_code == 200, f"Expected free-tier access, got {resp.status_code}"
 
     def test_export_returns_402_when_disabled(self, client_no_audit: TestClient) -> None:
         _assert_feature_402(client_no_audit.get("/api/v1/admin/audit/export"))

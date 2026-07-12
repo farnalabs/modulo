@@ -7,13 +7,12 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from fastapi.testclient import TestClient
+from sqlalchemy.exc import IntegrityError
 
 from modulo.api.dependencies import _get_engine, get_db_session, get_plan_context
 from modulo.api.main import app
 from modulo.auth.dependencies import get_current_user
 from modulo.auth.jwt import AuthenticatedPrincipal
-from sqlalchemy.exc import IntegrityError
-
 from modulo.db.crud.base import PageResult
 from modulo.settings import Settings, get_settings
 
@@ -238,7 +237,7 @@ class TestUpdateProfile:
 
     def test_update_profile_invalid_network_policy(self, client: TestClient) -> None:
         with (
-            patch("modulo.api.routes.environments.get_environment_profile") as mock_get,
+            patch("modulo.api.routes.environments.get_environment_profile"),
             patch("modulo.api.routes.environments.update_environment_profile") as mock_update,
             patch("modulo.api.routes.environments.set_rls_org"),
         ):

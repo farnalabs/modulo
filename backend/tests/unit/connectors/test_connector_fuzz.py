@@ -76,7 +76,7 @@ def _json_val(max_depth: int = 3) -> st.SearchStrategy[Any]:
 @st.composite
 def json_obj(draw):
     """Arbitrary JSON object (flatish, ~3 levels deep)."""
-    result = draw(
+    return draw(
         st.dictionaries(
             st.text(min_size=1, max_size=20),
             _json_val(max_depth=2),
@@ -84,7 +84,6 @@ def json_obj(draw):
             max_size=10,
         )
     )
-    return result
 
 
 @st.composite
