@@ -15,7 +15,7 @@ import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy.exc import ProgrammingError, SQLAlchemyError
 
-from modulo.api.dependencies import _get_engine, get_db_session
+from modulo.api.dependencies import _get_engine, get_db_session, get_plan_context
 from modulo.auth.scim_auth import ScimPrincipal, get_scim_principal
 from modulo.settings import Settings, get_settings
 
@@ -62,6 +62,22 @@ def _make_mock_session() -> AsyncMock:
     return session
 
 
+class _AllFeatures:
+    """Stub that enables every feature — used to override ``get_plan_context``."""
+    def feature_enabled(self, name: str) -> bool:
+        return True
+    def list_enabled_features(self) -> list:
+        return []
+    def tier(self) -> str:
+        return "enterprise"
+    def has_license_key(self) -> bool:
+        return True
+
+
+async def _override_plan_context() -> _AllFeatures:
+    return _AllFeatures()
+
+
 @pytest.fixture()
 def client() -> Generator[TestClient, None, None]:
     from modulo.api.main import app
@@ -75,6 +91,7 @@ def client() -> Generator[TestClient, None, None]:
     app.dependency_overrides[get_db_session] = override_session
     app.dependency_overrides[_get_engine] = lambda: MagicMock()
     app.dependency_overrides[get_scim_principal] = lambda: ScimPrincipal(organisation_id=_ORG_ID)
+    app.dependency_overrides[get_plan_context] = _override_plan_context
     yield TestClient(app)
     app.dependency_overrides.clear()
 
@@ -605,6 +622,7 @@ class TestGetBaseUrlMissing:
         app.dependency_overrides[get_db_session] = lambda: _make_mock_session()
         app.dependency_overrides[_get_engine] = lambda: MagicMock()
         app.dependency_overrides[get_scim_principal] = lambda: ScimPrincipal(organisation_id=_ORG_ID)
+        app.dependency_overrides[get_plan_context] = _override_plan_context
 
         with (
             patch("modulo.api.routes.scim.scim_list_users", return_value=([_MOCK_USER], 1)),
@@ -626,6 +644,7 @@ class TestGetBaseUrlMissing:
         app.dependency_overrides[get_db_session] = lambda: _make_mock_session()
         app.dependency_overrides[_get_engine] = lambda: MagicMock()
         app.dependency_overrides[get_scim_principal] = lambda: ScimPrincipal(organisation_id=_ORG_ID)
+        app.dependency_overrides[get_plan_context] = _override_plan_context
 
         with (
             patch("modulo.api.routes.scim.scim_get_user", return_value=_MOCK_USER),
