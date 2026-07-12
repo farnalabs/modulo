@@ -108,14 +108,13 @@ async def test_create_org_success(client_system_admin, mock_session):
     original_create = admin_orgs.create_organisation
 
     async def mock_create_org(session, *, name, slug, created_by, plan_id=None):
-        org = Organisation(
+        return Organisation(
             id=uuid4(),
             name=name,
             slug=slug,
             status="active",
             created_at=datetime.now(UTC),
         )
-        return org
 
     admin_orgs.create_organisation = mock_create_org
 
@@ -162,7 +161,7 @@ async def test_create_org_invalid_slug(client_system_admin):
         "/api/v1/admin/orgs",
         json={"name": "Test Org", "slug": "UPPERCASE-SLUG"},
     )
-    assert resp.status_code in (422,)
+    assert resp.status_code == 422
 
 
 @pytest.mark.anyio
@@ -243,7 +242,7 @@ async def test_create_org_user_success(client_system_admin):
     original_create_account = admin_orgs.create_account
 
     async def mock_create_account(session, *, email, display_name, password_hash, auth_provider="local"):
-        account = Account(
+        return Account(
             id=uuid4(),
             email=email,
             display_name=display_name,
@@ -251,7 +250,6 @@ async def test_create_org_user_success(client_system_admin):
             auth_provider=auth_provider,
             created_at=datetime.now(UTC),
         )
-        return account
 
     admin_orgs.create_account = mock_create_account
 

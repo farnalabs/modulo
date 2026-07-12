@@ -505,13 +505,12 @@ def _make_session_factory(
     session = AsyncMock()
     session.execute = AsyncMock(side_effect=execute_side_effect)
 
-    factory = MagicMock(
+    return MagicMock(
         side_effect=lambda: AsyncMock(
             __aenter__=AsyncMock(return_value=session),
             __aexit__=AsyncMock(return_value=False),
         )
     )
-    return factory
 
 
 async def test_get_subscribed_endpoints_team_id_returns_team_endpoints() -> None:

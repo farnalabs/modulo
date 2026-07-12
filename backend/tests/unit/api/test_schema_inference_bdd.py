@@ -111,7 +111,7 @@ def _patch_and_post(client, patches, connector_id, resource="issues", filters=No
     with ExitStack() as stack:
         for p in patches:
             stack.enter_context(p)
-        resp = client.post(
+        return client.post(
             "/api/v1/schemas/infer",
             json={
                 "connector_instance_id": str(connector_id),
@@ -122,7 +122,6 @@ def _patch_and_post(client, patches, connector_id, resource="issues", filters=No
                 },
             },
         )
-    return resp
 
 
 # --- Scenario 1: Infer returns draft schema ---

@@ -189,7 +189,7 @@ class TestGetAvailableFeatures:
         assert "no" in table
 
     def test_feature_count_and_tier(self) -> None:
-        flags = [MagicMock(name="f1", tier="core", currently_active=True)]
+        [MagicMock(name="f1", tier="core", currently_active=True)]
         result = {
             "results": "| Feature | ... |",
             "tier": "community",

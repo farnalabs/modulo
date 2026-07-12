@@ -2,6 +2,7 @@
 
 import uuid
 from datetime import UTC, datetime, timedelta
+from typing import Self
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -42,7 +43,7 @@ def _make_session_mock() -> AsyncMock:
     """Create an AsyncMock session with begin() returning an async context manager."""
 
     class _AsyncSessionContextManager:
-        async def __aenter__(self) -> "_AsyncSessionContextManager":
+        async def __aenter__(self) -> Self:
             return self
 
         async def __aexit__(

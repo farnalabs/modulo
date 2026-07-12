@@ -22,8 +22,7 @@ def _mock_session_factory(session: AsyncMock) -> MagicMock:
     cm.__aenter__ = AsyncMock(return_value=session)
     cm.__aexit__ = AsyncMock(return_value=False)
 
-    factory = MagicMock(return_value=cm)
-    return factory
+    return MagicMock(return_value=cm)
 
 
 def _org_list_session() -> AsyncMock:

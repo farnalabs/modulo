@@ -154,33 +154,19 @@ class TestResponseModelCoverage:
         with_rm = [r for r in routes if r["response_model"] is not None]
         missing_rm = [r for r in routes if r["response_model"] is None]
 
-        print(f"\n{'=' * 60}")
-        print("API Response Model Coverage Report")
-        print(f"{'=' * 60}")
-        print(f"Total API routes: {len(routes)}")
-        print(f"With response model: {len(with_rm)}")
-        print(f"Missing response model: {len(missing_rm)}")
-        print()
 
         if missing_rm:
-            print("Routes MISSING response_model:")
-            print("-" * 60)
             for r in sorted(missing_rm, key=lambda x: (x["methods"], x["path"])):
-                print(f"  {r['methods'][0]:7s} {r['path']}")
+                pass
 
-        print()
-        print("Routes WITH response_model:")
-        print("-" * 60)
         for r in sorted(with_rm, key=lambda x: (x["methods"], x["path"])):
             rm = r["response_model"]
             if hasattr(rm, "__name__"):
-                model_name = rm.__name__
+                pass
             elif hasattr(rm, "__origin__"):
-                model_name = str(rm)
+                str(rm)
             else:
-                model_name = str(rm)
-            print(f"  {r['methods'][0]:7s} {r['path']}")
-            print(f"          -> {model_name}")
+                str(rm)
 
     def test_response_model_is_pydantic_model(self) -> None:
         routes = get_api_routes()
@@ -199,11 +185,9 @@ class TestResponseModelCoverage:
             else:
                 non_pydantic.append((r["methods"][0], r["path"], str(rm)))
 
-        print(f"\nPydantic response models: {pydantic_count}")
         if non_pydantic:
-            print(f"Non-Pydantic response models: {len(non_pydantic)}")
             for method, path, rm_str in non_pydantic:
-                print(f"  {method} {path} -> {rm_str}")
+                pass
 
 
 # ---------------------------------------------------------------------------

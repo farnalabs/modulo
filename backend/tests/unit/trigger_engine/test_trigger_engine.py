@@ -36,10 +36,7 @@ _VALID_TS = int(time.time())
 
 
 def _sha256_sig(body: bytes, secret: str, timestamp: int | None = None) -> str:
-    if timestamp is not None:
-        payload = f"{timestamp}.".encode() + body
-    else:
-        payload = body
+    payload = f"{timestamp}.".encode() + body if timestamp is not None else body
     return "sha256=" + hmac.new(secret.encode(), payload, hashlib.sha256).hexdigest()
 
 
