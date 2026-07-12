@@ -1,6 +1,8 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { mount } from '@vue/test-utils'
-import { nextTick } from 'vue'
+import { flushPromises, mount } from '@vue/test-utils'
+import { nextTick as vueNextTick } from 'vue'
+
+async function nextTick() { await vueNextTick(); await flushPromises() }
 
 const { mockGet } = vi.hoisted(() => ({
   mockGet: vi.fn().mockResolvedValue({ data: { items: [] }, error: undefined }),

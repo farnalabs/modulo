@@ -266,6 +266,10 @@ interface DeliveryLogPage {
 type DeliveryLogQuery = NonNullable<paths['/api/v1/admin/notifications/deliveries']['get']>['parameters']['query']
 
 const cursor = ref<string | null>(null)
+const filterStatus = ref('')
+const filterEventType = ref('')
+const filterDateFrom = ref('')
+const filterDateTo = ref('')
 
 const { data: deliveriesData, loading, error, load: loadDeliveries } = useDataFetch<DeliveryLogPage>(
   async () => {
@@ -289,11 +293,6 @@ const prevCursor = computed(() => {
   if (!dc?.prev_cursor) return null
   return dc.prev_cursor
 })
-
-const filterStatus = ref('')
-const filterEventType = ref('')
-const filterDateFrom = ref('')
-const filterDateTo = ref('')
 
 const expandedId = ref<string | null>(null)
 const retryingId = ref<string | null>(null)

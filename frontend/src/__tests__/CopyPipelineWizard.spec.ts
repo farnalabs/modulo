@@ -1,7 +1,12 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { mount } from '@vue/test-utils'
+import { flushPromises, mount } from '@vue/test-utils'
 import { createRouter, createWebHistory } from 'vue-router'
-import { nextTick } from 'vue'
+import { nextTick as vueNextTick } from 'vue'
+
+async function nextTick() {
+  await vueNextTick()
+  await flushPromises()
+}
 
 const mockGet = vi.fn().mockResolvedValue({
   items: [
@@ -23,17 +28,11 @@ const mockPost = vi.fn().mockResolvedValue({
   updated_at: '2025-06-30T00:00:00Z',
 })
 
-vi.mock('../composables/useApi', () => ({
-  useApi: vi.fn(() => ({
-    get: mockGet,
-    post: mockPost,
-  })),
-}))
-
 vi.mock('../lib/api/client', () => ({
   getAccessToken: vi.fn().mockReturnValue('mock-token'),
   api: {
-    GET: vi.fn().mockResolvedValue({ data: { items: [] }, error: undefined }),
+    GET: vi.fn(async (...args: unknown[]) => ({ data: await mockGet(...args), error: undefined })),
+    POST: vi.fn(async (...args: unknown[]) => ({ data: await mockPost(...args), error: undefined })),
   },
 }))
 
@@ -82,7 +81,7 @@ describe('CopyPipelineWizard', () => {
     })
     await nextTick()
     await nextTick()
-    expect(mockGet).toHaveBeenCalledWith('/api/v1/pipelines?page_size=100')
+    expect(mockGet).toHaveBeenCalledWith('/api/v1/pipelines', { params: { query: { page_size: 100 } } })
     expect(wrapper.text()).toContain('Prod Pipeline')
     expect(wrapper.text()).toContain('Dev Pipeline')
   })
@@ -99,7 +98,7 @@ describe('CopyPipelineWizard', () => {
     await nextTick()
     await nextTick()
 
-    const input = wrapper.find('[data-testid="copy-wizard-search"]')
+    const input = wrapper.find('[data-testid="filter-bar-search"]')
     await input.setValue('Prod')
     expect(wrapper.text()).toContain('Prod Pipeline')
     expect(wrapper.text()).not.toContain('Dev Pipeline')
@@ -183,7 +182,7 @@ describe('CopyPipelineWizard', () => {
 
     expect(mockPost).toHaveBeenCalled()
     expect(mockPost.mock.calls[0][0]).toContain('/clone')
-    expect(mockPost.mock.calls[0][1]).toHaveProperty('name')
+    expect(mockPost.mock.calls[0][1]).toHaveProperty('body.name')
     vi.useRealTimers()
   })
 

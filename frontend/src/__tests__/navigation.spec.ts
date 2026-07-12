@@ -255,7 +255,6 @@ describe('navigation.ts', () => {
       icon: 'File',
       label: 'Test',
       labelKey: 'item_test',
-      requiredRoles: [],
       requiredTier: null,
     }
     expect(canSeeItem(item, { role: 'admin' }, { isAtMinimumTier: () => true })).toBe(true)
