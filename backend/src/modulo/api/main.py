@@ -732,6 +732,12 @@ app.include_router(events_router)
 app.include_router(remy_router)
 app.include_router(manifest_router)
 
+# Strip router lifespan contexts — none of the 68+ routers register
+# on_startup/on_shutdown handlers, so every _DefaultLifespan is a no-op.
+# Keeping the deeply nested _merge_lifespan_context chain causes infinite
+# recursion in Docker builds (FastAPI 0.139.0, Python 3.12, Linux).
+app.router.lifespan_context = _lifespan
+
 # Remote MCP server — mounted as a Starlette sub-app at /mcp.
 # Auth is enforced by McpAuthMiddleware inside the sub-app.
 app.mount("/mcp", build_mcp_asgi_app())

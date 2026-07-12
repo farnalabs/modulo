@@ -30,7 +30,7 @@ dependencies = [
     # Settings
     "pydantic-settings>=2.14.2",
     # API
-    "fastapi>=0.111.0",
+    "fastapi>=0.115.0",
     "uvicorn[standard]>=0.49.0",
     "websockets>=12.0",
     "python-multipart>=0.0.32",
@@ -84,7 +84,6 @@ dependencies = [
     # Fixes CVE-2025-64439 (RCE via jsonplus) and CVE-2026-27794 (RCE via pickle)
     "langgraph-checkpoint-postgres>=3.0.0",
     "psycopg-binary>=3.3.4",
-
     # Runtime environments
     "e2b>=0.15.0",
     # CLI
