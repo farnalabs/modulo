@@ -1,6 +1,7 @@
 """Unit tests for Remy UI tools — tool definitions, permission resolution, session approvals."""
 
 from datetime import UTC, datetime, timedelta
+from unittest.mock import patch
 
 from modulo.api.routes.remy import (
     _has_destructive_pattern,
@@ -422,6 +423,11 @@ class TestSessionApproval:
 
     def setup_method(self) -> None:
         _session_approvals.clear()
+        self._registry_patcher = patch("modulo.api.routes.remy._get_registry", return_value=None)
+        self._registry_patcher.start()
+
+    def teardown_method(self) -> None:
+        self._registry_patcher.stop()
 
     async def test_approved_same_page_not_expired(self) -> None:
         _session_approvals["session-1"] = {
