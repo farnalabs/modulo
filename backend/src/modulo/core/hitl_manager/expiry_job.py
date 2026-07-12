@@ -168,6 +168,8 @@ class ClaimExpiryJob:
                                     "claimed_by": str(entry["claimed_by"]) if entry["claimed_by"] else None,
                                 },
                             )
+                    except asyncio.CancelledError:
+                        raise
                     except Exception:
                         _log.exception("Failed to record claim_expired audit event for claim %s", entry["claim_id"])
 
@@ -185,6 +187,8 @@ class ClaimExpiryJob:
                             },
                             run_id=str(entry["run_id"]),
                         )
+                    except asyncio.CancelledError:
+                        raise
                     except Exception:
                         _log.exception(
                             "hitl.expiry_job.notification_failed",
