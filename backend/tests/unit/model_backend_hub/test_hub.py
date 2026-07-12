@@ -1,6 +1,8 @@
 """Unit tests for ModelBackendHub lifecycle, health check, and rotation."""
 
 import json
+import subprocess
+import sys
 import uuid
 from dataclasses import dataclass, field
 from typing import Any
@@ -23,6 +25,31 @@ from modulo.model_backends.base import HealthResult, ModelBackendBase
 # ---------------------------------------------------------------------------
 
 _KEY = Fernet.generate_key().decode()
+
+
+def test_import_does_not_load_provider_adapters() -> None:
+    """Importing the registry must not initialise optional provider SDKs."""
+    script = """
+import json
+import sys
+import modulo.core.model_backend_hub
+
+provider_modules = sorted(
+    name
+    for name in sys.modules
+    if name.startswith("modulo.model_backends.")
+    and name != "modulo.model_backends.base"
+)
+print(json.dumps(provider_modules))
+"""
+    result = subprocess.run(
+        [sys.executable, "-c", script],
+        check=True,
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    assert json.loads(result.stdout) == []
 
 
 def _encrypt(payload: dict[str, Any]) -> bytes:
