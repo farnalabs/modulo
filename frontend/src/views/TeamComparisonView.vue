@@ -249,7 +249,7 @@ function buildPipelineEvals(
 const pipelineEvalCache = ref<Record<string, Record<string, { total_evals: number; passed_evals: number; pass_rate: number }>>>({})
 const pipelineNames = ref<Map<string, string>>(new Map())
 
-async function fetchAndMerge() {
+async function fetchAndMerge(): Promise<{ data?: ViewData; error?: { detail: string } }> {
   expandedTeamId.value = null
 
   const [{ data: summaryResult, error: summaryErr }, { data: teamsResult, error: teamsErr }] = await Promise.all([
@@ -258,10 +258,10 @@ async function fetchAndMerge() {
   ])
 
   if (summaryErr) {
-    return { summaryErr: t('views.TeamComparisonView.failed_to_load_dashboard') + ' ' + formatError(summaryErr) }
+    return { error: { detail: t('views.TeamComparisonView.failed_to_load_dashboard') + ' ' + formatError(summaryErr) } }
   }
   if (teamsErr) {
-    return { teamsErr: t('views.TeamComparisonView.failed_to_load_teams') + ' ' + formatError(teamsErr) }
+    return { error: { detail: t('views.TeamComparisonView.failed_to_load_teams') + ' ' + formatError(teamsErr) } }
   }
 
   const s = summaryResult as unknown as {
@@ -296,10 +296,12 @@ async function fetchAndMerge() {
   pipelineEvalCache.value = s.eval_pass_rate?.per_team_pipeline ?? {}
 
   return {
-    summary: { total_runs: s.total_runs, active_pipelines: s.active_pipelines },
-    teams,
-    orgEvalPassRate: s.eval_pass_rate?.overall_pass_rate ?? null,
-  } as ViewData
+    data: {
+      summary: { total_runs: s.total_runs, active_pipelines: s.active_pipelines },
+      teams,
+      orgEvalPassRate: s.eval_pass_rate?.overall_pass_rate ?? null,
+    },
+  }
 }
 
 const { loading, error, data, load: loadData } = useDataFetch(fetchAndMerge)
