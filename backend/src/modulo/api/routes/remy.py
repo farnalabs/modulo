@@ -1595,6 +1595,8 @@ async def submit_ui_command_results(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database error. Please try again later.",
         ) from None
+    except HTTPException:
+        raise
     except Exception:
         logger.exception("remy.submit_ui_command_results.unexpected_error")
         raise HTTPException(
@@ -1638,6 +1640,8 @@ async def reset_session_permissions(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database error. Please try again later.",
         ) from None
+    except HTTPException:
+        raise
     except Exception:
         logger.exception("remy.reset_session_permissions.unexpected_error")
         raise HTTPException(
