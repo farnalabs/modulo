@@ -228,3 +228,7 @@ Async GitHub REST API connector implementing `ConnectorBase`. Provides read/writ
 
 **All 4 GitHub connector unit test files pass** (test_github.py, test_github_resilience.py, test_github_scopes.py, test_github_issues.py). No regressions.
 
+### 2026-07-12 — Round 3 QA (improve-architecture batch 2)
+
+**Fixed (MINOR):** Added missing `last_exc` tracking + fallback `raise ValueError(...) from last_exc` at end of `_call_api()` retry loop. The function was missing an explicit `raise` after the `for` loop exited without a `return` — while unreachable in practice (every path either returns or raises), ruff flagged it as RET503. The final fallback matches the pattern used in the GitLab connector and provides a safety-net error chain on retry exhaustion.
+

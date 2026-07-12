@@ -122,6 +122,7 @@ class GitHubConnector(ConnectorBase):
         Adds random jitter to retry delays to avoid thundering herd.
         Wraps HTTP/network/parse errors as ValueError.
         """
+        last_exc: Exception | None = None
         for attempt in range(_MAX_RETRIES + 1):
             try:
                 async with self._client() as client:
@@ -138,6 +139,7 @@ class GitHubConnector(ConnectorBase):
                     r.raise_for_status()
                     return r
             except httpx.HTTPStatusError as exc:
+                last_exc = exc
                 if exc.response.status_code in _RETRYABLE_STATUSES and attempt < _MAX_RETRIES:
                     retry_after = _parse_retry_after(exc.response)
                     delay = min(retry_after, _MAX_DELAY) if retry_after else min(_BASE_DELAY * (2**attempt), _MAX_DELAY)
@@ -145,17 +147,20 @@ class GitHubConnector(ConnectorBase):
                     continue
                 raise ValueError(f"GitHub API HTTP {exc.response.status_code}: {exc.response.text[:200]}") from exc
             except httpx.TimeoutException as exc:
+                last_exc = exc
                 if attempt < _MAX_RETRIES:
                     delay = min(_BASE_DELAY * (2**attempt), _MAX_DELAY)
                     await asyncio.sleep(self._jitter(delay))
                     continue
                 raise ValueError("GitHub API timeout") from exc
             except httpx.ConnectError as exc:
+                last_exc = exc
                 if attempt < _MAX_RETRIES:
                     delay = min(_BASE_DELAY * (2**attempt), _MAX_DELAY)
                     await asyncio.sleep(self._jitter(delay))
                     continue
                 raise ValueError("GitHub API connection error") from exc
+        raise ValueError("GitHub API request failed after retries") from last_exc
 
     async def _parse_json(self, response: httpx.Response) -> Any:
         """Parse JSON response, wrapping decode errors as ValueError."""
