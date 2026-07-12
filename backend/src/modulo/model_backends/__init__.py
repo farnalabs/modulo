@@ -1,65 +1,58 @@
-from modulo.model_backends.ai21 import Ai21Backend
-from modulo.model_backends.anthropic import AnthropicBackend
-from modulo.model_backends.azure_openai import AzureOpenAIBackend
+import importlib
+import typing
+
 from modulo.model_backends.base import (
     HealthResult,
     ModelBackendBase,
     openai_compatible_health_check,
 )
-from modulo.model_backends.bedrock import BedrockBackend
-from modulo.model_backends.cohere import CohereBackend
-from modulo.model_backends.deepseek import DeepSeekBackend
-from modulo.model_backends.fireworks import FireworksBackend
-from modulo.model_backends.gemini import GeminiBackend
-from modulo.model_backends.grok import GrokBackend
-from modulo.model_backends.groq import GroqBackend
-from modulo.model_backends.jan import JanBackend
-from modulo.model_backends.llamacpp import LLamaCppBackend
-from modulo.model_backends.lm_studio import LmStudioBackend
-from modulo.model_backends.localai import LocalAIBackend
-from modulo.model_backends.mistral import MistralBackend
-from modulo.model_backends.ollama import OllamaBackend
-from modulo.model_backends.openai import OpenAIBackend
-from modulo.model_backends.opencode import OpenCodeBackend
-from modulo.model_backends.openrouter import OpenRouterBackend
-from modulo.model_backends.perplexity import PerplexityBackend
-from modulo.model_backends.qwen import QwenBackend
-from modulo.model_backends.stub import StubModelBackend
-from modulo.model_backends.tgi import TgiBackend
-from modulo.model_backends.togetherai import TogetherAIBackend
-from modulo.model_backends.vertexai import VertexAIBackend
-from modulo.model_backends.vllm import VllmBackend
-from modulo.model_backends.watsonx import WatsonXBackend
+
+_LAZY_MODULES: dict[str, str] = {
+    "Ai21Backend": "modulo.model_backends.ai21",
+    "AnthropicBackend": "modulo.model_backends.anthropic",
+    "AzureOpenAIBackend": "modulo.model_backends.azure_openai",
+    "BedrockBackend": "modulo.model_backends.bedrock",
+    "CohereBackend": "modulo.model_backends.cohere",
+    "DeepSeekBackend": "modulo.model_backends.deepseek",
+    "FireworksBackend": "modulo.model_backends.fireworks",
+    "GeminiBackend": "modulo.model_backends.gemini",
+    "GrokBackend": "modulo.model_backends.grok",
+    "GroqBackend": "modulo.model_backends.groq",
+    "JanBackend": "modulo.model_backends.jan",
+    "LLamaCppBackend": "modulo.model_backends.llamacpp",
+    "LmStudioBackend": "modulo.model_backends.lm_studio",
+    "LocalAIBackend": "modulo.model_backends.localai",
+    "MistralBackend": "modulo.model_backends.mistral",
+    "OllamaBackend": "modulo.model_backends.ollama",
+    "OpenAIBackend": "modulo.model_backends.openai",
+    "OpenCodeBackend": "modulo.model_backends.opencode",
+    "OpenRouterBackend": "modulo.model_backends.openrouter",
+    "PerplexityBackend": "modulo.model_backends.perplexity",
+    "QwenBackend": "modulo.model_backends.qwen",
+    "StubModelBackend": "modulo.model_backends.stub",
+    "TgiBackend": "modulo.model_backends.tgi",
+    "TogetherAIBackend": "modulo.model_backends.togetherai",
+    "VertexAIBackend": "modulo.model_backends.vertexai",
+    "VllmBackend": "modulo.model_backends.vllm",
+    "WatsonXBackend": "modulo.model_backends.watsonx",
+}
+
+
+def __getattr__(name: str) -> typing.Any:
+    module_name = _LAZY_MODULES.get(name)
+    if module_name is not None:
+        module = importlib.import_module(module_name)
+        return getattr(module, name)
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
+
+def __dir__() -> list[str]:
+    return [*globals().keys(), *_LAZY_MODULES.keys()]
+
 
 __all__ = [
-    "Ai21Backend",
-    "AnthropicBackend",
-    "AzureOpenAIBackend",
-    "BedrockBackend",
-    "CohereBackend",
-    "DeepSeekBackend",
-    "FireworksBackend",
-    "GeminiBackend",
-    "GrokBackend",
-    "GroqBackend",
     "HealthResult",
-    "JanBackend",
-    "LLamaCppBackend",
-    "LmStudioBackend",
-    "LocalAIBackend",
-    "MistralBackend",
     "ModelBackendBase",
-    "OllamaBackend",
-    "OpenAIBackend",
-    "OpenCodeBackend",
-    "OpenRouterBackend",
-    "PerplexityBackend",
-    "QwenBackend",
-    "StubModelBackend",
-    "TgiBackend",
-    "TogetherAIBackend",
-    "VertexAIBackend",
-    "VllmBackend",
-    "WatsonXBackend",
     "openai_compatible_health_check",
+    *_LAZY_MODULES.keys(),
 ]
