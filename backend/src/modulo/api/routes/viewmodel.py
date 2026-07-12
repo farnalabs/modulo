@@ -103,7 +103,7 @@ class PendingHitlGate(BaseModel):
 
 class LicenseInfo(BaseModel):
     tier: str = "community"
-    features: ClassVar[list[str]] = []
+    features: list[str] = []
     is_valid: bool = True
 
 
@@ -176,7 +176,7 @@ async def license_info(
 ) -> LicenseInfo:
     try:
         has_license_key = bool(settings.modulo_license_key)
-        features: ClassVar[list[str]] = []
+        features: list[str] = []
         if has_license_key:
             features = ["notifications"]
         return LicenseInfo(
