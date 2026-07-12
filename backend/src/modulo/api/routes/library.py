@@ -301,7 +301,10 @@ async def list_library_primitives_endpoint(
                     cursor=cursor,
                 )
         except ProgrammingError:
-            _log.warning("list_library_primitives_endpoint: ProgrammingError — missing DB table or migration")
+            _log.warning(
+                "list_library_primitives_endpoint: ProgrammingError — missing DB table or migration",
+                exc_info=True,
+            )
             raise HTTPException(
                 status_code=status.HTTP_501_NOT_IMPLEMENTED,
                 detail="Feature is not available. Run database migrations to enable it.",
@@ -371,7 +374,7 @@ async def get_library_primitive_endpoint(
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="A resource with this value already exists",
-        )
+        ) from None
     except ProgrammingError:
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
@@ -438,24 +441,20 @@ async def create_library_primitive_endpoint(
                 tier=req.tier,
             )
     except IntegrityError:
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail="A resource with this value already exists",
-        )
-    except ProgrammingError:
-        raise HTTPException(
-            status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="Feature is not available. Run database migrations to enable it.",
-        ) from None
-    except IntegrityError:
         _log.warning(
             "create_library_primitive_endpoint: IntegrityError — slug collision on %s/%s",
             req.primitive_type,
             req.slug,
+            exc_info=True,
         )
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail=f"Primitive with type '{req.primitive_type}' and slug '{req.slug}' already exists",
+        ) from None
+    except ProgrammingError:
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="Feature is not available. Run database migrations to enable it.",
         ) from None
     except SQLAlchemyError:
         _log.exception("create_library_primitive_endpoint: SQLAlchemyError")
@@ -483,7 +482,7 @@ async def update_library_primitive_endpoint(
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="A resource with this value already exists",
-        )
+        ) from None
     except ProgrammingError:
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
@@ -518,7 +517,7 @@ async def delete_library_primitive_endpoint(
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="A resource with this value already exists",
-        )
+        ) from None
     except ProgrammingError:
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
@@ -573,7 +572,7 @@ async def copy_to_adapt_endpoint(
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="A resource with this value already exists",
-        )
+        ) from None
     except ProgrammingError:
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
@@ -614,7 +613,7 @@ async def export_pipeline_endpoint(
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="A resource with this value already exists",
-        )
+        ) from None
     except ProgrammingError:
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
@@ -753,15 +752,15 @@ async def _analyse_bundle(
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="A resource with this value already exists",
-        )
+        ) from None
     except ProgrammingError:
-        _log.warning("_analyse_bundle: ProgrammingError — missing DB table or migration")
+        _log.warning("_analyse_bundle: ProgrammingError — missing DB table or migration", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
         ) from None
     except SQLAlchemyError:
-        _log.warning("_analyse_bundle: SQLAlchemyError — database connection failure")
+        _log.warning("_analyse_bundle: SQLAlchemyError — database connection failure", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database connection failed. Please try again later.",
@@ -878,15 +877,15 @@ async def confirm_import_endpoint(
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="A resource with this value already exists",
-        )
+        ) from None
     except ProgrammingError:
-        _log.warning("confirm_import_endpoint: ProgrammingError — missing DB table or migration")
+        _log.warning("confirm_import_endpoint: ProgrammingError — missing DB table or migration", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
         ) from None
     except SQLAlchemyError:
-        _log.warning("confirm_import_endpoint: SQLAlchemyError — database connection failure")
+        _log.warning("confirm_import_endpoint: SQLAlchemyError — database connection failure", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database connection failed. Please try again later.",
@@ -926,7 +925,7 @@ async def list_ratings_endpoint(
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="A resource with this value already exists",
-        )
+        ) from None
     except ProgrammingError:
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
@@ -959,7 +958,7 @@ async def get_rating_aggregate_endpoint(
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="A resource with this value already exists",
-        )
+        ) from None
     except ProgrammingError:
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
@@ -1055,7 +1054,7 @@ async def submit_abuse_report_endpoint(
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="A resource with this value already exists",
-        )
+        ) from None
     except ProgrammingError:
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
@@ -1162,7 +1161,7 @@ async def create_pipeline_from_template_endpoint(
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="A resource with this value already exists",
-        )
+        ) from None
     except ProgrammingError:
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
@@ -1216,7 +1215,7 @@ async def create_pipeline_from_template_endpoint(
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="A resource with this value already exists",
-        )
+        ) from None
     except ProgrammingError:
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
@@ -1285,7 +1284,7 @@ async def community_contribute_endpoint(
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="A resource with this value already exists",
-        )
+        ) from None
     except ProgrammingError:
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
@@ -1323,9 +1322,12 @@ async def list_community_contributions_endpoint(
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
                 detail="A resource with this value already exists",
-            )
+            ) from None
         except ProgrammingError:
-            _log.warning("list_community_contributions_endpoint: ProgrammingError — missing DB table or migration")
+            _log.warning(
+                "list_community_contributions_endpoint: ProgrammingError — missing DB table or migration",
+                exc_info=True,
+            )
             raise HTTPException(
                 status_code=status.HTTP_501_NOT_IMPLEMENTED,
                 detail="Feature is not available. Run database migrations to enable it.",
@@ -1381,7 +1383,7 @@ async def admin_publish_contribution_endpoint(
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="A resource with this value already exists",
-        )
+        ) from None
     except ProgrammingError:
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
