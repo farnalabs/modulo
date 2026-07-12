@@ -12,7 +12,7 @@
         size="icon"
         @click="openCreateForm"
         :title="$t('components.remy.RemySkillManager.new_skill')"
-        :aria-label="$t('remy.new_skill')"
+        :aria-label="$t('components.remy.new_skill')"
       >
         <svg
           xmlns="http://www.w3.org/2000/svg"
