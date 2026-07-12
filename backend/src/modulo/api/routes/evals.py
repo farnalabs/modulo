@@ -609,10 +609,6 @@ class CompareEvalsRequest(BaseModel):
     run_id_b: uuid.UUID
 
 
-class CoverageQueryParams(BaseModel):
-    pipeline_id: uuid.UUID
-
-
 class CreateEvalFromRunRequest(BaseModel):
     run_id: uuid.UUID
     node_id: uuid.UUID
