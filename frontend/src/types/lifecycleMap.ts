@@ -49,5 +49,6 @@ export interface LifecycleMap {
 export interface PipelineSummary {
   id: string
   name: string
-  description: string | null
+  visibility: string
+  created_at: string
 }
