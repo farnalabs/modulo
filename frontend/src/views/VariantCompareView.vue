@@ -215,11 +215,17 @@
         </div>
       </template>
 
-      <div
+      <EmptyState
         v-else-if="!loading && groups.length === 0"
+        title="Variant Groups"
+        description="No variant groups found. Create a variant group from the AB Test Models page to compare model outputs side by side."
+      />
+
+      <div
+        v-else
         class="rounded-lg border bg-card p-8 text-center text-muted-foreground"
       >
-        {{ $t('views.variantCompare.noGroups') }}
+        Select a variant group from the dropdown above to compare model outputs.
       </div>
     </template>
   </div>
@@ -237,6 +243,7 @@ import PageHeader from '../components/shared/PageHeader.vue'
 import PageTabs from "../components/PageTabs.vue"
 import { formatApiError } from '../lib/api/formatError'
 import { Button } from '@/components/ui/button'
+import EmptyState from '../components/shared/EmptyState.vue'
 
 const { t } = useI18n()
 

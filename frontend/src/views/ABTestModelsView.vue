@@ -268,20 +268,13 @@
           </div>
         </section>
 
-        <div
-          v-else-if="!selectedPipelineId"
-          class="rounded-lg border bg-card p-8 text-center text-muted-foreground"
-        >
-          {{ $t('views.ABTestModelsView.select_pipeline_hint') }}
-        </div>
       </template>
 
-      <div
+      <EmptyState
         v-else-if="!loading && pipelines.length === 0"
-        class="rounded-lg border bg-card p-8 text-center text-muted-foreground"
-      >
-        {{ $t('views.ABTestModelsView.no_pipelines_found') }}
-      </div>
+        title="No Pipelines Found"
+        description="Create a pipeline first, then return here to set up A/B testing between model backends."
+      />
     </template>
   </div>
 </template>
@@ -296,6 +289,7 @@ import ErrorAlert from '../components/shared/ErrorAlert.vue'
 import PageTabs from "../components/PageTabs.vue"
 import PageHeader from '../components/shared/PageHeader.vue'
 import { Button } from '@/components/ui/button'
+import EmptyState from '../components/shared/EmptyState.vue'
 import { shortId } from '../utils/format'
 import { formatApiError } from '../lib/api/formatError'
 
