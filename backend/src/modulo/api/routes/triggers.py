@@ -13,7 +13,7 @@ import hashlib
 import json
 import logging
 import uuid
-from typing import Any
+from typing import Any, ClassVar
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, Field
@@ -30,6 +30,7 @@ from modulo.core.trigger_engine import TriggerEngine
 from modulo.db.models.trigger import Trigger
 from modulo.db.models.trigger_event import TriggerEvent
 from modulo.db.rls import set_rls_org
+
 
 _log = logging.getLogger(__name__)
 
@@ -170,12 +171,11 @@ async def update_cron_config(
                 trigger.cron_timezone = req.cron_timezone
 
             # Recompute next_fire_at if relevant
-            if req.cron_expression is not None or req.cron_timezone is not None:
-                if trigger.cron_expression:
-                    tz = trigger.cron_timezone or "UTC"
-                    err = validate_cron_expression(trigger.cron_expression, tz)
-                    if err is None:
-                        trigger.next_fire_at = compute_next_fire(trigger.cron_expression)
+            if req.cron_expression is not None or req.cron_timezone is not None and trigger.cron_expression:
+                tz = trigger.cron_timezone or "UTC"
+                err = validate_cron_expression(trigger.cron_expression, tz)
+                if err is None:
+                    trigger.next_fire_at = compute_next_fire(trigger.cron_expression)
 
             if req.snapshot_id is not None:
                 trigger.config_json = {**(trigger.config_json or {}), "snapshot_id": req.snapshot_id}
@@ -243,7 +243,7 @@ async def preview_cron_schedule(
             from croniter import croniter
 
             cron = croniter(trigger.cron_expression, datetime.datetime.now(datetime.UTC))
-            times: list[str] = []
+            times: ClassVar[list[str]] = []
             for _ in range(count):
                 next_dt = cron.get_next(datetime.datetime)
                 times.append(next_dt.isoformat())
@@ -565,12 +565,11 @@ async def update_trigger(
                 trigger.max_concurrent_runs = req.max_concurrent_runs
             if req.config_json is not None:
                 trigger.config_json = req.config_json
-            if req.cron_expression is not None:
-                if trigger.trigger_type != "cron":
-                    raise HTTPException(
-                        status_code=status.HTTP_400_BAD_REQUEST,
-                        detail="Only cron triggers can have cron expressions",
-                    )
+            if req.cron_expression is not None and trigger.trigger_type != "cron":
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="Only cron triggers can have cron expressions",
+                )
                 tz = req.cron_timezone or trigger.cron_timezone or "UTC"
                 err = validate_cron_expression(req.cron_expression, tz)
                 if err:
@@ -581,12 +580,11 @@ async def update_trigger(
                 trigger.cron_expression = req.cron_expression
             if req.cron_timezone is not None:
                 trigger.cron_timezone = req.cron_timezone
-            if req.cron_expression is not None or req.cron_timezone is not None:
-                if trigger.cron_expression:
-                    tz = trigger.cron_timezone or "UTC"
-                    err = validate_cron_expression(trigger.cron_expression, tz)
-                    if err is None:
-                        trigger.next_fire_at = compute_next_fire(trigger.cron_expression)
+            if req.cron_expression is not None or req.cron_timezone is not None and trigger.cron_expression:
+                tz = trigger.cron_timezone or "UTC"
+                err = validate_cron_expression(trigger.cron_expression, tz)
+                if err is None:
+                    trigger.next_fire_at = compute_next_fire(trigger.cron_expression)
 
             await session.flush()
     except ProgrammingError:

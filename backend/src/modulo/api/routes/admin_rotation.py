@@ -1,6 +1,6 @@
-from __future__ import annotations
-
 """Admin API endpoints for Fernet key rotation."""
+
+from __future__ import annotations
 
 
 import logging
@@ -19,6 +19,7 @@ from modulo.core.audit_logger import append_audit_event
 from modulo.settings import Settings, get_settings
 
 _MIN_KEY_LEN = 32
+
 
 _log = logging.getLogger(__name__)
 
@@ -137,18 +138,18 @@ async def rotate_key(
         )
     except HTTPException:
         raise
-    except IntegrityError:
+    except IntegrityError as exc:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="A resource with this value already exists",
-        )
-    except ProgrammingError:
-        raise HTTPException(status_code=503, detail="Database not available. Run migrations.")
-    except IntegrityError:
-        raise HTTPException(status_code=409, detail="Resource already exists or constraint violation.")
+        ) from exc
+    except ProgrammingError as exc:
+        raise HTTPException(status_code=503, detail="Database not available. Run migrations.") from exc
+    except IntegrityError as exc:
+        raise HTTPException(status_code=409, detail="Resource already exists or constraint violation.") from exc
     except Exception as e:
         _log.error("Unexpected error in rotate_key: %s", str(e))
-        raise HTTPException(status_code=500, detail="Internal server error")
+        raise HTTPException(status_code=500, detail="Internal server error") from e
 
 
 @router.get("/status", response_model=RotationStatusResponse)
@@ -169,18 +170,18 @@ async def rotation_status(
         )
     except HTTPException:
         raise
-    except IntegrityError:
+    except IntegrityError as exc:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="A resource with this value already exists",
-        )
-    except ProgrammingError:
-        raise HTTPException(status_code=503, detail="Database not available. Run migrations.")
-    except IntegrityError:
-        raise HTTPException(status_code=409, detail="Resource already exists or constraint violation.")
+        ) from exc
+    except ProgrammingError as exc:
+        raise HTTPException(status_code=503, detail="Database not available. Run migrations.") from exc
+    except IntegrityError as exc:
+        raise HTTPException(status_code=409, detail="Resource already exists or constraint violation.") from exc
     except Exception as e:
         _log.error("Unexpected error in rotation_status: %s", str(e))
-        raise HTTPException(status_code=500, detail="Internal server error")
+        raise HTTPException(status_code=500, detail="Internal server error") from e
 
 
 # ── Background task ────────────────────────────────────────────────────────

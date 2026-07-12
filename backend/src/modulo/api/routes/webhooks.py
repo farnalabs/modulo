@@ -38,6 +38,7 @@ from modulo.db.models.trigger import Trigger
 from modulo.db.rls import set_rls_org
 
 _log = logging.getLogger(__name__)
+
 router = APIRouter(prefix="/api/v1/triggers", tags=["webhooks"])
 
 _trigger_engine = TriggerEngine()

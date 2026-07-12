@@ -7,7 +7,7 @@ import logging
 import uuid
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
-from typing import Any
+from typing import Any, ClassVar
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 from pydantic import BaseModel, Field
@@ -15,7 +15,6 @@ from sqlalchemy import func, select
 from sqlalchemy.exc import ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-_log = logging.getLogger(__name__)
 
 from modulo.api.dependencies import get_db_session, require_feature
 from modulo.auth.dependencies import get_current_user
@@ -31,6 +30,8 @@ from modulo.db.crud.spend_anomaly import dismiss_anomaly, list_anomalies
 from modulo.db.crud.team import get_team, list_teams
 from modulo.db.models.daily_run_count import OrgDailyRunCount
 from modulo.db.rls import set_rls_org
+
+_log = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/v1/admin/costs", tags=["admin", "costs"])
 
@@ -268,7 +269,7 @@ async def set_team_spend_limit(
 class CostControlsResponse(BaseModel):
     teams: list[dict[str, object]]
     budget: float | None = None
-    alert_thresholds: list[float] = []
+    alert_thresholds: ClassVar[list[float]] = []
     circuit_breaker_enabled: bool = False
     currency: str = "USD"
     billing_period: str = "monthly"
@@ -687,7 +688,7 @@ async def get_anomalies(
             counts_result = await session.execute(counts_q)
             daily_spends: list[tuple[object, object]] = [(r.run_date, r.daily_spend) for r in counts_result.all()]
 
-            anomalies: list[dict[str, Any]] = []
+            anomalies: ClassVar[list[dict[str, Any]]] = []
             for i, (run_date, spend) in enumerate(daily_spends):
                 if i < 7:
                     continue
@@ -714,7 +715,7 @@ async def get_anomalies(
 
             # Also return any previously stored anomalies
             stored = await list_anomalies(session, organisation_id=current_user.organisation_id, dismissed=False)
-            stored_dict: dict[str, Any] = {}
+            stored_dict: ClassVar[dict[str, Any]] = {}
             for a in stored:
                 key = str(a.anomaly_date)
                 if key not in stored_dict:
@@ -729,7 +730,7 @@ async def get_anomalies(
                     }
 
             # Merge: use stored dismissed status, and include stored anomalies
-            seen_dates: set[str] = set()
+            seen_dates: ClassVar[set[str]] = set()
             for a in anomalies:  # type: ignore[assignment]
                 key = a["anomaly_date"]  # type: ignore[index]
                 seen_dates.add(key)

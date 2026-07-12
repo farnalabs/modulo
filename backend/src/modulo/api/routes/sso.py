@@ -1,4 +1,4 @@
-﻿"""SSO routes: OIDC and SAML 2.0 login flows."""
+"""SSO routes: OIDC and SAML 2.0 login flows."""
 
 import logging
 from typing import Any
@@ -302,4 +302,3 @@ async def saml_metadata(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="An unexpected error occurred",
         ) from e
-
