@@ -357,6 +357,10 @@ const { loading, error, data: loadResp, load: loadPrimitives } = useDataFetch<Li
 )
 
 const primitives = ref<LibraryPrimitive[]>([])
+
+type LibrarySection = 'native' | 'community'
+const section = ref<LibrarySection>('native')
+
 watch(loadResp, (d) => {
   if (d) {
     primitives.value = section.value === 'native' ? d.items.filter(p => p.source !== 'community') : d.items
@@ -364,21 +368,18 @@ watch(loadResp, (d) => {
   }
 }, { immediate: true })
 
-const search = ref('')
-const typeFilter = ref('')
-const page = ref(1)
-const pageSize = ref(12)
-const total = ref(0)
-
-type LibrarySection = 'native' | 'community'
-const section = ref<LibrarySection>('native')
-
 function switchSection(next: LibrarySection) {
   if (section.value === next) return
   section.value = next
   page.value = 1
   loadPrimitives()
 }
+
+const search = ref('')
+const typeFilter = ref('')
+const page = ref(1)
+const pageSize = ref(12)
+const total = ref(0)
 
 const nativePrimitives = computed(() => primitives.value.filter(p => (p.tier ?? 'native') !== 'preview' && (p.tier ?? 'native') !== 'in_dev'))
 const previewPrimitives = computed(() => primitives.value.filter(p => p.tier === 'preview'))
