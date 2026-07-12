@@ -1,6 +1,7 @@
-from __future__ import annotations
-
 """API routes for error forwarder configuration — list, configure, test."""
+
+from __future__ import annotations
+from typing import ClassVar
 
 
 import asyncio
@@ -86,25 +87,25 @@ async def list_forwarders(
                 select(ErrorForwarderConfig).where(ErrorForwarderConfig.organisation_id == org_id)
             )
             existing = {r.forwarder_type: r for r in result.scalars().all()}
-    except ProgrammingError:
+    except ProgrammingError as exc:
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Error tracking is not available. Run database migrations to enable it.",
-        )
-    except SQLAlchemyError:
+        ) from exc
+    except SQLAlchemyError as exc:
         _log.warning("error_tracking.list_forwarders_db_error")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Error tracking is temporarily unavailable. Please try again.",
-        )
-    except Exception:
+        ) from exc
+    except Exception as exc:
         _log.exception("error_tracking.list_forwarders_error")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="An unexpected error occurred while processing your request.",
-        )
+        ) from exc
 
-    items: list[ForwarderListItem] = []
+    items: ClassVar[list[ForwarderListItem]] = []
     for ftype in _FORWARDER_TYPES:
         cfg = existing.get(ftype)
         items.append(
@@ -171,23 +172,23 @@ async def configure_forwarder(
 
             cfg.updated_at = datetime.now(UTC)
             await session.flush()
-    except ProgrammingError:
+    except ProgrammingError as exc:
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Error tracking is not available. Run database migrations to enable it.",
-        )
-    except SQLAlchemyError:
+        ) from exc
+    except SQLAlchemyError as exc:
         _log.warning("error_tracking.configure_forwarder_db_error")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Error tracking is temporarily unavailable. Please try again.",
-        )
-    except Exception:
+        ) from exc
+    except Exception as exc:
         _log.exception("error_tracking.configure_forwarder_error")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="An unexpected error occurred while processing your request.",
-        )
+        ) from exc
 
     return ForwarderConfigResponse.from_orm_model(cfg)
 
@@ -233,23 +234,23 @@ async def test_forwarder(
                 db_cfg = result.scalar_one_or_none()
                 if db_cfg and db_cfg.config_json:
                     config = {**db_cfg.config_json, **config}
-        except ProgrammingError:
+        except ProgrammingError as exc:
             raise HTTPException(
                 status_code=status.HTTP_501_NOT_IMPLEMENTED,
                 detail="Error tracking is not available. Run database migrations to enable it.",
-            )
-        except SQLAlchemyError:
+            ) from exc
+        except SQLAlchemyError as exc:
             _log.warning("error_tracking.test_forwarder_db_error")
             raise HTTPException(
                 status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
                 detail="Error tracking is temporarily unavailable. Please try again.",
-            )
-        except Exception:
+            ) from exc
+        except Exception as exc:
             _log.exception("error_tracking.test_forwarder_config_read_error")
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail="An unexpected error occurred while processing your request.",
-            )
+            ) from exc
 
     test_group = ErrorGroup(
         organisation_id=org_id,
@@ -289,23 +290,23 @@ async def test_forwarder(
                 db_cfg.last_test_at = datetime.now(UTC)
                 db_cfg.last_test_ok = ok
                 await session.flush()
-    except ProgrammingError:
+    except ProgrammingError as exc:
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Error tracking is not available. Run database migrations to enable it.",
-        )
-    except SQLAlchemyError:
+        ) from exc
+    except SQLAlchemyError as exc:
         _log.warning("error_tracking.test_forwarder_save_db_error")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Error tracking is temporarily unavailable. Please try again.",
-        )
-    except Exception:
+        ) from exc
+    except Exception as exc:
         _log.exception("error_tracking.test_forwarder_save_error")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="An unexpected error occurred while processing your request.",
-        )
+        ) from exc
 
     name = _FORWARDER_DISPLAY_NAMES.get(forwarder_type, forwarder_type)
     if ok:

@@ -32,6 +32,7 @@ from modulo.db.crud.org_membership import list_memberships_for_account
 from modulo.db.crud.token_family import advance_sequence, blacklist_family, create_family
 from modulo.settings import Settings, get_settings
 
+
 _log = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/v1/auth", tags=["auth"])
@@ -96,9 +97,8 @@ async def login(
     try:
         async with session.begin():
             account = await get_account_by_email(session, req.email)
-            if not account or not authenticate_db_user(req.password, account):
-                if limiter is not None:
-                    await limiter.record_failure(ip)
+            if not account or not authenticate_db_user(req.password, account) and limiter is not None:
+                await limiter.record_failure(ip)
                 raise HTTPException(
                     status_code=status.HTTP_401_UNAUTHORIZED,
                     detail="Incorrect email or password",

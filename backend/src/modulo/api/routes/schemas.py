@@ -6,7 +6,7 @@ import logging
 import uuid
 from copy import deepcopy
 from datetime import datetime
-from typing import Any
+from typing import Any, ClassVar
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from jsonschema import Draft202012Validator, ValidationError  # type: ignore[import-untyped]
@@ -638,7 +638,7 @@ async def list_schema_fields_endpoint(
     properties: dict[str, Any] = definition.get("properties", {})
     required_fields: list[str] = definition.get("required", [])
 
-    fields: list[SchemaFieldResponse] = []
+    fields: ClassVar[list[SchemaFieldResponse]] = []
     for field_name, field_schema in properties.items():
         if not isinstance(field_schema, dict):
             continue
@@ -663,7 +663,7 @@ async def list_schema_fields_endpoint(
 
 class SchemaSampleQuery(BaseModel):
     resource: str = Field(min_length=1)
-    filters: dict[str, Any] = {}
+    filters: ClassVar[dict[str, Any]] = {}
     limit: int = Field(default=10, ge=1, le=100)
 
 
@@ -882,7 +882,7 @@ async def infer_schema_endpoint(
 
 class SchemaGenerateRequest(BaseModel):
     description: str = Field(min_length=1)
-    examples: list[dict[str, Any]] = []
+    examples: ClassVar[list[dict[str, Any]]] = []
 
 
 class SchemaGenerateResponse(BaseModel):
@@ -1241,7 +1241,7 @@ async def validate_schema_endpoint(
     Returns structural validation errors with best-effort line/column info.
     """
     raw = json.dumps(req.definition, indent=2)
-    errors: list[SchemaValidationError] = []
+    errors: ClassVar[list[SchemaValidationError]] = []
 
     try:
         Draft202012Validator.check_schema(req.definition)
@@ -1321,7 +1321,7 @@ async def import_schema_endpoint(
     properties = schema.get("properties", {})
     required_fields: list[str] = schema.get("required", [])
 
-    fields: list[SchemaImportField] = []
+    fields: ClassVar[list[SchemaImportField]] = []
     for field_name, field_schema in properties.items():
         if not isinstance(field_schema, dict):
             continue

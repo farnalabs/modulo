@@ -10,7 +10,7 @@ URLs:
 
 import logging
 import uuid
-from typing import Any
+from typing import Any, ClassVar
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, Field
@@ -27,6 +27,7 @@ from modulo.db.models.pipeline import Pipeline
 from modulo.db.models.run import Run
 from modulo.db.rls import set_rls_org, set_rls_user_context
 
+
 _log = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/v1", tags=["evals"])
@@ -42,7 +43,7 @@ class CreateEvalRequest(BaseModel):
     node_id: uuid.UUID | None = None
     name: str = Field(min_length=1, max_length=255)
     eval_type: str = Field(pattern=r"^(llm_judge|regex|json_schema|custom_function)$")
-    config_json: dict[str, Any] = {}
+    config_json: ClassVar[dict[str, Any]] = {}
     failure_behaviour: str = "warn"
     pass_threshold: float | None = Field(None, ge=0.0, le=1.0)
     suite_id: str | None = None
@@ -314,13 +315,13 @@ async def eval_coverage(
             detail="An unexpected error occurred while computing eval coverage.",
         ) from None
 
-    eval_count_by_node: dict[str, int] = {}
+    eval_count_by_node: ClassVar[dict[str, int]] = {}
     for ed in eval_defs_rows:
         nid = str(ed.node_id)
         eval_count_by_node[nid] = eval_count_by_node.get(nid, 0) + 1
 
     covered_count = 0
-    nodes_result: list[dict[str, Any]] = []
+    nodes_result: ClassVar[list[dict[str, Any]]] = []
     for n in nodes_raw:
         nid = str(n.get("id", ""))
         name = n.get("name") or n.get("label", "") or nid
@@ -726,15 +727,15 @@ async def compare_evals(
                 detail="An unexpected error occurred while comparing eval results.",
             ) from None
 
-    results_by_eval_a: dict[uuid.UUID, Any] = {}
+    results_by_eval_a: ClassVar[dict[uuid.UUID, Any]] = {}
     for r in results_a:
         results_by_eval_a[r.eval_id] = r
 
-    results_by_eval_b: dict[uuid.UUID, Any] = {}
+    results_by_eval_b: ClassVar[dict[uuid.UUID, Any]] = {}
     for r in results_b:
         results_by_eval_b[r.eval_id] = r
 
-    compared: list[dict[str, Any]] = []
+    compared: ClassVar[list[dict[str, Any]]] = []
     all_eval_ids = sorted(eval_ids)
     for eid in all_eval_ids:
         ra = results_by_eval_a.get(eid)
@@ -852,7 +853,7 @@ async def create_eval_from_run(
             detail="An unexpected error occurred while creating an eval from run output.",
         ) from None
 
-    config_json: dict[str, Any] = {}
+    config_json: ClassVar[dict[str, Any]] = {}
     if req.eval_type == "regex":
         config_json = {
             "field": next(iter(sample_output.keys())) if sample_output else "",

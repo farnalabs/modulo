@@ -1,4 +1,4 @@
-﻿import json
+import json
 import logging
 import uuid
 from typing import Any
@@ -621,4 +621,3 @@ async def get_group_mappings_endpoint(
             detail="SSO provider not found",
         )
     return GroupMappingsResponse(mappings=[GroupMappingItem(**m) for m in provider.group_mappings])
-

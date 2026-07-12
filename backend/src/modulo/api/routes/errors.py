@@ -1,6 +1,6 @@
-from __future__ import annotations
-
 """Error tracking API — session-key generation, event ingestion, and dashboard."""
+
+from __future__ import annotations
 
 
 import json
@@ -8,7 +8,7 @@ import logging
 import time as _time
 import uuid
 from datetime import UTC, datetime, timedelta
-from typing import Any
+from typing import Any, ClassVar
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from sqlalchemy import select
@@ -41,6 +41,7 @@ from modulo.db.models.error_event import ErrorEvent
 from modulo.db.models.error_group import ErrorGroup
 from modulo.db.rls import set_rls_org
 from modulo.settings import Settings, get_settings
+
 
 _log = logging.getLogger(__name__)
 
@@ -162,23 +163,23 @@ async def ingest_errors(
             results = await _service.ingest_batch(session, org_id, events_data)
     except HTTPException:
         raise
-    except ProgrammingError:
+    except ProgrammingError as exc:
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Error tracking is not available. Run database migrations to enable it.",
-        )
-    except SQLAlchemyError:
+        ) from exc
+    except SQLAlchemyError as exc:
         _log.warning("error_tracking.db_error", extra={"org_id": str(principal.organisation_id)})
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Error tracking is temporarily unavailable. Please try again.",
-        )
-    except Exception:
+        ) from exc
+    except Exception as exc:
         _log.exception("error_tracking.ingest_error")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="An unexpected error occurred while processing your request.",
-        )
+        ) from exc
 
     return {"results": [ErrorGroupResult(**r) for r in results]}
 
@@ -262,23 +263,23 @@ async def ingest_errors_public(
     try:
         async with session.begin():
             results = await _service.ingest_batch(session, ORPHAN_ORG_ID, events_data)
-    except ProgrammingError:
+    except ProgrammingError as exc:
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Error tracking is not available. Run database migrations to enable it.",
-        )
-    except SQLAlchemyError:
+        ) from exc
+    except SQLAlchemyError as exc:
         _log.warning("error_tracking.public_ingest_db_error", extra={"ip": client_ip})
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Error tracking is temporarily unavailable. Please try again.",
-        )
-    except Exception:
+        ) from exc
+    except Exception as exc:
         _log.exception("error_tracking.public_ingest_error")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="An unexpected error occurred while processing your request.",
-        )
+        ) from exc
 
     # Update daily cap count after successful ingest
     ip_counts[today] = today_count + len(valid_events)
@@ -375,7 +376,7 @@ async def list_error_groups(
             )
 
             sample_ids = [g.sample_event_id for g in groups if g.sample_event_id is not None]
-            sample_events: dict[uuid.UUID, ErrorEvent] = {}
+            sample_events: ClassVar[dict[uuid.UUID, ErrorEvent]] = {}
             if sample_ids:
                 result = await session.execute(
                     select(ErrorEvent).where(
@@ -390,23 +391,23 @@ async def list_error_groups(
             for g in groups:
                 sample = sample_events.get(g.sample_event_id) if g.sample_event_id else None
                 items.append(_serialize_error_group_summary(g, sample))
-    except ProgrammingError:
+    except ProgrammingError as exc:
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Error tracking is not available. Run database migrations to enable it.",
-        )
-    except SQLAlchemyError:
+        ) from exc
+    except SQLAlchemyError as exc:
         _log.warning("error_tracking.list_groups_db_error")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Error tracking is temporarily unavailable. Please try again.",
-        )
-    except Exception:
+        ) from exc
+    except Exception as exc:
         _log.exception("error_tracking.list_groups_error")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="An unexpected error occurred while processing your request.",
-        )
+        ) from exc
 
     return {"items": items, "total": total, "limit": limit, "offset": offset}
 
@@ -430,23 +431,23 @@ async def get_error_group_detail(
             sample = await _fetch_sample_event(session, org_id, group)
     except HTTPException:
         raise
-    except ProgrammingError:
+    except ProgrammingError as exc:
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Error tracking is not available. Run database migrations to enable it.",
-        )
-    except SQLAlchemyError:
+        ) from exc
+    except SQLAlchemyError as exc:
         _log.warning("error_tracking.get_group_detail_db_error")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Error tracking is temporarily unavailable. Please try again.",
-        )
-    except Exception:
+        ) from exc
+    except Exception as exc:
         _log.exception("error_tracking.get_group_detail_error")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="An unexpected error occurred while processing your request.",
-        )
+        ) from exc
 
     return {
         "id": str(group.id),
@@ -489,23 +490,23 @@ async def patch_error_group(
             sample = await _fetch_sample_event(session, org_id, group)
     except HTTPException:
         raise
-    except ProgrammingError:
+    except ProgrammingError as exc:
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Error tracking is not available. Run database migrations to enable it.",
-        )
-    except SQLAlchemyError:
+        ) from exc
+    except SQLAlchemyError as exc:
         _log.warning("error_tracking.patch_group_db_error")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Error tracking is temporarily unavailable. Please try again.",
-        )
-    except Exception:
+        ) from exc
+    except Exception as exc:
         _log.exception("error_tracking.patch_group_error")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="An unexpected error occurred while processing your request.",
-        )
+        ) from exc
 
     return {
         "id": str(group.id),
@@ -545,23 +546,23 @@ async def list_error_events(
             total = await count_error_events_by_group(session=session, org_id=org_id, group_id=error_id)
     except HTTPException:
         raise
-    except ProgrammingError:
+    except ProgrammingError as exc:
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Error tracking is not available. Run database migrations to enable it.",
-        )
-    except SQLAlchemyError:
+        ) from exc
+    except SQLAlchemyError as exc:
         _log.warning("error_tracking.list_events_db_error")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Error tracking is temporarily unavailable. Please try again.",
-        )
-    except Exception:
+        ) from exc
+    except Exception as exc:
         _log.exception("error_tracking.list_events_error")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="An unexpected error occurred while processing your request.",
-        )
+        ) from exc
 
     items = [_serialize_error_event_detail(e) for e in events]
     return {"items": items, "total": total, "limit": limit, "offset": offset}

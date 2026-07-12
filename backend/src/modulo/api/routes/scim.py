@@ -7,7 +7,7 @@ Groups → internal Team + TeamMembership.
 
 import logging
 import uuid
-from typing import Any
+from typing import Any, ClassVar
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, Field
@@ -44,10 +44,11 @@ _SCIM_LIST_SCHEMA = "urn:ietf:params:scim:api:messages:2.0:ListResponse"
 _SCIM_ERROR_SCHEMA = "urn:ietf:params:scim:api:messages:2.0:Error"
 _SCIM_PATCH_OP_SCHEMA = "urn:ietf:params:scim:api:messages:2.0:PatchOp"
 
-_log = logging.getLogger(__name__)
-
 
 # ── Helpers ──────────────────────────────────────────────────────────
+
+
+_log = logging.getLogger(__name__)
 
 
 def _scim_error(status_code: int, detail: str) -> HTTPException:
@@ -137,7 +138,7 @@ class ScimUserRequest(BaseModel):
     schemas: list[str]
     userName: str
     name: ScimName | None = None
-    emails: list[ScimEmail] = []
+    emails: ClassVar[list[ScimEmail]] = []
     active: bool = True
     externalId: str | None = None
 
@@ -145,7 +146,7 @@ class ScimUserRequest(BaseModel):
 class ScimGroupRequest(BaseModel):
     schemas: list[str]
     displayName: str
-    members: list[ScimMemberRef] = []
+    members: ClassVar[list[ScimMemberRef]] = []
     externalId: str | None = None
 
 
@@ -157,7 +158,7 @@ class ScimPatchOperation(BaseModel):
 
 class ScimPatchRequest(BaseModel):
     schemas: list[str]
-    Operations: list[ScimPatchOperation] = []
+    Operations: ClassVar[list[ScimPatchOperation]] = []
 
 
 class ScimListResponse(BaseModel):
@@ -439,27 +440,25 @@ async def patch_user(
                         status.HTTP_400_BAD_REQUEST,
                         f"Unsupported PATCH operation '{op.op}'. Supported: replace, remove, add",
                     )
-                if op.op == "replace":
-                    if isinstance(op.value, dict):
-                        if "userName" in op.value:
-                            account.email = str(op.value["userName"])
-                        if "active" in op.value:
-                            account.active = bool(op.value["active"])
-                        if isinstance(op.value.get("name"), dict):
-                            name_data = op.value["name"]
-                            given = name_data.get("givenName") or ""
-                            family = name_data.get("familyName") or ""
-                            formatted = name_data.get("formatted") or (given + " " + family).strip()
-                            account.display_name = str(formatted).strip()
+                if op.op == "replace" and isinstance(op.value, dict):
+                    if "userName" in op.value:
+                        account.email = str(op.value["userName"])
+                    if "active" in op.value:
+                        account.active = bool(op.value["active"])
+                    if isinstance(op.value.get("name"), dict):
+                        name_data = op.value["name"]
+                        given = name_data.get("givenName") or ""
+                        family = name_data.get("familyName") or ""
+                        formatted = name_data.get("formatted") or (given + " " + family).strip()
+                        account.display_name = str(formatted).strip()
                     if op.path == "active":
                         account.active = bool(op.value)
                 elif op.op == "remove":
                     if op.path == "active":
                         account.active = False
                 elif op.op == "add":
-                    if isinstance(op.value, dict):
-                        if "userName" in op.value:
-                            account.email = str(op.value["userName"])
+                    if isinstance(op.value, dict) and "userName" in op.value:
+                        account.email = str(op.value["userName"])
                         if "active" in op.value:
                             account.active = bool(op.value["active"])
 
@@ -559,7 +558,7 @@ async def list_groups(
                 count=count,
             )
             base_url = _get_base_url(settings)
-            resources: list[dict[str, object]] = []
+            resources: ClassVar[list[dict[str, object]]] = []
             for g in groups:
                 memberships = await scim_list_group_members(session, g.id)
                 members = [
@@ -848,26 +847,25 @@ async def patch_group(
                         status.HTTP_400_BAD_REQUEST,
                         f"Unsupported PATCH operation '{op.op}'. Supported: replace, remove, add",
                     )
-                if op.op == "replace":
-                    if isinstance(op.value, dict):
-                        if "displayName" in op.value:
-                            await scim_update_group(session, group, name=str(op.value["displayName"]))
-                        if "members" in op.value and isinstance(op.value["members"], list):
-                            existing = await scim_list_group_members(session, group.id)
-                            for em in existing:
-                                await scim_remove_group_member(session, group.id, em.user_id)
-                            for m in op.value["members"]:
-                                if isinstance(m, dict) and "value" in m:
-                                    try:
-                                        uid = uuid.UUID(str(m["value"]))
-                                    except ValueError:
-                                        continue
-                                    await scim_add_group_member(
-                                        session,
-                                        org_id=principal.organisation_id,
-                                        team_id=group.id,
-                                        user_id=uid,
-                                    )
+                if op.op == "replace" and isinstance(op.value, dict):
+                    if "displayName" in op.value:
+                        await scim_update_group(session, group, name=str(op.value["displayName"]))
+                    if "members" in op.value and isinstance(op.value["members"], list):
+                        existing = await scim_list_group_members(session, group.id)
+                        for em in existing:
+                            await scim_remove_group_member(session, group.id, em.user_id)
+                        for m in op.value["members"]:
+                            if isinstance(m, dict) and "value" in m:
+                                try:
+                                    uid = uuid.UUID(str(m["value"]))
+                                except ValueError:
+                                    continue
+                                await scim_add_group_member(
+                                    session,
+                                    org_id=principal.organisation_id,
+                                    team_id=group.id,
+                                    user_id=uid,
+                                )
                 elif op.op == "add":
                     if op.path == "members" or op.path is None:
                         values = op.value

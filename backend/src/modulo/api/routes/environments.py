@@ -31,6 +31,7 @@ from modulo.db.models.environment_profile import EnvironmentProfile
 from modulo.db.rls import set_rls_org
 
 _log = logging.getLogger(__name__)
+
 router = APIRouter(prefix="/api/v1/environments", tags=["environments"])
 
 
@@ -168,11 +169,11 @@ async def list_profiles(
         async with session.begin():
             await set_rls_org(session, principal.organisation_id)
             result = await list_environment_profiles(session, page=page, page_size=page_size)
-    except IntegrityError:
+    except IntegrityError as exc:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="A resource with this value already exists",
-        )
+        ) from exc
     except ProgrammingError:
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
@@ -266,11 +267,11 @@ async def get_profile(
         async with session.begin():
             await set_rls_org(session, principal.organisation_id)
             profile = await _get_profile_or_404(session, profile_id)
-    except IntegrityError:
+    except IntegrityError as exc:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="A resource with this value already exists",
-        )
+        ) from exc
     except ProgrammingError:
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
@@ -353,11 +354,11 @@ async def delete_profile(
         async with session.begin():
             await set_rls_org(session, principal.organisation_id)
             deleted = await delete_environment_profile(session, profile_id)
-    except IntegrityError:
+    except IntegrityError as exc:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="A resource with this value already exists",
-        )
+        ) from exc
     except ProgrammingError:
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
@@ -485,11 +486,11 @@ async def test_profile(
         async with session.begin():
             await set_rls_org(session, principal.organisation_id)
             profile = await _get_profile_or_404(session, profile_id)
-    except IntegrityError:
+    except IntegrityError as exc:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="A resource with this value already exists",
-        )
+        ) from exc
     except ProgrammingError:
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,

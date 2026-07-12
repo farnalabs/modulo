@@ -2,13 +2,13 @@
 
 import logging
 import uuid
+from typing import ClassVar
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, Field, field_validator
 from sqlalchemy.exc import IntegrityError, ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-_log = logging.getLogger(__name__)
 
 from modulo.api.dependencies import get_db_session, require_feature
 from modulo.auth.dependencies import get_current_user
@@ -31,6 +31,8 @@ from modulo.db.crud.team_membership import (
     update_member_role,
 )
 from modulo.db.rls import set_rls_org, set_rls_user_context
+
+_log = logging.getLogger(__name__)
 
 router = APIRouter(
     prefix="/api/v1/teams",
@@ -126,11 +128,11 @@ async def list_teams_endpoint(
             await set_rls_org(session, current_user.organisation_id)
             await set_rls_user_context(session, current_user.account_id, current_user.org_role)
             result = await list_teams(session, org_id=current_user.organisation_id, page=page, page_size=page_size)
-    except IntegrityError:
+    except IntegrityError as exc:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="A resource with this value already exists",
-        )
+        ) from exc
     except ProgrammingError:
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
@@ -229,11 +231,11 @@ async def create_team_endpoint(
                 resource_id=team.id,
                 payload_json={"team_id": str(team.id), "name": team.name},
             )
-    except IntegrityError:
+    except IntegrityError as exc:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="A resource with this value already exists",
-        )
+        ) from exc
     except ProgrammingError:
         _log.warning(
             "create_team audit event ProgrammingError — team was created",
@@ -265,11 +267,11 @@ async def get_team_endpoint(
             await set_rls_org(session, current_user.organisation_id)
             await set_rls_user_context(session, current_user.account_id, current_user.org_role)
             team = await get_team(session, team_id)
-    except IntegrityError:
+    except IntegrityError as exc:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="A resource with this value already exists",
-        )
+        ) from exc
     except ProgrammingError:
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
@@ -331,11 +333,11 @@ async def update_team_endpoint(
                     )
 
             team = await update_team(session, team_id, updates)
-    except IntegrityError:
+    except IntegrityError as exc:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="A resource with this value already exists",
-        )
+        ) from exc
     except ProgrammingError:
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
@@ -377,11 +379,11 @@ async def update_team_endpoint(
                 resource_id=team_id,
                 payload_json={"team_id": str(team_id), "updates": updates},
             )
-    except IntegrityError:
+    except IntegrityError as exc:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="A resource with this value already exists",
-        )
+        ) from exc
     except ProgrammingError:
         _log.warning(
             "update_team audit event ProgrammingError — team was updated",
@@ -423,7 +425,7 @@ async def delete_team_endpoint(
             from modulo.db.models.pipeline import Pipeline
             from modulo.db.models.stage import Stage
 
-            resource_checks: list[tuple[str, int]] = []
+            resource_checks: ClassVar[list[tuple[str, int]]] = []
             for model_cls, label in [
                 (Pipeline, "pipeline"),
                 (Stage, "stage"),
@@ -447,11 +449,11 @@ async def delete_team_endpoint(
                 )
 
             deleted = await delete_team(session, team_id)
-    except IntegrityError:
+    except IntegrityError as exc:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="A resource with this value already exists",
-        )
+        ) from exc
     except ProgrammingError:
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
@@ -493,11 +495,11 @@ async def delete_team_endpoint(
                 resource_id=team_id,
                 payload_json={"team_id": str(team_id)},
             )
-    except IntegrityError:
+    except IntegrityError as exc:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="A resource with this value already exists",
-        )
+        ) from exc
     except ProgrammingError:
         _log.warning(
             "delete_team audit event ProgrammingError — team was deleted",
@@ -526,11 +528,11 @@ async def list_members_endpoint(
             if team is None:
                 raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Team not found")
             result = await list_team_members(session, team_id=team_id, page=page, page_size=page_size)
-    except IntegrityError:
+    except IntegrityError as exc:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="A resource with this value already exists",
-        )
+        ) from exc
     except ProgrammingError:
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
@@ -631,11 +633,11 @@ async def add_member_endpoint(
                 account_id=user_id,
                 role=req.role,
             )
-    except IntegrityError:
+    except IntegrityError as exc:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="A resource with this value already exists",
-        )
+        ) from exc
     except ProgrammingError:
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
@@ -697,11 +699,11 @@ async def remove_member_endpoint(
             if membership is None or membership.team_id != team_id:
                 raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Membership not found")
             await remove_team_member(session, membership_id)
-    except IntegrityError:
+    except IntegrityError as exc:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="A resource with this value already exists",
-        )
+        ) from exc
     except ProgrammingError:
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
@@ -774,11 +776,11 @@ async def change_member_role_endpoint(
             membership = await update_member_role(session, membership_id, req.role)
             if membership is None or membership.team_id != team_id:
                 raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Membership not found")
-    except IntegrityError:
+    except IntegrityError as exc:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="A resource with this value already exists",
-        )
+        ) from exc
     except ProgrammingError:
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,

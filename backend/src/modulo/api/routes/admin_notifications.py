@@ -1,6 +1,7 @@
-from __future__ import annotations
-
 """Admin notification webhook management — CRUD, test, re-enable, delivery log, retry."""
+
+from __future__ import annotations
+from typing import ClassVar
 
 
 import contextlib
@@ -352,7 +353,7 @@ async def retry_all_failed_deliveries(
         ) from None
 
     retried = 0
-    errors: list[str] = []
+    errors: ClassVar[list[str]] = []
 
     for delivery, ep in failed:
         event_type = delivery.event_type
@@ -1198,7 +1199,7 @@ async def retry_delivery(
 
 
 def _ep_to_response(ep: NotificationEndpoint) -> WebhookResponse:
-    events: list[str] = []
+    events: ClassVar[list[str]] = []
     with contextlib.suppress(json.JSONDecodeError, TypeError):
         events = json.loads(ep.events) if ep.events else []
     return WebhookResponse(

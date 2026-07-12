@@ -7,7 +7,7 @@ GET /api/v1/viewmodel/current — single-request aggregate for the frontend
 import logging
 import uuid
 from datetime import datetime
-from typing import Any
+from typing import Any, ClassVar
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, Field
@@ -30,6 +30,7 @@ from modulo.db.models.team import Team
 from modulo.db.models.view import SavedView
 from modulo.db.rls import set_rls_org, set_rls_user_context
 from modulo.settings import Settings, get_settings
+
 
 logger = logging.getLogger(__name__)
 
@@ -61,7 +62,7 @@ class MeResponse(BaseModel):
     team_memberships: list[TeamMembershipInfo]
     team_memberships_truncated: bool
     org_role: str
-    preferences: dict[str, Any] = {}
+    preferences: ClassVar[dict[str, Any]] = {}
     is_system_admin: bool = False
 
 
@@ -103,7 +104,7 @@ class PendingHitlGate(BaseModel):
 
 class LicenseInfo(BaseModel):
     tier: str = "community"
-    features: list[str] = []
+    features: ClassVar[list[str]] = []
     is_valid: bool = True
 
 
@@ -176,7 +177,7 @@ async def license_info(
 ) -> LicenseInfo:
     try:
         has_license_key = bool(settings.modulo_license_key)
-        features: list[str] = []
+        features: ClassVar[list[str]] = []
         if has_license_key:
             features = ["notifications"]
         return LicenseInfo(
@@ -252,12 +253,11 @@ async def viewmodel_current(
             await set_rls_org(session, current_user.organisation_id)
             await set_rls_user_context(session, current_user.account_id, current_user.org_role or "")
 
-            if view_as_team is not None:
-                if current_user.organisation_id is None:
-                    raise HTTPException(
-                        status_code=status.HTTP_400_BAD_REQUEST,
-                        detail="Cannot use view_as_team without an organisation",
-                    )
+            if view_as_team is not None and current_user.organisation_id is None:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="Cannot use view_as_team without an organisation",
+                )
                 team_result = await session.execute(
                     select(Team).where(
                         Team.id == view_as_team,

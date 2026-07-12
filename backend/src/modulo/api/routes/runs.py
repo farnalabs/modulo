@@ -5,7 +5,7 @@ import json
 import logging
 import uuid
 from decimal import Decimal
-from typing import Any, Literal
+from typing import Any, Literal, ClassVar
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, status
 from pydantic import BaseModel, Field
@@ -48,6 +48,7 @@ from modulo.db.rls import set_rls_org
 from modulo.settings import Settings, get_settings
 
 _log = logging.getLogger(__name__)
+
 router = APIRouter(prefix="/api/v1/runs", tags=["runs"])
 
 _TERMINAL_STATUSES = frozenset({"complete", "failed", "cancelled", "eval_failed"})
@@ -493,7 +494,7 @@ def _build_fixture_map(
     fixture_map entry.  Otherwise a single entry maps the full
     input_payload to the serialised outputs.
     """
-    fixture: dict[str, str] = {}
+    fixture: ClassVar[dict[str, str]] = {}
     inp = input_payload or {}
     out = outputs_json or {}
 
@@ -516,7 +517,7 @@ class FixtureExportResponse(BaseModel):
     run_id: uuid.UUID
     pipeline_id: uuid.UUID
     status: str
-    snapshot_graph_json: dict[str, Any] = {}
+    snapshot_graph_json: ClassVar[dict[str, Any]] = {}
     input_payload: dict[str, Any] | None = None
     outputs_json: dict[str, Any] | None = None
     fixture_map: dict[str, str]
@@ -1182,7 +1183,7 @@ def _build_messages_from_agent_and_state(
     from the input payload or checkpoint state, and assistant messages
     from previous node outputs.
     """
-    messages: list[dict[str, str]] = []
+    messages: ClassVar[list[dict[str, str]]] = []
 
     if agent is not None:
         system_content = agent.prompt_template or ""
@@ -1455,7 +1456,7 @@ async def diff_node_output(
     lines_b = text_b.splitlines(keepends=True)
 
     differ = difflib.SequenceMatcher(None, lines_a, lines_b)
-    diff_lines: list[NodeOutputDiffLine] = []
+    diff_lines: ClassVar[list[NodeOutputDiffLine]] = []
     line_a = 1
     line_b = 1
 

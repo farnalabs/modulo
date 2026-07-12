@@ -10,13 +10,14 @@ from sqlalchemy import func, select
 from sqlalchemy.exc import ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-_log = logging.getLogger(__name__)
 
 from modulo.api.dependencies import get_db_session
 from modulo.auth.dependencies import get_current_user
 from modulo.auth.jwt import AuthenticatedPrincipal
 from modulo.db.models.trigger_event import TriggerEvent
 from modulo.db.rls import set_rls_org
+
+_log = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/v1/admin/trigger-events", tags=["admin-trigger-events"])
 

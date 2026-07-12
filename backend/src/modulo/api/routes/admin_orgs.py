@@ -23,6 +23,7 @@ from modulo.db.crud.organisation import (
     update_organisation,
 )
 
+
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/v1/admin/orgs", tags=["admin"])
@@ -85,16 +86,16 @@ async def admin_create_org(
                 status=org.status,
                 created_at=org.created_at.isoformat(),
             )
-    except ProgrammingError:
+    except ProgrammingError as exc:
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
-        )
-    except SQLAlchemyError:
+        ) from exc
+    except SQLAlchemyError as exc:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database error while creating organisation.",
-        )
+        ) from exc
     except HTTPException:
         raise
     except Exception:
@@ -128,16 +129,16 @@ async def admin_list_orgs(
     try:
         async with session.begin():
             orgs = await list_organisations(session)
-    except ProgrammingError:
+    except ProgrammingError as exc:
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
-        )
-    except SQLAlchemyError:
+        ) from exc
+    except SQLAlchemyError as exc:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database error while listing organisations.",
-        )
+        ) from exc
     except HTTPException:
         raise
     except Exception:
@@ -253,16 +254,16 @@ async def admin_create_org_user(
                 auth_provider=account.auth_provider,
                 created_at=account.created_at.isoformat(),
             )
-    except ProgrammingError:
+    except ProgrammingError as exc:
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
-        )
-    except SQLAlchemyError:
+        ) from exc
+    except SQLAlchemyError as exc:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database error while creating org user.",
-        )
+        ) from exc
     except HTTPException:
         raise
     except Exception:
@@ -294,16 +295,16 @@ async def admin_delete_org(
             deleted = await delete_organisation(session, org_id)
             if not deleted:
                 raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Organisation not found")
-    except ProgrammingError:
+    except ProgrammingError as exc:
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
-        )
-    except SQLAlchemyError:
+        ) from exc
+    except SQLAlchemyError as exc:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database error while deleting organisation.",
-        )
+        ) from exc
     except HTTPException:
         raise
     except Exception:
@@ -340,16 +341,16 @@ async def admin_get_org_license(
 
     try:
         org = await get_organisation(session, org_id)
-    except ProgrammingError:
+    except ProgrammingError as exc:
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
-        )
-    except SQLAlchemyError:
+        ) from exc
+    except SQLAlchemyError as exc:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database error while fetching org license.",
-        )
+        ) from exc
     except HTTPException:
         raise
     except Exception:
@@ -402,16 +403,16 @@ async def admin_set_org_license(
 
     try:
         org = await get_organisation(session, org_id)
-    except ProgrammingError:
+    except ProgrammingError as exc:
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
-        )
-    except SQLAlchemyError:
+        ) from exc
+    except SQLAlchemyError as exc:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database error while fetching org for set-license.",
-        )
+        ) from exc
     except HTTPException:
         raise
     except Exception:
@@ -443,16 +444,16 @@ async def admin_set_org_license(
 
     try:
         await update_organisation(session, org_id, {"settings_json": settings_json})
-    except ProgrammingError:
+    except ProgrammingError as exc:
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
-        )
-    except SQLAlchemyError:
+        ) from exc
+    except SQLAlchemyError as exc:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database error while updating org license.",
-        )
+        ) from exc
     except HTTPException:
         raise
     except Exception:
@@ -483,16 +484,16 @@ async def admin_remove_org_license(
 
     try:
         org = await get_organisation(session, org_id)
-    except ProgrammingError:
+    except ProgrammingError as exc:
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
-        )
-    except SQLAlchemyError:
+        ) from exc
+    except SQLAlchemyError as exc:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database error while fetching org for remove-license.",
-        )
+        ) from exc
     except HTTPException:
         raise
     except Exception:
@@ -509,16 +510,16 @@ async def admin_remove_org_license(
 
     try:
         await update_organisation(session, org_id, {"settings_json": settings_json})
-    except ProgrammingError:
+    except ProgrammingError as exc:
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
-        )
-    except SQLAlchemyError:
+        ) from exc
+    except SQLAlchemyError as exc:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database error while removing org license.",
-        )
+        ) from exc
     except HTTPException:
         raise
     except Exception:

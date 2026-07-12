@@ -7,7 +7,7 @@ never exposed in any response — only a boolean `has_credentials` field.
 import logging
 import uuid
 from datetime import datetime
-from typing import Any, Literal
+from typing import Any, Literal, ClassVar
 
 from cryptography.fernet import Fernet
 from fastapi import APIRouter, Depends, HTTPException, Query, status
@@ -16,7 +16,6 @@ from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError, ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-logger = logging.getLogger(__name__)
 
 from modulo.api.dependencies import get_db_session
 from modulo.auth.dependencies import get_current_user
@@ -33,6 +32,8 @@ from modulo.db.models.model_backend import ModelBackend
 from modulo.db.rls import set_rls_org, set_rls_user_context
 from modulo.settings import Settings, get_settings
 
+logger = logging.getLogger(__name__)
+
 router = APIRouter(prefix="/api/v1/model-backends", tags=["model-backends"])
 
 
@@ -46,7 +47,7 @@ class ModelBackendCreate(BaseModel):
     provider: str = Field(..., min_length=1, max_length=128)
     model_id: str = Field(..., min_length=1, max_length=128)
     api_key: str = Field(..., min_length=1)
-    default_params: dict[str, Any] = {}
+    default_params: ClassVar[dict[str, Any]] = {}
     visibility: str = Field(default="org")
     owner_team_id: uuid.UUID | None = None
     fallback_backend_ids: list[uuid.UUID] | None = None

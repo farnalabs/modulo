@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 """HITL (Human-In-The-Loop) API routes.
 
 All HITL operations are scoped to the authenticated user's organisation.
@@ -10,12 +8,13 @@ claim.  ``human_only`` gates additionally reject MCP-initiated approve requests
 (checked by the ViewModel layer — this route does not distinguish clients).
 """
 
+from __future__ import annotations
+
 
 import logging
 import uuid
-from typing import Any
+from typing import Any, ClassVar
 
-logger = logging.getLogger(__name__)
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, Field
@@ -40,6 +39,8 @@ from modulo.db.crud.run import get_run, update_run_status
 from modulo.db.models.hitl_claim import HitlClaim
 from modulo.db.models.pipeline import Pipeline
 from modulo.db.rls import set_rls_org
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/v1", tags=["hitl"])
 
@@ -674,7 +675,7 @@ async def list_org_pending_gates(
             gates = await mgr.list_pending(session, principal.organisation_id)
 
             pipeline_ids = list({g.pipeline_id for g in gates})
-            pipeline_map: dict[uuid.UUID, str] = {}
+            pipeline_map: ClassVar[dict[uuid.UUID, str]] = {}
             if pipeline_ids:
                 pipeline_rows = await session.execute(
                     select(Pipeline.id, Pipeline.name).where(Pipeline.id.in_(pipeline_ids))

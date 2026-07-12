@@ -1,12 +1,12 @@
-from __future__ import annotations
-
 """Admin runtime-config introspection and overrides."""
+
+from __future__ import annotations
 
 
 import logging
 import os
 from dataclasses import asdict
-from typing import Any
+from typing import Any, ClassVar
 
 from fastapi import APIRouter, Depends, HTTPException, status
 
@@ -88,7 +88,7 @@ def set_runtime_config_overrides(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="'overrides' must be a dict",
             )
-        validated_overrides: list[tuple[str, str]] = []
+        validated_overrides: ClassVar[list[tuple[str, str]]] = []
         for key, value in overrides.items():
             _validate_known_key(key, "override")
             if not isinstance(value, str):
@@ -104,7 +104,7 @@ def set_runtime_config_overrides(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="'clear' must be a list",
             )
-        validated_clear: list[str] = []
+        validated_clear: ClassVar[list[str]] = []
         for key in clear_keys:
             if not isinstance(key, str):
                 raise HTTPException(

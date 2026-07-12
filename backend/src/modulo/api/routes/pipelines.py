@@ -10,7 +10,7 @@ import logging
 import re
 import uuid
 from datetime import datetime
-from typing import Any, Literal
+from typing import Any, Literal, ClassVar
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, Field, ValidationError, model_validator
@@ -165,9 +165,8 @@ class PipelineGraphNode(BaseModel):
 
     @model_validator(mode="after")
     def validate_node_type(self) -> "PipelineGraphNode":
-        if self.node_type == "manual":
-            if self.agent_id is not None:
-                raise ValueError("Manual nodes cannot reference an agent")
+        if self.node_type == "manual" and self.agent_id is not None:
+            raise ValueError("Manual nodes cannot reference an agent")
             if self.connector_binding is not None:
                 raise ValueError("Manual nodes cannot have connector bindings")
             if self.output_schema_id is None:
@@ -349,8 +348,8 @@ async def _resolve_graph_references(
             detail=f"Unknown manual output schema IDs for this organisation: {missing_schema_ids}",
         )
 
-    schema_pins: list[dict[str, Any]] = []
-    model_backend_pins: list[dict[str, Any]] = []
+    schema_pins: ClassVar[list[dict[str, Any]]] = []
+    model_backend_pins: ClassVar[list[dict[str, Any]]] = []
     for node in nodes:
         if node.agent_id is not None:
             agent = agents_by_id[node.agent_id]
@@ -863,7 +862,7 @@ async def save_as_composite_endpoint(
 
             # Auto-detect parameter placeholders: scan all agent prompts referenced by selected nodes
             agent_ids = {n.get("agent_id") for n in sub_nodes if n.get("agent_id") is not None}
-            detected_ports: list[dict[str, Any]] = []
+            detected_ports: ClassVar[list[dict[str, Any]]] = []
             if agent_ids:
                 agents_result = await session.execute(
                     select(Agent).where(Agent.id.in_(agent_ids), Agent.organisation_id == principal.organisation_id)
@@ -978,7 +977,7 @@ async def trigger_quality_report(
                 )
             ).scalars()
 
-            recipient_urls: list[str] = []
+            recipient_urls: ClassVar[list[str]] = []
             for ep in endpoints:
                 try:
                     events = json.loads(ep.events) if ep.events else []
@@ -987,7 +986,7 @@ async def trigger_quality_report(
                 if "quality_report" in events:
                     recipient_urls.append(ep.url)
 
-            deliveries: list[dict[str, Any]] = []
+            deliveries: ClassVar[list[dict[str, Any]]] = []
             if recipient_urls:
                 deliveries = await deliver_quality_report(report, {"webhook_urls": recipient_urls})
     except ProgrammingError:
@@ -1486,9 +1485,8 @@ def _find_node_in_list(nodes: list[dict[str, Any]], node_id: uuid.UUID) -> dict[
         raw_id = n.get("id")
         if raw_id is None:
             continue
-        if isinstance(raw_id, uuid.UUID):
-            if raw_id == node_id:
-                return n
+        if isinstance(raw_id, uuid.UUID) and raw_id == node_id:
+            return n
         elif str(raw_id) == node_id_str:
             return n
     return None

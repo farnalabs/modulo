@@ -3,7 +3,7 @@
 import logging
 import uuid
 from datetime import datetime
-from typing import Any, Literal
+from typing import Any, Literal, ClassVar
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, Field
@@ -219,7 +219,7 @@ async def update_composite_template_endpoint(
     session: AsyncSession = Depends(get_db_session),
     principal: AuthenticatedPrincipal = Depends(get_current_user),
 ) -> CompositeTemplateResponse:
-    updates: dict[str, Any] = {}
+    updates: ClassVar[dict[str, Any]] = {}
     for k, v in req.model_dump(exclude_unset=True).items():
         if k == "parameter_ports_json" and v is not None:
             updates[k] = [p.model_dump() if isinstance(p, BaseModel) else p for p in v]
