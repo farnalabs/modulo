@@ -47,7 +47,7 @@ deny_by_default_strategy = st.tuples(
 @given(deny_by_default_strategy)
 def test_deny_by_default_isolation(triple: tuple[uuid.UUID, str, str, str]) -> None:
     """Access from org A to org A's own resources should be permitted (baseline)."""
-    org_id, role, resource, operation = triple
+    _org_id, role, resource, operation = triple
     assume(role in ORG_ROLE_HIERARCHY)
 
     if (
@@ -87,7 +87,7 @@ def test_cross_tenant_access_rejected(
     If a single cross-org row is accessible, the entire multi-tenant isolation
     model is broken.
     """
-    attacker_org, victim_org, role, resource, operation, resource_id = sextuple
+    attacker_org, victim_org, role, _resource, _operation, _resource_id = sextuple
     assume(attacker_org != victim_org)
     assume(role in ORG_ROLE_HIERARCHY)
 
@@ -126,9 +126,7 @@ def _access_allowed(role: str, resource: str, operation: str) -> bool:
         return True
     if role == "operator":
         return True
-    if role == "admin":
-        return True
-    return False
+    return role == "admin"
 
 
 @settings(

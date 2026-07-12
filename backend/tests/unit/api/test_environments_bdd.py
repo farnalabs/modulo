@@ -57,7 +57,7 @@ def _fake_profile(**overrides: Any) -> MagicMock:
     p.persistence_policy = overrides.get("persistence_policy", "ephemeral")
     p.status = overrides.get("status", "active")
     p.visibility = overrides.get("visibility", "org")
-    p.owner_team_id = overrides.get("owner_team_id", None)
+    p.owner_team_id = overrides.get("owner_team_id")
     p.is_active = overrides.get("is_active", True)
     p.created_by = overrides.get("created_by", _USER_ID)
     p.created_at = None

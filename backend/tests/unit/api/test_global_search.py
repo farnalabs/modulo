@@ -2,6 +2,7 @@
 
 import uuid
 from collections.abc import Generator
+from typing import Self
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -32,7 +33,7 @@ VIEWER_PRINCIPAL = AuthenticatedPrincipal(
 class _FakeAsyncSession(AsyncMock):
     """Mock session supporting `async with session.begin():` protocol."""
 
-    async def __aenter__(self) -> "_FakeAsyncSession":
+    async def __aenter__(self) -> Self:
         return self
 
     async def __aexit__(self, *args: object) -> None:

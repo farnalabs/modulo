@@ -1,5 +1,6 @@
 """Unit tests for DeterminationScanner — uses mocked connectors."""
 
+import contextlib
 import json
 import uuid
 from unittest.mock import patch
@@ -47,10 +48,8 @@ def _hub(ci: object) -> ConnectorHub:
     ci_creds_json = "{}"
     payload = getattr(ci, "credentials_ciphertext", None)
     if payload:
-        try:
+        with contextlib.suppress(ValueError, TypeError):
             ci_creds_json = Fernet(_KEY.encode()).decrypt(payload).decode()
-        except (ValueError, TypeError):
-            pass
     patcher = patch.object(backend, "get_secret", return_value=ci_creds_json)
     patcher.start()
     return hub

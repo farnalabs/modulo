@@ -465,7 +465,7 @@ class TestEnvVarSeeding:
         ):
             await _seed_sso_providers(settings)
 
-            call_args = [call for call in mock_session.add.call_args_list]
+            call_args = list(mock_session.add.call_args_list)
             assert len(call_args) >= 1
             added = call_args[0][0][0]
             assert added.provider_type == "oidc"

@@ -3,6 +3,7 @@
 import datetime
 import uuid
 from decimal import Decimal
+from typing import Self
 from unittest.mock import AsyncMock, MagicMock, patch
 
 from celery.beat import Scheduler
@@ -53,7 +54,7 @@ class _MockSession:
         self._execute_mock = AsyncMock(side_effect=execute_side_effect or [])
         self.added: list[object] = []
 
-    async def __aenter__(self) -> "_MockSession":
+    async def __aenter__(self) -> Self:
         return self
 
     async def __aexit__(self, *args: object) -> bool:
