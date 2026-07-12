@@ -2,6 +2,7 @@
 
 import base64
 import uuid
+from contextlib import suppress
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -12,10 +13,8 @@ from modulo.api.dependencies import get_plan_context
 from modulo.core.feature_flags import CommunityTier, LicenseData, LicenseKeyTier
 from modulo.settings import Settings, get_settings
 
-try:
+with suppress(FileNotFoundError, OSError):
     scenarios("../features/auth/sso_saml.feature")
-except (FileNotFoundError, OSError):
-    pass
 
 _VALID_32 = "a" * 32
 _ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
@@ -202,7 +201,7 @@ def acs_valid_response(request: Any, ctx: dict[str, Any], client: Any) -> None:
             user_mock.id = uuid.uuid4()
             user_mock.organisation_id = _ORG_ID
             user_mock.org_role = "runner"
-            mock_jit.return_value = user_mock
+            mock_jit.return_value = (user_mock, _ORG_ID, "runner")
         else:
             existing = MagicMock()
             existing.email = email
@@ -211,7 +210,7 @@ def acs_valid_response(request: Any, ctx: dict[str, Any], client: Any) -> None:
             existing.org_role = "admin"
             existing.sso_subject = "saml:https://idp.example.com:user@example.com"
             existing.auth_provider = "saml"
-            mock_jit.return_value = existing
+            mock_jit.return_value = (existing, _ORG_ID, "admin")
 
         mock_tok.return_value = {
             "access_token": "at-saml-test",
@@ -271,7 +270,7 @@ def acs_with_groups(groups: str, request: Any, ctx: dict[str, Any], client: Any)
         user_mock.id = uuid.uuid4()
         user_mock.organisation_id = _ORG_ID
         user_mock.org_role = "runner"
-        mock_jit.return_value = user_mock
+        mock_jit.return_value = (user_mock, _ORG_ID, "runner")
 
         provider_mock = MagicMock()
         provider_mock.group_mappings = ctx.get("group_mappings", [])
