@@ -1,11 +1,10 @@
-from __future__ import annotations
-
 """Recovery handler for failed manual-input nodes.
 
 Provides the core logic to replay or skip a manual node that failed or
 is awaiting human input.  Used by the ``POST /recover`` API endpoint.
 """
 
+from __future__ import annotations
 
 import logging
 import uuid
