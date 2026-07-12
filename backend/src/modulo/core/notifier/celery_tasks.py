@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 """Celery task for notification dispatch with retry and dead-letter tracking.
 
 This module defines the ``DispatchNotificationTask`` and a convenience
@@ -13,6 +11,7 @@ Usage
     await enqueue_dispatch(org_id, event_type, payload, run_id=run_id)
 """
 
+from __future__ import annotations
 
 import asyncio
 import json
@@ -41,22 +40,15 @@ __all__ = [
     "get_celery_app",
 ]
 
-_get_engine_lock = asyncio.Lock()
-_engine_cache: dict[str, Any] = {}
-
-
 def _get_engine() -> Any:
-    """Return a cached async engine from settings.
+    """Return an async engine from settings.
 
-    The engine is cached so that multiple ``enqueue_dispatch`` calls
-    within the same process reuse the connection pool.
+    A fresh engine is created per call because the caller disposes
+    it after use — caching here would race with dispose in the
+    fallback path.
     """
-    global _engine_cache
     settings = get_settings()
-    key = settings.database_url
-    if key not in _engine_cache:
-        _engine_cache[key] = create_async_engine(settings.database_url)
-    return _engine_cache[key]
+    return create_async_engine(settings.database_url)
 
 
 _log = logging.getLogger(__name__)
