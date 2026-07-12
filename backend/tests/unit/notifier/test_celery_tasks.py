@@ -77,6 +77,9 @@ async def test_enqueue_dispatch_falls_back_to_inline_when_celery_unavailable() -
         patch("modulo.core.notifier.celery_tasks.Notifier") as mock_notifier_cls,
     ):
         mock_get_app.side_effect = ImportError("Celery not available")
+        mock_engine = MagicMock()
+        mock_engine.dispose = AsyncMock()
+        _mock_get_engine.return_value = mock_engine
         mock_notifier = MagicMock()
         mock_notifier.dispatch_event = AsyncMock(
             return_value=[
@@ -89,6 +92,7 @@ async def test_enqueue_dispatch_falls_back_to_inline_when_celery_unavailable() -
             ]
         )
         mock_notifier_cls.return_value = mock_notifier
+        mock_notifier.close = AsyncMock()
 
         results = await enqueue_dispatch(
             _ORG,
@@ -97,7 +101,7 @@ async def test_enqueue_dispatch_falls_back_to_inline_when_celery_unavailable() -
         )
 
     assert len(results) == 1
-    assert results[0].status == "delivered"
+    assert results[0]["status"] == "delivered"
     mock_notifier.dispatch_event.assert_called_once()
 
 
@@ -130,7 +134,7 @@ def test_dispatch_notification_task_autoretry_config() -> None:
     """Task has the correct autoretry configuration."""
     assert DispatchNotificationTask.max_retries == 3
     assert DispatchNotificationTask.default_retry_delay == 5
-    assert DispatchNotificationTask.autoretry_for == (Exception,)
+    assert DispatchNotificationTask.autoretry_for == (ConnectionError, TimeoutError, OSError)
     assert DispatchNotificationTask.name == "modulo.notifier.dispatch"
 
 
