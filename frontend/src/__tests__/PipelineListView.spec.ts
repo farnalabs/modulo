@@ -8,15 +8,24 @@ const mockResponses: Record<string, unknown> = {
   default: { items: [], total: 0, page: 1, page_size: 100 },
 }
 
-vi.mock('../lib/api/client', () => ({
-  api: {
-    GET: vi.fn(() => Promise.resolve({ data: mockResponses['/api/v1/pipelines?page_size=100'] ?? mockResponses.default, error: undefined })),
-    PUT: vi.fn().mockResolvedValue({ data: null, error: undefined }),
-    POST: vi.fn().mockResolvedValue({ data: null, error: undefined }),
-    DELETE: vi.fn().mockResolvedValue({ data: null, error: undefined }),
-  },
-  getAccessToken: vi.fn().mockReturnValue('mock-token'),
-}))
+vi.mock('../lib/api/client', () => {
+  const mockGet = vi.fn((url: string) => {
+    if (url === '/api/v1/pipeline-folders') {
+      return Promise.resolve({ data: mockResponses['/api/v1/pipeline-folders'] ?? [], error: undefined })
+    }
+    return Promise.resolve({ data: mockResponses.default, error: undefined })
+  })
+  return {
+    api: {
+      GET: mockGet,
+      PUT: vi.fn().mockResolvedValue({ data: null, error: undefined }),
+      POST: vi.fn().mockResolvedValue({ data: null, error: undefined }),
+      PATCH: vi.fn().mockResolvedValue({ data: null, error: undefined }),
+      DELETE: vi.fn().mockResolvedValue({ data: null, error: undefined }),
+    },
+    getAccessToken: vi.fn().mockReturnValue('mock-token'),
+  }
+})
 
 import PipelineListView from '../views/PipelineListView.vue'
 
@@ -42,7 +51,7 @@ describe('PipelineListView', () => {
     const wrapper = mount(PipelineListView, {
       global: {
         plugins: [router],
-        stubs: { ErrorAlert: true },
+        stubs: { ErrorAlert: true, FolderTree: true },
       },
     })
     expect(wrapper.exists()).toBe(true)
@@ -54,7 +63,7 @@ describe('PipelineListView', () => {
     const wrapper = mount(PipelineListView, {
       global: {
         plugins: [router],
-        stubs: { ErrorAlert: true },
+        stubs: { ErrorAlert: true, FolderTree: true },
       },
     })
     expect(wrapper.find('[data-testid="filter-bar-search"]').exists()).toBe(true)
@@ -66,7 +75,7 @@ describe('PipelineListView', () => {
     const wrapper = mount(PipelineListView, {
       global: {
         plugins: [router],
-        stubs: { ErrorAlert: true },
+        stubs: { ErrorAlert: true, FolderTree: true },
       },
     })
     await flushPromises()
@@ -88,7 +97,7 @@ describe('PipelineListView', () => {
     const wrapper = mount(PipelineListView, {
       global: {
         plugins: [router],
-        stubs: { ErrorAlert: true },
+        stubs: { ErrorAlert: true, FolderTree: true },
       },
     })
     await flushPromises()
@@ -111,7 +120,7 @@ describe('PipelineListView', () => {
     const wrapper = mount(PipelineListView, {
       global: {
         plugins: [router],
-        stubs: { ErrorAlert: true },
+        stubs: { ErrorAlert: true, FolderTree: true },
       },
     })
     await flushPromises()
