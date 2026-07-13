@@ -129,9 +129,30 @@ def test_retry_delivery_exception_returns_500(client: TestClient) -> None:
 
 
 def test_create_webhook_returns_201(client: TestClient) -> None:
+    session = _make_mock_session()
+
+    async def override_session() -> AsyncGenerator[AsyncMock, None]:
+        yield session
+
+    client.app.dependency_overrides[get_db_session] = override_session
     with patch("modulo.api.routes.admin_notifications.set_rls_org"):
         resp = client.post(
             "/api/v1/admin/notifications",
             json={"url": "https://example.com/hook", "events": ["hitl_awaiting"]},
         )
     assert resp.status_code == 201
+    persisted = session.add.call_args.args[0]
+    assert isinstance(persisted.events, list)
+    assert persisted.events == ["hitl_awaiting"]
+
+
+def test_admin_response_reads_legacy_json_string_events() -> None:
+    from modulo.api.routes.admin_notifications import _ep_to_response
+
+    endpoint = _make_mock_endpoint(events='["hitl_awaiting", "run_failed"]')
+    endpoint.disabled_at = None
+    endpoint.created_at = None
+
+    response = _ep_to_response(endpoint)
+
+    assert response.events == ["hitl_awaiting", "run_failed"]

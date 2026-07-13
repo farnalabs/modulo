@@ -148,6 +148,27 @@ def test_create_endpoint_returns_201(client: TestClient) -> None:
     assert body["url"] == "https://hooks.example.com/notify"
     assert "secret" not in body
     assert body["events"] == ["hitl.review_required"]
+    persisted = session.add.call_args.args[0]
+    assert isinstance(persisted.events, list)
+    assert persisted.events == ["hitl.review_required"]
+
+
+def test_list_endpoints_reads_legacy_json_string_events(client: TestClient) -> None:
+    ep = _make_mock_endpoint(events='["hitl.review_required", "run.failed"]')
+    session = _make_mock_session()
+    result_mock = MagicMock()
+    result_mock.scalars.return_value = [ep]
+    session.execute = AsyncMock(return_value=result_mock)
+
+    async def override_session() -> AsyncGenerator[AsyncMock, None]:
+        yield session
+
+    client.app.dependency_overrides[get_db_session] = override_session
+    with patch("modulo.api.routes.notifications.set_rls_org"):
+        resp = client.get("/api/v1/notifications")
+
+    assert resp.status_code == 200
+    assert resp.json()[0]["events"] == ["hitl.review_required", "run.failed"]
 
 
 def test_create_endpoint_with_secret_encrypts_it(client: TestClient) -> None:
