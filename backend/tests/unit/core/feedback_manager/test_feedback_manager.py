@@ -24,6 +24,12 @@ _GATE_ID = "gate-1"
 @pytest.fixture
 def mock_session() -> AsyncMock:
     session = AsyncMock()
+    bind = MagicMock()
+    bind.dialect.name = "sqlite"
+    session.in_transaction = MagicMock(return_value=True)
+    session.get_bind = MagicMock(return_value=bind)
+    session.info = {}
+    session.add = MagicMock()
     begin_cm = AsyncMock()
     begin_cm.__aenter__ = AsyncMock(return_value=None)
     begin_cm.__aexit__ = AsyncMock(return_value=False)
@@ -724,7 +730,9 @@ class TestRunPostCorrectionEval:
         mock_eval_result.score = 0.0
         mock_eval_engine.standalone_evaluate = MagicMock(return_value=mock_eval_result)
 
-        mock_session.execute = AsyncMock()
+        mock_exec_result = MagicMock()
+        mock_exec_result.scalar_one_or_none.return_value = correcting_record
+        mock_session.execute = AsyncMock(return_value=mock_exec_result)
 
         with (
             patch.object(mgr, "get_feedback_record", return_value=correcting_record),
