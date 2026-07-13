@@ -11,7 +11,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "farnalabs-modulo"
-version = "0.3.315"
+version = "0.3.316"
 description = "Governed orchestration for your agentic SDLC"
 license = "BUSL-1.1"
 authors = [
@@ -129,8 +129,9 @@ dev = [
     "hypothesis>=6.100.0",
     "schemathesis>=3.30.0",
     "pytest-recording>=0.13.0",
-
+    "mutmut>=3.6.0",
 ]
+
 docker = ["aiodocker>=0.21.0"]
 redis = [
     "celery[redis]>=5.4.0",
@@ -234,9 +235,17 @@ exclude_lines = [
 
 [tool.mutmut]
 paths_to_mutate = [
-    "src/modulo/db/rls.py",
     "src/modulo/auth/",
+    "src/modulo/db/rls.py",
     "src/modulo/core/license.py",
+    "src/modulo/core/pipeline_engine/",
+    "src/modulo/core/eval_engine/",
+    "src/modulo/core/cost_controller/",
+    "src/modulo/core/audit_logger/",
+    "src/modulo/core/connector_hub/",
+    "src/modulo/core/model_backend_hub/",
+    "src/modulo/core/graph_validator/",
+    "src/modulo/core/run_context/",
 ]
 runner = "pytest tests/unit/ tests/architecture/ -x -q --timeout=60 -m 'not integration and not e2e'"
 backup = false
@@ -266,6 +275,7 @@ dev = [
     "semgrep>=1.70.0",
     "testcontainers[postgres]>=4.5.0",
     "locust>=2.32.0",
+    "mutmut>=3.6.0",
     "websocket-client>=1.8.0",
     "requests>=2.31.0",
     "types-jmespath>=1.1.0.20260508",
