@@ -130,12 +130,14 @@ async def list_trigger_events(
         prev_cursor = f"{first.created_at.isoformat()}_{first.id}"
 
     try:
-        count_result = await session.execute(
-            select(func.count(TriggerEvent.id)).where(
-                TriggerEvent.organisation_id == principal.organisation_id,
+        async with session.begin():
+            await set_rls_org(session, principal.organisation_id)
+            count_result = await session.execute(
+                select(func.count(TriggerEvent.id)).where(
+                    TriggerEvent.organisation_id == principal.organisation_id,
+                )
             )
-        )
-        total = count_result.scalar() or 0
+            total = count_result.scalar() or 0
     except ProgrammingError:
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
