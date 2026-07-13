@@ -64,11 +64,16 @@ def get_or_compile(
     return result
 
 
-def _get_edge_val(edge: dict[str, Any], key: str) -> str:
-    value = edge.get(key)
+def _get_edge_val(edge: dict[str, Any], canonical: str, persisted: str) -> str:
+    value = edge.get(canonical, edge.get(persisted))
     if value is None:
-        raise ValueError(f"graph edge missing {key}")
+        raise ValueError(f"graph edge missing {canonical}")
     return str(value)
+
+
+def _get_edge_type(edge: dict[str, Any]) -> str:
+    value = edge.get("type", edge.get("edge_type", ""))
+    return str(value) if value is not None else ""
 
 
 def _make_gate_id(source: str, target: str) -> str:
@@ -113,7 +118,7 @@ def _make_conditional_router(
     compiled: list[tuple[Any, str]] = []
     for edge in conditional_edges:
         expr: str = edge.get("condition_expression", "")
-        target = _get_edge_val(edge, "target")
+        target = _get_edge_val(edge, "target", "target_node_id")
         compiled.append((jmespath.compile(expr), target))
 
     def _router(state: dict[str, Any]) -> str:
@@ -225,32 +230,32 @@ def build_graph_from_json(
     # Build reject-edge lookup for kick-back routing.
     reject_targets_by_source: dict[str, str] = {}
     for edge_def in edges:
-        etype = edge_def.get("type", "")
+        etype = _get_edge_type(edge_def)
         if etype == "reject":
-            src = _get_edge_val(edge_def, "source")
-            tgt = _get_edge_val(edge_def, "target")
+            src = _get_edge_val(edge_def, "source", "source_node_id")
+            tgt = _get_edge_val(edge_def, "target", "target_node_id")
             reject_targets_by_source[src] = tgt
 
     # Group forwarding edges by source (skip reject).
     source_edges: dict[str, list[dict[str, Any]]] = defaultdict(list)
     for edge_def in edges:
-        if edge_def.get("type", "") == "reject":
+        if _get_edge_type(edge_def) == "reject":
             continue
-        source = _get_edge_val(edge_def, "source")
+        source = _get_edge_val(edge_def, "source", "source_node_id")
         source_edges[source].append(edge_def)
 
     target_ids: set[str] = set()
     gate_node_ids: set[str] = set()
 
     for source, src_edges in source_edges.items():
-        conditional = [e for e in src_edges if e.get("type") == "conditional"]
-        normal = [e for e in src_edges if e.get("type") != "conditional"]
+        conditional = [e for e in src_edges if _get_edge_type(e) == "conditional"]
+        normal = [e for e in src_edges if _get_edge_type(e) != "conditional"]
 
         if conditional:
             # All outgoing edges from this source are handled by the router.
             normal_targets: list[str] = []
             for edge_def in normal:
-                tgt = _get_edge_val(edge_def, "target")
+                tgt = _get_edge_val(edge_def, "target", "target_node_id")
                 normal_targets.append(tgt)
                 target_ids.add(tgt)
 
@@ -265,7 +270,7 @@ def build_graph_from_json(
             graph.add_conditional_edges(source, router)
         else:
             for edge_def in normal:
-                target = _get_edge_val(edge_def, "target")
+                target = _get_edge_val(edge_def, "target", "target_node_id")
                 hitl_config = edge_def.get("hitl_gate_config")
                 if hitl_config:
                     gate_id = _make_gate_id(source, target)
