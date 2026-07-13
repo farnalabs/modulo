@@ -2,6 +2,7 @@
 
 import uuid
 from contextlib import asynccontextmanager
+from decimal import Decimal
 from typing import Any, TypedDict
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -18,6 +19,29 @@ from modulo.core.pipeline_engine.executor import (
 
 class _InterruptState(TypedDict, total=False):
     artifacts: list[dict[str, Any]]
+
+
+def test_compute_token_costs_treats_null_counters_as_zero():
+    usage: Any = {
+        "node-a": {"total_tokens": None, "input_tokens": None, "output_tokens": None},
+    }
+
+    total_tokens, total_cost, result_usage = PipelineExecutor._compute_token_costs(
+        usage,
+        input_rate=Decimal("0.1"),
+        output_rate=Decimal("0.2"),
+    )
+
+    assert total_tokens == 0
+    assert total_cost == Decimal(0)
+    assert result_usage == {
+        "node-a": {
+            "total_tokens": None,
+            "input_tokens": None,
+            "output_tokens": None,
+            "cost_usd": 0.0,
+        }
+    }
 
 
 # ---------------------------------------------------------------------------

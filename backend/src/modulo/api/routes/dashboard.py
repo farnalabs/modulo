@@ -8,6 +8,7 @@ from typing import Any, ClassVar
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi import status as http_status
+from redis.asyncio import Redis
 from sqlalchemy import Date, case, cast, func, select
 from sqlalchemy.exc import ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -66,8 +67,6 @@ async def _get_cached_dashboard(org_id: str) -> dict[str, Any] | None:
     if settings.redis_url:
         redis: Any = None
         try:
-            from redis.asyncio import Redis
-
             redis = Redis.from_url(settings.redis_url, decode_responses=True)
             key = f"dashboard:summary:{org_id}"
             cached = await redis.get(key)
@@ -90,8 +89,6 @@ async def _set_cached_dashboard(org_id: str, data: dict[str, Any]) -> None:
     if settings.redis_url:
         redis: Any = None
         try:
-            from redis.asyncio import Redis
-
             redis = Redis.from_url(settings.redis_url, decode_responses=True)
             key = f"dashboard:summary:{org_id}"
             await redis.setex(key, _DASHBOARD_CACHE_TTL, json.dumps(data, default=str))

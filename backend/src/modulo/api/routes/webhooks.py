@@ -33,6 +33,7 @@ from modulo.core.trigger_engine import (
     TriggerInactiveError,
     TriggerNotFoundError,
 )
+from modulo.db.crud.run import update_run_status
 from modulo.db.models.trigger import Trigger
 from modulo.db.rls import set_rls_org
 from modulo.settings import get_settings
@@ -289,9 +290,6 @@ async def _run_in_background(
             settings = get_settings()
             engine = get_or_create_engine(settings)
             factory = async_sessionmaker(engine, expire_on_commit=False)
-            from modulo.db.crud.run import update_run_status
-            from modulo.db.rls import set_rls_org
-
             async with factory() as session, session.begin():
                 await set_rls_org(session, org_id)
                 await update_run_status(session, run_id, "failed", error_code="internal_error")

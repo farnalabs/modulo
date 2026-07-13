@@ -7,6 +7,7 @@ import uuid
 from decimal import Decimal
 from typing import Any, ClassVar, Literal
 
+from cryptography.fernet import Fernet
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, status
 from pydantic import BaseModel, Field
 from sqlalchemy import select, text
@@ -125,7 +126,13 @@ async def _validate_run_input_basics(
             detail="Pipeline graph has no nodes",
         )
 
-    target_ids = {str(e.get("target_node_id", e.get("target"))) for e in edges}
+    target_ids: set[str] = set()
+    for edge in edges:
+        target_id = edge.get("target_node_id")
+        if target_id is None:
+            target_id = edge.get("target")
+        if target_id is not None:
+            target_ids.add(str(target_id))
     entry_candidates = [n for n in nodes if str(n.get("id")) not in target_ids]
     if not entry_candidates:
         raise HTTPException(
@@ -1126,8 +1133,6 @@ async def _get_checkpoint_state(
     fernet_key: str | None = None,
 ) -> dict[str, Any] | None:
     """Fetch the latest checkpoint state for a thread, decrypting if needed."""
-    from cryptography.fernet import Fernet
-
     result = await session.execute(
         text("""
             SELECT checkpoint, checkpoint_id

@@ -15,6 +15,7 @@ from modulo.api.dependencies import get_db_session
 from modulo.auth.dependencies import get_current_user
 from modulo.auth.jwt import AuthenticatedPrincipal
 from modulo.core.feature_flags import FeatureFlagRegistry
+from modulo.core.license import get_license, parse_and_verify
 from modulo.db.crud.organisation import get_organisation
 from modulo.settings import Settings, get_settings
 
@@ -38,8 +39,6 @@ async def _resolve_tier(settings: Settings, session: AsyncSession, current_user:
     4. Org.plan_id (per-org, from DB)
     5. Community fallback
     """
-    from modulo.core.license import get_license, parse_and_verify
-
     async with session.begin():
         org = await get_organisation(session, current_user.organisation_id)
 
@@ -84,8 +83,6 @@ async def _build_registry(
     settings: Settings, session: AsyncSession, current_user: AuthenticatedPrincipal
 ) -> FeatureFlagRegistry:
     tier = await _resolve_tier(settings, session, current_user)
-    from modulo.core.license import get_license
-
     lic = get_license()
     has_key = bool(settings.modulo_license_key) or lic is not None
 
