@@ -53,7 +53,7 @@ class Settings(BaseSettings):
 
     # "postgres" (default), "sqlite", "mariadb", or "mysql" — sqlite disables RLS,
     # advisory locks, flood protection, and other Postgres-specific security features.
-    # "mariadb" / "mysql" use asyncmy driver.
+    # "mariadb" / "mysql" use the aiomysql driver.
     modulo_db: str = Field("postgres")
 
     modulo_ratelimit_bypass_token: str = Field("")
@@ -207,6 +207,9 @@ class Settings(BaseSettings):
         url = self.database_url
         if url.startswith("postgres://"):
             url = "postgresql+asyncpg://" + url[len("postgres://") :]
+        if url.startswith("mysql+asyncmy://"):
+            url = "mysql+aiomysql://" + url[len("mysql+asyncmy://") :]
+            _log.warning("settings.legacy_asyncmy_url_replaced")
         url = url.replace("?sslmode=disable", "?ssl=disable")
         if url != self.database_url:
             self.database_url = url
@@ -223,7 +226,7 @@ class Settings(BaseSettings):
         elif self.modulo_db.lower() in ("mariadb", "mysql"):
             _log.warning("settings.mariadb_mode")
             if self.database_url.startswith("postgresql+asyncpg://"):
-                self.database_url = "mysql+asyncmy://modulo:modulo@localhost:5435/modulo"
+                self.database_url = "mysql+aiomysql://modulo:modulo@localhost:5435/modulo"
                 _log.info("settings.database_url_auto_set", extra={"database_url": self.database_url})
         return self
 
