@@ -18,9 +18,14 @@ _SQLALCHEMY_ERROR = SQLAlchemyError("mock", {}, None)
 
 
 @pytest.fixture(autouse=True)
-def _reset_rate_limiters():
+def _reset_error_state(monkeypatch: pytest.MonkeyPatch):
     from modulo.api.routes import errors as errors_module
 
+    monkeypatch.setenv("DATABASE_URL", "sqlite+aiosqlite:///:memory:")
+    monkeypatch.setenv("SECRET_KEY", "unit-test-secret-key-that-is-long-enough")
+    monkeypatch.setenv("FERNET_KEY", "unit-test-fernet-key-that-is-long-enough")
+    monkeypatch.setenv("REDIS_URL", "")
+    errors_module._key_store = None
     errors_module._public_rate_limit.clear()
     errors_module._public_daily_event_count.clear()
 
