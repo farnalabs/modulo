@@ -92,7 +92,7 @@ repos:
     hooks:
       - id: import-linter
         name: import-linter
-        entry: bash -c 'cd backend && uv run lint-imports'
+        entry: uv --directory backend run lint-imports
         language: system
         files: ^backend/src/
         pass_filenames: false
