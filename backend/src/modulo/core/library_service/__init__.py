@@ -3,7 +3,10 @@
 from __future__ import annotations
 
 import asyncio
+import base64
+import json
 import logging
+import os
 import uuid
 from datetime import UTC, datetime
 from typing import Any
@@ -284,243 +287,6 @@ _MODULO_PRIMITIVES: list[LibraryPrimitive] = [
             "run_id": None,
         },
         tags=["test_fixture", "example", "prd"],
-    ),
-    # -----------------------------------------------------------------------
-    # Modulo dogfood pipeline primitives (schemas, agents, workflow)
-    # -----------------------------------------------------------------------
-    _make_modulo(
-        pid="00000000-0000-0000-0000-000000000050",
-        primitive_type="schema",
-        name="GitHub Issue Input Schema",
-        slug="github-issue-input",
-        description="Schema for a GitHub issue to be processed by the Modulo dogfood pipeline.",
-        content_json={
-            "fields": [
-                {"name": "issue_number", "type": "integer", "required": True},
-                {"name": "title", "type": "string", "required": True},
-                {"name": "body", "type": "string", "required": True},
-                {"name": "labels", "type": "array", "items": "string", "required": False},
-                {"name": "repo", "type": "string", "required": True},
-            ]
-        },
-        tags=["schema", "github", "issue", "dogfood"],
-    ),
-    _make_modulo(
-        pid="00000000-0000-0000-0000-000000000051",
-        primitive_type="schema",
-        name="Structured Requirements Schema",
-        slug="structured-requirements",
-        description="Structured requirements extracted from a GitHub issue for code generation.",
-        content_json={
-            "fields": [
-                {"name": "agent_task", "type": "string", "required": True},
-                {"name": "feature_area", "type": "string", "required": True},
-                {"name": "spec_summary", "type": "string", "required": True},
-                {"name": "files_to_change", "type": "array", "items": "string", "required": False},
-                {"name": "implementation_notes", "type": "string", "required": False},
-            ]
-        },
-        tags=["schema", "requirements", "spec", "dogfood"],
-    ),
-    _make_modulo(
-        pid="00000000-0000-0000-0000-000000000052",
-        primitive_type="schema",
-        name="Code Diff Output Schema",
-        slug="code-diff-output",
-        description="Generated code changes as a list of file diffs.",
-        content_json={
-            "fields": [
-                {
-                    "name": "files",
-                    "type": "array",
-                    "items": {
-                        "type": "object",
-                        "properties": {
-                            "path": {"type": "string"},
-                            "content": {"type": "string"},
-                        },
-                    },
-                    "required": True,
-                },
-            ]
-        },
-        tags=["schema", "code", "diff", "dogfood"],
-    ),
-    _make_modulo(
-        pid="00000000-0000-0000-0000-000000000053",
-        primitive_type="schema",
-        name="Test Result Output Schema",
-        slug="test-result-output",
-        description="Result of running tests against generated code.",
-        content_json={
-            "fields": [
-                {"name": "passed", "type": "boolean", "required": True},
-                {"name": "failed", "type": "boolean", "required": True},
-                {"name": "output", "type": "string", "required": True},
-                {"name": "duration_ms", "type": "integer", "required": False},
-            ]
-        },
-        tags=["schema", "test", "result", "dogfood"],
-    ),
-    _make_modulo(
-        pid="00000000-0000-0000-0000-000000000054",
-        primitive_type="schema",
-        name="PR Output Schema",
-        slug="pr-output",
-        description="Result of creating a pull request.",
-        content_json={
-            "fields": [
-                {"name": "pr_url", "type": "string", "required": True},
-                {"name": "pr_number", "type": "integer", "required": True},
-                {"name": "success", "type": "boolean", "required": True},
-            ]
-        },
-        tags=["schema", "pr", "github", "dogfood"],
-    ),
-    _make_modulo(
-        pid="00000000-0000-0000-0000-000000000060",
-        primitive_type="agent",
-        name="Ticket Reader Agent",
-        slug="ticket-reader",
-        description="Reads a ticket via a ticket-tracker connector and extracts a structured spec for code generation.",
-        content_json={
-            "input_schema": "github-issue-input",
-            "output_schema": "structured-requirements",
-            "prompt_template": (
-                "You are a technical product manager. Read the following GitHub issue "
-                "and extract a structured specification for implementation.\n\n"
-                "Issue:\n{{ input }}"
-            ),
-            "connector_type_refs": [{"connector_type": "ticket-tracker", "capabilities": ["issue_read"]}],
-            "required_environment_capabilities": ["egress:github.com"],
-            "model_backend_id": None,
-            "retry_policy": {},
-            "token_budget": None,
-        },
-        tags=["agent", "ticket-tracker", "ticket-reader", "dogfood"],
-    ),
-    _make_modulo(
-        pid="00000000-0000-0000-0000-000000000061",
-        primitive_type="agent",
-        name="Code Generator Agent",
-        slug="code-generator",
-        description="Generates code changes from structured requirements as file diffs.",
-        content_json={
-            "input_schema": "structured-requirements",
-            "output_schema": "code-diff-output",
-            "prompt_template": (
-                "You are a senior software engineer. Given the following structured requirements, "
-                "generate the necessary code changes. Output a list of files with their full content.\n\n"
-                "Requirements:\n{{ input }}"
-            ),
-            "connector_type_refs": [],
-            "required_environment_capabilities": [],
-            "model_backend_id": None,
-            "retry_policy": {},
-            "token_budget": None,
-        },
-        tags=["agent", "code-generation", "llm", "dogfood"],
-    ),
-    _make_modulo(
-        pid="00000000-0000-0000-0000-000000000062",
-        primitive_type="agent",
-        name="Code Applier Agent",
-        slug="code-applier",
-        description="Writes generated code files to the workspace via ShellConnector.",
-        content_json={
-            "input_schema": "code-diff-output",
-            "output_schema": "code-diff-output",
-            "prompt_template": (
-                "You are a build engineer. Apply the following code changes to the workspace "
-                "by writing each file to disk.\n\n"
-                "Changes:\n{{ input }}"
-            ),
-            "connector_type_refs": [{"connector_type": "shell", "capabilities": ["write"]}],
-            "required_environment_capabilities": ["git", "shell", "python>=3.12"],
-            "model_backend_id": None,
-            "retry_policy": {},
-            "token_budget": None,
-        },
-        tags=["agent", "code-applier", "shell", "dogfood"],
-    ),
-    _make_modulo(
-        pid="00000000-0000-0000-0000-000000000063",
-        primitive_type="agent",
-        name="Test Runner Agent",
-        slug="test-runner",
-        description="Runs unit tests in the workspace via ShellConnector and reports results.",
-        content_json={
-            "input_schema": "code-diff-output",
-            "output_schema": "test-result-output",
-            "prompt_template": (
-                "You are a QA engineer. Run the unit tests at the workspace root "
-                "using the command 'uv run pytest tests/unit -x -q' and report the results.\n\n"
-                "Code changes applied:\n{{ input }}"
-            ),
-            "connector_type_refs": [{"connector_type": "shell", "capabilities": ["read", "write"]}],
-            "required_environment_capabilities": ["git", "shell", "python>=3.12"],
-            "model_backend_id": None,
-            "retry_policy": {},
-            "token_budget": None,
-        },
-        tags=["agent", "test-runner", "shell", "dogfood"],
-    ),
-    _make_modulo(
-        pid="00000000-0000-0000-0000-000000000064",
-        primitive_type="agent",
-        name="PR Creator Agent",
-        slug="pr-creator",
-        description="Creates a pull request on GitHub with the generated changes and test summary.",
-        content_json={
-            "input_schema": "test-result-output",
-            "output_schema": "pr-output",
-            "prompt_template": (
-                "You are a release engineer. Create a pull request on GitHub with the changes "
-                "that were made and include the test results in the PR body.\n\n"
-                "Test results:\n{{ input }}"
-            ),
-            "connector_type_refs": [{"connector_type": "github", "capabilities": ["create_pr"]}],
-            "required_environment_capabilities": ["egress:github.com"],
-            "model_backend_id": None,
-            "retry_policy": {},
-            "token_budget": None,
-        },
-        tags=["agent", "pr-creator", "github", "dogfood"],
-    ),
-    _make_modulo(
-        pid="00000000-0000-0000-0000-000000000070",
-        primitive_type="workflow",
-        name="Modulo Dogfood Pipeline",
-        slug="modulo-dogfood-pipeline",
-        description=(
-            "End-to-end pipeline that builds Modulo from a GitHub issue: reads spec, "
-            "generates code, applies changes, runs tests, and creates a PR with HITL review."
-        ),
-        content_json={
-            "nodes": [
-                {"id": "ticket-reader", "agent": "ticket-reader"},
-                {"id": "code-generator", "agent": "code-generator"},
-                {"id": "code-applier", "agent": "code-applier"},
-                {"id": "test-runner", "agent": "test-runner"},
-                {"id": "pr-creator", "agent": "pr-creator"},
-            ],
-            "edges": [
-                {"source": "ticket-reader", "target": "code-generator"},
-                {"source": "code-generator", "target": "code-applier"},
-                {"source": "code-applier", "target": "test-runner"},
-                {
-                    "source": "test-runner",
-                    "target": "pr-creator",
-                    "hitl_gate_config": {
-                        "human_only": False,
-                        "gate_id": "review_before_pr",
-                        "overdue_threshold_minutes": 60,
-                    },
-                },
-            ],
-            "entry": "ticket-reader",
-        },
-        tags=["workflow", "dogfood", "modulo", "pipeline"],
     ),
     # -----------------------------------------------------------------------
     # Simplest Workflow primitives (agent + workflow)
@@ -1087,7 +853,10 @@ def _filter_modulo(
     primitive_type: str | None,
     search: str | None,
 ) -> list[LibraryPrimitive]:
-    return _filter_primitives(_MODULO_PRIMITIVES, primitive_type=primitive_type, search=search)
+    items = _MODULO_PRIMITIVES
+    if os.environ.get("MODULO_DOGFOOD_ENABLED", "").lower() in ("true", "1"):
+        items = [*items, *_ensure_dogfood_primitives()]
+    return _filter_primitives(items, primitive_type=primitive_type, search=search)
 
 
 # ---------------------------------------------------------------------------
@@ -1210,7 +979,12 @@ async def get_primitive(
         raise
     if item is not None:
         return item
-    return _MODULO_BY_ID.get(primitive_id) or _COMMUNITY_BY_ID.get(primitive_id)
+    result = _MODULO_BY_ID.get(primitive_id) or _COMMUNITY_BY_ID.get(primitive_id)
+    if result is None and os.environ.get("MODULO_DOGFOOD_ENABLED", "").lower() in ("true", "1"):
+        for p in _ensure_dogfood_primitives():
+            if p.id == primitive_id:
+                return p
+    return result
 
 
 async def get_primitive_by_slug(
@@ -1250,7 +1024,12 @@ async def get_primitive_by_slug(
         raise
     if item is not None:
         return item
-    return _MODULO_BY_SLUG.get((primitive_type, slug)) or _COMMUNITY_BY_SLUG.get((primitive_type, slug))
+    result = _MODULO_BY_SLUG.get((primitive_type, slug)) or _COMMUNITY_BY_SLUG.get((primitive_type, slug))
+    if result is None and os.environ.get("MODULO_DOGFOOD_ENABLED", "").lower() in ("true", "1"):
+        for p in _ensure_dogfood_primitives():
+            if p.primitive_type == primitive_type and p.slug == slug:
+                return p
+    return result
 
 
 async def copy_to_adapt(
@@ -1288,6 +1067,11 @@ async def copy_to_adapt(
             refreshed = await get_library_primitive(session, primitive_id)
             if refreshed is None:
                 refreshed = _MODULO_BY_ID.get(primitive_id) or _COMMUNITY_BY_ID.get(primitive_id)
+            if refreshed is None and os.environ.get("MODULO_DOGFOOD_ENABLED", "").lower() in ("true", "1"):
+                for p in _ensure_dogfood_primitives():
+                    if p.id == primitive_id:
+                        refreshed = p
+                        break
             if refreshed is None:
                 raise LookupError(f"Primitive {primitive_id} not found for org {org_id} during copy")
             new_version = _bump_version(refreshed.version)
@@ -1722,6 +1506,54 @@ _MODULO_PRIMITIVES.extend(
 # Indexes for O(1) community lookup
 _MODULO_BY_ID: dict[uuid.UUID, LibraryPrimitive] = {p.id: p for p in _MODULO_PRIMITIVES}
 _MODULO_BY_SLUG: dict[tuple[str, str], LibraryPrimitive] = {(p.primitive_type, p.slug): p for p in _MODULO_PRIMITIVES}
+
+# ---------------------------------------------------------------------------
+# Dogfood primitives (loaded from MODULO_DOGFOOD_JSON_B64 env var).
+# Source of truth: Repos/devtools/dogfood/dogfood-primitives.json.
+# Only loaded when MODULO_DOGFOOD_ENABLED is true.
+# ---------------------------------------------------------------------------
+
+_DOGFOOD_PRIMITIVES: list[LibraryPrimitive] | None = None
+
+
+def _ensure_dogfood_primitives() -> list[LibraryPrimitive]:
+    global _DOGFOOD_PRIMITIVES
+    if _DOGFOOD_PRIMITIVES is not None:
+        return _DOGFOOD_PRIMITIVES
+    if os.environ.get("MODULO_DOGFOOD_ENABLED", "").lower() not in ("true", "1"):
+        _DOGFOOD_PRIMITIVES = []
+        return []
+    encoded = os.environ.get("MODULO_DOGFOOD_JSON_B64", "")
+    if not encoded:
+        _DOGFOOD_PRIMITIVES = []
+        return []
+    try:
+        decoded = base64.b64decode(encoded).decode("utf-8")
+        data = json.loads(decoded)
+        result: list[LibraryPrimitive] = []
+        seen: set[uuid.UUID] = set()
+        for entry in data:
+            pid = uuid.UUID(entry["pid"])
+            if pid in seen:
+                continue
+            seen.add(pid)
+            result.append(
+                _make_modulo(
+                    pid=entry["pid"],
+                    primitive_type=entry["primitive_type"],
+                    name=entry["name"],
+                    slug=entry["slug"],
+                    description=entry["description"],
+                    content_json=entry["content_json"],
+                    tags=entry["tags"],
+                )
+            )
+        _DOGFOOD_PRIMITIVES = result
+    except Exception:
+        logger.warning("Failed to load dogfood primitives from MODULO_DOGFOOD_JSON_B64", exc_info=True)
+        _DOGFOOD_PRIMITIVES = []
+    return _DOGFOOD_PRIMITIVES
+
 
 # ---------------------------------------------------------------------------
 # Community database — opinionated, narrower example pipelines contributed
