@@ -7,15 +7,15 @@ Groups → internal Team + TeamMembership.
 
 import logging
 import uuid
-from typing import Any, ClassVar
+from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, Field
 from sqlalchemy.exc import IntegrityError, ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from modulo.api.dependencies import get_db_session, require_feature
-from modulo.auth.scim_auth import ScimPrincipal, get_scim_principal
+from modulo.api.dependencies import get_db_session
+from modulo.auth.scim_auth import ScimPrincipal, get_scim_principal, require_scim_feature
 from modulo.db.crud.scim import (
     scim_add_group_member,
     scim_create_group,
@@ -138,7 +138,7 @@ class ScimUserRequest(BaseModel):
     schemas: list[str]
     userName: str
     name: ScimName | None = None
-    emails: ClassVar[list[ScimEmail]] = []
+    emails: list[ScimEmail] = Field(default_factory=list)
     active: bool = True
     externalId: str | None = None
 
@@ -146,7 +146,7 @@ class ScimUserRequest(BaseModel):
 class ScimGroupRequest(BaseModel):
     schemas: list[str]
     displayName: str
-    members: ClassVar[list[ScimMemberRef]] = []
+    members: list[ScimMemberRef] = Field(default_factory=list)
     externalId: str | None = None
 
 
@@ -158,7 +158,7 @@ class ScimPatchOperation(BaseModel):
 
 class ScimPatchRequest(BaseModel):
     schemas: list[str]
-    Operations: ClassVar[list[ScimPatchOperation]] = []
+    Operations: list[ScimPatchOperation] = Field(default_factory=list)
 
 
 class ScimListResponse(BaseModel):
@@ -172,7 +172,7 @@ class ScimListResponse(BaseModel):
 # ── ServiceProviderConfig ────────────────────────────────────────────
 
 
-@router.get("/ServiceProviderConfig", dependencies=[require_feature("scim")])
+@router.get("/ServiceProviderConfig", dependencies=[Depends(require_scim_feature)])
 async def get_service_provider_config(
     settings: Settings = Depends(get_settings),
     principal: ScimPrincipal = Depends(get_scim_principal),
@@ -200,7 +200,7 @@ async def get_service_provider_config(
 # ── Users ────────────────────────────────────────────────────────────
 
 
-@router.get("/Users", response_model=ScimListResponse, dependencies=[require_feature("scim")])
+@router.get("/Users", response_model=ScimListResponse, dependencies=[Depends(require_scim_feature)])
 async def list_users(
     filter: str | None = Query(None),
     startIndex: int = Query(1, ge=1),
@@ -256,7 +256,7 @@ async def list_users(
     )
 
 
-@router.post("/Users", status_code=status.HTTP_201_CREATED, dependencies=[require_feature("scim")])
+@router.post("/Users", status_code=status.HTTP_201_CREATED, dependencies=[Depends(require_scim_feature)])
 async def create_user(
     req: ScimUserRequest,
     settings: Settings = Depends(get_settings),
@@ -325,7 +325,7 @@ async def create_user(
     return _user_to_scim(account, _get_base_url(settings))
 
 
-@router.get("/Users/{user_id}", dependencies=[require_feature("scim")])
+@router.get("/Users/{user_id}", dependencies=[Depends(require_scim_feature)])
 async def get_user(
     user_id: uuid.UUID,
     settings: Settings = Depends(get_settings),
@@ -369,7 +369,7 @@ async def get_user(
     return _user_to_scim(account, _get_base_url(settings))
 
 
-@router.put("/Users/{user_id}", dependencies=[require_feature("scim")])
+@router.put("/Users/{user_id}", dependencies=[Depends(require_scim_feature)])
 async def replace_user(
     user_id: uuid.UUID,
     req: ScimUserRequest,
@@ -392,6 +392,8 @@ async def replace_user(
                 display_name=display_name,
                 active=req.active,
             )
+    except HTTPException:
+        raise
     except IntegrityError:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
@@ -419,7 +421,7 @@ async def replace_user(
     return _user_to_scim(account, _get_base_url(settings))
 
 
-@router.patch("/Users/{user_id}", dependencies=[require_feature("scim")])
+@router.patch("/Users/{user_id}", dependencies=[Depends(require_scim_feature)])
 async def patch_user(
     user_id: uuid.UUID,
     req: ScimPatchRequest,
@@ -440,17 +442,18 @@ async def patch_user(
                         status.HTTP_400_BAD_REQUEST,
                         f"Unsupported PATCH operation '{op.op}'. Supported: replace, remove, add",
                     )
-                if op.op == "replace" and isinstance(op.value, dict):
-                    if "userName" in op.value:
-                        account.email = str(op.value["userName"])
-                    if "active" in op.value:
-                        account.active = bool(op.value["active"])
-                    if isinstance(op.value.get("name"), dict):
-                        name_data = op.value["name"]
-                        given = name_data.get("givenName") or ""
-                        family = name_data.get("familyName") or ""
-                        formatted = name_data.get("formatted") or (given + " " + family).strip()
-                        account.display_name = str(formatted).strip()
+                if op.op == "replace":
+                    if isinstance(op.value, dict):
+                        if "userName" in op.value:
+                            account.email = str(op.value["userName"])
+                        if "active" in op.value:
+                            account.active = bool(op.value["active"])
+                        if isinstance(op.value.get("name"), dict):
+                            name_data = op.value["name"]
+                            given = name_data.get("givenName") or ""
+                            family = name_data.get("familyName") or ""
+                            formatted = name_data.get("formatted") or (given + " " + family).strip()
+                            account.display_name = str(formatted).strip()
                     if op.path == "active":
                         account.active = bool(op.value)
                 elif op.op == "remove":
@@ -493,7 +496,7 @@ async def patch_user(
     return _user_to_scim(account, _get_base_url(settings))
 
 
-@router.delete("/Users/{user_id}", status_code=status.HTTP_204_NO_CONTENT, dependencies=[require_feature("scim")])
+@router.delete("/Users/{user_id}", status_code=status.HTTP_204_NO_CONTENT, dependencies=[Depends(require_scim_feature)])
 async def delete_user(
     user_id: uuid.UUID,
     principal: ScimPrincipal = Depends(get_scim_principal),
@@ -538,7 +541,7 @@ async def delete_user(
 # ── Groups ───────────────────────────────────────────────────────────
 
 
-@router.get("/Groups", response_model=ScimListResponse, dependencies=[require_feature("scim")])
+@router.get("/Groups", response_model=ScimListResponse, dependencies=[Depends(require_scim_feature)])
 async def list_groups(
     filter: str | None = Query(None),
     startIndex: int = Query(1, ge=1),
@@ -558,7 +561,7 @@ async def list_groups(
                 count=count,
             )
             base_url = _get_base_url(settings)
-            resources: ClassVar[list[dict[str, object]]] = []
+            resources: list[dict[str, object]] = []
             for g in groups:
                 memberships = await scim_list_group_members(session, g.id)
                 members = [
@@ -606,7 +609,7 @@ async def list_groups(
     )
 
 
-@router.post("/Groups", status_code=status.HTTP_201_CREATED, dependencies=[require_feature("scim")])
+@router.post("/Groups", status_code=status.HTTP_201_CREATED, dependencies=[Depends(require_scim_feature)])
 async def create_group(
     req: ScimGroupRequest,
     settings: Settings = Depends(get_settings),
@@ -699,7 +702,7 @@ async def create_group(
     return _group_to_scim(team, members, base_url)
 
 
-@router.get("/Groups/{group_id}", dependencies=[require_feature("scim")])
+@router.get("/Groups/{group_id}", dependencies=[Depends(require_scim_feature)])
 async def get_group(
     group_id: uuid.UUID,
     settings: Settings = Depends(get_settings),
@@ -752,7 +755,7 @@ async def get_group(
     return _group_to_scim(group, members, base_url)
 
 
-@router.put("/Groups/{group_id}", dependencies=[require_feature("scim")])
+@router.put("/Groups/{group_id}", dependencies=[Depends(require_scim_feature)])
 async def replace_group(
     group_id: uuid.UUID,
     req: ScimGroupRequest,
@@ -826,7 +829,7 @@ async def replace_group(
     return _group_to_scim(group, members, base_url)
 
 
-@router.patch("/Groups/{group_id}", dependencies=[require_feature("scim")])
+@router.patch("/Groups/{group_id}", dependencies=[Depends(require_scim_feature)])
 async def patch_group(
     group_id: uuid.UUID,
     req: ScimPatchRequest,
@@ -952,7 +955,11 @@ async def patch_group(
     return _group_to_scim(group, members, base_url)
 
 
-@router.delete("/Groups/{group_id}", status_code=status.HTTP_204_NO_CONTENT, dependencies=[require_feature("scim")])
+@router.delete(
+    "/Groups/{group_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    dependencies=[Depends(require_scim_feature)],
+)
 async def delete_group(
     group_id: uuid.UUID,
     principal: ScimPrincipal = Depends(get_scim_principal),

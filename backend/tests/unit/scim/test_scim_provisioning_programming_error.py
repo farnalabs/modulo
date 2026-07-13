@@ -15,8 +15,8 @@ import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy.exc import ProgrammingError, SQLAlchemyError
 
-from modulo.api.dependencies import _get_engine, get_db_session, get_plan_context
-from modulo.auth.scim_auth import ScimPrincipal, get_scim_principal
+from modulo.api.dependencies import _get_engine, get_db_session
+from modulo.auth.scim_auth import ScimPrincipal, get_scim_plan_context, get_scim_principal
 from modulo.settings import Settings, get_settings
 
 _NOW = datetime(2025, 1, 1, tzinfo=UTC)
@@ -95,7 +95,7 @@ def client() -> Generator[TestClient, None, None]:
     app.dependency_overrides[get_db_session] = override_session
     app.dependency_overrides[_get_engine] = lambda: MagicMock()
     app.dependency_overrides[get_scim_principal] = lambda: ScimPrincipal(organisation_id=_ORG_ID)
-    app.dependency_overrides[get_plan_context] = _override_plan_context
+    app.dependency_overrides[get_scim_plan_context] = _override_plan_context
     yield TestClient(app)
     app.dependency_overrides.clear()
 
@@ -626,7 +626,7 @@ class TestGetBaseUrlMissing:
         app.dependency_overrides[get_db_session] = lambda: _make_mock_session()
         app.dependency_overrides[_get_engine] = lambda: MagicMock()
         app.dependency_overrides[get_scim_principal] = lambda: ScimPrincipal(organisation_id=_ORG_ID)
-        app.dependency_overrides[get_plan_context] = _override_plan_context
+        app.dependency_overrides[get_scim_plan_context] = _override_plan_context
 
         with (
             patch("modulo.api.routes.scim.scim_list_users", return_value=([_MOCK_USER], 1)),
@@ -648,7 +648,7 @@ class TestGetBaseUrlMissing:
         app.dependency_overrides[get_db_session] = lambda: _make_mock_session()
         app.dependency_overrides[_get_engine] = lambda: MagicMock()
         app.dependency_overrides[get_scim_principal] = lambda: ScimPrincipal(organisation_id=_ORG_ID)
-        app.dependency_overrides[get_plan_context] = _override_plan_context
+        app.dependency_overrides[get_scim_plan_context] = _override_plan_context
 
         with (
             patch("modulo.api.routes.scim.scim_get_user", return_value=_MOCK_USER),

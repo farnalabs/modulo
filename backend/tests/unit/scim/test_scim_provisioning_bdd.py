@@ -16,7 +16,8 @@ from fastapi.testclient import TestClient
 
 from modulo.api.dependencies import _get_engine, get_db_session
 from modulo.api.main import app
-from modulo.auth.scim_auth import ScimPrincipal, get_scim_principal
+from modulo.auth.scim_auth import ScimPrincipal, get_scim_plan_context, get_scim_principal
+from modulo.core.feature_flags import CommunityTier, DbPlanContext, FeatureFlagRegistry
 from modulo.settings import Settings, get_settings
 
 _VALID_32 = "a" * 32
@@ -24,6 +25,11 @@ _ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
 _USER_ID = uuid.UUID("00000000-0000-0000-0000-000000000002")
 _TEAM_ID = uuid.UUID("00000000-0000-0000-0000-000000000003")
 _SCIM_TOKEN = "test-scim-token-12345"
+
+
+def _team_plan_context() -> DbPlanContext:
+    return DbPlanContext(FeatureFlagRegistry(current_tier="team"))
+
 
 _USER_CREATE_BODY = {
     "schemas": ["urn:ietf:params:scim:schemas:core:2.0:User"],
@@ -124,6 +130,7 @@ def client() -> Generator[TestClient, None, None]:
     app.dependency_overrides[get_db_session] = override_session
     app.dependency_overrides[_get_engine] = lambda: MagicMock()
     app.dependency_overrides[get_scim_principal] = lambda: ScimPrincipal(organisation_id=_ORG_ID)
+    app.dependency_overrides[get_scim_plan_context] = _team_plan_context
     yield TestClient(app)
     app.dependency_overrides.clear()
 
@@ -295,6 +302,7 @@ class TestJitProvisioning:
         from sqlalchemy.exc import IntegrityError
 
         with (
+            patch("modulo.db.crud.account.get_account_by_email", return_value=None),
             patch(
                 "modulo.api.routes.scim.scim_create_user", side_effect=IntegrityError("mock", {}, Exception("mock dup"))
             ),
@@ -360,7 +368,7 @@ class TestCreateScimGroup:
 
         with (
             patch("modulo.db.crud.team.get_team_by_name", return_value=None),
-            patch("modulo.db.crud.user.list_users_for_org", create=True, return_value=[_make_mock_user()]),
+            patch("modulo.db.crud.org_membership.list_memberships_for_org", return_value=[]),
             patch("modulo.api.routes.scim.scim_create_group", return_value=mock_team),
             patch("modulo.api.routes.scim.set_rls_org"),
         ):
@@ -395,7 +403,7 @@ class TestCreateScimGroup:
 
         with (
             patch("modulo.db.crud.team.get_team_by_name", return_value=None),
-            patch("modulo.db.crud.user.list_users_for_org", create=True, return_value=[mock_user]),
+            patch("modulo.db.crud.org_membership.list_memberships_for_org", return_value=[]),
             patch("modulo.db.crud.account.get_account_by_email", return_value=mock_user),
             patch("modulo.api.routes.scim.scim_get_user", return_value=mock_user),
             patch("modulo.api.routes.scim.scim_create_group", return_value=mock_team),
@@ -550,6 +558,8 @@ class TestLicenseGate:
     def test_scim_blocked_without_team_license(self) -> None:
         app.dependency_overrides[get_settings] = _make_no_license_settings
         app.dependency_overrides[get_db_session] = lambda: _make_mock_session()
+        app.dependency_overrides[get_scim_principal] = lambda: ScimPrincipal(organisation_id=_ORG_ID)
+        app.dependency_overrides[get_scim_plan_context] = CommunityTier
         resp = TestClient(app).get("/scim/v2/Users", headers={"Authorization": f"Bearer {_SCIM_TOKEN}"})
         app.dependency_overrides.clear()
         assert resp.status_code == 402
@@ -561,6 +571,7 @@ class TestLicenseGate:
         app.dependency_overrides[get_db_session] = lambda: _make_mock_session()
         app.dependency_overrides[_get_engine] = lambda: MagicMock()
         app.dependency_overrides[get_scim_principal] = lambda: ScimPrincipal(organisation_id=_ORG_ID)
+        app.dependency_overrides[get_scim_plan_context] = _team_plan_context
 
         with (
             patch("modulo.api.routes.scim.scim_list_users", return_value=mock_user_list),
@@ -576,6 +587,7 @@ class TestLicenseGate:
         app.dependency_overrides[get_settings] = _make_settings
         app.dependency_overrides[get_db_session] = lambda: _make_mock_session()
         app.dependency_overrides[get_scim_principal] = lambda: ScimPrincipal(organisation_id=_ORG_ID)
+        app.dependency_overrides[get_scim_plan_context] = _team_plan_context
         resp = TestClient(app).get("/scim/v2/ServiceProviderConfig", headers={"Authorization": f"Bearer {_SCIM_TOKEN}"})
         app.dependency_overrides.clear()
         assert resp.status_code == 200
