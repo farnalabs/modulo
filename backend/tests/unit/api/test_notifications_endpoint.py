@@ -153,8 +153,23 @@ def test_create_endpoint_returns_201(client: TestClient) -> None:
     assert persisted.events == ["hitl.review_required"]
 
 
-def test_list_endpoints_reads_legacy_json_string_events(client: TestClient) -> None:
-    ep = _make_mock_endpoint(events='["hitl.review_required", "run.failed"]')
+@pytest.mark.parametrize(
+    ("stored_events", "expected"),
+    [
+        ([], []),
+        (["hitl.review_required", "run.failed"], ["hitl.review_required", "run.failed"]),
+        (["hitl.review_required", 1], []),
+        ("[]", []),
+        ('["hitl.review_required", "run.failed"]', ["hitl.review_required", "run.failed"]),
+        ('["hitl.review_required", 1]', []),
+    ],
+)
+def test_list_endpoints_normalizes_stored_events(
+    client: TestClient,
+    stored_events: object,
+    expected: list[str],
+) -> None:
+    ep = _make_mock_endpoint(events=stored_events, team_id=None)
     session = _make_mock_session()
     result_mock = MagicMock()
     result_mock.scalars.return_value = [ep]
@@ -168,7 +183,7 @@ def test_list_endpoints_reads_legacy_json_string_events(client: TestClient) -> N
         resp = client.get("/api/v1/notifications")
 
     assert resp.status_code == 200
-    assert resp.json()[0]["events"] == ["hitl.review_required", "run.failed"]
+    assert resp.json()[0]["events"] == expected
 
 
 def test_create_endpoint_with_secret_encrypts_it(client: TestClient) -> None:

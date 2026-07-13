@@ -146,13 +146,24 @@ def test_create_webhook_returns_201(client: TestClient) -> None:
     assert persisted.events == ["hitl_awaiting"]
 
 
-def test_admin_response_reads_legacy_json_string_events() -> None:
+@pytest.mark.parametrize(
+    ("stored_events", "expected"),
+    [
+        ([], []),
+        (["hitl_awaiting", "run_failed"], ["hitl_awaiting", "run_failed"]),
+        (["hitl_awaiting", 1], []),
+        ("[]", []),
+        ('["hitl_awaiting", "run_failed"]', ["hitl_awaiting", "run_failed"]),
+        ('["hitl_awaiting", 1]', []),
+    ],
+)
+def test_admin_response_normalizes_stored_events(stored_events: object, expected: list[str]) -> None:
     from modulo.api.routes.admin_notifications import _ep_to_response
 
-    endpoint = _make_mock_endpoint(events='["hitl_awaiting", "run_failed"]')
+    endpoint = _make_mock_endpoint(events=stored_events)
     endpoint.disabled_at = None
     endpoint.created_at = None
 
     response = _ep_to_response(endpoint)
 
-    assert response.events == ["hitl_awaiting", "run_failed"]
+    assert response.events == expected
