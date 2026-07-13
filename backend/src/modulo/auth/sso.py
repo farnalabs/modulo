@@ -9,7 +9,6 @@ import urllib.parse
 import uuid
 import zlib
 from datetime import UTC, datetime, timedelta
-from typing import Any, cast
 
 import defusedxml.ElementTree as ET
 import httpx
@@ -227,7 +226,7 @@ async def oidc_get_authorize_url(
     except httpx.HTTPError as exc:
         raise ValueError(f"Failed to fetch discovery document: {exc}") from None
     auth_endpoint = disc.get("authorization_endpoint")
-    if not auth_endpoint:
+    if not isinstance(auth_endpoint, str) or not auth_endpoint:
         raise ValueError("No authorization_endpoint in discovery document")
 
     raw_state = str(uuid.uuid4())
@@ -272,7 +271,7 @@ async def oidc_process_callback(
         raise ValueError(f"Failed to fetch discovery document: {exc}") from None
 
     token_endpoint = disc.get("token_endpoint")
-    if not token_endpoint:
+    if not isinstance(token_endpoint, str) or not token_endpoint:
         raise ValueError("No token_endpoint in discovery document")
 
     try:
@@ -286,11 +285,13 @@ async def oidc_process_callback(
     except httpx.HTTPError as exc:
         raise ValueError(f"Failed to exchange authorization code: {exc}") from None
 
-    id_token = token_data.get("id_token", "")
+    id_token = token_data.get("id_token")
+    if not isinstance(id_token, str) or not id_token:
+        raise ValueError("OIDC token response is missing a valid id_token")
 
-    jwks_uri = disc.get("jwks_uri", "")
-    issuer = disc.get("issuer", "")
-    if not jwks_uri or not issuer:
+    jwks_uri = disc.get("jwks_uri")
+    issuer = disc.get("issuer")
+    if not isinstance(jwks_uri, str) or not jwks_uri or not isinstance(issuer, str) or not issuer:
         raise ValueError(
             "OIDC provider discovery document is missing jwks_uri or issuer — "
             "cannot verify ID token signature. Check provider configuration."
@@ -354,14 +355,28 @@ def _parse_oidc_providers(settings: Settings) -> list[dict[str, str]]:
 parse_oidc_providers = _parse_oidc_providers
 
 
-async def _fetch_discovery(discovery_url: str) -> dict[str, Any]:
+def _require_json_object(value: object, context: str) -> dict[str, object]:
+    """Validate and precisely type an object decoded from JSON."""
+    if not isinstance(value, dict):
+        raise ValueError(f"{context} must be a JSON object")
+
+    result: dict[str, object] = {}
+    for key, item in value.items():
+        if not isinstance(key, str):
+            raise ValueError(f"{context} contains a non-string key")
+        result[key] = item
+    return result
+
+
+async def _fetch_discovery(discovery_url: str) -> dict[str, object]:
     async with httpx.AsyncClient() as client:
         resp = await client.get(discovery_url, timeout=httpx.Timeout(10.0, connect=5.0))
         resp.raise_for_status()
         try:
-            return cast(dict[str, Any], resp.json())
+            decoded = resp.json()
         except json.JSONDecodeError as exc:
             raise ValueError(f"Invalid JSON in discovery document: {exc}") from None
+        return _require_json_object(decoded, "OIDC discovery document")
 
 
 async def _exchange_code(
@@ -370,7 +385,7 @@ async def _exchange_code(
     client_secret: str,
     code: str,
     redirect_uri: str,
-) -> dict[str, Any]:
+) -> dict[str, object]:
     async with httpx.AsyncClient() as client:
         resp = await client.post(
             token_endpoint,
@@ -385,10 +400,14 @@ async def _exchange_code(
             timeout=httpx.Timeout(15.0, connect=5.0),
         )
         resp.raise_for_status()
-        return cast(dict[str, Any], resp.json())
+        try:
+            decoded = resp.json()
+        except json.JSONDecodeError as exc:
+            raise ValueError(f"Invalid JSON in OIDC token response: {exc}") from None
+        return _require_json_object(decoded, "OIDC token response")
 
 
-def _decode_id_token_claims(id_token: str) -> dict[str, Any]:
+def _decode_id_token_claims(id_token: str) -> dict[str, object]:
     """Decode ID token claims without signature verification.
 
     The code exchange with the token endpoint is over HTTPS (transport-level
@@ -403,7 +422,8 @@ def _decode_id_token_claims(id_token: str) -> dict[str, Any]:
     try:
         pad = (4 - len(parts[1]) % 4) % 4
         padded = parts[1] + "=" * pad
-        return cast(dict[str, Any], json.loads(base64.urlsafe_b64decode(padded)))
+        decoded = json.loads(base64.urlsafe_b64decode(padded))
+        return _require_json_object(decoded, "OIDC ID token claims")
     except (ValueError, json.JSONDecodeError):
         return {}
 
