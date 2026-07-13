@@ -45,6 +45,7 @@ from modulo.db.crud.pipeline import (
     unarchive_pipeline,
     update_pipeline,
 )
+from modulo.db.crud.pipeline_folder import move_pipeline_to_folder
 from modulo.db.crud.pipeline_snapshot_versioning import (
     delete_snapshot,
     diff_snapshots,
@@ -122,6 +123,7 @@ class PipelineResponse(BaseModel):
     snapshot_count: int = 0
     archived_at: datetime | None = None
     owner_team_id: uuid.UUID | None = None
+    folder_id: uuid.UUID | None = None
     created_by: uuid.UUID = Field(validation_alias="account_id")
     created_at: datetime
     updated_at: datetime
@@ -393,6 +395,7 @@ async def list_pipelines_endpoint(
     page_size: int = Query(default=20, ge=1, le=100),
     cursor: str | None = Query(default=None),
     include_archived: bool = Query(default=False),
+    folder_id: uuid.UUID | None = Query(default=None),
     session: AsyncSession = Depends(get_db_session),
     principal: AuthenticatedPrincipal = Depends(get_current_user),
 ) -> PipelineListResponse:
@@ -401,7 +404,12 @@ async def list_pipelines_endpoint(
             await set_rls_org(session, principal.organisation_id)
             await set_rls_user_context(session, principal.account_id, principal.org_role)
             result = await list_pipelines(
-                session, page=page, page_size=page_size, cursor=cursor, include_archived=include_archived
+                session,
+                page=page,
+                page_size=page_size,
+                cursor=cursor,
+                include_archived=include_archived,
+                folder_id=folder_id,
             )
     except ProgrammingError:
         logger.exception("routes.pipelines")
@@ -1265,6 +1273,39 @@ async def diff_snapshot_endpoint(
             detail="One or both snapshots not found",
         )
     return SnapshotDiffResponse(**result)
+
+
+# ---------------------------------------------------------------------------
+# Folder assignment
+# ---------------------------------------------------------------------------
+
+
+class PipelineFolderMoveRequest(BaseModel):
+    folder_id: uuid.UUID | None = None
+
+
+@router.patch("/{pipeline_id}/folder", response_model=PipelineResponse)
+@handle_db_errors("pipelines.move_to_folder")
+async def move_pipeline_to_folder_endpoint(
+    pipeline_id: uuid.UUID,
+    req: PipelineFolderMoveRequest,
+    session: AsyncSession = Depends(get_db_session),
+    principal: AuthenticatedPrincipal = Depends(get_current_user),
+) -> PipelineResponse:
+    try:
+        async with session.begin():
+            await set_rls_org(session, principal.organisation_id)
+            await set_rls_user_context(session, principal.account_id, principal.org_role)
+            pipeline = await move_pipeline_to_folder(session, pipeline_id, req.folder_id)
+    except ProgrammingError:
+        logger.exception("routes.pipelines")
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="This feature is not available. Run database migrations to enable it.",
+        ) from None
+    if pipeline is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Pipeline not found")
+    return PipelineResponse.model_validate(pipeline)
 
 
 # ---------------------------------------------------------------------------

@@ -79,6 +79,7 @@ from modulo.api.routes.node_categories import router as node_categories_router
 from modulo.api.routes.notifications import router as notifications_router
 from modulo.api.routes.observability import router as observability_router
 from modulo.api.routes.onboarding import router as onboarding_router
+from modulo.api.routes.pipeline_folders import router as pipeline_folders_router
 from modulo.api.routes.pipelines import router as pipelines_router
 from modulo.api.routes.plugins import router as plugins_router
 from modulo.api.routes.registry import router as registry_router
@@ -371,7 +372,7 @@ async def _seed_demo_data(settings: Settings) -> None:
             )
             session.add(schema)
             await session.flush()
-            
+
             schema_version = SchemaVersion(
                 organisation_id=org_id,
                 account_id=demo_account.id,
@@ -782,6 +783,7 @@ app.include_router(deployment_router)
 app.include_router(costs_router)
 app.include_router(teams_router)
 app.include_router(pipelines_router)
+app.include_router(pipeline_folders_router)
 app.include_router(agents_router)
 app.include_router(hitl_router)
 app.include_router(schemas_router)
