@@ -516,7 +516,7 @@ export default {
       "model_backend_label": "Model Backend",
       "loading": "Loading...",
       "folder": "Folder",
-      "linked_in_lifecycle_maps": "In {count} lifecycle {count, plural, one {map} other {maps}}"
+      "linked_in_lifecycle_maps": "In {count} lifecycle map{count, plural, one {} other {s}}"
     },
     "AdminPluginsView": {
       "manage_installed_modulo_plugins_and_extensions": "Manage installed Modulo plugins and extensions",
