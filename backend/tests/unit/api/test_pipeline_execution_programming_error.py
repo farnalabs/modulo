@@ -76,6 +76,14 @@ def _override_session(session) -> None:
     app.dependency_overrides[get_db_session] = _get_session
 
 
+def _assert_feature_requires_database_update(resp) -> None:
+    """Assert the stable public contract for unavailable run features."""
+    detail = resp.json()["detail"].lower()
+    assert "feature" in detail
+    assert "not available" in detail
+    assert "database update" in detail
+
+
 # ---------------------------------------------------------------------------
 # Pipeline CRUD — ProgrammingError→501
 # ---------------------------------------------------------------------------
@@ -149,7 +157,7 @@ class TestTriggerRunProgrammingError:
             json={"pipeline_id": str(_PIPELINE_ID), "input_payload": {}},
         )
         assert resp.status_code == 501
-        assert "migrations" in resp.json()["detail"].lower()
+        _assert_feature_requires_database_update(resp)
 
 
 class TestGetRunStatusProgrammingError:
@@ -158,7 +166,7 @@ class TestGetRunStatusProgrammingError:
         _override_session(session)
         resp = admin_client.get(f"/api/v1/runs/{_RUN_ID}")
         assert resp.status_code == 501
-        assert "migrations" in resp.json()["detail"].lower()
+        _assert_feature_requires_database_update(resp)
 
 
 class TestCancelRunProgrammingError:
@@ -167,7 +175,7 @@ class TestCancelRunProgrammingError:
         _override_session(session)
         resp = admin_client.post(f"/api/v1/runs/{_RUN_ID}/cancel")
         assert resp.status_code == 501
-        assert "migrations" in resp.json()["detail"].lower()
+        _assert_feature_requires_database_update(resp)
 
 
 class TestGetRunIoProgrammingError:
@@ -176,7 +184,7 @@ class TestGetRunIoProgrammingError:
         _override_session(session)
         resp = admin_client.get(f"/api/v1/runs/{_RUN_ID}/io")
         assert resp.status_code == 501
-        assert "migrations" in resp.json()["detail"].lower()
+        _assert_feature_requires_database_update(resp)
 
 
 class TestExportRunFixtureProgrammingError:
@@ -185,7 +193,7 @@ class TestExportRunFixtureProgrammingError:
         _override_session(session)
         resp = admin_client.get(f"/api/v1/runs/{_RUN_ID}/export-fixture")
         assert resp.status_code == 501
-        assert "migrations" in resp.json()["detail"].lower()
+        _assert_feature_requires_database_update(resp)
 
 
 class TestGetRunWorkspaceLeaseProgrammingError:
@@ -194,7 +202,7 @@ class TestGetRunWorkspaceLeaseProgrammingError:
         _override_session(session)
         resp = admin_client.get(f"/api/v1/runs/{_RUN_ID}/workspace-lease")
         assert resp.status_code == 501
-        assert "migrations" in resp.json()["detail"].lower()
+        _assert_feature_requires_database_update(resp)
 
 
 class TestGetRunWorkspaceEventsProgrammingError:
@@ -203,7 +211,7 @@ class TestGetRunWorkspaceEventsProgrammingError:
         _override_session(session)
         resp = admin_client.get(f"/api/v1/runs/{_RUN_ID}/workspace-events")
         assert resp.status_code == 501
-        assert "migrations" in resp.json()["detail"].lower()
+        _assert_feature_requires_database_update(resp)
 
 
 class TestGetRunNodeOutputProgrammingError:
@@ -212,7 +220,7 @@ class TestGetRunNodeOutputProgrammingError:
         _override_session(session)
         resp = admin_client.get(f"/api/v1/runs/{_RUN_ID}/nodes/{_NODE_ID}/output")
         assert resp.status_code == 501
-        assert "migrations" in resp.json()["detail"].lower()
+        _assert_feature_requires_database_update(resp)
 
 
 class TestObserveRunNodeProgrammingError:
@@ -221,7 +229,7 @@ class TestObserveRunNodeProgrammingError:
         _override_session(session)
         resp = admin_client.post(f"/api/v1/runs/{_RUN_ID}/nodes/{_NODE_ID}/observe")
         assert resp.status_code == 501
-        assert "migrations" in resp.json()["detail"].lower()
+        _assert_feature_requires_database_update(resp)
 
 
 class TestRecoverRunNodeProgrammingError:
@@ -230,7 +238,7 @@ class TestRecoverRunNodeProgrammingError:
         _override_session(session)
         resp = admin_client.post(f"/api/v1/runs/{_RUN_ID}/nodes/{_NODE_ID}/recover", json={})
         assert resp.status_code == 501
-        assert "migrations" in resp.json()["detail"].lower()
+        _assert_feature_requires_database_update(resp)
 
 
 class TestDiffRunNodeOutputProgrammingError:
@@ -247,7 +255,7 @@ class TestDiffRunNodeOutputProgrammingError:
             },
         )
         assert resp.status_code == 501
-        assert "migrations" in resp.json()["detail"].lower()
+        _assert_feature_requires_database_update(resp)
 
 
 class TestRunStatsProgrammingError:
@@ -256,7 +264,7 @@ class TestRunStatsProgrammingError:
         _override_session(session)
         resp = admin_client.get("/api/v1/runs/stats?period=30d")
         assert resp.status_code == 501
-        assert "migrations" in resp.json()["detail"].lower()
+        _assert_feature_requires_database_update(resp)
 
 
 class TestRunHeatmapProgrammingError:
@@ -265,6 +273,7 @@ class TestRunHeatmapProgrammingError:
         _override_session(session)
         resp = admin_client.get("/api/v1/runs/stats/heatmap?year=2026")
         assert resp.status_code == 501
+        _assert_feature_requires_database_update(resp)
 
 
 # ---------------------------------------------------------------------------
