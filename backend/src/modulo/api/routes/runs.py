@@ -42,6 +42,9 @@ from modulo.db.crud.run import (
     request_cancellation,
     update_run_status,
 )
+from modulo.db.crud.run import (
+    list_runs as db_list_runs,
+)
 from modulo.db.models.agent import Agent
 from modulo.db.models.pipeline_snapshot import PipelineSnapshot
 from modulo.db.rls import set_rls_org
@@ -52,6 +55,82 @@ _log = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/v1/runs", tags=["runs"])
 
 _TERMINAL_STATUSES = frozenset({"complete", "failed", "cancelled", "eval_failed"})
+
+
+@router.get("")
+async def list_runs_endpoint(
+    pipeline_id: uuid.UUID | None = Query(None),
+    status: str | None = Query(None),
+    trigger_type: str | None = Query(None),
+    search: str | None = Query(None, max_length=200),
+    page: int = Query(1, ge=1),
+    page_size: int = Query(20, ge=1, le=100),
+    session: AsyncSession = Depends(get_db_session),
+    user: AuthenticatedPrincipal = Depends(get_current_user),
+) -> dict[str, Any]:
+    try:
+        async with session.begin():
+            from modulo.db.rls import set_rls_org
+            await set_rls_org(session, user.organisation_id)
+            result = await db_list_runs(
+                session,
+                pipeline_id=pipeline_id,
+                status=status,
+                trigger_type=trigger_type,
+                search=search,
+                page=page,
+                page_size=page_size,
+            )
+    except IntegrityError:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="A resource with this value already exists",
+        ) from None
+    except ProgrammingError:
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="Feature is not available. Run database migrations to enable it.",
+        ) from None
+    except SQLAlchemyError:
+        _log.warning("route.db_error", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Database temporarily unavailable.",
+        ) from None
+    except HTTPException:
+        raise
+    except Exception:
+        _log.exception("pipeline_execution.unexpected_error")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="An unexpected error occurred.",
+        ) from None
+
+    items = []
+    for run in result.items:
+        pipeline_name = run.pipeline.name if hasattr(run, 'pipeline') and run.pipeline else None
+        items.append({
+            "run_id": str(run.id),
+            "pipeline_id": str(run.pipeline_id),
+            "pipeline_name": pipeline_name,
+            "status": run.status,
+            "trigger_type": run.trigger_type,
+            "run_number": run.run_number,
+            "created_at": run.created_at.isoformat() if run.created_at else None,
+            "started_at": run.started_at.isoformat() if run.started_at else None,
+            "completed_at": run.completed_at.isoformat() if run.completed_at else None,
+            "error_code": run.error_code,
+            "total_cost_usd": run.total_cost_usd,
+            "account_id": str(run.account_id) if run.account_id else None,
+        })
+    return {
+        "items": items,
+        "total": result.total,
+        "page": result.page,
+        "page_size": result.page_size,
+        "next_cursor": result.next_cursor,
+        "has_more": result.has_more,
+    }
 _NAMESPACE_TRACE = uuid.UUID("6ba7b810-9dad-11d1-80b4-00c04fd430c8")
 
 
