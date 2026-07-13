@@ -144,6 +144,18 @@ def _map_lg_event(
     return None
 
 
+def _streamed_interrupts(lg_event: dict[str, Any]) -> tuple[Any, ...]:
+    """Extract native LangGraph interrupts from a top-level stream event."""
+    if lg_event.get("event") != "on_chain_stream":
+        return ()
+    data = lg_event.get("data")
+    chunk = data.get("chunk") if isinstance(data, dict) else None
+    interrupts = chunk.get("__interrupt__") if isinstance(chunk, dict) else None
+    if isinstance(interrupts, (list, tuple)):
+        return tuple(interrupts)
+    return (interrupts,) if interrupts is not None else ()
+
+
 @asynccontextmanager
 async def _checkpointer_scope(
     conn_string: str,
@@ -887,6 +899,53 @@ class PipelineExecutor:
 
         return results
 
+    async def _handle_graph_interrupt(
+        self,
+        interrupts: Any,
+        broker: RunEventBroker,
+        run_id: uuid.UUID,
+        *,
+        pipeline_id: uuid.UUID | None,
+        org_id: uuid.UUID | None,
+    ) -> tuple[str, str | None, str | None, dict[str, Any] | None]:
+        """Create the HITL gate and publish the awaiting event for an interrupt."""
+        first_interrupt = interrupts[0] if interrupts else None
+        value = getattr(first_interrupt, "value", None)
+        gate_payload = value if isinstance(value, dict) else {}
+        gate_id = gate_payload.get("gate_id", "")
+        required_team_id_str = gate_payload.get("required_team_id")
+        required_team_id = uuid.UUID(required_team_id_str) if required_team_id_str else None
+
+        if pipeline_id is not None and org_id is not None:
+            try:
+                mgr = HITLManager()
+                async with self._session_factory() as session, session.begin():
+                    await set_rls_org(session, org_id)
+                    await mgr.create_gate(
+                        session,
+                        run_id=run_id,
+                        gate_id=gate_id,
+                        pipeline_id=pipeline_id,
+                        org_id=org_id,
+                        required_team_id=required_team_id,
+                    )
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                _log.exception(
+                    "hitl_gate.create_failed",
+                    extra={"run_id": str(run_id), "gate_id": gate_id},
+                )
+
+        broker.publish(
+            "hitl_awaiting",
+            {
+                "gate_payload": gate_payload,
+                "team_id": str(required_team_id) if required_team_id else None,
+            },
+        )
+        return "awaiting_human", None, None, None
+
     async def _stream_graph(
         self,
         compiled: Any,
@@ -922,6 +981,16 @@ class PipelineExecutor:
             async for lg_event in compiled.astream_events(initial_state, lg_config, version="v2"):
                 if guard is not None:
                     guard.check_duration()
+
+                interrupts = _streamed_interrupts(lg_event)
+                if interrupts:
+                    return await self._handle_graph_interrupt(
+                        interrupts,
+                        broker,
+                        run_id,
+                        pipeline_id=pipeline_id,
+                        org_id=org_id,
+                    )
 
                 mapped = _map_lg_event(lg_event, node_ids)
                 if mapped is not None:
@@ -975,40 +1044,13 @@ class PipelineExecutor:
             return "complete", None, None, node_token_usage or None
         except GraphInterrupt as exc:
             interrupts = exc.args[0] if exc.args else []
-            gate_payload = interrupts[0].value if interrupts else {}
-            gate_id = gate_payload.get("gate_id", "")
-            required_team_id_str = gate_payload.get("required_team_id")
-            required_team_id = uuid.UUID(required_team_id_str) if required_team_id_str else None
-
-            if pipeline_id is not None and org_id is not None:
-                try:
-                    mgr = HITLManager()
-                    async with self._session_factory() as session, session.begin():
-                        await set_rls_org(session, org_id)
-                        await mgr.create_gate(
-                            session,
-                            run_id=run_id,
-                            gate_id=gate_id,
-                            pipeline_id=pipeline_id,
-                            org_id=org_id,
-                            required_team_id=required_team_id,
-                        )
-                except asyncio.CancelledError:
-                    raise
-                except Exception:
-                    _log.exception(
-                        "hitl_gate.create_failed",
-                        extra={"run_id": str(run_id), "gate_id": gate_id},
-                    )
-
-            broker.publish(
-                "hitl_awaiting",
-                {
-                    "gate_payload": gate_payload,
-                    "team_id": str(required_team_id) if required_team_id else None,
-                },
+            return await self._handle_graph_interrupt(
+                interrupts,
+                broker,
+                run_id,
+                pipeline_id=pipeline_id,
+                org_id=org_id,
             )
-            return "awaiting_human", None, None, None
         except EvalBlockedError as exc:
             broker.publish("run_failed", {"error": "eval_blocked", "detail": str(exc)})
             return "eval_failed", "eval_blocked", str(exc), None

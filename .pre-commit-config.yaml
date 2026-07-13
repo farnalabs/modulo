@@ -47,7 +47,7 @@ repos:
         pass_filenames: false
       - id: semgrep
         name: semgrep
-        entry: bash -c 'cd backend && uv run semgrep --config=../.semgrep/ --error src/'
+        entry: uv run --project backend --no-sync semgrep scan --config=.semgrep/ --error --baseline-commit=HEAD backend/src/
         language: system
         files: ^backend/src/
         pass_filenames: false
