@@ -57,6 +57,8 @@ Provided by existing tests: test_hub.py
 - [x] unregister nonexistent name is no-op
 - [x] list_providers() returns a copy of the registry dict (mutating copy does not affect hub)
 - [x] resolve(profile) uses provider_hint to pick matching registered provider
+- [x] resolve(profile) deterministically honours provider_type IDs `local`, `local_docker`/`docker`, and `e2b`
+- [x] resolve(profile) returns None when an explicitly requested provider type is unavailable (no cross-provider fallback)
 - [x] resolve prefers provider_hint over supports()
 - [x] resolve falls through to supports() when no hint
 - [x] resolve returns first registered provider when no hint and no supports() match
@@ -99,6 +101,7 @@ Provided by existing tests: test_docker_provider.py
 - [x] get_workspace_status: falls back to "terminated" on error (e.g. connection lost)
 - [x] close: closes underlying Docker client connection
 - [x] close: idempotent (can be called multiple times)
+- [x] LocalDockerRuntimeProvider preserves the legacy ShellConnector mapping contract through a thin adapter over DockerRuntimeProvider
 
 ### LocalRuntimeProvider (`core/runtime_provider/local.py`)
 

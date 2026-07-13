@@ -10,7 +10,7 @@ import logging
 import shlex
 import uuid
 from pathlib import Path
-from typing import Any
+from typing import Any, Protocol
 
 from modulo.connectors.base import (
     ConnectorBase,
@@ -23,6 +23,19 @@ from modulo.connectors.base import (
 )
 
 _log = logging.getLogger(__name__)
+
+
+class ShellRuntimeProvider(Protocol):
+    """Legacy workspace operations consumed by ShellConnector."""
+
+    async def execute_command(
+        self,
+        workspace: Any,
+        command: str,
+        cwd: str | None = None,
+        env: dict[str, str] | None = None,
+        timeout_seconds: int = 60,
+    ) -> dict[str, Any]: ...
 
 
 class ShellConnector(ConnectorBase):
@@ -44,7 +57,7 @@ class ShellConnector(ConnectorBase):
 
     def __init__(
         self,
-        runtime_provider: Any | None = None,
+        runtime_provider: ShellRuntimeProvider | None = None,
         allowed_commands: list[str] | None = None,
         runtime_provider_hub: Any | None = None,
         environment_profile_id: uuid.UUID | None = None,
