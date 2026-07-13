@@ -40,6 +40,7 @@ def test_initial_schema_contains_required_tables() -> None:
         "org_memberships",
         "organisations",
         "pipeline_edges",
+        "pipeline_folders",
         "pipeline_snapshots",
         "pipelines",
         "primitive_abuse_reports",
