@@ -1,5 +1,5 @@
 ﻿<template>
-  <FeatureGate feature-name="plugin_management">
+  <FeatureGate feature-name="plugin_management" show-disabled>
     <div class="page-narrow">
       <header class="flex items-center justify-between">
         <PageHeader title="Plugins" :subtitle="$t('views.AdminPluginsView.manage_installed_modulo_plugins_and_extensions')" />
