@@ -151,6 +151,10 @@ class TestOidcProviderParsing:
         settings = _override(modulo_oidc_providers="not-json")
         assert parse_oidc_providers(settings) == []
 
+    def test_skips_non_object_entry(self) -> None:
+        settings = _override(modulo_oidc_providers=json.dumps(["invalid-provider"]))
+        assert parse_oidc_providers(settings) == []
+
     def test_skips_missing_fields(self) -> None:
         settings = _override(
             modulo_oidc_providers=json.dumps(
