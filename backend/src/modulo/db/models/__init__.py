@@ -31,6 +31,7 @@ from modulo.db.models.org_membership import OrgMembership
 from modulo.db.models.organisation import Organisation
 from modulo.db.models.pipeline import Pipeline
 from modulo.db.models.pipeline_edge import PipelineEdge
+from modulo.db.models.pipeline_folder import PipelineFolder
 from modulo.db.models.pipeline_snapshot import PipelineSnapshot
 from modulo.db.models.primitive_abuse_report import PrimitiveAbuseReport
 from modulo.db.models.primitive_rating import PrimitiveRating
@@ -99,6 +100,7 @@ __all__ = [
     "Organisation",
     "Pipeline",
     "PipelineEdge",
+    "PipelineFolder",
     "PipelineSnapshot",
     "PrimitiveAbuseReport",
     "PrimitiveRating",
