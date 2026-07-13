@@ -51,6 +51,7 @@ def _make_session_raising(error_cls: type[Exception]) -> AsyncMock:
 def _make_session_raising_in_create(error_cls: type[Exception]) -> AsyncMock:
     """Session that fails on add_team_member / create_team session.flush."""
     session = configure_mock_session(AsyncMock())
+    session.execute.return_value = MagicMock(scalar_one_or_none=MagicMock(return_value=None))
     begin_cm = AsyncMock()
     begin_cm.__aenter__ = AsyncMock(return_value=None)
     begin_cm.__aexit__ = AsyncMock(return_value=False)
