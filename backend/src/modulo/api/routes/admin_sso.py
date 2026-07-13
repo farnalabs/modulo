@@ -1,12 +1,13 @@
 import json
 import logging
 import uuid
+from datetime import datetime
 from typing import Any
 
 import httpx
 from defusedxml import ElementTree
 from fastapi import APIRouter, Depends, HTTPException, status
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 from sqlalchemy.exc import IntegrityError, ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -60,7 +61,7 @@ class SsoProviderUpdate(BaseModel):
 
 
 class SsoProviderResponse(BaseModel):
-    id: str
+    id: uuid.UUID
     provider_type: str
     name: str
     client_id: str | None = None
@@ -73,38 +74,33 @@ class SsoProviderResponse(BaseModel):
     enabled: bool
     auto_provision: bool
     default_role: str
-    created_at: str
+    created_at: datetime
 
     model_config = {"from_attributes": True}
-    updated_at: str
+    updated_at: datetime
 
+    @field_validator("scopes", mode="before")
     @classmethod
-    def from_orm(cls, provider: Any) -> "SsoProviderResponse":
-        scopes = None
-        if provider.scopes:
+    def _normalize_scopes(cls, value: object) -> list[str] | None:
+        if value is None:
+            return None
+        if isinstance(value, str):
             try:
-                parsed = json.loads(provider.scopes)
-                scopes = parsed if isinstance(parsed, list) else [str(parsed)]
-            except (json.JSONDecodeError, TypeError):
-                scopes = None
+                value = json.loads(value)
+            except json.JSONDecodeError:
+                return None
+        if isinstance(value, list) and all(isinstance(scope, str) for scope in value):
+            return value
+        return None
 
-        return cls(
-            id=str(provider.id),
-            provider_type=provider.provider_type,
-            name=provider.name,
-            client_id=provider.client_id,
-            client_secret=provider.client_secret,
-            discovery_url=provider.discovery_url,
-            metadata_url=provider.metadata_url,
-            metadata_xml=provider.metadata_xml,
-            entity_id=provider.entity_id,
-            scopes=scopes,
-            enabled=provider.enabled,
-            auto_provision=provider.auto_provision,
-            default_role=provider.default_role,
-            created_at=provider.created_at.isoformat() if provider.created_at else "",
-            updated_at=provider.updated_at.isoformat() if provider.updated_at else "",
-        )
+    @field_validator("client_secret", mode="before")
+    @classmethod
+    def _normalize_client_secret(cls, value: object) -> str | None:
+        if value is None:
+            return None
+        if isinstance(value, str | bytes):
+            return "configured" if value else ""
+        raise ValueError("client_secret has an unsupported storage type")
 
 
 class SsoProviderTestResult(BaseModel):
@@ -130,7 +126,7 @@ async def get_providers(
     _require_admin(current_user)
     try:
         providers = await list_providers(session)
-        return [SsoProviderResponse.from_orm(p) for p in providers]
+        return [SsoProviderResponse.model_validate(p) for p in providers]
     except ProgrammingError as exc:
         _log.warning("SSO providers table not available: %s", exc, exc_info=True)
         raise HTTPException(
@@ -159,6 +155,7 @@ async def create_provider_endpoint(
     _: object = require_feature("sso"),
     current_user: TenantPrincipal = Depends(get_current_tenant_user),
     session: AsyncSession = Depends(get_db_session),
+    settings: Settings = Depends(get_settings),
 ) -> SsoProviderResponse:
     _require_admin(current_user)
     try:
@@ -176,6 +173,7 @@ async def create_provider_endpoint(
             enabled=req.enabled,
             auto_provision=req.auto_provision,
             default_role=req.default_role,
+            fernet_key=settings.fernet_key,
             org_id=current_user.organisation_id,
             actor_user_id=current_user.account_id,
         )
@@ -216,6 +214,7 @@ async def update_provider_endpoint(
     _: object = require_feature("sso"),
     current_user: TenantPrincipal = Depends(get_current_tenant_user),
     session: AsyncSession = Depends(get_db_session),
+    settings: Settings = Depends(get_settings),
 ) -> SsoProviderResponse:
     _require_admin(current_user)
     updates = req.model_dump(exclude_unset=True)
@@ -223,7 +222,13 @@ async def update_provider_endpoint(
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No fields to update")
 
     try:
-        provider = await update_provider(session, provider_id, actor_user_id=current_user.account_id, **updates)
+        provider = await update_provider(
+            session,
+            provider_id,
+            actor_user_id=current_user.account_id,
+            fernet_key=settings.fernet_key,
+            **updates,
+        )
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
     except IntegrityError as exc:
