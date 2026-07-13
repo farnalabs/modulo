@@ -357,6 +357,15 @@ class GitHubConnector(ConnectorBase):
             raise ValueError(f"GitHub {resource} write field '{key}' must be a string")
         return value
 
+    def _require_string_list(self, data: dict[str, Any], key: str, resource: str) -> list[str]:
+        """Get a required non-empty list of strings or raise a descriptive ValueError."""
+        if key not in data:
+            raise ValueError(f"GitHub {resource} write requires '{key}' in data")
+        value = data[key]
+        if not isinstance(value, list) or not value or any(not isinstance(item, str) for item in value):
+            raise ValueError(f"GitHub {resource} write field '{key}' must be a non-empty list of strings")
+        return value
+
     async def write(self, payload: ConnectorPayload) -> dict[str, Any]:
         match payload.resource:
             case "file":
@@ -409,7 +418,7 @@ class GitHubConnector(ConnectorBase):
                 r = await self._call_api(
                     "POST",
                     f"/repos/{owner_repo}/issues/{issue_number}/labels",
-                    json={"labels": self._require_write_filter(payload.data, "labels", "issue_label")},
+                    json={"labels": self._require_string_list(payload.data, "labels", "issue_label")},
                 )
                 return await self._parse_json_object(r)
             case "issue_reaction":
