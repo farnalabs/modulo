@@ -10,10 +10,8 @@ const mockResponses: Record<string, unknown> = {
 
 vi.mock('../lib/api/client', () => {
   const mockGet = vi.fn((url: string) => {
-    if (url === '/api/v1/pipeline-folders') {
-      return Promise.resolve({ data: mockResponses['/api/v1/pipeline-folders'] ?? [], error: undefined })
-    }
-    return Promise.resolve({ data: mockResponses.default, error: undefined })
+    const matchingKey = Object.keys(mockResponses).find(k => url.startsWith(k.split('?')[0]))
+    return Promise.resolve({ data: mockResponses[matchingKey] ?? mockResponses.default, error: undefined })
   })
   return {
     api: {
