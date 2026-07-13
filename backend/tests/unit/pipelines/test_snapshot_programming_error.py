@@ -3,11 +3,13 @@
 import os
 import uuid
 from collections.abc import AsyncGenerator, Generator
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy.exc import ProgrammingError, SQLAlchemyError
+from sqlalchemy.ext.asyncio import AsyncSession
 
 os.environ.setdefault("MODULO_CSRF_ENABLED", "false")
 
@@ -35,13 +37,20 @@ def _make_settings() -> Settings:
 
 @pytest.fixture()
 def client() -> Generator[TestClient, None, None]:
-    mock_session = AsyncMock()
-    begin_cm = AsyncMock()
+    mock_session = AsyncMock(spec=AsyncSession)
+    mock_session.in_transaction = MagicMock(return_value=True)
+    mock_session.get_bind = MagicMock(
+        return_value=SimpleNamespace(dialect=SimpleNamespace(name="sqlite")),
+    )
+    mock_session.info = {}
+    mock_session.add = MagicMock()
+
+    begin_cm = MagicMock()
     begin_cm.__aenter__ = AsyncMock(return_value=None)
     begin_cm.__aexit__ = AsyncMock(return_value=False)
     mock_session.begin = MagicMock(return_value=begin_cm)
 
-    async def override_session() -> AsyncGenerator[AsyncMock, None]:
+    async def override_session() -> AsyncGenerator[AsyncSession, None]:
         yield mock_session
 
     app.dependency_overrides[get_settings] = _make_settings
