@@ -240,6 +240,7 @@ class TestSchemaVersionListErrors:
     def test_list_versions_programming_error_returns_501(self, client: TestClient) -> None:
         mock_list = AsyncMock(side_effect=ProgrammingError("stmt", "params", "table missing"))
         with (
+            patch("modulo.api.routes.schemas.get_schema", new=AsyncMock(return_value=MagicMock())),
             patch("modulo.api.routes.schemas.list_schema_versions", mock_list),
             patch("modulo.api.routes.schemas.set_rls_org"),
         ):
@@ -249,6 +250,7 @@ class TestSchemaVersionListErrors:
     def test_list_versions_sqlalchemy_error_returns_503(self, client: TestClient) -> None:
         mock_list = AsyncMock(side_effect=SQLAlchemyError("connection failed"))
         with (
+            patch("modulo.api.routes.schemas.get_schema", new=AsyncMock(return_value=MagicMock())),
             patch("modulo.api.routes.schemas.list_schema_versions", mock_list),
             patch("modulo.api.routes.schemas.set_rls_org"),
         ):
