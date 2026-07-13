@@ -434,6 +434,72 @@ class TestDecodeIdTokenClaims:
 
         assert _decode_id_token_claims("") == {}
 
+    @pytest.mark.parametrize("payload", [[], "claims", None])
+    def test_returns_empty_when_payload_is_not_an_object(self, payload: object) -> None:
+        from modulo.auth.sso import _decode_id_token_claims
+
+        encoded = base64.urlsafe_b64encode(json.dumps(payload).encode()).rstrip(b"=").decode()
+
+        assert _decode_id_token_claims(f"header.{encoded}.signature") == {}
+
+
+class TestOidcJsonResponseShapes:
+    @pytest.mark.parametrize("payload", [[], "discovery", None])
+    async def test_discovery_rejects_non_object_json(self, payload: object) -> None:
+        from modulo.auth.sso import _fetch_discovery
+
+        response = MagicMock()
+        response.json.return_value = payload
+        client = AsyncMock()
+        client.get.return_value = response
+
+        with patch("modulo.auth.sso.httpx.AsyncClient") as client_type:
+            client_type.return_value.__aenter__.return_value = client
+            with pytest.raises(ValueError, match="OIDC discovery document must be a JSON object"):
+                await _fetch_discovery("https://issuer.example/.well-known/openid-configuration")
+
+    async def test_discovery_accepts_object_json(self) -> None:
+        from modulo.auth.sso import _fetch_discovery
+
+        payload = {"authorization_endpoint": "https://issuer.example/authorize"}
+        response = MagicMock()
+        response.json.return_value = payload
+        client = AsyncMock()
+        client.get.return_value = response
+
+        with patch("modulo.auth.sso.httpx.AsyncClient") as client_type:
+            client_type.return_value.__aenter__.return_value = client
+            assert await _fetch_discovery("https://issuer.example/discovery") == payload
+
+    @pytest.mark.parametrize("payload", [[], "token", None])
+    async def test_token_exchange_rejects_non_object_json(self, payload: object) -> None:
+        from modulo.auth.sso import _exchange_code
+
+        response = MagicMock()
+        response.json.return_value = payload
+        client = AsyncMock()
+        client.post.return_value = response
+
+        with patch("modulo.auth.sso.httpx.AsyncClient") as client_type:
+            client_type.return_value.__aenter__.return_value = client
+            with pytest.raises(ValueError, match="OIDC token response must be a JSON object"):
+                await _exchange_code("https://issuer.example/token", "client", "secret", "code", "callback")
+
+    async def test_token_exchange_accepts_object_json(self) -> None:
+        from modulo.auth.sso import _exchange_code
+
+        payload = {"id_token": "header.payload.signature"}
+        response = MagicMock()
+        response.json.return_value = payload
+        client = AsyncMock()
+        client.post.return_value = response
+
+        with patch("modulo.auth.sso.httpx.AsyncClient") as client_type:
+            client_type.return_value.__aenter__.return_value = client
+            result = await _exchange_code("https://issuer.example/token", "client", "secret", "code", "callback")
+
+        assert result == payload
+
 
 # ---------------------------------------------------------------------------
 # JIT provisioning — additional cases
