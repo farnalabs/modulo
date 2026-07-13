@@ -2,6 +2,30 @@
 
 Full PRD: `docs/prd.md`. This file covers how to build. Conflicts between files → fix the conflict.
 
+## Non-Negotiable Enforcement Gates
+
+The following enforcement mechanisms are STRUCTURALLY PROTECTED. Any agent observed weakening, bypassing, or removing any of these will be blocked with a violation. These rules exist because every previous gap (continue-on-error, WARN-only checks, skippable integration tests, no E2E in gate) was exploited by rot.
+
+### Gate rules (modify only with explicit human approval)
+1. **`continue-on-error: true` is FORBIDDEN** in all CI workflow files (`.github/workflows/*.yml`). Every job must fail CI when it fails. Legitimate uses require a post-step `if: failure()` aggregate that reports the collected failure.
+2. **`verify-main.ps1` must use `Fail` (not `Warn`) for all test, lint, type-check, and audit checks.** No check may log a warning and continue — every check must block with `$script:exitCode = 1`.
+3. **`gate.ps1` must run Playwright @smoke E2E tests** after the merge, from the main worktree. No merge completes without browser-level verification.
+4. **`gate.ps1` integration tests must run by default** (no `-SkipIntegration` opt-out). Integration tests may only be skipped when Docker is unavailable, and the skip must be documented.
+5. **`-SkipTests` in `gate.ps1` may ONLY be used for frontend-only changes where node_modules is unavailable in a worktree.** The Conductor must verify post-merge via `gate.ps1` without `-SkipTests`.
+
+### What counts as a violation
+- Adding `continue-on-error: true` to any CI job
+- Changing a `Fail` to `Warn` in `verify-main.ps1`
+- Removing or commenting out the Playwright @smoke step from `gate.ps1`
+- Adding a new skip parameter that bypasses test enforcement
+- Any change that makes a passing test no longer block the merge
+
+### How to verify gates are intact
+Run these checks before completing any session:
+- `Select-String -Pattern "continue-on-error: true" -Path ".github/workflows/*.yml"` — must not match product-map-validate or manifest-validate jobs
+- `Select-String -Pattern "Warn ""vue-tsc""" -Path "../devtools/harness/tools/verify-main.ps1"` — must not find it (should be `Fail`)
+- `Select-String -Pattern "playwright|@smoke" -Path "../devtools/harness/tools/gate.ps1"` — must find at least one match
+
 ## Git Workflow
 
 **Always use `git worktree` when branching.** Never check out branches in the main working tree — it must stay on `main`. Worktrees live under `.agents/worktrees/<branch-name>/`.
