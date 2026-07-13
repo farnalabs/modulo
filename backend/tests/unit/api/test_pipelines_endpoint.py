@@ -40,6 +40,7 @@ def _make_pipeline() -> MagicMock:
     p.description = None
     p.visibility = "org"
     p.owner_team_id = None
+    p.folder_id = None
     p.max_concurrent_runs = 5
     p.lock_wait_timeout_seconds = 300
     p.node_timeout_seconds = 300
