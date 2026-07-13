@@ -87,6 +87,14 @@ export function getAuthHeaders(): Record<string, string> {
 }
 
 export function redirectToLogin(): void {
+  // If auto-login is configured, the login attempt may still be in
+  // progress — skip the hard redirect and let auto-login complete.
+  const autoLoginUser = import.meta.env.VITE_AUTO_LOGIN_USERNAME as string | undefined
+  const autoLoginPass = import.meta.env.VITE_AUTO_LOGIN_PASSWORD as string | undefined
+  if (autoLoginUser && autoLoginPass) {
+    return
+  }
+
   if (!window.location.pathname.startsWith('/login')) {
     window.location.href = '/login'
   }
