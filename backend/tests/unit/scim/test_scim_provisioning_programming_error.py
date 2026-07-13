@@ -53,8 +53,12 @@ def _make_settings() -> Settings:
     )
 
 
-def _make_mock_session() -> AsyncMock:
-    session = AsyncMock()
+def _make_mock_session() -> MagicMock:
+    session = MagicMock()
+    session.execute = AsyncMock()
+    session.flush = AsyncMock()
+    session.delete = AsyncMock()
+    session.rollback = AsyncMock()
     begin_cm = AsyncMock()
     begin_cm.__aenter__ = AsyncMock(return_value=None)
     begin_cm.__aexit__ = AsyncMock(return_value=False)
@@ -88,7 +92,7 @@ def client() -> Generator[TestClient, None, None]:
 
     mock_session = _make_mock_session()
 
-    async def override_session() -> AsyncGenerator[AsyncMock, None]:
+    async def override_session() -> AsyncGenerator[MagicMock, None]:
         yield mock_session
 
     app.dependency_overrides[get_settings] = _make_settings
