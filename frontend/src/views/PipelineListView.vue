@@ -8,6 +8,28 @@
           :search-value="search"
           @update:search="search = $event; page = 1"
         />
+        <div class="flex items-center gap-1 border border-border rounded-lg p-0.5" role="group" :aria-label="$t('views.PipelineListView.view_mode')">
+          <button
+            :class="viewMode === 'table' ? 'bg-accent text-accent-foreground' : 'text-muted-foreground hover:text-foreground'"
+            class="rounded p-1.5 transition-colors"
+            @click="setViewMode('table')"
+            :aria-label="$t('views.PipelineListView.table_view')"
+            :aria-pressed="viewMode === 'table'"
+            data-testid="pipeline-view-toggle-table"
+          >
+            <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="3" y1="3" x2="21" y2="3"/><line x1="3" y1="9" x2="21" y2="9"/><line x1="3" y1="15" x2="21" y2="15"/><line x1="3" y1="21" x2="21" y2="21"/></svg>
+          </button>
+          <button
+            :class="viewMode === 'card' ? 'bg-accent text-accent-foreground' : 'text-muted-foreground hover:text-foreground'"
+            class="rounded p-1.5 transition-colors"
+            @click="setViewMode('card')"
+            :aria-label="$t('views.PipelineListView.card_view')"
+            :aria-pressed="viewMode === 'card'"
+            data-testid="pipeline-view-toggle-card"
+          >
+            <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/></svg>
+          </button>
+        </div>
           <Button
             v-if="allPipelines.length > 0 && !loading"
             variant="default"
@@ -64,79 +86,128 @@
         </div>
       </div>
 
-      <div v-else class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-        <div role="button" tabindex="0" @keydown.enter="($event.currentTarget as HTMLElement).click()" @keydown.space.prevent="($event.currentTarget as HTMLElement).click()"
-          v-for="p in pagedPipelines"
-          :key="p.id"
-          class="card card-hover p-5 cursor-pointer"
-          @click="openPipeline(p)"
-          data-testid="pipeline-list-card"
-        >
-          <div class="flex items-start justify-between gap-2 mb-3">
-            <h3 class="text-base font-medium text-foreground truncate">{{ p.name }}</h3>
-            <div class="flex items-center gap-1 shrink-0">
-              <span
-                v-if="p.archived_at"
-                class="badge text-xs badge-status-warning"
-              >Archived</span>
-              <span
-                class="badge text-xs"
-                :class="p.visibility === 'org' ? 'badge-context-blue' : 'badge-context-purple'"
-                data-testid="pipeline-list-visibility-badge"
-              >
-                {{ p.visibility === 'org' ? 'Org' : 'Team' }}
+      <div v-else>
+        <!-- Card view -->
+        <div v-if="viewMode === 'card'" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+          <div role="button" tabindex="0" @keydown.enter="($event.currentTarget as HTMLElement).click()" @keydown.space.prevent="($event.currentTarget as HTMLElement).click()"
+            v-for="p in pagedPipelines"
+            :key="p.id"
+            class="card card-hover p-5 cursor-pointer"
+            @click="openPipeline(p)"
+            data-testid="pipeline-list-card"
+          >
+            <div class="flex items-start justify-between gap-2 mb-3">
+              <h3 class="text-base font-medium text-foreground truncate">{{ p.name }}</h3>
+              <div class="flex items-center gap-1 shrink-0">
+                <span
+                  v-if="p.archived_at"
+                  class="badge text-xs badge-status-warning"
+                >{{ $t('views.PipelineListView.archived') }}</span>
+                <span
+                  class="badge text-xs"
+                  :class="p.visibility === 'org' ? 'badge-context-blue' : 'badge-context-purple'"
+                  data-testid="pipeline-list-visibility-badge"
+                >
+                  {{ p.visibility === 'org' ? 'Org' : 'Team' }}
+                </span>
+                <div class="relative">
+                  <button
+                    class="rounded p-1 hover:bg-accent"
+                    @click.stop="showActionMenu = (showActionMenu === p.id ? null : p.id)"
+                    data-testid="pipeline-list-action-menu"
+                  >
+                    <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="1"/><circle cx="12" cy="5" r="1"/><circle cx="12" cy="19" r="1"/></svg>
+                  </button>
+                  <div
+                    v-if="showActionMenu === p.id"
+                    class="absolute right-0 top-full z-20 mt-1 w-40 rounded-lg border bg-card py-1 shadow-lg"
+                    @click.stop
+                  >
+                    <button class="flex w-full items-center gap-2 px-3 py-2 text-left text-sm hover:bg-accent" @click.stop="openRename(p)">Rename</button>
+                    <button v-if="!p.archived_at" class="flex w-full items-center gap-2 px-3 py-2 text-left text-sm hover:bg-accent" @click.stop="handleArchive(p)">Archive</button>
+                    <button v-else class="flex w-full items-center gap-2 px-3 py-2 text-left text-sm hover:bg-accent" @click.stop="handleUnarchive(p)">Unarchive</button>
+                    <button v-if="planStore.featureEnabled('pipeline_delete')" class="flex w-full items-center gap-2 px-3 py-2 text-left text-sm text-destructive hover:bg-destructive/10" @click.stop="openDelete(p)">Delete</button>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <p v-if="p.description" class="text-sm text-muted-foreground mb-4 line-clamp-2">
+              {{ p.description }}
+            </p>
+            <div v-else class="mb-10" />
+
+            <div class="flex items-center gap-3 text-xs text-muted-foreground">
+              <span class="flex items-center gap-1">
+                <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 8v4l3 3"/><circle cx="12" cy="12" r="10"/></svg>
+                Created {{ formatDate(p.created_at) }}
               </span>
-              <div class="relative">
+            </div>
+
+            <div class="mt-4 pt-3 border-t border-border flex gap-2">
+              <Button
+                variant="default"
+                class="flex-1"
+                data-testid="pipeline-list-open-editor"
+              >
+                {{ $t('views.PipelineListView.open_in_editor') }}
+              </Button>
+              <Button
+                variant="outline"
+                class="flex-1"
+                @click.stop="openRunDialog(p)"
+                data-testid="pipeline-list-run"
+              >
+                {{ $t('views.PipelineListView.run') }}
+              </Button>
+            </div>
+          </div>
+        </div>
+
+        <!-- Table view -->
+        <div v-else class="card rounded-lg border border-border overflow-hidden">
+          <DataTable
+            :columns="tableColumns"
+            :rows="tableRows"
+            @row-click="openPipeline"
+          >
+            <template #cell-name="{ row }">
+              <span class="font-medium text-foreground">{{ row.name }}</span>
+            </template>
+            <template #cell-description="{ row }">
+              <span v-if="row.description" class="text-muted-foreground truncate block max-w-xs">{{ row.description }}</span>
+              <span v-else class="text-muted-foreground/50 italic">{{ $t('views.PipelineListView.no_description') }}</span>
+            </template>
+            <template #cell-visibility="{ row }">
+              <span class="badge text-xs" :class="row.visibility === 'org' ? 'badge-context-blue' : 'badge-context-purple'">
+                {{ row.visibility === 'org' ? 'Org' : 'Team' }}
+              </span>
+            </template>
+            <template #cell-created_at="{ row }">
+              <span class="text-muted-foreground">{{ formatDate(row.created_at) }}</span>
+            </template>
+            <template #cell-actions="{ row }">
+              <div class="relative flex justify-end" @click.stop>
                 <button
                   class="rounded p-1 hover:bg-accent"
-                  @click.stop="showActionMenu = (showActionMenu === p.id ? null : p.id)"
+                  @click.stop="showActionMenu = (showActionMenu === row.id ? null : row.id)"
                   data-testid="pipeline-list-action-menu"
                 >
                   <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="1"/><circle cx="12" cy="5" r="1"/><circle cx="12" cy="19" r="1"/></svg>
                 </button>
                 <div
-                  v-if="showActionMenu === p.id"
+                  v-if="showActionMenu === row.id"
                   class="absolute right-0 top-full z-20 mt-1 w-40 rounded-lg border bg-card py-1 shadow-lg"
                   @click.stop
                 >
-                  <button class="flex w-full items-center gap-2 px-3 py-2 text-left text-sm hover:bg-accent" @click.stop="openRename(p)">Rename</button>
-                  <button v-if="!p.archived_at" class="flex w-full items-center gap-2 px-3 py-2 text-left text-sm hover:bg-accent" @click.stop="handleArchive(p)">Archive</button>
-                  <button v-else class="flex w-full items-center gap-2 px-3 py-2 text-left text-sm hover:bg-accent" @click.stop="handleUnarchive(p)">Unarchive</button>
-                  <button v-if="planStore.featureEnabled('pipeline_delete')" class="flex w-full items-center gap-2 px-3 py-2 text-left text-sm text-destructive hover:bg-destructive/10" @click.stop="openDelete(p)">Delete</button>
+                  <button class="flex w-full items-center gap-2 px-3 py-2 text-left text-sm hover:bg-accent" @click.stop="openRename(row)">Rename</button>
+                  <button v-if="!row.archived_at" class="flex w-full items-center gap-2 px-3 py-2 text-left text-sm hover:bg-accent" @click.stop="handleArchive(row)">Archive</button>
+                  <button v-else class="flex w-full items-center gap-2 px-3 py-2 text-left text-sm hover:bg-accent" @click.stop="handleUnarchive(row)">Unarchive</button>
+                  <button v-if="planStore.featureEnabled('pipeline_delete')" class="flex w-full items-center gap-2 px-3 py-2 text-left text-sm text-destructive hover:bg-destructive/10" @click.stop="openDelete(row)">Delete</button>
                 </div>
               </div>
-            </div>
-          </div>
-
-          <p v-if="p.description" class="text-sm text-muted-foreground mb-4 line-clamp-2">
-            {{ p.description }}
-          </p>
-          <div v-else class="mb-10" />
-
-          <div class="flex items-center gap-3 text-xs text-muted-foreground">
-            <span class="flex items-center gap-1">
-              <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 8v4l3 3"/><circle cx="12" cy="12" r="10"/></svg>
-              Created {{ formatDate(p.created_at) }}
-            </span>
-          </div>
-
-          <div class="mt-4 pt-3 border-t border-border flex gap-2">
-            <Button
-              variant="default"
-              class="flex-1"
-              data-testid="pipeline-list-open-editor"
-            >
-              {{ $t('views.PipelineListView.open_in_editor') }}
-            </Button>
-            <Button
-              variant="outline"
-              class="flex-1"
-              @click.stop="openRunDialog(p)"
-              data-testid="pipeline-list-run"
-            >
-              {{ $t('views.PipelineListView.run') }}
-            </Button>
-          </div>
+            </template>
+          </DataTable>
         </div>
       </div>
 
@@ -348,6 +419,8 @@ import { Button } from '@/components/ui/button'
 import { api } from '../lib/api/client'
 import { useApi } from '../composables/useApi'
 import { formatDateShort } from '../lib/formatDate'
+import DataTable from '../components/ui/data-table/DataTable.vue'
+import type { Column } from '../components/ui/data-table/DataTable.vue'
 
 interface PipelineItem {
   id: string
@@ -399,6 +472,29 @@ const runError = ref<string | null>(null)
 const search = ref('')
 const page = ref(1)
 const pageSize = 12
+
+const viewMode = ref<'card' | 'table'>(
+  (localStorage.getItem('pipeline-view-mode') as 'card' | 'table') || 'table'
+)
+
+function setViewMode(mode: 'card' | 'table') {
+  viewMode.value = mode
+  localStorage.setItem('pipeline-view-mode', mode)
+}
+
+const tableColumns: Column[] = [
+  { key: 'name', label: 'Name' },
+  { key: 'description', label: 'Description' },
+  { key: 'visibility', label: 'Visibility' },
+  { key: 'created_at', label: 'Created' },
+  { key: 'actions', label: '' },
+]
+
+const tableRows = computed(() =>
+  pagedPipelines.value.map(p => ({
+    ...p,
+  }))
+)
 
 const filteredPipelines = computed(() => {
   const q = search.value.toLowerCase().trim()
