@@ -3,6 +3,7 @@ import os
 from logging.config import fileConfig
 from urllib.parse import parse_qs, urlencode, urlparse, urlunparse
 
+import sqlalchemy as sa
 from alembic import context
 from alembic.config import Config
 from sqlalchemy import Connection, create_engine
@@ -85,6 +86,21 @@ def run_migrations_offline() -> None:
 def do_run_migrations(connection: Connection) -> None:
     backend = _detect_backend(str(connection.engine.url))
     _log.info("Running migrations for %s backend", backend)
+
+    # Alembic creates alembic_version with VARCHAR(32) by default, but
+    # post-squash branch migration IDs exceed 32 chars (e.g.
+    # 0006_post_squash_pipeline_archived_at is 44 chars).  Widen the column
+    # before any migration runs so the version UPDATE never truncates.
+    if backend == "postgresql":
+        try:
+            connection.execute(
+                sa.text(
+                    "ALTER TABLE alembic_version "
+                    "ALTER COLUMN version_num TYPE VARCHAR(255)"
+                )
+            )
+        except Exception:
+            _log.warning("Could not widen alembic_version column — table may not exist yet")
 
     context.configure(
         connection=connection,
