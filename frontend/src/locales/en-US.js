@@ -149,7 +149,12 @@ export default {
       "running": "Running...",
       "previous": "Previous",
       "next": "Next",
-      "page_x_of_y": "Page {page} of {total}"
+      "page_x_of_y": "Page {page} of {total}",
+      "view_mode": "View mode",
+      "table_view": "Table view",
+      "card_view": "Card view",
+      "archived": "Archived",
+      "no_description": "No description"
     },
     "SettingsRateLimitsView": {
       "rate_limits": "Rate Limits",
