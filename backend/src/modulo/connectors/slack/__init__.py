@@ -3,7 +3,7 @@
 import asyncio
 import json
 import random
-from typing import Any
+from typing import Any, cast
 
 import httpx
 
@@ -37,9 +37,9 @@ def _parse_retry_after(response: httpx.Response) -> float | None:
 def _compute_retry_delay(attempt: int, response: httpx.Response | None = None) -> float:
     retry_after = _parse_retry_after(response) if response else None
     if retry_after is not None:
-        return min(retry_after, _MAX_DELAY)
+        return float(min(retry_after, _MAX_DELAY))
     jitter = random.uniform(0, 1)  # noqa: S311 — non-cryptographic jitter for retry delays
-    return min(_BASE_DELAY * (2**attempt) + jitter, _MAX_DELAY)
+    return float(min(_BASE_DELAY * (2**attempt) + jitter, _MAX_DELAY))
 
 
 def _check_slack_ok(body: Any, context: str) -> None:
@@ -107,7 +107,7 @@ class SlackConnector(ConnectorBase):
         body = await self._parse_json(r)
         if not body.get("ok"):
             raise ValueError(f"Token validation failed: {body.get('error', 'unknown')}")
-        return body
+        return cast(dict[str, Any], body)
 
     async def health_check(self) -> HealthResult:
         try:
