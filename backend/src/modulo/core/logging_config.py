@@ -16,7 +16,7 @@ import traceback as tb_module
 from contextvars import ContextVar
 from typing import Any
 
-from pythonjsonlogger import jsonlogger
+from pythonjsonlogger.json import JsonFormatter
 from sqlalchemy.exc import ProgrammingError
 
 correlation_id_var: ContextVar[str | None] = ContextVar("correlation_id", default=None)
@@ -190,7 +190,7 @@ def configure_logging() -> None:
     handler = logging.StreamHandler(sys.stdout)
     handler.setLevel(logging.DEBUG)
 
-    formatter = jsonlogger.JsonFormatter(  # type: ignore[attr-defined]
+    formatter = JsonFormatter(
         fmt="%(timestamp)s %(level)s %(name)s %(module)s %(funcName)s %(lineno)d %(message)s %(correlation_id)s",
         rename_fields={
             "timestamp": "timestamp",

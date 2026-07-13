@@ -234,7 +234,7 @@ class TestConvertToAgent:
                 principal=principal,
             )
 
-        assert excinfo.value.status_code == status.HTTP_422_UNPROCESSABLE_ENTITY
+        assert excinfo.value.status_code == status.HTTP_422_UNPROCESSABLE_CONTENT
 
     async def test_agent_not_found(self):
         session = make_session()
@@ -307,7 +307,7 @@ class TestConvertToAgent:
                 principal=principal,
             )
 
-        assert excinfo.value.status_code == status.HTTP_422_UNPROCESSABLE_ENTITY
+        assert excinfo.value.status_code == status.HTTP_422_UNPROCESSABLE_CONTENT
 
     async def test_model_backend_not_found(self):
         session = make_session()
@@ -450,7 +450,7 @@ class TestRevertToManual:
                 principal=principal,
             )
 
-        assert excinfo.value.status_code == status.HTTP_422_UNPROCESSABLE_ENTITY
+        assert excinfo.value.status_code == status.HTTP_422_UNPROCESSABLE_CONTENT
 
     async def test_snapshot_not_found(self):
         session = make_session()
@@ -493,7 +493,7 @@ class TestRevertToManual:
                 principal=principal,
             )
 
-        assert excinfo.value.status_code == status.HTTP_422_UNPROCESSABLE_ENTITY
+        assert excinfo.value.status_code == status.HTTP_422_UNPROCESSABLE_CONTENT
 
     async def test_snapshot_node_not_manual(self):
         session = make_session()
@@ -517,7 +517,7 @@ class TestRevertToManual:
                 principal=principal,
             )
 
-        assert excinfo.value.status_code == status.HTTP_422_UNPROCESSABLE_ENTITY
+        assert excinfo.value.status_code == status.HTTP_422_UNPROCESSABLE_CONTENT
 
     async def test_snapshot_no_output_schema(self):
         session = make_session()
@@ -541,7 +541,7 @@ class TestRevertToManual:
                 principal=principal,
             )
 
-        assert excinfo.value.status_code == status.HTTP_422_UNPROCESSABLE_ENTITY
+        assert excinfo.value.status_code == status.HTTP_422_UNPROCESSABLE_CONTENT
 
     async def test_integrity_error_returns_409(self):
         session = make_session()

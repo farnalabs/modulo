@@ -214,7 +214,7 @@ def _validate_provider(provider: str) -> None:
     except Exception as exc:
         logger.warning("Plugin registry check failed for provider %r: %s", provider, exc)
     raise HTTPException(
-        status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+        status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
         detail=[
             {
                 "type": "value_error",

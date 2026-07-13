@@ -294,7 +294,7 @@ def _graph_response(
     except ValidationError:
         _log.exception("Pipeline graph data validation failed")
         raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail="Pipeline graph contains invalid data. This may be caused by a schema migration.",
         ) from None
 
@@ -324,7 +324,7 @@ async def _resolve_graph_references(
     missing_agent_ids = sorted(agent_ids - agents_by_id.keys(), key=str)
     if missing_agent_ids:
         raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail=f"Unknown agent IDs for this organisation: {missing_agent_ids}",
         )
 
@@ -348,7 +348,7 @@ async def _resolve_graph_references(
     missing_schema_ids = sorted(manual_schema_ids - existing_schema_ids, key=str)
     if missing_schema_ids:
         raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail=f"Unknown manual output schema IDs for this organisation: {missing_schema_ids}",
         )
 
@@ -778,7 +778,7 @@ async def clone_pipeline_endpoint(
             if not await check_pipeline_name_available(session, principal.organisation_id, target_name):
                 _log.warning("Copy aborted: name '%s' already exists in org %s", target_name, principal.organisation_id)
                 raise HTTPException(
-                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                    status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
                     detail=(
                         f"pipeline_copy_failed: A pipeline named '{target_name}' already exists in this organisation"
                     ),
@@ -864,7 +864,7 @@ async def save_as_composite_endpoint(
             sub_nodes = [n for n in all_nodes if str(n.get("id")) in selected_ids_str]
             if not sub_nodes:
                 raise HTTPException(
-                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                    status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
                     detail="No valid nodes selected",
                 )
 
@@ -1299,7 +1299,7 @@ async def move_pipeline_to_folder_endpoint(
             pipeline = await move_pipeline_to_folder(session, pipeline_id, req.folder_id)
     except ValueError as e:
         raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail=str(e),
         ) from None
     except ProgrammingError:
@@ -1354,7 +1354,7 @@ async def convert_node_to_agent_endpoint(
                 raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Node not found")
             if target.get("node_type") != "manual":
                 raise HTTPException(
-                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                    status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
                     detail="Only manual nodes can be converted to agent",
                 )
 
@@ -1381,7 +1381,7 @@ async def convert_node_to_agent_endpoint(
                 raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Connector not found")
             if connector.connector_type_id != req.connector_binding.type:
                 raise HTTPException(
-                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                    status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
                     detail="Connector type mismatch",
                 )
 
@@ -1462,7 +1462,7 @@ async def revert_node_to_manual_endpoint(
                 raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Node not found")
             if target.get("node_type") != "agent":
                 raise HTTPException(
-                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                    status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
                     detail="Only agent nodes can be reverted to manual",
                 )
 
@@ -1474,19 +1474,19 @@ async def revert_node_to_manual_endpoint(
             snapshot_node = _find_node_in_list(snapshot_nodes, node_id)
             if snapshot_node is None:
                 raise HTTPException(
-                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                    status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
                     detail="Snapshot does not contain this node",
                 )
             if snapshot_node.get("node_type") != "manual":
                 raise HTTPException(
-                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                    status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
                     detail="Snapshot node was not a manual node",
                 )
 
             output_schema_id = snapshot_node.get("output_schema_id")
             if output_schema_id is None:
                 raise HTTPException(
-                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                    status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
                     detail="Snapshot node has no output schema",
                 )
 

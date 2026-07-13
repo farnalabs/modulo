@@ -4,13 +4,23 @@ from typing import Any
 from uuid import uuid4
 
 import pytest
-from langgraph.errors import NodeInterrupt
+from langgraph.errors import GraphInterrupt
+from langgraph.types import Interrupt
 
 from modulo.core.eval_engine import EvalBlockedError, EvalDefinition, EvalType
 from modulo.core.pipeline_engine.node_runner import _evaluate_eval_condition, make_hitl_gate_fn, make_manual_node_fn
 
+
+@pytest.fixture(autouse=True)
+def _interrupt_without_graph_runtime(monkeypatch: pytest.MonkeyPatch) -> None:
+    def raise_interrupt(value: Any) -> None:
+        raise GraphInterrupt((Interrupt(value=value),))
+
+    monkeypatch.setattr("modulo.core.pipeline_engine.node_runner.interrupt", raise_interrupt)
+
+
 # ---------------------------------------------------------------------------
-# HITL gate node — first invocation (raises NodeInterrupt)
+# HITL gate node — first invocation (raises GraphInterrupt)
 # ---------------------------------------------------------------------------
 
 
@@ -18,10 +28,10 @@ async def test_hitl_gate_first_call_raises_interrupt():
     gate_config = {"gate_id": "review-step", "human_only": False}
     node_fn = make_hitl_gate_fn(gate_config)
 
-    with pytest.raises(NodeInterrupt) as exc_info:
+    with pytest.raises(GraphInterrupt) as exc_info:
         await node_fn({"artifacts": [], "_hitl_gates": []})
 
-    # NodeInterrupt(value) stores value in args as [Interrupt(value, ...)].
+    # GraphInterrupt(value) stores value in args as [Interrupt(value, ...)].
     interrupt_list = exc_info.value.args[0]
     assert len(interrupt_list) > 0
     actual = interrupt_list[0]
@@ -35,7 +45,7 @@ async def test_hitl_gate_first_call_stores_gate_config_in_state():
     node_fn = make_hitl_gate_fn(gate_config)
 
     state: dict[str, Any] = {"artifacts": [], "_hitl_gates": []}
-    with pytest.raises(NodeInterrupt):
+    with pytest.raises(GraphInterrupt):
         await node_fn(state)
 
     # State mutations before the raise should be persisted.
@@ -51,7 +61,7 @@ async def test_hitl_gate_first_call_preserves_existing_hitl_gates():
         "artifacts": [],
         "_hitl_gates": [{"gate_id": "first-gate"}],
     }
-    with pytest.raises(NodeInterrupt):
+    with pytest.raises(GraphInterrupt):
         await node_fn(state)
 
     assert len(state["_hitl_gates"]) == 2
@@ -60,6 +70,19 @@ async def test_hitl_gate_first_call_preserves_existing_hitl_gates():
 # ---------------------------------------------------------------------------
 # HITL gate node — resume (state has _hitl_decision)
 # ---------------------------------------------------------------------------
+
+
+async def test_hitl_gate_accepts_command_resume_value(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setattr(
+        "modulo.core.pipeline_engine.node_runner.interrupt",
+        lambda _payload: {"action": "approved", "notes": "Command resume"},
+    )
+    node_fn = make_hitl_gate_fn({"gate_id": "review-step"})
+
+    result = await node_fn({"artifacts": [], "_hitl_gates": []})
+
+    assert result["artifacts"][0]["result"] == "approved"
+    assert result["artifacts"][0]["human_data"]["notes"] == "Command resume"
 
 
 async def test_hitl_gate_resume_with_approved():
@@ -111,7 +134,7 @@ async def test_hitl_gate_resume_preserves_existing_artifacts():
 
 
 # ---------------------------------------------------------------------------
-# Manual node — first invocation (raises NodeInterrupt)
+# Manual node — first invocation (raises GraphInterrupt)
 # ---------------------------------------------------------------------------
 
 
@@ -119,7 +142,7 @@ async def test_manual_node_first_call_raises_interrupt():
     node_def = {"id": "manual-node-1", "node_type": "manual"}
     node_fn = make_manual_node_fn(node_def)
 
-    with pytest.raises(NodeInterrupt) as exc_info:
+    with pytest.raises(GraphInterrupt) as exc_info:
         await node_fn({"artifacts": [], "_hitl_gates": []})
 
     interrupt_list = exc_info.value.args[0]
@@ -134,6 +157,18 @@ async def test_manual_node_first_call_raises_interrupt():
 # ---------------------------------------------------------------------------
 # Manual node — resume (state has _hitl_decision with output)
 # ---------------------------------------------------------------------------
+
+
+async def test_manual_node_accepts_command_resume_value(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setattr(
+        "modulo.core.pipeline_engine.node_runner.interrupt",
+        lambda _payload: {"output": {"answer": "provided"}},
+    )
+    node_fn = make_manual_node_fn({"id": "manual-step", "manual_prompt": "Provide output"})
+
+    result = await node_fn({"artifacts": []})
+
+    assert result["manual_output"] == {"answer": "provided"}
 
 
 async def test_manual_node_resume_with_output():
@@ -244,7 +279,7 @@ async def test_hitl_gate_human_only_overrides_fully_autonomous():
     gate_config = {"gate_id": "human-override", "human_only": True}
     node_fn = make_hitl_gate_fn(gate_config)
 
-    with pytest.raises(NodeInterrupt) as exc_info:
+    with pytest.raises(GraphInterrupt) as exc_info:
         await node_fn(
             {
                 "artifacts": [],
@@ -265,7 +300,7 @@ async def test_hitl_gate_manual_approval_raises_interrupt():
     gate_config = {"gate_id": "manual-gate", "human_only": False}
     node_fn = make_hitl_gate_fn(gate_config)
 
-    with pytest.raises(NodeInterrupt) as exc_info:
+    with pytest.raises(GraphInterrupt) as exc_info:
         await node_fn(
             {
                 "artifacts": [],
@@ -286,7 +321,7 @@ async def test_hitl_gate_no_run_context_falls_back_to_manual_approval():
     gate_config = {"gate_id": "no-ctx-gate", "human_only": False}
     node_fn = make_hitl_gate_fn(gate_config)
 
-    with pytest.raises(NodeInterrupt):
+    with pytest.raises(GraphInterrupt):
         await node_fn(
             {
                 "artifacts": [],
@@ -340,7 +375,7 @@ async def test_condition_truthy_proceeds_to_interrupt():
     gate_config = {"gate_id": "cond-gate", "condition": "score > `0.5`"}
     node_fn = make_hitl_gate_fn(gate_config)
 
-    with pytest.raises(NodeInterrupt) as exc_info:
+    with pytest.raises(GraphInterrupt) as exc_info:
         await node_fn(
             {
                 "artifacts": [],
@@ -405,7 +440,7 @@ async def test_condition_absent_defaults_to_interrupt():
     gate_config = {"gate_id": "no-cond-gate", "human_only": False}
     node_fn = make_hitl_gate_fn(gate_config)
 
-    with pytest.raises(NodeInterrupt):
+    with pytest.raises(GraphInterrupt):
         await node_fn(
             {
                 "artifacts": [],
@@ -434,7 +469,7 @@ async def test_condition_nonzero_number_is_truthy():
     gate_config = {"gate_id": "cond-gate", "condition": "count"}
     node_fn = make_hitl_gate_fn(gate_config)
 
-    with pytest.raises(NodeInterrupt):
+    with pytest.raises(GraphInterrupt):
         await node_fn(
             {
                 "artifacts": [],
@@ -449,7 +484,7 @@ async def test_condition_true_bool_is_truthy():
     gate_config = {"gate_id": "cond-gate", "condition": "ready == `true`"}
     node_fn = make_hitl_gate_fn(gate_config)
 
-    with pytest.raises(NodeInterrupt):
+    with pytest.raises(GraphInterrupt):
         await node_fn(
             {
                 "artifacts": [],
@@ -500,7 +535,7 @@ async def test_eval_warn_fails_still_interrupts():
     )
     node_fn = make_hitl_gate_fn(gate_config, eval_definitions=[eval_def])
 
-    with pytest.raises(NodeInterrupt):
+    with pytest.raises(GraphInterrupt):
         await node_fn(
             {
                 "artifacts": [],
@@ -523,7 +558,7 @@ async def test_eval_all_pass_proceeds_to_interrupt():
     )
     node_fn = make_hitl_gate_fn(gate_config, eval_definitions=[eval_def])
 
-    with pytest.raises(NodeInterrupt):
+    with pytest.raises(GraphInterrupt):
         await node_fn(
             {
                 "artifacts": [],
@@ -538,7 +573,7 @@ async def test_no_eval_definitions_proceeds_to_interrupt():
     gate_config = {"gate_id": "eval-gate"}
     node_fn = make_hitl_gate_fn(gate_config, eval_definitions=None)
 
-    with pytest.raises(NodeInterrupt):
+    with pytest.raises(GraphInterrupt):
         await node_fn(
             {
                 "artifacts": [],
@@ -552,7 +587,7 @@ async def test_empty_eval_definitions_proceeds_to_interrupt():
     gate_config = {"gate_id": "eval-gate"}
     node_fn = make_hitl_gate_fn(gate_config, eval_definitions=[])
 
-    with pytest.raises(NodeInterrupt):
+    with pytest.raises(GraphInterrupt):
         await node_fn(
             {
                 "artifacts": [],
@@ -582,7 +617,7 @@ async def test_eval_condition_below_threshold_triggers_interrupt():
     )
     node_fn = make_hitl_gate_fn(gate_config, eval_definitions=[eval_def])
 
-    with pytest.raises(NodeInterrupt) as exc_info:
+    with pytest.raises(GraphInterrupt) as exc_info:
         await node_fn(
             {
                 "artifacts": [],
@@ -638,7 +673,7 @@ async def test_eval_condition_with_gt_operator():
     )
     node_fn = make_hitl_gate_fn(gate_config, eval_definitions=[eval_def])
 
-    with pytest.raises(NodeInterrupt):
+    with pytest.raises(GraphInterrupt):
         await node_fn(
             {
                 "artifacts": [],
@@ -656,7 +691,7 @@ async def test_eval_condition_no_eval_definition_skips_check():
     }
     node_fn = make_hitl_gate_fn(gate_config, eval_definitions=[])
 
-    with pytest.raises(NodeInterrupt):
+    with pytest.raises(GraphInterrupt):
         await node_fn(
             {
                 "artifacts": [],
@@ -670,7 +705,7 @@ async def test_eval_condition_none_skips_check():
     gate_config = {"gate_id": "no-eval-cond"}
     node_fn = make_hitl_gate_fn(gate_config)
 
-    with pytest.raises(NodeInterrupt):
+    with pytest.raises(GraphInterrupt):
         await node_fn(
             {
                 "artifacts": [],
@@ -695,7 +730,7 @@ async def test_eval_condition_score_equal_threshold_with_eq():
     )
     node_fn = make_hitl_gate_fn(gate_config, eval_definitions=[eval_def])
 
-    with pytest.raises(NodeInterrupt):
+    with pytest.raises(GraphInterrupt):
         await node_fn(
             {
                 "artifacts": [],

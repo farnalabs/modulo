@@ -610,7 +610,7 @@ async def add_member_endpoint(
                     )
                 if TEAM_ROLE_HIERARCHY.get(req.role, -1) > TEAM_ROLE_HIERARCHY.get(caller_membership.role, -1):
                     raise HTTPException(
-                        status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                        status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
                         detail=f"Cannot grant role '{req.role}' above your own team role '{caller_membership.role}'",
                     )
 
@@ -621,7 +621,7 @@ async def add_member_endpoint(
 
             if TEAM_ROLE_HIERARCHY.get(req.role, -1) > ORG_ROLE_HIERARCHY.get(target_membership.role, -1):
                 raise HTTPException(
-                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                    status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
                     detail=f"Team role '{req.role}' exceeds user's org role '{target_membership.role}'",
                 )
 
@@ -768,7 +768,7 @@ async def change_member_role_endpoint(
                     )
                 if TEAM_ROLE_HIERARCHY.get(req.role, -1) > TEAM_ROLE_HIERARCHY.get(caller_membership.role, -1):
                     raise HTTPException(
-                        status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                        status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
                         detail=f"Cannot grant role '{req.role}' above your own team role '{caller_membership.role}'",
                     )
 

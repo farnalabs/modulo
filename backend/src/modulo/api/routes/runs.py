@@ -121,7 +121,7 @@ async def _validate_run_input_basics(
     edges = graph_json.get("edges", [])
     if not nodes:
         raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail="Pipeline graph has no nodes",
         )
 
@@ -129,7 +129,7 @@ async def _validate_run_input_basics(
     entry_candidates = [n for n in nodes if str(n.get("id")) not in target_ids]
     if not entry_candidates:
         raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail="Pipeline graph has no entry node (cycle detected)",
         )
 
@@ -142,13 +142,13 @@ async def _validate_run_input_basics(
     agent = agent_result.scalar_one_or_none()
     if agent is None:
         raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail=f"Entry agent {agent_id_str} not found",
         )
 
     if not isinstance(input_payload, dict):
         raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail="Input payload must be a JSON object",
         )
 

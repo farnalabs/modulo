@@ -356,19 +356,20 @@ async def test_execute_error_code_matches_exception_type():
 
 
 # ---------------------------------------------------------------------------
-# PipelineExecutor.execute — NodeInterrupt → awaiting_human
+# PipelineExecutor.execute — GraphInterrupt → awaiting_human
 # ---------------------------------------------------------------------------
 
 
 async def test_execute_sets_awaiting_human_on_node_interrupt():
-    from langgraph.errors import NodeInterrupt
+    from langgraph.errors import GraphInterrupt
+    from langgraph.types import Interrupt
 
     run = _make_run()
     final_run = _make_run(run_id=run.id, status="awaiting_human")
     snapshot = _make_snapshot()
     session = _make_session(snapshot)
     factory = _make_session_factory(session)
-    compiled = _mock_compiled_raising(NodeInterrupt({"gate_id": "step-1"}))
+    compiled = _mock_compiled_raising(GraphInterrupt((Interrupt(value={"gate_id": "step-1"}),)))
     registry = _mock_registry()
 
     with (
@@ -395,14 +396,15 @@ async def test_execute_sets_awaiting_human_on_node_interrupt():
 
 
 async def test_execute_publishes_hitl_awaiting_event():
-    from langgraph.errors import NodeInterrupt
+    from langgraph.errors import GraphInterrupt
+    from langgraph.types import Interrupt
 
     run = _make_run()
     final_run = _make_run(run_id=run.id, status="awaiting_human")
     snapshot = _make_snapshot()
     session = _make_session(snapshot)
     factory = _make_session_factory(session)
-    compiled = _mock_compiled_raising(NodeInterrupt({"gate_id": "gate-1"}))
+    compiled = _mock_compiled_raising(GraphInterrupt((Interrupt(value={"gate_id": "gate-1"}),)))
     registry = _mock_registry()
 
     with (

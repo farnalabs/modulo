@@ -303,7 +303,7 @@ async def create_agent_endpoint(
             )
     except IntegrityError:
         raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail="Referenced schema version or model backend not found. Verify the IDs are correct.",
         ) from None
     except ProgrammingError:
@@ -439,7 +439,7 @@ async def optimize_prompt(
 ) -> PromptOptimizeResponse:
     if not req.eval_result_ids:
         raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail="At least one eval_result_id is required",
         )
 

@@ -231,7 +231,7 @@ async def update_remy_config(
         invalid = [p for p in req.allowed_providers if p not in _SIMPLE_BACKENDS]
         if invalid:
             raise HTTPException(
-                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
                 detail=f"Unsupported providers: {invalid}. Supported: {sorted(_SIMPLE_BACKENDS)}",
             )
     try:

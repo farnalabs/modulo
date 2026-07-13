@@ -52,7 +52,7 @@ class RotationStatusResponse(BaseModel):
 def _validate_fernet_key(key: str, label: str) -> None:
     if len(key.encode()) < _MIN_KEY_LEN:
         raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail=f"{label} must be at least {_MIN_KEY_LEN} bytes; got {len(key.encode())}",
         )
 

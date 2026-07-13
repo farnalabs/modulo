@@ -149,13 +149,13 @@ async def upload_license(
         validation = parse_and_verify(req.license_key)
     except LicenseError as exc:
         raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail=str(exc),
         ) from exc
 
     if not validation.valid or validation.license_data is None:
         raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail=validation.error or "Invalid license key",
         )
 

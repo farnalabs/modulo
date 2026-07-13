@@ -9,7 +9,7 @@ Responsibilities:
   - Stream graph execution, updating Run status on transitions
   - Mark run complete/failed/cancelled/awaiting_human/eval_failed in DB
 
-Handles NodeInterrupt by transitioning the run to awaiting_human.
+Handles GraphInterrupt by transitioning the run to awaiting_human.
 Does NOT handle WebSocket fan-out, HITL claim/approve/reject, or webhook triggers (phases 3+).
 """
 
@@ -24,7 +24,7 @@ from datetime import UTC, datetime
 from decimal import Decimal
 from typing import Any
 
-from langgraph.errors import NodeInterrupt
+from langgraph.errors import GraphInterrupt
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
@@ -973,7 +973,7 @@ class PipelineExecutor:
 
             broker.publish("run_completed", {})
             return "complete", None, None, node_token_usage or None
-        except NodeInterrupt as exc:
+        except GraphInterrupt as exc:
             interrupts = exc.args[0] if exc.args else []
             gate_payload = interrupts[0].value if interrupts else {}
             gate_id = gate_payload.get("gate_id", "")

@@ -142,7 +142,7 @@ async def change_password(
             try:
                 validate_password_strength(req.new_password)
             except ValueError as exc:
-                raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from exc
+                raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(exc)) from exc
 
             account.password_hash = hash_password(req.new_password)
             session.add(account)

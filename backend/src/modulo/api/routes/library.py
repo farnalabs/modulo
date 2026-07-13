@@ -5,7 +5,7 @@ import json
 import logging
 import uuid
 from datetime import datetime
-from typing import Any, ClassVar, Literal
+from typing import Any, ClassVar, Literal, Self
 
 from fastapi import APIRouter, Depends, File, HTTPException, Query, Response, UploadFile, status
 from pydantic import BaseModel, Field, model_validator
@@ -105,17 +105,16 @@ class LibraryPrimitiveResponse(BaseModel):
     model_config = {"from_attributes": True, "populate_by_name": True}
 
     @model_validator(mode="after")
-    @classmethod
-    def _compute_trust_tier(cls, data: Any) -> Any:
-        if data.source == "modulo":
-            data.trust_tier = "modulo"
-        elif data.source == "registry" and data.verified is True:
-            data.trust_tier = "green"
-        elif data.source == "registry":
-            data.trust_tier = "amber"
+    def _compute_trust_tier(self) -> Self:
+        if self.source == "modulo":
+            self.trust_tier = "modulo"
+        elif self.source == "registry" and self.verified is True:
+            self.trust_tier = "green"
+        elif self.source == "registry":
+            self.trust_tier = "amber"
         else:
-            data.trust_tier = None
-        return data
+            self.trust_tier = None
+        return self
 
 
 class LibraryPrimitiveListResponse(BaseModel):
@@ -139,11 +138,10 @@ class LibraryPrimitiveCreate(BaseModel):
     tier: Literal["native", "preview", "in_dev"] = Field(default="native")
 
     @model_validator(mode="after")
-    @classmethod
-    def _require_team_id_for_team_visibility(cls, values: Any) -> Any:
-        if values.visibility == "team" and values.owner_team_id is None:
+    def _require_team_id_for_team_visibility(self) -> Self:
+        if self.visibility == "team" and self.owner_team_id is None:
             raise ValueError("owner_team_id is required when visibility is 'team'")
-        return values
+        return self
 
 
 class LibraryPrimitiveUpdate(BaseModel):
@@ -157,11 +155,10 @@ class LibraryPrimitiveUpdate(BaseModel):
     tier: Literal["native", "preview", "in_dev"] | None = None
 
     @model_validator(mode="after")
-    @classmethod
-    def _require_team_id_for_team_visibility(cls, values: Any) -> Any:
-        if values.visibility == "team" and values.owner_team_id is None:
+    def _require_team_id_for_team_visibility(self) -> Self:
+        if self.visibility == "team" and self.owner_team_id is None:
             raise ValueError("owner_team_id is required when visibility is 'team'")
-        return values
+        return self
 
 
 class RatingSubmit(BaseModel):

@@ -511,11 +511,12 @@ class TestScimAuth:
         app.dependency_overrides[get_db_session] = lambda: _make_mock_session()
         app.dependency_overrides[_get_engine] = lambda: MagicMock()
         headers = {"X-CSRF-Token": "test-csrf-token"}
-        resp = TestClient(app).post(
+        test_client = TestClient(app)
+        test_client.cookies.set("XSRF-TOKEN", "test-csrf-token")
+        resp = test_client.post(
             "/scim/v2/Users",
             json=_USER_CREATE_BODY,
             headers=headers,
-            cookies={"XSRF-TOKEN": "test-csrf-token"},
         )
         app.dependency_overrides.clear()
         assert resp.status_code == 401
