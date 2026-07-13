@@ -19,6 +19,7 @@ from modulo.auth.dependencies import get_current_user
 from modulo.auth.jwt import AuthenticatedPrincipal
 from modulo.db.models.trigger import Trigger
 from modulo.settings import Settings, get_settings
+from tests.unit.api.mock_session import configure_mock_session
 
 _ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
 _USER_ID = uuid.UUID("00000000-0000-0000-0000-000000000002")
@@ -54,6 +55,7 @@ def _make_trigger_result(triggers: list[MagicMock]) -> MagicMock:
 
 def _make_mock_session(execute_result=None) -> AsyncMock:
     session = AsyncMock()
+    configure_mock_session(session)
     begin_cm = AsyncMock()
     begin_cm.__aenter__ = AsyncMock(return_value=None)
     begin_cm.__aexit__ = AsyncMock(return_value=False)
@@ -178,6 +180,7 @@ async def test_cron_trigger_fires_and_creates_run() -> None:
     event_mock = MagicMock(id=uuid.uuid4())
 
     session = AsyncMock()
+    configure_mock_session(session)
     session.__aenter__ = AsyncMock(return_value=session)
     session.__aexit__ = AsyncMock(return_value=False)
     begin_cm = AsyncMock()
@@ -232,6 +235,7 @@ async def test_daily_spend_limit_stops_trigger() -> None:
     cost_result.scalar_one.return_value = Decimal("55.00")
 
     session = AsyncMock()
+    configure_mock_session(session)
     session.__aenter__ = AsyncMock(return_value=session)
     session.__aexit__ = AsyncMock(return_value=False)
     begin_cm = AsyncMock()
@@ -284,6 +288,7 @@ async def test_input_template_populates_run_input() -> None:
     cost_result.scalar_one.return_value = Decimal(0)
 
     session = AsyncMock()
+    configure_mock_session(session)
     session.__aenter__ = AsyncMock(return_value=session)
     session.__aexit__ = AsyncMock(return_value=False)
     begin_cm = AsyncMock()
@@ -340,6 +345,7 @@ async def test_trigger_event_logged_on_fire() -> None:
     cost_result.scalar_one.return_value = Decimal(0)
 
     session = AsyncMock()
+    configure_mock_session(session)
     session.__aenter__ = AsyncMock(return_value=session)
     session.__aexit__ = AsyncMock(return_value=False)
     begin_cm = AsyncMock()
@@ -430,6 +436,7 @@ async def test_disabled_cron_trigger_skipped() -> None:
     trigger_result.scalar_one_or_none.return_value = trigger
 
     session = AsyncMock()
+    configure_mock_session(session)
     session.__aenter__ = AsyncMock(return_value=session)
     session.__aexit__ = AsyncMock(return_value=False)
     begin_cm = AsyncMock()

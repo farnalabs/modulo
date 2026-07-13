@@ -13,6 +13,7 @@ from modulo.api.main import app
 from modulo.auth.dependencies import get_current_user
 from modulo.auth.jwt import AuthenticatedPrincipal
 from modulo.settings import Settings, get_settings
+from tests.unit.api.mock_session import configure_mock_session
 
 _VALID_32 = "a" * 32
 _ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
@@ -29,6 +30,7 @@ def _make_settings() -> Settings:
 
 def _make_mock_session() -> AsyncMock:
     session = AsyncMock()
+    configure_mock_session(session)
     begin_cm = AsyncMock()
     begin_cm.__aenter__ = AsyncMock(return_value=None)
     begin_cm.__aexit__ = AsyncMock(return_value=False)
@@ -141,6 +143,7 @@ class TestSchemaVersionListExceptionGuard:
     def test_list_versions_exception_returns_500(self, client: TestClient) -> None:
         mock_list = AsyncMock(side_effect=ValueError("bad versions"))
         with (
+            patch("modulo.api.routes.schemas.get_schema", return_value=MagicMock()),
             patch("modulo.api.routes.schemas.list_schema_versions", mock_list),
             patch("modulo.api.routes.schemas.set_rls_org"),
         ):
