@@ -106,7 +106,6 @@ jobs:
   product-map-validate:
     name: Product map validation
     runs-on: self-hosted
-    continue-on-error: true
     steps:
       - uses: actions/checkout@v7
       - name: Validate product map graph
@@ -117,7 +116,6 @@ jobs:
   manifest-validate:
     name: Manifest validation
     runs-on: self-hosted
-    continue-on-error: true
     steps:
       - uses: actions/checkout@v7
       - name: Validate manifest.yaml
