@@ -1,6 +1,35 @@
 #!/bin/sh
 set -e
 
+echo "=== Writing frontend runtime configuration ==="
+.venv/bin/python3 - <<'PY'
+import json
+import os
+from pathlib import Path
+
+config = {}
+
+monitor_config = os.environ.get("MODULO_MONITOR_CONFIG")
+if monitor_config:
+    try:
+        config["monitor"] = json.loads(monitor_config)
+    except json.JSONDecodeError as exc:
+        print(f"Ignoring invalid MODULO_MONITOR_CONFIG: {exc}")
+
+username = os.environ.get("MODULO_AUTO_LOGIN_USERNAME")
+password = os.environ.get("MODULO_AUTO_LOGIN_PASSWORD")
+if username and password:
+    config["autoLogin"] = {"username": username, "password": password}
+
+payload = json.dumps(config, separators=(",", ":"), ensure_ascii=True)
+Path("/usr/share/nginx/html/runtime-config.js").write_text(
+    "window.__MODULO_CONFIG__ = Object.assign(window.__MODULO_CONFIG__ || {}, "
+    + payload
+    + ");\n",
+    encoding="utf-8",
+)
+PY
+
 echo "=== Starting nginx ==="
 nginx -g "daemon off;" &
 

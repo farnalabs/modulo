@@ -1,8 +1,15 @@
+# syntax=docker/dockerfile:1.7
 FROM node:22-alpine AS builder
 WORKDIR /app
 COPY frontend/package.json frontend/package-lock.json ./
-RUN npm ci --ignore-scripts
-RUN cp node_modules/reka-ui/dist/index.d.cts node_modules/reka-ui/dist/index.d.ts 2>/dev/null || true
+RUN --mount=type=cache,target=/root/.npm \
+    npm ci --ignore-scripts --no-audit --no-fund && \
+    if [ ! -f node_modules/reka-ui/dist/index.d.ts ] && [ -f node_modules/reka-ui/dist/index.d.cts ]; then \
+        cp node_modules/reka-ui/dist/index.d.cts node_modules/reka-ui/dist/index.d.ts; \
+    fi && \
+    if [ ! -f node_modules/@internationalized/date/dist/index.mjs ] && [ -f node_modules/@internationalized/date/dist/index.js ]; then \
+        cp node_modules/@internationalized/date/dist/index.js node_modules/@internationalized/date/dist/index.mjs; \
+    fi
 COPY frontend/ ./
 RUN npm run build
 

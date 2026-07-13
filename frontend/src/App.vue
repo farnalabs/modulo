@@ -8,6 +8,7 @@ import { ref, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { getAccessToken, setAccessToken, setRefreshToken, onAuthChange } from './lib/api/client'
 import { getErrorTracker } from './lib/error-tracking'
+import { getAutoLoginConfig } from './config/runtime'
 import LoginView from './views/LoginView.vue'
 import AppLayout from './components/AppLayout.vue'
 
@@ -15,9 +16,8 @@ const router = useRouter()
 
 // When auto-login is configured, don't trust localStorage tokens at
 // startup — wait for the auto-login API call to complete first.
-const autoLoginUser = import.meta.env.VITE_AUTO_LOGIN_USERNAME as string | undefined
-const autoLoginPass = import.meta.env.VITE_AUTO_LOGIN_PASSWORD as string | undefined
-const hasAutoLogin = !!(autoLoginUser && autoLoginPass)
+const autoLogin = getAutoLoginConfig()
+const hasAutoLogin = !!autoLogin
 const isAuthenticated = ref(hasAutoLogin ? false : !!getAccessToken())
 
 onAuthChange((token) => {
@@ -27,15 +27,13 @@ onAuthChange((token) => {
 onMounted(async () => {
   if (isAuthenticated.value) return
 
-  const username = autoLoginUser
-  const password = autoLoginPass
-  if (!username || !password) return
+  if (!autoLogin) return
 
   try {
     const res = await fetch('/api/v1/auth/login', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ email: username, password }),
+      body: JSON.stringify({ email: autoLogin.username, password: autoLogin.password }),
     })
     if (!res.ok) return
     const data = await res.json()
