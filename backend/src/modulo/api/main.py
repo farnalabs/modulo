@@ -347,9 +347,10 @@ async def _seed_demo_data(settings: Settings) -> None:
         if existing_pipelines.scalar_one_or_none() is None:
             pipeline = Pipeline(
                 organisation_id=org_id,
+                account_id=demo_account.id,
                 name="Demo Pipeline",
                 description="A sample pipeline for exploration",
-                graph={"nodes": [], "edges": []},
+                graph_nodes_json=[{"id": "node-1", "type": "input", "label": "Start"}],
             )
             session.add(pipeline)
             logger.info("startup.demo_pipeline_seeded")
@@ -359,19 +360,20 @@ async def _seed_demo_data(settings: Settings) -> None:
         if existing_schemas.scalar_one_or_none() is None:
             schema = Schema(
                 organisation_id=org_id,
+                account_id=demo_account.id,
                 name="Demo Schema",
                 description="A sample schema for exploration",
-                schema_type="object",
             )
             session.add(schema)
             await session.flush()
-
+            
             schema_version = SchemaVersion(
                 organisation_id=org_id,
+                account_id=demo_account.id,
                 schema_id=schema.id,
+                version="v1",
                 version_number=1,
-                schema_definition={"type": "object", "properties": {}},
-                change_description="Initial version",
+                definition_json={"type": "object", "properties": {}},
             )
             session.add(schema_version)
             logger.info("startup.demo_schema_seeded")
@@ -383,11 +385,12 @@ async def _seed_demo_data(settings: Settings) -> None:
         if existing_mbs.scalar_one_or_none() is None:
             mb = ModelBackend(
                 organisation_id=org_id,
+                account_id=demo_account.id,
                 name="Stub Model (Demo)",
+                display_name="Stub Model (Demo)",
                 provider="stub",
                 model_id="demo-model",
-                credentials_ciphertext="demo-encrypted",
-                supports_tools=True,
+                credentials_ciphertext=b"demo-encrypted",
             )
             session.add(mb)
             logger.info("startup.demo_model_backend_seeded")
