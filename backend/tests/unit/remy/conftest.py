@@ -36,6 +36,7 @@ def mock_session() -> AsyncMock:
     begin_cm.__aenter__ = AsyncMock(return_value=None)
     begin_cm.__aexit__ = AsyncMock(return_value=False)
     session.begin = MagicMock(return_value=begin_cm)
+    session.add = MagicMock()
 
     scalar_result = MagicMock()
     scalar_result.scalar = MagicMock(return_value=None)
