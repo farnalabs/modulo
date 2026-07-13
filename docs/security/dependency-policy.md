@@ -29,7 +29,7 @@ The clock starts when the advisory is published to a trusted source (GitHub Advi
 ## Scanning Schedule
 
 - **Automated**: GitHub Actions workflow runs every Monday 06:00 UTC and on any PR touching dependency files.
-- **Manual**: `pip-audit --project=backend/` and `cd frontend && npm audit` can be run locally at any time.
+- **Manual**: `pip-audit backend/` and `cd frontend && npm audit` can be run locally at any time.
 
 ## How to Handle a False Positive
 
@@ -45,7 +45,7 @@ The clock starts when the advisory is published to a trusted source (GitHub Advi
 
 ## Dependency Update Workflow
 
-1. Run `pip-audit --project=backend/` and `cd frontend && npm audit` before any dependency change.
+1. Run `pip-audit backend/` and `cd frontend && npm audit` before any dependency change.
 2. Prefer patch-level updates within the same major version. Major version bumps require a PR with migration notes.
 3. Pin transitive dependencies only when they carry a CVE that cannot be resolved by updating the direct dependency.
 4. After updating, rerun the full test suite: `uv run pytest` and `cd frontend && npm test:unit`.
