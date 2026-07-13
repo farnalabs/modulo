@@ -14,6 +14,7 @@ Revision ID: 0009_fix_enforce_same_organisation
 Revises: 0008_rls_pipeline_folders
 Create Date: 2026-07-13
 """
+
 from collections.abc import Sequence
 
 import sqlalchemy as sa
