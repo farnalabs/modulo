@@ -35,7 +35,17 @@ class TestMultiBackendConfig:
         monkeypatch.setenv("MODULO_DB", "mariadb")
         settings = Settings()
         assert settings.modulo_db == "mariadb"
-        assert "mysql+asyncmy" in settings.database_url
+        assert "mysql+aiomysql" in settings.database_url
+
+    def test_legacy_asyncmy_url_uses_safe_driver(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("DATABASE_URL", "mysql+asyncmy://modulo:modulo@localhost:3306/modulo")
+        monkeypatch.setenv("SECRET_KEY", "a" * 32)
+        monkeypatch.setenv("FERNET_KEY", "a" * 32)
+        monkeypatch.setenv("MODULO_DB", "mariadb")
+
+        settings = Settings()
+
+        assert settings.database_url == "mysql+aiomysql://modulo:modulo@localhost:3306/modulo"
 
     def test_backend_string_normalization(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv("DATABASE_URL", "postgresql+asyncpg://modulo:modulo@localhost:5432/modulo")

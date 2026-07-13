@@ -70,5 +70,5 @@ jobs:
         env:
           SECRET_KEY: "ci-secret-key-not-for-production"
           FERNET_KEY: "vK-xU7GqHLflg_GqzJ1FqWI7pHWoHSIyukf4wx-tMHI="
-          DATABASE_URL: "mysql+asyncmy://modulo:modulo@localhost:5435/modulo"
+          DATABASE_URL: "mysql+aiomysql://modulo:modulo@localhost:5435/modulo"
           MODULO_DB: mariadb
