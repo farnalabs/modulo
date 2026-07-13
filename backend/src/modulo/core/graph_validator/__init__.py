@@ -48,6 +48,10 @@ _JSON_TYPE_MAP: MappingProxyType[str, type | tuple[type, ...]] = MappingProxyTyp
 )
 
 
+def _string_or_default(value: object, default: str = "?") -> str:
+    return default if value is None else str(value)
+
+
 class GraphValidator:
     """Validates a PipelineSnapshot's graph before save or execution."""
 
@@ -197,7 +201,8 @@ class GraphValidator:
             node_ids.add(str(nid))
 
         for edge in edges:
-            src, tgt = str(edge.get("source", "?")), str(edge.get("target", "?"))
+            src = _string_or_default(edge.get("source"))
+            tgt = _string_or_default(edge.get("target"))
             if src not in node_ids:
                 result.error("TOPOLOGY_UNKNOWN_SOURCE", f"Edge source '{src}' is not a node")
             if tgt not in node_ids:
@@ -297,7 +302,10 @@ class GraphValidator:
     ) -> None:
         if edge.get("type") != "conditional":
             return
-        src: str = str(edge.get("source", edge.get("source_node_id", "?")))
+        source = edge.get("source")
+        if source is None:
+            source = edge.get("source_node_id")
+        src = _string_or_default(source)
         expr: object = edge.get("condition_expression")
         if not isinstance(expr, str) or not expr.strip():
             result.error(
@@ -327,7 +335,10 @@ class GraphValidator:
         eval_cond = hitl_config.get("eval_condition")
         if not isinstance(eval_cond, dict):
             return
-        src: str = str(edge.get("source", edge.get("source_node_id", "?")))
+        source = edge.get("source")
+        if source is None:
+            source = edge.get("source_node_id")
+        src = _string_or_default(source)
         eval_name: str | None = eval_cond.get("eval_name")
         if not eval_name or not eval_name.strip():
             result.error(
@@ -371,7 +382,7 @@ class GraphValidator:
         """Build node_id -> direction -> schema_id from schema pin list."""
         pins: dict[str, dict[str, str]] = {}
         for pin in schema_pins:
-            nid = str(pin.get("node_id", "?"))
+            nid = _string_or_default(pin.get("node_id"))
             direction = pin.get("direction", "?")
             schema_id = pin.get("schema_id")
             if schema_id is None:
@@ -782,7 +793,7 @@ class GraphValidator:
         node_ref_map: dict[str, uuid.UUID] = {}
         for node in composite_nodes:
             raw = node.get("composite_ref")
-            nid = str(node.get("id", "?"))
+            nid = _string_or_default(node.get("id"))
             if raw is not None:
                 parsed = try_parse_uuid(raw)
                 if parsed is not None:
@@ -806,7 +817,7 @@ class GraphValidator:
         found: dict[uuid.UUID, CompositeTemplate] = {r.id: r for r in rows}
 
         for node in composite_nodes:
-            node_id = str(node.get("id", "?"))
+            node_id = _string_or_default(node.get("id"))
             raw = node.get("composite_ref")
             if raw is None:
                 continue

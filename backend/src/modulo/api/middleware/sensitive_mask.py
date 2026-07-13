@@ -106,14 +106,14 @@ def _require_admin(principal: AuthenticatedPrincipal) -> None:
 
 
 async def _fetch_value(
-    body: RevealRequest,
+    payload: RevealRequest,
     session: AsyncSession,
     principal: AuthenticatedPrincipal,
 ) -> str:
-    resource_id = body.resource_id
-    field = body.field
+    resource_id = payload.resource_id
+    field = payload.field
 
-    if body.resource_type == "connector":
+    if payload.resource_type == "connector":
         from modulo.db.models.connector_instance import ConnectorInstance
 
         result = await session.execute(
@@ -128,7 +128,7 @@ async def _fetch_value(
         raw = ci.config_json.get(field, "") if field else json.dumps(ci.config_json)
         return raw if isinstance(raw, str) else json.dumps(raw)
 
-    if body.resource_type == "sso_provider":
+    if payload.resource_type == "sso_provider":
         result = await session.execute(
             select(SsoProvider).where(
                 SsoProvider.id == uuid.UUID(resource_id),
@@ -140,7 +140,7 @@ async def _fetch_value(
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="SSO provider not found")
         return provider.client_secret or ""
 
-    if body.resource_type == "observability":
+    if payload.resource_type == "observability":
         from modulo.db.models.organisation import Organisation
 
         result = await session.execute(
@@ -154,13 +154,13 @@ async def _fetch_value(
 
     raise HTTPException(
         status_code=status.HTTP_400_BAD_REQUEST,
-        detail=f"Unknown resource_type: {body.resource_type}",
+        detail=f"Unknown resource_type: {payload.resource_type}",
     )
 
 
 @router.post("/reveal", response_model=RevealResponse)
 async def reveal_sensitive_value(
-    body: RevealRequest,
+    payload: RevealRequest,
     principal: AuthenticatedPrincipal = Depends(get_current_user),
     settings: Settings = Depends(get_settings),
     session: AsyncSession = Depends(get_db_session),
@@ -170,7 +170,7 @@ async def reveal_sensitive_value(
     try:
         async with session.begin():
             await set_rls_org(session, principal.organisation_id)
-            actual_value = await _fetch_value(body, session, principal)
+            actual_value = await _fetch_value(payload, session, principal)
 
     except ProgrammingError:
         _log.exception("middleware.sensitive_mask")
