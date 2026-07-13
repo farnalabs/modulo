@@ -9,6 +9,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from langgraph.graph import END, START, StateGraph
 from langgraph.types import interrupt
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.core.pipeline_engine.executor import (
     PipelineExecutor,
@@ -111,7 +112,7 @@ def _make_session(snapshot: MagicMock) -> AsyncMock:
         except StopIteration:
             return count_result
 
-    session = AsyncMock()
+    session = AsyncMock(spec=AsyncSession)
     begin_cm = AsyncMock()
     begin_cm.__aenter__ = AsyncMock(return_value=None)
     begin_cm.__aexit__ = AsyncMock(return_value=False)
