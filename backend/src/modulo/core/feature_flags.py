@@ -274,6 +274,32 @@ class CommunityTier:
         return self._registry.has_license_key
 
 
+class DemoTier:
+    """Demo mode — ALL features active regardless of tier.
+
+    Used when MODULO_DEMO_MODE=true to provide a full-featured
+    experience for find-and-fix and exploratory testing.
+    """
+
+    def __init__(self) -> None:
+        self._registry = FeatureFlagRegistry(current_tier="team", has_license_key=True)
+
+    def feature_enabled(self, name: str) -> bool:
+        flag = self._registry.get_flag(name)
+        if flag is None:
+            return False
+        return True  # ALL features active in demo mode
+
+    def list_enabled_features(self) -> list[FeatureFlag]:
+        return self._registry.list_flags()
+
+    def tier(self) -> str:
+        return self._registry.current_tier
+
+    def has_license_key(self) -> bool:
+        return self._registry.has_license_key
+
+
 class LicenseKeyTier:
     """Licensed plan — activates features based on license tier and explicit feature list.
     Backward-compatible class satisfying the PlanContext protocol."""
@@ -360,6 +386,10 @@ async def resolve_plan_context(settings: Any, session: Any, org: Any | None = No
     3. System-level env-var license (``settings.modulo_license_key``)
     4. Community tier (default fallback)
     """
+    # 0. Demo mode — all features enabled
+    if getattr(settings, 'modulo_demo_mode', False):
+        return DemoTier()
+
     from modulo.core.license import get_license, parse_and_verify
 
     # 1. Org-level license key

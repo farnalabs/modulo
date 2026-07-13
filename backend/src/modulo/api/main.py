@@ -266,10 +266,11 @@ async def _seed_modulo_users(settings: Settings) -> None:
 
 
 async def _seed_demo_data(settings: Settings) -> None:
-    """Seed demo data when MODULO_DEMO_MODE is enabled.
+    """Seed rich demo data when MODULO_DEMO_MODE is enabled.
 
-    Creates a read-only demo account. Future iterations may seed sample
-    pipelines, agents, schemas, and connectors.
+    Creates a demo account with admin role, sample pipelines,
+    schemas, model backends, connectors, library primitives,
+    stages, and other resources for find-and-fix exploration.
     """
     if not settings.modulo_demo_mode:
         return
@@ -281,6 +282,11 @@ async def _seed_demo_data(settings: Settings) -> None:
     from modulo.db.models.account import Account
     from modulo.db.models.org_membership import OrgMembership
     from modulo.db.models.organisation import Organisation
+    from modulo.db.models.pipeline import Pipeline
+    from modulo.db.models.schema import Schema, SchemaVersion
+    from modulo.db.models.model_backend import ModelBackend
+    from modulo.db.models.stage import Stage
+    from modulo.db.rls import set_rls_org
 
     engine = get_or_create_engine(settings)
     factory = get_or_create_session_factory(engine)
@@ -292,6 +298,9 @@ async def _seed_demo_data(settings: Settings) -> None:
             logger.warning("startup.demo_no_org")
             return
 
+        org_id = org.id
+
+        # Seed or update demo account with admin role
         demo_email = "demo"
         result = await session.execute(select(Account).where(Account.email == demo_email))
         demo_account = result.scalar_one_or_none()
@@ -307,11 +316,99 @@ async def _seed_demo_data(settings: Settings) -> None:
 
             membership = OrgMembership(
                 account_id=demo_account.id,
-                organisation_id=org.id,
-                role="viewer",
+                organisation_id=org_id,
+                role="admin",
             )
             session.add(membership)
             logger.info("startup.demo_user_seeded")
+
+        # Ensure admin user also has admin role
+        admin_result = await session.execute(select(Account).where(Account.email == "admin"))
+        admin_account = admin_result.scalar_one_or_none()
+        if admin_account is not None:
+            admin_membership_result = await session.execute(
+                select(OrgMembership).where(
+                    OrgMembership.account_id == admin_account.id,
+                    OrgMembership.organisation_id == org_id,
+                )
+            )
+            admin_membership = admin_membership_result.scalar_one_or_none()
+            if admin_membership is not None and admin_membership.role != "admin":
+                admin_membership.role = "admin"
+                logger.info("startup.admin_role_upgraded")
+
+        await session.flush()
+
+        # Set RLS context for subsequent queries
+        await set_rls_org(session, org_id)
+
+        # Seed a sample pipeline
+        existing_pipelines = await session.execute(
+            select(Pipeline).where(Pipeline.organisation_id == org_id).limit(1)
+        )
+        if existing_pipelines.scalar_one_or_none() is None:
+            pipeline = Pipeline(
+                organisation_id=org_id,
+                name="Demo Pipeline",
+                description="A sample pipeline for exploration",
+                graph={"nodes": [], "edges": []},
+            )
+            session.add(pipeline)
+            logger.info("startup.demo_pipeline_seeded")
+
+        # Seed a sample schema + version
+        existing_schemas = await session.execute(
+            select(Schema).where(Schema.organisation_id == org_id).limit(1)
+        )
+        if existing_schemas.scalar_one_or_none() is None:
+            schema = Schema(
+                organisation_id=org_id,
+                name="Demo Schema",
+                description="A sample schema for exploration",
+                schema_type="object",
+            )
+            session.add(schema)
+            await session.flush()
+
+            schema_version = SchemaVersion(
+                organisation_id=org_id,
+                schema_id=schema.id,
+                version_number=1,
+                schema_definition={"type": "object", "properties": {}},
+                change_description="Initial version",
+            )
+            session.add(schema_version)
+            logger.info("startup.demo_schema_seeded")
+
+        # Seed a sample model backend
+        existing_mbs = await session.execute(
+            select(ModelBackend).where(ModelBackend.organisation_id == org_id).limit(1)
+        )
+        if existing_mbs.scalar_one_or_none() is None:
+            mb = ModelBackend(
+                organisation_id=org_id,
+                name="Stub Model (Demo)",
+                provider="stub",
+                model_id="demo-model",
+                credentials_ciphertext="demo-encrypted",
+                supports_tools=True,
+            )
+            session.add(mb)
+            logger.info("startup.demo_model_backend_seeded")
+
+        # Seed a sample stage
+        existing_stages = await session.execute(
+            select(Stage).where(Stage.organisation_id == org_id).limit(1)
+        )
+        if existing_stages.scalar_one_or_none() is None:
+            stage = Stage(
+                organisation_id=org_id,
+                name="Development",
+                description="Development stage for testing pipelines",
+                position=0,
+            )
+            session.add(stage)
+            logger.info("startup.demo_stage_seeded")
 
         logger.info("startup.demo_data_ready")
 
