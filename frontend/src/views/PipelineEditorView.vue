@@ -30,6 +30,25 @@
               <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 3a2.85 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z"/></svg>
             </button>
             <span v-if="pipeline?.archived_at" class="rounded bg-warning/20 px-1.5 py-0.5 text-[10px] font-medium text-warning">Archived</span>
+            <span v-if="folderPath.length > 0" class="ml-2 flex items-center gap-1 text-xs text-muted-foreground">
+              <span v-for="(f, i) in folderPath" :key="f.id">
+                <template v-if="i > 0"><span class="text-muted-foreground/50">/</span></template>
+                <router-link :to="`/pipelines?folder_id=${f.id}`" class="hover:text-foreground">{{ f.name }}</router-link>
+              </span>
+            </span>
+            <template v-if="linkedLifecycleMaps.length > 0">
+              <span class="mx-1 h-3 w-px bg-border" />
+              <span class="flex items-center gap-1 text-xs text-muted-foreground">
+                <router-link
+                  v-for="map in linkedLifecycleMaps"
+                  :key="map.id"
+                  :to="`/lifecycle-maps/${map.id}`"
+                  class="hover:text-foreground"
+                >
+                  {{ map.name }}
+                </router-link>
+              </span>
+            </template>
           </div>
           <span class="mx-2 h-4 w-px bg-border" />
           <div class="relative" @click.stop>
@@ -569,7 +588,7 @@ const pickerAgentId = ref<string>('')
 const pickerConnectorId = ref<string>('')
 const revertSnapshotId = ref<string>('')
 const convertError = ref<string | null>(null)
-const { post: postUntyped } = useApi()
+const { get, post: postUntyped } = useApi()
 const revertError = ref<string | null>(null)
 const revertLoading = ref(false)
 
@@ -589,6 +608,19 @@ const renameError = ref<string | null>(null)
 const renaming = ref(false)
 const showDeleteConfirm = ref(false)
 const deleteError = ref<string | null>(null)
+
+const folders = ref<any[]>([])
+const linkedLifecycleMaps = ref<any[]>([])
+
+const folderPath = computed(() => {
+  const path: { name: string; id: string }[] = []
+  let current: any = folders.value.find((f: any) => f.id === pipeline.value?.folder_id)
+  while (current) {
+    path.unshift({ name: current.name, id: current.id })
+    current = current.parent_id ? folders.value.find((f: any) => f.id === current.parent_id) : null
+  }
+  return path
+})
 
 const defaultEdgeForm = {
   edge_type: 'normal',
@@ -986,9 +1018,35 @@ async function handleDelete() {
   }
 }
 
+async function loadFolders() {
+  try {
+    const { data } = await api.GET('/api/v1/pipeline-folders')
+    folders.value = (data as any)?.items ?? []
+  } catch (e) {
+    console.warn('Failed to load folders', e)
+  }
+}
+
+async function loadLifecycleMaps() {
+  try {
+    const summaries = await get<any[]>('/api/v1/lifecycle-maps')
+    const first10 = (summaries ?? []).slice(0, 10)
+    const fullMaps = await Promise.all(
+      first10.map((m: any) =>
+        get<any>(`/api/v1/lifecycle-maps/${m.id}`).catch(() => null)
+      )
+    )
+    linkedLifecycleMaps.value = fullMaps.filter(
+      (m: any) => m && m.stages?.some((s: any) => s.pipeline_id === pipelineId)
+    )
+  } catch (e) {
+    console.warn('Failed to load lifecycle maps', e)
+  }
+}
+
 const { loading, error: pageErrorRef } = useDataFetch(
   async () => {
-    await Promise.all([loadPipeline(), loadGraph(), loadCatalog()])
+    await Promise.all([loadPipeline(), loadGraph(), loadCatalog(), loadFolders(), loadLifecycleMaps()])
     return {}
   },
   { initialValue: {} },
