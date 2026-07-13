@@ -21,7 +21,7 @@ from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 from typing import Any, ClassVar
 
-from jose import JWTError
+from jwt import InvalidTokenError as JWTError
 from mcp.server.fastmcp import FastMCP
 from sqlalchemy.exc import ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker

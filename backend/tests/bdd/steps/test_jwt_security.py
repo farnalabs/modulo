@@ -10,9 +10,9 @@ from datetime import UTC, datetime, timedelta
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import jwt as pyjwt
 import pytest
 from fastapi.testclient import TestClient
-from jose import jwt as jose_jwt
 from pytest_bdd import given, parsers, scenarios, then, when
 
 from modulo.core.rate_limiter import AuthRateLimiter
@@ -153,7 +153,7 @@ def valid_jwt(request: Any, org: str) -> None:
         "iat": now - timedelta(minutes=5),
         "exp": now + timedelta(hours=1),
     }
-    token = str(jose_jwt.encode(payload, _VALID_32, algorithm="HS256"))
+    token = str(pyjwt.encode(payload, _VALID_32, algorithm="HS256"))
     request.node._jwt_token = token
 
 
@@ -168,7 +168,7 @@ def expired_jwt(request: Any, org: str) -> None:
         "iat": now - timedelta(hours=48),
         "exp": now - timedelta(hours=1),
     }
-    token = str(jose_jwt.encode(payload, _VALID_32, algorithm="HS256"))
+    token = str(pyjwt.encode(payload, _VALID_32, algorithm="HS256"))
     request.node._jwt_token = token
 
 
@@ -183,7 +183,7 @@ def tampered_jwt(request: Any, org: str) -> None:
         "iat": now - timedelta(minutes=5),
         "exp": now + timedelta(hours=1),
     }
-    token = str(jose_jwt.encode(payload, _VALID_32, algorithm="HS256"))
+    token = str(pyjwt.encode(payload, _VALID_32, algorithm="HS256"))
     parts = token.split(".")
     parts[2] = "tampered"
     request.node._jwt_token = ".".join(parts)

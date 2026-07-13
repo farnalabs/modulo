@@ -173,7 +173,7 @@ OAuth 2.0 authorization code grant for MCP client authentication, with client re
 - **BDD refresh_token scenarios are xfail**: 2 BDD scenarios and 2 unit tests for refresh token rotation are marked @pytest.mark.xfail because the _oauth_token handler only supports authorization_code grant_type. The refresh_token grant type and refresh token issuance are not implemented.
 - **No middleware OAuth path tests**: McpAuthMiddleware's OAuth token validation path (JWT decode → family blacklist check → scope-to-role mapping) has zero unit or integration tests.
 - **state parameter not validated**: The authorize endpoint accepts state and echoes it back but performs no server-side validation or CSRF binding.
-- **No `authlib` usage**: PRD mandates `authlib` (not hand-rolled). Current implementation uses `python-jose` directly for JWT encoding/decoding. OAuth logic is hand-rolled in `modulo/auth/oauth.py`.
+- **No `authlib` usage**: PRD mandates `authlib` (not hand-rolled). Current implementation uses PyJWT directly for JWT encoding/decoding. OAuth logic is hand-rolled in `modulo/auth/oauth.py`.
 - **No per-pipeline scopes**: `hitl:approve:pipeline:{id}` scope pattern from PRD is not implemented at any layer.
 - **`library:write` scope not implemented**: Only `library:browse` exists in code; no write scope for library primitives exists.
 - **BDD feature files for MCP tools now exist**: `trigger.feature`, `review_hitl.feature`, `human_only.feature`, `library_browse.feature`, and `onboarding.feature` are all present alongside `mcp_oauth.feature`.
