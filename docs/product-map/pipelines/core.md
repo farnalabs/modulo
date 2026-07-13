@@ -7,15 +7,20 @@ bdd:
   - backend/tests/bdd/features/ui/pipeline_builder.feature
 code:
   - backend/src/modulo/api/routes/pipelines.py
+  - backend/src/modulo/api/routes/pipeline_folders.py
   - backend/src/modulo/api/routes/stages.py
+  - backend/src/modulo/db/models/pipeline_folder.py
   - backend/src/modulo/db/models/pipeline_edge.py
   - backend/src/modulo/db/models/stage.py
+  - backend/src/modulo/db/crud/pipeline_folder.py
   - backend/src/modulo/db/crud/stage.py
+  - backend/src/modulo/db/migrations/versions/0007_pipeline_folders.py
   - backend/src/modulo/core/graph_validator/__init__.py
   - backend/src/modulo/core/graph_validator/category_validator.py
   - frontend/src/views/PipelineEditorView.vue
   - frontend/src/views/StageBoardView.vue
   - frontend/src/views/PipelineListView.vue
+  - frontend/src/components/pipelines/FolderTree.vue
   # frontend/src/views/PipelineTemplateGallery.vue — removed, merged into PipelineListView
   - frontend/src/views/pipeline/CompositeEditorView.vue
   - frontend/src/components/pipeline/composite/CompositeConfigPanel.vue
@@ -34,6 +39,7 @@ unit-tests:
   - backend/tests/unit/test_pipeline_node_conversion.py
   - backend/tests/unit/graph_validator/test_graph_validator.py
   - backend/tests/unit/graph_validator/test_category_validator.py
+  - frontend/src/__tests__/PipelineListView.spec.ts
 depends-on:
   - feat-core-pipeline-execution
   - feat-pipelines-cicd-pipeline
@@ -79,6 +85,22 @@ copy-to-adapt (save-as-composite), node conversion, and ownership/visibility.
 - [ ] Stage reorder (drag-and-drop position swap) — not implemented, only move-left/right per pipeline
 - [ ] Stage board has no search input for stages — only team/status/date filters on pipelines
 - [ ] Stage deletion cascading — no test for what happens to pipelines assigned to a deleted stage
+
+### Pipeline Folders
+
+- [x] Pipeline folders are organisation-scoped records with name, optional parent folder, sort order, and creator
+- [x] Folder REST API supports list, create, partial update, delete, and sort-order updates under `/api/v1/pipeline-folders`
+- [x] Folder endpoints set organisation and user RLS context before accessing data
+- [x] Folder names are required and limited to 255 characters; sort order is non-negative
+- [x] Pipeline list supports filtering by `folder_id`
+- [x] Pipelines can be moved into a folder or returned to the unfiled list via `PATCH /api/v1/pipelines/{pipeline_id}/folder`
+- [x] Moving a pipeline validates that the target folder exists in the active organisation
+- [x] Deleting a folder preserves its pipelines by clearing their `folder_id` and promotes direct child folders to the top level
+- [x] Folder list UI renders a nested tree and supports create, rename, delete, selection, and move-to-folder workflows
+- [x] Pipeline editor renders folder breadcrumbs and links back to the filtered pipeline list
+- [x] Folder routes return 501 Not Implemented when the folder migration has not been applied
+- [ ] Folder CRUD and move endpoints do not yet have dedicated backend unit or BDD coverage
+- [ ] Folder parent updates do not yet reject self-parenting or longer ancestry cycles
 
 ### Agent Picker — Convert Manual to Agent
 
@@ -309,4 +331,3 @@ frontend-side integration:
 - 2026-07-08: Cross-cutting QA (index 254): Fixed CRITICAL — RLS leak in save_as_composite_endpoint (3 DB queries outside session.begin() — Agent lookup, PipelineEdge fetch, create_composite_template — missing RLS context on Postgres; all moved inside transaction). Fixed CRITICAL — added SQLAlchemyError→503 catches to all 5 stage routes (previously only ProgrammingError→501). Fixed CRITICAL — added SQLAlchemyError→503 catches to 8 pipeline CRUD + clone routes. Fixed CRITICAL — combined `except (IntegrityError, ProgrammingError, SQLAlchemyError)` in convert-to-agent/revert-to-manual split into separate handlers with correct status codes (409/501/503). Fixed MAJOR — added `populate_by_name=True` to StageResponse. Fixed MAJOR — replaced 10 `e instanceof Error ? e.message : String(e)` handlers with `formatApiError(e)` in 4 frontend views (PipelineEditorView, StageBoardView, PipelineListView, PipelineTemplateGallery). Created backend/tests/unit/api/test_stage_programming_error.py with 10 tests covering all 5 stage routes × 2 error types. Fixed 2 pre-existing test failures (license tier assertion, AsyncMock for publish_primitive). Merged to main at v0.3.227. Status: partial.
 - 2026-07-05: Prodmap pipelines QA: Fixed depends-on direction (core → cicd was inverted). Fixed false Known Gap about missing `test_graph_validator.py`. Fixed website docs path prefix. Updated delivery-tasks note.
 - 2026-07-09: Cross-cutting QA (index 338): Updated frontmatter — added graph_validator unit tests to unit-tests, populated depends-on with feat-core-pipeline-execution, feat-pipelines-cicd-pipeline, feat-core-agent-model. Corrected stale claims: graph_validator/__init__.py is 817 lines (not 876), test_graph_validator.py now covers topology/schema/connector/backend/conditional edges (52 tests), test_category_validator.py covers node categories (12 tests). Removed dead `PipelineTemplateGallery.vue` code reference. Added Known Gaps for frontend i18n coverage (PipelineEditorView, StageBoardView, CompositeEditorView all have 30+ hardcoded strings). Added `@handle_db_errors` decorator clarification to Error Handling section. Status: partial.
-

@@ -816,6 +816,11 @@ Left-to-right kanban of user-defined Stages. Each card: name, active run count, 
 
 **Stage board controls**: search by pipeline name, filter by status (`running`, `awaiting_human`, `failed`, `idle`), sort by last run (default) / name / status. Filter by team added in v1 when team management ships. The `awaiting_human` filter is surfaced prominently — time-sensitive items should be easy to reach.
 
+#### Pipeline Folders
+The pipeline library supports organisation-scoped, nested folders for grouping pipelines. Users can create, rename, reorder, and delete folders, filter the pipeline list by folder, and move a pipeline into a folder or back to the unfiled list. Folder access uses the same organisation RLS context as pipeline access.
+
+Deleting a folder does not delete pipelines: pipelines directly assigned to it become unfiled, and direct child folders become top-level folders. Folder ordering is represented by a non-negative `sort_order`; names are required and limited to 255 characters. The folder API returns `501 Not Implemented` when the required database migration has not been applied.
+
 #### Agent Picker
 Adding a node to the pipeline canvas opens a slide-out agent picker panel: searchable by name and tag; shows agent description, input schema name, output schema name, and last-modified date; lists org agents and accessible library agents in separate tabs; "Add to pipeline" closes the panel and places the node. Schema compatibility is indicated: if the selected agent's input schema is incompatible with the previous node's output schema, a warning badge is shown (does not block selection — user may resolve in agent config).
 
