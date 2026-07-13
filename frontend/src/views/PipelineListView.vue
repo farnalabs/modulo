@@ -539,8 +539,8 @@ async function loadFolders() {
     if (!response.error) {
       foldersList.value = (response.data as unknown as FolderItem[]) ?? []
     }
-  } catch {
-    // folders are non-critical; fail silently
+  } catch (e) {
+    console.warn('Failed to load folders', e)
   }
 }
 
@@ -673,10 +673,14 @@ async function handleMoveToFolder() {
   moveError.value = null
   try {
     const folderId = moveToFolderId.value ?? null
-    await api.PATCH('/api/v1/pipelines/{pipeline_id}/folder', {
+    const { error } = await api.PATCH('/api/v1/pipelines/{pipeline_id}/folder', {
       params: { path: { pipeline_id: moveTarget.value.id } },
       body: { folder_id: folderId },
     })
+    if (error) {
+      moveError.value = formatApiError(error)
+      return
+    }
     showMoveToFolder.value = false
     moveTarget.value = null
     await loadPipelines()
