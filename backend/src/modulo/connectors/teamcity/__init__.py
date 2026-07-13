@@ -116,8 +116,9 @@ class TeamCityConnector(ConnectorBase):
         bt = data.get("buildType")
         if bt:
             build_type_id = bt.get("buildTypeId", bt.get("id", ""))
+        response_id = data.get("id")
         return CIRun(
-            id=str(data.get("id", run_id)),
+            id=str(response_id if response_id is not None else run_id),
             pipeline_id=build_type_id,
             status=status,
             url=f"{self._base_url}{href}" if href else "",

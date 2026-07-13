@@ -375,12 +375,14 @@ class PipelineExecutor:
         if not node_token_usage:
             return None, None, None
 
-        total_tokens = sum(n.get("total_tokens", 0) for n in node_token_usage.values())
+        total_tokens = sum(n.get("total_tokens") or 0 for n in node_token_usage.values())
         total_cost = Decimal(0)
         result_usage: dict[str, dict[str, Any]] = {}
         for node_id, n_data in node_token_usage.items():
-            n_cost = Decimal(str(n_data.get("input_tokens", 0))) * input_rate
-            n_cost += Decimal(str(n_data.get("output_tokens", 0))) * output_rate
+            input_tokens = n_data.get("input_tokens")
+            output_tokens = n_data.get("output_tokens")
+            n_cost = Decimal(str(input_tokens if input_tokens is not None else 0)) * input_rate
+            n_cost += Decimal(str(output_tokens if output_tokens is not None else 0)) * output_rate
             result_usage[node_id] = {**n_data, "cost_usd": float(n_cost)}
             total_cost += n_cost
 

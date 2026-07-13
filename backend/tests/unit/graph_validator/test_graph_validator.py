@@ -115,6 +115,20 @@ async def test_topology_edge_unknown_source():
     assert any(i.code == "TOPOLOGY_UNKNOWN_SOURCE" for i in result.issues)
 
 
+async def test_topology_null_source_uses_missing_value_marker():
+    snap = _snapshot(
+        graph_json={
+            "nodes": [{"id": "a"}],
+            "edges": [{"source": None, "target": "a"}],
+        }
+    )
+    result = await GraphValidator().validate(snap, _session_returning([]))
+
+    issue = next(i for i in result.issues if i.code == "TOPOLOGY_UNKNOWN_SOURCE")
+    assert "'?'" in issue.message
+    assert "None" not in issue.message
+
+
 async def test_topology_edge_unknown_target():
     snap = _snapshot(
         graph_json={

@@ -15,6 +15,7 @@ from modulo.api.dependencies import get_db_session, get_or_create_engine, get_or
 from modulo.auth.dependencies import get_current_user
 from modulo.auth.jwt import AuthenticatedPrincipal
 from modulo.core.audit_logger import append_audit_event
+from modulo.core.fernet_rotation import rotate_all_encrypted_data
 from modulo.settings import Settings, get_settings
 
 _MIN_KEY_LEN = 32
@@ -194,8 +195,6 @@ async def _run_rotation_background(
 
     try:
         async with factory() as session, session.begin():
-            from modulo.core.fernet_rotation import rotate_all_encrypted_data
-
             result = await rotate_all_encrypted_data(session, new_key, old_key)
 
             # Log completion inside the transaction so it gets committed

@@ -22,7 +22,7 @@ from modulo.core.eval_engine.okr import track_okr_progress
 from modulo.core.eval_engine.regression import detect_regressions
 from modulo.core.hitl_manager.overdue_warning import get_overdue_claims
 from modulo.db.crud.account import get_account_by_email, get_account_by_id
-from modulo.db.crud.org_membership import create_membership
+from modulo.db.crud.org_membership import create_membership, get_membership_by_account_and_org
 from modulo.db.crud.organisation import get_organisation, update_organisation
 from modulo.db.crud.publisher import (
     create_publisher,
@@ -372,8 +372,6 @@ async def admin_create_user(
         async with session.begin():
             existing = await get_account_by_email(session, req.email)
             if existing is not None:
-                from modulo.db.crud.org_membership import get_membership_by_account_and_org
-
                 membership = await get_membership_by_account_and_org(session, existing.id, current_user.organisation_id)
                 if membership is not None:
                     raise HTTPException(
@@ -928,8 +926,6 @@ async def admin_update_user(
 
 
 async def _get_org_role(session: AsyncSession, account_id: uuid.UUID, org_id: uuid.UUID) -> str:
-    from modulo.db.crud.org_membership import get_membership_by_account_and_org
-
     membership = await get_membership_by_account_and_org(session, account_id, org_id)
     return membership.role if membership is not None else ""
 
