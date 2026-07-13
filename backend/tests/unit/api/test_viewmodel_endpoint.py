@@ -13,6 +13,7 @@ from modulo.api.main import app
 from modulo.auth.dependencies import get_current_user
 from modulo.auth.jwt import AuthenticatedPrincipal
 from modulo.settings import Settings, get_settings
+from tests.unit.api.mock_session import configure_mock_session
 
 _VALID_32 = "a" * 32
 _ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
@@ -89,7 +90,7 @@ def _make_mock_plan_context() -> MagicMock:
 
 
 def _make_mock_session() -> AsyncMock:
-    session = AsyncMock()
+    session = configure_mock_session(AsyncMock())
     begin_cm = AsyncMock()
     begin_cm.__aenter__ = AsyncMock(return_value=None)
     begin_cm.__aexit__ = AsyncMock(return_value=False)
@@ -99,7 +100,7 @@ def _make_mock_session() -> AsyncMock:
     scalars_mock = MagicMock()
     scalars_mock.all = MagicMock(return_value=[])
     execute_result.scalars.return_value = scalars_mock
-    execute_result.scalar_one_or_none = AsyncMock(return_value=None)
+    execute_result.scalar_one_or_none = MagicMock(return_value=None)
     session.execute = AsyncMock(return_value=execute_result)
     return session
 
@@ -368,13 +369,27 @@ def test_viewmodel_current_includes_preferences(client: TestClient) -> None:
 
 
 def test_viewmodel_current_returns_503_on_sqlalchemy_error(client: TestClient) -> None:
-    with patch("modulo.api.routes.viewmodel.list_pipelines", side_effect=Exception("connection failed")):
+    with (
+        patch("modulo.api.routes.viewmodel.set_rls_org"),
+        patch("modulo.api.routes.viewmodel.set_rls_user_context"),
+        patch("modulo.api.routes.viewmodel.get_organisation", return_value=_make_org()),
+        patch("modulo.api.routes.viewmodel.get_account_by_id", return_value=_make_user()),
+        patch("modulo.api.routes.viewmodel.list_team_memberships_for_account", return_value=[]),
+        patch("modulo.api.routes.viewmodel.list_pipelines", side_effect=Exception("connection failed")),
+    ):
         resp = client.get("/api/v1/viewmodel/current")
     assert resp.status_code == 500
 
 
 def test_viewmodel_current_returns_500_on_unexpected_error(client: TestClient) -> None:
-    with patch("modulo.api.routes.viewmodel.list_pipelines", side_effect=TypeError("expected str, got None")):
+    with (
+        patch("modulo.api.routes.viewmodel.set_rls_org"),
+        patch("modulo.api.routes.viewmodel.set_rls_user_context"),
+        patch("modulo.api.routes.viewmodel.get_organisation", return_value=_make_org()),
+        patch("modulo.api.routes.viewmodel.get_account_by_id", return_value=_make_user()),
+        patch("modulo.api.routes.viewmodel.list_team_memberships_for_account", return_value=[]),
+        patch("modulo.api.routes.viewmodel.list_pipelines", side_effect=TypeError("expected str, got None")),
+    ):
         resp = client.get("/api/v1/viewmodel/current")
     assert resp.status_code == 500
 
