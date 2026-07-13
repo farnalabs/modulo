@@ -53,10 +53,17 @@ def require_feature(feature_name: str):
 
 
 def pg_connection_string(database_url: str) -> str:
-    """Strip SQLAlchemy+asyncpg prefix to get a psycopg-compatible URL."""
-    return database_url.replace("postgresql+asyncpg://", "postgresql://").replace(
+    """Strip SQLAlchemy+asyncpg prefix to get a psycopg-compatible URL.
+
+    Ensures ``sslmode=require`` is present for Fly.io Postgres connections
+    (the internal wireguard link sometimes drops non-SSL connections).
+    """
+    result = database_url.replace("postgresql+asyncpg://", "postgresql://").replace(
         "postgresql+psycopg://", "postgresql://"
     )
+    if "sslmode" not in result:
+        result += "&sslmode=require" if "?" in result else "?sslmode=require"
+    return result
 
 
 _engine: AsyncEngine | None = None
