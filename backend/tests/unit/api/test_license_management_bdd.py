@@ -7,7 +7,7 @@ pytest unit tests — no pytest-bdd dependency.
 import base64
 import json
 import uuid
-from collections.abc import AsyncGenerator, Generator
+from collections.abc import AsyncGenerator, Generator, Mapping
 from datetime import UTC, datetime, timedelta
 from unittest.mock import AsyncMock, MagicMock
 
@@ -29,13 +29,15 @@ from modulo.core.registry.crypto import generate_keypair, sign_primitive
 from modulo.settings import Settings, get_settings
 
 _VALID_32 = "a" * 32
+_TEST_ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
+_TEST_ACCOUNT_ID = uuid.UUID("00000000-0000-0000-0000-000000000002")
 
 _TEST_KP = generate_keypair()
 _TEST_PRIV = _TEST_KP["private_key"]
 _TEST_PUB = _TEST_KP["public_key"]
 
 
-def _sign_license_payload(payload: dict, private_key: str = _TEST_PRIV) -> str:
+def _sign_license_payload(payload: Mapping[str, object], private_key: str = _TEST_PRIV) -> str:
     sig_hex = sign_primitive(payload, private_key)
     sig_bytes = bytes.fromhex(sig_hex)
     payload_b64 = (
@@ -60,6 +62,9 @@ def _valid_payload(**overrides: object) -> dict[str, object]:
 
 def _make_mock_session() -> AsyncMock:
     session = AsyncMock()
+    result = MagicMock()
+    result.scalar_one_or_none.return_value = None
+    session.execute = AsyncMock(return_value=result)
     begin_cm = AsyncMock()
     begin_cm.__aenter__ = AsyncMock(return_value=None)
     begin_cm.__aexit__ = AsyncMock(return_value=False)
@@ -96,8 +101,8 @@ def admin_client() -> Generator[TestClient, None, None]:
     app.dependency_overrides[_get_engine] = lambda: MagicMock()
     app.dependency_overrides[get_current_user] = lambda: AuthenticatedPrincipal(
         username="admin",
-        organisation_id=None,
-        account_id=uuid.UUID("00000000-0000-0000-0000-000000000002"),
+        organisation_id=_TEST_ORG_ID,
+        account_id=_TEST_ACCOUNT_ID,
         org_role="admin",
     )
     mock_plan = MagicMock()
@@ -125,8 +130,8 @@ def non_admin_client() -> Generator[TestClient, None, None]:
     app.dependency_overrides[_get_engine] = lambda: MagicMock()
     app.dependency_overrides[get_current_user] = lambda: AuthenticatedPrincipal(
         username="operator",
-        organisation_id=None,
-        account_id=uuid.UUID("00000000-0000-0000-0000-000000000002"),
+        organisation_id=_TEST_ORG_ID,
+        account_id=_TEST_ACCOUNT_ID,
         org_role="operator",
     )
     mock_plan = MagicMock()
