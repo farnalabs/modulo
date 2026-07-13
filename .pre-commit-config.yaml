@@ -29,7 +29,7 @@ repos:
         stages: [manual]
       - id: graph-validate
         name: graph-validate
-        entry: powershell -NoProfile -File tools\graph-validate.ps1
+        entry: powershell -NoProfile -File tools/graph-validate.ps1
         language: system
         files: ^docs/product-map/
         pass_filenames: false
