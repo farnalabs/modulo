@@ -430,6 +430,10 @@ class TestCreateReport:
         resp = client.post(self.ENDPOINT, json={**self.PAYLOAD, "recipients": []})
         assert resp.status_code == 422
 
+    def test_create_report_rejects_unsupported_grouping(self, client: TestClient) -> None:
+        resp = client.post(self.ENDPOINT, json={**self.PAYLOAD, "group_by": "pipeline"})
+        assert resp.status_code == 422
+
     def test_create_report_unauthorized_returns_4xx(self, unauth_client: TestClient) -> None:
         resp = unauth_client.post(self.ENDPOINT, json=self.PAYLOAD)
         assert resp.status_code in (401, 403)

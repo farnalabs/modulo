@@ -25,27 +25,25 @@ class ScheduledReport(OrgScoped):
     )
 
     @property
-    def period(self) -> str:
-        value = (self.config_json or {}).get("period", "monthly")
-        return value if isinstance(value, str) else "monthly"
+    def period(self) -> str | None:
+        return self._cost_config_string("period")
 
     @property
-    def group_by(self) -> str:
-        value = (self.config_json or {}).get("group_by", "team")
-        return value if isinstance(value, str) else "team"
+    def group_by(self) -> str | None:
+        return self._cost_config_string("group_by")
 
     @property
-    def format(self) -> str:
-        value = (self.config_json or {}).get("format", "csv")
-        return value if isinstance(value, str) else "csv"
+    def format(self) -> str | None:
+        return self._cost_config_string("format")
 
     @property
-    def schedule_type(self) -> str:
-        value = (self.config_json or {}).get("schedule_type", "recurring")
-        return value if isinstance(value, str) else "recurring"
+    def schedule_type(self) -> str | None:
+        return self._cost_config_string("schedule_type")
 
     @property
     def recipients(self) -> list[str]:
+        if self.report_type != "cost":
+            return []
         value = (self.recipient_config or {}).get("emails", [])
         if not isinstance(value, list):
             return []
@@ -54,3 +52,9 @@ class ScheduledReport(OrgScoped):
     @property
     def next_run_at(self) -> datetime | None:
         return self.next_send_at
+
+    def _cost_config_string(self, key: str) -> str | None:
+        if self.report_type != "cost":
+            return None
+        value = (self.config_json or {}).get(key)
+        return value if isinstance(value, str) else None
