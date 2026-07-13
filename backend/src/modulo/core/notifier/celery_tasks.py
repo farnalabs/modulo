@@ -25,14 +25,14 @@ from modulo.core.notifier import MAX_ATTEMPTS, Notifier
 from modulo.settings import get_settings
 
 try:
-    from celery import Celery, Task  # type: ignore[import-untyped]
+    from celery import Celery, Task
 except ImportError:
     import typing
 
     if typing.TYPE_CHECKING:
-        from celery import Celery, Task  # type: ignore[import-untyped]
-    Celery = None  # type: ignore[misc]
-    Task = object  # type: ignore[misc]
+        from celery import Celery, Task
+    Celery = None
+    Task = object
 
 __all__ = [
     "DispatchNotificationTask",

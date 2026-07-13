@@ -19,14 +19,9 @@ from pathlib import Path
 from typing import Any
 
 import click
+import psycopg
 from cryptography.fernet import Fernet, InvalidToken
-
-try:
-    import psycopg
-    from psycopg.rows import dict_row
-except ImportError:
-    psycopg = None
-    dict_row = None
+from psycopg.rows import dict_row
 
 from modulo.settings import get_settings
 
@@ -432,11 +427,12 @@ def backup(db_url: str | None, output_dir: Path | None) -> None:
     settings = get_settings()
 
     ts = datetime.now(UTC).strftime("%Y%m%d-%H%M%S")
-    user_specified = output_dir is not None
-    if user_specified:
+    if output_dir is not None:
         backup_dir = output_dir
         backup_dir.mkdir(parents=True, exist_ok=True)
+        user_specified = True
     else:
+        user_specified = False
         suffix = random.randint(1000, 9999)  # noqa: S311 — not crypto, just avoiding directory collision
         backup_dir = Path(f"./modulo-backup-{ts}-{suffix}")
         while backup_dir.exists():

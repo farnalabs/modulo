@@ -15,7 +15,7 @@ import uuid
 from typing import Any
 
 from sqlalchemy import select
-from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker, create_async_engine
 
 from modulo.core.cleanup_jobs.webhook_dedup_cleanup import cleanup_scheduler_loop
 from modulo.core.cron_scheduler import fire_cron_trigger
@@ -29,12 +29,12 @@ _POLL_INTERVAL = 30  # seconds between DB polls
 
 # Engine reference set by start_schedulers(). Use dispose_scheduler_engine()
 # on shutdown to clean up the connection pool.
-_scheduler_engine: Any = None
+_scheduler_engine: AsyncEngine | None = None
 
 
 async def start_schedulers(
-    engine: Any | None = None,
-) -> list[asyncio.Task]:
+    engine: AsyncEngine | None = None,
+) -> list[asyncio.Task[None]]:
     """Start all in-process scheduler loops.
 
     Args:
@@ -60,11 +60,11 @@ async def start_schedulers(
     return tasks
 
 
-_cron_tasks: set[asyncio.Task] = set()
-_polling_tasks: set[asyncio.Task] = set()
+_cron_tasks: set[asyncio.Task[None]] = set()
+_polling_tasks: set[asyncio.Task[None]] = set()
 
 
-async def _cron_scheduler_loop(factory: async_sessionmaker) -> None:
+async def _cron_scheduler_loop(factory: async_sessionmaker[AsyncSession]) -> None:
     """Poll for due cron triggers and fire them."""
     while True:
         try:
@@ -83,7 +83,7 @@ async def _cron_scheduler_loop(factory: async_sessionmaker) -> None:
         await asyncio.sleep(_POLL_INTERVAL)
 
 
-async def _polling_scheduler_loop(factory: async_sessionmaker) -> None:
+async def _polling_scheduler_loop(factory: async_sessionmaker[AsyncSession]) -> None:
     """Poll for due polling triggers and fire them."""
     while True:
         try:
@@ -102,10 +102,10 @@ async def _polling_scheduler_loop(factory: async_sessionmaker) -> None:
         await asyncio.sleep(_POLL_INTERVAL)
 
 
-async def _fetch_due_cron_triggers(factory: async_sessionmaker) -> list[dict]:
+async def _fetch_due_cron_triggers(factory: async_sessionmaker[AsyncSession]) -> list[dict[str, Any]]:
     """Query the database for cron triggers whose next_fire_at <= now."""
     now = datetime.datetime.now(datetime.UTC)
-    triggers: list[dict] = []
+    triggers: list[dict[str, Any]] = []
     async with factory() as session:
         result = await session.execute(
             select(
@@ -142,10 +142,10 @@ async def _fetch_due_cron_triggers(factory: async_sessionmaker) -> list[dict]:
     return triggers
 
 
-async def _fetch_due_polling_triggers(factory: async_sessionmaker) -> list[dict]:
+async def _fetch_due_polling_triggers(factory: async_sessionmaker[AsyncSession]) -> list[dict[str, Any]]:
     """Query the database for polling triggers whose next_fire_at <= now."""
     now = datetime.datetime.now(datetime.UTC)
-    triggers: list[dict] = []
+    triggers: list[dict[str, Any]] = []
     async with factory() as session:
         result = await session.execute(
             select(
@@ -192,7 +192,7 @@ async def _fetch_due_polling_triggers(factory: async_sessionmaker) -> list[dict]
     return triggers
 
 
-async def _fire_cron_wrapper(factory: async_sessionmaker, info: dict) -> None:
+async def _fire_cron_wrapper(factory: async_sessionmaker[AsyncSession], info: dict[str, Any]) -> None:
     """Fire one cron trigger — wrapper that logs outcomes."""
     try:
         result = await fire_cron_trigger(
@@ -208,7 +208,7 @@ async def _fire_cron_wrapper(factory: async_sessionmaker, info: dict) -> None:
         _log.exception("In-process cron trigger %s failed", info["id"])
 
 
-async def _fire_polling_wrapper(factory: async_sessionmaker, info: dict) -> None:
+async def _fire_polling_wrapper(factory: async_sessionmaker[AsyncSession], info: dict[str, Any]) -> None:
     """Fire one polling trigger — wrapper that logs outcomes."""
     try:
         result = await fire_polling_trigger(

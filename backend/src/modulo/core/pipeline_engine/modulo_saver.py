@@ -230,6 +230,8 @@ class ModuloPostgresSaver(AsyncPostgresSaver):
 
     def _decrypt_with_fallback(self, ciphertext: bytes) -> bytes:
         """Decrypt with primary key, falling back to old key on InvalidToken."""
+        if self._fernet is None:
+            return ciphertext
         try:
             return self._fernet.decrypt(ciphertext)
         except InvalidToken:

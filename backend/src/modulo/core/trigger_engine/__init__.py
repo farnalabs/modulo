@@ -116,7 +116,7 @@ def _is_unique_violation(exc: IntegrityError) -> bool:
     # PostgreSQL — asyncpg raises with pgcode attribute
     pgcode = getattr(orig, "pgcode", None)
     if pgcode is not None:
-        return pgcode == "23505"
+        return str(pgcode) == "23505"
 
     # SQLite — aiosqlite wraps the message as a string
     msg = str(orig)
