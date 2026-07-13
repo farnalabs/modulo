@@ -60,7 +60,7 @@ class ModelBackendBase(ABC):
     def stream(
         self,
         messages: list[BaseMessage],
-        tools: list[dict] | None = None,
+        tools: list[dict[str, Any]] | None = None,
         **kwargs: Any,
     ) -> AsyncIterator[BaseMessage]:
         """Return an async iterator that yields token chunks."""

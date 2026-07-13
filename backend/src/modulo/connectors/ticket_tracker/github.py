@@ -58,7 +58,7 @@ class GitHubTicketTracker(TicketTrackerBase):
         return ConnectorResult(records=[t.__dict__ for t in tickets], total=len(tickets))
 
     async def write(self, payload: ConnectorPayload) -> dict[str, Any]:
-        data = payload.data if hasattr(payload, "data") else payload
+        data = payload.data
         async with httpx.AsyncClient() as client:
             resp = await client.post(
                 f"{self._base_url}/repos/{self._repo}/issues",
@@ -135,7 +135,7 @@ class GitHubTicketTracker(TicketTrackerBase):
             resp.raise_for_status()
             return self._to_ticket(resp.json())
 
-    def _to_ticket(self, raw: dict) -> Ticket:
+    def _to_ticket(self, raw: dict[str, Any]) -> Ticket:
         return Ticket(
             id=str(raw.get("number", "")),
             title=raw.get("title", ""),
