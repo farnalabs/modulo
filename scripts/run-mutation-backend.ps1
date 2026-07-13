@@ -17,20 +17,41 @@ param(
 $RepoRoot = Split-Path -Parent $PSScriptRoot
 $ImageName = "modulo-mutmut"
 
-Write-Host "🔨 Building mutation testing image..." -ForegroundColor Cyan
-docker build -t $ImageName -f "$RepoRoot/backend/Dockerfile.mutation" "$RepoRoot"
-if ($LASTEXITCODE -ne 0) {
-    Write-Host "❌ Build failed" -ForegroundColor Red
+# Assemble a clean build context (no .dockerignore to block backend/tests/)
+$TempDir = Join-Path $env:TEMP "modulo-mutmut-$(Get-Random)"
+$BackendDir = Join-Path $TempDir "backend"
+New-Item -ItemType Directory -Path $BackendDir -Force | Out-Null
+$Cleanup = { Remove-Item -Path $TempDir -Recurse -Force -ErrorAction SilentlyContinue }
+
+try {
+    # Mirror the repo structure so Dockerfile paths (COPY backend/...) resolve
+    Copy-Item -Path "$RepoRoot/backend/Dockerfile.mutation" -Destination "$TempDir/Dockerfile"
+    Copy-Item -Path "$RepoRoot/backend/pyproject.toml" -Destination "$BackendDir/"
+    Copy-Item -Path "$RepoRoot/backend/uv.lock" -Destination "$BackendDir/"
+    Copy-Item -Path "$RepoRoot/backend/src" -Destination "$BackendDir/src" -Recurse
+    Copy-Item -Path "$RepoRoot/backend/tests" -Destination "$BackendDir/tests" -Recurse
+
+    Write-Host "Building mutation testing image..." -ForegroundColor Cyan
+    docker build -t $ImageName "$TempDir"
+    if ($LASTEXITCODE -ne 0) {
+        Write-Host "Build failed" -ForegroundColor Red
+        & $Cleanup
+        exit 1
+    }
+
+    & $Cleanup
+
+    if ($MutmutArgs.Count -gt 0) {
+        Write-Host "Running mutmut with: $($MutmutArgs -join ' ')" -ForegroundColor Cyan
+        docker run --rm $ImageName uv run mutmut run @MutmutArgs
+    } else {
+        Write-Host "Running mutmut with all configured paths..." -ForegroundColor Cyan
+        docker run --rm $ImageName
+    }
+} catch {
+    & $Cleanup
+    Write-Host "Error: $_" -ForegroundColor Red
     exit 1
 }
 
-if ($MutmutArgs.Count -gt 0) {
-    $ArgStr = $MutmutArgs -join " "
-    Write-Host "🧪 Running mutmut with: $ArgStr" -ForegroundColor Cyan
-    docker run --rm $ImageName uv run mutmut run @MutmutArgs
-} else {
-    Write-Host "🧪 Running mutmut (all configured paths)..." -ForegroundColor Cyan
-    docker run --rm $ImageName
-}
-
-Write-Host "`n📊 Mutation results saved in container artifacts. Re-run with --paths-to-mutate to target specific files." -ForegroundColor Cyan
+exit $LASTEXITCODE

@@ -234,7 +234,7 @@ exclude_lines = [
 ]
 
 [tool.mutmut]
-paths_to_mutate = [
+source_paths = [
     "src/modulo/auth/",
     "src/modulo/db/rls.py",
     "src/modulo/core/license.py",
@@ -247,9 +247,9 @@ paths_to_mutate = [
     "src/modulo/core/graph_validator/",
     "src/modulo/core/run_context/",
 ]
-runner = "pytest tests/unit/ tests/architecture/ -x -q --timeout=60 -m 'not integration and not e2e'"
+runner = "pytest -x -q --timeout=60 -m 'not integration and not e2e'"
 backup = false
-tests_dir = "tests/"
+pytest_add_cli_args_test_selection = ["tests/unit", "tests/architecture"]
 
 [tool.importlinter]
 root_package = "modulo"
