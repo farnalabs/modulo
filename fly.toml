@@ -33,14 +33,13 @@ primary_region = 'lhr'
   MODULO_PUBLIC_URL = "https://app.modulo.run"
   MODULO_DEMO_MODE = "true"
   MODULO_DOGFOOD_ENABLED = "true"
-  # MODULO_USERS set via `flyctl secrets set` — not committed to repo
+  # MODULO_USERS is set with `fly secrets set` and must not be committed.
   MODULO_PLUGIN_DISCOVERY = "false"
   MODULO_MAX_LOCAL_CONCURRENCY = "4"
   # REQUIRED: Upstash Redis instance. Create with:
   #   fly redis create --name modulo-app-redis -r lhr,ams --enable-eviction
-  # Then set REDIS_URL to the connection string from `fly redis status modulo-app-redis`
-  REDIS_URL = "redis://default:30a066ca47a448bbba0ce80e7863a19c@fly-modulo-app-redis.upstash.io:6379"
-  CORS_ORIGINS = "https://modulo.run,http://localhost:5173"
+  # Then store its connection string with `fly secrets set REDIS_URL=...`.
+  CORS_ORIGINS = "https://modulo.run,https://app.modulo.run"
 
 [[vm]]
   memory = '1gb'
