@@ -16,14 +16,17 @@ param(
 $RepoRoot = Split-Path -Parent $PSScriptRoot
 $ImageName = "modulo-stryker"
 
-Write-Host "🔨 Building mutation testing image..." -ForegroundColor Cyan
-docker build -t $ImageName -f "$RepoRoot/frontend/Dockerfile.mutation" "$RepoRoot"
+Write-Host "Building mutation testing image..." -ForegroundColor Cyan
+docker build -t $ImageName `
+    -f "$RepoRoot/frontend/Dockerfile.mutation" `
+    --ignorefile "$RepoRoot/.dockerignore-mutation" `
+    "$RepoRoot"
 if ($LASTEXITCODE -ne 0) {
-    Write-Host "❌ Build failed" -ForegroundColor Red
+    Write-Host "Build failed" -ForegroundColor Red
     exit 1
 }
 
-Write-Host "🧪 Running Stryker with --mutate $Mutate" -ForegroundColor Cyan
+Write-Host "Running Stryker with --mutate $Mutate" -ForegroundColor Cyan
 docker run --rm $ImageName npx stryker run --mutate $Mutate
 
-Write-Host "`n📊 Mutation report at frontend/reports/mutation/mutation-report.json (in container)." -ForegroundColor Cyan
+$LASTEXITCODE
