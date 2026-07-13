@@ -18,6 +18,7 @@ from modulo.api.main import app
 from modulo.auth.dependencies import get_current_user
 from modulo.auth.jwt import AuthenticatedPrincipal
 from modulo.settings import Settings, get_settings
+from tests.unit.api.mock_session import configure_mock_session
 
 _VALID_32 = "a" * 32
 _ORG_ID = "00000000-0000-0000-0000-000000000001"
@@ -35,6 +36,7 @@ def _make_settings() -> Settings:
 
 def _make_session_raising_programming_error() -> AsyncMock:
     session = AsyncMock()
+    configure_mock_session(session)
     begin_cm = AsyncMock()
     begin_cm.__aenter__ = AsyncMock(side_effect=ProgrammingError("relation does not exist", None, None))
     begin_cm.__aexit__ = AsyncMock(return_value=False)
@@ -47,6 +49,7 @@ def _make_session_raising_programming_error() -> AsyncMock:
 
 def _make_session_raising_sqlalchemy_error() -> AsyncMock:
     session = AsyncMock()
+    configure_mock_session(session)
     begin_cm = AsyncMock()
     begin_cm.__aenter__ = AsyncMock(side_effect=SQLAlchemyError("connection failed", None, None))
     begin_cm.__aexit__ = AsyncMock(return_value=False)
