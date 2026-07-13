@@ -44,6 +44,7 @@ from modulo.db.crud.schema import (
     list_schemas,
     update_schema,
 )
+from modulo.db.models.schema import SchemaVersion as SchemaVersionModel
 from modulo.db.rls import set_rls_org
 from modulo.settings import Settings, get_settings
 
@@ -193,6 +194,15 @@ async def create_schema_endpoint(
                 description=req.description,
                 abstract_name=req.abstract_name,
             )
+            sv = SchemaVersionModel(
+                organisation_id=principal.organisation_id,
+                schema_id=schema.id,
+                version="latest",
+                version_number=0,
+                definition_json={"type": "object", "properties": {}, "additionalProperties": True},
+                account_id=principal.account_id,
+            )
+            session.add(sv)
     except IntegrityError:
         logger.exception("schemas.create.conflict")
         raise HTTPException(
