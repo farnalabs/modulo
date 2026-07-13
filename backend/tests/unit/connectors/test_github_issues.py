@@ -390,6 +390,31 @@ async def test_write_issue_label(connector):
     assert json.loads(route.calls.last.request.content)["labels"] == ["bug", "urgent"]
 
 
+@pytest.mark.parametrize(
+    "labels",
+    ["bug", [], ["bug", 1]],
+    ids=["scalar", "empty", "mixed"],
+)
+async def test_write_issue_label_rejects_invalid_labels(connector, labels: object):
+    with pytest.raises(ValueError, match="must be a non-empty list of strings"):
+        await connector.write(
+            ConnectorPayload(
+                resource="issue_label",
+                data={"repo": "owner/repo", "issue_number": "42", "labels": labels},
+            )
+        )
+
+
+async def test_write_issue_label_requires_labels(connector):
+    with pytest.raises(ValueError, match="requires 'labels' in data"):
+        await connector.write(
+            ConnectorPayload(
+                resource="issue_label",
+                data={"repo": "owner/repo", "issue_number": "42"},
+            )
+        )
+
+
 # ---------------------------------------------------------------------------
 # Write: issue_reaction
 # ---------------------------------------------------------------------------
