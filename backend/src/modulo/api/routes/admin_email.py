@@ -1,6 +1,7 @@
 import asyncio
 import logging
 import uuid
+from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, Field
@@ -171,7 +172,7 @@ async def admin_test_email_settings(
     req: TestEmailRequest,
     current_user: AuthenticatedPrincipal = Depends(get_current_user),
     session: AsyncSession = Depends(get_db_session),
-) -> dict:
+) -> dict[str, Any]:
     if not current_user.is_system_admin and current_user.organisation_id != org_id:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied")
 

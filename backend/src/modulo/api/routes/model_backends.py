@@ -17,8 +17,8 @@ from sqlalchemy.exc import IntegrityError, ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.api.dependencies import get_db_session
-from modulo.auth.dependencies import get_current_user
-from modulo.auth.jwt import AuthenticatedPrincipal
+from modulo.auth.dependencies import get_current_tenant_user
+from modulo.auth.jwt import TenantPrincipal
 from modulo.core.plugin_registry import get_plugin_registry
 from modulo.db.crud.model_backend import (
     create_model_backend,
@@ -122,7 +122,7 @@ def _to_response(mb: Any) -> ModelBackendResponse:
         owner_team_id=mb.owner_team_id,
         tier=mb.tier,
         fallback_backend_ids=fallback_ids,
-        account_id=mb.account_id,
+        created_by=mb.account_id,
         created_at=mb.created_at,
         updated_at=mb.updated_at,
     )
@@ -133,7 +133,7 @@ async def list_model_backends_endpoint(
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
     session: AsyncSession = Depends(get_db_session),
-    principal: AuthenticatedPrincipal = Depends(get_current_user),
+    principal: TenantPrincipal = Depends(get_current_tenant_user),
 ) -> ModelBackendListResponse:
     try:
         async with session.begin():
@@ -229,7 +229,7 @@ def _validate_provider(provider: str) -> None:
 async def create_model_backend_endpoint(
     req: ModelBackendCreate,
     session: AsyncSession = Depends(get_db_session),
-    principal: AuthenticatedPrincipal = Depends(get_current_user),
+    principal: TenantPrincipal = Depends(get_current_tenant_user),
     settings: Settings = Depends(get_settings),
 ) -> ModelBackendResponse:
     _validate_provider(req.provider)
@@ -303,7 +303,7 @@ async def create_model_backend_endpoint(
 async def get_model_backend_endpoint(
     backend_id: uuid.UUID,
     session: AsyncSession = Depends(get_db_session),
-    principal: AuthenticatedPrincipal = Depends(get_current_user),
+    principal: TenantPrincipal = Depends(get_current_tenant_user),
 ) -> ModelBackendResponse:
     try:
         async with session.begin():
@@ -343,7 +343,7 @@ async def update_model_backend_endpoint(
     backend_id: uuid.UUID,
     req: ModelBackendUpdate,
     session: AsyncSession = Depends(get_db_session),
-    principal: AuthenticatedPrincipal = Depends(get_current_user),
+    principal: TenantPrincipal = Depends(get_current_tenant_user),
     settings: Settings = Depends(get_settings),
 ) -> ModelBackendResponse:
     updates: dict[str, Any] = req.model_dump(exclude_unset=True)
@@ -389,7 +389,7 @@ async def update_model_backend_endpoint(
 async def delete_model_backend_endpoint(
     backend_id: uuid.UUID,
     session: AsyncSession = Depends(get_db_session),
-    principal: AuthenticatedPrincipal = Depends(get_current_user),
+    principal: TenantPrincipal = Depends(get_current_tenant_user),
 ) -> None:
     try:
         async with session.begin():

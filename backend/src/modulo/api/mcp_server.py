@@ -17,9 +17,9 @@ import contextvars
 import json
 import logging
 import uuid
-from collections.abc import AsyncGenerator
+from collections.abc import AsyncGenerator, Awaitable, Callable
 from contextlib import asynccontextmanager
-from typing import Any, ClassVar
+from typing import Any
 
 from jwt import InvalidTokenError as JWTError
 from mcp.server.fastmcp import FastMCP
@@ -214,7 +214,7 @@ class McpAuthMiddleware(BaseHTTPMiddleware):
     2. OAuth 2.0 access token (JWT with purpose=oauth_access)
     """
 
-    async def dispatch(self, request: Request, call_next: Any) -> Response:
+    async def dispatch(self, request: Request, call_next: Callable[[Request], Awaitable[Response]]) -> Response:
         # Allow unauthenticated access to the health check endpoint.
         clean = request.url.path.rstrip("/")
         if clean in ("/mcp/healthz", "/healthz"):
@@ -309,6 +309,12 @@ class McpAuthMiddleware(BaseHTTPMiddleware):
                     status_code=401,
                     media_type="application/json",
                 )
+            if principal.organisation_id is None:
+                return Response(
+                    '{"error":"forbidden","detail":"Organisation membership required"}',
+                    status_code=403,
+                    media_type="application/json",
+                )
             _ctx_org_id.set(principal.organisation_id)
             _ctx_role.set(principal.org_role or "runner")
             _ctx_key_id.set(uuid.UUID(int=0))
@@ -319,8 +325,8 @@ class McpAuthMiddleware(BaseHTTPMiddleware):
                 "type": "user",
                 "org_id": str(principal.organisation_id) if principal.organisation_id else "",
             }
-            resp3: Response = await call_next(request)
-            return resp3
+            resp4: Response = await call_next(request)
+            return resp4
 
         # Verify token family is not blacklisted.
         try:
@@ -357,7 +363,8 @@ class McpAuthMiddleware(BaseHTTPMiddleware):
         _ctx_org_id.set(claims.organisation_id)
         _ctx_role.set(role)
         _ctx_key_id.set(uuid.UUID(int=0))  # sentinel for OAuth clients
-        _ctx_user_id.set(claims.client_id)
+        oauth_actor_id = uuid.uuid5(uuid.NAMESPACE_URL, f"modulo-oauth-client:{claims.client_id}")
+        _ctx_user_id.set(oauth_actor_id)
         _ctx_auth_token.set(token)
         _ctx_auth_type.set("oauth")
         request.scope["auth_principal"] = {
@@ -671,10 +678,10 @@ async def get_run_status(run_id: str, detail: bool = False) -> dict[str, Any]:
         if detail:
             token_usage = run.node_token_usage or {}
             outputs_json = run.outputs_json or {}
-            node_ids: ClassVar[set[str]] = set()
+            node_ids: set[str] = set()
             node_ids.update(token_usage.keys())
             node_ids.update(outputs_json.keys())
-            nodes: ClassVar[list[dict[str, Any]]] = []
+            nodes: list[dict[str, Any]] = []
             for nid in sorted(node_ids):
                 usage = token_usage.get(nid, {})
                 t_in = usage.get("tokens_in", 0) if usage else 0
@@ -724,7 +731,7 @@ async def get_run_output(run_id: str, node_id: str) -> dict[str, Any]:
         masked = _mask_output_value(node_output)
 
         # Detect masked fields by scanning for the bullet mask character.
-        masked_fields: ClassVar[list[str]] = []
+        masked_fields: list[str] = []
         if isinstance(masked, dict):
             for k, v in masked.items():
                 if isinstance(v, str) and "\u2022" in v:
@@ -1114,7 +1121,10 @@ async def browse_library_alias(
     cursor: str | None = None,
     limit: int = 20,
 ) -> dict[str, Any]:
-    return await search_library(primitive_type=primitive_type, search=search, cursor=cursor, limit=limit)
+    result = await search_library(primitive_type=primitive_type, search=search, cursor=cursor, limit=limit)
+    if not isinstance(result, dict):
+        raise RuntimeError("search_library returned an invalid response")
+    return result
 
 
 @mcp.tool(
@@ -1179,7 +1189,10 @@ async def get_trigger_events_alias(
     cursor: str | None = None,
     limit: int = 20,
 ) -> dict[str, Any]:
-    return await list_trigger_events(trigger_id=trigger_id, pipeline_id=pipeline_id, cursor=cursor, limit=limit)
+    result = await list_trigger_events(trigger_id=trigger_id, pipeline_id=pipeline_id, cursor=cursor, limit=limit)
+    if not isinstance(result, dict):
+        raise RuntimeError("list_trigger_events returned an invalid response")
+    return result
 
 
 @mcp.tool(
@@ -1633,7 +1646,10 @@ def _is_sensitive_key(key: str) -> bool:
     description=("[DEPRECATED — use search_documentation] Search product documentation."),
 )
 async def get_documentation_alias(query: str, section: str | None = None) -> dict[str, Any]:
-    return await search_documentation(query=query, section=section)
+    result = await search_documentation(query=query, section=section)
+    if not isinstance(result, dict):
+        raise RuntimeError("search_documentation returned an invalid response")
+    return result
 
 
 @mcp.tool(
@@ -1691,7 +1707,7 @@ async def get_integration_status() -> dict[str, Any]:
             )
             trigger_count = trigger_count_result.scalar_one()
 
-        connector_list: ClassVar[list[dict[str, Any]]] = []
+        connector_list: list[dict[str, Any]] = []
         connector_lines = [
             "| Name | Type | Status | Last Check | Error |",
             "|------|------|--------|------------|-------|",
@@ -1710,7 +1726,7 @@ async def get_integration_status() -> dict[str, Any]:
                 }
             )
 
-        backend_list: ClassVar[list[dict[str, Any]]] = []
+        backend_list: list[dict[str, Any]] = []
         backend_lines = [
             "| Name | Provider | Model | Has Credentials | Status |",
             "|------|----------|-------|-----------------|--------|",
@@ -1934,7 +1950,7 @@ async def validate_payload(
         if not await validate_current_auth():
             return _tool_auth_error("Token revoked or expired — re-authenticate")
         from jsonschema import Draft202012Validator, ValidationError  # type: ignore[import-untyped]
-        from jsonschema.exceptions import SchemaError as JsSchemaError
+        from jsonschema.exceptions import SchemaError as JsSchemaError  # type: ignore[import-untyped]
 
         org_id = _ctx_org_id_val()
         try:
@@ -2218,7 +2234,7 @@ async def resource_schema_detail(schema_id: str, version: str) -> str:
     defn = sv.definition_json or {}
     schema_type = defn.get("type", "object")
 
-    fields: ClassVar[list[dict[str, Any]]] = []
+    fields: list[dict[str, Any]] = []
     if "properties" in defn:
         required_set = set(defn.get("required", []))
         for name, prop in defn["properties"].items():
@@ -2312,7 +2328,7 @@ async def resource_library() -> str:
             )
         if not result.items:
             return "Library is empty."
-        lines: ClassVar[list[str]] = []
+        lines: list[str] = []
         for p in result.items:
             tags_str = ", ".join(p.tags) if p.tags else ""
             rating_str = f"{p.average_rating:.1f}" if p.average_rating is not None else "N/A"

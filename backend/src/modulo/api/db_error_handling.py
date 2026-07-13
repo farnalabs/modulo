@@ -1,15 +1,21 @@
 import asyncio
 import logging
+from collections.abc import Awaitable, Callable
 from functools import wraps
+from typing import ParamSpec, TypeVar
 
 import pydantic
 from fastapi import HTTPException, status
 from sqlalchemy.exc import IntegrityError, ProgrammingError, SQLAlchemyError
 
 _log = logging.getLogger(__name__)
+_P = ParamSpec("_P")
+_R = TypeVar("_R")
 
 
-def handle_db_errors(log_prefix: str = "api"):
+def handle_db_errors(
+    log_prefix: str = "api",
+) -> Callable[[Callable[_P, Awaitable[_R]]], Callable[_P, Awaitable[_R]]]:
     """Decorator that catches common DB errors and maps them to HTTP exceptions.
 
     Usage:
@@ -18,10 +24,10 @@ def handle_db_errors(log_prefix: str = "api"):
             ...
     """
 
-    def decorator(func):
+    def decorator(func: Callable[_P, Awaitable[_R]]) -> Callable[_P, Awaitable[_R]]:
 
         @wraps(func)
-        async def wrapper(*args, **kwargs):
+        async def wrapper(*args: _P.args, **kwargs: _P.kwargs) -> _R:
             try:
                 return await func(*args, **kwargs)
             except asyncio.CancelledError:

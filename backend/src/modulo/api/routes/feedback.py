@@ -25,8 +25,8 @@ from sqlalchemy.exc import IntegrityError, ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.api.dependencies import get_db_session
-from modulo.auth.dependencies import get_current_user
-from modulo.auth.jwt import AuthenticatedPrincipal
+from modulo.auth.dependencies import get_current_tenant_user
+from modulo.auth.jwt import TenantPrincipal
 from modulo.core.feedback_manager import (
     ConcurrentModificationError,
     FeedbackManager,
@@ -92,7 +92,7 @@ async def create_feedback(
     run_id: uuid.UUID,
     req: CreateFeedbackRequest,
     session: AsyncSession = Depends(get_db_session),
-    principal: AuthenticatedPrincipal = Depends(get_current_user),
+    principal: TenantPrincipal = Depends(get_current_tenant_user),
 ) -> dict[str, Any]:
     try:
         async with session.begin():
@@ -159,7 +159,7 @@ async def list_feedback(
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
     session: AsyncSession = Depends(get_db_session),
-    principal: AuthenticatedPrincipal = Depends(get_current_user),
+    principal: TenantPrincipal = Depends(get_current_tenant_user),
 ) -> dict[str, Any]:
     try:
         async with session.begin():
@@ -213,7 +213,7 @@ async def list_feedback_inbox(
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
     session: AsyncSession = Depends(get_db_session),
-    principal: AuthenticatedPrincipal = Depends(get_current_user),
+    principal: TenantPrincipal = Depends(get_current_tenant_user),
 ) -> dict[str, Any]:
     date_from_dt: datetime | None = None
     date_to_dt: datetime | None = None
@@ -286,7 +286,7 @@ async def list_eval_proposals(
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
     session: AsyncSession = Depends(get_db_session),
-    principal: AuthenticatedPrincipal = Depends(get_current_user),
+    principal: TenantPrincipal = Depends(get_current_tenant_user),
 ) -> dict[str, Any]:
     try:
         async with session.begin():
@@ -295,7 +295,7 @@ async def list_eval_proposals(
             result = await mgr.get_eval_proposals(page=page, page_size=page_size)
 
             items = result["items"]
-            node_name_map: ClassVar[dict[str, str]] = {}
+            node_name_map: dict[str, str] = {}
             run_ids = [r.run_id for r in items if r.run_id]
             if run_ids:
                 run_rows = await session.execute(select(Run.id, Run.snapshot_id).where(Run.id.in_(run_ids)))
@@ -348,7 +348,7 @@ async def list_eval_proposals(
 async def get_feedback(
     record_id: uuid.UUID,
     session: AsyncSession = Depends(get_db_session),
-    principal: AuthenticatedPrincipal = Depends(get_current_user),
+    principal: TenantPrincipal = Depends(get_current_tenant_user),
 ) -> dict[str, Any]:
     try:
         async with session.begin():
@@ -390,7 +390,7 @@ async def update_feedback_status(
     record_id: uuid.UUID,
     req: UpdateStatusRequest,
     session: AsyncSession = Depends(get_db_session),
-    principal: AuthenticatedPrincipal = Depends(get_current_user),
+    principal: TenantPrincipal = Depends(get_current_tenant_user),
 ) -> dict[str, Any]:
     valid_statuses = {"pending", "routing", "correcting", "resolved", "escalated"}
     if req.status not in valid_statuses:
@@ -441,7 +441,7 @@ async def update_feedback_status(
 async def detect_eval_gap(
     record_id: uuid.UUID,
     session: AsyncSession = Depends(get_db_session),
-    principal: AuthenticatedPrincipal = Depends(get_current_user),
+    principal: TenantPrincipal = Depends(get_current_tenant_user),
 ) -> dict[str, Any]:
     try:
         async with session.begin():
@@ -452,7 +452,7 @@ async def detect_eval_gap(
             if record is None:
                 raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Feedback record not found")
 
-            eval_suite: ClassVar[list[EvalDefinition]] = []
+            eval_suite: list[EvalDefinition] = []
             if record.run_id:
                 run = (await session.execute(select(Run).where(Run.id == record.run_id))).scalar_one_or_none()
                 if run is not None:
@@ -502,7 +502,7 @@ async def detect_eval_gap(
 async def get_inbox_item(
     record_id: uuid.UUID,
     session: AsyncSession = Depends(get_db_session),
-    principal: AuthenticatedPrincipal = Depends(get_current_user),
+    principal: TenantPrincipal = Depends(get_current_tenant_user),
 ) -> dict[str, Any]:
     pipeline_name: str | None = None
     try:
@@ -554,7 +554,7 @@ async def review_feedback(
     record_id: uuid.UUID,
     req: ReviewFeedbackRequest,
     session: AsyncSession = Depends(get_db_session),
-    principal: AuthenticatedPrincipal = Depends(get_current_user),
+    principal: TenantPrincipal = Depends(get_current_tenant_user),
 ) -> dict[str, Any]:
     valid_actions = {"mark_reviewed", "dismiss", "create_correction_run"}
     if req.action not in valid_actions:

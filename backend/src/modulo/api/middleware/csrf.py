@@ -14,9 +14,10 @@ import logging
 import secrets
 from typing import Any
 
-from fastapi import FastAPI, Request, Response
+from fastapi import Request, Response
 from fastapi.responses import JSONResponse
 from starlette.middleware.base import BaseHTTPMiddleware
+from starlette.types import ASGIApp
 
 from modulo.settings import Settings, get_settings
 
@@ -34,7 +35,7 @@ class CsrfMiddleware(BaseHTTPMiddleware):
 
     def __init__(
         self,
-        app: FastAPI,
+        app: ASGIApp,
         settings: Settings | None = None,
     ) -> None:
         super().__init__(app)

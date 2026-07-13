@@ -13,8 +13,8 @@ from sqlalchemy.exc import IntegrityError, ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.api.dependencies import get_db_session
-from modulo.auth.dependencies import get_current_user
-from modulo.auth.jwt import AuthenticatedPrincipal
+from modulo.auth.dependencies import get_current_tenant_user
+from modulo.auth.jwt import TenantPrincipal
 from modulo.db.crud.pipeline import create_pipeline, replace_pipeline_graph
 from modulo.db.crud.schema import create_schema
 from modulo.db.models.pipeline import Pipeline
@@ -129,7 +129,7 @@ class StarterPipelineResponse(BaseModel):
 @router.get("/status", response_model=OnboardingStatusResponse)
 async def get_onboarding_status(
     session: AsyncSession = Depends(get_db_session),
-    principal: AuthenticatedPrincipal = Depends(get_current_user),
+    principal: TenantPrincipal = Depends(get_current_tenant_user),
 ) -> OnboardingStatusResponse:
     try:
         async with session.begin():
@@ -190,7 +190,7 @@ async def get_onboarding_status(
 async def mark_step_completed(
     req: MarkStepRequest,
     session: AsyncSession = Depends(get_db_session),
-    principal: AuthenticatedPrincipal = Depends(get_current_user),
+    principal: TenantPrincipal = Depends(get_current_tenant_user),
 ) -> MarkStepResponse:
     try:
         valid_ids: set[str] = {str(s["id"]) for s in _ONBOARDING_STEPS}
@@ -231,7 +231,7 @@ async def mark_step_completed(
 async def get_step_data(
     step_id: str,
     session: AsyncSession = Depends(get_db_session),
-    principal: AuthenticatedPrincipal = Depends(get_current_user),
+    principal: TenantPrincipal = Depends(get_current_tenant_user),
 ) -> OnboardingStepDataResponse:
     try:
         step = None
@@ -301,7 +301,7 @@ async def get_step_data(
 @router.post("/starter-pipeline", response_model=StarterPipelineResponse, status_code=status.HTTP_201_CREATED)
 async def create_starter_pipeline(
     session: AsyncSession = Depends(get_db_session),
-    principal: AuthenticatedPrincipal = Depends(get_current_user),
+    principal: TenantPrincipal = Depends(get_current_tenant_user),
 ) -> StarterPipelineResponse:
     try:
         async with session.begin():

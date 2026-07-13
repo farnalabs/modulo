@@ -6,7 +6,7 @@ router = APIRouter(prefix="/api/v1", tags=["manifest"])
 
 
 @router.get("/manifest")
-async def manifest_endpoint():
+async def manifest_endpoint() -> dict[str, object]:
     try:
         return get_manifest()
     except RuntimeError as exc:

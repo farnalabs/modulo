@@ -1,11 +1,11 @@
 """Eval management endpoints.
 
 URLs:
-    POST   /api/v1/evals              â€” create an eval definition (admin only)
-    GET    /api/v1/runs/{run_id}/evals â€” list eval results for a run
-    POST   /api/v1/evals/compare      â€” side-by-side comparison of two runs
-    GET    /api/v1/evals/coverage     â€” eval coverage map for a pipeline
-    POST   /api/v1/evals/from-run     â€” create eval definition from run data
+    POST   /api/v1/evals              — create an eval definition (admin only)
+    GET    /api/v1/runs/{run_id}/evals — list eval results for a run
+    POST   /api/v1/evals/compare      — side-by-side comparison of two runs
+    GET    /api/v1/evals/coverage     — eval coverage map for a pipeline
+    POST   /api/v1/evals/from-run     — create eval definition from run data
 """
 
 import logging
@@ -19,8 +19,8 @@ from sqlalchemy.exc import IntegrityError, ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.api.dependencies import get_db_session
-from modulo.auth.dependencies import get_current_user
-from modulo.auth.jwt import AuthenticatedPrincipal
+from modulo.auth.dependencies import get_current_tenant_user
+from modulo.auth.jwt import TenantPrincipal
 from modulo.db.models.eval_definition import EvalDefinition
 from modulo.db.models.eval_result import EvalResult
 from modulo.db.models.pipeline import Pipeline
@@ -119,7 +119,7 @@ class EvalDefinitionListResponse(BaseModel):
 async def create_eval_definition(
     req: CreateEvalRequest,
     session: AsyncSession = Depends(get_db_session),
-    principal: AuthenticatedPrincipal = Depends(get_current_user),
+    principal: TenantPrincipal = Depends(get_current_tenant_user),
 ) -> dict[str, Any]:
     """Create a new eval definition.
 
@@ -188,7 +188,7 @@ async def list_eval_definitions(
     page_size: int = Query(20, ge=1, le=100),
     pipeline_id: uuid.UUID | None = None,
     session: AsyncSession = Depends(get_db_session),
-    principal: AuthenticatedPrincipal = Depends(get_current_user),
+    principal: TenantPrincipal = Depends(get_current_tenant_user),
 ) -> EvalDefinitionListResponse:
     """List eval definitions for the caller's organisation."""
     from sqlalchemy import func as sa_func
@@ -255,7 +255,7 @@ async def list_eval_definitions(
 async def eval_coverage(
     pipeline_id: uuid.UUID = Query(..., description="Pipeline ID"),
     session: AsyncSession = Depends(get_db_session),
-    principal: AuthenticatedPrincipal = Depends(get_current_user),
+    principal: TenantPrincipal = Depends(get_current_tenant_user),
 ) -> dict[str, Any]:
     """Return eval coverage map for a pipeline."""
     try:
@@ -314,13 +314,13 @@ async def eval_coverage(
             detail="An unexpected error occurred while computing eval coverage.",
         ) from None
 
-    eval_count_by_node: ClassVar[dict[str, int]] = {}
+    eval_count_by_node: dict[str, int] = {}
     for ed in eval_defs_rows:
         nid = str(ed.node_id)
         eval_count_by_node[nid] = eval_count_by_node.get(nid, 0) + 1
 
     covered_count = 0
-    nodes_result: ClassVar[list[dict[str, Any]]] = []
+    nodes_result: list[dict[str, Any]] = []
     for n in nodes_raw:
         nid = str(n.get("id", ""))
         name = n.get("name") or n.get("label", "") or nid
@@ -355,7 +355,7 @@ async def eval_coverage(
 async def get_eval_definition(
     eval_id: uuid.UUID,
     session: AsyncSession = Depends(get_db_session),
-    principal: AuthenticatedPrincipal = Depends(get_current_user),
+    principal: TenantPrincipal = Depends(get_current_tenant_user),
 ) -> dict[str, Any]:
     """Get a single eval definition by ID."""
     try:
@@ -403,7 +403,7 @@ async def update_eval_definition(
     eval_id: uuid.UUID,
     req: UpdateEvalRequest,
     session: AsyncSession = Depends(get_db_session),
-    principal: AuthenticatedPrincipal = Depends(get_current_user),
+    principal: TenantPrincipal = Depends(get_current_tenant_user),
 ) -> dict[str, Any]:
     """Update an eval definition. Admin only."""
     if principal.org_role != "admin":
@@ -459,7 +459,7 @@ async def update_eval_definition(
 async def delete_eval_definition(
     eval_id: uuid.UUID,
     session: AsyncSession = Depends(get_db_session),
-    principal: AuthenticatedPrincipal = Depends(get_current_user),
+    principal: TenantPrincipal = Depends(get_current_tenant_user),
 ) -> None:
     """Delete an eval definition. Admin only."""
     if principal.org_role != "admin":
@@ -511,7 +511,7 @@ async def list_run_evals(
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
     session: AsyncSession = Depends(get_db_session),
-    principal: AuthenticatedPrincipal = Depends(get_current_user),
+    principal: TenantPrincipal = Depends(get_current_tenant_user),
 ) -> dict[str, Any]:
     """List all eval results for a given run.
 
@@ -625,7 +625,7 @@ class CreateEvalFromRunRequest(BaseModel):
 async def compare_evals(
     req: CompareEvalsRequest,
     session: AsyncSession = Depends(get_db_session),
-    principal: AuthenticatedPrincipal = Depends(get_current_user),
+    principal: TenantPrincipal = Depends(get_current_tenant_user),
 ) -> dict[str, Any]:
     """Compare eval results between two runs side by side."""
     try:
@@ -726,15 +726,15 @@ async def compare_evals(
                 detail="An unexpected error occurred while comparing eval results.",
             ) from None
 
-    results_by_eval_a: ClassVar[dict[uuid.UUID, Any]] = {}
+    results_by_eval_a: dict[uuid.UUID, Any] = {}
     for r in results_a:
         results_by_eval_a[r.eval_id] = r
 
-    results_by_eval_b: ClassVar[dict[uuid.UUID, Any]] = {}
+    results_by_eval_b: dict[uuid.UUID, Any] = {}
     for r in results_b:
         results_by_eval_b[r.eval_id] = r
 
-    compared: ClassVar[list[dict[str, Any]]] = []
+    compared: list[dict[str, Any]] = []
     all_eval_ids = sorted(eval_ids)
     for eid in all_eval_ids:
         ra = results_by_eval_a.get(eid)
@@ -796,7 +796,7 @@ async def compare_evals(
 async def create_eval_from_run(
     req: CreateEvalFromRunRequest,
     session: AsyncSession = Depends(get_db_session),
-    principal: AuthenticatedPrincipal = Depends(get_current_user),
+    principal: TenantPrincipal = Depends(get_current_tenant_user),
 ) -> dict[str, Any]:
     """Create an eval definition pre-populated from run output."""
     if principal.org_role != "admin":
@@ -852,7 +852,7 @@ async def create_eval_from_run(
             detail="An unexpected error occurred while creating an eval from run output.",
         ) from None
 
-    config_json: ClassVar[dict[str, Any]] = {}
+    config_json: dict[str, Any] = {}
     if req.eval_type == "regex":
         config_json = {
             "field": next(iter(sample_output.keys())) if sample_output else "",

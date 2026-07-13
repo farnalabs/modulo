@@ -18,7 +18,7 @@ _started_at = datetime.now(UTC)
 
 
 @router.get("")
-async def deployment_info():
+async def deployment_info() -> dict[str, object]:
     """Return deployment metadata for operational visibility.
 
     Build-time values (git_sha, git_branch, build_timestamp, etc.) are injected

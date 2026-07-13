@@ -10,8 +10,8 @@ from sqlalchemy.exc import IntegrityError, ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.api.dependencies import get_db_session
-from modulo.auth.dependencies import get_current_user
-from modulo.auth.jwt import AuthenticatedPrincipal
+from modulo.auth.dependencies import get_current_tenant_user
+from modulo.auth.jwt import TenantPrincipal
 from modulo.db.crud.node_category import (
     create_node_category,
     delete_node_category,
@@ -69,7 +69,7 @@ async def list_node_categories_endpoint(
     page: int = Query(default=1, ge=1),
     page_size: int = Query(default=20, ge=1, le=100),
     session: AsyncSession = Depends(get_db_session),
-    principal: AuthenticatedPrincipal = Depends(get_current_user),
+    principal: TenantPrincipal = Depends(get_current_tenant_user),
 ) -> NodeCategoryListResponse:
     try:
         async with session.begin():
@@ -116,7 +116,7 @@ async def list_node_categories_endpoint(
 async def create_node_category_endpoint(
     req: NodeCategoryCreate,
     session: AsyncSession = Depends(get_db_session),
-    principal: AuthenticatedPrincipal = Depends(get_current_user),
+    principal: TenantPrincipal = Depends(get_current_tenant_user),
 ) -> NodeCategoryResponse:
     try:
         async with session.begin():
@@ -165,7 +165,7 @@ async def create_node_category_endpoint(
 async def get_node_category_endpoint(
     category_id: uuid.UUID,
     session: AsyncSession = Depends(get_db_session),
-    principal: AuthenticatedPrincipal = Depends(get_current_user),
+    principal: TenantPrincipal = Depends(get_current_tenant_user),
 ) -> NodeCategoryResponse:
     try:
         async with session.begin():
@@ -208,7 +208,7 @@ async def update_node_category_endpoint(
     category_id: uuid.UUID,
     req: NodeCategoryUpdate,
     session: AsyncSession = Depends(get_db_session),
-    principal: AuthenticatedPrincipal = Depends(get_current_user),
+    principal: TenantPrincipal = Depends(get_current_tenant_user),
 ) -> NodeCategoryResponse:
     updates = req.model_dump(exclude_unset=True)
     try:
@@ -251,7 +251,7 @@ async def update_node_category_endpoint(
 async def delete_node_category_endpoint(
     category_id: uuid.UUID,
     session: AsyncSession = Depends(get_db_session),
-    principal: AuthenticatedPrincipal = Depends(get_current_user),
+    principal: TenantPrincipal = Depends(get_current_tenant_user),
 ) -> None:
     try:
         async with session.begin():

@@ -11,8 +11,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.api.db_error_handling import handle_db_errors
 from modulo.api.dependencies import get_db_session
-from modulo.auth.dependencies import get_current_user
-from modulo.auth.jwt import AuthenticatedPrincipal
+from modulo.auth.dependencies import get_current_tenant_user
+from modulo.auth.jwt import TenantPrincipal
 from modulo.db.crud.pipeline_folder import (
     create_folder,
     delete_folder,
@@ -57,7 +57,7 @@ class FolderResponse(BaseModel):
 @handle_db_errors("pipeline_folders.list")
 async def list_folders_endpoint(
     session: AsyncSession = Depends(get_db_session),
-    principal: AuthenticatedPrincipal = Depends(get_current_user),
+    principal: TenantPrincipal = Depends(get_current_tenant_user),
 ) -> list[FolderResponse]:
     try:
         async with session.begin():
@@ -78,7 +78,7 @@ async def list_folders_endpoint(
 async def create_folder_endpoint(
     req: FolderCreate,
     session: AsyncSession = Depends(get_db_session),
-    principal: AuthenticatedPrincipal = Depends(get_current_user),
+    principal: TenantPrincipal = Depends(get_current_tenant_user),
 ) -> FolderResponse:
     try:
         async with session.begin():
@@ -106,7 +106,7 @@ async def update_folder_endpoint(
     folder_id: uuid.UUID,
     req: FolderUpdate,
     session: AsyncSession = Depends(get_db_session),
-    principal: AuthenticatedPrincipal = Depends(get_current_user),
+    principal: TenantPrincipal = Depends(get_current_tenant_user),
 ) -> FolderResponse:
     updates = req.model_dump(exclude_unset=True)
     try:
@@ -130,7 +130,7 @@ async def update_folder_endpoint(
 async def delete_folder_endpoint(
     folder_id: uuid.UUID,
     session: AsyncSession = Depends(get_db_session),
-    principal: AuthenticatedPrincipal = Depends(get_current_user),
+    principal: TenantPrincipal = Depends(get_current_tenant_user),
 ) -> None:
     try:
         async with session.begin():
@@ -153,7 +153,7 @@ async def reorder_folder_endpoint(
     folder_id: uuid.UUID,
     req: FolderMove,
     session: AsyncSession = Depends(get_db_session),
-    principal: AuthenticatedPrincipal = Depends(get_current_user),
+    principal: TenantPrincipal = Depends(get_current_tenant_user),
 ) -> FolderResponse:
     updates = {"sort_order": req.sort_order}
     try:

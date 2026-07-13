@@ -2,14 +2,15 @@
 
 import asyncio
 import logging
+from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.exc import ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.api.dependencies import get_db_session
-from modulo.auth.dependencies import get_current_user
-from modulo.auth.jwt import AuthenticatedPrincipal
+from modulo.auth.dependencies import get_current_tenant_user
+from modulo.auth.jwt import TenantPrincipal
 from modulo.db.crud.tier_catalog import list_tiers
 
 logger = logging.getLogger(__name__)
@@ -19,9 +20,9 @@ router = APIRouter(prefix="/api/v1/admin/tiers", tags=["admin-tiers"])
 
 @router.get("")
 async def list_tiers_endpoint(
-    current_user: AuthenticatedPrincipal = Depends(get_current_user),
+    current_user: TenantPrincipal = Depends(get_current_tenant_user),
     session: AsyncSession = Depends(get_db_session),
-) -> dict:
+) -> dict[str, Any]:
     try:
         async with session.begin():
             tiers = await list_tiers(session)

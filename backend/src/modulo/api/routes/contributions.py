@@ -10,8 +10,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.api.dependencies import get_db_session
 from modulo.api.routes.library import LibraryPrimitiveResponse
-from modulo.auth.dependencies import get_current_user
-from modulo.auth.jwt import AuthenticatedPrincipal
+from modulo.auth.dependencies import get_current_tenant_user
+from modulo.auth.jwt import TenantPrincipal
 from modulo.core.library_service import (
     ContributionInvalidTransitionError,
     ContributionNotFoundError,
@@ -59,7 +59,7 @@ class ContributionStatusResponse(BaseModel):
 async def create_contribution(
     req: ContributeFixtureRequest,
     session: AsyncSession = Depends(get_db_session),
-    principal: AuthenticatedPrincipal = Depends(get_current_user),
+    principal: TenantPrincipal = Depends(get_current_tenant_user),
 ) -> ContributeFixtureResponse:
     """Submit a test fixture contribution (stored as draft).
 
@@ -114,7 +114,7 @@ async def create_contribution(
 async def submit_for_review(
     primitive_id: uuid.UUID,
     session: AsyncSession = Depends(get_db_session),
-    principal: AuthenticatedPrincipal = Depends(get_current_user),
+    principal: TenantPrincipal = Depends(get_current_tenant_user),
 ) -> ContributionStatusResponse:
     """Move a draft contribution to the review queue."""
     try:
@@ -160,7 +160,7 @@ async def submit_for_review(
 async def publish_contribution_endpoint(
     primitive_id: uuid.UUID,
     session: AsyncSession = Depends(get_db_session),
-    principal: AuthenticatedPrincipal = Depends(get_current_user),
+    principal: TenantPrincipal = Depends(get_current_tenant_user),
 ) -> ContributionStatusResponse:
     """Publish a reviewed fixture contribution to the community library.
 
@@ -231,7 +231,7 @@ async def submit_contribution_version_endpoint(
     primitive_id: uuid.UUID,
     req: ContributeFixtureRequest,
     session: AsyncSession = Depends(get_db_session),
-    principal: AuthenticatedPrincipal = Depends(get_current_user),
+    principal: TenantPrincipal = Depends(get_current_tenant_user),
 ) -> ContributeFixtureResponse:
     """Submit a new version of an existing published fixture contribution.
 
@@ -291,7 +291,7 @@ async def submit_contribution_version_endpoint(
 async def list_contribution_versions_endpoint(
     primitive_id: uuid.UUID,
     session: AsyncSession = Depends(get_db_session),
-    principal: AuthenticatedPrincipal = Depends(get_current_user),
+    principal: TenantPrincipal = Depends(get_current_tenant_user),
 ) -> VersionListResponse:
     """List all versions for a fixture contribution."""
     try:
@@ -343,7 +343,7 @@ async def list_contributions_endpoint(
     page_size: int = Query(20, ge=1, le=100),
     contribution_status: str | None = None,
     session: AsyncSession = Depends(get_db_session),
-    principal: AuthenticatedPrincipal = Depends(get_current_user),
+    principal: TenantPrincipal = Depends(get_current_tenant_user),
 ) -> dict[str, object]:
     """List fixture contributions visible to the current org."""
     try:

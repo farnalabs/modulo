@@ -12,8 +12,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.api.dependencies import get_db_session, require_feature
 from modulo.api.middleware.sensitive_mask import SensitiveValue
-from modulo.auth.dependencies import get_current_user
-from modulo.auth.jwt import AuthenticatedPrincipal
+from modulo.auth.dependencies import get_current_tenant_user
+from modulo.auth.jwt import TenantPrincipal
 from modulo.db.crud.sso_provider import (
     create_provider,
     delete_provider,
@@ -74,6 +74,8 @@ class SsoProviderResponse(BaseModel):
     auto_provision: bool
     default_role: str
     created_at: str
+
+    model_config = {"from_attributes": True}
     updated_at: str
 
     @classmethod
@@ -111,7 +113,7 @@ class SsoProviderTestResult(BaseModel):
     provider_info: dict[str, Any] | None = None
 
 
-def _require_admin(principal: AuthenticatedPrincipal) -> None:
+def _require_admin(principal: TenantPrincipal) -> None:
     if principal.org_role != "admin":
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
@@ -121,8 +123,8 @@ def _require_admin(principal: AuthenticatedPrincipal) -> None:
 
 @router.get("/providers", response_model=list[SsoProviderResponse])
 async def get_providers(
-    _: None = require_feature("sso"),
-    current_user: AuthenticatedPrincipal = Depends(get_current_user),
+    _: object = require_feature("sso"),
+    current_user: TenantPrincipal = Depends(get_current_tenant_user),
     session: AsyncSession = Depends(get_db_session),
 ) -> list[SsoProviderResponse]:
     _require_admin(current_user)
@@ -154,8 +156,8 @@ async def get_providers(
 @router.post("/providers", response_model=SsoProviderResponse, status_code=status.HTTP_201_CREATED)
 async def create_provider_endpoint(
     req: SsoProviderCreate,
-    _: None = require_feature("sso"),
-    current_user: AuthenticatedPrincipal = Depends(get_current_user),
+    _: object = require_feature("sso"),
+    current_user: TenantPrincipal = Depends(get_current_tenant_user),
     session: AsyncSession = Depends(get_db_session),
 ) -> SsoProviderResponse:
     _require_admin(current_user)
@@ -204,15 +206,15 @@ async def create_provider_endpoint(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Internal server error",
         ) from None
-    return SsoProviderResponse.from_orm(provider)  # type: ignore[pydantic-orm]
+    return SsoProviderResponse.model_validate(provider)
 
 
 @router.put("/providers/{provider_id}", response_model=SsoProviderResponse)
 async def update_provider_endpoint(
     provider_id: uuid.UUID,
     req: SsoProviderUpdate,
-    _: None = require_feature("sso"),
-    current_user: AuthenticatedPrincipal = Depends(get_current_user),
+    _: object = require_feature("sso"),
+    current_user: TenantPrincipal = Depends(get_current_tenant_user),
     session: AsyncSession = Depends(get_db_session),
 ) -> SsoProviderResponse:
     _require_admin(current_user)
@@ -255,14 +257,14 @@ async def update_provider_endpoint(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="SSO provider not found",
         )
-    return SsoProviderResponse.from_orm(provider)  # type: ignore[pydantic-orm]
+    return SsoProviderResponse.model_validate(provider)
 
 
 @router.delete("/providers/{provider_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_provider_endpoint(
     provider_id: uuid.UUID,
-    _: None = require_feature("sso"),
-    current_user: AuthenticatedPrincipal = Depends(get_current_user),
+    _: object = require_feature("sso"),
+    current_user: TenantPrincipal = Depends(get_current_tenant_user),
     session: AsyncSession = Depends(get_db_session),
 ) -> None:
     _require_admin(current_user)
@@ -303,8 +305,8 @@ async def delete_provider_endpoint(
 @router.post("/providers/{provider_id}/test", response_model=SsoProviderTestResult)
 async def test_provider_connection(
     provider_id: uuid.UUID,
-    _: None = require_feature("sso"),
-    current_user: AuthenticatedPrincipal = Depends(get_current_user),
+    _: object = require_feature("sso"),
+    current_user: TenantPrincipal = Depends(get_current_tenant_user),
     session: AsyncSession = Depends(get_db_session),
     settings: Settings = Depends(get_settings),
 ) -> SsoProviderTestResult:
@@ -486,8 +488,8 @@ async def _test_saml_connection(provider: Any) -> SsoProviderTestResult:
 @router.put("/providers/{provider_id}/toggle", response_model=SsoProviderResponse)
 async def toggle_provider_endpoint(
     provider_id: uuid.UUID,
-    _: None = require_feature("sso"),
-    current_user: AuthenticatedPrincipal = Depends(get_current_user),
+    _: object = require_feature("sso"),
+    current_user: TenantPrincipal = Depends(get_current_tenant_user),
     session: AsyncSession = Depends(get_db_session),
 ) -> SsoProviderResponse:
     _require_admin(current_user)
@@ -523,7 +525,7 @@ async def toggle_provider_endpoint(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="SSO provider not found",
         )
-    return SsoProviderResponse.from_orm(provider)  # type: ignore[pydantic-orm]
+    return SsoProviderResponse.model_validate(provider)
 
 
 class GroupMappingItem(BaseModel):
@@ -544,8 +546,8 @@ class GroupMappingsResponse(BaseModel):
 async def set_group_mappings_endpoint(
     provider_id: uuid.UUID,
     req: GroupMappingsRequest,
-    _: None = require_feature("sso"),
-    current_user: AuthenticatedPrincipal = Depends(get_current_user),
+    _: object = require_feature("sso"),
+    current_user: TenantPrincipal = Depends(get_current_tenant_user),
     session: AsyncSession = Depends(get_db_session),
 ) -> GroupMappingsResponse:
     _require_admin(current_user)
@@ -588,8 +590,8 @@ async def set_group_mappings_endpoint(
 @router.get("/providers/{provider_id}/group-mappings", response_model=GroupMappingsResponse)
 async def get_group_mappings_endpoint(
     provider_id: uuid.UUID,
-    _: None = require_feature("sso"),
-    current_user: AuthenticatedPrincipal = Depends(get_current_user),
+    _: object = require_feature("sso"),
+    current_user: TenantPrincipal = Depends(get_current_tenant_user),
     session: AsyncSession = Depends(get_db_session),
 ) -> GroupMappingsResponse:
     _require_admin(current_user)

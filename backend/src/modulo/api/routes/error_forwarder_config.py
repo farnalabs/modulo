@@ -6,7 +6,7 @@ import asyncio
 import logging
 import uuid
 from datetime import UTC, datetime
-from typing import ClassVar
+from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy import select
@@ -22,8 +22,8 @@ from modulo.api.models.error_forwarder_config import (
     ForwarderTestResult,
     TestConnectionRequest,
 )
-from modulo.auth.dependencies import get_current_user
-from modulo.auth.jwt import AuthenticatedPrincipal
+from modulo.auth.dependencies import get_current_tenant_user
+from modulo.auth.jwt import TenantPrincipal
 from modulo.core.error_tracking.forwarders import BaseForwarder, get_forwarder
 from modulo.db.models.error_event import ErrorEvent
 from modulo.db.models.error_forwarder_config import ErrorForwarderConfig
@@ -46,7 +46,7 @@ _FORWARDER_DISPLAY_NAMES: dict[str, str] = {
 _FORWARDER_TYPES = list(_FORWARDER_DISPLAY_NAMES)
 
 
-def _require_admin(principal: AuthenticatedPrincipal) -> None:
+def _require_admin(principal: TenantPrincipal) -> None:
     if principal.org_role != "admin":
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
@@ -54,7 +54,7 @@ def _require_admin(principal: AuthenticatedPrincipal) -> None:
         )
 
 
-def _is_configured(forwarder_type: str, config_json: dict | None) -> bool:
+def _is_configured(forwarder_type: str, config_json: dict[str, Any] | None) -> bool:
     if not config_json:
         return False
     required_keys: dict[str, list[str]] = {
@@ -74,7 +74,7 @@ def _is_configured(forwarder_type: str, config_json: dict | None) -> bool:
 @router.get("", response_model=ForwarderListResponse, dependencies=[require_feature("error_forwarders")])
 async def list_forwarders(
     session: AsyncSession = Depends(get_db_session),
-    principal: AuthenticatedPrincipal = Depends(get_current_user),
+    principal: TenantPrincipal = Depends(get_current_tenant_user),
 ) -> ForwarderListResponse:
     org_id = principal.organisation_id
     if org_id is None:
@@ -106,7 +106,7 @@ async def list_forwarders(
             detail="An unexpected error occurred while processing your request.",
         ) from exc
 
-    items: ClassVar[list[ForwarderListItem]] = []
+    items: list[ForwarderListItem] = []
     for ftype in _FORWARDER_TYPES:
         cfg = existing.get(ftype)
         items.append(
@@ -132,7 +132,7 @@ async def configure_forwarder(
     forwarder_type: str,
     req: ForwarderConfigUpdate,
     session: AsyncSession = Depends(get_db_session),
-    principal: AuthenticatedPrincipal = Depends(get_current_user),
+    principal: TenantPrincipal = Depends(get_current_tenant_user),
 ) -> ForwarderConfigResponse:
     org_id = principal.organisation_id
     if org_id is None:
@@ -203,7 +203,7 @@ async def test_forwarder(
     forwarder_type: str,
     req: TestConnectionRequest,
     session: AsyncSession = Depends(get_db_session),
-    principal: AuthenticatedPrincipal = Depends(get_current_user),
+    principal: TenantPrincipal = Depends(get_current_tenant_user),
 ) -> ForwarderTestResult:
     org_id = principal.organisation_id
     if org_id is None:

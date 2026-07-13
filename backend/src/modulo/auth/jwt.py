@@ -40,6 +40,13 @@ class AuthenticatedPrincipal:
         return self.account_id
 
 
+class TenantPrincipal(AuthenticatedPrincipal):
+    """Authenticated principal with validated tenant-scoped claims."""
+
+    organisation_id: uuid.UUID
+    org_role: str
+
+
 def create_access_token(
     subject: str,
     secret_key: str,

@@ -388,6 +388,7 @@ async def replace_user(
             account = await scim_update_user(
                 session,
                 account,
+                org_id=principal.organisation_id,
                 email=req.userName,
                 display_name=display_name,
                 active=req.active,
@@ -566,8 +567,8 @@ async def list_groups(
                 memberships = await scim_list_group_members(session, g.id)
                 members = [
                     {
-                        "value": str(m.user_id),
-                        "$ref": f"{base_url}/scim/v2/Users/{m.user_id}",
+                        "value": str(m.account_id),
+                        "$ref": f"{base_url}/scim/v2/Users/{m.account_id}",
                         "type": "User",
                     }
                     for m in memberships
@@ -719,8 +720,8 @@ async def get_group(
             memberships = await scim_list_group_members(session, group_id)
             members = [
                 {
-                    "value": str(m.user_id),
-                    "$ref": f"{base_url}/scim/v2/Users/{m.user_id}",
+                    "value": str(m.account_id),
+                    "$ref": f"{base_url}/scim/v2/Users/{m.account_id}",
                     "type": "User",
                 }
                 for m in memberships
@@ -775,7 +776,7 @@ async def replace_group(
             # Replace all members: remove existing, add new
             existing_members = await scim_list_group_members(session, group.id)
             for em in existing_members:
-                await scim_remove_group_member(session, group.id, em.user_id)
+                await scim_remove_group_member(session, group.id, em.account_id)
 
             for member_ref in req.members:
                 try:
@@ -856,7 +857,7 @@ async def patch_group(
                     if "members" in op.value and isinstance(op.value["members"], list):
                         existing = await scim_list_group_members(session, group.id)
                         for em in existing:
-                            await scim_remove_group_member(session, group.id, em.user_id)
+                            await scim_remove_group_member(session, group.id, em.account_id)
                         for m in op.value["members"]:
                             if isinstance(m, dict) and "value" in m:
                                 try:
@@ -919,8 +920,8 @@ async def patch_group(
             memberships = await scim_list_group_members(session, group.id)
             members = [
                 {
-                    "value": str(m.user_id),
-                    "$ref": f"{base_url}/scim/v2/Users/{m.user_id}",
+                    "value": str(m.account_id),
+                    "$ref": f"{base_url}/scim/v2/Users/{m.account_id}",
                     "type": "User",
                 }
                 for m in memberships
