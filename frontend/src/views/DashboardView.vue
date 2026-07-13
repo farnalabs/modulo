@@ -130,7 +130,7 @@
       </div>
 
       <div class="grid gap-4 sm:grid-cols-2">
-        <StatCard :label="$t('views.DashboardView.failed')" :value="summary.run_counts_by_status?.failed ?? 0" color="destructive" to="/admin/errors">
+        <StatCard :label="$t('views.DashboardView.failed')" :value="summary.run_counts_by_status?.failed ?? 0" color="destructive" to="/runs?status=failed">
           <template #icon><circle cx="12" cy="12" r="10"/><line x1="15" y1="9" x2="9" y2="15"/><line x1="9" y1="9" x2="15" y2="15"/></template>
         </StatCard>
         <StatCard :label="$t('views.DashboardView.idle')" :value="summary.run_counts_by_status?.idle ?? 0" color="muted" to="/pipelines">

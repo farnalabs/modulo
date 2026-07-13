@@ -64,6 +64,7 @@ const EvalEditorView = () => import('../views/EvalEditorView.vue')
 const EvalProposalsQueueView = () => import('../views/EvalProposalsQueueView.vue')
 const VariantCompareView = () => import('../views/VariantCompareView.vue')
 const ABTestModelsView = () => import('../views/ABTestModelsView.vue')
+const RunsListView = () => import('../views/RunsListView.vue')
 const RunDetailView = () => import('../views/RunDetailView.vue')
 const AgentOutputDiffView = () => import('../views/AgentOutputDiffView.vue')
 const AdminAuditView = () => import('../views/AdminAuditView.vue')
@@ -257,14 +258,19 @@ const router = createRouter({
       component: ABTestModelsView,
     },
     {
-      path: '/runs/:id',
-      name: 'run-detail',
-      component: RunDetailView,
+      path: '/runs',
+      name: 'runs-list',
+      component: RunsListView,
     },
     {
       path: '/runs/diff',
       name: 'runs-diff',
       component: AgentOutputDiffView,
+    },
+    {
+      path: '/runs/:id',
+      name: 'run-detail',
+      component: RunDetailView,
     },
     {
       path: '/admin',
