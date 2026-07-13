@@ -365,7 +365,9 @@ class TestSkillLoaderBuildSystemPrompt:
                 "product_primer": "off",
             },
         )
-        assert prompt == ""
+        assert prompt.startswith("## Behaviour\n\n")
+        assert "direct visual access to the application UI" in prompt
+        assert prompt.count("## ") == 1
 
     async def test_with_include_ui_tools_text_false_excludes_tools(
         self,
