@@ -126,8 +126,9 @@ async def list_runs(
         q = q.where(Run.trigger_type == trigger_type)
         count_q = count_q.where(Run.trigger_type == trigger_type)
     if search is not None:
-        q = q.where(Pipeline.name.ilike(f"%{search}%"))
-        count_q = count_q.where(Pipeline.name.ilike(f"%{search}%"))
+        escaped = search.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+        q = q.where(Pipeline.name.ilike(f"%{escaped}%", escape="\\"))
+        count_q = count_q.where(Pipeline.name.ilike(f"%{escaped}%", escape="\\"))
 
     if cursor is not None:
         paginator = CursorPaginator()
