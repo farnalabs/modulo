@@ -559,7 +559,7 @@ async def create_webhook(
                 organisation_id=principal.organisation_id,
                 url=req.url,
                 secret_ciphertext=secret_ciphertext,
-                events=json.dumps(req.events),
+                events=req.events,
                 description=req.description,
                 account_id=principal.account_id,
             )
