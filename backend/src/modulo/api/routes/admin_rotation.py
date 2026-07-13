@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-
 import logging
 import uuid
 from typing import Any
@@ -145,8 +144,6 @@ async def rotate_key(
         ) from exc
     except ProgrammingError as exc:
         raise HTTPException(status_code=503, detail="Database not available. Run migrations.") from exc
-    except IntegrityError as exc:
-        raise HTTPException(status_code=409, detail="Resource already exists or constraint violation.") from exc
     except Exception as e:
         _log.error("Unexpected error in rotate_key: %s", str(e))
         raise HTTPException(status_code=500, detail="Internal server error") from e
@@ -177,8 +174,6 @@ async def rotation_status(
         ) from exc
     except ProgrammingError as exc:
         raise HTTPException(status_code=503, detail="Database not available. Run migrations.") from exc
-    except IntegrityError as exc:
-        raise HTTPException(status_code=409, detail="Resource already exists or constraint violation.") from exc
     except Exception as e:
         _log.error("Unexpected error in rotation_status: %s", str(e))
         raise HTTPException(status_code=500, detail="Internal server error") from e

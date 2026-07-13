@@ -1,12 +1,12 @@
-﻿<template>
+<template>
   <div class="page-wide">
     <PageHeader :title="$t('views.AdminNotificationDeliveryLogView.notification_delivery_log')" :subtitle="$t('views.SettingsNotificationLogView.delivery_history_for_all_webhook_notifications')" />
 
     <div class="rounded-lg border bg-card p-4 shadow-sm">
       <div class="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
         <div>
-          <label class="mb-1 block text-xs font-medium text-muted-foreground">Status</label>
-          <select
+          <label for="settingsnotificationlogview-field-3" class="mb-1 block text-xs font-medium text-muted-foreground">Status</label>
+          <select id="settingsnotificationlogview-field-3"
             v-model="filterStatus"
             data-testid="settings-notification-log-status"
             aria-label="Status"
@@ -19,8 +19,8 @@
           </select>
         </div>
         <div>
-          <label class="mb-1 block text-xs font-medium text-muted-foreground">From</label>
-          <input
+          <label for="settingsnotificationlogview-field-2" class="mb-1 block text-xs font-medium text-muted-foreground">From</label>
+          <input id="settingsnotificationlogview-field-2"
             v-model="filterDateFrom"
             type="date"
             data-testid="settings-notification-log-date-from"
@@ -28,8 +28,8 @@
           />
         </div>
         <div>
-          <label class="mb-1 block text-xs font-medium text-muted-foreground">To</label>
-          <input
+          <label for="settingsnotificationlogview-field-1" class="mb-1 block text-xs font-medium text-muted-foreground">To</label>
+          <input id="settingsnotificationlogview-field-1"
             v-model="filterDateTo"
             type="date"
             data-testid="settings-notification-log-date-to"
@@ -138,14 +138,10 @@
 import { ref, computed } from 'vue'
 import { api } from '../lib/api/client'
 import { useDataFetch } from '../composables/useDataFetch'
-import { formatApiError } from '../lib/api/formatError'
-import type { components } from '../lib/api/client'
 import PageHeader from '../components/shared/PageHeader.vue'
 import LoadingSpinner from '../components/shared/LoadingSpinner.vue'
 import ErrorAlert from '../components/shared/ErrorAlert.vue'
 import { Button } from '@/components/ui/button'
-
-type DeliveryLogEntry = components['schemas']['DeliveryLogEntry']
 
 const cursorStack = ref<(string | null)[]>([])
 const currentCursor = ref<string | null>(null)

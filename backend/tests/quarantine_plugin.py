@@ -14,6 +14,7 @@ via pyproject.toml:
 import os
 from datetime import date
 
+import pytest
 import yaml
 
 QUARANTINE_PATH = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), ".quarantine.yml")

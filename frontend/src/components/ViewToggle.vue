@@ -1,7 +1,7 @@
-﻿<template>
+<template>
   <FeatureGate feature-name="saved_views" data-testid="view-toggle-gate" show-disabled>
     <div class="flex items-center gap-2" data-testid="view-toggle">
-      <Select v-model="selectedViewId" @update:model-value="onViewSelect($event as string)">
+      <Select aria-label="Form control" v-model="selectedViewId" @update:model-value="onViewSelect($event as string)">
         <SelectTrigger class="w-[200px]" data-testid="view-toggle-trigger">
           <SelectValue :placeholder="$t('components.ViewToggle.select_a_saved_view')" />
         </SelectTrigger>

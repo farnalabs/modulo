@@ -1,4 +1,4 @@
-﻿<template>
+<template>
   <PageTabs :tabs="[
     { label: 'Overview', to: '/admin/costs' },
     { label: 'Spend Limits', to: '/admin/costs/limits' },
@@ -72,7 +72,7 @@
               :rows="tableRows"
             >
               <template #cell-budget="{ row }">
-                <Input
+                <Input aria-label="Form control"
                   :model-value="(row as any).editingBudget ?? undefined" @update:model-value="(v: any) => (row as any).editingBudget = v === '' ? null : Number(v)"
                   type="number"
                   min="0"
@@ -104,29 +104,29 @@
           </CardHeader>
           <CardContent>
             <div class="space-y-3">
-              <label class="flex items-center gap-3 rounded-lg border p-3" data-testid="cc-threshold-50">
-                <input type="checkbox" :checked="settings.alertThresholds.includes(50)" @change="toggleThreshold(50)" class="h-4 w-4 rounded border-muted-foreground" />
+              <label for="admincostcontrolsview-field-7" class="flex items-center gap-3 rounded-lg border p-3" data-testid="cc-threshold-50">
+                <input id="admincostcontrolsview-field-7" type="checkbox" :checked="settings.alertThresholds.includes(50)" @change="toggleThreshold(50)" class="h-4 w-4 rounded border-muted-foreground" />
                 <div>
                   <p class="text-sm font-medium">{{ $t('views.AdminCostControlsView.caution_50') }}</p>
                   <p class="text-xs text-muted-foreground">{{ $t('views.AdminCostControlsView.notify_when_half_budget_consumed') }}</p>
                 </div>
               </label>
-              <label class="flex items-center gap-3 rounded-lg border p-3" data-testid="cc-threshold-75">
-                <input type="checkbox" :checked="settings.alertThresholds.includes(75)" @change="toggleThreshold(75)" class="h-4 w-4 rounded border-muted-foreground" />
+              <label for="admincostcontrolsview-field-6" class="flex items-center gap-3 rounded-lg border p-3" data-testid="cc-threshold-75">
+                <input id="admincostcontrolsview-field-6" type="checkbox" :checked="settings.alertThresholds.includes(75)" @change="toggleThreshold(75)" class="h-4 w-4 rounded border-muted-foreground" />
                 <div>
                   <p class="text-sm font-medium">{{ $t('views.AdminCostControlsView.warning_75') }}</p>
                   <p class="text-xs text-muted-foreground">{{ $t('views.AdminCostControlsView.notify_when_three_quarters_consumed') }}</p>
                 </div>
               </label>
-              <label class="flex items-center gap-3 rounded-lg border p-3" data-testid="cc-threshold-90">
-                <input type="checkbox" :checked="settings.alertThresholds.includes(90)" @change="toggleThreshold(90)" class="h-4 w-4 rounded border-muted-foreground" />
+              <label for="admincostcontrolsview-field-5" class="flex items-center gap-3 rounded-lg border p-3" data-testid="cc-threshold-90">
+                <input id="admincostcontrolsview-field-5" type="checkbox" :checked="settings.alertThresholds.includes(90)" @change="toggleThreshold(90)" class="h-4 w-4 rounded border-muted-foreground" />
                 <div>
                   <p class="text-sm font-medium">{{ $t('views.AdminCostControlsView.critical_90') }}</p>
                   <p class="text-xs text-muted-foreground">{{ $t('views.AdminCostControlsView.notify_when_budget_nearly_exhausted') }}</p>
                 </div>
               </label>
-              <label class="flex items-center gap-3 rounded-lg border p-3" data-testid="cc-threshold-100">
-                <input type="checkbox" :checked="settings.alertThresholds.includes(100)" @change="toggleThreshold(100)" class="h-4 w-4 rounded border-muted-foreground" />
+              <label for="admincostcontrolsview-field-4" class="flex items-center gap-3 rounded-lg border p-3" data-testid="cc-threshold-100">
+                <input id="admincostcontrolsview-field-4" type="checkbox" :checked="settings.alertThresholds.includes(100)" @change="toggleThreshold(100)" class="h-4 w-4 rounded border-muted-foreground" />
                 <div>
                   <p class="text-sm font-medium">{{ $t('views.AdminCostControlsView.exceeded_100') }}</p>
                   <p class="text-xs text-muted-foreground">{{ $t('views.AdminCostControlsView.notify_when_budget_exceeded') }}</p>
@@ -150,8 +150,8 @@
                   {{ $t('views.AdminCostControlsView.when_enabled_all_agent_runs_paused') }}
                 </p>
               </div>
-              <label class="relative inline-flex cursor-pointer items-center" data-testid="cc-circuit-breaker">
-                <input type="checkbox" class="peer sr-only" :checked="settings.circuitBreakerEnabled" @change="toggleCircuitBreaker" />
+              <label for="admincostcontrolsview-field-3" class="relative inline-flex cursor-pointer items-center" data-testid="cc-circuit-breaker">
+                <input id="admincostcontrolsview-field-3" type="checkbox" class="peer sr-only" :checked="settings.circuitBreakerEnabled" @change="toggleCircuitBreaker" />
                 <div class="peer h-6 w-11 rounded-full bg-muted-foreground/30 after:absolute after:start-[2px] after:top-[2px] after:h-5 after:w-5 after:rounded-full after:border after:border-muted after:bg-background after:transition-all peer-checked:bg-primary peer-checked:after:translate-x-full" />
               </label>
             </div>
@@ -167,8 +167,8 @@
           <CardContent>
             <div class="grid grid-cols-1 gap-6 sm:grid-cols-2">
               <div>
-                <label class="mb-1.5 block text-xs font-medium text-muted-foreground">{{ $t('views.AdminCostControlsView.currency') }}</label>
-                <select
+                <label for="admincostcontrolsview-field-2" class="mb-1.5 block text-xs font-medium text-muted-foreground">{{ $t('views.AdminCostControlsView.currency') }}</label>
+                <select id="admincostcontrolsview-field-2"
                   :value="settings.currency"
                   @change="onCurrencyChange"
                   class="w-full rounded-lg border border-border bg-background px-3 py-2 text-sm"
@@ -182,8 +182,8 @@
                 <p v-if="currencySaveError" class="mt-1 text-xs text-destructive">{{ currencySaveError }}</p>
               </div>
               <div>
-                <label class="mb-1.5 block text-xs font-medium text-muted-foreground">{{ $t('views.AdminCostControlsView.billing_period') }}</label>
-                <select
+                <label for="admincostcontrolsview-field-1" class="mb-1.5 block text-xs font-medium text-muted-foreground">{{ $t('views.AdminCostControlsView.billing_period') }}</label>
+                <select id="admincostcontrolsview-field-1"
                   :value="settings.billingPeriod"
                   @change="onBillingPeriodChange"
                   class="w-full rounded-lg border border-border bg-background px-3 py-2 text-sm"
@@ -198,10 +198,10 @@
               </div>
             </div>
             <div class="mt-6">
-              <label class="mb-1.5 block text-xs font-medium text-muted-foreground">{{ $t('views.AdminCostControlsView.monthly_budget', { currency: settings.currency }) }}</label>
+              <span class="mb-1.5 block text-xs font-medium text-muted-foreground">{{ $t('views.AdminCostControlsView.monthly_budget', { currency: settings.currency }) }}</span>
               <div class="flex items-end gap-3">
                 <div class="flex-1">
-                  <Input
+                  <Input aria-label="Form control"
                     :model-value="settings.budget"
                     @update:model-value="(v: any) => settings.budget = v === '' ? 0 : Number(v)"
                     type="number"
@@ -227,7 +227,7 @@
 
 <script setup lang="ts">
 import PageHeader from '../components/shared/PageHeader.vue'
-import { ref, reactive, computed, watch } from 'vue'
+import { ref, computed, watch } from 'vue'
 import { api } from '../lib/api/client'
 import { useDataFetch } from '../composables/useDataFetch'
 import { formatApiError } from '../lib/api/formatError'

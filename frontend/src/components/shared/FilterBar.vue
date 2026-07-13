@@ -8,7 +8,8 @@
         <circle cx="11" cy="11" r="8" />
         <path d="m21 21-4.3-4.3" />
       </svg>
-      <input
+      <input aria-label="search.placeholder || "
+        data-testid="filter-bar-search"
         :value="searchValue"
         type="text"
         :placeholder="search.placeholder || 'Search...'"
@@ -21,6 +22,7 @@
       :key="filter.key"
       :value="filterValues[filter.key] ?? ''"
       :aria-label="filter.label"
+      :data-testid="`filter-bar-${filter.key}`"
       class="rounded-lg border border-input bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring"
       @change="$emit('update:filter', filter.key, ($event.target as HTMLSelectElement).value)"
     >
@@ -32,7 +34,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, reactive, watch } from 'vue'
+import { computed } from 'vue'
 
 const props = defineProps<{
   search?: { placeholder?: string }
@@ -41,7 +43,7 @@ const props = defineProps<{
   filterValues?: Record<string, string>
 }>()
 
-const emit = defineEmits<{
+defineEmits<{
   (e: 'update:search', value: string): void
   (e: 'update:filter', key: string, value: string): void
 }>()

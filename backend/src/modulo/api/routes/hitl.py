@@ -10,11 +10,9 @@ claim.  ``human_only`` gates additionally reject MCP-initiated approve requests
 
 from __future__ import annotations
 
-
 import logging
 import uuid
 from typing import Any, ClassVar
-
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, Field

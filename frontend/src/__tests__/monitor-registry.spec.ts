@@ -2,19 +2,16 @@ import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { MonitorBackendRegistry } from '../monitor/registry'
 import type { MonitorBackend } from '../monitor/types'
 
-function createMockBackend(name: string): MonitorBackend {
-  return { name } as MonitorBackend
-}
-
 function createFullBackend(overrides: Partial<MonitorBackend> = {}): MonitorBackend {
   return {
-    name: 'test',
+    key: 'test',
+    init: vi.fn().mockResolvedValue(true),
     captureError: vi.fn(),
     captureMessage: vi.fn(),
     setUser: vi.fn(),
     setTags: vi.fn(),
     dispose: vi.fn(),
-  
+
     ...overrides,
   }
 }
@@ -30,7 +27,7 @@ describe('MonitorBackendRegistry', () => {
     it('can add backends', () => {
       const a = createFullBackend()
       registry.add(a)
-      registry.captureMessage('test', 'info')
+      registry.captureMessage('test', 'warning')
       expect(a.captureMessage).toHaveBeenCalledTimes(1)
     })
 
@@ -38,7 +35,7 @@ describe('MonitorBackendRegistry', () => {
       const a = createFullBackend()
       registry.add(a)
       registry.remove(a)
-      registry.captureMessage('test', 'info')
+      registry.captureMessage('test', 'warning')
       expect(a.captureMessage).not.toHaveBeenCalled()
     })
   })
@@ -75,10 +72,10 @@ describe('MonitorBackendRegistry', () => {
       registry.add(a)
       registry.add(b)
 
-      registry.captureMessage('hello', 'info')
+      registry.captureMessage('hello', 'warning')
 
-      expect(a.captureMessage).toHaveBeenCalledWith('hello', 'info')
-      expect(b.captureMessage).toHaveBeenCalledWith('hello', 'info')
+      expect(a.captureMessage).toHaveBeenCalledWith('hello', 'warning')
+      expect(b.captureMessage).toHaveBeenCalledWith('hello', 'warning')
     })
 
     it('catches backend errors and logs', () => {
@@ -86,7 +83,7 @@ describe('MonitorBackendRegistry', () => {
       registry.add(a)
       const warnSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
 
-      registry.captureMessage('hello', 'info')
+      registry.captureMessage('hello', 'warning')
 
       expect(warnSpy).toHaveBeenCalled()
       warnSpy.mockRestore()
@@ -141,23 +138,15 @@ describe('MonitorBackendRegistry', () => {
       expect(b.dispose).toHaveBeenCalledTimes(1)
     })
 
-    it('handles backends without dispose method', () => {
-      const a = createFullBackend({ dispose: undefined })
-      const b = createFullBackend({ dispose: undefined })
-      registry.add(a)
-      registry.add(b)
-
-      expect(() => registry.disposeAll()).not.toThrow()
-    })
-
     it('does not dispatch to backends after disposeAll', () => {
-      const a = createFullBackend()
+      const captureMessage = vi.fn()
+      const a = createFullBackend({ captureMessage })
       registry.add(a)
       registry.disposeAll()
 
-      a.captureMessage.mockClear()
-      registry.captureMessage('after', 'info')
-      expect(a.captureMessage).not.toHaveBeenCalled()
+      captureMessage.mockClear()
+      registry.captureMessage('after', 'warning')
+      expect(captureMessage).not.toHaveBeenCalled()
     })
   })
 })

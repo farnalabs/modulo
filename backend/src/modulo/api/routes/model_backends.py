@@ -7,7 +7,7 @@ never exposed in any response — only a boolean `has_credentials` field.
 import logging
 import uuid
 from datetime import datetime
-from typing import Any, Literal, ClassVar
+from typing import Any, ClassVar, Literal
 
 from cryptography.fernet import Fernet
 from fastapi import APIRouter, Depends, HTTPException, Query, status
@@ -15,7 +15,6 @@ from pydantic import BaseModel, Field, model_validator
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError, ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
-
 
 from modulo.api.dependencies import get_db_session
 from modulo.auth.dependencies import get_current_user

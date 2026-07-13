@@ -5,7 +5,7 @@ import json
 import logging
 import uuid
 from decimal import Decimal
-from typing import Any, Literal, ClassVar
+from typing import Any, ClassVar, Literal
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, status
 from pydantic import BaseModel, Field

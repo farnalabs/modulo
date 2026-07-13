@@ -26,7 +26,6 @@ from modulo.auth.jwt import AuthenticatedPrincipal
 from modulo.core.feature_flags import PlanContext
 from modulo.settings import Settings, get_settings
 
-
 logger = logging.getLogger(__name__)
 
 

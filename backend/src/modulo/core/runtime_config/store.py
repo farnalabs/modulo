@@ -1,4 +1,5 @@
 """Process-global singleton for runtime configuration with provenance tracking."""
+
 from __future__ import annotations
 
 import logging

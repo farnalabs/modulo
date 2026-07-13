@@ -1,4 +1,4 @@
-﻿<template>
+<template>
   <PageTabs :tabs="[
     { label: 'Browse', to: '/schemas' },
     { label: 'Editor', to: '/schemas/editor' },
@@ -105,10 +105,9 @@
 
 <script setup lang="ts">
 import { ref, computed } from 'vue'
-import { useI18n } from 'vue-i18n'
 import { api } from '../lib/api/client'
 import { useDataFetch } from '../composables/useDataFetch'
-import { formatApiError, type ProblemDetail } from '../lib/api/formatError'
+import { formatApiError } from '../lib/api/formatError'
 import type { components } from '../lib/api/client'
 import LoadingSpinner from '../components/shared/LoadingSpinner.vue'
 import ErrorAlert from '../components/shared/ErrorAlert.vue'
@@ -116,9 +115,7 @@ import PageHeader from '../components/shared/PageHeader.vue'
 import { Button } from '@/components/ui/button'
 import PageTabs from "../components/PageTabs.vue"
 
-const { t } = useI18n()
-
-type SchemaItem = components['schemas']['SchemaItem']
+type SchemaItem = components['schemas']['SchemaResponse']
 
 interface SchemaListResponse {
   items: SchemaItem[]
@@ -127,7 +124,7 @@ interface SchemaListResponse {
   page_size: number
 }
 
-const { loading, error, data: schemasResp, load: loadSchemas } = useDataFetch<SchemaListResponse>(
+const { loading, error, data: schemasResp } = useDataFetch<SchemaListResponse>(
   () => api.GET('/api/v1/schemas', {
     params: { query: { page: 1, page_size: 100 } },
   }),

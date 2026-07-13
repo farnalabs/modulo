@@ -1,4 +1,4 @@
-﻿<template>
+<template>
   <FeatureGate feature-name="team_rbac" required-tier="team" show-disabled>
 
     <div data-theme="agent" class="page-wide">
@@ -136,7 +136,7 @@
 <script setup lang="ts">
 import PageHeader from '../components/shared/PageHeader.vue'
 import SectionCard from '../components/shared/SectionCard.vue'
-import { ref, computed } from 'vue'
+import { ref, computed, reactive } from 'vue'
 import { useRouter } from 'vue-router'
 import { Button } from '@/components/ui/button'
 import { api } from '../lib/api/client'
@@ -243,7 +243,7 @@ function downloadExport() {
   const url = URL.createObjectURL(blob)
   const a = document.createElement('a')
   a.href = url
-  a.download = `org-export-${orgInfo.slug || orgInfo.id}-${formatDateFilename(new Date())}.json`
+  a.download = `org-export-${orgInfo.value.slug || orgInfo.value.id}-${formatDateFilename(new Date())}.json`
   document.body.appendChild(a)
   a.click()
   document.body.removeChild(a)
@@ -256,14 +256,8 @@ function resetExport() {
   exportData.exportedAt = ''
 }
 
-function cancelDelete() {
-  deleteDialogOpen.value = false
-  confirmName.value = ''
-  deleteError.value = null
-}
-
 async function confirmDelete() {
-  if (confirmName.value !== orgInfo.name) return
+  if (confirmName.value !== orgInfo.value.name) return
   deleting.value = true
   deleteError.value = null
   try {

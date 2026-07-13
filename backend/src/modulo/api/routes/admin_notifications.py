@@ -1,8 +1,6 @@
 """Admin notification webhook management — CRUD, test, re-enable, delivery log, retry."""
 
 from __future__ import annotations
-from typing import ClassVar
-
 
 import contextlib
 import hashlib
@@ -11,6 +9,7 @@ import json
 import logging
 import uuid
 from datetime import UTC, datetime
+from typing import ClassVar
 
 import httpx
 from cryptography.fernet import Fernet

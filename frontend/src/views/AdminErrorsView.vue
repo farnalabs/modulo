@@ -1,4 +1,4 @@
-﻿<template>
+<template>
   <PageTabs :tabs="[
     { label: 'Dashboard', to: '/admin/errors' },
   ]" />
@@ -125,11 +125,6 @@ import LoadingSpinner from '../components/shared/LoadingSpinner.vue'
 import ErrorAlert from '../components/shared/ErrorAlert.vue'
 import PageTabs from "../components/PageTabs.vue"
 import { shortId } from '../utils/format'
-import {
-  Tooltip,
-  TooltipTrigger,
-  TooltipContent,
-} from '../components/ui/tooltip'
 import { formatApiError } from "../lib/api/formatError"
 import { Button } from '@/components/ui/button'
 import { DataTable } from '../components/ui/data-table'
@@ -141,7 +136,7 @@ const limit = ref(20)
 const offset = ref(0)
 const currentPage = ref(1)
 
-const { data: groupsData, loading, error, load: loadGroups } = useDataFetch(
+const { data: groupsData, loading, error, load: loadGroups } = useDataFetch<{ items: ErrorGroupSummary[]; total: number }>(
   () => fetchErrorGroups(buildParams()).then(
     d => ({ data: d }),
     e => ({ error: { detail: `Failed to load error groups: ${formatApiError(e)}` } }),

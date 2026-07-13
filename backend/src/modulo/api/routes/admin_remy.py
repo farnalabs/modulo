@@ -19,7 +19,6 @@ from modulo.db.models.remy_skill import RemySkill
 from modulo.db.models.system_config import SystemConfig
 from modulo.db.rls import set_rls_org
 
-
 # Labels for all known providers (both native and custom).
 # Derived from _SIMPLE_BACKENDS (native) and ModelBackendProvider enum (custom).
 logger = logging.getLogger(__name__)

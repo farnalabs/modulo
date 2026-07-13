@@ -31,8 +31,8 @@
   <template v-else>
     <div class="flex flex-wrap items-center gap-4">
       <div class="flex items-center gap-2">
-        <label class="text-sm font-medium text-muted-foreground">Team</label>
-        <select
+        <label for="stageboardview-field-8" class="text-sm font-medium text-muted-foreground">Team</label>
+        <select id="stageboardview-field-8"
           v-model="teamFilter"
           data-testid="stage-board-team-filter"
           aria-label="Team"
@@ -44,8 +44,8 @@
         </select>
       </div>
       <div class="flex items-center gap-2">
-        <label class="text-sm font-medium text-muted-foreground">Status</label>
-        <select
+        <label for="stageboardview-field-7" class="text-sm font-medium text-muted-foreground">Status</label>
+        <select id="stageboardview-field-7"
           v-model="statusFilter"
           data-testid="stage-board-status-filter"
           aria-label="Status"
@@ -61,8 +61,8 @@
         </select>
       </div>
       <div class="flex items-center gap-2">
-        <label class="text-sm font-medium text-muted-foreground">From</label>
-        <input
+        <label for="stageboardview-field-6" class="text-sm font-medium text-muted-foreground">From</label>
+        <input id="stageboardview-field-6"
           v-model="dateFrom"
           type="date"
           placeholder="YYYY-MM-DD"
@@ -72,8 +72,8 @@
         />
       </div>
       <div class="flex items-center gap-2">
-        <label class="text-sm font-medium text-muted-foreground">To</label>
-        <input
+        <label for="stageboardview-field-5" class="text-sm font-medium text-muted-foreground">To</label>
+        <input id="stageboardview-field-5"
           v-model="dateTo"
           type="date"
           placeholder="YYYY-MM-DD"
@@ -110,7 +110,7 @@
                     v-model="editingNameValue"
                     class="w-full rounded border border-input bg-background px-1 py-0.5 text-sm font-semibold"
                     placeholder="Stage name"
-                    autofocus
+
                     @click.stop
                     @keydown.enter.prevent="saveEditingName"
                     @keydown.escape.prevent="cancelEditingName"
@@ -119,8 +119,12 @@
                 </template>
                 <h3
                   v-else
+                  role="button"
+                  tabindex="0"
                   class="truncate cursor-pointer font-semibold hover:text-primary"
                   @click.stop="startEditingName(stage)"
+                  @keydown.enter.prevent="startEditingName(stage)"
+                  @keydown.space.prevent="startEditingName(stage)"
                   :title="'Click to rename'"
                 >{{ stage.name }}</h3>
               </div>
@@ -206,7 +210,7 @@
       </div>
     </div>
   </template>
-  <div v-if="selectedStageId" class="fixed inset-0 z-50 flex items-start justify-end" @click.self="selectedStageId = null">
+  <div role="button" tabindex="0" @keydown.enter="($event.currentTarget as HTMLElement).click()" @keydown.space.prevent="($event.currentTarget as HTMLElement).click()" v-if="selectedStageId" class="fixed inset-0 z-50 flex items-start justify-end" @click.self="selectedStageId = null">
     <div class="h-full w-full max-w-md overflow-y-auto border-l bg-card p-6 shadow-lg">
       <div class="mb-6 flex items-center justify-between">
         <h2 class="text-base font-semibold">Stage Details</h2>
@@ -228,13 +232,13 @@
                   v-model="editingNameValue"
                   class="w-full rounded border border-input bg-background px-2 py-1 text-sm font-medium"
                   placeholder="Stage name"
-                  autofocus
+
                   @keydown.enter.prevent="saveEditingName"
                   @keydown.escape.prevent="cancelEditingName"
                   @blur="saveEditingName"
                 />
               </template>
-              <span
+              <span role="button" tabindex="0" @keydown.enter="($event.currentTarget as HTMLElement).click()" @keydown.space.prevent="($event.currentTarget as HTMLElement).click()"
                 v-else
                 class="cursor-pointer font-medium hover:text-primary"
                 @click="startEditingName(selectedStageDetail)"
@@ -250,11 +254,11 @@
             <dd>
               <template v-if="editingPositionStageId === selectedStageDetail.id">
                 <div class="flex items-center gap-2">
-                  <input
+                  <input aria-label="number"
                     v-model.number="editingPositionValue"
                     type="number"
                     min="0"
-                    autofocus
+
                     class="w-20 rounded border border-input bg-background px-2 py-1 text-sm"
                     @keydown.enter.prevent="saveEditingPosition"
                     @keydown.escape.prevent="cancelEditingPosition"
@@ -262,7 +266,7 @@
                   />
                 </div>
               </template>
-              <span
+              <span role="button" tabindex="0" @keydown.enter="($event.currentTarget as HTMLElement).click()" @keydown.space.prevent="($event.currentTarget as HTMLElement).click()"
                 v-else
                 class="cursor-pointer hover:text-primary"
                 @click="startEditingPosition(selectedStageDetail)"
@@ -306,13 +310,13 @@
       </template>
     </div>
   </div>
-  <div v-if="showCreateDialog" class="fixed inset-0 z-50 flex items-center justify-center bg-black/50" @click.self="showCreateDialog = false">
+  <div role="button" tabindex="0" @keydown.enter="($event.currentTarget as HTMLElement).click()" @keydown.space.prevent="($event.currentTarget as HTMLElement).click()" v-if="showCreateDialog" class="fixed inset-0 z-50 flex items-center justify-center bg-black/50" @click.self="showCreateDialog = false">
     <div class="w-full max-w-md rounded-lg border bg-card p-6 shadow-lg">
       <h3 class="mb-4 text-base font-semibold">Create New Stage</h3>
       <div class="space-y-4">
         <div>
-          <label class="mb-1 block text-sm font-medium">Name</label>
-          <input
+          <label for="stageboardview-field-4" class="mb-1 block text-sm font-medium">Name</label>
+          <input id="stageboardview-field-4"
             v-model="createName"
             data-testid="stage-board-create-name"
             class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
@@ -320,8 +324,8 @@
           />
         </div>
         <div>
-          <label class="mb-1 block text-sm font-medium">Description</label>
-          <textarea
+          <label for="stageboardview-field-3" class="mb-1 block text-sm font-medium">Description</label>
+          <textarea id="stageboardview-field-3"
             v-model="createDescription"
             data-testid="stage-board-create-description"
             class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
@@ -330,8 +334,8 @@
           />
         </div>
         <div>
-          <label class="mb-1 block text-sm font-medium">Position</label>
-          <input
+          <label for="stageboardview-field-2" class="mb-1 block text-sm font-medium">Position</label>
+          <input id="stageboardview-field-2"
             v-model.number="createPosition"
             type="number"
             data-testid="stage-board-create-position"
@@ -340,8 +344,8 @@
           />
         </div>
         <div>
-          <label class="mb-1 block text-sm font-medium">Visibility</label>
-          <select
+          <label for="stageboardview-field-1" class="mb-1 block text-sm font-medium">Visibility</label>
+          <select id="stageboardview-field-1"
             v-model="createVisibility"
             data-testid="stage-board-create-visibility"
             aria-label="Visibility"
@@ -374,7 +378,7 @@
       </div>
     </div>
   </div>
-  <div v-if="selectedPipeline" class="fixed inset-0 z-50 flex items-start justify-end" @click.self="selectedPipeline = null">
+  <div role="button" tabindex="0" @keydown.enter="($event.currentTarget as HTMLElement).click()" @keydown.space.prevent="($event.currentTarget as HTMLElement).click()" v-if="selectedPipeline" class="fixed inset-0 z-50 flex items-start justify-end" @click.self="selectedPipeline = null">
     <div class="h-full w-full max-w-md overflow-y-auto border-l bg-card p-6 shadow-lg">
       <div class="mb-6 flex items-center justify-between">
         <h2 class="text-base font-semibold">Pipeline Details</h2>
@@ -542,6 +546,10 @@ async function fetchTeams() {
   return (data as any)?.items ?? []
 }
 
+const stages = ref<any[]>([])
+const allPipelines = ref<any[]>([])
+const teams = ref<any[]>([])
+
 const { loading, error: pageError } = useDataFetch(
   async () => {
     const [stagesData, pipelinesData, teamsData] = await Promise.all([
@@ -552,14 +560,11 @@ const { loading, error: pageError } = useDataFetch(
     stages.value = (stagesData as any[]).sort((a: any, b: any) => a.position - b.position)
     allPipelines.value = pipelinesData as any[]
     teams.value = teamsData as any[]
-    return {}
+    return { data: {} }
   },
   { initialValue: {} },
 )
 
-const stages = ref<any[]>([])
-const allPipelines = ref<any[]>([])
-const teams = ref<any[]>([])
 
 const movingPipelines = ref<Record<string, boolean>>({})
 

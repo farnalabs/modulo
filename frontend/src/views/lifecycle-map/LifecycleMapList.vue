@@ -9,7 +9,7 @@
           @update:search="search = $event; page = 1"
         >
           <template #after>
-            <select
+            <select aria-label="Form control"
               v-model="ownerFilter"
               class="rounded-lg border border-input bg-background px-3 py-1.5 text-sm"
               data-testid="lifecycle-map-list-owner-filter"
@@ -67,7 +67,7 @@
       </EmptyState>
 
       <div v-else class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-        <div
+        <div role="button" tabindex="0" @keydown.enter="($event.currentTarget as HTMLElement).click()" @keydown.space.prevent="($event.currentTarget as HTMLElement).click()"
           v-for="m in pagedMaps"
           :key="m.id"
           class="card card-hover p-5 cursor-pointer"
@@ -131,7 +131,7 @@
     </main>
 
     <!-- Create dialog -->
-    <div
+    <div role="button" tabindex="0" @keydown.enter="($event.currentTarget as HTMLElement).click()" @keydown.space.prevent="($event.currentTarget as HTMLElement).click()"
       v-if="showCreateDialog"
       class="fixed inset-0 z-50 flex items-center justify-center bg-black/50"
       @click.self="showCreateDialog = false"
@@ -140,16 +140,16 @@
         <h3 class="mb-4 text-base font-semibold">Create Lifecycle Map</h3>
         <div class="space-y-4">
           <div>
-            <label class="mb-1 block text-sm font-medium">Name</label>
-            <input
+            <label for="lifecyclemaplist-field-2" class="mb-1 block text-sm font-medium">Name</label>
+            <input id="lifecyclemaplist-field-2"
               v-model="newName"
               class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm"
               placeholder="My Delivery Lifecycle"
             />
           </div>
           <div>
-            <label class="mb-1 block text-sm font-medium">Description</label>
-            <textarea
+            <label for="lifecyclemaplist-field-1" class="mb-1 block text-sm font-medium">Description</label>
+            <textarea id="lifecyclemaplist-field-1"
               v-model="newDescription"
               class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm"
               rows="3"
@@ -183,7 +183,6 @@
 <script setup lang="ts">
 import { ref, computed, onMounted } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
-import { PlusIcon, MapIcon } from '@lucide/vue'
 import PageHeader from '../../components/shared/PageHeader.vue'
 import FilterBar from '../../components/shared/FilterBar.vue'
 import { useLifecycleMapsStore } from '../../stores/lifecycleMaps'
@@ -192,12 +191,13 @@ import EmptyState from '../../components/shared/EmptyState.vue'
 import { Button } from '@/components/ui/button'
 import type { LifecycleMapSummary } from '../../stores/lifecycleMaps'
 import { formatDateShort } from '../../lib/formatDate'
-import { api } from '../../lib/api/client'
+import { useApi } from '../../composables/useApi'
 import { formatApiError } from '../../lib/api/formatError'
 
 const router = useRouter()
 const route = useRoute()
 const store = useLifecycleMapsStore()
+const { post } = useApi()
 
 const search = ref('')
 const ownerFilter = ref('')
@@ -273,11 +273,9 @@ async function handleCreateConfirm(): Promise<void> {
   creating.value = true
   createError.value = null
   try {
-    const { data } = await api.POST('/api/v1/lifecycle-maps', {
-      body: {
+    const data = await post<LifecycleMapSummary>('/api/v1/lifecycle-maps', {
         name: newName.value.trim(),
         description: newDescription.value.trim() || null,
-      },
     })
     showCreateDialog.value = false
     if (data) router.push({ name: 'lifecycle-map-editor', params: { id: (data as LifecycleMapSummary).id } })

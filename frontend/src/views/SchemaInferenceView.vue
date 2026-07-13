@@ -1,4 +1,4 @@
-﻿<template>
+<template>
   <PageTabs :tabs="[
     { label: $t('views.SchemaInferenceView.browse'), to: '/schemas' },
     { label: $t('views.SchemaInferenceView.editor'), to: '/schemas/editor' },
@@ -16,8 +16,8 @@
         <h2 class="mb-4 text-base font-semibold">{{ $t('views.SchemaInferenceView.source') }}</h2>
         <div class="space-y-4">
           <div>
-            <label class="mb-1 block text-sm font-medium">{{ $t('views.SchemaInferenceView.connector') }}</label>
-            <select
+            <label for="schemainferenceview-field-3" class="mb-1 block text-sm font-medium">{{ $t('views.SchemaInferenceView.connector') }}</label>
+            <select id="schemainferenceview-field-3"
               v-model="selectedConnectorId"
               data-testid="schema-inference-connector"
               aria-label="Connector"
@@ -29,7 +29,7 @@
                 :key="connector.id"
                 :value="connector.id"
               >
-                {{ connector.name }} ({{ connector.connector_type }})
+                  {{ connector.name }} ({{ connector.connector_type_id }})
               </option>
             </select>
             <p v-if="connectors.length === 0" class="mt-2 text-sm text-muted-foreground">
@@ -38,8 +38,8 @@
           </div>
 
           <div>
-            <label class="mb-1 block text-sm font-medium">{{ $t('views.SchemaInferenceView.resource_type') }}</label>
-            <input
+            <label for="schemainferenceview-field-2" class="mb-1 block text-sm font-medium">{{ $t('views.SchemaInferenceView.resource_type') }}</label>
+            <input id="schemainferenceview-field-2"
               v-model="resourceType"
               type="text"
               data-testid="schema-inference-resource-type"
@@ -49,11 +49,11 @@
           </div>
 
           <div>
-            <label class="mb-1 block text-sm font-medium">
+            <label for="schemainferenceview-field-1" class="mb-1 block text-sm font-medium">
               {{ $t('views.SchemaInferenceView.sample_query') }}
               <span class="text-muted-foreground"> {{ $t('views.SchemaInferenceView.optional') }}</span>
             </label>
-            <textarea
+            <textarea id="schemainferenceview-field-1"
               v-model="sampleQuery"
               rows="2"
               data-testid="schema-inference-sample-query"
@@ -80,17 +80,17 @@
         <h2 class="mb-4 text-base font-semibold">{{ $t('views.SchemaInferenceView.draft_schema') }}</h2>
 
         <div class="mb-3">
-          <label class="block text-sm font-medium text-muted-foreground">{{ $t('views.SchemaInferenceView.name_label') }}</label>
+          <span class="block text-sm font-medium text-muted-foreground">{{ $t('views.SchemaInferenceView.name_label') }}</span>
           <p class="text-sm">{{ draftSchema.name }}</p>
         </div>
 
         <div v-if="draftSchema.description" class="mb-3">
-          <label class="block text-sm font-medium text-muted-foreground">{{ $t('views.SchemaInferenceView.description_label') }}</label>
+          <span class="block text-sm font-medium text-muted-foreground">{{ $t('views.SchemaInferenceView.description_label') }}</span>
           <p class="text-sm">{{ draftSchema.description }}</p>
         </div>
 
         <div class="mb-4">
-          <label class="mb-2 block text-sm font-medium text-muted-foreground">{{ $t('views.SchemaInferenceView.fields_label') }}</label>
+          <span class="mb-2 block text-sm font-medium text-muted-foreground">{{ $t('views.SchemaInferenceView.fields_label') }}</span>
           <table v-if="draftSchema.fields.length > 0" class="w-full text-sm">
             <thead>
               <tr class="border-b text-left text-muted-foreground">
@@ -177,7 +177,7 @@ import PageHeader from '../components/shared/PageHeader.vue'
 import PageTabs from "../components/PageTabs.vue"
 import { Button } from '@/components/ui/button'
 
-type ConnectorItem = components['schemas']['ConnectorItem']
+type ConnectorItem = components['schemas']['ConnectorResponse']
 
 interface DraftSchema {
   name: string
@@ -267,7 +267,7 @@ async function inferSchema() {
       rawDefinitionJson.value = data.definition_json
       draftSchema.value = {
         name: data.suggestion_name,
-        description: data.suggestion_description,
+        description: data.suggestion_description ?? null,
         fields: extractFieldsFromDefinition(data.definition_json),
       }
     }

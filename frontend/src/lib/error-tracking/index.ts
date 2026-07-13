@@ -114,6 +114,13 @@ export class ErrorTracker {
     this.backends.setTags(tags)
   }
 
+  getContextState(): Readonly<{
+    user: UserInfo | null
+    tags: Readonly<Record<string, string>>
+  }> {
+    return { user: this._user, tags: { ...this._tags } }
+  }
+
   async reloadBackends(newBackends: MonitorBackend[]): Promise<void> {
     this.backends.disposeAll()
     for (const b of newBackends) {
@@ -200,11 +207,12 @@ function buildBaseEvent(): ErrorEventInput {
   const collector = getCollector()
   const ctx = gatherContext()
   if (_instance) {
-    if (_instance._user) {
-      ctx.user = _instance._user
+    const state = _instance.getContextState()
+    if (state.user) {
+      ctx.user = state.user
     }
-    if (Object.keys(_instance._tags).length > 0) {
-      ctx.tags = _instance._tags
+    if (Object.keys(state.tags).length > 0) {
+      ctx.tags = state.tags
     }
   }
   return {

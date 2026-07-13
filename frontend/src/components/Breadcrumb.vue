@@ -43,21 +43,25 @@ interface ManifestEntry {
 const route = useRoute()
 const router = useRouter()
 
-function buildManifestMap() {
-  const map = new Map<string, ManifestEntry>()
+function buildManifestMaps() {
+  const byName = new Map<string, ManifestEntry>()
+  const byPath = new Map<string, ManifestEntry>()
   try {
     const rawRoutes = (manifest as { routes?: Record<string, Omit<ManifestEntry, 'path'>> })?.routes ?? {}
     for (const [path, entry] of Object.entries(rawRoutes)) {
       if (entry.name) {
-        map.set(entry.name, { ...entry, path })
+        const manifestEntry = { ...entry, path }
+        byName.set(entry.name, manifestEntry)
+        byPath.set(path, manifestEntry)
       }
     }
   } catch {
+    // A missing or malformed build manifest leaves the breadcrumb map empty.
   }
-  return map
+  return { byName, byPath }
 }
 
-const manifestByName = buildManifestMap()
+const { byName: manifestByName, byPath: manifestByPath } = buildManifestMaps()
 
 const segments = computed<BreadcrumbSegment[]>(() => {
   const meta = route.meta as Record<string, unknown> | undefined
@@ -79,7 +83,7 @@ const segments = computed<BreadcrumbSegment[]>(() => {
         label: manifestEntry.breadcrumb || currentName,
       })
       if (manifestEntry.parent) {
-        const parentEntry = manifestByName.get(manifestEntry.parent)
+        const parentEntry = manifestByPath.get(manifestEntry.parent)
         currentName = parentEntry?.name ?? undefined
       } else {
         currentName = undefined

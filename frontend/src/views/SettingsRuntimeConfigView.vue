@@ -1,4 +1,4 @@
-﻿<template>
+<template>
   <div class="page-wide">
     <PageHeader :title="$t('views.SettingsRuntimeConfigView.runtime_configuration')" :subtitle="$t('views.SettingsRuntimeConfigView.description')" />
 
@@ -162,11 +162,12 @@
 </template>
 
 <script setup lang="ts">
-import { ref, reactive, computed, watch, onBeforeUnmount } from 'vue'
+import { ref, reactive, watch, onBeforeUnmount } from 'vue'
 import { useDataFetch } from '../composables/useDataFetch'
 import { useI18n } from 'vue-i18n'
 import { api } from '../lib/api/client'
-import { formatApiError, type ProblemDetail } from '../lib/api/formatError'
+import { useApi } from '../composables/useApi'
+import { formatApiError } from '../lib/api/formatError'
 import PageHeader from '../components/shared/PageHeader.vue'
 import LoadingSpinner from '../components/shared/LoadingSpinner.vue'
 import ErrorAlert from '../components/shared/ErrorAlert.vue'
@@ -197,8 +198,9 @@ const editedValues = reactive<Record<string, string>>({})
 const editedKeys = reactive(new Set<string>())
 
 const items = ref<ConfigEntry[]>([])
+const { get: getUntyped } = useApi()
 const { loading, error, data: configData, load: loadConfig } = useDataFetch<ConfigResponse>(
-  () => api.GET('/api/v1/admin/runtime-config'),
+  async () => ({ data: await getUntyped<ConfigResponse>('/api/v1/admin/runtime-config') }),
 )
 
 watch(configData, (resp) => {
@@ -255,21 +257,18 @@ function applyResponse(resp: ConfigResponse): void {
 }
 
 async function reloadConfig() {
-  loading.value = true
-  error.value = null
+  formError.value = null
   try {
     const { data, error: err } = await api.POST('/api/v1/admin/runtime-config/reload')
     if (err) {
-      error.value = err && typeof err === 'object' && 'detail' in err
-        ? `${t('views.SettingsRuntimeConfigView.failed_to_reload_config')} ${(err as ProblemDetail).detail}`
+      formError.value = err && typeof err === 'object' && 'detail' in err
+        ? `${t('views.SettingsRuntimeConfigView.failed_to_reload_config')} ${formatApiError(err)}`
         : `${t('views.SettingsRuntimeConfigView.failed_to_reload_config')} ${formatApiError(err)}`
     } else if (data) {
       applyResponse(data as unknown as ConfigResponse)
     }
   } catch (e: unknown) {
-    error.value = `${t('views.SettingsRuntimeConfigView.failed_to_reload_config')} ${formatApiError(e)}`
-  } finally {
-    loading.value = false
+    formError.value = `${t('views.SettingsRuntimeConfigView.failed_to_reload_config')} ${formatApiError(e)}`
   }
 }
 
@@ -283,7 +282,7 @@ async function applyOverride(key: string) {
     })
     if (err) {
       formError.value = err && typeof err === 'object' && 'detail' in err
-        ? `${t('views.SettingsRuntimeConfigView.failed_to_apply_override')} ${(err as ProblemDetail).detail}`
+        ? `${t('views.SettingsRuntimeConfigView.failed_to_apply_override')} ${formatApiError(err)}`
         : `${t('views.SettingsRuntimeConfigView.failed_to_apply_override')} ${formatApiError(err)}`
     } else if (data) {
       applyResponse(data as unknown as ConfigResponse)
@@ -308,7 +307,7 @@ async function clearOverride(key: string) {
     })
     if (err) {
       formError.value = err && typeof err === 'object' && 'detail' in err
-        ? `${t('views.SettingsRuntimeConfigView.failed_to_clear_override')} ${(err as ProblemDetail).detail}`
+        ? `${t('views.SettingsRuntimeConfigView.failed_to_clear_override')} ${formatApiError(err)}`
         : `${t('views.SettingsRuntimeConfigView.failed_to_clear_override')} ${formatApiError(err)}`
     } else if (data) {
       applyResponse(data as unknown as ConfigResponse)

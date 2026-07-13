@@ -81,7 +81,7 @@
     </template>
 
     <!-- Save as composite dialog -->
-    <div
+    <div role="button" tabindex="0" @keydown.enter="($event.currentTarget as HTMLElement).click()" @keydown.space.prevent="($event.currentTarget as HTMLElement).click()"
       v-if="showSaveAsComposite"
       class="fixed inset-0 z-50 flex items-center justify-center bg-black/50"
       @click.self="showSaveAsComposite = false"
@@ -90,16 +90,16 @@
         <h3 class="mb-4 text-base font-semibold">Save as Composite</h3>
         <div class="space-y-4">
           <div>
-            <label class="mb-1 block text-sm font-medium">Name</label>
-            <input
+            <label for="compositeeditorview-field-2" class="mb-1 block text-sm font-medium">Name</label>
+            <input id="compositeeditorview-field-2"
               v-model="saveAsName"
               class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm"
               placeholder="My Composite"
             />
           </div>
           <div>
-            <label class="mb-1 block text-sm font-medium">Description</label>
-            <textarea
+            <label for="compositeeditorview-field-1" class="mb-1 block text-sm font-medium">Description</label>
+            <textarea id="compositeeditorview-field-1"
               v-model="saveAsDescription"
               class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm"
               rows="3"
@@ -199,14 +199,14 @@ function convertBackendEdge(e: any, i: number): any {
   }
 }
 
-const { loading, error: pageError, load: loadEditor } = useDataFetch(
+const { loading, error: pageError } = useDataFetch(
   async () => {
     const [{ data: templateData }, { data: editorData }] = await Promise.all([
-      api.GET('/api/v1/composite-templates/{composite_id}', {
-        params: { path: { composite_id: compositeId } },
+      api.GET('/api/v1/composite-templates/{template_id}', {
+        params: { path: { template_id: compositeId } },
       }),
-      api.GET('/api/v1/composite-templates/{composite_id}/editor', {
-        params: { path: { composite_id: compositeId } },
+      api.GET('/api/v1/composite-templates/{template_id}/editor', {
+        params: { path: { template_id: compositeId } },
       }),
     ])
 
@@ -258,6 +258,7 @@ async function handleSaveAs() {
       body: {
         name: saveAsName.value,
         description: saveAsDescription.value || null,
+        version: '1.0.0',
         sub_pipeline_graph_json: {
           nodes: rawNodes.value,
           edges: rawEdges.value,
@@ -270,6 +271,8 @@ async function handleSaveAs() {
           type: p.type,
           required: p.required,
           default_value: p.default_value ?? null,
+          multiline: p.multiline,
+          options: p.options ?? null,
           target_injection: {
             mode: 'prompt_replace',
             node_id: '',

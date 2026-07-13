@@ -170,7 +170,7 @@ class ErrorTrackingLogHandler(logging.Handler):
                     async with session.begin():
                         await service.ingest(session, org_id, event_data)
                 except ProgrammingError:
-                    logger.exception("core.logging_config")
+                    logging.getLogger(__name__).exception("Database unavailable while forwarding a log event")
 
                     raise
 

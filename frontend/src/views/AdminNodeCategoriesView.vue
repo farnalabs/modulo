@@ -1,4 +1,4 @@
-﻿<template>
+<template>
   <FeatureGate feature-name="plugin_management" required-tier="community" show-disabled>
 
     <div class="page-narrow">
@@ -143,7 +143,7 @@ interface NodeCategory {
 
 const { data: categoriesData, loading, error, load: loadCategories } = useDataFetch(
   () => api.GET('/api/v1/node-categories') as Promise<{ data?: { items?: NodeCategory[] }; error?: { detail?: string } }>,
-  { initialValue: [] as NodeCategory[] }
+  { initialValue: { items: [] as NodeCategory[] } }
 )
 
 const categories = computed(() => {
@@ -208,8 +208,8 @@ async function deleteCategory() {
     if (err) {
       deleteError.value = String(err)
     } else if (response.status === 204 || response.ok) {
-      categories.value = categories.value.filter(c => c.id !== deleteConfirmCategoryId.value)
       deleteConfirmCategoryId.value = null
+      await loadCategories()
     }
   } catch (e: unknown) {
     deleteError.value = formatApiError(e)
@@ -218,7 +218,6 @@ async function deleteCategory() {
   }
 }
 
-/* eslint-disable no-secrets/no-secrets */
 const iconSvgs: Record<string, string> = {
   bot: '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="11" width="18" height="10" rx="2"/><circle cx="12" cy="5" r="2"/><path d="M12 7v4"/><line x1="8" y1="16" x2="8" y2="16"/><line x1="16" y1="16" x2="16" y2="16"/></svg>',
   database: '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3"/><path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5"/></svg>',
@@ -233,7 +232,6 @@ const iconSvgs: Record<string, string> = {
   upload: '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>',
   zap: '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>',
 }
-/* eslint-enable no-secrets/no-secrets */
 
 function iconSvg(name: string): string {
   return iconSvgs[name] || ''

@@ -84,6 +84,7 @@ class RuntimeProvider(ABC):
 
     async def close(self) -> None:
         """Release provider-level resources (connections, clients, etc.)."""
+        return
 
 
 def create_default_hub(max_local_concurrency: int = 2) -> RuntimeProviderHub:

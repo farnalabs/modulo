@@ -16,7 +16,7 @@ const mockRoute: Record<string, any> = {
 const mockRouter = {
   push: vi.fn(),
   replace: vi.fn(),
-  resolve: vi.fn((opts: any) => {
+  resolve: vi.fn((opts: { name?: string }): { path: string; meta: Record<string, string | undefined> } => {
     if (opts.name === 'dashboard') return { path: '/', meta: {} }
     if (opts.name === 'schemas') return { path: '/schemas', meta: {} }
     if (opts.name === 'library') return { path: '/library', meta: {} }
@@ -157,7 +157,7 @@ describe('Breadcrumb.vue', () => {
     mockRoute.name = 'onboarding'
     mockRoute.meta = { breadcrumb: 'Onboarding', parent: 'dashboard' }
 
-    mockRouter.resolve.mockImplementation((opts: any) => {
+    mockRouter.resolve.mockImplementation((opts: { name?: string }): { path: string; meta: Record<string, string | undefined> } => {
       if (opts.name === 'dashboard') return { path: '/', meta: { breadcrumb: 'Dashboard', parent: undefined } }
       if (opts.name === 'onboarding') return { path: '/onboarding', meta: { breadcrumb: 'Onboarding', parent: 'dashboard' } }
       return { path: '/', meta: { breadcrumb: undefined, parent: undefined } }

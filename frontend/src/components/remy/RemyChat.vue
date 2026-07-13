@@ -218,6 +218,7 @@
           :class="{ active: slashHighlightIdx === idx }"
           @click="executeSlashCommand(cmd)"
           @mouseenter="slashHighlightIdx = idx"
+          @focus="slashHighlightIdx = idx"
         >
           <span class="remy-slash-command">{{ cmd.command }}</span>
           <span class="remy-slash-desc">{{ cmd.description }}</span>

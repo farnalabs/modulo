@@ -1,4 +1,4 @@
-﻿<template>
+<template>
   <div class="page-wide">
     <PageHeader :title="$t('views.TeamComparisonView.team_comparison')" :subtitle="$t('views.TeamComparisonView.sidebyside_eval_pass_rates_and_pipeline_metrics_across_teams')" />
 
@@ -162,7 +162,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted } from 'vue'
+import { ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { api } from '../lib/api/client'
 import { useDataFetch } from '../composables/useDataFetch'
@@ -176,7 +176,6 @@ import {
   TooltipTrigger,
   TooltipContent,
 } from '../components/ui/tooltip'
-import { formatApiError } from '../lib/api/formatError'
 
 interface TeamRunStatus {
   running: number
@@ -280,8 +279,8 @@ async function fetchAndMerge(): Promise<{ data?: ViewData; error?: { detail: str
     } | null
   }
 
-  const t = teamsResult as unknown as { items: Array<{ id: string; member_count: number }> }
-  const memberCountMap = new Map(t.items.map(item => [item.id, item.member_count]))
+  const teamsPayload = teamsResult as unknown as { items: Array<{ id: string; member_count: number }> }
+  const memberCountMap = new Map(teamsPayload.items.map(item => [item.id, item.member_count]))
 
   const teams: TeamInfo[] = (s.teams ?? []).map(team => ({
     id: team.id,
@@ -304,7 +303,16 @@ async function fetchAndMerge(): Promise<{ data?: ViewData; error?: { detail: str
   }
 }
 
-const { loading, error, data, load: loadData } = useDataFetch(fetchAndMerge)
+const { loading, error, data, load: loadData } = useDataFetch<ViewData>(
+  fetchAndMerge,
+  {
+    initialValue: {
+      summary: { total_runs: 0, active_pipelines: 0 },
+      teams: [],
+      orgEvalPassRate: null,
+    },
+  },
+)
 
 async function toggleExpand(teamId: string) {
   if (expandedTeamId.value === teamId) {

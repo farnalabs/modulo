@@ -1,4 +1,4 @@
-﻿<template>
+<template>
   <div class="inline-flex items-center rounded-lg border bg-background p-4 shadow-sm min-w-[300px] max-w-[400px]">
     <div class="flex-1">
       <p class="text-sm font-medium">{{ $t('components.DismissDialog.dismiss_this_notification') }}</p>
@@ -7,12 +7,12 @@
       </p>
     </div>
     <div class="mt-3 flex flex-col gap-2">
-      <label class="flex items-center gap-2 text-sm">
-        <input type="radio" v-model="selectedScope" value="self" />
+      <label for="dismissdialog-field-2" class="flex items-center gap-2 text-sm">
+        <input id="dismissdialog-field-2" type="radio" v-model="selectedScope" value="self" />
         Dismiss for me
       </label>
-      <label v-if="canDismissAtScope" class="flex items-center gap-2 text-sm">
-        <input type="radio" v-model="selectedScope" value="scope" />
+      <label for="dismissdialog-field-1" v-if="canDismissAtScope" class="flex items-center gap-2 text-sm">
+        <input id="dismissdialog-field-1" type="radio" v-model="selectedScope" value="scope" />
         {{ scopeLabel }}
       </label>
     </div>

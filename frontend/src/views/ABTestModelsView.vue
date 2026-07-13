@@ -12,9 +12,9 @@
       <PageHeader :title="$t('views.ABTestModelsView.ab_test_models')" subtitle="Compare model backends side by side with weighted A/B testing — eval scores, costs, and token usage" />
 
       <div class="flex flex-wrap items-center gap-4">
-        <label class="flex items-center gap-2 text-sm">
+        <label for="abtestmodelsview-field-7" class="flex items-center gap-2 text-sm">
           <span class="text-muted-foreground">{{ $t('views.ABTestModelsView.pipeline') }}</span>
-          <select
+          <select id="abtestmodelsview-field-7"
             v-model="selectedPipelineId"
             data-testid="ab-test-models-pipeline-select"
             aria-label="Pipeline"
@@ -27,9 +27,9 @@
           </select>
         </label>
 
-        <label class="flex items-center gap-2 text-sm">
+        <label for="abtestmodelsview-field-6" class="flex items-center gap-2 text-sm">
           <span class="text-muted-foreground">{{ $t('views.ABTestModelsView.existing_group') }}</span>
-          <select
+          <select id="abtestmodelsview-field-6"
             v-model="selectedGroupId"
             data-testid="ab-test-models-group-select"
             aria-label="Existing group"
@@ -50,8 +50,8 @@
           </h2>
           <div class="grid gap-4 sm:grid-cols-2">
             <div>
-              <label class="mb-1 block text-sm font-medium text-muted-foreground">{{ $t('views.ABTestModelsView.group_name') }}</label>
-              <input
+              <label for="abtestmodelsview-field-5" class="mb-1 block text-sm font-medium text-muted-foreground">{{ $t('views.ABTestModelsView.group_name') }}</label>
+              <input id="abtestmodelsview-field-5"
                 v-model="groupName"
                 data-testid="ab-test-models-group-name"
                 type="text"
@@ -60,8 +60,8 @@
               />
             </div>
             <div>
-              <label class="mb-1 block text-sm font-medium text-muted-foreground">{{ $t('views.ABTestModelsView.description') }}</label>
-              <input
+              <label for="abtestmodelsview-field-4" class="mb-1 block text-sm font-medium text-muted-foreground">{{ $t('views.ABTestModelsView.description') }}</label>
+              <input id="abtestmodelsview-field-4"
                 v-model="groupDescription"
                 data-testid="ab-test-models-group-description"
                 type="text"
@@ -112,8 +112,8 @@
               </div>
               <div class="grid gap-3 sm:grid-cols-3">
                 <div>
-                  <label class="mb-1 block text-xs font-medium text-muted-foreground">{{ $t('views.ABTestModelsView.name_label') }}</label>
-                  <input
+                  <label for="abtestmodelsview-field-3" class="mb-1 block text-xs font-medium text-muted-foreground">{{ $t('views.ABTestModelsView.name_label') }}</label>
+                  <input id="abtestmodelsview-field-3"
                     v-model="v.name"
                     :data-testid="`ab-test-models-variant-name-${i}`"
                     type="text"
@@ -122,8 +122,8 @@
                   />
                 </div>
                 <div>
-                  <label class="mb-1 block text-xs font-medium text-muted-foreground">{{ $t('views.ABTestModelsView.model_backend') }}</label>
-                  <select
+                  <label for="abtestmodelsview-field-2" class="mb-1 block text-xs font-medium text-muted-foreground">{{ $t('views.ABTestModelsView.model_backend') }}</label>
+                  <select id="abtestmodelsview-field-2"
                     v-model="v.modelBackendId"
                     :data-testid="`ab-test-models-model-backend-${i}`"
                     aria-label="Model backend"
@@ -140,10 +140,10 @@
                   </select>
                 </div>
                 <div>
-                  <label class="mb-1 block text-xs font-medium text-muted-foreground">
+                  <label for="abtestmodelsview-field-1" class="mb-1 block text-xs font-medium text-muted-foreground">
                     Weight: <span class="font-mono tabular-nums">{{ v.weight }}%</span>
                   </label>
-                    <input
+                    <input id="abtestmodelsview-field-1"
                         v-model.number="v.weight"
                         :data-testid="`ab-test-models-weight-${i}`"
                         type="range"
@@ -293,13 +293,20 @@ import EmptyState from '../components/shared/EmptyState.vue'
 import { shortId } from '../utils/format'
 import { formatApiError } from '../lib/api/formatError'
 
-type PipelineItem = components['schemas']['PipelineItem']
+type PipelineItem = components['schemas']['PipelineResponse']
 type VariantGroup = components['schemas']['VariantGroupResponse']
 type ModelBackend = components['schemas']['ModelBackendResponse']
 type RunResponse = components['schemas']['RunResponse']
 type RunIOResponse = components['schemas']['RunIOResponse']
-type RunEvalItem = components['schemas']['RunEvalItem']
-type RunEvalListResponse = components['schemas']['RunEvalListResponse']
+interface RunEvalItem {
+  eval_id: string
+  node_id: string
+  passed: boolean
+  score: number | null
+  detail?: string | null
+}
+
+interface RunEvalListResponse { items?: RunEvalItem[] }
 
 interface VariantForm {
   id: string
@@ -512,6 +519,9 @@ async function saveGroup() {
           name: groupName.value.trim(),
           description: groupDescription.value || null,
           variants: variantDefs as unknown as components['schemas']['VariantDef'][],
+          selection_strategy: 'weighted',
+          max_concurrent_runs: 10,
+          degraded_evals: false,
         },
       })
       if (err) {
@@ -528,6 +538,9 @@ async function saveGroup() {
           name: groupName.value.trim(),
           description: groupDescription.value || null,
           variants: variantDefs as unknown as components['schemas']['VariantDef'][],
+          selection_strategy: 'weighted',
+          max_concurrent_runs: 10,
+          degraded_evals: false,
         },
       })
       if (err) {
@@ -618,8 +631,8 @@ async function pollRunStatus(runId: string, variantName: string) {
           runEntries.value.set(variantName, {
             ...existing,
             runStatus: status,
-            totalCostUsd: runResp.total_cost_usd,
-            tokenConsumption: runResp.token_consumption,
+            totalCostUsd: runResp.total_cost_usd == null ? null : Number(runResp.total_cost_usd),
+            tokenConsumption: runResp.token_consumption ?? null,
           })
         }
 
@@ -652,7 +665,7 @@ async function fetchRunIO(runId: string, variantName: string) {
       if (existing) {
         runEntries.value.set(variantName, {
           ...existing,
-          nodeOutputs: ioResp.outputs_json,
+          nodeOutputs: ioResp.outputs_json ?? null,
         })
       }
     }
@@ -711,6 +724,9 @@ async function promoteWinner(variantName: string) {
         name: `${groupName.value.trim()} (default: ${variantName})`,
         description: groupDescription.value || null,
         variants: [variantDef] as unknown as components['schemas']['VariantDef'][],
+        selection_strategy: 'weighted',
+        max_concurrent_runs: 10,
+        degraded_evals: false,
       },
     })
 
@@ -765,16 +781,6 @@ watch(selectedGroupId, async (id) => {
     savedGroupId.value = null
   }
 })
-
-async function fetchVariantGroups() {
-  try {
-    const { data, error: err } = await api.GET('/api/v1/variant-groups')
-    if (err) return
-    variantGroups.value = (Array.isArray(data) ? data : (data as any)?.items ?? []) as unknown as VariantGroup[]
-  } catch (e) {
-    console.warn('Failed to fetch variant groups', e)
-  }
-}
 
 async function fetchSnapshotForPipeline(pipelineId: string) {
   try {

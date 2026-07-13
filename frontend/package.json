@@ -21,6 +21,9 @@
         "postinstall": "powershell -NoLogo -NoProfile -ExecutionPolicy Bypass -File scripts/reka-ui-patch.ps1 && powershell -NoLogo -NoProfile -ExecutionPolicy Bypass -File scripts/internationalized-date-patch.ps1"
     },
     "optionalDependencies": {
+        "@datadog/browser-logs": "^7.5.0",
+        "@datadog/browser-rum": "^7.5.0",
+        "@grafana/faro-web-sdk": "^2.8.2",
         "@sentry/vue": "^8.0.0"
     },
     "dependencies": {
@@ -48,6 +51,7 @@
         "@rolldown/binding-win32-x64-msvc": "^1.1.5",
         "@rollup/plugin-yaml": "^5.0.0",
         "@rushstack/eslint-patch": "^1.16.1",
+        "@types/node": "^26.1.1",
         "@typescript-eslint/eslint-plugin": "^7.0.0",
         "@typescript-eslint/parser": "^7.0.0",
         "@vitejs/plugin-vue": "^6.0.7",

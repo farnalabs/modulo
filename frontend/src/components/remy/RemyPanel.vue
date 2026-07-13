@@ -5,7 +5,7 @@
     :class="panelClasses"
     :style="panelStyle"
   >
-    <div class="remy-titlebar" @mousedown="startDrag">
+    <div role="button" tabindex="0" @keydown.enter="($event.currentTarget as HTMLElement).click()" @keydown.space.prevent="($event.currentTarget as HTMLElement).click()" class="remy-titlebar" @mousedown="startDrag">
       <div class="flex items-center gap-2 flex-1 min-w-0">
         <template v-if="editingName && store.activeSession">
           <input
@@ -20,7 +20,7 @@
           />
         </template>
         <template v-else>
-          <span
+          <span role="button" tabindex="0" @keydown.enter="($event.currentTarget as HTMLElement).click()" @keydown.space.prevent="($event.currentTarget as HTMLElement).click()"
             class="text-sm font-semibold truncate cursor-pointer hover:opacity-80"
             :title="$t('components.remy.RemyPanel.click_to_rename')"
             @click.stop="startEditName"
@@ -107,8 +107,8 @@
           v-if="planStore.featureEnabled('remy_ui_driving')"
           class="remy-titlebar-btn text-xs font-medium px-1.5"
           @click="cycleSpeed"
-          :title="`UI Navigation Speed — ${currentSpeedLabel} — ${speedDescriptions[currentSpeed.value] ?? ''}`"
-          :aria-label="`Speed: ${currentSpeedLabel} — ${speedDescriptions[currentSpeed.value] ?? ''}`"
+          :title="`UI Navigation Speed — ${currentSpeedLabel} — ${speedDescriptions[currentSpeed] ?? ''}`"
+          :aria-label="`Speed: ${currentSpeedLabel} — ${speedDescriptions[currentSpeed] ?? ''}`"
         >
           <span>{{ speedIcon }}</span><span class="ml-0.5 text-[10px] uppercase tracking-wider">{{ currentSpeedLabel }}</span>
         </button>
@@ -249,7 +249,7 @@
       </div>
     </div>
 
-    <div
+    <div role="button" tabindex="0" @keydown.enter="($event.currentTarget as HTMLElement).click()" @keydown.space.prevent="($event.currentTarget as HTMLElement).click()"
       v-if="store.panelState === 'floating' || store.panelState === 'docked'"
       class="remy-resize-handle"
       @mousedown="startResize"
@@ -296,7 +296,7 @@ const { pageContext } = useRemyContext();
 watch(
   pageContext,
   (ctx) => {
-    store.setPageContext(ctx);
+    store.setPageContext({ ...ctx, entities: [...ctx.entities] });
   },
   { immediate: true },
 );

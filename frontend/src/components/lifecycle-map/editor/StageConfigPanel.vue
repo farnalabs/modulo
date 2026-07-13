@@ -1,13 +1,13 @@
 <template>
   <div class="space-y-4">
     <div>
-      <label class="mb-1 block text-sm font-medium">Name</label>
+      <span class="mb-1 block text-sm font-medium">Name</span>
       <Input v-model="form.name" placeholder="Stage name" />
     </div>
 
     <div>
-      <label class="mb-1 block text-sm font-medium">Description</label>
-      <textarea
+      <label for="stageconfigpanel-field-2" class="mb-1 block text-sm font-medium">Description</label>
+      <textarea id="stageconfigpanel-field-2"
         v-model="form.description"
         rows="3"
         class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
@@ -16,7 +16,7 @@
     </div>
 
     <div>
-      <label class="mb-1 block text-sm font-medium">Type</label>
+      <span class="mb-1 block text-sm font-medium">Type</span>
       <div class="grid grid-cols-2 gap-2">
         <button
           v-for="opt in stageTypeOptions"
@@ -36,8 +36,8 @@
     </div>
 
     <div v-if="form.stage_type === 'modulo'">
-      <label class="mb-1 block text-sm font-medium">Pipeline</label>
-      <select
+      <label for="stageconfigpanel-field-1" class="mb-1 block text-sm font-medium">Pipeline</label>
+      <select id="stageconfigpanel-field-1"
         v-model="form.pipeline_id"
         class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
       >
@@ -47,12 +47,12 @@
     </div>
 
     <div v-if="form.stage_type === 'external'">
-      <label class="mb-1 block text-sm font-medium">External URL</label>
+      <span class="mb-1 block text-sm font-medium">External URL</span>
       <Input v-model="form.external_url" placeholder="https://..." />
     </div>
 
     <div>
-      <label class="mb-1 block text-sm font-medium">Owner</label>
+      <span class="mb-1 block text-sm font-medium">Owner</span>
       <Input v-model="form.owner" placeholder="Team or person name" />
     </div>
 
@@ -74,7 +74,7 @@
 
 <script setup lang="ts">
 import { reactive, computed, watch } from 'vue'
-import { GraduationCapIcon } from '@lucide/vue'
+import { GraduationCap as GraduationCapIcon } from '@lucide/vue'
 import { Input } from '@/components/ui/input'
 import { Button } from '@/components/ui/button'
 import type { StageType, PipelineSummary } from '../../../types/lifecycleMap'

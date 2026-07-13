@@ -1,4 +1,4 @@
-﻿<template>
+<template>
   <PageTabs :tabs="[
     { label: 'Overview', to: '/admin/costs' },
     { label: 'Spend Limits', to: '/admin/costs/limits' },
@@ -22,8 +22,8 @@
           <CardContent>
             <div class="flex items-end gap-3">
               <div class="flex-1">
-                <label class="mb-1.5 block text-xs font-medium text-muted-foreground">Daily limit (USD)</label>
-                <Input :model-value="orgLimit ?? undefined" @update:model-value="(v: any) => orgLimit = v === '' ? null : Number(v)" type="number" min="0" step="0.01" placeholder="No limit" data-testid="admin-spend-limits-org-limit" />
+                <span class="mb-1.5 block text-xs font-medium text-muted-foreground">Daily limit (USD)</span>
+                <Input aria-label="Form control" :model-value="orgLimit ?? undefined" @update:model-value="(v: any) => orgLimit = v === '' ? null : Number(v)" type="number" min="0" step="0.01" placeholder="No limit" data-testid="admin-spend-limits-org-limit" />
               </div>
               <Button :disabled="savingOrg" data-testid="admin-spend-limits-org-save" @click="saveOrgLimit">
                 {{ savingOrg ? 'Saving...' : 'Save' }}
@@ -55,7 +55,7 @@
                 <tr v-for="team in teams" :key="team.id" class="border-b last:border-b-0">
                   <td class="table-cell font-medium">{{ team.name }}</td>
                   <td class="table-cell">
-                    <Input
+                    <Input aria-label="Form control"
                       :model-value="team.editingLimit ?? undefined" @update:model-value="(v: any) => team.editingLimit = v === '' ? null : Number(v)"
                       type="number"
                       min="0"
@@ -173,7 +173,7 @@ watch(() => limitsData.value, (data) => {
   }
 })
 
-const { data: costsResp, loading: costsLoading, error: costsError, load: loadCosts } = useDataFetch(
+const { data: costsResp, loading: costsLoading, error: costsError } = useDataFetch(
   () => (api as any).GET('/api/v1/admin/costs'),
   { initialValue: { org_total_usd: 0, teams: [] } }
 )

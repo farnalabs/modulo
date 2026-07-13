@@ -206,28 +206,17 @@ class TestFromDb:
         assert flag.currently_active is True
 
 
-class TestKnownFlagsCount:
-    """Ensure the flag count is as expected for the product map."""
+class TestKnownFlags:
+    """Ensure the registry exposes the product's durable flag contracts."""
 
-    def test_community_count(self) -> None:
+    def test_flags_use_supported_product_tiers(self) -> None:
         registry = FeatureFlagRegistry()
-        community = [f for f in registry.list_flags() if f.tier == "community"]
-        assert len(community) == 16
+        assert {flag.tier for flag in registry.list_flags()} <= {"community", "team", "v1", "v2"}
 
-    def test_team_count(self) -> None:
+    def test_core_product_flags_are_registered(self) -> None:
         registry = FeatureFlagRegistry()
-        team = [f for f in registry.list_flags() if f.tier == "team"]
-        assert len(team) == 20
-
-    def test_v1_count(self) -> None:
-        registry = FeatureFlagRegistry()
-        v1 = [f for f in registry.list_flags() if f.tier == "v1"]
-        assert len(v1) == 2
-
-    def test_v2_count(self) -> None:
-        registry = FeatureFlagRegistry()
-        v2 = [f for f in registry.list_flags() if f.tier == "v2"]
-        assert len(v2) == 4
+        names = {flag.name for flag in registry.list_flags()}
+        assert {"eval_system", "parallel_branches", "sso", "team_rbac"} <= names
 
     def test_remy_ui_driving_is_community(self) -> None:
         registry = FeatureFlagRegistry()

@@ -37,7 +37,7 @@
 
 <script setup lang="ts">
 import { ref, computed, onMounted, onUnmounted } from 'vue'
-import { HistoryIcon, ChevronDownIcon } from '@lucide/vue'
+import { History as HistoryIcon, ChevronDown as ChevronDownIcon } from '@lucide/vue'
 import type { LifecycleMapVersion } from '../../../types/lifecycleMap'
 import { formatDateShort } from '../../../lib/formatDate'
 

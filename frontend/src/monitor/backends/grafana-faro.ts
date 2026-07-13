@@ -16,12 +16,26 @@
  * @module
  */
 
-import type { MonitorBackend, MonitorConfig, ErrorEventInput, Breadcrumb, UserInfo } from '../types'
+import type { Breadcrumb, ErrorEventInput, MonitorBackend, MonitorConfig, MonitorLevel, UserInfo } from '../types'
+import { isModuleNotFound } from './sdk-utils'
+
+interface FaroApi {
+  pushError(error: Error, options: Record<string, unknown>): void
+  pushLog(messages: string[], options: Record<string, unknown>): void
+  setUser(user: Record<string, unknown>): void
+  resetUser(): void
+  setSessionProperty(key: string, value: string): void
+}
+
+interface FaroModule {
+  initializeFaro(config: Record<string, unknown>): void
+  api: FaroApi
+}
 
 export class GrafanaFaroMonitorBackend implements MonitorBackend {
   readonly key = 'grafana-faro'
   private initialized = false
-  private faro: any = null
+  private faro: FaroModule | null = null
 
   async init(config: MonitorConfig): Promise<boolean> {
     if (!config.grafanaFaro?.url) {
@@ -30,7 +44,8 @@ export class GrafanaFaroMonitorBackend implements MonitorBackend {
     }
 
     try {
-      const faroModule = await import(/* @vite-ignore */ '@grafana/faro-web-sdk')
+      const moduleName = '@grafana/faro-web-sdk'
+      const faroModule = await import(/* @vite-ignore */ moduleName) as FaroModule
       this.faro = faroModule
 
       const cfg = config.grafanaFaro
@@ -46,10 +61,10 @@ export class GrafanaFaroMonitorBackend implements MonitorBackend {
       })
 
       this.initialized = true
-      console.info('[monitor] Grafana Faro backend initialized')
+      console.warn('[monitor] Grafana Faro backend initialized')
       return true
-    } catch (e: any) {
-      if (e?.code === 'MODULE_NOT_FOUND' || e?.message?.includes('Cannot find module')) {
+    } catch (e: unknown) {
+      if (isModuleNotFound(e)) {
         console.warn('[monitor] @grafana/faro-web-sdk not installed — Grafana Faro unavailable. Run: npm install @grafana/faro-web-sdk')
       } else {
         console.error('[monitor] Grafana Faro init failed:', e)
@@ -70,7 +85,7 @@ export class GrafanaFaroMonitorBackend implements MonitorBackend {
     }
   }
 
-  captureMessage(message: string, level: 'error' | 'warning' | 'critical'): void {
+  captureMessage(message: string, level: MonitorLevel): void {
     if (!this.initialized || !this.faro) return
     try {
       this.faro.api.pushLog([message], {

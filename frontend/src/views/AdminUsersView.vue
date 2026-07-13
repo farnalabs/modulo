@@ -1,4 +1,4 @@
-﻿<template>
+<template>
   <div class="page-wide">
     <div class="flex items-center justify-between">
       <PageHeader title="Users" :subtitle="$t('views.AdminUsersView.manage_user_accounts_and_permissions')" />
@@ -125,20 +125,20 @@
     >
       <form @submit.prevent="createUser">
         <div>
-          <label class="block text-sm font-medium mb-1">Email</label>
-          <input v-model="newUser.email" data-testid="admin-users-create-email" type="email" class="w-full px-3 py-2 border border-input bg-background rounded-lg text-sm" required />
+          <label for="adminusersview-field-4" class="block text-sm font-medium mb-1">Email</label>
+          <input id="adminusersview-field-4" v-model="newUser.email" data-testid="admin-users-create-email" type="email" class="w-full px-3 py-2 border border-input bg-background rounded-lg text-sm" required />
         </div>
         <div>
-          <label class="block text-sm font-medium mb-1">{{ $t('views.AdminModelBackendsView.display_name') }}</label>
-          <input v-model="newUser.display_name" data-testid="admin-users-create-display-name" type="text" class="w-full px-3 py-2 border border-input bg-background rounded-lg text-sm" required />
+          <label for="adminusersview-field-3" class="block text-sm font-medium mb-1">{{ $t('views.AdminModelBackendsView.display_name') }}</label>
+          <input id="adminusersview-field-3" v-model="newUser.display_name" data-testid="admin-users-create-display-name" type="text" class="w-full px-3 py-2 border border-input bg-background rounded-lg text-sm" required />
         </div>
         <div>
-          <label class="block text-sm font-medium mb-1">Password</label>
-          <input v-model="newUser.password" data-testid="admin-users-create-password" type="password" class="w-full px-3 py-2 border border-input bg-background rounded-lg text-sm" minlength="8" required />
+          <label for="adminusersview-field-2" class="block text-sm font-medium mb-1">Password</label>
+          <input id="adminusersview-field-2" v-model="newUser.password" data-testid="admin-users-create-password" type="password" class="w-full px-3 py-2 border border-input bg-background rounded-lg text-sm" minlength="8" required />
         </div>
         <div>
-          <label class="block text-sm font-medium mb-1">Role</label>
-          <select v-model="newUser.org_role" data-testid="admin-users-create-role" aria-label="Role" class="w-full px-3 py-2 border border-input bg-background rounded-lg text-sm">
+          <label for="adminusersview-field-1" class="block text-sm font-medium mb-1">Role</label>
+          <select id="adminusersview-field-1" v-model="newUser.org_role" data-testid="admin-users-create-role" aria-label="Role" class="w-full px-3 py-2 border border-input bg-background rounded-lg text-sm">
             <option value="runner">Runner</option>
             <option value="operator">Operator</option>
             <option value="admin">Admin</option>

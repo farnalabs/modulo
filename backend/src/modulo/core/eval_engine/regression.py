@@ -77,7 +77,10 @@ async def detect_regressions(
                 SUM(CASE WHEN er.evaluated_at < :recent_start THEN 1 ELSE 0 END)
                                        AS baseline_total,
                 SUM(CASE WHEN er.evaluated_at < :recent_start AND er.passed THEN 1 ELSE 0 END)
-                                       AS baseline_passed
+                                       AS baseline_passed,
+                ARRAY_AGG(er.run_id) FILTER (
+                    WHERE er.evaluated_at >= :recent_start AND NOT er.passed
+                )                      AS affected_run_ids
             FROM eval_results er
             JOIN eval_definitions ed ON ed.id = er.eval_id
             WHERE er.organisation_id = :org_id
@@ -138,7 +141,7 @@ async def detect_regressions(
                 current_pass_rate=round(current_pass_rate, 4),
                 drop_pct=round(drop, 4),
                 trend=trend,
-                affected_run_ids=[],
+                affected_run_ids=list(row.affected_run_ids or []),
             ),
         )
 

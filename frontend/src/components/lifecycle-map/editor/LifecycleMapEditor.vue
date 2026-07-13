@@ -94,9 +94,9 @@
           :stage-id="selectedNode.id"
           :name="selectedNodeData.name"
           :description="selectedNodeData.description"
-          :stage-type="selectedNodeData.stage_type"
-          :pipeline-id="selectedNodeData.pipeline_id"
-          :external-url="selectedNodeData.external_url"
+          :stage_type="selectedNodeData.stage_type"
+          :pipeline_id="selectedNodeData.pipeline_id"
+          :external_url="selectedNodeData.external_url"
           :owner="selectedNodeData.owner"
           :graduated="selectedNodeData.graduated"
           :pipelines="pipelines"
@@ -119,11 +119,11 @@
           </button>
         </div>
         <EdgeConfigPanel
-          :trigger-type="selectedEdgeData.trigger_type"
+          :trigger_type="selectedEdgeData.trigger_type"
           :description="selectedEdgeData.description"
-          :condition-expression="selectedEdgeData.condition_expression"
-          :estimated-frequency="selectedEdgeData.estimated_frequency"
-          :trigger-link="selectedEdgeData.trigger_link"
+          :condition_expression="selectedEdgeData.condition_expression"
+          :estimated_frequency="selectedEdgeData.estimated_frequency"
+          :trigger_link="selectedEdgeData.trigger_link"
           @update="onEdgeFieldUpdate"
         />
       </aside>
@@ -145,13 +145,13 @@
 
 <script setup lang="ts">
 import { ref, computed, onMounted, watch } from 'vue'
-import { VueFlow, useVueFlow } from '@vue-flow/core'
+import { VueFlow, useVueFlow, type EdgeMouseEvent, type NodeMouseEvent } from '@vue-flow/core'
 import { Background } from '@vue-flow/background'
 import { Controls } from '@vue-flow/controls'
 
 import '@vue-flow/core/dist/style.css'
 import '@vue-flow/core/dist/theme-default.css'
-import { XIcon, LayersIcon } from '@lucide/vue'
+import { X as XIcon, Layers as LayersIcon } from '@lucide/vue'
 import StageNode from './StageNode.vue'
 import StageConfigPanel from './StageConfigPanel.vue'
 import EdgeConfigPanel from './EdgeConfigPanel.vue'
@@ -173,6 +173,7 @@ const props = defineProps<{
 
 const emitEvent = defineEmits<{
   saved: []
+  'load-version': [versionId: string]
 }>()
 
 const { get, post, put } = useApi()
@@ -321,14 +322,16 @@ async function handleSave() {
   }
 }
 
-function onDragOver(event: DragEvent) {
+function onDragOver(event: unknown) {
+  if (!(event instanceof DragEvent)) return
   event.preventDefault()
   if (event.dataTransfer) {
     event.dataTransfer.dropEffect = 'copy'
   }
 }
 
-function onDrop(event: DragEvent) {
+function onDrop(event: unknown) {
+  if (!(event instanceof DragEvent)) return
   event.preventDefault()
   const type = event.dataTransfer?.getData('application/lifecycle-stage') as StageType | undefined
   if (!type) return
@@ -350,12 +353,12 @@ function onDrop(event: DragEvent) {
   flowNodes.value.push(node)
 }
 
-function onNodeClick(_event: any, node: any) {
+function onNodeClick({ node }: NodeMouseEvent) {
   selectedNode.value = node
   selectedEdge.value = null
 }
 
-function onEdgeClick(_event: any, edge: any) {
+function onEdgeClick({ edge }: EdgeMouseEvent) {
   selectedEdge.value = edge
   selectedNode.value = null
 }

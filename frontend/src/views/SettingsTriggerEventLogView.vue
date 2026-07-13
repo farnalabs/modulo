@@ -1,12 +1,12 @@
-﻿<template>
+<template>
   <div class="page-wide">
     <PageHeader :title="$t('views.SettingsTriggerEventLogView.trigger_event_log')" :subtitle="$t('views.SettingsTriggerEventLogView.event_history_for_all_triggers_across_the_organisation')" />
 
     <div class="rounded-lg border bg-card p-4 shadow-sm">
       <div class="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
         <div>
-          <label class="mb-1 block text-xs font-medium text-muted-foreground">{{ $t('views.SettingsTriggerEventLogView.trigger_type') }}</label>
-          <select
+          <label for="settingstriggereventlogview-field-2" class="mb-1 block text-xs font-medium text-muted-foreground">{{ $t('views.SettingsTriggerEventLogView.trigger_type') }}</label>
+          <select id="settingstriggereventlogview-field-2"
             v-model="filterTriggerType"
             data-testid="settings-trigger-event-log-trigger-type"
             aria-label="Trigger type"
@@ -21,8 +21,8 @@
           </select>
         </div>
         <div>
-          <label class="mb-1 block text-xs font-medium text-muted-foreground">Result</label>
-          <select
+          <label for="settingstriggereventlogview-field-1" class="mb-1 block text-xs font-medium text-muted-foreground">Result</label>
+          <select id="settingstriggereventlogview-field-1"
             v-model="filterResult"
             data-testid="settings-trigger-event-log-result"
             aria-label="Result"
@@ -156,15 +156,11 @@
 import { ref, computed } from 'vue'
 import { api } from '../lib/api/client'
 import { useDataFetch } from '../composables/useDataFetch'
-import { formatApiError } from '../lib/api/formatError'
-import type { components } from '../lib/api/client'
 import PageHeader from '../components/shared/PageHeader.vue'
 import LoadingSpinner from '../components/shared/LoadingSpinner.vue'
 import ErrorAlert from '../components/shared/ErrorAlert.vue'
 import { shortId } from '../utils/format'
 import { Button } from '@/components/ui/button'
-
-type TriggerEventItem = components['schemas']['TriggerEventItem']
 
 const cursorStack = ref<(string | null)[]>([])
 const currentCursor = ref<string | null>(null)

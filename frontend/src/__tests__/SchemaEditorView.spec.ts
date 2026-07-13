@@ -34,46 +34,6 @@ const mockSchemas = [
   },
 ]
 
-const mockVersions = [
-  {
-    id: 'ver-1',
-    schema_id: 'schema-1',
-    version: '1.0.0',
-    version_number: 1,
-    definition_json: {
-      $schema: 'https://json-schema.org/draft/2020-12/schema',
-      title: 'User Profile',
-      type: 'object',
-      properties: {
-        name: { type: 'string', description: 'Full name' },
-        age: { type: 'number' },
-      },
-      required: ['name'],
-    },
-    published: true,
-    created_at: '2026-01-15T00:00:00Z',
-  },
-  {
-    id: 'ver-2',
-    schema_id: 'schema-1',
-    version: '2.0.0',
-    version_number: 2,
-    definition_json: {
-      $schema: 'https://json-schema.org/draft/2020-12/schema',
-      title: 'User Profile',
-      type: 'object',
-      properties: {
-        name: { type: 'string', description: 'Full name' },
-        age: { type: 'number' },
-        email: { type: 'string' },
-      },
-      required: ['name', 'email'],
-    },
-    published: true,
-    created_at: '2026-02-15T00:00:00Z',
-  },
-]
-
 vi.mock('../lib/api/client', () => ({
   api: {
     GET: vi.fn().mockImplementation((_url: string) => {
@@ -178,7 +138,7 @@ describe('SchemaEditorView', () => {
     })
     await flushPromises()
 
-    const searchInput = wrapper.find('[data-testid="schema-editor-search"]')
+    const searchInput = wrapper.find('[data-testid="filter-bar-search"]')
     await searchInput.setValue('User')
     await nextTick()
 

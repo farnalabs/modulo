@@ -13,7 +13,7 @@ export interface DataTableRow {
   [key: string]: unknown
 }
 
-const props = withDefaults(defineProps<{
+withDefaults(defineProps<{
   columns: Column[]
   rows: DataTableRow[]
   loading?: boolean

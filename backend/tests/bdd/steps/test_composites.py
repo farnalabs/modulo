@@ -622,10 +622,9 @@ def when_graph_validator_checks(request: pytest.FixtureRequest) -> None:
     # Check template existence
     if composite_node.get("composite_ref") and not errors:
         tid = composite_node["composite_ref"]
-        if len(tid) == 36 or len(tid) == 32:
-            # Patch-level: simulate 404
-            if tid == "00000000-0000-0000-0000-000000099999":
-                errors.append("Composite template not found")
+        # Patch-level: simulate 404 for a syntactically valid template ID.
+        if (len(tid) == 36 or len(tid) == 32) and tid == "00000000-0000-0000-0000-000000099999":
+            errors.append("Composite template not found")
 
     request.node._validation_errors = errors
 

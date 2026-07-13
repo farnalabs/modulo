@@ -48,7 +48,7 @@
 <script setup lang="ts">
 import { computed } from 'vue'
 import { Handle, Position } from '@vue-flow/core'
-import { ShieldCheckIcon } from '@lucide/vue'
+import { ShieldCheck as ShieldCheckIcon } from '@lucide/vue'
 import type { StageType } from '../../../types/lifecycleMap'
 
 const props = defineProps<{
