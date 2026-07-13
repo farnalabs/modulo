@@ -130,7 +130,7 @@ async def login(
             detail="Account already has an active session. Try again.",
         ) from None
     except ProgrammingError:
-        _log.warning("login.programming_error")
+        _log.warning("login.programming_error", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
