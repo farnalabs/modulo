@@ -906,6 +906,8 @@ Errors shown inline on canvas with user-readable messages.
 - `polling` (v1): `{connector_instance_id, poll_query, condition_expression, poll_interval_seconds}`
 - `agent_signal` (v1): `{source_pipeline_id, source_node_id, signal_schema_id}`
 
+Cron expressions are evaluated as wall-clock schedules in their named IANA timezone, while `next_fire_at` is persisted in UTC. Across daylight-saving transitions, a nonexistent local time advances to the first valid instant and an ambiguous local time uses its first occurrence, matching `croniter` with `zoneinfo`.
+
 **Cardinality**: one trigger belongs to exactly one pipeline. One pipeline may have multiple triggers. When a trigger is deleted: in-flight runs continue against their snapshot to completion; no new runs initiated. Trigger record cascade-deleted; run records retained.
 
 | Type | Alpha | Description |
