@@ -30,7 +30,7 @@ class CompleteSetupRequest(BaseModel):
 @router.post("/model-backends/{backend_id}/complete-setup")
 async def complete_model_backend_setup(
     backend_id: uuid.UUID,
-    body: CompleteSetupRequest,
+    payload: CompleteSetupRequest,
     session: AsyncSession = Depends(get_db_session),
     principal: AuthenticatedPrincipal = Depends(get_current_user),
 ) -> dict:
@@ -43,7 +43,7 @@ async def complete_model_backend_setup(
             await set_rls_org(session, org_id)
             record = await consume_handoff(
                 session,
-                raw_token=body.token,
+                raw_token=payload.token,
                 resource_type="model-backend",
                 org_id=org_id,
             )
@@ -89,7 +89,7 @@ async def complete_model_backend_setup(
                 ) from exc
 
             try:
-                ciphertext = fernet.encrypt(body.api_key.encode())
+                ciphertext = fernet.encrypt(payload.api_key.encode())
             except Exception as exc:
                 _log.error("Failed to encrypt API key: %s", exc)
                 raise HTTPException(

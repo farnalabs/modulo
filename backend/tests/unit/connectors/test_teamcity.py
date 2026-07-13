@@ -144,6 +144,17 @@ async def test_get_run_status_success(teamcity):
 
 
 @respx.mock
+async def test_get_run_status_uses_requested_id_when_response_id_is_null(teamcity):
+    respx.get(f"{_TC_BASE}/app/rest/builds/id:42").mock(
+        return_value=httpx.Response(200, json={"id": None, "state": "queued"})
+    )
+
+    run = await teamcity.get_run_status("42")
+
+    assert run.id == "42"
+
+
+@respx.mock
 async def test_get_run_status_failure(teamcity):
     respx.get(f"{_TC_BASE}/app/rest/builds/id:42").mock(
         return_value=httpx.Response(
