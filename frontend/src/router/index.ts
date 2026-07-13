@@ -3,6 +3,7 @@ import { formatApiError } from '../lib/api/formatError'
 import { createRouter, createWebHistory } from 'vue-router'
 import { getAccessToken } from '../lib/api/client'
 import manifest from '@/manifest.yaml'
+import LoginView from '../views/LoginView.vue'
 
 declare module 'vue-router' {
   interface RouteMeta {
@@ -47,7 +48,6 @@ function decodeJwtPayload(token: string | null): Record<string, unknown> | null 
 }
 
 const DashboardView = () => import('../views/DashboardView.vue')
-const LoginView = () => import('../views/LoginView.vue')
 const LibraryView = () => import('../views/LibraryView.vue')
 const LibraryPipelineWizard = () => import('../views/LibraryPipelineWizard.vue')
 const SettingsObservabilityView = () => import('../views/SettingsObservabilityView.vue')

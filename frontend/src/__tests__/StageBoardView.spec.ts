@@ -1,7 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { mount, flushPromises } from '@vue/test-utils'
 import { createPinia, setActivePinia } from 'pinia'
-import { createRouter, createWebHistory } from 'vue-router'
 import { nextTick } from 'vue'
 
 vi.mock('../lib/api/client', () => ({
@@ -45,47 +44,46 @@ vi.mock('../lib/api/client', () => ({
 
 import StageBoardView from '../views/StageBoardView.vue'
 
-const router = createRouter({
-  history: createWebHistory(),
-  routes: [
-    { path: '/stages', name: 'stages', component: StageBoardView },
-  ],
-})
-
 describe('StageBoardView', () => {
+  let pinia: ReturnType<typeof createPinia>
+
   beforeEach(() => {
-    setActivePinia(createPinia())
+    pinia = createPinia()
+    setActivePinia(pinia)
     vi.clearAllMocks()
   })
 
-  it('renders without crashing', async () => {
-    router.push('/stages')
-    await router.isReady()
-    const wrapper = mount(StageBoardView, {
-      global: { plugins: [router], stubs: { FeatureGate: { template: '<div><slot /></div>' } } },
+  function mountStageBoard() {
+    return mount(StageBoardView, {
+      global: {
+        plugins: [pinia],
+        stubs: { FeatureGate: { template: '<div><slot /></div>' } },
+      },
     })
+  }
+
+  it('renders without crashing', async () => {
+
+    const wrapper = mountStageBoard()
+
     await flushPromises()
     await nextTick()
     expect(wrapper.exists()).toBe(true)
   })
 
   it('renders the heading', async () => {
-    router.push('/stages')
-    await router.isReady()
-    const wrapper = mount(StageBoardView, {
-      global: { plugins: [router], stubs: { FeatureGate: { template: '<div><slot /></div>' } } },
-    })
+
+    const wrapper = mountStageBoard()
+
     await flushPromises()
     await nextTick()
     expect(wrapper.text()).toContain('Stage Board')
   })
 
   it('renders stage columns', async () => {
-    router.push('/stages')
-    await router.isReady()
-    const wrapper = mount(StageBoardView, {
-      global: { plugins: [router], stubs: { FeatureGate: { template: '<div><slot /></div>' } } },
-    })
+
+    const wrapper = mountStageBoard()
+
     await flushPromises()
     await nextTick()
     expect(wrapper.text()).toContain('Development')
@@ -94,11 +92,9 @@ describe('StageBoardView', () => {
   })
 
   it('shows pipeline cards within stage columns', async () => {
-    router.push('/stages')
-    await router.isReady()
-    const wrapper = mount(StageBoardView, {
-      global: { plugins: [router], stubs: { FeatureGate: { template: '<div><slot /></div>' } } },
-    })
+
+    const wrapper = mountStageBoard()
+
     await flushPromises()
     await nextTick()
     expect(wrapper.text()).toContain('Feature X')
@@ -108,11 +104,9 @@ describe('StageBoardView', () => {
   })
 
   it('shows status badges on pipeline cards', async () => {
-    router.push('/stages')
-    await router.isReady()
-    const wrapper = mount(StageBoardView, {
-      global: { plugins: [router], stubs: { FeatureGate: { template: '<div><slot /></div>' } } },
-    })
+
+    const wrapper = mountStageBoard()
+
     await flushPromises()
     await nextTick()
     expect(wrapper.text()).toContain('running')
@@ -122,11 +116,9 @@ describe('StageBoardView', () => {
   })
 
   it('shows filters', async () => {
-    router.push('/stages')
-    await router.isReady()
-    const wrapper = mount(StageBoardView, {
-      global: { plugins: [router], stubs: { FeatureGate: { template: '<div><slot /></div>' } } },
-    })
+
+    const wrapper = mountStageBoard()
+
     await flushPromises()
     await nextTick()
     expect(wrapper.find('[data-testid="stage-board-team-filter"]').exists()).toBe(true)
@@ -136,22 +128,18 @@ describe('StageBoardView', () => {
   })
 
   it('shows create stage button', async () => {
-    router.push('/stages')
-    await router.isReady()
-    const wrapper = mount(StageBoardView, {
-      global: { plugins: [router], stubs: { FeatureGate: { template: '<div><slot /></div>' } } },
-    })
+
+    const wrapper = mountStageBoard()
+
     await flushPromises()
     await nextTick()
     expect(wrapper.find('[data-testid="stage-board-create-btn"]').exists()).toBe(true)
   })
 
   it('opens create stage dialog on button click', async () => {
-    router.push('/stages')
-    await router.isReady()
-    const wrapper = mount(StageBoardView, {
-      global: { plugins: [router], stubs: { FeatureGate: { template: '<div><slot /></div>' } } },
-    })
+
+    const wrapper = mountStageBoard()
+
     await flushPromises()
     await nextTick()
     await wrapper.find('[data-testid="stage-board-create-btn"]').trigger('click')
@@ -162,11 +150,9 @@ describe('StageBoardView', () => {
   })
 
   it('shows stage detail panel on column click', async () => {
-    router.push('/stages')
-    await router.isReady()
-    const wrapper = mount(StageBoardView, {
-      global: { plugins: [router], stubs: { FeatureGate: { template: '<div><slot /></div>' } } },
-    })
+
+    const wrapper = mountStageBoard()
+
     await flushPromises()
     await nextTick()
     await wrapper.find('[data-testid="stage-board-column-stage-1"]').trigger('click')
@@ -176,11 +162,9 @@ describe('StageBoardView', () => {
   })
 
   it('shows pipeline detail panel on card click', async () => {
-    router.push('/stages')
-    await router.isReady()
-    const wrapper = mount(StageBoardView, {
-      global: { plugins: [router], stubs: { FeatureGate: { template: '<div><slot /></div>' } } },
-    })
+
+    const wrapper = mountStageBoard()
+
     await flushPromises()
     await nextTick()
     await wrapper.find('[data-testid="stage-board-card-pipeline-1"]').trigger('click')
@@ -190,11 +174,9 @@ describe('StageBoardView', () => {
   })
 
   it('shows all stages when no team filter is selected', async () => {
-    router.push('/stages')
-    await router.isReady()
-    const wrapper = mount(StageBoardView, {
-      global: { plugins: [router], stubs: { FeatureGate: { template: '<div><slot /></div>' } } },
-    })
+
+    const wrapper = mountStageBoard()
+
     await flushPromises()
     await nextTick()
     expect(wrapper.text()).toContain('Development')
@@ -203,11 +185,9 @@ describe('StageBoardView', () => {
   })
 
   it('filters stages by team when a team is selected', async () => {
-    router.push('/stages')
-    await router.isReady()
-    const wrapper = mount(StageBoardView, {
-      global: { plugins: [router], stubs: { FeatureGate: { template: '<div><slot /></div>' } } },
-    })
+
+    const wrapper = mountStageBoard()
+
     await flushPromises()
     await nextTick()
     const select = wrapper.find('[data-testid="stage-board-team-filter"]')
@@ -218,11 +198,9 @@ describe('StageBoardView', () => {
   })
 
   it('shows all stages when switching back to All Teams', async () => {
-    router.push('/stages')
-    await router.isReady()
-    const wrapper = mount(StageBoardView, {
-      global: { plugins: [router], stubs: { FeatureGate: { template: '<div><slot /></div>' } } },
-    })
+
+    const wrapper = mountStageBoard()
+
     await flushPromises()
     await nextTick()
     const select = wrapper.find('[data-testid="stage-board-team-filter"]')
@@ -237,11 +215,9 @@ describe('StageBoardView', () => {
   })
 
   it('populates team filter dropdown with loaded teams', async () => {
-    router.push('/stages')
-    await router.isReady()
-    const wrapper = mount(StageBoardView, {
-      global: { plugins: [router], stubs: { FeatureGate: { template: '<div><slot /></div>' } } },
-    })
+
+    const wrapper = mountStageBoard()
+
     await flushPromises()
     await nextTick()
     const options = wrapper.find('[data-testid="stage-board-team-filter"]').findAll('option')
