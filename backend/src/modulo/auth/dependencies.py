@@ -4,7 +4,7 @@ import logging
 
 from fastapi import Depends, HTTPException, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
-from jose import JWTError
+from jwt import InvalidTokenError as JWTError
 
 from modulo.auth.jwt import AuthenticatedPrincipal, decode_principal
 from modulo.settings import Settings, get_settings
