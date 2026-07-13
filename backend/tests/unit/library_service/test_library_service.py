@@ -1,6 +1,7 @@
 """Unit tests for the library service layer."""
 
 import uuid
+from collections.abc import Iterator
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -30,6 +31,28 @@ from modulo.core.library_service import (
     publish_contribution,
 )
 from modulo.db.crud.base import PageResult
+
+_COMMUNITY_PRIMITIVES_BASELINE = tuple(_COMMUNITY_PRIMITIVES)
+_COMMUNITY_BY_ID_BASELINE = dict(_COMMUNITY_BY_ID)
+_COMMUNITY_BY_SLUG_BASELINE = dict(_COMMUNITY_BY_SLUG)
+
+
+def _restore_community_cache() -> None:
+    _COMMUNITY_PRIMITIVES[:] = _COMMUNITY_PRIMITIVES_BASELINE
+    _COMMUNITY_BY_ID.clear()
+    _COMMUNITY_BY_ID.update(_COMMUNITY_BY_ID_BASELINE)
+    _COMMUNITY_BY_SLUG.clear()
+    _COMMUNITY_BY_SLUG.update(_COMMUNITY_BY_SLUG_BASELINE)
+
+
+@pytest.fixture(autouse=True)
+def isolate_community_cache() -> Iterator[None]:
+    _restore_community_cache()
+    try:
+        yield
+    finally:
+        _restore_community_cache()
+
 
 # ---------------------------------------------------------------------------
 # Helpers

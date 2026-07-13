@@ -10,6 +10,7 @@ code:
   - backend/src/modulo/db/models/environment_profile.py
   - backend/src/modulo/db/models/workspace_lease.py
   - backend/src/modulo/db/crud/environment_profile.py
+  - backend/src/modulo/api/routes/environment_profiles.py
   - backend/src/modulo/api/routes/environments.py
   - backend/src/modulo/core/graph_validator/__init__.py
   - backend/src/modulo/db/migrations/versions/0013_environment_profiles_workspace_leases.py

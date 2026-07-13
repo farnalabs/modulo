@@ -96,7 +96,7 @@ Packages Modulo for self-hosted deployment via Docker Compose (dev/alpha/poc) an
 - No documented upgrade path between chart versions
 - No automated backup/restore hooks in Helm chart
 - No multi-replica backend deployment tested (advisory locks, rate limiter, scheduler)
-- No `docker-build` CI gate — the `docker-build.yml` workflow only runs on push-to-main and tag, not on PR/merge. Broken Dockerfiles could reach main without feedback.
+- Docker build validation runs on every push and pull request; only `main` and version tags publish the already-scanned image to GHCR.
 - No SQLite Docker Compose profile for zero-dependency local dev — PRD §13 requires "SQLite fallback" in "Docker-compose: Postgres + API + UI; SQLite fallback"
 - Frontend `Dockerfile.prod` nginx config hardcodes `backend:8000` — works only in Docker Compose context; Helm chart uses its own nginx config from `_helpers.tpl` template
 - Two backend Dockerfiles (`backend/Dockerfile` for dev, `Dockerfile.backend` for CI/prod) — risk of divergence; the CI build uses multi-stage with `uv sync --frozen` while the dev file uses `uv pip install --system -e .`

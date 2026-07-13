@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { mount } from '@vue/test-utils'
+import { flushPromises, mount } from '@vue/test-utils'
 import { nextTick } from 'vue'
 
 vi.mock('../lib/api/client', () => ({
@@ -11,6 +11,15 @@ vi.mock('../lib/api/client', () => ({
 
 import TeamComparisonView from '../views/TeamComparisonView.vue'
 import { api } from '../lib/api/client'
+
+type MockApiResult = Promise<{ data: unknown; error: unknown }>
+
+function mockApiGet(implementation: (url: string) => MockApiResult) {
+  const mock = api.GET as unknown as {
+    mockImplementation: (callback: (url: string) => MockApiResult) => void
+  }
+  mock.mockImplementation(implementation)
+}
 
 function createMockSummary(overrides = {}) {
   return {
@@ -52,14 +61,22 @@ function createMockTeams(overrides = {}) {
 }
 
 async function waitForAsync() {
-  await nextTick()
-  await nextTick()
+  await flushPromises()
   await nextTick()
 }
 
 describe('TeamComparisonView', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    mockApiGet((url: string) => {
+      if (url === '/api/v1/dashboard/summary') {
+        return Promise.resolve({ data: createMockSummary(), error: undefined })
+      }
+      if (url === '/api/v1/admin/teams') {
+        return Promise.resolve({ data: createMockTeams(), error: undefined })
+      }
+      return Promise.resolve({ data: null, error: undefined })
+    })
   })
 
   it('renders without crashing', async () => {
@@ -70,7 +87,7 @@ describe('TeamComparisonView', () => {
   })
 
   it('shows error alert when dashboard summary API fails', async () => {
-    vi.mocked(api.GET).mockImplementation((url: string) => {
+    mockApiGet((url: string) => {
       if (url === '/api/v1/dashboard/summary') {
         return Promise.resolve({ data: null, error: { detail: 'Failed to load dashboard data' } })
       }
@@ -82,7 +99,7 @@ describe('TeamComparisonView', () => {
   })
 
   it('shows error alert when teams list API fails', async () => {
-    vi.mocked(api.GET).mockImplementation((url: string) => {
+    mockApiGet((url: string) => {
       if (url === '/api/v1/dashboard/summary') {
         return Promise.resolve({ data: createMockSummary(), error: undefined })
       }
@@ -97,7 +114,7 @@ describe('TeamComparisonView', () => {
   })
 
   it('shows spinner during loading state', async () => {
-    vi.mocked(api.GET).mockImplementation(() => new Promise(() => {}))
+    mockApiGet(() => new Promise(() => {}))
     const wrapper = mount(TeamComparisonView)
     await nextTick()
     const spinner = wrapper.findComponent({ name: 'LoadingSpinner' })
@@ -105,7 +122,7 @@ describe('TeamComparisonView', () => {
   })
 
   it('shows empty state when no teams exist', async () => {
-    vi.mocked(api.GET).mockImplementation((url: string) => {
+    mockApiGet((url: string) => {
       if (url === '/api/v1/dashboard/summary') {
         return Promise.resolve({
           data: {
@@ -132,7 +149,7 @@ describe('TeamComparisonView', () => {
   })
 
   it('renders team data in comparison table', async () => {
-    vi.mocked(api.GET).mockImplementation((url: string) => {
+    mockApiGet((url: string) => {
       if (url === '/api/v1/dashboard/summary') {
         return Promise.resolve({ data: createMockSummary(), error: undefined })
       }
@@ -152,7 +169,7 @@ describe('TeamComparisonView', () => {
   })
 
   it('expands team drill-down on click and shows pipeline evals', async () => {
-    vi.mocked(api.GET).mockImplementation((url: string) => {
+    mockApiGet((url: string) => {
       if (url === '/api/v1/dashboard/summary') {
         return Promise.resolve({ data: createMockSummary(), error: undefined })
       }
@@ -179,7 +196,7 @@ describe('TeamComparisonView', () => {
   })
 
   it('collapses team drill-down on second click', async () => {
-    vi.mocked(api.GET).mockImplementation((url: string) => {
+    mockApiGet((url: string) => {
       if (url === '/api/v1/dashboard/summary') {
         return Promise.resolve({ data: createMockSummary(), error: undefined })
       }
@@ -208,7 +225,7 @@ describe('TeamComparisonView', () => {
   })
 
   it('falls back to shortId when pipeline names API fails', async () => {
-    vi.mocked(api.GET).mockImplementation((url: string) => {
+    mockApiGet((url: string) => {
       if (url === '/api/v1/dashboard/summary') {
         return Promise.resolve({ data: createMockSummary(), error: undefined })
       }
@@ -231,7 +248,7 @@ describe('TeamComparisonView', () => {
   })
 
   it('shows pipeline count with pluralization', async () => {
-    vi.mocked(api.GET).mockImplementation((url: string) => {
+    mockApiGet((url: string) => {
       if (url === '/api/v1/dashboard/summary') {
         return Promise.resolve({ data: createMockSummary(), error: undefined })
       }

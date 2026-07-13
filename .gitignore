@@ -29,6 +29,7 @@ dmypy.json
 # pytest
 .pytest_cache/
 .coverage
+.coverage.*
 coverage.xml
 htmlcov/
 test-results/

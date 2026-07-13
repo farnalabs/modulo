@@ -32,7 +32,13 @@ from modulo.db.models.trigger import Trigger
 # Module-level helpers
 # ---------------------------------------------------------------------------
 
-_VALID_TS = int(time.time())
+_VALID_TS: int
+
+
+@pytest.fixture(autouse=True)
+def refresh_valid_timestamp() -> None:
+    global _VALID_TS
+    _VALID_TS = int(time.time())
 
 
 def _sha256_sig(body: bytes, secret: str, timestamp: int | None = None) -> str:

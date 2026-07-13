@@ -75,27 +75,7 @@ jobs:
           path: backend/coverage.xml
 
   frontend:
-    name: Frontend
-    runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: frontend
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v6
-        with:
-          node-version: "20"
-          cache: npm
-          cache-dependency-path: frontend/package-lock.json
-      - run: npm ci
-      - run: npm run lint
-      - run: npm run type-check
-      - run: npm run test:unit
-      - run: npm run build
-      - run: npm audit
-
-  wcag-contrast:
-    name: WCAG Contrast
+    name: Frontend and WCAG
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -111,19 +91,17 @@ jobs:
       - name: Install Playwright browsers
         run: npx playwright install chromium
       - name: Run WCAG contrast tests
+        id: wcag-contrast
         run: npx playwright test wcag-contrast
-
-  docker-build:
-    name: Build (Docker)
-    runs-on: self-hosted
-    steps:
-      - uses: actions/checkout@v4
-      - name: Build backend image
-        shell: powershell
-        run: docker build ./backend -t modulo-backend:${{ github.sha }}
-      - name: Build frontend image
-        shell: powershell
-        run: docker build ./frontend -t modulo-frontend:${{ github.sha }}
+        continue-on-error: true
+      - run: npm run lint
+      - run: npm run type-check
+      - run: npm run test:unit
+      - run: npm run build
+      - run: npm audit
+      - name: Fail job on WCAG contrast failure
+        if: steps.wcag-contrast.outcome == 'failure'
+        run: exit 1
 
   product-map-validate:
     name: Product map validation
