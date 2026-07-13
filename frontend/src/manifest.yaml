@@ -642,6 +642,9 @@ routes:
         sidebar_group:
         sidebar_order:
         type: detail_page
+        pattern: /lifecycle-maps/:id
+        dynamic_params:
+        -   id
         <<: *community
         deprecated: false
 
