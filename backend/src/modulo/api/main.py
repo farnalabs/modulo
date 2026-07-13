@@ -439,6 +439,7 @@ async def _seed_sso_providers(settings: Settings) -> None:
     from sqlalchemy import select
 
     from modulo.api.dependencies import get_or_create_engine, get_or_create_session_factory
+    from modulo.auth.secret_storage import encrypt_stored_secret
     from modulo.db.models.sso_provider import SsoProvider
 
     engine = get_or_create_engine(settings)
@@ -465,7 +466,7 @@ async def _seed_sso_providers(settings: Settings) -> None:
                 provider_type="oidc",
                 name=entry.get("provider_id", entry.get("name", "Imported OIDC Provider")),
                 client_id=entry["client_id"],
-                client_secret=entry["client_secret"],
+                client_secret=encrypt_stored_secret(entry["client_secret"], settings.fernet_key),
                 discovery_url=entry["discovery_url"],
                 scopes=json.dumps(["openid", "profile", "email"]),
                 enabled=True,
