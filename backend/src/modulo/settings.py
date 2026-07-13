@@ -207,7 +207,9 @@ class Settings(BaseSettings):
         url = self.database_url
         if url.startswith("postgres://"):
             url = "postgresql+asyncpg://" + url[len("postgres://") :]
-        # asyncpg accepts ?sslmode=disable natively — keep it.
+        # asyncpg doesn't understand sslmode in URLs — strip it entirely.
+        # Without it, asyncpg defaults to "prefer" SSL (try SSL, fall back).
+        url = url.replace("?sslmode=disable", "").replace("&sslmode=disable", "")
         if url != self.database_url:
             self.database_url = url
             _log.info("settings.database_url_fixed")
