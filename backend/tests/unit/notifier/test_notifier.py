@@ -24,6 +24,14 @@ _ORG = uuid.uuid4()
 _RUN = uuid.uuid4()
 
 
+def _configure_rls_session(session: AsyncMock) -> None:
+    bind = MagicMock()
+    bind.dialect.name = "sqlite"
+    session.in_transaction = MagicMock(return_value=True)
+    session.get_bind = MagicMock(return_value=bind)
+    session.info = {}
+
+
 def _encrypt(secret: str) -> bytes:
     return Fernet(_KEY.encode()).encrypt(secret.encode())
 
@@ -52,6 +60,7 @@ def _fake_endpoint(
 def _session_factory(entries: list[Any] | None = None) -> MagicMock:
     """Build a mock async_sessionmaker that returns a controlled session."""
     session = AsyncMock()
+    _configure_rls_session(session)
     begin_cm = AsyncMock()
     begin_cm.__aenter__ = AsyncMock(return_value=None)
     begin_cm.__aexit__ = AsyncMock(return_value=False)
@@ -104,6 +113,7 @@ async def test_get_subscribed_endpoints_returns_matching() -> None:
     result.scalars.return_value.__iter__ = lambda self: iter([ep])
 
     session = AsyncMock()
+    _configure_rls_session(session)
     session.execute = AsyncMock(return_value=result)
 
     factory = MagicMock(
@@ -128,6 +138,7 @@ async def test_get_subscribed_endpoints_skips_unsubscribed() -> None:
     result.scalars.return_value.__iter__ = lambda self: iter([ep])
 
     session = AsyncMock()
+    _configure_rls_session(session)
     session.execute = AsyncMock(return_value=result)
 
     factory = MagicMock(
@@ -151,6 +162,7 @@ async def test_get_subscribed_endpoints_skips_auto_disabled() -> None:
     result.scalars.return_value.__iter__ = lambda self: iter([])
 
     session = AsyncMock()
+    _configure_rls_session(session)
     session.execute = AsyncMock(return_value=result)
 
     factory = MagicMock(
@@ -315,6 +327,7 @@ async def test_increment_dead_letter_does_not_auto_disable_below_threshold() -> 
     scalar_result.scalar_one.return_value = 6  # new count
 
     session = AsyncMock()
+    _configure_rls_session(session)
     begin_cm = AsyncMock()
     begin_cm.__aenter__ = AsyncMock(return_value=None)
     begin_cm.__aexit__ = AsyncMock(return_value=False)
@@ -343,6 +356,7 @@ async def test_increment_dead_letter_auto_disables_at_threshold() -> None:
     scalar_result.scalar_one.return_value = MAX_DEAD_LETTERS
 
     session = AsyncMock()
+    _configure_rls_session(session)
     begin_cm = AsyncMock()
     begin_cm.__aenter__ = AsyncMock(return_value=None)
     begin_cm.__aexit__ = AsyncMock(return_value=False)
@@ -507,6 +521,7 @@ def _make_session_factory(
         return _make_scalar_result(endpoints_org)
 
     session = AsyncMock()
+    _configure_rls_session(session)
     session.execute = AsyncMock(side_effect=execute_side_effect)
 
     return MagicMock(
@@ -564,6 +579,7 @@ async def test_get_subscribed_endpoints_no_team_id_skips_team_endpoints() -> Non
         return _make_scalar_result([org_ep])
 
     session = AsyncMock()
+    _configure_rls_session(session)
     session.execute = AsyncMock(side_effect=execute_side_effect)
 
     factory = MagicMock(

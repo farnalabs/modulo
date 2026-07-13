@@ -5,7 +5,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 
 class TestStartSchedulers:
-    def test_returns_three_tasks(self):
+    async def test_returns_three_tasks(self):
         """start_schedulers() should return cron, polling, and cleanup tasks."""
         import modulo.core.in_process_scheduler as ips
 
@@ -16,15 +16,16 @@ class TestStartSchedulers:
             patch.object(ips, "async_sessionmaker", return_value=MagicMock()),
             patch.object(ips, "create_async_engine", return_value=mock_engine),
         ):
-            tasks = asyncio.run(ips.start_schedulers(engine=mock_engine))
+            tasks = await ips.start_schedulers(engine=mock_engine)
         assert len(tasks) == 3
         assert tasks[0].get_name() == "cron-scheduler"
         assert tasks[1].get_name() == "polling-scheduler"
         assert tasks[2].get_name() == "cleanup-scheduler"
         for t in tasks:
             t.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
 
-    def test_creates_engine_when_not_provided(self):
+    async def test_creates_engine_when_not_provided(self):
         """start_schedulers() should create an engine when not provided."""
         import modulo.core.in_process_scheduler as ips
 
@@ -37,13 +38,14 @@ class TestStartSchedulers:
             patch.object(ips, "create_async_engine", return_value=mock_engine) as mock_create,
             patch.object(ips, "async_sessionmaker", return_value=MagicMock()),
         ):
-            tasks = asyncio.run(ips.start_schedulers())
+            tasks = await ips.start_schedulers()
         assert mock_create.called
         assert len(tasks) == 3
         for t in tasks:
             t.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
 
-    def test_uses_provided_engine(self):
+    async def test_uses_provided_engine(self):
         """start_schedulers() should use the engine provided."""
         import modulo.core.in_process_scheduler as ips
 
@@ -54,11 +56,12 @@ class TestStartSchedulers:
             patch.object(ips, "create_async_engine") as mock_create,
             patch.object(ips, "async_sessionmaker", return_value=MagicMock()),
         ):
-            tasks = asyncio.run(ips.start_schedulers(engine=mock_engine))
+            tasks = await ips.start_schedulers(engine=mock_engine)
         assert not mock_create.called
         assert len(tasks) == 3
         for t in tasks:
             t.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
 
 
 class TestDisposeSchedulerEngine:
