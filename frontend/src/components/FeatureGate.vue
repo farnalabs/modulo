@@ -73,7 +73,7 @@ const props = withDefaults(defineProps<{
   showDisabled?: boolean;
   pricingUrl?: string;
 }>(), {
-  pricingUrl: "https://modulo.run/pricing",
+  pricingUrl: "/settings/license",
 });
 
 const planStore = usePlanStore();
