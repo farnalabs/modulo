@@ -462,9 +462,11 @@ async def optimize_prompt(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Agent not found")
 
     try:
-        eval_results, eval_defs = await get_eval_results_with_defs(
-            session, req.eval_result_ids, principal.organisation_id
-        )
+        async with session.begin():
+            await set_rls_org(session, principal.organisation_id)
+            eval_results, eval_defs = await get_eval_results_with_defs(
+                session, req.eval_result_ids, principal.organisation_id
+            )
     except ProgrammingError:
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
@@ -485,12 +487,14 @@ async def optimize_prompt(
     backend_id = req.model_backend_id or agent.model_backend_id
 
     try:
-        mb_result = await session.execute(
-            select(ModelBackend).where(
-                ModelBackend.id == backend_id,
-                ModelBackend.organisation_id == principal.organisation_id,
+        async with session.begin():
+            await set_rls_org(session, principal.organisation_id)
+            mb_result = await session.execute(
+                select(ModelBackend).where(
+                    ModelBackend.id == backend_id,
+                    ModelBackend.organisation_id == principal.organisation_id,
+                )
             )
-        )
     except ProgrammingError:
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,

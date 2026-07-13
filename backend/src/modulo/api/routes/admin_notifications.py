@@ -393,31 +393,31 @@ async def retry_all_failed_deliveries(
                     )
                     session.add(new_log)
 
-                if resp.is_success:
-                    await session.execute(
-                        update(NotificationEndpoint)
-                        .where(
-                            NotificationEndpoint.id == ep.id,
-                            NotificationEndpoint.consecutive_dead_letter_count > 0,
-                        )
-                        .values(consecutive_dead_letter_count=0)
-                    )
-                else:
-                    result = await session.execute(
-                        update(NotificationEndpoint)
-                        .where(NotificationEndpoint.id == ep.id)
-                        .values(
-                            consecutive_dead_letter_count=(NotificationEndpoint.consecutive_dead_letter_count + 1),
-                        )
-                        .returning(NotificationEndpoint.consecutive_dead_letter_count)
-                    )
-                    new_count = result.scalar_one()
-                    if new_count >= 10:
+                    if resp.is_success:
                         await session.execute(
                             update(NotificationEndpoint)
-                            .where(NotificationEndpoint.id == ep.id)
-                            .values(auto_disabled=True, disabled_at=datetime.now(UTC))
+                            .where(
+                                NotificationEndpoint.id == ep.id,
+                                NotificationEndpoint.consecutive_dead_letter_count > 0,
+                            )
+                            .values(consecutive_dead_letter_count=0)
                         )
+                    else:
+                        result = await session.execute(
+                            update(NotificationEndpoint)
+                            .where(NotificationEndpoint.id == ep.id)
+                            .values(
+                                consecutive_dead_letter_count=(NotificationEndpoint.consecutive_dead_letter_count + 1),
+                            )
+                            .returning(NotificationEndpoint.consecutive_dead_letter_count)
+                        )
+                        new_count = result.scalar_one()
+                        if new_count >= 10:
+                            await session.execute(
+                                update(NotificationEndpoint)
+                                .where(NotificationEndpoint.id == ep.id)
+                                .values(auto_disabled=True, disabled_at=datetime.now(UTC))
+                            )
             except ProgrammingError:
                 logger.warning(
                     "notifications.delivery_table_missing", extra={"route": "retry_all_failed_deliveries.record"}
