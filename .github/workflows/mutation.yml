@@ -1,0 +1,73 @@
+name: Mutation Testing
+
+on:
+  schedule:
+    - cron: '0 6 * * 1'  # Every Monday at 6 AM UTC
+  workflow_dispatch:
+    inputs:
+      paths:
+        description: 'Paths to mutate (space-separated, relative to backend/)'
+        required: false
+        default: 'src/modulo/auth/ src/modulo/db/rls.py src/modulo/core/license.py'
+  pull_request:
+    paths:
+      - 'backend/src/modulo/auth/**'
+      - 'backend/src/modulo/db/rls.py'
+      - 'backend/src/modulo/core/pipeline_engine/**'
+      - 'backend/src/modulo/core/eval_engine/**'
+      - 'backend/src/modulo/core/cost_controller/**'
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  mutation-backend:
+    name: Mutation (Backend)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend
+    env:
+      DATABASE_URL: "postgresql+asyncpg://unused:unused@localhost/unused"
+      SECRET_KEY: "ci-mutation-secret-key-not-for-production"
+      FERNET_KEY: "vK-xU7GqHLflg_GqzJ1FqWI7pHWoHSIyukf4wx-tMHI="
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: astral-sh/setup-uv@v7
+        with:
+          python-version: "3.12"
+          enable-cache: true
+      - run: uv sync --frozen
+      - name: Run mutation tests
+        shell: bash
+        run: |
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            CHANGED=$(git diff --name-only origin/${{ github.base_ref }}...HEAD -- 'backend/src/modulo/' | sed 's|^backend/||' | tr '\n' ' ')
+            if [ -z "$CHANGED" ]; then
+              echo "No backend source files changed — skipping mutation tests"
+              exit 0
+            fi
+            echo "Mutating paths: $CHANGED"
+            uv run mutmut run --paths-to-mutate $CHANGED
+          else
+            PATHS="${{ github.event.inputs.paths || 'src/modulo/auth/ src/modulo/db/rls.py src/modulo/core/license.py' }}"
+            uv run mutmut run --paths-to-mutate $PATHS
+          fi
+      - name: Upload mutation report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: mutation-report-backend
+          path: backend/mutation-results.xml
+      - name: Fail on low mutation score
+        if: always()
+        shell: bash
+        run: |
+          SCORE=$(uv run mutmut results 2>&1 | grep -oP 'Mutation score \K[\d.]+(?=%)' || echo "0")
+          echo "Mutation score: $SCORE%"
+          if (( $(echo "$SCORE < 50.0" | bc -l) )); then
+            echo "⚠️ Mutation score $SCORE% is below 50% threshold"
+          fi
