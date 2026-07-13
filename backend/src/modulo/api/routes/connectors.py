@@ -201,7 +201,7 @@ async def create_connector_endpoint(
                 org_id=principal.organisation_id,
                 name=req.name,
                 connector_type_id=req.connector_type_id,
-                account_id=principal.account_id,
+                owner_id=principal.account_id,
                 credentials_ciphertext=ciphertext,
                 config_json=req.config_json,
                 allowed_operations=req.allowed_operations,

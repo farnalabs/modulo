@@ -1428,7 +1428,7 @@ async def create_connector(
                 org_id=org_id,
                 name=name,
                 connector_type_id=connector_type_id,
-                owner_id=account_id,
+                account_id=account_id,
                 credentials_ciphertext=credentials_ciphertext,
                 config_json=config_json or {},
                 allowed_operations=allowed_operations or [],
