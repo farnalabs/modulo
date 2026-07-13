@@ -19,6 +19,7 @@ from modulo.api.main import app
 from modulo.auth.dependencies import get_current_user
 from modulo.auth.jwt import AuthenticatedPrincipal
 from modulo.settings import Settings, get_settings
+from tests.unit.api.assertions import assert_feature_requires_database_update
 
 _VALID_32 = "a" * 32
 _ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
@@ -74,14 +75,6 @@ def _override_session(session) -> None:
         yield session
 
     app.dependency_overrides[get_db_session] = _get_session
-
-
-def _assert_feature_requires_database_update(resp) -> None:
-    """Assert the stable public contract for unavailable run features."""
-    detail = resp.json()["detail"].lower()
-    assert "feature" in detail
-    assert "not available" in detail
-    assert "database update" in detail
 
 
 # ---------------------------------------------------------------------------
@@ -148,6 +141,14 @@ class TestDeletePipelineProgrammingError:
 # ---------------------------------------------------------------------------
 
 
+class TestListRunsProgrammingError:
+    def test_list_runs_returns_501_on_programming_error(self, admin_client: TestClient) -> None:
+        session = _make_session_raising_programming_error()
+        _override_session(session)
+        resp = admin_client.get("/api/v1/runs")
+        assert_feature_requires_database_update(resp)
+
+
 class TestTriggerRunProgrammingError:
     def test_trigger_run_returns_501_on_programming_error(self, admin_client: TestClient) -> None:
         session = _make_session_raising_programming_error()
@@ -156,8 +157,7 @@ class TestTriggerRunProgrammingError:
             "/api/v1/runs",
             json={"pipeline_id": str(_PIPELINE_ID), "input_payload": {}},
         )
-        assert resp.status_code == 501
-        _assert_feature_requires_database_update(resp)
+        assert_feature_requires_database_update(resp)
 
 
 class TestGetRunStatusProgrammingError:
@@ -165,8 +165,7 @@ class TestGetRunStatusProgrammingError:
         session = _make_session_raising_programming_error()
         _override_session(session)
         resp = admin_client.get(f"/api/v1/runs/{_RUN_ID}")
-        assert resp.status_code == 501
-        _assert_feature_requires_database_update(resp)
+        assert_feature_requires_database_update(resp)
 
 
 class TestCancelRunProgrammingError:
@@ -174,8 +173,7 @@ class TestCancelRunProgrammingError:
         session = _make_session_raising_programming_error()
         _override_session(session)
         resp = admin_client.post(f"/api/v1/runs/{_RUN_ID}/cancel")
-        assert resp.status_code == 501
-        _assert_feature_requires_database_update(resp)
+        assert_feature_requires_database_update(resp)
 
 
 class TestGetRunIoProgrammingError:
@@ -183,8 +181,7 @@ class TestGetRunIoProgrammingError:
         session = _make_session_raising_programming_error()
         _override_session(session)
         resp = admin_client.get(f"/api/v1/runs/{_RUN_ID}/io")
-        assert resp.status_code == 501
-        _assert_feature_requires_database_update(resp)
+        assert_feature_requires_database_update(resp)
 
 
 class TestExportRunFixtureProgrammingError:
@@ -192,8 +189,7 @@ class TestExportRunFixtureProgrammingError:
         session = _make_session_raising_programming_error()
         _override_session(session)
         resp = admin_client.get(f"/api/v1/runs/{_RUN_ID}/export-fixture")
-        assert resp.status_code == 501
-        _assert_feature_requires_database_update(resp)
+        assert_feature_requires_database_update(resp)
 
 
 class TestGetRunWorkspaceLeaseProgrammingError:
@@ -201,8 +197,7 @@ class TestGetRunWorkspaceLeaseProgrammingError:
         session = _make_session_raising_programming_error()
         _override_session(session)
         resp = admin_client.get(f"/api/v1/runs/{_RUN_ID}/workspace-lease")
-        assert resp.status_code == 501
-        _assert_feature_requires_database_update(resp)
+        assert_feature_requires_database_update(resp)
 
 
 class TestGetRunWorkspaceEventsProgrammingError:
@@ -210,8 +205,7 @@ class TestGetRunWorkspaceEventsProgrammingError:
         session = _make_session_raising_programming_error()
         _override_session(session)
         resp = admin_client.get(f"/api/v1/runs/{_RUN_ID}/workspace-events")
-        assert resp.status_code == 501
-        _assert_feature_requires_database_update(resp)
+        assert_feature_requires_database_update(resp)
 
 
 class TestGetRunNodeOutputProgrammingError:
@@ -219,8 +213,7 @@ class TestGetRunNodeOutputProgrammingError:
         session = _make_session_raising_programming_error()
         _override_session(session)
         resp = admin_client.get(f"/api/v1/runs/{_RUN_ID}/nodes/{_NODE_ID}/output")
-        assert resp.status_code == 501
-        _assert_feature_requires_database_update(resp)
+        assert_feature_requires_database_update(resp)
 
 
 class TestObserveRunNodeProgrammingError:
@@ -228,8 +221,7 @@ class TestObserveRunNodeProgrammingError:
         session = _make_session_raising_programming_error()
         _override_session(session)
         resp = admin_client.post(f"/api/v1/runs/{_RUN_ID}/nodes/{_NODE_ID}/observe")
-        assert resp.status_code == 501
-        _assert_feature_requires_database_update(resp)
+        assert_feature_requires_database_update(resp)
 
 
 class TestRecoverRunNodeProgrammingError:
@@ -237,8 +229,7 @@ class TestRecoverRunNodeProgrammingError:
         session = _make_session_raising_programming_error()
         _override_session(session)
         resp = admin_client.post(f"/api/v1/runs/{_RUN_ID}/nodes/{_NODE_ID}/recover", json={})
-        assert resp.status_code == 501
-        _assert_feature_requires_database_update(resp)
+        assert_feature_requires_database_update(resp)
 
 
 class TestDiffRunNodeOutputProgrammingError:
@@ -254,8 +245,7 @@ class TestDiffRunNodeOutputProgrammingError:
                 "node_id_b": str(_NODE_ID),
             },
         )
-        assert resp.status_code == 501
-        _assert_feature_requires_database_update(resp)
+        assert_feature_requires_database_update(resp)
 
 
 class TestRunStatsProgrammingError:
@@ -263,8 +253,7 @@ class TestRunStatsProgrammingError:
         session = _make_session_raising_programming_error()
         _override_session(session)
         resp = admin_client.get("/api/v1/runs/stats?period=30d")
-        assert resp.status_code == 501
-        _assert_feature_requires_database_update(resp)
+        assert_feature_requires_database_update(resp)
 
 
 class TestRunHeatmapProgrammingError:
@@ -272,8 +261,7 @@ class TestRunHeatmapProgrammingError:
         session = _make_session_raising_programming_error()
         _override_session(session)
         resp = admin_client.get("/api/v1/runs/stats/heatmap?year=2026")
-        assert resp.status_code == 501
-        _assert_feature_requires_database_update(resp)
+        assert_feature_requires_database_update(resp)
 
 
 # ---------------------------------------------------------------------------

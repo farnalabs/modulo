@@ -13,6 +13,7 @@ from modulo.api.main import app
 from modulo.auth.dependencies import get_current_user
 from modulo.auth.jwt import AuthenticatedPrincipal
 from modulo.settings import Settings, get_settings
+from tests.unit.api.assertions import assert_feature_requires_database_update
 
 _VALID_32 = "a" * 32
 _ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
@@ -117,8 +118,7 @@ class TestRevealPromptProgrammingError:
         resp = client.post(
             f"/api/v1/runs/{_RUN_ID}/nodes/{_NODE_ID}/prompt/reveal",
         )
-        assert resp.status_code == 501
-        assert "migrations" in resp.json()["detail"].lower()
+        assert_feature_requires_database_update(resp)
 
     def test_reveal_prompt_sqlalchemy_error_returns_503(self, sqlalchemy_error_client: TestClient) -> None:
         resp = sqlalchemy_error_client.post(
