@@ -136,7 +136,7 @@ async def create_notification_rule(
 
             if current_count >= max_rules:
                 raise HTTPException(
-                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                    status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
                     detail=f"Maximum {max_rules} notification rules per organisation reached",
                 )
 

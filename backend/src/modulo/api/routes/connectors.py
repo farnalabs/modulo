@@ -178,12 +178,12 @@ async def create_connector_endpoint(
             missing = await temp.verify_scopes()
         except (HTTPStatusError, RequestError, ValueError):
             raise HTTPException(
-                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
                 detail="Cannot verify GitHub token — API call failed",
             ) from None
         if missing:
             raise HTTPException(
-                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
                 detail=(
                     f"GitHub token is missing required OAuth scopes: "
                     f"{', '.join(sorted(missing))}. "
@@ -302,12 +302,12 @@ async def update_connector_endpoint(
                     missing = await temp.verify_scopes()
                 except (HTTPStatusError, RequestError, ValueError):
                     raise HTTPException(
-                        status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                        status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
                         detail="Cannot verify GitHub token — API call failed",
                     ) from None
                 if missing:
                     raise HTTPException(
-                        status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                        status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
                         detail=(
                             f"GitHub token is missing required OAuth scopes: "
                             f"{', '.join(sorted(missing))}. "

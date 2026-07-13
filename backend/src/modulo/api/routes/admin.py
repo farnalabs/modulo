@@ -364,7 +364,7 @@ async def admin_create_user(
 
     if req.org_role not in ("admin", "operator", "runner", "viewer"):
         raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail=(f"Invalid role: {req.org_role}. Must be one of: admin, operator, runner, viewer"),
         )
 
@@ -385,7 +385,7 @@ async def admin_create_user(
             validate_password_strength(req.password)
         except ValueError as exc:
             raise HTTPException(
-                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
                 detail=str(exc),
             ) from exc
 
@@ -859,7 +859,7 @@ async def _prevent_last_admin_lockout(
 
     if admin_count <= 1:
         raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail="Cannot remove the last admin. Promote another user to admin first.",
         )
 
@@ -948,7 +948,7 @@ async def admin_deactivate_user(
 
     if current_user.account_id == user_id:
         raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail="Cannot deactivate yourself",
         )
 
@@ -1017,7 +1017,7 @@ async def admin_deactivate_user(
                 admin_count = admin_result.scalar() or 0
                 if admin_count <= 1:
                     raise HTTPException(
-                        status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                        status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
                         detail="Cannot deactivate the last admin. Promote another user to admin first.",
                     )
 
@@ -2445,7 +2445,7 @@ async def admin_create_publisher(
                 )
             except ValueError as exc:
                 raise HTTPException(
-                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                    status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
                     detail=str(exc),
                 ) from exc
     except IntegrityError:
@@ -2495,7 +2495,7 @@ async def admin_update_publisher(
                 name_val = updates["name"]
                 if not isinstance(name_val, str):
                     raise HTTPException(
-                        status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                        status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
                         detail="publisher_name_invalid: Name must be a string",
                     )
                 existing = await get_publisher_by_name(session, current_user.organisation_id, name_val)
@@ -2509,7 +2509,7 @@ async def admin_update_publisher(
                 key_val = updates["public_key_hex"]
                 if not isinstance(key_val, str):
                     raise HTTPException(
-                        status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                        status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
                         detail="publisher_key_invalid: Public key must be a string",
                     )
                 existing_key = await get_publisher_by_key(session, current_user.organisation_id, key_val)
@@ -2525,7 +2525,7 @@ async def admin_update_publisher(
                 )
             except ValueError as exc:
                 raise HTTPException(
-                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                    status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
                     detail=str(exc),
                 ) from exc
     except IntegrityError:

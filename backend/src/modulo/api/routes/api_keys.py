@@ -86,7 +86,7 @@ async def create_api_key_endpoint(
 ) -> ApiKeyCreatedResponse:
     if req.role not in ("operator", "runner"):
         raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail="role must be 'operator' or 'runner'. admin keys are prohibited.",
         )
     team_id: uuid.UUID | None = None
@@ -186,7 +186,7 @@ async def update_api_key_endpoint(
 ) -> dict[str, Any]:
     if req.role is not None and req.role not in ("operator", "runner"):
         raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail="role must be 'operator' or 'runner'.",
         )
     team_id: uuid.UUID | None = None

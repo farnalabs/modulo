@@ -453,7 +453,7 @@ async def deliver_manual_output(
     """
     if not req.output:
         raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail="output must be a non-empty object",
         )
 

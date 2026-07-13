@@ -136,7 +136,7 @@ async def ingest_errors(
         data: dict[str, Any] = json.loads(raw_body)
     except json.JSONDecodeError as exc:
         raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail="Invalid JSON body",
         ) from exc
 
@@ -144,7 +144,7 @@ async def ingest_errors(
         ingest_request = ErrorIngestRequest(**data)
     except Exception as exc:
         raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail=str(exc),
         ) from exc
 
@@ -223,7 +223,7 @@ async def ingest_errors_public(
         data: dict[str, Any] = json.loads(raw_body)
     except json.JSONDecodeError as exc:
         raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail="Invalid JSON body",
         ) from exc
 
@@ -231,7 +231,7 @@ async def ingest_errors_public(
         ingest_request = ErrorIngestRequest(**data)
     except Exception as exc:
         raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail=str(exc),
         ) from exc
 

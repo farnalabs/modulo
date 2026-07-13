@@ -811,7 +811,7 @@ async def test_count_overdue_returns_zero():
 
 
 # ---------------------------------------------------------------------------
-# Executor integration — NodeInterrupt handling
+# Executor integration — GraphInterrupt handling
 # ---------------------------------------------------------------------------
 
 
@@ -832,10 +832,11 @@ async def _bypass_capacity(
 
 
 async def test_executor_sets_awaiting_human_on_node_interrupt():
-    """When astream_events raises NodeInterrupt, the executor transitions run to awaiting_human."""
+    """When astream_events raises GraphInterrupt, the executor transitions run to awaiting_human."""
     from contextlib import asynccontextmanager
 
-    from langgraph.errors import NodeInterrupt
+    from langgraph.errors import GraphInterrupt
+    from langgraph.types import Interrupt
 
     from modulo.core.pipeline_engine.executor import PipelineExecutor
 
@@ -868,7 +869,7 @@ async def test_executor_sets_awaiting_human_on_node_interrupt():
     session_factory = MagicMock(side_effect=lambda: _ctx())
 
     async def _failing_stream(*args: Any, **kwargs: Any) -> Any:
-        raise NodeInterrupt({"gate_id": "step-1"})
+        raise GraphInterrupt((Interrupt(value={"gate_id": "step-1"}),))
         yield  # pragma: no cover
 
     compiled = MagicMock()

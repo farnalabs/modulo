@@ -161,7 +161,7 @@ async def update_cron_config(
                 )
                 if err:
                     raise HTTPException(
-                        status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                        status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
                         detail=f"Invalid cron expression: {err}",
                     )
                 trigger.cron_expression = req.cron_expression
@@ -489,7 +489,7 @@ async def create_trigger(
                 err = validate_cron_expression(req.cron_expression, req.cron_timezone or "UTC")
                 if err:
                     raise HTTPException(
-                        status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                        status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
                         detail=f"Invalid cron expression: {err}",
                     )
                 trigger.next_fire_at = compute_next_fire(req.cron_expression)
@@ -573,7 +573,7 @@ async def update_trigger(
                 err = validate_cron_expression(req.cron_expression, tz)
                 if err:
                     raise HTTPException(
-                        status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                        status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
                         detail=f"Invalid cron expression: {err}",
                     )
                 trigger.cron_expression = req.cron_expression

@@ -206,7 +206,7 @@ async def admin_test_email_settings(
     smtp_host = email_cfg.get("smtp_host", "")
     if not smtp_host:
         raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail="SMTP is not configured. Save email settings before testing.",
         )
 

@@ -222,7 +222,7 @@ async def list_feedback_inbox(
             date_from_dt = datetime.fromisoformat(date_from).replace(tzinfo=UTC)
         except ValueError:
             raise HTTPException(
-                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
                 detail=f"Invalid date_from format: '{date_from}'. Use ISO 8601 format (e.g. 2024-01-01T00:00:00).",
             ) from None
     if date_to:
@@ -230,7 +230,7 @@ async def list_feedback_inbox(
             date_to_dt = datetime.fromisoformat(date_to).replace(tzinfo=UTC)
         except ValueError:
             raise HTTPException(
-                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
                 detail=f"Invalid date_to format: '{date_to}'. Use ISO 8601 format (e.g. 2024-01-01T00:00:00).",
             ) from None
 
@@ -395,7 +395,7 @@ async def update_feedback_status(
     valid_statuses = {"pending", "routing", "correcting", "resolved", "escalated"}
     if req.status not in valid_statuses:
         raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail=f"Invalid status. Must be one of: {', '.join(sorted(valid_statuses))}",
         )
 
@@ -559,7 +559,7 @@ async def review_feedback(
     valid_actions = {"mark_reviewed", "dismiss", "create_correction_run"}
     if req.action not in valid_actions:
         raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail=f"Invalid action. Must be one of: {', '.join(sorted(valid_actions))}",
         )
 
@@ -580,7 +580,7 @@ async def review_feedback(
             elif req.action == "create_correction_run":
                 if not record.run_id:
                     raise HTTPException(
-                        status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                        status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
                         detail="Feedback has no associated run — cannot create correction run",
                     )
 

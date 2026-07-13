@@ -233,7 +233,7 @@ async def _list_deliveries(
                 dt_from = datetime.fromisoformat(date_from)
             except ValueError as exc:
                 raise HTTPException(
-                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                    status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
                     detail="Invalid from date format",
                 ) from exc
             query = query.where(NotificationDeliveryLog.created_at >= dt_from)
@@ -243,7 +243,7 @@ async def _list_deliveries(
                 dt_to = datetime.fromisoformat(date_to)
             except ValueError as exc:
                 raise HTTPException(
-                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                    status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
                     detail="Invalid to date format",
                 ) from exc
             query = query.where(NotificationDeliveryLog.created_at <= dt_to)
@@ -253,7 +253,7 @@ async def _list_deliveries(
                 cursor_dt = datetime.fromisoformat(cursor)
             except ValueError as exc:
                 raise HTTPException(
-                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                    status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
                     detail="Invalid cursor format",
                 ) from exc
             query = query.where(NotificationDeliveryLog.created_at < cursor_dt)
@@ -890,7 +890,7 @@ async def list_deliveries(
                     cursor_dt = datetime.fromisoformat(cursor)
                 except ValueError as exc:
                     raise HTTPException(
-                        status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                        status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
                         detail="Invalid cursor format",
                     ) from exc
                 query = query.where(NotificationDeliveryLog.created_at < cursor_dt)

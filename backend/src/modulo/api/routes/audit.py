@@ -68,7 +68,7 @@ async def list_audit_events_endpoint(
             actor_uid = _UUID(actor_user_id)
         except ValueError:
             raise HTTPException(
-                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
                 detail=f"Invalid user_id format: {actor_user_id!r}. Must be a valid UUID.",
             ) from None
     _require_admin(principal)
@@ -198,7 +198,7 @@ async def export_chain_endpoint(
             actor_uid = _UUID(actor_user_id)
         except ValueError:
             raise HTTPException(
-                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
                 detail=f"Invalid user_id format: {actor_user_id!r}. Must be a valid UUID.",
             ) from None
     try:
