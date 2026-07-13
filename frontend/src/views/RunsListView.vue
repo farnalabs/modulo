@@ -110,7 +110,7 @@
 <script setup lang="ts">
 import PageHeader from '../components/shared/PageHeader.vue'
 import FilterBar from '../components/shared/FilterBar.vue'
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import { fetchRuns, type RunListItem, type FetchRunsParams } from '../lib/api/runs'
 import { useDataFetch } from '../composables/useDataFetch'
