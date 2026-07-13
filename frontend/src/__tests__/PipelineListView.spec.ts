@@ -9,9 +9,16 @@ const mockResponses: Record<string, unknown> = {
 }
 
 vi.mock('../lib/api/client', () => {
-  const mockGet = vi.fn((url: string) => {
+  const mockGet = vi.fn((url: string, options?: { params?: { query?: { page_size?: number } } }) => {
     if (url === '/api/v1/pipeline-folders') {
       return Promise.resolve({ data: mockResponses['/api/v1/pipeline-folders'] ?? [], error: undefined })
+    }
+    if (url === '/api/v1/pipelines') {
+      const pageSize = options?.params?.query?.page_size ?? 100
+      return Promise.resolve({
+        data: mockResponses[`/api/v1/pipelines?page_size=${pageSize}`] ?? mockResponses.default,
+        error: undefined,
+      })
     }
     return Promise.resolve({ data: mockResponses.default, error: undefined })
   })
@@ -26,6 +33,14 @@ vi.mock('../lib/api/client', () => {
     getAccessToken: vi.fn().mockReturnValue('mock-token'),
   }
 })
+
+vi.mock('../composables/useApi', () => ({
+  useApi: () => ({
+    get: vi.fn((url: string) => Promise.resolve(mockResponses[url] ?? [])),
+    post: vi.fn(),
+    patch: vi.fn(),
+  }),
+}))
 
 import PipelineListView from '../views/PipelineListView.vue'
 

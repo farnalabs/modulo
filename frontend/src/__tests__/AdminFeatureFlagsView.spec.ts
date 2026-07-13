@@ -198,8 +198,8 @@ describe('AdminFeatureFlagsView', () => {
     for (let i = 0; i < 10; i++) {
       await flushPromises()
     }
-    expect(wrapper.text()).toContain('common.next')
-    expect(wrapper.text()).toContain('common.previous')
+    expect(wrapper.text()).toContain('Next')
+    expect(wrapper.text()).toContain('Previous')
   })
 
   it('shows tooltip trigger elements', async () => {

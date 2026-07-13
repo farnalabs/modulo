@@ -1,4 +1,4 @@
-import { ref, onUnmounted } from 'vue'
+import { getCurrentInstance, ref, onUnmounted } from 'vue'
 import { useRemyStore } from './useRemyStore'
 import { usePlanStore } from '../stores/planStore'
 import { getAuthHeaders } from '@/lib/api/client'
@@ -182,9 +182,11 @@ export function useRemyStream() {
     store.isStreaming = false
   }
 
-  onUnmounted(() => {
-    disconnectStream()
-  })
+  if (getCurrentInstance()) {
+    onUnmounted(() => {
+      disconnectStream()
+    })
+  }
 
   return { connected, connectStream, disconnectStream }
 }

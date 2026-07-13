@@ -176,7 +176,7 @@ function showFlash(msg: string, type: 'success' | 'error') {
 
 function toMonitorConfig(): MonitorConfig {
   const activeKeys: string[] = []
-  let perBackend: Record<string, Record<string, string>> = {}
+  const perBackend: Record<string, Record<string, string>> = {}
   for (const b of backendForms) {
     if (b.enabled) {
       activeKeys.push(b.key)

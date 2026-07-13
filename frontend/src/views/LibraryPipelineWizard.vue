@@ -270,7 +270,7 @@ function layoutNodes(
   for (const e of edges) inDegree[e.target] = (inDegree[e.target] || 0) + 1
 
   const layers: string[][] = []
-  let remaining = new Set(nodes.map(n => n.id))
+  const remaining = new Set(nodes.map(n => n.id))
   while (remaining.size > 0) {
     const layer = [...remaining].filter(id => inDegree[id] === 0 || [...remaining].every(other => {
       if (other === id) return true

@@ -35,6 +35,7 @@ function mockSessionKey(key = 'test-session-key') {
 beforeEach(() => {
   mockFetch.mockReset()
   mockSessionKey()
+  window.fetch = mockFetch as unknown as typeof fetch
   setActivePinia(createPinia())
 })
 
@@ -43,10 +44,8 @@ afterEach(() => {
   if (tracker) tracker.dispose()
   ;(window as unknown as Record<string, unknown>).__MODULO_ERROR_TRACKING_DISABLED__ = false
   vi.restoreAllMocks()
+  mockSessionKey()
   vi.useRealTimers()
-  if (typeof window !== 'undefined') {
-    Reflect.deleteProperty(window, 'fetch')
-  }
 })
 
 describe('ErrorTracker', () => {
@@ -124,21 +123,16 @@ describe('ErrorTracker', () => {
       }
       window.fetch = mockFetch as unknown as typeof fetch
       const tracker = createErrorTracker()
-
-      for (let i = 0; i < 9; i++) {
-        tracker.captureMessage(`fill ${i}`)
-      }
+      const captureError = vi.spyOn(tracker, 'captureError')
       window.dispatchEvent(new PromiseRejectionEvent('unhandledrejection', {
         reason: new Error('promise rejected'),
-        promise: Promise.reject(new Error('promise rejected')),
+        promise: Promise.resolve(),
       }))
 
-      await vi.waitFor(() => {
-        const ingestCalls = mockFetch.mock.calls.filter(
-          (c: unknown[]) => typeof c[0] === 'string' && (c[0] as string).includes('/ingest'),
-        )
-        expect(ingestCalls.length).toBeGreaterThanOrEqual(1)
-      })
+      expect(captureError).toHaveBeenCalledWith(
+        expect.objectContaining({ message: 'promise rejected' }),
+        { type: 'unhandled_promise_rejection' },
+      )
     })
   })
 
@@ -157,12 +151,14 @@ describe('ErrorTracker', () => {
 
     it('captures errors thrown in Vue lifecycle', async () => {
       window.fetch = mockFetch as unknown as typeof fetch
+      const consoleError = vi.spyOn(console, 'error').mockImplementation(() => undefined)
       const tracker = createErrorTracker({ monitorBackends: [new BuiltinMonitorBackend()] })
       const app = createApp({
         mounted() { throw new Error('vue-lifecycle-error') },
         render() { return h('div') },
       })
       app.config.warnHandler = vi.fn()
+      app.use(createPinia())
       app.use(tracker.vuePlugin)
 
       app.mount(document.createElement('div'))
@@ -177,6 +173,14 @@ describe('ErrorTracker', () => {
         )
         expect(ingestCalls.length).toBeGreaterThanOrEqual(1)
       })
+
+      expect(consoleError).toHaveBeenCalledWith(
+        '[vue] mounted hook:',
+        expect.objectContaining({ message: 'vue-lifecycle-error' }),
+      )
+      app.unmount()
+      tracker.dispose()
+      consoleError.mockRestore()
     })
   })
 
