@@ -35,6 +35,9 @@ class DockerRuntimeProvider(RuntimeProvider):
     4. ``None`` (local socket — default)
     """
 
+    provider_id = "local_docker"
+    provider_aliases = frozenset({"docker"})
+
     def __init__(
         self,
         docker_host: str | None = None,

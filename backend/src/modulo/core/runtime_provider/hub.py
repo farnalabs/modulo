@@ -59,24 +59,38 @@ class RuntimeProviderHub:
 
         Resolution strategy:
         1. If the profile declares a ``provider_hint``, look it up by name.
-        2. Match by ``provider_type`` against provider_id.
+        2. Treat an explicit ``provider_type`` as authoritative and match it
+           against registered names or provider identity metadata.
         3. Try each provider's ``supports()`` and return the first match.
         4. Fall back to the first registered provider.
         5. Return None if nothing is registered.
         """
         providers = dict(self._providers)
-        hint: str | None = getattr(profile, "provider_hint", None)
-        if hint:
-            hint_normalized = hint.lower()
+        raw_hint: Any = getattr(profile, "provider_hint", None)
+        if isinstance(raw_hint, str) and raw_hint.strip():
+            hint_normalized = raw_hint.strip().lower()
             if hint_normalized in providers:
                 return providers[hint_normalized]
-            _log.warning("RuntimeProvider hint '%s' specified but no matching provider registered", hint)
+            _log.warning("RuntimeProvider hint '%s' specified but no matching provider registered", raw_hint)
 
-        provider_type: str | None = getattr(profile, "provider_type", None)
-        if provider_type:
-            for provider in providers.values():
-                if getattr(provider, "provider_id", None) == provider_type:
-                    return provider
+        raw_provider_type: Any = getattr(profile, "provider_type", None)
+        if isinstance(raw_provider_type, str) and raw_provider_type.strip():
+            provider_type = raw_provider_type.strip().lower()
+            direct_match = providers.get(provider_type)
+            if direct_match is not None:
+                return direct_match
+
+            matches = [
+                provider for _, provider in sorted(providers.items()) if provider.matches_provider_type(provider_type)
+            ]
+            if matches:
+                return matches[0]
+
+            _log.warning(
+                "RuntimeProvider type '%s' requested but no matching provider is available",
+                raw_provider_type,
+            )
+            return None
 
         for provider in providers.values():
             try:

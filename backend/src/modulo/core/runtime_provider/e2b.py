@@ -33,6 +33,8 @@ class E2BRuntimeProvider(RuntimeProvider):
     the service layer and pass the resolved key to the constructor.
     """
 
+    provider_id = "e2b"
+
     def __init__(self, api_key: str | None = None) -> None:
         self._api_key = api_key or os.environ.get("MODULO_E2B_API_KEY")
         if not self._api_key:

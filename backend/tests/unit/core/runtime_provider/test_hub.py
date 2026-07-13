@@ -1,12 +1,16 @@
 """Unit tests for RuntimeProviderHub."""
 
+from types import SimpleNamespace
 from typing import Any
 from unittest.mock import MagicMock
 
 import pytest
 
 from modulo.core.runtime_provider import ExecResult, RuntimeProvider, WorkspaceSpec
+from modulo.core.runtime_provider.docker import DockerRuntimeProvider
+from modulo.core.runtime_provider.e2b import E2BRuntimeProvider
 from modulo.core.runtime_provider.hub import RuntimeProviderHub
+from modulo.core.runtime_provider.local import LocalRuntimeProvider
 
 
 class _StubProvider(RuntimeProvider):
@@ -157,6 +161,37 @@ def test_resolve_empty_hub_returns_none() -> None:
     profile = MagicMock()
     profile.provider_hint = None
     assert hub.resolve(profile) is None
+
+
+@pytest.mark.parametrize(
+    ("provider_type", "expected"),
+    [
+        ("local", "local"),
+        ("local_docker", "docker"),
+        ("docker", "docker"),
+        ("e2b", "e2b"),
+    ],
+)
+def test_resolve_honours_explicit_provider_type(provider_type: str, expected: str) -> None:
+    """Profile provider types resolve independently of registration order."""
+    hub = RuntimeProviderHub()
+    providers = {
+        "e2b": E2BRuntimeProvider(api_key="test-key"),
+        "local": LocalRuntimeProvider(),
+        "docker": DockerRuntimeProvider(),
+    }
+    hub.register("cloud-sandbox", providers["e2b"])
+    hub.register("host-process", providers["local"])
+    hub.register("container-runtime", providers["docker"])
+
+    assert hub.resolve(SimpleNamespace(provider_type=provider_type)) is providers[expected]
+
+
+def test_resolve_explicit_unavailable_provider_does_not_fall_back() -> None:
+    hub = RuntimeProviderHub()
+    hub.register("local", LocalRuntimeProvider())
+
+    assert hub.resolve(SimpleNamespace(provider_type="e2b")) is None
 
 
 def test_resolve_hint_not_found_continues() -> None:
