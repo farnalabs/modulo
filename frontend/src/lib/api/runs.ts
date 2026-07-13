@@ -40,8 +40,8 @@ export async function fetchRuns(params: FetchRunsParams = {}): Promise<RunListRe
   if (params.trigger_type) q.trigger_type = params.trigger_type
   if (params.search) q.search = params.search
   if (params.pipeline_id) q.pipeline_id = params.pipeline_id
-  if (params.page) q.page = params.page
-  if (params.page_size) q.page_size = params.page_size
+  if (params.page !== undefined) q.page = params.page
+  if (params.page_size !== undefined) q.page_size = params.page_size
   return throwOnError(await api.GET('/api/v1/runs', {
     params: { query: q },
   })) as RunListResponse
