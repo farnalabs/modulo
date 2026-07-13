@@ -14,6 +14,7 @@ from sqlalchemy.exc import ProgrammingError, SQLAlchemyError
 
 from modulo.api.dependencies import _get_engine, get_db_session, get_plan_context
 from modulo.api.main import app
+from modulo.api.routes.error_forwarder_config import _is_configured
 from modulo.auth.dependencies import get_current_user
 from modulo.auth.jwt import AuthenticatedPrincipal
 from modulo.settings import Settings, get_settings
@@ -150,6 +151,15 @@ def _make_mock_config(forwarder_type: str = "sentry", **overrides) -> MagicMock:
     cfg.last_test_at = overrides.get("last_test_at")
     cfg.last_test_ok = overrides.get("last_test_ok")
     return cfg
+
+
+def test_is_configured_rejects_unknown_forwarder_type() -> None:
+    assert _is_configured("unknown", {"unexpected": "secret"}) is False
+
+
+def test_is_configured_requires_known_forwarder_credentials() -> None:
+    assert _is_configured("sentry", {"dsn": "https://key@sentry.io/1"}) is True
+    assert _is_configured("sentry", {"dsn": ""}) is False
 
 
 # ── GET /api/v1/errors/forwarders ──────────────────────────────────────────
