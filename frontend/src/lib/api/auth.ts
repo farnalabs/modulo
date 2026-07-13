@@ -1,3 +1,5 @@
+import { getAutoLoginConfig } from '../../config/runtime'
+
 const TOKEN_KEY = 'modulo_access_token'
 const REFRESH_TOKEN_KEY = 'modulo_refresh_token'
 
@@ -89,9 +91,7 @@ export function getAuthHeaders(): Record<string, string> {
 export function redirectToLogin(): void {
   // If auto-login is configured, the login attempt may still be in
   // progress — skip the hard redirect and let auto-login complete.
-  const autoLoginUser = import.meta.env.VITE_AUTO_LOGIN_USERNAME as string | undefined
-  const autoLoginPass = import.meta.env.VITE_AUTO_LOGIN_PASSWORD as string | undefined
-  if (autoLoginUser && autoLoginPass) {
+  if (getAutoLoginConfig()) {
     return
   }
 

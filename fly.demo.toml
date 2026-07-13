@@ -4,10 +4,6 @@ primary_region = 'lhr'
 [build]
   dockerfile = "backend/Dockerfile.fly"
 
-[build.args]
-  VITE_AUTO_LOGIN_USERNAME = "demo"
-  VITE_AUTO_LOGIN_PASSWORD = "demo"
-
 [http_service]
   internal_port = 8080
   force_https = true
@@ -30,6 +26,9 @@ primary_region = 'lhr'
     protocol = "http"
 
 [env]
+  # These credentials are intentionally public and enable the demo login flow.
+  MODULO_AUTO_LOGIN_USERNAME = "demo"
+  MODULO_AUTO_LOGIN_PASSWORD = "demo"
   MODULO_DB = "postgres"
   MODULO_PUBLIC_URL = "https://demo.modulo.run"
   MODULO_DEMO_MODE = "true"
