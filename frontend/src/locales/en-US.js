@@ -514,7 +514,9 @@ export default {
       "select_agent_placeholder": "Select an agent...",
       "select_connector_placeholder": "Select a connector...",
       "model_backend_label": "Model Backend",
-      "loading": "Loading..."
+      "loading": "Loading...",
+      "folder": "Folder",
+      "linked_in_lifecycle_maps": "In {count} lifecycle {count, plural, one {map} other {maps}}"
     },
     "AdminPluginsView": {
       "manage_installed_modulo_plugins_and_extensions": "Manage installed Modulo plugins and extensions",
