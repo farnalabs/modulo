@@ -9,9 +9,10 @@ if test isolation is needed.
 
 import logging
 from collections.abc import AsyncGenerator
-from typing import Any
+from typing import Any, cast
 
 from fastapi import Depends, HTTPException, status
+from fastapi.params import Depends as DependsParameter
 from sqlalchemy.exc import ProgrammingError
 from sqlalchemy.ext.asyncio import (
     AsyncEngine,
@@ -29,7 +30,7 @@ from modulo.settings import Settings, get_settings
 logger = logging.getLogger(__name__)
 
 
-def require_feature(feature_name: str):
+def require_feature(feature_name: str) -> DependsParameter:
     """FastAPI dependency factory — blocks access if the named feature is not enabled on the current plan.
 
     Returns 402 Payment Required when the feature is unavailable.
@@ -37,7 +38,7 @@ def require_feature(feature_name: str):
 
     .. code-block:: python
 
-       _: None = require_feature("sso")           # route parameter
+       _: object = require_feature("sso")           # route parameter
        dependencies=[require_feature("team_rbac")]  # decorator
     """
 
@@ -49,7 +50,7 @@ def require_feature(feature_name: str):
                 instance=feature_name,
             )
 
-    return Depends(_check)
+    return cast(DependsParameter, Depends(_check))
 
 
 def pg_connection_string(database_url: str) -> str:

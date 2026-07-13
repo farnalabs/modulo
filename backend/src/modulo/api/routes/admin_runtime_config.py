@@ -5,14 +5,14 @@ from __future__ import annotations
 import logging
 import os
 from dataclasses import asdict
-from typing import Any, ClassVar
+from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, status
 
 from modulo.api.dependencies import require_feature
 from modulo.api.middleware.sensitive_mask import is_sensitive_env_key, mask_sensitive_value
-from modulo.auth.dependencies import get_current_user
-from modulo.auth.jwt import AuthenticatedPrincipal
+from modulo.auth.dependencies import get_current_tenant_user
+from modulo.auth.jwt import TenantPrincipal
 from modulo.core.runtime_config.store import KNOWN_KEYS, RuntimeConfigStore, get_runtime_config_store
 
 _log = logging.getLogger(__name__)
@@ -20,7 +20,7 @@ _log = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/v1/admin/runtime-config", tags=["admin-runtime-config"])
 
 
-def _require_admin(principal: AuthenticatedPrincipal) -> None:
+def _require_admin(principal: TenantPrincipal) -> None:
     if principal.org_role != "admin":
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
@@ -57,7 +57,7 @@ def _build_response(store: RuntimeConfigStore) -> dict[str, Any]:
 
 @router.get("", dependencies=[require_feature("runtime_config")])
 def get_runtime_config(
-    current_user: AuthenticatedPrincipal = Depends(get_current_user),
+    current_user: TenantPrincipal = Depends(get_current_tenant_user),
 ) -> dict[str, Any]:
     _require_admin(current_user)
     try:
@@ -75,7 +75,7 @@ def get_runtime_config(
 @router.put("", dependencies=[require_feature("runtime_config")])
 def set_runtime_config_overrides(
     req: dict[str, Any],
-    current_user: AuthenticatedPrincipal = Depends(get_current_user),
+    current_user: TenantPrincipal = Depends(get_current_tenant_user),
 ) -> dict[str, Any]:
     _require_admin(current_user)
     try:
@@ -87,7 +87,7 @@ def set_runtime_config_overrides(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="'overrides' must be a dict",
             )
-        validated_overrides: ClassVar[list[tuple[str, str]]] = []
+        validated_overrides: list[tuple[str, str]] = []
         for key, value in overrides.items():
             _validate_known_key(key, "override")
             if not isinstance(value, str):
@@ -103,7 +103,7 @@ def set_runtime_config_overrides(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="'clear' must be a list",
             )
-        validated_clear: ClassVar[list[str]] = []
+        validated_clear: list[str] = []
         for key in clear_keys:
             if not isinstance(key, str):
                 raise HTTPException(
@@ -131,7 +131,7 @@ def set_runtime_config_overrides(
 
 @router.post("/reload", dependencies=[require_feature("runtime_config")])
 def reload_runtime_config(
-    current_user: AuthenticatedPrincipal = Depends(get_current_user),
+    current_user: TenantPrincipal = Depends(get_current_tenant_user),
 ) -> dict[str, Any]:
     _require_admin(current_user)
     try:

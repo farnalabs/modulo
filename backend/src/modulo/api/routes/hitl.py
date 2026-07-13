@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import logging
 import uuid
-from typing import Any, ClassVar
+from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, Field
@@ -21,8 +21,8 @@ from sqlalchemy.exc import ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession
 
 from modulo.api.dependencies import _get_engine, get_db_session, pg_connection_string
-from modulo.auth.dependencies import get_current_user
-from modulo.auth.jwt import AuthenticatedPrincipal
+from modulo.auth.dependencies import get_current_tenant_user
+from modulo.auth.jwt import TenantPrincipal
 from modulo.core.hitl_manager import (
     AlreadyClaimedError,
     ClaimTokenExpiredError,
@@ -116,7 +116,7 @@ async def claim_gate(
     gate_id: str,
     req: ClaimRequest,
     session: AsyncSession = Depends(get_db_session),
-    principal: AuthenticatedPrincipal = Depends(get_current_user),
+    principal: TenantPrincipal = Depends(get_current_tenant_user),
 ) -> ClaimResponse:
     """Atomically claim a HITL gate. Returns a claim_token for approve/reject."""
     mgr = HITLManager()
@@ -189,7 +189,7 @@ async def approve_gate(
     req: ApproveRequest,
     session: AsyncSession = Depends(get_db_session),
     engine: AsyncEngine = Depends(_get_engine),
-    principal: AuthenticatedPrincipal = Depends(get_current_user),
+    principal: TenantPrincipal = Depends(get_current_tenant_user),
 ) -> dict[str, str]:
     """Approve an interrupted HITL gate and resume the run."""
     mgr = HITLManager()
@@ -271,7 +271,7 @@ async def approve_gate_with_modification(
     req: ApproveWithModificationRequest,
     session: AsyncSession = Depends(get_db_session),
     engine: AsyncEngine = Depends(_get_engine),
-    principal: AuthenticatedPrincipal = Depends(get_current_user),
+    principal: TenantPrincipal = Depends(get_current_tenant_user),
 ) -> dict[str, str]:
     """Approve a HITL gate with a modified output payload.
 
@@ -362,7 +362,7 @@ async def reject_gate(
     req: RejectRequest,
     session: AsyncSession = Depends(get_db_session),
     engine: AsyncEngine = Depends(_get_engine),
-    principal: AuthenticatedPrincipal = Depends(get_current_user),
+    principal: TenantPrincipal = Depends(get_current_tenant_user),
 ) -> dict[str, str]:
     """Reject an interrupted HITL gate and route to reject_target or fail."""
     mgr = HITLManager()
@@ -443,7 +443,7 @@ async def deliver_manual_output(
     req: DeliverManualRequest,
     session: AsyncSession = Depends(get_db_session),
     engine: AsyncEngine = Depends(_get_engine),
-    principal: AuthenticatedPrincipal = Depends(get_current_user),
+    principal: TenantPrincipal = Depends(get_current_tenant_user),
 ) -> dict[str, str]:
     """Deliver manually-supplied output at a HITL gate and resume the run.
 
@@ -534,7 +534,7 @@ async def submit_manual_output(
     req: ManualOutputRequest,
     session: AsyncSession = Depends(get_db_session),
     engine: AsyncEngine = Depends(_get_engine),
-    principal: AuthenticatedPrincipal = Depends(get_current_user),
+    principal: TenantPrincipal = Depends(get_current_tenant_user),
 ) -> dict[str, str]:
     """Submit output for a manual-input node and resume the run."""
     mgr = HITLManager()
@@ -612,7 +612,7 @@ async def submit_manual_output(
 async def list_run_pending_gates(
     run_id: uuid.UUID,
     session: AsyncSession = Depends(get_db_session),
-    principal: AuthenticatedPrincipal = Depends(get_current_user),
+    principal: TenantPrincipal = Depends(get_current_tenant_user),
 ) -> PendingGatesResponse:
     """List all pending (undecided) HITL gates for a specific run."""
     try:
@@ -663,7 +663,7 @@ async def list_run_pending_gates(
 )
 async def list_org_pending_gates(
     session: AsyncSession = Depends(get_db_session),
-    principal: AuthenticatedPrincipal = Depends(get_current_user),
+    principal: TenantPrincipal = Depends(get_current_tenant_user),
 ) -> PendingGatesResponse:
     """List all pending HITL gates across the organisation."""
     mgr = HITLManager()
@@ -673,7 +673,7 @@ async def list_org_pending_gates(
             gates = await mgr.list_pending(session, principal.organisation_id)
 
             pipeline_ids = list({g.pipeline_id for g in gates})
-            pipeline_map: ClassVar[dict[uuid.UUID, str]] = {}
+            pipeline_map: dict[uuid.UUID, str] = {}
             if pipeline_ids:
                 pipeline_rows = await session.execute(
                     select(Pipeline.id, Pipeline.name).where(Pipeline.id.in_(pipeline_ids))

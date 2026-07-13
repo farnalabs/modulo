@@ -17,8 +17,8 @@ from sqlalchemy.exc import ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.api.dependencies import get_db_session
-from modulo.auth.dependencies import get_current_user
-from modulo.auth.jwt import AuthenticatedPrincipal
+from modulo.auth.dependencies import get_current_tenant_user
+from modulo.auth.jwt import TenantPrincipal
 from modulo.auth.oauth import (
     InvalidScopeError,
     create_oauth_client,
@@ -64,7 +64,7 @@ class DeleteOAuthClientResponse(BaseModel):
 async def register_oauth_client(
     req: CreateOAuthClientRequest,
     session: AsyncSession = Depends(get_db_session),
-    principal: AuthenticatedPrincipal = Depends(get_current_user),
+    principal: TenantPrincipal = Depends(get_current_tenant_user),
     settings: Settings = Depends(get_settings),
 ) -> CreateOAuthClientResponse:
     if principal.org_role not in ("admin", "operator"):
@@ -99,7 +99,7 @@ async def register_oauth_client(
                 name=req.name,
                 scopes=scopes_str,
                 redirect_uris=redirect_uris_str,
-                account_id=principal.account_id,
+                created_by=principal.account_id,
             )
     except ProgrammingError:
         _log.warning(
@@ -141,7 +141,7 @@ async def register_oauth_client(
 @router.get("/clients", response_model=list[OAuthClientItem])
 async def list_oauth_clients_endpoint(
     session: AsyncSession = Depends(get_db_session),
-    principal: AuthenticatedPrincipal = Depends(get_current_user),
+    principal: TenantPrincipal = Depends(get_current_tenant_user),
 ) -> list[OAuthClientItem]:
     try:
         async with session.begin():
@@ -178,7 +178,7 @@ async def list_oauth_clients_endpoint(
 async def remove_oauth_client(
     client_id: str,
     session: AsyncSession = Depends(get_db_session),
-    principal: AuthenticatedPrincipal = Depends(get_current_user),
+    principal: TenantPrincipal = Depends(get_current_tenant_user),
 ) -> DeleteOAuthClientResponse:
     if principal.org_role not in ("admin", "operator"):
         raise HTTPException(

@@ -4,8 +4,9 @@ import logging
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager, suppress
 from datetime import UTC, datetime
-from typing import ClassVar
+from typing import Protocol, cast
 
+import anyio
 from fastapi import FastAPI
 from fastapi.exceptions import RequestValidationError
 from sqlalchemy import text
@@ -111,6 +112,13 @@ from modulo.settings import Settings, get_settings
 # Uptime tracking — set at module import time, read by health endpoints.
 logger = logging.getLogger(__name__)
 
+
+class _TaskGroupSessionManager(Protocol):
+    """FastMCP session-manager surface used by the application lifespan."""
+
+    _task_group: anyio.abc.TaskGroup | None
+
+
 _START_TIME = datetime.now(UTC)
 
 # Graceful shutdown manager — resources registered during lifespan startup.
@@ -215,9 +223,9 @@ async def _seed_modulo_users(settings: Settings) -> None:
             existing_account = result.scalar_one_or_none()
             pw_hash = pw_part if pw_part.startswith("$2") else hash_password(pw_part)
 
-            if (
-                existing_account is not None and not existing_account.password_hash
-            ) or not existing_account.password_hash.startswith("$2"):
+            if existing_account is not None and (
+                not existing_account.password_hash or not existing_account.password_hash.startswith("$2")
+            ):
                 existing_account.password_hash = pw_hash
                 logger.info("startup.user_rehashed", extra={"email": email})
 
@@ -601,7 +609,7 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
             "caching, and session state. Provision Upstash Redis and set REDIS_URL in fly.toml."
         )
     logger.info("startup.redis_configured — Celery beat available for distributed scheduling")
-    _scheduler_tasks: ClassVar[list[asyncio.Task]] = []
+    _scheduler_tasks: list[asyncio.Task[None]] = []
 
     setup_otel(
         service_name=settings.modulo_otel_service_name,
@@ -677,7 +685,11 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
     # initialised and can't use DI.  Dispose both so no connections leak.
     try:
         _di_engine = get_or_create_engine(settings)
-        _shutdown_manager.register("otel", shutdown_otel)
+
+        async def shutdown_otel_async() -> None:
+            shutdown_otel()
+
+        _shutdown_manager.register("otel", shutdown_otel_async)
         _shutdown_manager.register("db_engine", db_engine.dispose)
         _shutdown_manager.register("di_engine", _di_engine.dispose)
         _shutdown_manager.register("rate_limiter_redis", shutdown_rate_limiters)
@@ -704,12 +716,12 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
     await _claim_expiry_job.start()
 
     # Start MCP task group so FastMCP's _handle_stateless_request can use tg.start().
-    import anyio
-
     from modulo.api.mcp_server import mcp
 
     _mcp_tg = await anyio.create_task_group().__aenter__()
-    mcp.session_manager._task_group = _mcp_tg
+    # FastMCP annotates this private integration slot as None despite assigning a TaskGroup at runtime.
+    session_manager = cast(_TaskGroupSessionManager, mcp.session_manager)
+    session_manager._task_group = _mcp_tg
 
     yield
 
@@ -764,7 +776,7 @@ DeprecationHeaderMiddleware.deprecate(
 )
 app.add_middleware(SecurityHeadersMiddleware)  # type: ignore[arg-type]
 app.add_middleware(CatchAllMiddleware)
-app.add_middleware(ShutdownMiddleware, manager=_shutdown_manager)  # type: ignore[arg-type]
+app.add_middleware(ShutdownMiddleware, manager=_shutdown_manager)
 app.add_middleware(RequestTimeoutMiddleware, timeout_seconds=120, overrides={"/healthz": 5, "/healthz/ready": 15})
 
 app.include_router(health_router)

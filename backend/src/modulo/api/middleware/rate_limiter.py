@@ -8,6 +8,7 @@ explicitly rather than relying on the module-level `get_settings()` call.
 
 import asyncio
 import logging
+from collections.abc import Awaitable, Callable
 from typing import Any, ClassVar
 
 import jwt
@@ -98,7 +99,7 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         self._bypass_token = resolved.modulo_ratelimit_bypass_token
         self._registry = registry or _create_registry(resolved)
 
-    async def dispatch(self, request: Request, call_next: Any) -> Response:
+    async def dispatch(self, request: Request, call_next: Callable[[Request], Awaitable[Response]]) -> Response:
         if self._should_rate_limit(request):
             client_key = self._client_key(request)
             rule = self._rule_for(request)
@@ -244,7 +245,7 @@ class AuthRateLimitMiddleware(BaseHTTPMiddleware):
         self._bypass_token = resolved.modulo_ratelimit_bypass_token
         self._rate_limiter = rate_limiter or get_auth_rate_limiter(resolved)
 
-    async def dispatch(self, request: Request, call_next: Any) -> Response:
+    async def dispatch(self, request: Request, call_next: Callable[[Request], Awaitable[Response]]) -> Response:
         if not self._should_rate_limit(request):
             return await call_next(request)
 

@@ -1,5 +1,6 @@
 import logging
 import os
+from collections.abc import Awaitable, Callable
 from typing import Any
 
 from fastapi import HTTPException, Request
@@ -15,7 +16,7 @@ logger = logging.getLogger(__name__)
 
 
 class CatchAllMiddleware(BaseHTTPMiddleware):
-    async def dispatch(self, request: Request, call_next: Any) -> Response:
+    async def dispatch(self, request: Request, call_next: Callable[[Request], Awaitable[Response]]) -> Response:
         try:
             return await call_next(request)
         except HTTPException:

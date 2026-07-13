@@ -5,7 +5,7 @@ import json
 import logging
 import uuid
 from datetime import datetime
-from typing import Any, ClassVar, Literal, Self
+from typing import Any, Literal, Self
 
 from fastapi import APIRouter, Depends, File, HTTPException, Query, Response, UploadFile, status
 from pydantic import BaseModel, Field, model_validator
@@ -14,8 +14,8 @@ from sqlalchemy.exc import IntegrityError, ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.api.dependencies import get_db_session
-from modulo.auth.dependencies import get_current_user, require_system_admin
-from modulo.auth.jwt import AuthenticatedPrincipal
+from modulo.auth.dependencies import get_current_tenant_user, require_system_admin
+from modulo.auth.jwt import TenantPrincipal
 from modulo.core.library_service import (
     CommunityPrimitiveReadOnlyError,
     ContributionInvalidTransitionError,
@@ -278,7 +278,7 @@ async def list_library_primitives_endpoint(
     search: str | None = None,
     source: str | None = None,
     session: AsyncSession = Depends(get_db_session),
-    principal: AuthenticatedPrincipal = Depends(get_current_user),
+    principal: TenantPrincipal = Depends(get_current_tenant_user),
 ) -> LibraryPrimitiveListResponse:
     try:
         try:
@@ -352,7 +352,7 @@ async def list_library_primitives_endpoint(
 
 
 @router.get("/ping")
-async def ping():
+async def ping() -> dict[str, bool]:
     return {"pong": True}
 
 
@@ -360,7 +360,7 @@ async def ping():
 async def get_library_primitive_endpoint(
     primitive_id: uuid.UUID,
     session: AsyncSession = Depends(get_db_session),
-    principal: AuthenticatedPrincipal = Depends(get_current_user),
+    principal: TenantPrincipal = Depends(get_current_tenant_user),
 ) -> LibraryPrimitiveResponse:
     try:
         async with session.begin():
@@ -400,7 +400,7 @@ async def get_library_primitive_endpoint(
 async def create_library_primitive_endpoint(
     req: LibraryPrimitiveCreate,
     session: AsyncSession = Depends(get_db_session),
-    principal: AuthenticatedPrincipal = Depends(get_current_user),
+    principal: TenantPrincipal = Depends(get_current_tenant_user),
 ) -> LibraryPrimitiveResponse:
     try:
         async with session.begin():
@@ -467,7 +467,7 @@ async def update_library_primitive_endpoint(
     primitive_id: uuid.UUID,
     req: LibraryPrimitiveUpdate,
     session: AsyncSession = Depends(get_db_session),
-    principal: AuthenticatedPrincipal = Depends(get_current_user),
+    principal: TenantPrincipal = Depends(get_current_tenant_user),
 ) -> LibraryPrimitiveResponse:
     updates = req.model_dump(exclude_unset=True)
     try:
@@ -503,7 +503,7 @@ async def update_library_primitive_endpoint(
 async def delete_library_primitive_endpoint(
     primitive_id: uuid.UUID,
     session: AsyncSession = Depends(get_db_session),
-    principal: AuthenticatedPrincipal = Depends(get_current_user),
+    principal: TenantPrincipal = Depends(get_current_tenant_user),
 ) -> None:
     try:
         async with session.begin():
@@ -543,7 +543,7 @@ async def copy_to_adapt_endpoint(
     primitive_id: uuid.UUID,
     req: CopyToAdaptRequest,
     session: AsyncSession = Depends(get_db_session),
-    principal: AuthenticatedPrincipal = Depends(get_current_user),
+    principal: TenantPrincipal = Depends(get_current_tenant_user),
 ) -> LibraryPrimitiveResponse:
     try:
         result = await copy_to_adapt(
@@ -593,7 +593,7 @@ async def copy_to_adapt_endpoint(
 async def export_pipeline_endpoint(
     pipeline_id: uuid.UUID,
     session: AsyncSession = Depends(get_db_session),
-    principal: AuthenticatedPrincipal = Depends(get_current_user),
+    principal: TenantPrincipal = Depends(get_current_tenant_user),
 ) -> Response:
     try:
         async with session.begin():
@@ -639,16 +639,16 @@ async def export_pipeline_endpoint(
 
 async def _analyse_bundle(
     session: AsyncSession,
-    principal: AuthenticatedPrincipal,
+    principal: TenantPrincipal,
     bundle: dict[str, Any],
 ) -> ImportBundleResponse:
     """Shared analysis logic — validates a bundle and returns resolution state."""
     bundle = copy.deepcopy(bundle)  # avoid mutating caller's dict
-    warnings: ClassVar[list[str]] = []
-    resolved_schemas: ClassVar[list[dict[str, Any]]] = []
-    resolved_connectors: ClassVar[list[dict[str, Any]]] = []
-    resolved_model_backends_list: ClassVar[list[dict[str, Any]]] = []
-    name_conflicts: ClassVar[list[dict[str, str]]] = []
+    warnings: list[str] = []
+    resolved_schemas: list[dict[str, Any]] = []
+    resolved_connectors: list[dict[str, Any]] = []
+    resolved_model_backends_list: list[dict[str, Any]] = []
+    name_conflicts: list[dict[str, str]] = []
 
     try:
         async with session.begin():
@@ -679,8 +679,8 @@ async def _analyse_bundle(
                 if result.get("warning"):
                     warnings.append(result["warning"])
 
-            seen_connector_types: ClassVar[set[str]] = set()
-            connector_instance_map: ClassVar[dict[str, str]] = {}
+            seen_connector_types: set[str] = set()
+            connector_instance_map: dict[str, str] = {}
             for agent in bundle.get("agents", []):
                 for ref in agent.get("connector_type_refs", []):
                     ctid = ref.get("connector_type_id", ref.get("type", ""))
@@ -703,7 +703,7 @@ async def _analyse_bundle(
 
             # Check for duplicate agent names within the bundle
             agent_names_in_bundle = [a.get("name", "") for a in bundle.get("agents", [])]
-            seen_names: ClassVar[set[str]] = set()
+            seen_names: set[str] = set()
             for aname in agent_names_in_bundle:
                 if aname and aname in seen_names:
                     warnings.append(
@@ -733,7 +733,7 @@ async def _analyse_bundle(
                     if ctid and ctid in connector_instance_map:
                         binding["instance_id"] = connector_instance_map[ctid]
 
-            mb_id_by_name: ClassVar[dict[str, str]] = {}
+            mb_id_by_name: dict[str, str] = {}
             for mb in bundle.get("model_backends", []):
                 rid = mb.get("_resolved_model_backend_id")
                 if rid:
@@ -781,7 +781,7 @@ async def _analyse_bundle(
 async def upload_zip_and_analyse_endpoint(
     file: UploadFile = File(...),
     session: AsyncSession = Depends(get_db_session),
-    principal: AuthenticatedPrincipal = Depends(get_current_user),
+    principal: TenantPrincipal = Depends(get_current_tenant_user),
 ) -> ImportBundleResponse:
     """Upload a .modulo.zip file, extract bundle.json, and return analysis.
 
@@ -819,7 +819,7 @@ async def upload_zip_and_analyse_endpoint(
 async def analyse_import_bundle_endpoint(
     req: AnalyseBundleRequest,
     session: AsyncSession = Depends(get_db_session),
-    principal: AuthenticatedPrincipal = Depends(get_current_user),
+    principal: TenantPrincipal = Depends(get_current_tenant_user),
 ) -> ImportBundleResponse:
     """Analyse a bundle JSON and return resolution warnings + available teams.
 
@@ -838,7 +838,7 @@ async def analyse_import_bundle_endpoint(
 async def confirm_import_endpoint(
     req: ImportConfirmRequest,
     session: AsyncSession = Depends(get_db_session),
-    principal: AuthenticatedPrincipal = Depends(get_current_user),
+    principal: TenantPrincipal = Depends(get_current_tenant_user),
 ) -> dict[str, Any]:
     """Confirm and execute the import.
 
@@ -911,7 +911,7 @@ async def list_ratings_endpoint(
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
     session: AsyncSession = Depends(get_db_session),
-    principal: AuthenticatedPrincipal = Depends(get_current_user),
+    principal: TenantPrincipal = Depends(get_current_tenant_user),
 ) -> RatingListResponse:
     try:
         async with session.begin():
@@ -944,7 +944,7 @@ async def list_ratings_endpoint(
 async def get_rating_aggregate_endpoint(
     primitive_id: uuid.UUID,
     session: AsyncSession = Depends(get_db_session),
-    principal: AuthenticatedPrincipal = Depends(get_current_user),
+    principal: TenantPrincipal = Depends(get_current_tenant_user),
 ) -> RatingAggregateResponse:
     try:
         async with session.begin():
@@ -982,7 +982,7 @@ async def submit_rating_endpoint(
     primitive_id: uuid.UUID,
     req: RatingSubmit,
     session: AsyncSession = Depends(get_db_session),
-    principal: AuthenticatedPrincipal = Depends(get_current_user),
+    principal: TenantPrincipal = Depends(get_current_tenant_user),
 ) -> RatingResponse:
     try:
         async with session.begin():
@@ -1033,7 +1033,7 @@ async def submit_abuse_report_endpoint(
     primitive_id: uuid.UUID,
     req: AbuseReportSubmit,
     session: AsyncSession = Depends(get_db_session),
-    principal: AuthenticatedPrincipal = Depends(get_current_user),
+    principal: TenantPrincipal = Depends(get_current_tenant_user),
 ) -> AbuseReportResponse:
     try:
         async with session.begin():
@@ -1090,7 +1090,7 @@ def _build_pipeline_from_template(
 
     # Build a map from template string IDs to stable UUIDs so PipelineEdge
     # foreign keys (Uuid columns) don't crash on human-readable IDs.
-    node_id_map: ClassVar[dict[str, str]] = {}
+    node_id_map: dict[str, str] = {}
     for node in graph_nodes:
         tid = node.get("id", "")
         if tid:
@@ -1100,7 +1100,7 @@ def _build_pipeline_from_template(
     # Template nodes use agent_index to reference template agents.
     # We embed the agent definition in the node metadata so the frontend
     # can resolve it later when the user configures real agents.
-    pipeline_nodes: ClassVar[list[dict[str, Any]]] = []
+    pipeline_nodes: list[dict[str, Any]] = []
     for node in graph_nodes:
         tid = node.get("id", "")
         pipeline_node: dict[str, Any] = {
@@ -1123,7 +1123,7 @@ def _build_pipeline_from_template(
 
     # Convert template edges to pipeline edge format, mapping source/target
     # through node_id_map so human-readable template IDs become UUIDs.
-    pipeline_edges: ClassVar[list[dict[str, Any]]] = []
+    pipeline_edges: list[dict[str, Any]] = []
     for edge in edges:
         old_source = edge.get("source", edge.get("source_node_id", ""))
         old_target = edge.get("target", edge.get("target_node_id", ""))
@@ -1150,7 +1150,7 @@ async def create_pipeline_from_template_endpoint(
     primitive_id: uuid.UUID,
     req: CreatePipelineFromTemplateRequest,
     session: AsyncSession = Depends(get_db_session),
-    principal: AuthenticatedPrincipal = Depends(get_current_user),
+    principal: TenantPrincipal = Depends(get_current_tenant_user),
 ) -> PipelineFromTemplateResponse:
     try:
         primitive = await get_primitive(session, principal.organisation_id, primitive_id)
@@ -1260,7 +1260,7 @@ class CommunityContributionListResponse(BaseModel):
 async def community_contribute_endpoint(
     req: CommunityContributeRequest,
     session: AsyncSession = Depends(get_db_session),
-    principal: AuthenticatedPrincipal = Depends(get_current_user),
+    principal: TenantPrincipal = Depends(get_current_tenant_user),
 ) -> LibraryPrimitiveResponse:
     """Submit a community library contribution."""
     try:
@@ -1302,7 +1302,7 @@ async def list_community_contributions_endpoint(
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
     session: AsyncSession = Depends(get_db_session),
-    principal: AuthenticatedPrincipal = Depends(get_current_user),
+    principal: TenantPrincipal = Depends(get_current_tenant_user),
 ) -> CommunityContributionListResponse:
     """List the org's own community contributions, optionally filtered by status."""
     try:
@@ -1354,7 +1354,7 @@ async def list_community_contributions_endpoint(
 async def admin_publish_contribution_endpoint(
     primitive_id: uuid.UUID,
     session: AsyncSession = Depends(get_db_session),
-    principal: AuthenticatedPrincipal = Depends(get_current_user),
+    principal: TenantPrincipal = Depends(get_current_tenant_user),
     _: None = Depends(require_system_admin),
 ) -> LibraryPrimitiveResponse:
     """Publish a community contribution to the community library (admin only)."""

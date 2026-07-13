@@ -9,7 +9,7 @@ import json
 import logging
 import uuid
 from datetime import UTC, datetime
-from typing import ClassVar
+from typing import Any
 
 import httpx
 from cryptography.fernet import Fernet
@@ -21,8 +21,8 @@ from sqlalchemy.exc import ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.api.dependencies import get_db_session
-from modulo.auth.dependencies import get_current_user
-from modulo.auth.jwt import AuthenticatedPrincipal
+from modulo.auth.dependencies import get_current_tenant_user
+from modulo.auth.jwt import TenantPrincipal
 from modulo.core.notifier import (
     EVENT_BUDGET_EXCEEDED,
     EVENT_CIRCUIT_BREAKER_TRIPPED,
@@ -46,7 +46,7 @@ AVAILABLE_EVENTS = [
 ]
 
 
-def _require_admin(principal: AuthenticatedPrincipal) -> None:
+def _require_admin(principal: TenantPrincipal) -> None:
     if principal.org_role != "admin":
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
@@ -153,7 +153,7 @@ async def list_all_deliveries(
     date_from: str | None = Query(None, alias="from"),
     date_to: str | None = Query(None, alias="to"),
     session: AsyncSession = Depends(get_db_session),
-    principal: AuthenticatedPrincipal = Depends(get_current_user),
+    principal: TenantPrincipal = Depends(get_current_tenant_user),
 ) -> DeliveryLogResponse:
     _require_admin(principal)
     try:
@@ -200,7 +200,7 @@ async def _list_deliveries(
     date_from: str | None,
     date_to: str | None,
     session: AsyncSession,
-    principal: AuthenticatedPrincipal,
+    principal: TenantPrincipal,
 ) -> DeliveryLogResponse:
     async with session.begin():
         await set_rls_org(session, principal.organisation_id)
@@ -305,9 +305,9 @@ async def _list_deliveries(
 @router.post("/deliveries/retry-all-failed")
 async def retry_all_failed_deliveries(
     session: AsyncSession = Depends(get_db_session),
-    principal: AuthenticatedPrincipal = Depends(get_current_user),
+    principal: TenantPrincipal = Depends(get_current_tenant_user),
     settings: Settings = Depends(get_settings),
-) -> dict:
+) -> dict[str, Any]:
     """Retry all failed and dead_lettered deliveries across all webhooks in the org."""
     _require_admin(principal)
 
@@ -352,7 +352,7 @@ async def retry_all_failed_deliveries(
         ) from None
 
     retried = 0
-    errors: ClassVar[list[str]] = []
+    errors: list[str] = []
 
     for delivery, ep in failed:
         event_type = delivery.event_type
@@ -490,7 +490,7 @@ async def retry_all_failed_deliveries(
 
 @router.get("/available-events", response_model=list[str])
 async def list_available_events(
-    principal: AuthenticatedPrincipal = Depends(get_current_user),
+    principal: TenantPrincipal = Depends(get_current_tenant_user),
 ) -> list[str]:
     _require_admin(principal)
     return AVAILABLE_EVENTS
@@ -502,7 +502,7 @@ async def list_available_events(
 @router.get("", response_model=list[WebhookResponse])
 async def list_webhooks(
     session: AsyncSession = Depends(get_db_session),
-    principal: AuthenticatedPrincipal = Depends(get_current_user),
+    principal: TenantPrincipal = Depends(get_current_tenant_user),
 ) -> list[WebhookResponse]:
     _require_admin(principal)
     try:
@@ -542,7 +542,7 @@ async def list_webhooks(
 async def create_webhook(
     req: WebhookCreate,
     session: AsyncSession = Depends(get_db_session),
-    principal: AuthenticatedPrincipal = Depends(get_current_user),
+    principal: TenantPrincipal = Depends(get_current_tenant_user),
     settings: Settings = Depends(get_settings),
 ) -> WebhookResponse:
     _require_admin(principal)
@@ -594,7 +594,7 @@ async def create_webhook(
 async def get_webhook(
     webhook_id: uuid.UUID,
     session: AsyncSession = Depends(get_db_session),
-    principal: AuthenticatedPrincipal = Depends(get_current_user),
+    principal: TenantPrincipal = Depends(get_current_tenant_user),
 ) -> WebhookResponse:
     _require_admin(principal)
     try:
@@ -636,7 +636,7 @@ async def update_webhook(
     webhook_id: uuid.UUID,
     req: WebhookUpdate,
     session: AsyncSession = Depends(get_db_session),
-    principal: AuthenticatedPrincipal = Depends(get_current_user),
+    principal: TenantPrincipal = Depends(get_current_tenant_user),
     settings: Settings = Depends(get_settings),
 ) -> WebhookResponse:
     _require_admin(principal)
@@ -653,7 +653,7 @@ async def update_webhook(
                 fernet = Fernet(settings.fernet_key.encode())
                 ep.secret_ciphertext = fernet.encrypt(req.secret.encode())
             if req.events is not None:
-                ep.events = json.dumps(req.events)
+                ep.events = req.events
             if req.description is not None:
                 ep.description = req.description
 
@@ -691,7 +691,7 @@ async def update_webhook(
 async def delete_webhook(
     webhook_id: uuid.UUID,
     session: AsyncSession = Depends(get_db_session),
-    principal: AuthenticatedPrincipal = Depends(get_current_user),
+    principal: TenantPrincipal = Depends(get_current_tenant_user),
 ) -> None:
     _require_admin(principal)
     try:
@@ -735,7 +735,7 @@ async def delete_webhook(
 async def test_webhook(
     webhook_id: uuid.UUID,
     session: AsyncSession = Depends(get_db_session),
-    principal: AuthenticatedPrincipal = Depends(get_current_user),
+    principal: TenantPrincipal = Depends(get_current_tenant_user),
     settings: Settings = Depends(get_settings),
 ) -> TestResult:
     _require_admin(principal)
@@ -815,7 +815,7 @@ async def test_webhook(
 async def re_enable_webhook(
     webhook_id: uuid.UUID,
     session: AsyncSession = Depends(get_db_session),
-    principal: AuthenticatedPrincipal = Depends(get_current_user),
+    principal: TenantPrincipal = Depends(get_current_tenant_user),
 ) -> WebhookResponse:
     _require_admin(principal)
     try:
@@ -866,7 +866,7 @@ async def list_deliveries(
     limit: int = Query(default=25, ge=1, le=100),
     status_filter: str | None = Query(None, alias="status"),
     session: AsyncSession = Depends(get_db_session),
-    principal: AuthenticatedPrincipal = Depends(get_current_user),
+    principal: TenantPrincipal = Depends(get_current_tenant_user),
 ) -> DeliveryLogResponse:
     _require_admin(principal)
 
@@ -969,7 +969,7 @@ async def retry_delivery(
     webhook_id: uuid.UUID,
     delivery_id: uuid.UUID,
     session: AsyncSession = Depends(get_db_session),
-    principal: AuthenticatedPrincipal = Depends(get_current_user),
+    principal: TenantPrincipal = Depends(get_current_tenant_user),
     settings: Settings = Depends(get_settings),
 ) -> TestResult:
     _require_admin(principal)
@@ -1198,9 +1198,13 @@ async def retry_delivery(
 
 
 def _ep_to_response(ep: NotificationEndpoint) -> WebhookResponse:
-    events: ClassVar[list[str]] = []
-    with contextlib.suppress(json.JSONDecodeError, TypeError):
-        events = json.loads(ep.events) if ep.events else []
+    raw_events: object = ep.events
+    events = raw_events if isinstance(raw_events, list) and all(isinstance(event, str) for event in raw_events) else []
+    if isinstance(raw_events, str):
+        with contextlib.suppress(json.JSONDecodeError, TypeError):
+            parsed = json.loads(raw_events)
+            if isinstance(parsed, list) and all(isinstance(event, str) for event in parsed):
+                events = parsed
     return WebhookResponse(
         id=str(ep.id),
         url=ep.url,

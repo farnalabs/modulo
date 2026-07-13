@@ -16,8 +16,8 @@ from sqlalchemy.exc import ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.api.dependencies import get_db_session, require_feature
-from modulo.auth.dependencies import get_current_user
-from modulo.auth.jwt import AuthenticatedPrincipal
+from modulo.auth.dependencies import get_current_tenant_user
+from modulo.auth.jwt import TenantPrincipal
 from modulo.core.cost_controller import get_cost_report
 from modulo.db.crud.organisation import get_organisation
 from modulo.db.crud.scheduled_report import (
@@ -58,7 +58,7 @@ class SetSpendLimitRequest(BaseModel):
     daily_spend_limit: float | None = Field(None, ge=0)
 
 
-def _require_admin(principal: AuthenticatedPrincipal) -> None:
+def _require_admin(principal: TenantPrincipal) -> None:
     if principal.org_role != "admin":
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
@@ -70,9 +70,9 @@ def _require_admin(principal: AuthenticatedPrincipal) -> None:
 async def get_costs(
     group_by: str = Query("team", pattern=r"^(team|org)$"),
     period: str = Query("month", pattern=r"^(day|week|month|year)$"),
-    _: None = require_feature("admin_spend_limits"),
-    __: None = require_feature("admin_cost_breakdown"),
-    current_user: AuthenticatedPrincipal = Depends(get_current_user),
+    _: object = require_feature("admin_spend_limits"),
+    __: object = require_feature("admin_cost_breakdown"),
+    current_user: TenantPrincipal = Depends(get_current_tenant_user),
     session: AsyncSession = Depends(get_db_session),
 ) -> CostReportResponse:
     _require_admin(current_user)
@@ -119,9 +119,9 @@ async def get_costs(
 
 @router.get("/limits", response_model=SpendLimitResponse)
 async def get_spend_limits(
-    _: None = require_feature("admin_spend_limits"),
-    __: None = require_feature("admin_cost_controls"),
-    current_user: AuthenticatedPrincipal = Depends(get_current_user),
+    _: object = require_feature("admin_spend_limits"),
+    __: object = require_feature("admin_cost_controls"),
+    current_user: TenantPrincipal = Depends(get_current_tenant_user),
     session: AsyncSession = Depends(get_db_session),
 ) -> SpendLimitResponse:
     _require_admin(current_user)
@@ -173,9 +173,9 @@ async def get_spend_limits(
 @router.put("/limits/org", response_model=dict[str, Any])
 async def set_org_spend_limit(
     req: SetSpendLimitRequest,
-    _: None = require_feature("admin_spend_limits"),
-    __: None = require_feature("admin_cost_controls"),
-    current_user: AuthenticatedPrincipal = Depends(get_current_user),
+    _: object = require_feature("admin_spend_limits"),
+    __: object = require_feature("admin_cost_controls"),
+    current_user: TenantPrincipal = Depends(get_current_tenant_user),
     session: AsyncSession = Depends(get_db_session),
 ) -> dict[str, Any]:
     _require_admin(current_user)
@@ -222,9 +222,9 @@ async def set_org_spend_limit(
 async def set_team_spend_limit(
     team_id: uuid.UUID,
     req: SetSpendLimitRequest,
-    _: None = require_feature("admin_spend_limits"),
-    __: None = require_feature("admin_cost_controls"),
-    current_user: AuthenticatedPrincipal = Depends(get_current_user),
+    _: object = require_feature("admin_spend_limits"),
+    __: object = require_feature("admin_cost_controls"),
+    current_user: TenantPrincipal = Depends(get_current_tenant_user),
     session: AsyncSession = Depends(get_db_session),
 ) -> dict[str, Any]:
     _require_admin(current_user)
@@ -284,9 +284,9 @@ class UpdateCostControlsRequest(BaseModel):
 
 @router.get("/controls", response_model=CostControlsResponse)
 async def get_cost_controls(
-    _: None = require_feature("admin_spend_limits"),
-    __: None = require_feature("admin_cost_controls"),
-    current_user: AuthenticatedPrincipal = Depends(get_current_user),
+    _: object = require_feature("admin_spend_limits"),
+    __: object = require_feature("admin_cost_controls"),
+    current_user: TenantPrincipal = Depends(get_current_tenant_user),
     session: AsyncSession = Depends(get_db_session),
 ) -> CostControlsResponse:
     _require_admin(current_user)
@@ -335,9 +335,9 @@ async def get_cost_controls(
 @router.put("/controls", response_model=CostControlsResponse)
 async def update_cost_controls(
     req: UpdateCostControlsRequest,
-    _: None = require_feature("admin_spend_limits"),
-    __: None = require_feature("admin_cost_controls"),
-    current_user: AuthenticatedPrincipal = Depends(get_current_user),
+    _: object = require_feature("admin_spend_limits"),
+    __: object = require_feature("admin_cost_controls"),
+    current_user: TenantPrincipal = Depends(get_current_tenant_user),
     session: AsyncSession = Depends(get_db_session),
 ) -> CostControlsResponse:
     _require_admin(current_user)
@@ -399,9 +399,9 @@ async def export_costs(
     period: str = Query("this_month", pattern=r"^(this_month|last_month|7d|30d|90d)$"),
     group_by: str = Query("team", pattern=r"^(team|pipeline|model)$"),
     format: str = Query("csv", pattern=r"^(csv)$"),
-    _: None = require_feature("admin_spend_limits"),
-    __: None = require_feature("admin_cost_breakdown"),
-    current_user: AuthenticatedPrincipal = Depends(get_current_user),
+    _: object = require_feature("admin_spend_limits"),
+    __: object = require_feature("admin_cost_breakdown"),
+    current_user: TenantPrincipal = Depends(get_current_tenant_user),
     session: AsyncSession = Depends(get_db_session),
 ) -> Response:
     _require_admin(current_user)
@@ -485,9 +485,9 @@ class ReportResponse(BaseModel):
 @router.post("/reports", response_model=ReportResponse, status_code=201)
 async def create_report(
     req: CreateReportRequest,
-    _: None = require_feature("admin_spend_limits"),
-    __: None = require_feature("admin_cost_controls"),
-    current_user: AuthenticatedPrincipal = Depends(get_current_user),
+    _: object = require_feature("admin_spend_limits"),
+    __: object = require_feature("admin_cost_controls"),
+    current_user: TenantPrincipal = Depends(get_current_tenant_user),
     session: AsyncSession = Depends(get_db_session),
 ) -> ReportResponse:
     _require_admin(current_user)
@@ -542,9 +542,9 @@ async def create_report(
 
 @router.get("/reports", response_model=list[ReportResponse])
 async def list_reports(
-    _: None = require_feature("admin_spend_limits"),
-    __: None = require_feature("admin_cost_controls"),
-    current_user: AuthenticatedPrincipal = Depends(get_current_user),
+    _: object = require_feature("admin_spend_limits"),
+    __: object = require_feature("admin_cost_controls"),
+    current_user: TenantPrincipal = Depends(get_current_tenant_user),
     session: AsyncSession = Depends(get_db_session),
 ) -> list[ReportResponse]:
     _require_admin(current_user)
@@ -597,9 +597,9 @@ async def list_reports(
 @router.delete("/reports/{report_id}", status_code=204)
 async def delete_report(
     report_id: uuid.UUID,
-    _: None = require_feature("admin_spend_limits"),
-    __: None = require_feature("admin_cost_controls"),
-    current_user: AuthenticatedPrincipal = Depends(get_current_user),
+    _: object = require_feature("admin_spend_limits"),
+    __: object = require_feature("admin_cost_controls"),
+    current_user: TenantPrincipal = Depends(get_current_tenant_user),
     session: AsyncSession = Depends(get_db_session),
 ) -> None:
     _require_admin(current_user)
@@ -655,9 +655,9 @@ class AnomalyResponse(BaseModel):
 
 @router.get("/anomalies", response_model=list[AnomalyResponse])
 async def get_anomalies(
-    _: None = require_feature("admin_spend_limits"),
-    __: None = require_feature("admin_cost_breakdown"),
-    current_user: AuthenticatedPrincipal = Depends(get_current_user),
+    _: object = require_feature("admin_spend_limits"),
+    __: object = require_feature("admin_cost_breakdown"),
+    current_user: TenantPrincipal = Depends(get_current_tenant_user),
     session: AsyncSession = Depends(get_db_session),
 ) -> list[AnomalyResponse]:
     _require_admin(current_user)
@@ -687,7 +687,7 @@ async def get_anomalies(
             counts_result = await session.execute(counts_q)
             daily_spends: list[tuple[object, object]] = [(r.run_date, r.daily_spend) for r in counts_result.all()]
 
-            anomalies: ClassVar[list[dict[str, Any]]] = []
+            anomalies: list[dict[str, Any]] = []
             for i, (run_date, spend) in enumerate(daily_spends):
                 if i < 7:
                     continue
@@ -714,7 +714,7 @@ async def get_anomalies(
 
             # Also return any previously stored anomalies
             stored = await list_anomalies(session, organisation_id=current_user.organisation_id, dismissed=False)
-            stored_dict: ClassVar[dict[str, Any]] = {}
+            stored_dict: dict[str, Any] = {}
             for a in stored:
                 key = str(a.anomaly_date)
                 if key not in stored_dict:
@@ -729,7 +729,7 @@ async def get_anomalies(
                     }
 
             # Merge: use stored dismissed status, and include stored anomalies
-            seen_dates: ClassVar[set[str]] = set()
+            seen_dates: set[str] = set()
             for a in anomalies:  # type: ignore[assignment]
                 key = a["anomaly_date"]  # type: ignore[index]
                 seen_dates.add(key)
@@ -769,9 +769,9 @@ async def get_anomalies(
 @router.get("/anomalies/dismiss/{anomaly_id}", status_code=204)
 async def dismiss_anomaly_endpoint(
     anomaly_id: uuid.UUID,
-    _: None = require_feature("admin_spend_limits"),
-    __: None = require_feature("admin_cost_breakdown"),
-    current_user: AuthenticatedPrincipal = Depends(get_current_user),
+    _: object = require_feature("admin_spend_limits"),
+    __: object = require_feature("admin_cost_breakdown"),
+    current_user: TenantPrincipal = Depends(get_current_tenant_user),
     session: AsyncSession = Depends(get_db_session),
 ) -> None:
     _require_admin(current_user)

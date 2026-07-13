@@ -10,14 +10,14 @@ from typing import Any, ClassVar
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from jsonschema import Draft202012Validator, ValidationError  # type: ignore[import-untyped]
-from jsonschema.exceptions import SchemaError as JsSchemaError
+from jsonschema.exceptions import SchemaError as JsSchemaError  # type: ignore[import-untyped]
 from pydantic import BaseModel, Field
 from sqlalchemy.exc import IntegrityError, ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.api.dependencies import get_db_session, require_feature
-from modulo.auth.dependencies import get_current_user
-from modulo.auth.jwt import AuthenticatedPrincipal
+from modulo.auth.dependencies import get_current_tenant_user
+from modulo.auth.jwt import TenantPrincipal
 from modulo.core.audit_logger import append_audit_event
 from modulo.core.connector_hub import ConnectorHub
 from modulo.core.model_backend_hub import ModelBackendHub
@@ -136,7 +136,7 @@ async def list_schemas_endpoint(
     page: int = Query(default=1, ge=1),
     page_size: int = Query(default=20, ge=1, le=100),
     session: AsyncSession = Depends(get_db_session),
-    principal: AuthenticatedPrincipal = Depends(get_current_user),
+    principal: TenantPrincipal = Depends(get_current_tenant_user),
 ) -> SchemaListResponse:
     try:
         async with session.begin():
@@ -181,7 +181,7 @@ async def list_schemas_endpoint(
 async def create_schema_endpoint(
     req: SchemaCreate,
     session: AsyncSession = Depends(get_db_session),
-    principal: AuthenticatedPrincipal = Depends(get_current_user),
+    principal: TenantPrincipal = Depends(get_current_tenant_user),
 ) -> SchemaResponse:
     try:
         async with session.begin():
@@ -238,7 +238,7 @@ async def create_schema_endpoint(
 async def get_schema_endpoint(
     schema_id: uuid.UUID,
     session: AsyncSession = Depends(get_db_session),
-    principal: AuthenticatedPrincipal = Depends(get_current_user),
+    principal: TenantPrincipal = Depends(get_current_tenant_user),
 ) -> SchemaResponse:
     try:
         async with session.begin():
@@ -281,7 +281,7 @@ async def update_schema_endpoint(
     schema_id: uuid.UUID,
     req: SchemaUpdate,
     session: AsyncSession = Depends(get_db_session),
-    principal: AuthenticatedPrincipal = Depends(get_current_user),
+    principal: TenantPrincipal = Depends(get_current_tenant_user),
 ) -> SchemaResponse:
     updates = req.model_dump(exclude_unset=True)
     try:
@@ -325,7 +325,7 @@ async def update_schema_endpoint(
 async def deprecate_schema_endpoint(
     schema_id: uuid.UUID,
     session: AsyncSession = Depends(get_db_session),
-    principal: AuthenticatedPrincipal = Depends(get_current_user),
+    principal: TenantPrincipal = Depends(get_current_tenant_user),
 ) -> SchemaResponse:
     """Mark a schema as deprecated."""
     try:
@@ -369,7 +369,7 @@ async def delete_schema_endpoint(
     schema_id: uuid.UUID,
     force: bool = Query(False),
     session: AsyncSession = Depends(get_db_session),
-    principal: AuthenticatedPrincipal = Depends(get_current_user),
+    principal: TenantPrincipal = Depends(get_current_tenant_user),
 ) -> None:
     try:
         try:
@@ -427,7 +427,7 @@ async def list_schema_versions_endpoint(
     page: int = Query(default=1, ge=1),
     page_size: int = Query(default=20, ge=1, le=100),
     session: AsyncSession = Depends(get_db_session),
-    principal: AuthenticatedPrincipal = Depends(get_current_user),
+    principal: TenantPrincipal = Depends(get_current_tenant_user),
 ) -> SchemaVersionListResponse:
     try:
         async with session.begin():
@@ -481,7 +481,7 @@ async def create_schema_version_endpoint(
     schema_id: uuid.UUID,
     req: SchemaVersionCreate,
     session: AsyncSession = Depends(get_db_session),
-    principal: AuthenticatedPrincipal = Depends(get_current_user),
+    principal: TenantPrincipal = Depends(get_current_tenant_user),
 ) -> SchemaVersionResponse:
     try:
         async with session.begin():
@@ -539,7 +539,7 @@ async def get_schema_version_endpoint(
     schema_id: uuid.UUID,
     version: str,
     session: AsyncSession = Depends(get_db_session),
-    principal: AuthenticatedPrincipal = Depends(get_current_user),
+    principal: TenantPrincipal = Depends(get_current_tenant_user),
 ) -> SchemaVersionResponse:
     try:
         async with session.begin():
@@ -599,7 +599,7 @@ class SchemaFieldListResponse(BaseModel):
 async def list_schema_fields_endpoint(
     schema_id: uuid.UUID,
     session: AsyncSession = Depends(get_db_session),
-    principal: AuthenticatedPrincipal = Depends(get_current_user),
+    principal: TenantPrincipal = Depends(get_current_tenant_user),
 ) -> SchemaFieldListResponse:
     """Return the field list for the latest version of a schema.
 
@@ -648,7 +648,7 @@ async def list_schema_fields_endpoint(
     properties: dict[str, Any] = definition.get("properties", {})
     required_fields: list[str] = definition.get("required", [])
 
-    fields: ClassVar[list[SchemaFieldResponse]] = []
+    fields: list[SchemaFieldResponse] = []
     for field_name, field_schema in properties.items():
         if not isinstance(field_schema, dict):
             continue
@@ -693,7 +693,7 @@ class SchemaInferResponse(BaseModel):
 async def infer_schema_endpoint(
     req: SchemaInferRequest,
     session: AsyncSession = Depends(get_db_session),
-    principal: AuthenticatedPrincipal = Depends(get_current_user),
+    principal: TenantPrincipal = Depends(get_current_tenant_user),
     settings: Settings = Depends(get_settings),
 ) -> SchemaInferResponse:
     """Sample data from a connector and infer a JSON Schema via LLM.
@@ -903,7 +903,7 @@ class SchemaGenerateResponse(BaseModel):
 async def generate_schema_endpoint(
     req: SchemaGenerateRequest,
     session: AsyncSession = Depends(get_db_session),
-    principal: AuthenticatedPrincipal = Depends(get_current_user),
+    principal: TenantPrincipal = Depends(get_current_tenant_user),
     settings: Settings = Depends(get_settings),
 ) -> SchemaGenerateResponse:
     """Generate a JSON Schema from a natural language description and optional
@@ -1010,7 +1010,7 @@ async def generate_schema_endpoint(
                     event_type="schema_generation_completed",
                     actor_user_id=principal.account_id,
                     resource_type="schema",
-                    resource_id="generate",
+                    resource_id=None,
                     payload_json={
                         "description_length": len(req.description),
                         "example_count": len(req.examples),
@@ -1055,7 +1055,7 @@ class SchemaMigrationPlanRequest(BaseModel):
 async def migrate_data_endpoint(
     req: SchemaMigrationRequest,
     session: AsyncSession = Depends(get_db_session),
-    principal: AuthenticatedPrincipal = Depends(get_current_user),
+    principal: TenantPrincipal = Depends(get_current_tenant_user),
     dry_run: bool = Query(False, description="If true, preview the migration plan without applying it"),
 ) -> SchemaMigrationResponse:
     """Migrate data from one schema version to another.
@@ -1124,7 +1124,7 @@ async def migrate_data_endpoint(
             detail="Failed to compute migration plan.",
         ) from None
 
-    plan_dict = {
+    plan_dict: dict[str, Any] = {
         "field_additions": plan.field_additions,
         "field_removals": plan.field_removals,
         "type_changes": {k: {"old_type": v.old_type, "new_type": v.new_type} for k, v in plan.type_changes.items()},
@@ -1251,7 +1251,7 @@ async def validate_schema_endpoint(
     Returns structural validation errors with best-effort line/column info.
     """
     raw = json.dumps(req.definition, indent=2)
-    errors: ClassVar[list[SchemaValidationError]] = []
+    errors: list[SchemaValidationError] = []
 
     try:
         Draft202012Validator.check_schema(req.definition)
@@ -1331,7 +1331,7 @@ async def import_schema_endpoint(
     properties = schema.get("properties", {})
     required_fields: list[str] = schema.get("required", [])
 
-    fields: ClassVar[list[SchemaImportField]] = []
+    fields: list[SchemaImportField] = []
     for field_name, field_schema in properties.items():
         if not isinstance(field_schema, dict):
             continue

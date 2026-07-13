@@ -3,6 +3,7 @@
 import logging
 import uuid
 from datetime import datetime
+from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, Field, model_validator
@@ -10,8 +11,8 @@ from sqlalchemy.exc import ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.api.dependencies import get_db_session
-from modulo.auth.dependencies import get_current_user
-from modulo.auth.jwt import AuthenticatedPrincipal
+from modulo.auth.dependencies import get_current_tenant_user
+from modulo.auth.jwt import TenantPrincipal
 from modulo.core.lifecycle_map.service import (
     create_lifecycle_map,
     delete_lifecycle_map,
@@ -32,7 +33,7 @@ class LifecycleMapCreate(BaseModel):
     owner_team_id: uuid.UUID | None = None
     visibility: str = Field(default="org", pattern=r"^(org|team)$")
     version: int = Field(default=1, ge=1)
-    content_json: dict = Field(default_factory=dict)
+    content_json: dict[str, Any] = Field(default_factory=dict[str, Any])
 
     @model_validator(mode="after")
     def _validate_team_visibility(self) -> "LifecycleMapCreate":
@@ -46,7 +47,7 @@ class LifecycleMapUpdate(BaseModel):
     description: str | None = Field(None, max_length=2000)
     owner_team_id: uuid.UUID | None = None
     visibility: str | None = Field(None, pattern=r"^(org|team)$")
-    content_json: dict | None = None
+    content_json: dict[str, Any] | None = None
 
     @model_validator(mode="after")
     def _validate_team_visibility(self) -> "LifecycleMapUpdate":
@@ -63,7 +64,7 @@ class LifecycleMapResponse(BaseModel):
     owner_team_id: uuid.UUID | None
     visibility: str
     version: int
-    content_json: dict
+    content_json: dict[str, Any]
     archived_at: datetime | None
     created_at: datetime
     updated_at: datetime
@@ -85,7 +86,7 @@ async def list_lifecycle_maps_endpoint(
     owner_team_id: uuid.UUID | None = Query(default=None),
     include_archived: bool = Query(default=False),
     session: AsyncSession = Depends(get_db_session),
-    principal: AuthenticatedPrincipal = Depends(get_current_user),
+    principal: TenantPrincipal = Depends(get_current_tenant_user),
 ) -> LifecycleMapListResponse:
     try:
         async with session.begin():
@@ -128,7 +129,7 @@ async def list_lifecycle_maps_endpoint(
 async def create_lifecycle_map_endpoint(
     req: LifecycleMapCreate,
     session: AsyncSession = Depends(get_db_session),
-    principal: AuthenticatedPrincipal = Depends(get_current_user),
+    principal: TenantPrincipal = Depends(get_current_tenant_user),
 ) -> LifecycleMapResponse:
     try:
         async with session.begin():
@@ -170,7 +171,7 @@ async def create_lifecycle_map_endpoint(
 async def get_lifecycle_map_endpoint(
     lifecycle_map_id: uuid.UUID,
     session: AsyncSession = Depends(get_db_session),
-    principal: AuthenticatedPrincipal = Depends(get_current_user),
+    principal: TenantPrincipal = Depends(get_current_tenant_user),
 ) -> LifecycleMapResponse:
     try:
         async with session.begin():
@@ -205,7 +206,7 @@ async def update_lifecycle_map_endpoint(
     lifecycle_map_id: uuid.UUID,
     req: LifecycleMapUpdate,
     session: AsyncSession = Depends(get_db_session),
-    principal: AuthenticatedPrincipal = Depends(get_current_user),
+    principal: TenantPrincipal = Depends(get_current_tenant_user),
 ) -> LifecycleMapResponse:
     updates = req.model_dump(exclude_unset=True)
     try:
@@ -243,7 +244,7 @@ async def update_lifecycle_map_endpoint(
 async def delete_lifecycle_map_endpoint(
     lifecycle_map_id: uuid.UUID,
     session: AsyncSession = Depends(get_db_session),
-    principal: AuthenticatedPrincipal = Depends(get_current_user),
+    principal: TenantPrincipal = Depends(get_current_tenant_user),
 ) -> None:
     try:
         async with session.begin():

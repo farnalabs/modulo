@@ -5,7 +5,7 @@ import json
 import logging
 import uuid
 from decimal import Decimal
-from typing import Any, ClassVar, Literal
+from typing import Any, Literal
 
 from cryptography.fernet import Fernet
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, status
@@ -21,8 +21,8 @@ from modulo.api.dependencies import (
     pg_connection_string,
 )
 from modulo.api.middleware.sensitive_mask import is_sensitive_key, mask_sensitive_value
-from modulo.auth.dependencies import get_current_user
-from modulo.auth.jwt import AuthenticatedPrincipal
+from modulo.auth.dependencies import get_current_tenant_user
+from modulo.auth.jwt import TenantPrincipal
 from modulo.core.pipeline_engine.executor import PipelineExecutor
 from modulo.core.pipeline_engine.recovery import (
     ConcurrentRecoveryError,
@@ -166,7 +166,7 @@ async def trigger_run(
     background_tasks: BackgroundTasks,
     session: AsyncSession = Depends(get_db_session),
     engine: AsyncEngine = Depends(_get_engine),
-    principal: AuthenticatedPrincipal = Depends(get_current_user),
+    principal: TenantPrincipal = Depends(get_current_tenant_user),
 ) -> RunResponse:
     """Manually trigger a pipeline run.
 
@@ -282,7 +282,7 @@ async def trigger_run(
 async def get_run_stats_endpoint(
     period: str = Query(default="30d", pattern=r"^(7d|30d|90d)$"),
     session: AsyncSession = Depends(get_db_session),
-    principal: AuthenticatedPrincipal = Depends(get_current_user),
+    principal: TenantPrincipal = Depends(get_current_tenant_user),
 ) -> dict[str, Any]:
     """Aggregated run stats for a period (7d|30d|90d)."""
     try:
@@ -321,7 +321,7 @@ async def get_run_stats_endpoint(
 async def get_run_heatmap_endpoint(
     year: int = Query(default=2026, ge=2020, le=2100),
     session: AsyncSession = Depends(get_db_session),
-    principal: AuthenticatedPrincipal = Depends(get_current_user),
+    principal: TenantPrincipal = Depends(get_current_tenant_user),
 ) -> list[dict[str, Any]]:
     """Run counts per day for the given year (calendar heatmap)."""
     try:
@@ -360,7 +360,7 @@ async def get_run_heatmap_endpoint(
 async def get_run_status(
     run_id: uuid.UUID,
     session: AsyncSession = Depends(get_db_session),
-    principal: AuthenticatedPrincipal = Depends(get_current_user),
+    principal: TenantPrincipal = Depends(get_current_tenant_user),
 ) -> RunResponse:
     try:
         async with session.begin():
@@ -402,7 +402,7 @@ async def get_run_status(
 async def cancel_run(
     run_id: uuid.UUID,
     session: AsyncSession = Depends(get_db_session),
-    principal: AuthenticatedPrincipal = Depends(get_current_user),
+    principal: TenantPrincipal = Depends(get_current_tenant_user),
 ) -> dict[str, str]:
     """Request cancellation of a run.
 
@@ -501,7 +501,7 @@ def _build_fixture_map(
     fixture_map entry.  Otherwise a single entry maps the full
     input_payload to the serialised outputs.
     """
-    fixture: ClassVar[dict[str, str]] = {}
+    fixture: dict[str, str] = {}
     inp = input_payload or {}
     out = outputs_json or {}
 
@@ -534,7 +534,7 @@ class FixtureExportResponse(BaseModel):
 async def get_run_io_endpoint(
     run_id: uuid.UUID,
     session: AsyncSession = Depends(get_db_session),
-    principal: AuthenticatedPrincipal = Depends(get_current_user),
+    principal: TenantPrincipal = Depends(get_current_tenant_user),
 ) -> RunIOResponse:
     """Return per-node IO for a completed run, plus generated fixture_map."""
     try:
@@ -582,7 +582,7 @@ async def get_run_io_endpoint(
 async def export_run_fixture(
     run_id: uuid.UUID,
     session: AsyncSession = Depends(get_db_session),
-    principal: AuthenticatedPrincipal = Depends(get_current_user),
+    principal: TenantPrincipal = Depends(get_current_tenant_user),
 ) -> FixtureExportResponse:
     """Export run IO data as a StubModelBackend-compatible fixture.
 
@@ -655,7 +655,7 @@ async def export_run_fixture(
 async def get_run_workspace_lease(
     run_id: uuid.UUID,
     session: AsyncSession = Depends(get_db_session),
-    principal: AuthenticatedPrincipal = Depends(get_current_user),
+    principal: TenantPrincipal = Depends(get_current_tenant_user),
 ) -> dict[str, Any] | None:
     """Return the WorkspaceLease associated with a run, if any."""
     try:
@@ -710,7 +710,7 @@ async def get_run_workspace_lease(
 async def get_run_workspace_events(
     run_id: uuid.UUID,
     session: AsyncSession = Depends(get_db_session),
-    principal: AuthenticatedPrincipal = Depends(get_current_user),
+    principal: TenantPrincipal = Depends(get_current_tenant_user),
 ) -> list[dict[str, str]]:
     """Return workspace lifecycle events for a run as a timeline."""
     try:
@@ -802,7 +802,7 @@ async def get_run_node_output(
     run_id: uuid.UUID,
     node_id: str,
     session: AsyncSession = Depends(get_db_session),
-    principal: AuthenticatedPrincipal = Depends(get_current_user),
+    principal: TenantPrincipal = Depends(get_current_tenant_user),
 ) -> NodeOutputResponse:
     """Return a specific node's output from a completed pipeline run.
 
@@ -872,7 +872,7 @@ async def observe_run_node(
     run_id: uuid.UUID,
     node_id: str,
     session: AsyncSession = Depends(get_db_session),
-    principal: AuthenticatedPrincipal = Depends(get_current_user),
+    principal: TenantPrincipal = Depends(get_current_tenant_user),
 ) -> ObserveNodeResponse:
     """Mark a node as observed by a human.
 
@@ -989,7 +989,7 @@ async def recover_run_node(
     req: NodeRecoverRequest,
     session: AsyncSession = Depends(get_db_session),
     engine: AsyncEngine = Depends(_get_engine),
-    principal: AuthenticatedPrincipal = Depends(get_current_user),
+    principal: TenantPrincipal = Depends(get_current_tenant_user),
 ) -> NodeRecoverResponse:
     """Recover a failed manual-input node.
 
@@ -1188,7 +1188,7 @@ def _build_messages_from_agent_and_state(
     from the input payload or checkpoint state, and assistant messages
     from previous node outputs.
     """
-    messages: ClassVar[list[dict[str, str]]] = []
+    messages: list[dict[str, str]] = []
 
     if agent is not None:
         system_content = agent.prompt_template or ""
@@ -1243,7 +1243,7 @@ async def reveal_node_prompt(
     run_id: uuid.UUID,
     node_id: str,
     session: AsyncSession = Depends(get_db_session),
-    principal: AuthenticatedPrincipal = Depends(get_current_user),
+    principal: TenantPrincipal = Depends(get_current_tenant_user),
     settings: Settings = Depends(get_settings),
 ) -> PromptRevealResponse:
     """Reconstruct and reveal the exact prompt sent to the LLM for a node.
@@ -1384,7 +1384,7 @@ class NodeOutputDiffResponse(BaseModel):
 async def diff_node_output(
     req: NodeOutputDiffRequest,
     session: AsyncSession = Depends(get_db_session),
-    principal: AuthenticatedPrincipal = Depends(get_current_user),
+    principal: TenantPrincipal = Depends(get_current_tenant_user),
 ) -> NodeOutputDiffResponse:
     """Diff a specific node's output across two runs.
 
@@ -1461,7 +1461,7 @@ async def diff_node_output(
     lines_b = text_b.splitlines(keepends=True)
 
     differ = difflib.SequenceMatcher(None, lines_a, lines_b)
-    diff_lines: ClassVar[list[NodeOutputDiffLine]] = []
+    diff_lines: list[NodeOutputDiffLine] = []
     line_a = 1
     line_b = 1
 

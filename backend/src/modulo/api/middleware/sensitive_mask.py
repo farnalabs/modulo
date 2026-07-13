@@ -18,8 +18,8 @@ from sqlalchemy.exc import ProgrammingError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.api.dependencies import get_db_session
-from modulo.auth.dependencies import get_current_user
-from modulo.auth.jwt import AuthenticatedPrincipal
+from modulo.auth.dependencies import get_current_tenant_user
+from modulo.auth.jwt import TenantPrincipal
 from modulo.db.models.sso_provider import SsoProvider
 from modulo.db.rls import set_rls_org
 from modulo.settings import Settings, get_settings
@@ -97,7 +97,7 @@ class RevealResponse(BaseModel):
     expires_in_seconds: int = 30
 
 
-def _require_admin(principal: AuthenticatedPrincipal) -> None:
+def _require_admin(principal: TenantPrincipal) -> None:
     if principal.org_role != "admin":
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
@@ -108,7 +108,7 @@ def _require_admin(principal: AuthenticatedPrincipal) -> None:
 async def _fetch_value(
     payload: RevealRequest,
     session: AsyncSession,
-    principal: AuthenticatedPrincipal,
+    principal: TenantPrincipal,
 ) -> str:
     resource_id = payload.resource_id
     field = payload.field
@@ -116,40 +116,41 @@ async def _fetch_value(
     if payload.resource_type == "connector":
         from modulo.db.models.connector_instance import ConnectorInstance
 
-        result = await session.execute(
+        connector_result = await session.execute(
             select(ConnectorInstance).where(
                 ConnectorInstance.id == uuid.UUID(resource_id),
                 ConnectorInstance.organisation_id == principal.organisation_id,
             )
         )
-        ci = result.scalar_one_or_none()
+        ci = connector_result.scalar_one_or_none()
         if ci is None:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Connector not found")
         raw = ci.config_json.get(field, "") if field else json.dumps(ci.config_json)
         return raw if isinstance(raw, str) else json.dumps(raw)
 
     if payload.resource_type == "sso_provider":
-        result = await session.execute(
+        provider_result = await session.execute(
             select(SsoProvider).where(
                 SsoProvider.id == uuid.UUID(resource_id),
                 SsoProvider.organisation_id == principal.organisation_id,
             )
         )
-        provider = result.scalar_one_or_none()
+        provider = provider_result.scalar_one_or_none()
         if provider is None:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="SSO provider not found")
-        return provider.client_secret or ""
+        return provider.client_secret.decode() if provider.client_secret is not None else ""
 
     if payload.resource_type == "observability":
         from modulo.db.models.organisation import Organisation
 
-        result = await session.execute(
+        config_result = await session.execute(
             select(Organisation.otel_config_json).where(Organisation.id == principal.organisation_id)
         )
-        row = result.scalar_one_or_none()
-        config = row or {}
+        row = config_result.scalar_one_or_none()
+        config: dict[str, Any] = row or {}
         if field:
-            return config.get(field, "")
+            value = config.get(field, "")
+            return value if isinstance(value, str) else json.dumps(value)
         return json.dumps(config)
 
     raise HTTPException(
@@ -161,7 +162,7 @@ async def _fetch_value(
 @router.post("/reveal", response_model=RevealResponse)
 async def reveal_sensitive_value(
     payload: RevealRequest,
-    principal: AuthenticatedPrincipal = Depends(get_current_user),
+    principal: TenantPrincipal = Depends(get_current_tenant_user),
     settings: Settings = Depends(get_settings),
     session: AsyncSession = Depends(get_db_session),
 ) -> RevealResponse:

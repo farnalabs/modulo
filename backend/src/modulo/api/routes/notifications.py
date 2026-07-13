@@ -10,7 +10,6 @@ import contextlib
 import json
 import logging
 import uuid
-from typing import ClassVar
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, Field, field_validator
@@ -19,8 +18,8 @@ from sqlalchemy.exc import ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.api.dependencies import get_db_session
-from modulo.auth.dependencies import get_current_user
-from modulo.auth.jwt import AuthenticatedPrincipal
+from modulo.auth.dependencies import get_current_tenant_user
+from modulo.auth.jwt import TenantPrincipal
 from modulo.db.models.notification_endpoint import NotificationEndpoint
 from modulo.db.rls import set_rls_org, set_rls_user_context
 from modulo.settings import Settings, get_settings
@@ -76,7 +75,7 @@ class NotificationEndpointResponse(BaseModel):
 @router.get("", response_model=list[NotificationEndpointResponse])
 async def list_endpoints(
     session: AsyncSession = Depends(get_db_session),
-    principal: AuthenticatedPrincipal = Depends(get_current_user),
+    principal: TenantPrincipal = Depends(get_current_tenant_user),
 ) -> list[NotificationEndpointResponse]:
     try:
         async with session.begin():
@@ -113,7 +112,7 @@ async def list_endpoints(
 async def create_endpoint(
     req: NotificationEndpointCreate,
     session: AsyncSession = Depends(get_db_session),
-    principal: AuthenticatedPrincipal = Depends(get_current_user),
+    principal: TenantPrincipal = Depends(get_current_tenant_user),
     settings: Settings = Depends(get_settings),
 ) -> NotificationEndpointResponse:
     from cryptography.fernet import Fernet
@@ -177,7 +176,7 @@ async def create_endpoint(
 async def get_endpoint(
     endpoint_id: uuid.UUID,
     session: AsyncSession = Depends(get_db_session),
-    principal: AuthenticatedPrincipal = Depends(get_current_user),
+    principal: TenantPrincipal = Depends(get_current_tenant_user),
 ) -> NotificationEndpointResponse:
     try:
         async with session.begin():
@@ -214,7 +213,7 @@ async def update_endpoint(
     endpoint_id: uuid.UUID,
     req: NotificationEndpointUpdate,
     session: AsyncSession = Depends(get_db_session),
-    principal: AuthenticatedPrincipal = Depends(get_current_user),
+    principal: TenantPrincipal = Depends(get_current_tenant_user),
     settings: Settings = Depends(get_settings),
 ) -> NotificationEndpointResponse:
     from cryptography.fernet import Fernet
@@ -239,7 +238,7 @@ async def update_endpoint(
                 fernet = Fernet(settings.fernet_key.encode())
                 ep.secret_ciphertext = fernet.encrypt(req.secret.encode())
             if req.events is not None:
-                ep.events = json.dumps(req.events)
+                ep.events = req.events
             if req.description is not None:
                 ep.description = req.description
             if req.team_id is not None:
@@ -274,7 +273,7 @@ async def update_endpoint(
 async def delete_endpoint(
     endpoint_id: uuid.UUID,
     session: AsyncSession = Depends(get_db_session),
-    principal: AuthenticatedPrincipal = Depends(get_current_user),
+    principal: TenantPrincipal = Depends(get_current_tenant_user),
 ) -> None:
     try:
         async with session.begin():
@@ -307,9 +306,13 @@ async def delete_endpoint(
 
 
 def _ep_to_response(ep: NotificationEndpoint) -> NotificationEndpointResponse:
-    events: ClassVar[list[str]] = []
-    with contextlib.suppress(json.JSONDecodeError, TypeError):
-        events = json.loads(ep.events) if ep.events else []
+    raw_events: object = ep.events
+    events = raw_events if isinstance(raw_events, list) and all(isinstance(event, str) for event in raw_events) else []
+    if isinstance(raw_events, str):
+        with contextlib.suppress(json.JSONDecodeError, TypeError):
+            parsed = json.loads(raw_events)
+            if isinstance(parsed, list) and all(isinstance(event, str) for event in parsed):
+                events = parsed
     return NotificationEndpointResponse(
         id=ep.id,
         url=ep.url,

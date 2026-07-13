@@ -5,7 +5,6 @@ import logging
 import secrets
 import uuid
 from datetime import UTC, datetime, timedelta
-from typing import ClassVar
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, Field
@@ -15,8 +14,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.api.dependencies import get_db_session, require_feature
 from modulo.auth.api_key import revoke_api_key
-from modulo.auth.dependencies import get_current_user
-from modulo.auth.jwt import AuthenticatedPrincipal
+from modulo.auth.dependencies import get_current_tenant_user
+from modulo.auth.jwt import TenantPrincipal
 from modulo.auth.passwords import hash_password, validate_password_strength
 from modulo.core.eval_engine.okr import track_okr_progress
 from modulo.core.eval_engine.regression import detect_regressions
@@ -84,7 +83,7 @@ async def global_search(
     type_filter: str = Query(default="all", alias="type", pattern=r"^(all|pipeline|run|audit|library)$"),
     limit: int = Query(default=20, ge=1, le=100),
     offset: int = Query(default=0, ge=0),
-    current_user: AuthenticatedPrincipal = Depends(get_current_user),
+    current_user: TenantPrincipal = Depends(get_current_tenant_user),
     session: AsyncSession = Depends(get_db_session),
 ) -> SearchResponse:
     if current_user.org_role not in ("admin", "operator"):
@@ -103,7 +102,7 @@ async def global_search(
 
             search_types: list[str] = ["pipeline", "run", "audit", "library"] if type_filter == "all" else [type_filter]
 
-            all_items: ClassVar[list[tuple[int, SearchResultItem]]] = []
+            all_items: list[tuple[int, SearchResultItem]] = []
             total_by_type: dict[str, int] = {"pipeline": 0, "run": 0, "audit": 0, "library": 0}
 
             for st in search_types:
@@ -353,7 +352,7 @@ class CreateUserResponse(BaseModel):
 @router.post("/users", response_model=CreateUserResponse, status_code=status.HTTP_201_CREATED)
 async def admin_create_user(
     req: CreateUserRequest,
-    current_user: AuthenticatedPrincipal = Depends(get_current_user),
+    current_user: TenantPrincipal = Depends(get_current_tenant_user),
     session: AsyncSession = Depends(get_db_session),
 ) -> CreateUserResponse:
     if current_user.org_role != "admin":
@@ -456,7 +455,7 @@ class AdminCreateTeamResponse(BaseModel):
 )
 async def admin_create_team(
     req: AdminCreateTeamRequest,
-    current_user: AuthenticatedPrincipal = Depends(get_current_user),
+    current_user: TenantPrincipal = Depends(get_current_tenant_user),
     session: AsyncSession = Depends(get_db_session),
 ) -> AdminCreateTeamResponse:
     if current_user.org_role != "admin":
@@ -568,7 +567,7 @@ class OrgProfileResponse(BaseModel):
 
 @router.get("/org", response_model=OrgProfileResponse)
 async def admin_get_org(
-    current_user: AuthenticatedPrincipal = Depends(get_current_user),
+    current_user: TenantPrincipal = Depends(get_current_tenant_user),
     session: AsyncSession = Depends(get_db_session),
 ) -> OrgProfileResponse:
     if current_user.org_role != "admin":
@@ -616,7 +615,7 @@ async def admin_get_org(
 @router.put("/org", response_model=OrgProfileResponse)
 async def admin_update_org(
     req: UpdateOrgRequest,
-    current_user: AuthenticatedPrincipal = Depends(get_current_user),
+    current_user: TenantPrincipal = Depends(get_current_tenant_user),
     session: AsyncSession = Depends(get_db_session),
 ) -> OrgProfileResponse:
     if current_user.org_role != "admin":
@@ -635,7 +634,7 @@ async def admin_update_org(
                     detail="Organisation not found",
                 )
 
-            updates: ClassVar[dict[str, object]] = {}
+            updates: dict[str, object] = {}
             if req.name is not None:
                 updates["name"] = req.name
             if req.logo_url is not None:
@@ -678,7 +677,7 @@ async def admin_update_org(
 
 @router.post("/org/regenerate-api-key", status_code=status.HTTP_200_OK)
 async def admin_regenerate_api_key(
-    current_user: AuthenticatedPrincipal = Depends(get_current_user),
+    current_user: TenantPrincipal = Depends(get_current_tenant_user),
     session: AsyncSession = Depends(get_db_session),
 ) -> dict[str, str]:
     if current_user.org_role != "admin":
@@ -746,7 +745,7 @@ async def admin_list_users(
     page_size: int = Query(20, ge=1, le=1000),
     search: str | None = Query(None, min_length=1),
     role: str | None = Query(None, pattern=r"^(admin|operator|runner|viewer)$"),
-    current_user: AuthenticatedPrincipal = Depends(get_current_user),
+    current_user: TenantPrincipal = Depends(get_current_tenant_user),
     session: AsyncSession = Depends(get_db_session),
 ) -> UserListResponse:
     if current_user.org_role != "admin":
@@ -803,7 +802,7 @@ async def _list_org_accounts(
     page_size: int = 20,
     search: str | None = None,
     role_filter: str | None = None,
-) -> tuple[list[tuple[Account, object]], int]:
+) -> tuple[list[tuple[Account, OrgMembership]], int]:
     conditions = [OrgMembership.organisation_id == org_id]
     if search:
         conditions.append(Account.email.ilike(f"%{search}%"))
@@ -827,7 +826,7 @@ async def _list_org_accounts(
         .limit(page_size)
     )
     result = await session.execute(query)
-    return list(result.all()), total
+    return [(row[0], row[1]) for row in result.all()], total
 
 
 class UpdateUserRequest(BaseModel):
@@ -866,7 +865,7 @@ async def _prevent_last_admin_lockout(
 async def admin_update_user(
     user_id: uuid.UUID,
     req: UpdateUserRequest,
-    current_user: AuthenticatedPrincipal = Depends(get_current_user),
+    current_user: TenantPrincipal = Depends(get_current_tenant_user),
     session: AsyncSession = Depends(get_db_session),
 ) -> UserListItem:
     if current_user.org_role != "admin":
@@ -933,7 +932,7 @@ async def _get_org_role(session: AsyncSession, account_id: uuid.UUID, org_id: uu
 @router.post("/users/{user_id}/deactivate", response_model=UserListItem)
 async def admin_deactivate_user(
     user_id: uuid.UUID,
-    current_user: AuthenticatedPrincipal = Depends(get_current_user),
+    current_user: TenantPrincipal = Depends(get_current_tenant_user),
     session: AsyncSession = Depends(get_db_session),
 ) -> UserListItem:
     if current_user.org_role != "admin":
@@ -1066,7 +1065,7 @@ async def admin_deactivate_user(
 @router.post("/users/{user_id}/reactivate", response_model=UserListItem)
 async def admin_reactivate_user(
     user_id: uuid.UUID,
-    current_user: AuthenticatedPrincipal = Depends(get_current_user),
+    current_user: TenantPrincipal = Depends(get_current_tenant_user),
     session: AsyncSession = Depends(get_db_session),
 ) -> UserListItem:
     if current_user.org_role != "admin":
@@ -1148,7 +1147,7 @@ class AdminResetPasswordResponse(BaseModel):
 @router.post("/users/{user_id}/reset-password", response_model=AdminResetPasswordResponse)
 async def admin_reset_password(
     user_id: uuid.UUID,
-    current_user: AuthenticatedPrincipal = Depends(get_current_user),
+    current_user: TenantPrincipal = Depends(get_current_tenant_user),
     session: AsyncSession = Depends(get_db_session),
 ) -> AdminResetPasswordResponse:
     if current_user.org_role != "admin":
@@ -1207,7 +1206,7 @@ class AdminTeamListResponse(BaseModel):
 async def admin_list_teams(
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=1000),
-    current_user: AuthenticatedPrincipal = Depends(get_current_user),
+    current_user: TenantPrincipal = Depends(get_current_tenant_user),
     session: AsyncSession = Depends(get_db_session),
 ) -> AdminTeamListResponse:
     if current_user.org_role != "admin":
@@ -1225,7 +1224,7 @@ async def admin_list_teams(
 
             # Enrich with member counts via ORM (avoids raw SQL type binding issues)
             team_ids = [t.id for t in result.items]
-            member_counts: ClassVar[dict[uuid.UUID, int]] = {}
+            member_counts: dict[uuid.UUID, int] = {}
             if team_ids:
                 count_rows = (
                     await session.execute(
@@ -1281,7 +1280,7 @@ async def admin_list_teams(
 async def admin_update_team(
     team_id: uuid.UUID,
     req: AdminUpdateTeamRequest,
-    current_user: AuthenticatedPrincipal = Depends(get_current_user),
+    current_user: TenantPrincipal = Depends(get_current_tenant_user),
     session: AsyncSession = Depends(get_db_session),
 ) -> AdminTeamItem:
     if current_user.org_role != "admin":
@@ -1383,7 +1382,7 @@ async def admin_update_team(
 @router.delete("/teams/{team_id}", status_code=status.HTTP_204_NO_CONTENT, dependencies=[require_feature("team_rbac")])
 async def admin_delete_team(
     team_id: uuid.UUID,
-    current_user: AuthenticatedPrincipal = Depends(get_current_user),
+    current_user: TenantPrincipal = Depends(get_current_tenant_user),
     session: AsyncSession = Depends(get_db_session),
 ) -> None:
     if current_user.org_role != "admin":
@@ -1397,7 +1396,7 @@ async def admin_delete_team(
             await set_rls_org(session, current_user.organisation_id)
             await set_rls_user_context(session, current_user.account_id, current_user.org_role)
 
-            resource_checks: ClassVar[list[tuple[str, int]]] = []
+            resource_checks: list[tuple[str, int]] = []
             for model_cls, label in [
                 (Pipeline, "pipeline"),
                 (Stage, "stage"),
@@ -1407,7 +1406,9 @@ async def admin_delete_team(
             ]:
                 count = (
                     await session.execute(
-                        select(func.count()).select_from(model_cls).where(model_cls.owner_team_id == team_id)
+                        select(func.count())
+                        .select_from(model_cls)
+                        .where(model_cls.__table__.c.owner_team_id == team_id)
                     )
                 ).scalar() or 0
                 if count > 0:
@@ -1495,7 +1496,7 @@ class BillingOverviewResponse(BaseModel):
 
 @router.get("/billing/overview", response_model=BillingOverviewResponse)
 async def admin_billing_overview(
-    current_user: AuthenticatedPrincipal = Depends(get_current_user),
+    current_user: TenantPrincipal = Depends(get_current_tenant_user),
     session: AsyncSession = Depends(get_db_session),
 ) -> BillingOverviewResponse:
     if current_user.org_role != "admin":
@@ -1571,7 +1572,7 @@ async def admin_billing_overview(
 # ── Org Deletion ─────────────────────────────────────────────────────
 
 
-def _require_org_admin(principal: AuthenticatedPrincipal) -> None:
+def _require_org_admin(principal: TenantPrincipal) -> None:
     if principal.is_system_admin:
         return
     if principal.org_role not in ("admin", "owner"):
@@ -1594,7 +1595,7 @@ class DeletionRequestResponse(BaseModel):
     status_code=status.HTTP_202_ACCEPTED,
 )
 async def request_org_deletion(
-    current_user: AuthenticatedPrincipal = Depends(get_current_user),
+    current_user: TenantPrincipal = Depends(get_current_tenant_user),
     session: AsyncSession = Depends(get_db_session),
 ) -> DeletionRequestResponse:
     _require_org_admin(current_user)
@@ -1675,7 +1676,7 @@ class ConfirmDeletionResponse(BaseModel):
 @router.post("/org/deletion-confirm", response_model=ConfirmDeletionResponse)
 async def confirm_org_deletion(
     req: ConfirmDeletionRequest,
-    current_user: AuthenticatedPrincipal = Depends(get_current_user),
+    current_user: TenantPrincipal = Depends(get_current_tenant_user),
     session: AsyncSession = Depends(get_db_session),
 ) -> ConfirmDeletionResponse:
     _require_org_admin(current_user)
@@ -1729,7 +1730,7 @@ class OrgExportResponse(BaseModel):
 
 @router.patch("/org/deletion-cancel", response_model=CancelDeletionResponse)
 async def cancel_org_deletion(
-    current_user: AuthenticatedPrincipal = Depends(get_current_user),
+    current_user: TenantPrincipal = Depends(get_current_tenant_user),
     session: AsyncSession = Depends(get_db_session),
 ) -> CancelDeletionResponse:
     _require_org_admin(current_user)
@@ -1764,7 +1765,7 @@ async def cancel_org_deletion(
 
 @router.get("/org/export", response_model=OrgExportResponse)
 async def export_org_data(
-    current_user: AuthenticatedPrincipal = Depends(get_current_user),
+    current_user: TenantPrincipal = Depends(get_current_tenant_user),
     session: AsyncSession = Depends(get_db_session),
 ) -> OrgExportResponse:
     _require_org_admin(current_user)
@@ -1810,7 +1811,7 @@ async def export_org_data(
 
 @router.delete("/org", response_model=ConfirmDeletionResponse)
 async def delete_org_immediate(
-    current_user: AuthenticatedPrincipal = Depends(get_current_user),
+    current_user: TenantPrincipal = Depends(get_current_tenant_user),
     session: AsyncSession = Depends(get_db_session),
 ) -> ConfirmDeletionResponse:
     _require_org_admin(current_user)
@@ -1923,7 +1924,7 @@ class EvalDashboardResponse(BaseModel):
 
 @router.get("/evals/dashboard", response_model=EvalDashboardResponse)
 async def eval_dashboard(
-    current_user: AuthenticatedPrincipal = Depends(get_current_user),
+    current_user: TenantPrincipal = Depends(get_current_tenant_user),
     session: AsyncSession = Depends(get_db_session),
 ) -> EvalDashboardResponse:
     if current_user.org_role != "admin":
@@ -2030,7 +2031,7 @@ async def eval_dashboard(
                 )
             ).all()
 
-            covered_pairs: ClassVar[set[tuple[uuid.UUID, str]]] = set()
+            covered_pairs: set[tuple[uuid.UUID, str]] = set()
             eval_defs = (
                 await session.execute(
                     select(EvalDefinition.pipeline_id, EvalDefinition.node_id).where(
@@ -2042,7 +2043,7 @@ async def eval_dashboard(
                 if ed.node_id is not None:
                     covered_pairs.add((ed.pipeline_id, str(ed.node_id)))
 
-            coverage_gaps: ClassVar[list[CoverageGap]] = []
+            coverage_gaps: list[CoverageGap] = []
             for pl in pipelines:
                 for node in pl.graph_nodes_json or []:
                     node_id = node.get("id")
@@ -2137,7 +2138,7 @@ class RegressionAlertsResponse(BaseModel):
 async def eval_regressions(
     days: int = Query(default=7, ge=1, le=90, description="Lookback period in days"),
     threshold: float = Query(default=0.15, ge=0.0, le=1.0, description="Minimum drop fraction to trigger an alert"),
-    current_user: AuthenticatedPrincipal = Depends(get_current_user),
+    current_user: TenantPrincipal = Depends(get_current_tenant_user),
     session: AsyncSession = Depends(get_db_session),
 ) -> RegressionAlertsResponse:
     if current_user.org_role != "admin":
@@ -2232,7 +2233,7 @@ async def okr_progress(
         default=None,
         description="Optional ISO 8601 target date (e.g. 2026-09-30) for days-to-target",
     ),
-    current_user: AuthenticatedPrincipal = Depends(get_current_user),
+    current_user: TenantPrincipal = Depends(get_current_tenant_user),
     session: AsyncSession = Depends(get_db_session),
 ) -> OkrProgressResponse:
     if current_user.org_role != "admin":
@@ -2347,7 +2348,7 @@ async def admin_list_publishers(
     page_size: int = Query(20, ge=1, le=100),
     trust_tier: str | None = Query(None, pattern=r"^(green|amber)$"),
     search: str | None = Query(None, min_length=1),
-    current_user: AuthenticatedPrincipal = Depends(get_current_user),
+    current_user: TenantPrincipal = Depends(get_current_tenant_user),
     session: AsyncSession = Depends(get_db_session),
 ) -> PublisherListResponse:
     if current_user.org_role != "admin":
@@ -2402,7 +2403,7 @@ async def admin_list_publishers(
 @router.post("/publishers", response_model=PublisherResponse, status_code=status.HTTP_201_CREATED)
 async def admin_create_publisher(
     req: PublisherCreateRequest,
-    current_user: AuthenticatedPrincipal = Depends(get_current_user),
+    current_user: TenantPrincipal = Depends(get_current_tenant_user),
     session: AsyncSession = Depends(get_db_session),
 ) -> PublisherResponse:
     if current_user.org_role != "admin":
@@ -2472,7 +2473,7 @@ async def admin_create_publisher(
 async def admin_update_publisher(
     publisher_id: uuid.UUID,
     req: PublisherUpdateRequest,
-    current_user: AuthenticatedPrincipal = Depends(get_current_user),
+    current_user: TenantPrincipal = Depends(get_current_tenant_user),
     session: AsyncSession = Depends(get_db_session),
 ) -> PublisherResponse:
     if current_user.org_role != "admin":
@@ -2557,7 +2558,7 @@ async def admin_update_publisher(
 @router.delete("/publishers/{publisher_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def admin_delete_publisher(
     publisher_id: uuid.UUID,
-    current_user: AuthenticatedPrincipal = Depends(get_current_user),
+    current_user: TenantPrincipal = Depends(get_current_tenant_user),
     session: AsyncSession = Depends(get_db_session),
 ) -> None:
     if current_user.org_role != "admin":
@@ -2598,7 +2599,7 @@ class RetentionPurgeRequest(BaseModel):
 @router.post("/purge/runs", status_code=status.HTTP_200_OK, dependencies=[require_feature("admin_run_retention")])
 async def admin_retention_purge_runs(
     req: RetentionPurgeRequest,
-    current_user: AuthenticatedPrincipal = Depends(get_current_user),
+    current_user: TenantPrincipal = Depends(get_current_tenant_user),
     session: AsyncSession = Depends(get_db_session),
 ) -> dict[str, int]:
     if current_user.org_role != "admin":
@@ -2651,7 +2652,7 @@ class ManualPurgeRequest(BaseModel):
 @router.post("/purge", status_code=status.HTTP_200_OK, dependencies=[require_feature("admin_run_retention")])
 async def admin_manual_purge(
     req: ManualPurgeRequest,
-    current_user: AuthenticatedPrincipal = Depends(get_current_user),
+    current_user: TenantPrincipal = Depends(get_current_tenant_user),
     session: AsyncSession = Depends(get_db_session),
 ) -> dict[str, int]:
     if current_user.org_role != "admin":
@@ -2715,7 +2716,7 @@ class PurgeRunsResponse(BaseModel):
 @router.post("/runs/purge", status_code=status.HTTP_200_OK, dependencies=[require_feature("admin_run_retention")])
 async def admin_purge_stale_runs(
     request: PurgeRunsRequest,
-    current_user: AuthenticatedPrincipal = Depends(get_current_user),
+    current_user: TenantPrincipal = Depends(get_current_tenant_user),
     session: AsyncSession = Depends(get_db_session),
 ) -> PurgeRunsResponse:
     if current_user.org_role != "admin":
@@ -2798,7 +2799,7 @@ class StatusCount(BaseModel):
     dependencies=[require_feature("admin_run_retention")],
 )
 async def admin_get_retention(
-    current_user: AuthenticatedPrincipal = Depends(get_current_user),
+    current_user: TenantPrincipal = Depends(get_current_tenant_user),
     session: AsyncSession = Depends(get_db_session),
 ) -> RetentionConfigResponse:
     if current_user.org_role != "admin":
@@ -2848,7 +2849,7 @@ async def admin_get_retention(
 @router.put("/runs/retention", status_code=status.HTTP_200_OK, dependencies=[require_feature("admin_run_retention")])
 async def admin_update_retention(
     req: UpdateRetentionRequest,
-    current_user: AuthenticatedPrincipal = Depends(get_current_user),
+    current_user: TenantPrincipal = Depends(get_current_tenant_user),
     session: AsyncSession = Depends(get_db_session),
 ) -> RetentionConfigResponse:
     if current_user.org_role != "admin":
@@ -2907,7 +2908,7 @@ async def admin_update_retention(
 
 @router.get("/runs/storage", response_model=StorageInfoResponse)
 async def admin_get_storage(
-    current_user: AuthenticatedPrincipal = Depends(get_current_user),
+    current_user: TenantPrincipal = Depends(get_current_tenant_user),
     session: AsyncSession = Depends(get_db_session),
 ) -> StorageInfoResponse:
     if current_user.org_role != "admin":
@@ -2937,7 +2938,7 @@ async def admin_get_storage(
             detail="This feature is not available. Run database migrations to enable it.",
         ) from None
 
-    breakdown: ClassVar[dict[str, int]] = {}
+    breakdown: dict[str, int] = {}
     for row in status_rows:
         breakdown[row.status] = row.cnt
 
@@ -2970,7 +2971,7 @@ class OverdueClaimsResponse(BaseModel):
 
 @router.get("/hitl/overdue", response_model=OverdueClaimsResponse)
 async def admin_overdue_hitl_claims(
-    current_user: AuthenticatedPrincipal = Depends(get_current_user),
+    current_user: TenantPrincipal = Depends(get_current_tenant_user),
     session: AsyncSession = Depends(get_db_session),
 ) -> OverdueClaimsResponse:
     """List overdue HITL claims across the organisation."""

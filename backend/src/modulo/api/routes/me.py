@@ -22,8 +22,8 @@ from modulo.api.routes.admin_remy import (
 )
 from modulo.api.routes.auth import MeResponse
 from modulo.api.routes.auth import me as _me_handler
-from modulo.auth.dependencies import get_current_user
-from modulo.auth.jwt import AuthenticatedPrincipal
+from modulo.auth.dependencies import get_current_tenant_user
+from modulo.auth.jwt import TenantPrincipal
 from modulo.auth.passwords import hash_password, validate_password_strength, verify_password
 from modulo.core.remy.context_source_service import (
     ContextSourceResponseItem,
@@ -41,7 +41,7 @@ router = APIRouter(prefix="/api/v1", tags=["user"])
 @router.get("/me", response_model=MeResponse)
 @handle_db_errors("me.current_user_profile")
 async def current_user_profile(
-    current_user: AuthenticatedPrincipal = Depends(get_current_user),
+    current_user: TenantPrincipal = Depends(get_current_tenant_user),
     session: AsyncSession = Depends(get_db_session),
 ) -> MeResponse:
     return await _me_handler(current_user, session)
@@ -60,7 +60,7 @@ class SettingsUpdate(BaseModel):
 @router.get("/me/settings", response_model=SettingsResponse)
 @handle_db_errors("me.get_user_settings")
 async def get_user_settings(
-    current_user: AuthenticatedPrincipal = Depends(get_current_user),
+    current_user: TenantPrincipal = Depends(get_current_tenant_user),
     session: AsyncSession = Depends(get_db_session),
 ) -> dict[str, Any]:
     try:
@@ -85,7 +85,7 @@ SUPPORTED_LOCALES = {"en-US"}
 @handle_db_errors("me.update_user_settings")
 async def update_user_settings(
     req: SettingsUpdate | None = None,
-    current_user: AuthenticatedPrincipal = Depends(get_current_user),
+    current_user: TenantPrincipal = Depends(get_current_tenant_user),
     session: AsyncSession = Depends(get_db_session),
 ) -> dict[str, Any]:
     if req is None:
@@ -102,7 +102,7 @@ async def update_user_settings(
         if account is None:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Account not found")
         return account.preferences
-    prefs = {}
+    prefs: dict[str, object] = {}
     if req.theme is not None:
         prefs["theme"] = req.theme
     if req.locale is not None:
@@ -127,7 +127,7 @@ class PasswordChangeRequest(BaseModel):
 @handle_db_errors("me.change_password")
 async def change_password(
     req: PasswordChangeRequest,
-    current_user: AuthenticatedPrincipal = Depends(get_current_user),
+    current_user: TenantPrincipal = Depends(get_current_tenant_user),
     session: AsyncSession = Depends(get_db_session),
 ) -> dict[str, str]:
     try:
@@ -177,7 +177,7 @@ async def change_password(
 @router.get("/me/remy/skills", response_model=list[SkillResponse])
 @handle_db_errors("me.list_user_skills")
 async def list_user_skills(
-    current_user: AuthenticatedPrincipal = Depends(get_current_user),
+    current_user: TenantPrincipal = Depends(get_current_tenant_user),
     session: AsyncSession = Depends(get_db_session),
 ) -> list[SkillResponse]:
     try:
@@ -198,7 +198,7 @@ async def list_user_skills(
 @handle_db_errors("me.create_user_skill")
 async def create_user_skill(
     req: SkillCreate,
-    current_user: AuthenticatedPrincipal = Depends(get_current_user),
+    current_user: TenantPrincipal = Depends(get_current_tenant_user),
     session: AsyncSession = Depends(get_db_session),
 ) -> SkillResponse:
     try:
@@ -231,7 +231,7 @@ async def create_user_skill(
 async def update_user_skill(
     skill_id: uuid.UUID,
     req: SkillUpdate,
-    current_user: AuthenticatedPrincipal = Depends(get_current_user),
+    current_user: TenantPrincipal = Depends(get_current_tenant_user),
     session: AsyncSession = Depends(get_db_session),
 ) -> SkillResponse:
     try:
@@ -263,7 +263,7 @@ async def update_user_skill(
 @handle_db_errors("me.delete_user_skill")
 async def delete_user_skill(
     skill_id: uuid.UUID,
-    current_user: AuthenticatedPrincipal = Depends(get_current_user),
+    current_user: TenantPrincipal = Depends(get_current_tenant_user),
     session: AsyncSession = Depends(get_db_session),
 ) -> None:
     try:
@@ -289,7 +289,7 @@ class ContextSourceModeUpdate(BaseModel):
 @router.get("/me/remy/context-sources")
 @handle_db_errors("me.get_user_context_sources")
 async def get_user_context_sources(
-    current_user: AuthenticatedPrincipal = Depends(get_current_user),
+    current_user: TenantPrincipal = Depends(get_current_tenant_user),
     session: AsyncSession = Depends(get_db_session),
 ) -> list[ContextSourceResponseItem]:
     try:
@@ -312,7 +312,7 @@ async def get_user_context_sources(
 async def set_user_context_source(
     source_key: str,
     req: ContextSourceModeUpdate,
-    current_user: AuthenticatedPrincipal = Depends(get_current_user),
+    current_user: TenantPrincipal = Depends(get_current_tenant_user),
     session: AsyncSession = Depends(get_db_session),
 ) -> list[ContextSourceResponseItem]:
     try:
@@ -339,7 +339,7 @@ async def set_user_context_source(
 @router.delete("/me/remy/context-sources", status_code=status.HTTP_200_OK)
 @handle_db_errors("me.reset_user_context_sources")
 async def reset_user_context_sources(
-    current_user: AuthenticatedPrincipal = Depends(get_current_user),
+    current_user: TenantPrincipal = Depends(get_current_tenant_user),
     session: AsyncSession = Depends(get_db_session),
 ) -> list[ContextSourceResponseItem]:
     try:

@@ -77,7 +77,7 @@ async def run_websocket(
                 principal = AuthenticatedPrincipal(
                     username=payload["sub"],
                     organisation_id=uuid.UUID(payload["org_id"]),
-                    user_id=uuid.UUID(payload["user_id"]),
+                    account_id=uuid.UUID(payload["user_id"]),
                     org_role=payload["org_role"],
                 )
             except WsTokenExpiredError:

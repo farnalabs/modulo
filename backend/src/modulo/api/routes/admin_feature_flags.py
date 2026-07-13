@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.responses import JSONResponse
@@ -12,8 +13,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from starlette.responses import Response
 
 from modulo.api.dependencies import get_db_session
-from modulo.auth.dependencies import get_current_user
-from modulo.auth.jwt import AuthenticatedPrincipal
+from modulo.auth.dependencies import get_current_tenant_user, get_current_user
+from modulo.auth.jwt import AuthenticatedPrincipal, TenantPrincipal
 from modulo.core.feature_flags import FeatureFlagRegistry
 from modulo.core.license import get_license, parse_and_verify
 from modulo.db.crud.organisation import get_organisation
@@ -39,8 +40,10 @@ async def _resolve_tier(settings: Settings, session: AsyncSession, current_user:
     4. Org.plan_id (per-org, from DB)
     5. Community fallback
     """
-    async with session.begin():
-        org = await get_organisation(session, current_user.organisation_id)
+    org = None
+    if current_user.organisation_id is not None:
+        async with session.begin():
+            org = await get_organisation(session, current_user.organisation_id)
 
     # 1. Org-level license key
     if org is not None:
@@ -100,12 +103,12 @@ async def _build_registry(
         )
 
 
-@router.get("")
+@router.get("", response_model=None)
 async def list_feature_flags(
     settings: Settings = Depends(get_settings),
     session: AsyncSession = Depends(get_db_session),
     current_user: AuthenticatedPrincipal = Depends(get_current_user),
-) -> Response:
+) -> Response | dict[str, Any]:
     try:
         registry = await _build_registry(settings, session, current_user)
         return {
@@ -171,13 +174,13 @@ async def list_feature_flags(
         )
 
 
-@router.get("/{flag_name}")
+@router.get("/{flag_name}", response_model=None)
 async def get_feature_flag(
     flag_name: str,
     settings: Settings = Depends(get_settings),
     session: AsyncSession = Depends(get_db_session),
     current_user: AuthenticatedPrincipal = Depends(get_current_user),
-) -> Response:
+) -> Response | dict[str, Any]:
     try:
         registry = await _build_registry(settings, session, current_user)
         flag = registry.get_flag(flag_name)
@@ -234,14 +237,14 @@ class ToggleFlagRequest(BaseModel):
     enabled: bool
 
 
-@router.put("/{flag_name}")
+@router.put("/{flag_name}", response_model=None)
 async def toggle_feature_flag(
     flag_name: str,
     req: ToggleFlagRequest,
     settings: Settings = Depends(get_settings),
     session: AsyncSession = Depends(get_db_session),
     current_user: AuthenticatedPrincipal = Depends(get_current_user),
-) -> Response:
+) -> Response | dict[str, Any]:
     try:
         registry = await _build_registry(settings, session, current_user)
         flag = registry.get_flag(flag_name)
@@ -296,12 +299,12 @@ async def toggle_feature_flag(
         )
 
 
-@router.get("/{flag_name}/org-override")
+@router.get("/{flag_name}/org-override", response_model=None)
 async def get_org_flag_override(
     flag_name: str,
-    current_user: AuthenticatedPrincipal = Depends(get_current_user),
+    current_user: TenantPrincipal = Depends(get_current_tenant_user),
     session: AsyncSession = Depends(get_db_session),
-) -> dict:
+) -> Response | dict[str, Any]:
     _require_admin(current_user)
     try:
         async with session.begin():
@@ -347,13 +350,13 @@ async def get_org_flag_override(
         )
 
 
-@router.put("/{flag_name}/org-override")
+@router.put("/{flag_name}/org-override", response_model=None)
 async def set_org_flag_override(
     flag_name: str,
     req: ToggleFlagRequest,
-    current_user: AuthenticatedPrincipal = Depends(get_current_user),
+    current_user: TenantPrincipal = Depends(get_current_tenant_user),
     session: AsyncSession = Depends(get_db_session),
-) -> dict:
+) -> Response | dict[str, Any]:
     _require_admin(current_user)
     try:
         async with session.begin():
@@ -404,12 +407,12 @@ async def set_org_flag_override(
         )
 
 
-@router.delete("/{flag_name}/org-override")
+@router.delete("/{flag_name}/org-override", response_model=None)
 async def clear_org_flag_override(
     flag_name: str,
-    current_user: AuthenticatedPrincipal = Depends(get_current_user),
+    current_user: TenantPrincipal = Depends(get_current_tenant_user),
     session: AsyncSession = Depends(get_db_session),
-) -> dict:
+) -> Response | dict[str, Any]:
     _require_admin(current_user)
     try:
         async with session.begin():
