@@ -5,7 +5,7 @@ import json
 import logging
 import uuid
 from datetime import datetime
-from typing import Any, cast, ClassVar
+from typing import Any, ClassVar, cast
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from langchain_core.messages import BaseMessage
@@ -44,9 +44,9 @@ class AgentCreate(BaseModel):
     description: str | None = None
     is_executable: bool = True
     input_schema_id: uuid.UUID
-    input_schema_version: str
+    input_schema_version: str = "1"
     output_schema_id: uuid.UUID
-    output_schema_version: str
+    output_schema_version: str = "1"
     prompt_template: str = Field(min_length=1)
     model_backend_id: uuid.UUID
     connector_type_refs: ClassVar[list[dict[str, Any]]] = []
