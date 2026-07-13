@@ -2431,6 +2431,8 @@ The SSE stream handler runs a `while True` loop:
 6. Feed results into the next LLM call (loop continues)
 7. When LLM emits no tool calls, yield `done`
 
+`mcp_api_key` is optional and is required only for MCP calls. If a turn mixes UI and MCP calls without an MCP credential, each MCP call produces a failed `tool_call` result while manifest and browser UI calls continue; all results are fed back to the LLM on the next turn. A missing MCP credential does not abort the SSE stream.
+
 This allows multi-step workflows in a single stream: "Let me check the current config… [extract] → I see X is not set. Let me update it. [navigate → click → fill → click → go_back] → Done!"
 
 #### 8.27.7 Component Support
