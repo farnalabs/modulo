@@ -1,6 +1,6 @@
 {
     "name": "modulo-frontend",
-    "version": "0.3.316",
+"version": "0.3.317",
     "private": true,
     "scripts": {
         "generate:api": "powershell -ExecutionPolicy Bypass -File scripts/generate-api-types.ps1",
@@ -12,6 +12,7 @@
         "test:e2e:coverage": "cross-env VITE_COVERAGE=true playwright test",
         "test:all": "npm run test:unit && npm run test:e2e:smoke",
         "test:e2e:smoke": "playwright test --grep \"@smoke\"",
+        "test:mutation": "stryker run",
         "test:unit": "vitest run src",
         "preview": "vite preview",
         "lint": "eslint \"src/**/*.{vue,ts,js}\"",
