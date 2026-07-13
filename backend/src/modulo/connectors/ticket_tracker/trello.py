@@ -73,7 +73,7 @@ class TrelloTicketTracker(TicketTrackerBase):
         return ConnectorResult(records=[t.__dict__ for t in tickets], total=len(tickets))
 
     async def write(self, payload: ConnectorPayload) -> dict[str, Any]:
-        data = payload.data if hasattr(payload, "data") else payload
+        data = payload.data
         ticket = await self.create_ticket(
             title=data.get("title", ""),
             description=data.get("description"),
@@ -182,7 +182,7 @@ class TrelloTicketTracker(TicketTrackerBase):
             except httpx.RequestError as e:
                 raise ValueError(f"Trello network error: {e}") from None
 
-    def _to_ticket(self, raw: dict) -> Ticket:
+    def _to_ticket(self, raw: dict[str, Any]) -> Ticket:
         return Ticket(
             id=raw.get("id", ""),
             title=raw.get("name", ""),

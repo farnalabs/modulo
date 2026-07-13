@@ -4,7 +4,7 @@ import asyncio
 import base64
 import json
 import random
-from typing import Any
+from typing import Any, cast
 from urllib.parse import quote
 
 import httpx
@@ -46,6 +46,10 @@ def _safe_json(response: httpx.Response) -> Any:
         return response.json()
     except json.JSONDecodeError as exc:
         raise ValueError(f"GitLab API invalid response: {exc}") from exc
+
+
+def _safe_json_object(response: httpx.Response) -> dict[str, Any]:
+    return cast(dict[str, Any], _safe_json(response))
 
 
 def _project_path(project_id: str) -> str:
@@ -157,7 +161,7 @@ class GitLabConnector(ConnectorBase):
     async def _parse_json(self, response: httpx.Response) -> dict[str, Any]:
         """Safely parse JSON response, wrapping decode errors."""
         try:
-            return response.json()
+            return cast(dict[str, Any], response.json())
         except json.JSONDecodeError as exc:
             raise ValueError(f"GitLab API invalid response: {exc}") from exc
 
@@ -232,17 +236,17 @@ class GitLabConnector(ConnectorBase):
             case "mrs" | "merge_requests":
                 project = self._require_filter(q.filters, "project", q.resource)
                 encoded = _project_path(project)
-                params: dict[str, Any] = {"per_page": q.limit}
+                mr_params: dict[str, Any] = {"per_page": q.limit}
                 if "state" in q.filters:
-                    params["state"] = q.filters["state"]
+                    mr_params["state"] = q.filters["state"]
                 if "labels" in q.filters:
-                    params["labels"] = q.filters["labels"]
+                    mr_params["labels"] = q.filters["labels"]
                 if "milestone" in q.filters:
-                    params["milestone"] = q.filters["milestone"]
+                    mr_params["milestone"] = q.filters["milestone"]
                 r = await self._call_api(
                     "GET",
                     f"/projects/{encoded}/merge_requests",
-                    params=params,
+                    params=mr_params,
                 )
                 mrs = _safe_json(r)
                 return ConnectorResult(records=mrs, total=len(mrs))
@@ -403,7 +407,7 @@ class GitLabConnector(ConnectorBase):
                     f"/projects/{encoded}/repository/files/{quote(path, safe='')}",
                     json=body,
                 )
-                return _safe_json(r)
+                return _safe_json_object(r)
             case "mr" | "merge_request":
                 project = self._require_filter(payload.data, "project", payload.resource)
                 source_branch = self._require_filter(payload.data, "source_branch", payload.resource)
@@ -421,7 +425,7 @@ class GitLabConnector(ConnectorBase):
                     f"/projects/{encoded}/merge_requests",
                     json=body,
                 )
-                return _safe_json(r)
+                return _safe_json_object(r)
             case "issue":
                 project = self._require_filter(payload.data, "project", payload.resource)
                 title = self._require_filter(payload.data, "title", payload.resource)
@@ -442,7 +446,7 @@ class GitLabConnector(ConnectorBase):
                     f"/projects/{encoded}/issues",
                     json=body,
                 )
-                return _safe_json(r)
+                return _safe_json_object(r)
             case "issue_update":
                 project = self._require_filter(payload.data, "project", payload.resource)
                 issue_iid = self._require_filter(payload.data, "iid", payload.resource)
@@ -456,7 +460,7 @@ class GitLabConnector(ConnectorBase):
                     f"/projects/{encoded}/issues/{issue_iid}",
                     json=body,
                 )
-                return _safe_json(r)
+                return _safe_json_object(r)
             case "issue_note":
                 project = self._require_filter(payload.data, "project", payload.resource)
                 issue_iid = self._require_filter(payload.data, "iid", payload.resource)
@@ -470,7 +474,7 @@ class GitLabConnector(ConnectorBase):
                     f"/projects/{encoded}/issues/{issue_iid}/notes",
                     json=body,
                 )
-                return _safe_json(r)
+                return _safe_json_object(r)
             case "issue_label":
                 project = self._require_filter(payload.data, "project", payload.resource)
                 issue_iid = self._require_filter(payload.data, "iid", payload.resource)
@@ -484,7 +488,7 @@ class GitLabConnector(ConnectorBase):
                     f"/projects/{encoded}/issues/{issue_iid}",
                     json=body,
                 )
-                return _safe_json(r)
+                return _safe_json_object(r)
             case "label":
                 project = self._require_filter(payload.data, "project", payload.resource)
                 name = self._require_filter(payload.data, "name", payload.resource)
@@ -500,7 +504,7 @@ class GitLabConnector(ConnectorBase):
                     f"/projects/{encoded}/labels",
                     json=body,
                 )
-                return _safe_json(r)
+                return _safe_json_object(r)
             case "milestone":
                 project = self._require_filter(payload.data, "project", payload.resource)
                 title = self._require_filter(payload.data, "title", payload.resource)
@@ -517,7 +521,7 @@ class GitLabConnector(ConnectorBase):
                     f"/projects/{encoded}/milestones",
                     json=body,
                 )
-                return _safe_json(r)
+                return _safe_json_object(r)
             case "pipeline_run":
                 project = self._require_filter(payload.data, "project", payload.resource)
                 ref = self._require_filter(payload.data, "ref", payload.resource)
@@ -532,6 +536,6 @@ class GitLabConnector(ConnectorBase):
                     f"/projects/{encoded}/pipeline",
                     json=body,
                 )
-                return _safe_json(r)
+                return _safe_json_object(r)
             case _:
                 raise ValueError(f"Unsupported GitLab write resource: {payload.resource!r}")

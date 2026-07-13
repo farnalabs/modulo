@@ -3,7 +3,7 @@
 import asyncio
 import json
 import random
-from typing import Any
+from typing import Any, cast
 
 import httpx
 
@@ -214,9 +214,9 @@ def _compute_delay(attempt: int, response: httpx.Response | None = None) -> floa
     if response:
         retry_after = _parse_retry_after(response)
         if retry_after is not None:
-            return min(retry_after, _MAX_DELAY)
+            return float(min(retry_after, _MAX_DELAY))
     jitter = random.uniform(0, 1)  # noqa: S311 — non-crypto jitter for retry backoff
-    return min(_BASE_DELAY * (2**attempt) + jitter, _MAX_DELAY)
+    return float(min(_BASE_DELAY * (2**attempt) + jitter, _MAX_DELAY))
 
 
 class LinearConnector(ConnectorBase):
@@ -307,10 +307,12 @@ class LinearConnector(ConnectorBase):
                 raise ValueError(f"Linear API invalid response: {exc}") from exc
             if "errors" in body:
                 raise ValueError(f"Linear API error: {body['errors']}")
-            data: dict[str, Any] = body.get("data")
-            if data is None:
-                data = {}
-            return data
+            raw_data = body.get("data")
+            if raw_data is None:
+                return {}
+            if not isinstance(raw_data, dict):
+                raise ValueError("Linear API response 'data' must be an object")
+            return cast(dict[str, Any], raw_data)
         raise ValueError("Linear API request failed after retries") from last_exc
 
     async def health_check(self) -> HealthResult:
