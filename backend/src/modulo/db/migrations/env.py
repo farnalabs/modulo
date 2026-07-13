@@ -119,7 +119,7 @@ def run_migrations_online() -> None:
 
     engine = create_engine(sync_url, poolclass=NullPool)
     try:
-        with engine.connect() as connection:
+        with engine.begin() as connection:
             do_run_migrations(connection)
     finally:
         engine.dispose()
