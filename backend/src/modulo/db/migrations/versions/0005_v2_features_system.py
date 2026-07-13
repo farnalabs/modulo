@@ -6,7 +6,7 @@ config tables. Introduces append-only triggers (audit_events, error_events)
 and NULL-org RLS carve-outs for Remy dual-ownership tables.
 
 Revision ID: 0005_v2_features_system
-Revises: 0004_v2_runtime_engine
+Revises: 0003_v2_pipeline_runtime
 Create Date: 2026-07-11
 
 """
