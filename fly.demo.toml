@@ -36,8 +36,8 @@ primary_region = 'lhr'
   MODULO_MAX_LOCAL_CONCURRENCY = "4"
   # REQUIRED: Upstash Redis instance. Create with:
   #   fly redis create --name modulo-demo-redis -r lhr,ams --enable-eviction
-  REDIS_URL = "redis://default:7e3e7ea76e3549e1af66e9b47148d1a1@fly-modulo-demo-redis.upstash.io:6379"
-  CORS_ORIGINS = "https://modulo.run,http://localhost:5173"
+  # Then store its connection string with `fly secrets set REDIS_URL=...`.
+  CORS_ORIGINS = "https://modulo.run,https://demo.modulo.run"
 
 [[vm]]
   memory = '1gb'
