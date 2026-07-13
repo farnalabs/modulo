@@ -154,7 +154,16 @@ export default {
       "table_view": "Table view",
       "card_view": "Card view",
       "archived": "Archived",
-      "no_description": "No description"
+      "no_description": "No description",
+      "folders": "Folders",
+      "all_pipelines": "All Pipelines",
+      "new_folder": "New Folder",
+      "rename_folder": "Rename Folder",
+      "delete_folder": "Delete Folder",
+      "move_to_folder": "Move to Folder",
+      "no_folder": "No folder",
+      "folder_name": "Folder name",
+      "delete_folder_confirm": "Delete this folder? Pipelines in it will not be deleted."
     },
     "SettingsRateLimitsView": {
       "rate_limits": "Rate Limits",
