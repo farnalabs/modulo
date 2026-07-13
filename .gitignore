@@ -74,6 +74,7 @@ secrets/
 # Local — machine-local tooling, scripts, resources.
 local/
 .local/
+.tool-cache/
 
 # UX review capture
 ux-review-capture.json
