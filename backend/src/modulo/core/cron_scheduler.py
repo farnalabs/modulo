@@ -32,7 +32,7 @@ except ImportError:
     if typing.TYPE_CHECKING:
         from celery import Celery, Task
         from celery.beat import ScheduleEntry, Scheduler
-    Celery = Task = ScheduleEntry = Scheduler = object  # type: ignore[misc]
+    Celery = Task = ScheduleEntry = Scheduler = object
 
 from croniter import croniter
 from sqlalchemy import func, select, text, update
@@ -100,10 +100,10 @@ def compute_next_fire(cron_expression: str, after: datetime.datetime | None = No
 # Celery task — fire one cron trigger
 # ---------------------------------------------------------------------------
 
-_celery_app_global = None
+_celery_app_global: Any = None
 
 
-def get_celery_app():
+def get_celery_app() -> Any:
     global _celery_app_global
     if _celery_app_global is None:
         from modulo.celery_app import get_celery_app as _get_celery_app

@@ -3,7 +3,7 @@
 import json
 import logging
 import secrets
-from typing import Any
+from typing import Any, cast
 
 from redis.asyncio import Redis
 from redis.exceptions import RedisError
@@ -67,9 +67,10 @@ async def consume_ws_token(
     if data is None:
         raise WsTokenExpiredError("WS token expired or already used")
     try:
-        if isinstance(data, bytes):
-            return json.loads(data.decode())
-        return json.loads(data)
+        decoded = json.loads(data.decode()) if isinstance(data, bytes) else json.loads(data)
+        if not isinstance(decoded, dict):
+            raise ValueError("WS token payload must be an object")
+        return cast(dict[str, Any], decoded)
     except (json.JSONDecodeError, ValueError, TypeError) as exc:
         _log.error("ws_token.corrupt_data", extra={"error": str(exc)})
         raise WsTokenConsumeError(f"Corrupt WS token data: {exc}") from exc

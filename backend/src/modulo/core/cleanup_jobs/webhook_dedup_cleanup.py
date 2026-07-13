@@ -17,7 +17,7 @@ from modulo.settings import get_settings
 try:
     from celery import Task as _CeleryTask
 except ImportError:
-    _CeleryTask = object  # type: ignore[assignment,misc]
+    _CeleryTask = object
 
 _log = logging.getLogger(__name__)
 
