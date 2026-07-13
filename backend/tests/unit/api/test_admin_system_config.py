@@ -10,6 +10,7 @@ from sqlalchemy.exc import IntegrityError, ProgrammingError
 from modulo.api.dependencies import get_db_session, get_plan_context
 from modulo.auth.dependencies import get_current_user
 from modulo.auth.jwt import AuthenticatedPrincipal
+from tests.unit.api.mock_session import configure_mock_session
 
 ORG_ID = uuid4()
 USER_ID = uuid4()
@@ -34,6 +35,7 @@ def mock_session():
     from unittest.mock import MagicMock
 
     session = AsyncMock()
+    configure_mock_session(session)
     session.flush.return_value = None
     execute_result = MagicMock()
     execute_result.scalar_one_or_none.return_value = None
