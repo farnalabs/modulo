@@ -245,37 +245,47 @@ async def _fire_scheduled_report(
             _log.exception("Report %s (%s) generation or delivery failed", report_id, report.report_type)
             return {"status": "failed", "reason": "generation_or_delivery_failed"}
 
-        try:
-            next_send = compute_next_send(report.cron_expression, after=now)
-        except (ValueError, TypeError, KeyError) as exc:
-            _log.error(
-                "Invalid cron expression '%s' for report %s: %s",
-                report.cron_expression,
-                report_id,
-                exc,
-                exc_info=True,
-            )
-            await session.execute(update(ScheduledReport).where(ScheduledReport.id == report_id).values(active=False))
-            return {"status": "failed", "reason": f"invalid_cron: {exc}"}
+        schedule_type = config.get("schedule_type")
+        if schedule_type == "one_time":
+            next_send = None
+        else:
+            try:
+                next_send = compute_next_send(report.cron_expression, after=now)
+            except (ValueError, TypeError, KeyError) as exc:
+                _log.error(
+                    "Invalid cron expression '%s' for report %s: %s",
+                    report.cron_expression,
+                    report_id,
+                    exc,
+                    exc_info=True,
+                )
+                await session.execute(
+                    update(ScheduledReport).where(ScheduledReport.id == report_id).values(active=False)
+                )
+                return {"status": "failed", "reason": f"invalid_cron: {exc}"}
 
         await session.execute(
             update(ScheduledReport)
             .where(ScheduledReport.id == report_id)
-            .values(last_sent_at=now, next_send_at=next_send)
+            .values(
+                last_sent_at=now,
+                next_send_at=next_send,
+                active=schedule_type != "one_time",
+            )
         )
 
         _log.info(
             "Report %s (%s) sent. Next send: %s",
             report_id,
             report.report_type,
-            next_send.isoformat(),
+            next_send.isoformat() if next_send is not None else "none (one-time report completed)",
         )
 
         return {
             "status": "sent",
             "report_id": str(report_id),
             "report_type": report.report_type,
-            "next_send_at": next_send.isoformat(),
+            "next_send_at": next_send.isoformat() if next_send is not None else None,
             "delivery_results": delivery_results,
         }
 

@@ -28,6 +28,7 @@ from modulo.db.crud.scheduled_report import (
 from modulo.db.crud.spend_anomaly import dismiss_anomaly, list_anomalies
 from modulo.db.crud.team import get_team, list_teams
 from modulo.db.models.daily_run_count import OrgDailyRunCount
+from modulo.db.models.scheduled_report import ScheduledReport
 from modulo.db.rls import set_rls_org
 
 _log = logging.getLogger(__name__)
@@ -466,7 +467,7 @@ async def export_costs(
 
 class CreateReportRequest(BaseModel):
     period: str = Field(pattern=r"^(daily|weekly|monthly)$")
-    group_by: str = Field(pattern=r"^(team|pipeline|model)$")
+    group_by: str = Field(pattern=r"^(team|org)$")
     format: str = Field(default="csv", pattern=r"^(csv|json)$")
     recipients: list[str] = Field(min_length=1)
     schedule_type: str = Field(default="one_time", pattern=r"^(one_time|recurring)$")
@@ -480,6 +481,24 @@ class ReportResponse(BaseModel):
     recipients: list[str]
     schedule_type: str
     created_at: str
+
+
+def _report_response(report: ScheduledReport) -> ReportResponse:
+    period = report.period
+    group_by = report.group_by
+    report_format = report.format
+    schedule_type = report.schedule_type
+    if period is None or group_by is None or report_format is None or schedule_type is None:
+        raise ValueError(f"Scheduled cost report {report.id} has invalid configuration")
+    return ReportResponse(
+        id=str(report.id),
+        period=period,
+        group_by=group_by,
+        format=report_format,
+        recipients=report.recipients,
+        schedule_type=schedule_type,
+        created_at=report.created_at.isoformat(),
+    )
 
 
 @router.post("/reports", response_model=ReportResponse, status_code=201)
@@ -529,15 +548,7 @@ async def create_report(
             detail="Internal server error",
         ) from None
 
-    return ReportResponse(
-        id=str(report.id),
-        period=report.period,
-        group_by=report.group_by,
-        format=report.format,
-        recipients=list(report.recipients) if isinstance(report.recipients, list) else [],
-        schedule_type=report.schedule_type,
-        created_at=report.created_at.isoformat(),
-    )
+    return _report_response(report)
 
 
 @router.get("/reports", response_model=list[ReportResponse])
@@ -580,18 +591,7 @@ async def list_reports(
             detail="Internal server error",
         ) from None
 
-    return [
-        ReportResponse(
-            id=str(r.id),
-            period=r.period,
-            group_by=r.group_by,
-            format=r.format,
-            recipients=list(r.recipients) if isinstance(r.recipients, list) else [],
-            schedule_type=r.schedule_type,
-            created_at=r.created_at.isoformat(),
-        )
-        for r in reports
-    ]
+    return [_report_response(report) for report in reports]
 
 
 @router.delete("/reports/{report_id}", status_code=204)
