@@ -33,6 +33,12 @@ repos:
         language: system
         files: ^docs/product-map/
         pass_filenames: false
+      - id: validate-enforcement-gates
+        name: validate enforcement gates
+        entry: powershell -NoProfile -File tools/validate-enforcement-gates.ps1
+        language: system
+        files: ^(\.github/workflows/ci\.yml|AGENTS\.md)$
+        pass_filenames: false
       - id: pre-commit-checks
         name: pre-commit checks (Lessons Learned)
         entry: powershell -NoProfile -File tools/run-pre-commit-checks.ps1
