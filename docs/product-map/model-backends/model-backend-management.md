@@ -36,6 +36,9 @@ unit-tests:
   - backend/tests/unit/model_backends/test_vllm.py
   - backend/tests/unit/model_backends/test_watsonx.py
 code:
+  - backend/src/modulo/api/routes/mcp_setup.py
+  - backend/src/modulo/core/mcp_setup_handoff/
+  - backend/src/modulo/db/models/mcp_setup_token.py
   - backend/src/modulo/model_backends/base.py
   - backend/src/modulo/model_backends/anthropic/__init__.py
   - backend/src/modulo/model_backends/openai/__init__.py

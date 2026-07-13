@@ -74,6 +74,7 @@ async def test_github_scan():
     respx.get(f"{_GITHUB_API}/repos/owner/repo1/pulls").mock(
         httpx.Response(200, json=[{"number": 1, "created_at": "2026-06-20T00:00:00Z"}])
     )
+    respx.get(f"{_GITHUB_API}/repos/owner/repo2/pulls").mock(httpx.Response(200, json=[]))
 
     samples = await run_scan(hub)
     assert len(samples) >= 2  # repos + pulls
