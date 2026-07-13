@@ -630,10 +630,19 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
     await _run_migrations(settings)
 
     # Ensure at least one organisation exists before seeding users.
-    await _ensure_default_org(settings)
+    # Non-fatal: if the organisations table doesn't exist (migration state
+    # mismatch), the app starts without an org and retries on next restart.
+    try:
+        await _ensure_default_org(settings)
+    except Exception:
+        logger.warning("startup.default_org_failed", exc_info=True)
 
     # Seed MODULO_USERS env var entries into the user table (idempotent).
-    await _seed_modulo_users(settings)
+    # Non-fatal: if tables are missing, seeding is retried on next restart.
+    try:
+        await _seed_modulo_users(settings)
+    except Exception:
+        logger.warning("startup.user_seed_failed", exc_info=True)
 
     # Seed demo data if MODULO_DEMO_MODE is enabled.
     try:
