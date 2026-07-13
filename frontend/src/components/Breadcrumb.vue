@@ -79,7 +79,7 @@ const segments = computed<BreadcrumbSegment[]>(() => {
         label: manifestEntry.breadcrumb || currentName,
       })
       if (manifestEntry.parent) {
-        const parentEntry = rawRoutes[manifestEntry.parent]
+        const parentEntry = manifestByName.get(manifestEntry.parent)
         currentName = parentEntry?.name ?? undefined
       } else {
         currentName = undefined
