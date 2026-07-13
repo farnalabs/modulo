@@ -203,7 +203,7 @@ async def ingest_errors_public(
     raw_body = await request.body()
     if len(raw_body) > 10000:
         raise HTTPException(
-            status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+            status_code=status.HTTP_413_CONTENT_TOO_LARGE,
             detail="Request body exceeds 10,000 bytes",
         )
 
