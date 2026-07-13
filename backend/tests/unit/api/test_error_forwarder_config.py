@@ -267,10 +267,10 @@ class TestListForwarders:
 
         assert resp.status_code == 500
 
-    def test_list_returns_400_when_no_org(self, no_org_client: TestClient) -> None:
+    def test_list_returns_403_when_no_org(self, no_org_client: TestClient) -> None:
         resp = no_org_client.get("/api/v1/errors/forwarders")
-        assert resp.status_code == 400
-        assert "organisation" in resp.json()["detail"].lower()
+        assert resp.status_code == 403
+        assert resp.json()["detail"] == "Organisation membership required"
 
     def test_list_returns_402_when_gated(self, gated_client: TestClient) -> None:
         resp = gated_client.get("/api/v1/errors/forwarders")
@@ -379,12 +379,13 @@ class TestConfigureForwarder:
 
         assert resp.status_code == 503
 
-    def test_configure_returns_400_when_no_org(self, no_org_client: TestClient) -> None:
+    def test_configure_returns_403_when_no_org(self, no_org_client: TestClient) -> None:
         resp = no_org_client.put(
             "/api/v1/errors/forwarders/sentry",
             json={"config_json": {"dsn": "https://key@sentry.io/1"}},
         )
-        assert resp.status_code == 400
+        assert resp.status_code == 403
+        assert resp.json()["detail"] == "Organisation membership required"
 
     def test_configure_returns_402_when_gated(self, gated_client: TestClient) -> None:
         resp = gated_client.put(
@@ -595,12 +596,13 @@ class TestTestForwarder:
         assert resp.status_code == 501
         assert "migration" in resp.json()["detail"].lower()
 
-    def test_test_returns_400_when_no_org(self, no_org_client: TestClient) -> None:
+    def test_test_returns_403_when_no_org(self, no_org_client: TestClient) -> None:
         resp = no_org_client.post(
             "/api/v1/errors/forwarders/sentry/test",
             json={"config_json": {"dsn": "https://key@sentry.io/1"}},
         )
-        assert resp.status_code == 400
+        assert resp.status_code == 403
+        assert resp.json()["detail"] == "Organisation membership required"
 
     def test_test_returns_402_when_gated(self, gated_client: TestClient) -> None:
         resp = gated_client.post(
