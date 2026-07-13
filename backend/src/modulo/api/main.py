@@ -138,7 +138,7 @@ async def _verify_db_connectivity(settings: Settings) -> None:
             if attempt < 3:
                 await asyncio.sleep(attempt * 2)
     logger.error("startup.db_unreachable")
-    raise RuntimeError("Database is unreachable after 3 retry attempts — cannot start.")
+    logger.warning("startup.continuing_without_db — app will retry connections at runtime")
 
 
 async def _run_migrations(settings: Settings) -> None:
