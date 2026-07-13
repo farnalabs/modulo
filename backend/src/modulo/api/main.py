@@ -280,11 +280,11 @@ async def _seed_demo_data(settings: Settings) -> None:
     from modulo.api.dependencies import get_or_create_engine, get_or_create_session_factory
     from modulo.auth.passwords import hash_password
     from modulo.db.models.account import Account
+    from modulo.db.models.model_backend import ModelBackend
     from modulo.db.models.org_membership import OrgMembership
     from modulo.db.models.organisation import Organisation
     from modulo.db.models.pipeline import Pipeline
     from modulo.db.models.schema import Schema, SchemaVersion
-    from modulo.db.models.model_backend import ModelBackend
     from modulo.db.models.stage import Stage
     from modulo.db.rls import set_rls_org
 
@@ -343,9 +343,7 @@ async def _seed_demo_data(settings: Settings) -> None:
         await set_rls_org(session, org_id)
 
         # Seed a sample pipeline
-        existing_pipelines = await session.execute(
-            select(Pipeline).where(Pipeline.organisation_id == org_id).limit(1)
-        )
+        existing_pipelines = await session.execute(select(Pipeline).where(Pipeline.organisation_id == org_id).limit(1))
         if existing_pipelines.scalar_one_or_none() is None:
             pipeline = Pipeline(
                 organisation_id=org_id,
@@ -357,9 +355,7 @@ async def _seed_demo_data(settings: Settings) -> None:
             logger.info("startup.demo_pipeline_seeded")
 
         # Seed a sample schema + version
-        existing_schemas = await session.execute(
-            select(Schema).where(Schema.organisation_id == org_id).limit(1)
-        )
+        existing_schemas = await session.execute(select(Schema).where(Schema.organisation_id == org_id).limit(1))
         if existing_schemas.scalar_one_or_none() is None:
             schema = Schema(
                 organisation_id=org_id,
@@ -397,9 +393,7 @@ async def _seed_demo_data(settings: Settings) -> None:
             logger.info("startup.demo_model_backend_seeded")
 
         # Seed a sample stage
-        existing_stages = await session.execute(
-            select(Stage).where(Stage.organisation_id == org_id).limit(1)
-        )
+        existing_stages = await session.execute(select(Stage).where(Stage.organisation_id == org_id).limit(1))
         if existing_stages.scalar_one_or_none() is None:
             stage = Stage(
                 organisation_id=org_id,

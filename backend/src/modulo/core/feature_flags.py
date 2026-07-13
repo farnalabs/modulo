@@ -285,10 +285,7 @@ class DemoTier:
         self._registry = FeatureFlagRegistry(current_tier="team", has_license_key=True)
 
     def feature_enabled(self, name: str) -> bool:
-        flag = self._registry.get_flag(name)
-        if flag is None:
-            return False
-        return True  # ALL features active in demo mode
+        return self._registry.get_flag(name) is not None
 
     def list_enabled_features(self) -> list[FeatureFlag]:
         return self._registry.list_flags()
@@ -387,7 +384,7 @@ async def resolve_plan_context(settings: Any, session: Any, org: Any | None = No
     4. Community tier (default fallback)
     """
     # 0. Demo mode — all features enabled
-    if getattr(settings, 'modulo_demo_mode', False):
+    if getattr(settings, "modulo_demo_mode", False):
         return DemoTier()
 
     from modulo.core.license import get_license, parse_and_verify
