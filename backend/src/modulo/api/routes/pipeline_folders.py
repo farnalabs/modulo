@@ -65,7 +65,7 @@ async def list_folders_endpoint(
             await set_rls_user_context(session, principal.account_id, principal.org_role)
             folders = await list_folders(session)
     except ProgrammingError:
-        logger.exception("routes.pipeline_folders")
+        logger.exception("pipeline_folders.list")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="This feature is not available. Run database migrations to enable it.",
@@ -92,7 +92,7 @@ async def create_folder_endpoint(
                 parent_id=req.parent_id,
             )
     except ProgrammingError:
-        logger.exception("routes.pipeline_folders")
+        logger.exception("pipeline_folders.create")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="This feature is not available. Run database migrations to enable it.",
@@ -115,7 +115,7 @@ async def update_folder_endpoint(
             await set_rls_user_context(session, principal.account_id, principal.org_role)
             folder = await update_folder(session, folder_id, updates)
     except ProgrammingError:
-        logger.exception("routes.pipeline_folders")
+        logger.exception("pipeline_folders.update(%s)", folder_id)
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="This feature is not available. Run database migrations to enable it.",
@@ -138,7 +138,7 @@ async def delete_folder_endpoint(
             await set_rls_user_context(session, principal.account_id, principal.org_role)
             deleted = await delete_folder(session, folder_id)
     except ProgrammingError:
-        logger.exception("routes.pipeline_folders")
+        logger.exception("pipeline_folders.delete(%s)", folder_id)
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="This feature is not available. Run database migrations to enable it.",
@@ -162,7 +162,7 @@ async def reorder_folder_endpoint(
             await set_rls_user_context(session, principal.account_id, principal.org_role)
             folder = await update_folder(session, folder_id, updates)
     except ProgrammingError:
-        logger.exception("routes.pipeline_folders")
+        logger.exception("pipeline_folders.reorder(%s)", folder_id)
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="This feature is not available. Run database migrations to enable it.",

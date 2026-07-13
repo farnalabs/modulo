@@ -90,6 +90,10 @@ async def move_pipeline_to_folder(
     pipeline = result.scalar_one_or_none()
     if pipeline is None:
         return None
+    if folder_id is not None:
+        folder = await get_folder(session, folder_id)
+        if folder is None:
+            return None
     pipeline.folder_id = folder_id
     await session.flush()
     return pipeline

@@ -151,7 +151,7 @@
           <button class="rounded-lg border border-input bg-background px-4 py-2 text-sm hover:bg-accent" @click="showDeleteConfirm = false">
             {{ $t('common.cancel') }}
           </button>
-          <button class="rounded-lg bg-destructive px-4 py-2 text-sm font-medium text-destructive-foreground hover:bg-destructive/90" @click="handleDelete">
+          <button class="rounded-lg bg-destructive px-4 py-2 text-sm font-medium text-destructive-foreground hover:bg-destructive/90" :disabled="deleting" @click="handleDelete">
             {{ $t('common.delete') }}
           </button>
         </div>
@@ -206,6 +206,7 @@ const renaming = ref(false)
 const showDeleteConfirm = ref(false)
 const deleteTarget = ref<FolderItem | null>(null)
 const deleteError = ref<string | null>(null)
+const deleting = ref(false)
 
 const folderChildren = computed(() => {
   const children = new Map<string, FolderItem[]>()
@@ -319,6 +320,7 @@ function openDeleteConfirm(folder: FolderItem) {
 
 async function handleDelete() {
   if (!deleteTarget.value) return
+  deleting.value = true
   deleteError.value = null
   try {
     const response = await api.DELETE('/api/v1/pipeline-folders/{folder_id}', {
@@ -339,6 +341,8 @@ async function handleDelete() {
     await loadFolders()
   } catch (e: unknown) {
     deleteError.value = formatApiError(e)
+  } finally {
+    deleting.value = false
   }
 }
 

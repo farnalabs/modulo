@@ -1021,7 +1021,7 @@ async function handleDelete() {
 async function loadFolders() {
   try {
     const { data } = await api.GET('/api/v1/pipeline-folders')
-    folders.value = (data as any)?.items ?? []
+    folders.value = (data as unknown as any[]) ?? []
   } catch (e) {
     console.warn('Failed to load folders', e)
   }
