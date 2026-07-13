@@ -765,7 +765,11 @@ class TestPollingLogging:
                 condition_expression="[?issue.number > `0`]",
             )
 
-        mock_warning.assert_any_call("Polling trigger %s has no valid snapshot_id in config", _TRIGGER_ID)
+        mock_warning.assert_any_call(
+            "Polling trigger %s has no valid snapshot_id in config",
+            _TRIGGER_ID,
+            exc_info=True,
+        )
 
     async def test_poll_event_has_meaningful_hash(self) -> None:
         """_log_poll_event should compute a hash based on trigger id + result."""
