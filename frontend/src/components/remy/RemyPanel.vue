@@ -544,7 +544,7 @@ onUnmounted(() => {
 
 <style scoped>
 .remy-panel {
-  @apply fixed z-50 flex flex-col border rounded-lg shadow-2xl overflow-hidden;
+  @apply fixed z-40 flex flex-col border rounded-lg shadow-2xl overflow-hidden;
   background-color: hsl(var(--background));
   border-color: hsl(var(--border));
   transition:
