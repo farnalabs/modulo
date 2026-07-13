@@ -273,10 +273,10 @@ async def test_claim_team_member_can_claim():
     session.flush = AsyncMock()
 
     call_no = 0
-    team_check_hit = False
+    team_check_count = 0
 
     async def _execute(stmt: Any) -> Any:
-        nonlocal call_no, team_check_hit
+        nonlocal call_no, team_check_count
         call_no += 1
         if call_no == 1:
             # Pre-check SELECT
@@ -289,8 +289,8 @@ async def test_claim_team_member_can_claim():
             r.scalar_one_or_none.return_value = unclaimed
             return r
         if call_no == 3:
-            # Team membership check
-            team_check_hit = True
+            # Team membership check before claiming
+            team_check_count += 1
             r = MagicMock()
             r.scalar_one_or_none.return_value = membership
             return r
@@ -299,6 +299,12 @@ async def test_claim_team_member_can_claim():
             r = MagicMock()
             r.scalar_one_or_none.return_value = uuid.uuid4()
             return r
+        if call_no == 5:
+            # Re-check membership after claiming to close the TOCTOU window
+            team_check_count += 1
+            r = MagicMock()
+            r.scalar_one_or_none.return_value = membership
+            return r
         raise AssertionError(f"Unexpected execute call #{call_no}")
 
     session.execute = _execute
@@ -306,7 +312,7 @@ async def test_claim_team_member_can_claim():
     mgr = HITLManager()
     result = await mgr.claim(session, run_id=_RUN, gate_id=_GATE, org_id=_ORG, claimant_id=_USER)
     assert result is claimed
-    assert team_check_hit, "Team membership check was not performed"
+    assert team_check_count == 2
 
 
 async def test_claim_non_team_member_raises():
