@@ -7,25 +7,21 @@ organisation (first org in the DB, or the org specified by MODULO_SCIM_DEFAULT_O
 
 import hmac
 import uuid
-from collections.abc import AsyncGenerator
 
 from fastapi import Depends, HTTPException, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from sqlalchemy import select
+from sqlalchemy.exc import ProgrammingError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from modulo.api.dependencies import get_db_session
+from modulo.api.models.problem import ProblemException, ProblemType
+from modulo.core.feature_flags import CommunityTier, PlanContext, resolve_plan_context
+from modulo.db.crud.organisation import get_organisation
 from modulo.db.models.organisation import Organisation
 from modulo.settings import Settings, get_settings
 
 _scim_bearer = HTTPBearer(auto_error=False)
-
-
-async def _get_db_session() -> AsyncGenerator[AsyncSession, None]:
-    """Lazily import get_db_session to avoid circular imports."""
-    from modulo.api.dependencies import get_db_session
-
-    async for session in get_db_session():
-        yield session
 
 
 class ScimPrincipal:
@@ -38,7 +34,7 @@ class ScimPrincipal:
 async def get_scim_principal(
     credentials: HTTPAuthorizationCredentials | None = Depends(_scim_bearer),
     settings: Settings = Depends(get_settings),
-    session: AsyncSession = Depends(_get_db_session),
+    session: AsyncSession = Depends(get_db_session),
 ) -> ScimPrincipal:
     """Validate Bearer token against MODULO_SCIM_TOKEN and resolve the target org."""
     if credentials is None:
@@ -79,3 +75,36 @@ async def get_scim_principal(
             detail="No organisation exists — cannot resolve SCIM target org",
         )
     return ScimPrincipal(organisation_id=org.id)
+
+
+async def get_scim_plan_context(
+    principal: ScimPrincipal = Depends(get_scim_principal),
+    settings: Settings = Depends(get_settings),
+    session: AsyncSession = Depends(get_db_session),
+) -> PlanContext:
+    """Resolve feature access for a SCIM principal without requiring a user JWT."""
+    try:
+        async with session.begin():
+            org = await get_organisation(session, principal.organisation_id)
+    except ProgrammingError:
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="This feature is not available. Run database migrations to enable it.",
+        ) from None
+    except (TypeError, AttributeError):
+        return CommunityTier()
+
+    try:
+        return await resolve_plan_context(settings, session, org=org)
+    except (TypeError, AttributeError):
+        return CommunityTier()
+
+
+async def require_scim_feature(ctx: PlanContext = Depends(get_scim_plan_context)) -> None:
+    """Require the SCIM feature using the SCIM principal's organisation plan."""
+    if not ctx.feature_enabled("scim"):
+        raise ProblemException(
+            ProblemType.FEATURE_REQUIRED,
+            detail="scim is not available on your plan",
+            instance="scim",
+        )

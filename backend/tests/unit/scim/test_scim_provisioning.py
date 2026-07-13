@@ -10,7 +10,8 @@ from fastapi.testclient import TestClient
 
 from modulo.api.dependencies import _get_engine, get_db_session
 from modulo.api.main import app
-from modulo.auth.scim_auth import ScimPrincipal, get_scim_principal
+from modulo.auth.scim_auth import ScimPrincipal, get_scim_plan_context, get_scim_principal
+from modulo.core.feature_flags import CommunityTier, DbPlanContext, FeatureFlagRegistry
 from modulo.settings import Settings, get_settings
 
 _VALID_32 = "a" * 32
@@ -20,6 +21,13 @@ _TEAM_ID = uuid.UUID("00000000-0000-0000-0000-000000000003")
 _NOW = datetime(2025, 1, 1, tzinfo=UTC)
 
 _SCIM_TOKEN = "test-scim-token-12345"
+
+
+@pytest.fixture(autouse=True)
+def scim_feature_enabled() -> Generator[None, None, None]:
+    app.dependency_overrides[get_scim_plan_context] = lambda: DbPlanContext(FeatureFlagRegistry(current_tier="team"))
+    yield
+    app.dependency_overrides.clear()
 
 
 def _make_settings() -> Settings:
@@ -357,7 +365,7 @@ class TestInputValidation:
         body = {**_GROUP_CREATE_BODY, "members": [{"value": "not-a-uuid", "type": "User"}]}
         with (
             patch("modulo.db.crud.team.get_team_by_name", return_value=None),
-            patch("modulo.db.crud.user.list_users_for_org", create=True, return_value=[_MOCK_USER]),
+            patch("modulo.db.crud.org_membership.list_memberships_for_org", return_value=[]),
             patch("modulo.api.routes.scim.scim_create_group", return_value=_MOCK_TEAM),
             patch("modulo.api.routes.scim.set_rls_org"),
         ):
@@ -1006,11 +1014,7 @@ class TestCreateGroup:
                 "modulo.db.crud.team.get_team_by_name",
                 return_value=None,
             ),
-            patch(
-                "modulo.db.crud.user.list_users_for_org",
-                create=True,
-                return_value=[_MOCK_USER],
-            ),
+            patch("modulo.db.crud.org_membership.list_memberships_for_org", return_value=[]),
             patch(
                 "modulo.api.routes.scim.scim_get_user",
                 return_value=_MOCK_USER,
@@ -1236,6 +1240,7 @@ class TestLicenseGate:
         app.dependency_overrides[get_db_session] = lambda: _make_mock_session()
         app.dependency_overrides[_get_engine] = lambda: MagicMock()
         app.dependency_overrides[get_scim_principal] = lambda: ScimPrincipal(organisation_id=_ORG_ID)
+        app.dependency_overrides[get_scim_plan_context] = CommunityTier
         resp = TestClient(app).get(
             "/scim/v2/Users",
             headers={"Authorization": f"Bearer {_SCIM_TOKEN}"},
