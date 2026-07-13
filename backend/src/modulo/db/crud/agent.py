@@ -40,6 +40,8 @@ async def create_agent(
     token_budget: int | None = None,
     max_input_length: int | None = None,
     library_id: uuid.UUID | None = None,
+    prompt_always_visible: bool = False,
+    required_environment_capabilities: list[str] | None = None,
 ) -> Agent:
     agent = Agent(
         organisation_id=org_id,
@@ -59,6 +61,8 @@ async def create_agent(
         token_budget=token_budget,
         max_input_length=max_input_length,
         library_id=library_id,
+        prompt_always_visible=prompt_always_visible,
+        required_environment_capabilities=required_environment_capabilities or [],
     )
     session.add(agent)
     await session.flush()
