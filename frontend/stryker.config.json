@@ -4,6 +4,7 @@
   "plugins": ["@stryker-mutator/vitest-runner"],
   "testRunner": "vitest",
   "coverageAnalysis": "perTest",
+  "disableTypeChecks": "**/*.{js,ts,jsx,tsx}",
   "concurrency": 4,
   "mutate": [
     "src/stores/**/*.ts",

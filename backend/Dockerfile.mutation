@@ -1,3 +1,4 @@
+# check=skip=SecretsUsedInArgOrEnv
 # One-shot mutation testing container for the backend
 # Build from repo root: docker build -t modulo-mutmut -f backend/Dockerfile.mutation .
 # Run: docker run --rm modulo-mutmut
@@ -25,7 +26,7 @@ RUN uv sync --dev --frozen
 COPY backend/src/ src/
 COPY backend/tests/ tests/
 
-# Required env vars (DB won't be reached — mutmut only runs unit + architecture tests)
+# Required non-production test values (the database is never contacted).
 ENV DATABASE_URL=postgresql+asyncpg://unused:unused@localhost/unused
 ENV SECRET_KEY=docker-mutation-secret-key-not-for-production
 ENV FERNET_KEY=vK-xU7GqHLflg_GqzJ1FqWI7pHWoHSIyukf4wx-tMHI=
