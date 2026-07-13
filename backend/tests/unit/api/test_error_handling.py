@@ -70,13 +70,13 @@ def _make_app() -> FastAPI:
         raise ValueError("Something broke internally")
 
     @app.post("/test/validation")
-    async def validation(body: TestBody) -> dict[str, str]:
+    async def validation(body: ValidationBody) -> dict[str, str]:
         return {"body": body.name}
 
     return app
 
 
-class TestBody(BaseModel):
+class ValidationBody(BaseModel):
     name: str = Field(min_length=1)
 
 
