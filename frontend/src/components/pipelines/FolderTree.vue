@@ -330,10 +330,11 @@ async function handleDelete() {
       deleteError.value = formatApiError(response.error)
       return
     }
+    const deletedId = deleteTarget.value.id
     showDeleteConfirm.value = false
     deleteTarget.value = null
 
-    if (props.selectedFolderId === deleteTarget.value?.id) {
+    if (props.selectedFolderId === deletedId) {
       emit('select-folder', null)
     }
 
