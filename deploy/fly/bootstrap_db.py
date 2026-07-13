@@ -14,7 +14,7 @@ import asyncpg
 admin_url = os.environ.get("DATABASE_ADMIN_URL") or os.environ.get("DATABASE_URL", "")
 original = admin_url
 admin_url = admin_url.replace("postgres://", "postgresql+asyncpg://", 1)
-admin_url = admin_url.replace("?sslmode=disable", "?ssl=disable")
+admin_url = admin_url.replace("?sslmode=disable", "")
 admin_url = admin_url.replace("&sslmode=disable", "")
 os.environ["DATABASE_ADMIN_URL"] = admin_url
 if admin_url != original:
@@ -24,7 +24,7 @@ if admin_url != original:
 runtime_url = os.environ.get("DATABASE_URL", "")
 if runtime_url:
     runtime_url = runtime_url.replace("postgres://", "postgresql+asyncpg://", 1)
-    runtime_url = runtime_url.replace("?sslmode=disable", "?ssl=disable")
+    runtime_url = runtime_url.replace("?sslmode=disable", "")
     runtime_url = runtime_url.replace("&sslmode=disable", "")
     os.environ["DATABASE_URL"] = runtime_url
 
