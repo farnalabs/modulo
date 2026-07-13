@@ -1187,46 +1187,48 @@ async def stream_chat(
 
                     # Execute MCP tools
                     if mcp_tool_calls and not req.mcp_api_key:
-                        yield (
-                            "event: error\ndata: "
-                            + json.dumps({"detail": "Tool execution requires an MCP API key"})
-                            + "\n\n"
-                        )
-                        return
-                    mcp_api_key = req.mcp_api_key
-                    if mcp_api_key is None:
-                        return
-                    for tc in mcp_tool_calls:
-                        try:
-                            result = await _call_mcp_tool(
-                                tool_name=tc["name"],
-                                arguments=tc["args"],
-                                mcp_api_key=mcp_api_key,
-                                base_url=mcp_base_url,
-                            )
-                            tool_results.append(
-                                {
-                                    "tool_call_id": tc["id"],
-                                    "tool_name": tc["name"],
-                                    "success": True,
-                                    "result": result,
-                                }
-                            )
-                            yield f"event: tool_call\ndata: {json.dumps(tool_results[-1])}\n\n"
-                        except HTTPException:
-                            raise
-                        except Exception as exc:
-                            logger.exception("MCP tool call failed: %r", tc["name"])
-                            err_msg = f"{type(exc).__name__}: {exc}"[:200]
+                        for tc in mcp_tool_calls:
                             tool_results.append(
                                 {
                                     "tool_call_id": tc["id"],
                                     "tool_name": tc["name"],
                                     "success": False,
-                                    "error": err_msg,
+                                    "error": "Tool execution requires an MCP API key",
                                 }
                             )
                             yield f"event: tool_call\ndata: {json.dumps(tool_results[-1])}\n\n"
+                    elif req.mcp_api_key is not None:
+                        for tc in mcp_tool_calls:
+                            try:
+                                result = await _call_mcp_tool(
+                                    tool_name=tc["name"],
+                                    arguments=tc["args"],
+                                    mcp_api_key=req.mcp_api_key,
+                                    base_url=mcp_base_url,
+                                )
+                                tool_results.append(
+                                    {
+                                        "tool_call_id": tc["id"],
+                                        "tool_name": tc["name"],
+                                        "success": True,
+                                        "result": result,
+                                    }
+                                )
+                                yield f"event: tool_call\ndata: {json.dumps(tool_results[-1])}\n\n"
+                            except HTTPException:
+                                raise
+                            except Exception as exc:
+                                logger.exception("MCP tool call failed: %r", tc["name"])
+                                err_msg = f"{type(exc).__name__}: {exc}"[:200]
+                                tool_results.append(
+                                    {
+                                        "tool_call_id": tc["id"],
+                                        "tool_name": tc["name"],
+                                        "success": False,
+                                        "error": err_msg,
+                                    }
+                                )
+                                yield f"event: tool_call\ndata: {json.dumps(tool_results[-1])}\n\n"
 
                     # Handle get_manifest calls server-side
                     manifest_calls = [tc for tc in ui_tool_calls if tc["name"] == "get_manifest"]
