@@ -44,9 +44,9 @@ class AgentCreate(BaseModel):
     description: str | None = None
     is_executable: bool = True
     input_schema_id: uuid.UUID
-    input_schema_version: str = "1"
+    input_schema_version: str | None = None
     output_schema_id: uuid.UUID
-    output_schema_version: str = "1"
+    output_schema_version: str | None = None
     prompt_template: str = Field(min_length=1)
     model_backend_id: uuid.UUID
     connector_type_refs: ClassVar[list[dict[str, Any]]] = []
@@ -277,15 +277,17 @@ async def create_agent_endpoint(
     try:
         async with session.begin():
             await set_rls_org(session, principal.organisation_id)
+            input_ver = req.input_schema_version or "latest"
+            output_ver = req.output_schema_version or "latest"
             agent = await create_agent(
                 session,
                 org_id=principal.organisation_id,
                 name=req.name,
                 account_id=principal.account_id,
                 input_schema_id=req.input_schema_id,
-                input_schema_version=req.input_schema_version,
+                input_schema_version=input_ver,
                 output_schema_id=req.output_schema_id,
-                output_schema_version=req.output_schema_version,
+                output_schema_version=output_ver,
                 prompt_template=req.prompt_template,
                 model_backend_id=req.model_backend_id,
                 is_executable=req.is_executable,
