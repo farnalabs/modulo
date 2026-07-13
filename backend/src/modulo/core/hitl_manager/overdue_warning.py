@@ -73,4 +73,5 @@ async def get_overdue_claims(
             "status": "escalated" if claim.claimed_at < escalation_cutoff else "warning",
         }
         for claim in claims
+        if claim.claimed_at is not None
     ]

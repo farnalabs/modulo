@@ -23,8 +23,7 @@ _log = logging.getLogger(__name__)
 class RuntimeProviderHub:
     """Central registry for RuntimeProvider implementations.
 
-    Supports both the legacy RuntimeProvider interface (create_workspace(WorkspaceSpec))
-    and the new RuntimeProvider ABC (from modulo.core.runtime_provider.base).
+    All providers implement the canonical WorkspaceSpec-based interface.
     """
 
     def __init__(self) -> None:
@@ -104,16 +103,16 @@ class RuntimeProviderHub:
             provider_type = provider_config.get("type", provider_name)
             match provider_type:
                 case "local_docker":
-                    from modulo.core.runtime_provider.local_docker import LocalDockerRuntimeProvider
+                    from modulo.core.runtime_provider.docker import DockerRuntimeProvider
 
                     docker_host = provider_config.get("docker_host")
                     default_image = provider_config.get("default_image", "python:3.12-slim")
-                    provider = LocalDockerRuntimeProvider(
+                    docker_provider = DockerRuntimeProvider(
                         docker_host=docker_host,
                         default_image=default_image,
                     )
                     try:
-                        self.register(provider_name, provider)
+                        self.register(provider_name, docker_provider)
                     except ValueError:
                         _log.warning("Provider '%s' already registered, skipping", provider_name)
                 case "e2b":
@@ -123,9 +122,9 @@ class RuntimeProviderHub:
                     if not api_key:
                         _log.warning("E2B provider '%s' has no api_key, skipping", provider_name)
                         continue
-                    provider = E2BRuntimeProvider(api_key=api_key)
+                    e2b_provider = E2BRuntimeProvider(api_key=api_key)
                     try:
-                        self.register(provider_name, provider)
+                        self.register(provider_name, e2b_provider)
                     except ValueError:
                         _log.warning("Provider '%s' already registered, skipping", provider_name)
                 case _:
@@ -167,11 +166,7 @@ class RuntimeProviderHub:
             resource_limits=dict(getattr(profile, "config_json", {})),
             labels={},
         )
-        # Prefer new-style interface (WorkspaceSpec); fall back to legacy (profile, session)
-        try:
-            workspace_ref = await provider.create_workspace(spec)
-        except TypeError:
-            workspace_ref = await provider.create_workspace(profile, session)  # type: ignore[arg-type]
+        workspace_ref = await provider.create_workspace(spec)
 
         if isinstance(workspace_ref, dict):
             provider_ref = workspace_ref.get("ref") or workspace_ref.get("container_id", "")

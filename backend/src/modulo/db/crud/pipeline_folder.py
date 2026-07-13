@@ -6,6 +6,7 @@ before calling. The session must be within an active transaction.
 
 import logging
 import uuid
+from typing import Any
 
 from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -52,7 +53,7 @@ async def get_folder(
 async def update_folder(
     session: AsyncSession,
     folder_id: uuid.UUID,
-    updates: dict,
+    updates: dict[str, Any],
 ) -> PipelineFolder | None:
     folder = await get_folder(session, folder_id)
     if folder is None:

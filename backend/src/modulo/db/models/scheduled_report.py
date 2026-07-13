@@ -23,3 +23,34 @@ class ScheduledReport(OrgScoped):
     created_by: Mapped[uuid.UUID | None] = mapped_column(
         Uuid(), ForeignKey("accounts.id", ondelete="SET NULL"), nullable=True
     )
+
+    @property
+    def period(self) -> str:
+        value = (self.config_json or {}).get("period", "monthly")
+        return value if isinstance(value, str) else "monthly"
+
+    @property
+    def group_by(self) -> str:
+        value = (self.config_json or {}).get("group_by", "team")
+        return value if isinstance(value, str) else "team"
+
+    @property
+    def format(self) -> str:
+        value = (self.config_json or {}).get("format", "csv")
+        return value if isinstance(value, str) else "csv"
+
+    @property
+    def schedule_type(self) -> str:
+        value = (self.config_json or {}).get("schedule_type", "recurring")
+        return value if isinstance(value, str) else "recurring"
+
+    @property
+    def recipients(self) -> list[str]:
+        value = (self.recipient_config or {}).get("emails", [])
+        if not isinstance(value, list):
+            return []
+        return [item for item in value if isinstance(item, str)]
+
+    @property
+    def next_run_at(self) -> datetime | None:
+        return self.next_send_at

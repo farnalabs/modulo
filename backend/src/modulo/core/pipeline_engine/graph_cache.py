@@ -15,7 +15,7 @@ import threading
 import uuid
 from collections import OrderedDict, defaultdict
 from collections.abc import Callable
-from typing import Annotated, Any
+from typing import Annotated, Any, cast
 
 import jmespath
 from langgraph.graph import StateGraph
@@ -191,7 +191,8 @@ def build_graph_from_json(
 
     Returns a compiled LangGraph that accepts dict[str, Any] state.
     """
-    graph: StateGraph[Any] = StateGraph(Annotated[dict[str, Any], _pipeline_state_reducer])
+    state_schema = cast(type[Any], Annotated[dict[str, Any], _pipeline_state_reducer])
+    graph: StateGraph[Any] = StateGraph(state_schema)
 
     nodes: list[dict[str, Any]] = graph_json.get("nodes", [])
     edges: list[dict[str, Any]] = graph_json.get("edges", [])

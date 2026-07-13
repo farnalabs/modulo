@@ -14,6 +14,7 @@ Run a worker with::
 """
 
 import logging
+from typing import Any
 
 try:
     from celery import Celery
@@ -24,15 +25,15 @@ except ImportError:
     if typing.TYPE_CHECKING:
         from celery import Celery
         from celery.signals import task_failure
-    Celery = None  # type: ignore[misc]
-    task_failure = None  # type: ignore[misc]
+    Celery = None
+    task_failure = None
 
 _log = logging.getLogger(__name__)
 
 _celery_app_instance = None
 
 
-def get_celery_app():
+def get_celery_app() -> Any:
     """Return a configured Celery application instance (lazily built).
 
     Returns ``None`` when Celery is not installed or when ``redis_url``

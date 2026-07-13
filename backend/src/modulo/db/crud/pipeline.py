@@ -7,7 +7,7 @@ before calling. The session must be within an active transaction.
 import copy
 import logging
 import uuid
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Any
 
 from sqlalchemy import delete, func, select
@@ -154,7 +154,7 @@ async def archive_pipeline(session: AsyncSession, pipeline_id: uuid.UUID) -> Pip
     pipeline = await get_pipeline(session, pipeline_id)
     if pipeline is None:
         return None
-    pipeline.archived_at = datetime.now(datetime.UTC)
+    pipeline.archived_at = datetime.now(UTC)
     await session.flush()
     return pipeline
 

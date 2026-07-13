@@ -240,7 +240,7 @@ def make_hitl_gate_fn(
                 }
             is_rejected = action == "rejected"
             result_status = "rejected" if is_rejected else "approved"
-            result: dict[str, Any] = {
+            gate_result: dict[str, Any] = {
                 "artifacts": [
                     {
                         "node_id": gate_id,
@@ -254,8 +254,8 @@ def make_hitl_gate_fn(
             # downstream nodes receive the human's version instead of the
             # original agent output.
             if isinstance(decision, dict) and "modified_output" in decision:
-                result["output"] = decision["modified_output"]
-            return result
+                gate_result["output"] = decision["modified_output"]
+            return gate_result
 
         # --- Conditional gate (§8.17) — evaluate condition against state. ---
         if condition_expr:
@@ -283,17 +283,17 @@ def make_hitl_gate_fn(
         if eval_definitions:
             engine = EvalEngine()
             for eval_def in eval_definitions:
-                result = engine.evaluate(state, eval_def)
-                eval_results_by_name[eval_def.name] = result
+                eval_result = engine.evaluate(state, eval_def)
+                eval_results_by_name[eval_def.name] = eval_result
                 _log.info(
                     "hitl_gate.eval_result",
                     extra={
                         "gate_id": gate_id,
                         "eval_name": eval_def.name,
                         "eval_id": str(eval_def.id),
-                        "passed": result.passed,
-                        "score": result.score,
-                        "detail": result.detail,
+                        "passed": eval_result.passed,
+                        "score": eval_result.score,
+                        "detail": eval_result.detail,
                     },
                 )
             # If any block eval failed, EvalBlockedError was raised above.

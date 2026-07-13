@@ -22,18 +22,29 @@ async def create_scheduled_report(
     format: str,
     recipients: list[str],
     schedule_type: str,
-    created_by: uuid.UUID,
+    account_id: uuid.UUID,
     next_run_at: datetime | None = None,
 ) -> ScheduledReport:
+    cron_by_period = {
+        "daily": "0 0 * * *",
+        "weekly": "0 0 * * 1",
+        "monthly": "0 0 1 * *",
+    }
     report = ScheduledReport(
         organisation_id=organisation_id,
-        period=period,
-        group_by=group_by,
-        format=format,
-        recipients=recipients,
-        schedule_type=schedule_type,
-        created_by=created_by,
-        next_run_at=next_run_at,
+        name=f"Cost report: {period} by {group_by}",
+        report_type="cost",
+        cron_expression=cron_by_period[period],
+        config_json={
+            "period": period,
+            "group_by": group_by,
+            "format": format,
+            "schedule_type": schedule_type,
+        },
+        recipient_config={"emails": recipients},
+        created_by=account_id,
+        next_send_at=next_run_at,
+        active=True,
     )
     session.add(report)
     await session.flush()

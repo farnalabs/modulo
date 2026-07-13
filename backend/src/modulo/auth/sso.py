@@ -9,7 +9,7 @@ import urllib.parse
 import uuid
 import zlib
 from datetime import UTC, datetime, timedelta
-from typing import Any
+from typing import Any, cast
 
 import defusedxml.ElementTree as ET
 import httpx
@@ -359,7 +359,7 @@ async def _fetch_discovery(discovery_url: str) -> dict[str, Any]:
         resp = await client.get(discovery_url, timeout=httpx.Timeout(10.0, connect=5.0))
         resp.raise_for_status()
         try:
-            return resp.json()
+            return cast(dict[str, Any], resp.json())
         except json.JSONDecodeError as exc:
             raise ValueError(f"Invalid JSON in discovery document: {exc}") from None
 
@@ -385,7 +385,7 @@ async def _exchange_code(
             timeout=httpx.Timeout(15.0, connect=5.0),
         )
         resp.raise_for_status()
-        return resp.json()
+        return cast(dict[str, Any], resp.json())
 
 
 def _decode_id_token_claims(id_token: str) -> dict[str, Any]:
@@ -403,7 +403,7 @@ def _decode_id_token_claims(id_token: str) -> dict[str, Any]:
     try:
         pad = (4 - len(parts[1]) % 4) % 4
         padded = parts[1] + "=" * pad
-        return json.loads(base64.urlsafe_b64decode(padded))
+        return cast(dict[str, Any], json.loads(base64.urlsafe_b64decode(padded)))
     except (ValueError, json.JSONDecodeError):
         return {}
 

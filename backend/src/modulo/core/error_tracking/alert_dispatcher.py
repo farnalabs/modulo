@@ -94,8 +94,6 @@ async def _dispatch_email(
     session: AsyncSession,
 ) -> None:
     """Send alert notification email to org admins via the configured SMTP provider."""
-    from types import SimpleNamespace
-
     from modulo.db.models.organisation import Organisation
 
     settings = get_settings()
@@ -115,12 +113,14 @@ async def _dispatch_email(
             _log.warning("alert.email_disabled_no_smtp_host", extra={"rule": alert.rule_name, "org_id": str(org_id)})
             return
 
-        effective_settings = SimpleNamespace(
-            smtp_host=effective_smtp_host,
-            smtp_port=email_cfg.get("smtp_port", settings.smtp_port),
-            smtp_username=email_cfg.get("smtp_username", settings.smtp_username),
-            smtp_password=email_cfg.get("smtp_password", settings.smtp_password),
-            email_from=email_cfg.get("email_from", settings.email_from),
+        effective_settings = settings.model_copy(
+            update={
+                "smtp_host": effective_smtp_host,
+                "smtp_port": email_cfg.get("smtp_port", settings.smtp_port),
+                "smtp_username": email_cfg.get("smtp_username", settings.smtp_username),
+                "smtp_password": email_cfg.get("smtp_password", settings.smtp_password),
+                "email_from": email_cfg.get("email_from", settings.email_from),
+            }
         )
 
         _log.info(
@@ -148,8 +148,10 @@ async def _dispatch_email(
 
         account_ids = [m.account_id for m in memberships]
 
-        result = await session.execute(select(Account).where(Account.id.in_(account_ids), Account.active.is_(True)))
-        admin_accounts = list(result.scalars().all())
+        account_result = await session.execute(
+            select(Account).where(Account.id.in_(account_ids), Account.active.is_(True))
+        )
+        admin_accounts = list(account_result.scalars().all())
 
         if not admin_accounts:
             _log.warning("alert.email_no_active_admins", extra={"org_id": str(org_id), "rule": alert.rule_name})
