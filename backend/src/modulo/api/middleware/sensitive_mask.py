@@ -20,6 +20,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from modulo.api.dependencies import get_db_session
 from modulo.auth.dependencies import get_current_tenant_user
 from modulo.auth.jwt import TenantPrincipal
+from modulo.auth.secret_storage import decode_stored_secret
 from modulo.db.models.sso_provider import SsoProvider
 from modulo.db.rls import set_rls_org
 from modulo.settings import Settings, get_settings
@@ -109,6 +110,7 @@ async def _fetch_value(
     payload: RevealRequest,
     session: AsyncSession,
     principal: TenantPrincipal,
+    settings: Settings,
 ) -> str:
     resource_id = payload.resource_id
     field = payload.field
@@ -138,7 +140,16 @@ async def _fetch_value(
         provider = provider_result.scalar_one_or_none()
         if provider is None:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="SSO provider not found")
-        return provider.client_secret.decode() if provider.client_secret is not None else ""
+        if provider.client_secret is None:
+            return ""
+        try:
+            return decode_stored_secret(provider.client_secret, settings.fernet_key)
+        except ValueError:
+            _log.exception("middleware.sensitive_mask.invalid_sso_secret")
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Stored SSO provider secret is invalid",
+            ) from None
 
     if payload.resource_type == "observability":
         from modulo.db.models.organisation import Organisation
@@ -171,7 +182,7 @@ async def reveal_sensitive_value(
     try:
         async with session.begin():
             await set_rls_org(session, principal.organisation_id)
-            actual_value = await _fetch_value(payload, session, principal)
+            actual_value = await _fetch_value(payload, session, principal, settings)
 
     except ProgrammingError:
         _log.exception("middleware.sensitive_mask")
