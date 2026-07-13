@@ -622,6 +622,9 @@ class FeatureFlagRegistry:
         return None
 
 
+_registry: FeatureFlagRegistry | None = None
+
+
 def get_registry() -> FeatureFlagRegistry:
     """Return a process-global default FeatureFlagRegistry.
 
@@ -629,9 +632,10 @@ def get_registry() -> FeatureFlagRegistry:
     tier.  Granular overrides (org/team/user) are resolved from the DB at query
     time via ``resolve_flag()``.
     """
-    if not hasattr(get_registry, "_instance"):
-        get_registry._instance = FeatureFlagRegistry(current_tier="community")
-    return get_registry._instance
+    global _registry
+    if _registry is None:
+        _registry = FeatureFlagRegistry(current_tier="community")
+    return _registry
 
 
 async def get_plan_for_org(

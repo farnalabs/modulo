@@ -182,7 +182,7 @@ class FeedbackManager:
             .limit(page_size)
         )
         rows = (await self._session.execute(q)).scalars().all()
-        return rows, total
+        return list(rows), total
 
     @_rls
     async def get_feedback_records(

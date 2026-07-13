@@ -28,7 +28,7 @@ from collections.abc import Awaitable, Callable
 from typing import Any
 
 import httpx
-from croniter import croniter  # type: ignore[import-untyped]
+from croniter import croniter
 from sqlalchemy import select, update
 from sqlalchemy.exc import DBAPIError
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker, create_async_engine
@@ -37,18 +37,18 @@ from modulo.db.models.scheduled_report import ScheduledReport
 from modulo.settings import get_settings
 
 try:
-    from celery import Celery, Task  # type: ignore[import-untyped]
-    from celery.beat import ScheduleEntry, Scheduler  # type: ignore[import-untyped]
+    from celery import Celery, Task
+    from celery.beat import ScheduleEntry, Scheduler
 except ImportError:
     import typing
 
     if typing.TYPE_CHECKING:
-        from celery import Celery, Task  # type: ignore[import-untyped]
-        from celery.beat import ScheduleEntry, Scheduler  # type: ignore[import-untyped]
-    Celery = None  # type: ignore[misc]
-    Task = object  # type: ignore[misc]
-    ScheduleEntry = object  # type: ignore[misc]
-    Scheduler = object  # type: ignore[misc]
+        from celery import Celery, Task
+        from celery.beat import ScheduleEntry, Scheduler
+    Celery = None
+    Task = object
+    ScheduleEntry = object
+    Scheduler = object
 
 
 _log = logging.getLogger(__name__)
@@ -175,7 +175,7 @@ def get_celery_app() -> Any:
     return celery_app_global
 
 
-class ReportFireTask(Task):
+class ReportFireTask(Task):  # type: ignore[misc]  # Celery does not publish typed base classes
     """Task that fires a single scheduled report â€” generates and delivers."""
 
     name = "modulo.reports.fire_report"
@@ -415,7 +415,7 @@ async def _deliver_webhook(payload: Any, recipient_config: dict[str, Any]) -> li
 # ---------------------------------------------------------------------------
 
 
-class DatabaseReportEntry(ScheduleEntry):
+class DatabaseReportEntry(ScheduleEntry):  # type: ignore[misc]  # Celery does not publish typed base classes
     """A single schedule entry representing one scheduled report row."""
 
     def __init__(
@@ -465,7 +465,7 @@ class DatabaseReportEntry(ScheduleEntry):
         return f"<DatabaseReportEntry report={self._report_id} next={self._next_send_at.isoformat()}>"
 
 
-class DatabaseReportScheduler(Scheduler):
+class DatabaseReportScheduler(Scheduler):  # type: ignore[misc]  # Celery does not publish typed base classes
     """Celery beat scheduler that reads scheduled reports from the database.
 
     On each tick (default every 60 s via ``max_interval``), the scheduler

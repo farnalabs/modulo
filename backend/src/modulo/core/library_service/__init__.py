@@ -1119,7 +1119,7 @@ async def list_primitives(
     """
     if excluded_tiers is None:
         excluded_tiers = ["in_dev"]
-    org_page = PageResult(items=[], total=0, page=page, page_size=page_size)
+    org_page: PageResult[LibraryPrimitive] = PageResult(items=[], total=0, page=page, page_size=page_size)
     db_community: list[LibraryPrimitive] = []
     try:
         async with session.begin():

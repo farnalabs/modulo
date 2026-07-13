@@ -260,7 +260,7 @@ class PipelineExecutor:
             EvalDefinition.pipeline_id == pipeline_id,
             EvalDefinition.node_id.isnot(None),
         )
-        return (await session.execute(eval_stmt)).scalars().all()
+        return list((await session.execute(eval_stmt)).scalars().all())
 
     @staticmethod
     def _build_eval_defs_by_node(
