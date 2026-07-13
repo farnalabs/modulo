@@ -23,8 +23,8 @@ from types import SimpleNamespace
 from typing import Any
 from unittest.mock import patch
 
+import jwt as pyjwt
 import pytest
-from jose import jwt as jose_jwt
 from pytest_bdd import given, parsers, scenarios, then, when
 
 # ---------------------------------------------------------------------------
@@ -128,7 +128,7 @@ def has_access_token(request: Any) -> None:
 def token_encodes_org_id(request: Any) -> None:
     body = request.node.response.json()
     token = body["access_token"]
-    payload: dict[str, object] = jose_jwt.decode(token, _VALID_32, algorithms=["HS256"])
+    payload: dict[str, object] = pyjwt.decode(token, _VALID_32, algorithms=["HS256"])
     assert "org_id" in payload, f"Token payload missing org_id: {payload}"
     assert payload["org_id"] is not None
 
@@ -151,7 +151,7 @@ def expired_jwt(org_name: str) -> str:
         "iat": now - timedelta(hours=48),
         "exp": now - timedelta(hours=1),  # expired 1 hour ago
     }
-    return str(jose_jwt.encode(payload, _VALID_32, algorithm="HS256"))
+    return str(pyjwt.encode(payload, _VALID_32, algorithm="HS256"))
 
 
 @when("I make an authenticated request to /api/pipelines")

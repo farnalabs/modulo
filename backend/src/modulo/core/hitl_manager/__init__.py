@@ -32,7 +32,8 @@ import uuid
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
-from jose import ExpiredSignatureError, JWTError
+from jwt import ExpiredSignatureError
+from jwt import InvalidTokenError as JWTError
 from sqlalchemy import func, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession

@@ -57,7 +57,7 @@ dependencies = [
     # HTTP client (GitHub connector)
     "httpx>=0.28.1",
     # Auth + crypto
-    "python-jose[cryptography]>=3.3.0",
+    "PyJWT[crypto]>=2.10.1",
     "passlib[bcrypt]>=1.7.4",
     "cryptography>=42.0.0",
     # Docker SDK (local_docker runtime provider)
@@ -194,7 +194,7 @@ exclude = ["migrations/"]
 mypy_path = ["src"]
 
 [[tool.mypy.overrides]]
-module = ["langgraph.*", "langchain.*", "testcontainers.*", "factory.*", "jose.*", "passlib.*", "celery", "celery.*", "croniter", "croniter.*", "defusedxml", "defusedxml.*"]
+module = ["langgraph.*", "langchain.*", "testcontainers.*", "factory.*", "passlib.*", "celery", "celery.*", "croniter", "croniter.*", "defusedxml", "defusedxml.*"]
 ignore_missing_imports = true
 
 [[tool.mypy.overrides]]

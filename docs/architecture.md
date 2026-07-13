@@ -53,7 +53,7 @@ Modulo is a self-hosted orchestration layer for agentic SDLC pipelines. This doc
 | **ORM** | SQLAlchemy 2.0 (async) | Database access |
 | **Migrations** | Alembic | Schema versioning |
 | **Task queue** | Celery + Redis | Async task processing (optional) |
-| **Auth** | python-jose, authlib (v1) | JWT, OAuth 2.0 |
+| **Auth** | PyJWT[crypto], authlib (v1) | JWT, OAuth 2.0 |
 | **LLM SDKs** | anthropic, openai | Model backend integrations |
 | **Observability** | OpenTelemetry | Tracing, metrics |
 | **Frontend** | Vue 3 + TypeScript | SPA |
