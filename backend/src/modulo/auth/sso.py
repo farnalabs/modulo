@@ -336,11 +336,16 @@ def _parse_oidc_providers(settings: Settings) -> list[dict[str, str]]:
         _log.warning("sso.oidc_not_array", extra={"type": type(entries).__name__})
         return []
     valid = []
+    required_fields = ("provider_id", "client_id", "client_secret", "discovery_url")
     for entry in entries:
-        if all(k in entry for k in ("provider_id", "client_id", "client_secret", "discovery_url")):
+        if isinstance(entry, dict) and not any(key not in entry for key in required_fields):
             valid.append(entry)
         else:
-            safe_entry = {k: v for k, v in entry.items() if k != "client_secret"}
+            safe_entry = (
+                {key: value for key, value in entry.items() if key != "client_secret"}
+                if isinstance(entry, dict)
+                else {"invalid_type": type(entry).__name__}
+            )
             _log.warning("sso.oidc_entry_missing_fields", extra={"entry": str(safe_entry)})
     return valid
 
