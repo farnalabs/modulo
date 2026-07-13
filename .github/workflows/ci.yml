@@ -125,6 +125,20 @@ jobs:
         run: |
           & tools\validate-manifest.ps1 -CI
 
+  powershell-tests:
+    name: PowerShell tests (Pester 5)
+    runs-on: [self-hosted, windows, docker]
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/cache@v5
+        with:
+          path: .tool-cache/powershell
+          key: pester-5.7.1-${{ runner.os }}-${{ runner.arch }}
+      - name: Run PowerShell tests
+        shell: powershell
+        run: |
+          & tools\run-pester-tests.ps1
+
   gitleaks:
     name: Secret scan
     runs-on: self-hosted

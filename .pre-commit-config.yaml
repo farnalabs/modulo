@@ -39,6 +39,13 @@ repos:
         language: system
         files: \.(vue|ts|py|ps1)$
         pass_filenames: false
+      - id: pester
+        name: Pester 5 PowerShell tests
+        entry: powershell -NoProfile -File tools/run-pester-tests.ps1
+        language: system
+        files: ^tools/.*\.ps1$
+        pass_filenames: false
+        stages: [pre-commit, manual]
       - id: check-migration-heads
         name: check migration number/revision collisions
         entry: powershell -NoProfile -File ..\devtools\harness\tools\check-migration-heads.ps1
