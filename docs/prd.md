@@ -3050,7 +3050,7 @@ Telemetry is opt-in and disabled by default. The OTel bridge (`setup_otel`) is c
 | Encryption | cryptography (Fernet) | Connector credentials + model backend credentials |
 | API keys | SHA-256 hash storage | `mk_<lookup_prefix>_<secret>` format |
 | Task queue | Celery + Redis | Optional alpha; required for v1 cron/polling triggers |
-| Auth (v1+) | python-jose (JWT), passlib (bcrypt), python-saml, authlib (OIDC) | |
+| Auth (v1+) | PyJWT[crypto] (JWT/JWK), passlib (bcrypt), python-saml, authlib (OIDC) | |
 
 ### Frontend
 | Layer | Technology | Notes |

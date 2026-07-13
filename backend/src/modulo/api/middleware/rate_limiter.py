@@ -10,8 +10,8 @@ import asyncio
 import logging
 from typing import Any, ClassVar
 
+import jwt
 from fastapi import FastAPI, Request, Response
-from jose import jwt as jose_jwt
 from starlette.middleware.base import BaseHTTPMiddleware
 
 from modulo.api.models.problem import ProblemDetail, ProblemType
@@ -155,7 +155,7 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
                 return f"ak:none:{prefix}:{path}"
 
             try:
-                claims = jose_jwt.get_unverified_claims(token)
+                claims = jwt.decode(token, options={"verify_signature": False})
                 org_id = claims.get("org_id", "")
                 user_id = claims.get("user_id", "") or claims.get("account_id", "")
                 if org_id and user_id:

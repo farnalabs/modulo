@@ -10,9 +10,9 @@ from collections.abc import Generator
 from datetime import UTC, datetime
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import jwt as pyjwt
 import pytest
 from fastapi.testclient import TestClient
-from jose import jwt as jose_jwt
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.api.dependencies import _get_engine, get_db_session, get_plan_context
@@ -318,7 +318,7 @@ def _create_expired_token() -> str:
         "iat": past - 86400,
         "exp": past,
     }
-    return str(jose_jwt.encode(payload, _VALID_32, algorithm="HS256"))
+    return str(pyjwt.encode(payload, _VALID_32, algorithm="HS256"))
 
 
 def _login_and_get_tokens(client: TestClient) -> tuple[str, str]:
