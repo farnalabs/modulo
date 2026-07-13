@@ -48,6 +48,9 @@ class ExecResult:
 class RuntimeProvider(ABC):
     """Abstract base for a runtime backend (Docker, K8s, sandbox, etc.)."""
 
+    provider_id = ""
+    provider_aliases: frozenset[str] = frozenset()
+
     @abstractmethod
     async def create_workspace(self, spec: WorkspaceSpec) -> str:
         """Provision a new workspace and return its provider-specific reference."""
@@ -81,6 +84,11 @@ class RuntimeProvider(ABC):
         implement this method are skipped during auto-resolution.
         """
         return False
+
+    def matches_provider_type(self, provider_type: str) -> bool:
+        """Return whether this provider implements an explicit profile type."""
+        normalized = provider_type.strip().lower()
+        return bool(normalized) and normalized in {self.provider_id, *self.provider_aliases}
 
     async def close(self) -> None:
         """Release provider-level resources (connections, clients, etc.)."""

@@ -42,6 +42,8 @@ class LocalRuntimeProvider(RuntimeProvider):
     across all workspaces — agents waiting on the semaphore are queued.
     """
 
+    provider_id = "local"
+
     def __init__(self, max_concurrency: int = 2) -> None:
         self._max_concurrency = max_concurrency
         self._semaphore = asyncio.Semaphore(max_concurrency)
