@@ -106,6 +106,7 @@
       :open="deleteDialogOpen"
       @update:open="deleteDialogOpen = false"
       title="Delete Organisation"
+      description="Permanently delete this organisation and all associated data. This action cannot be undone."
       confirmText="Permanently Delete"
       :confirmDisabled="confirmName !== orgInfo.name || deleting"
       :loading="deleting"

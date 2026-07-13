@@ -297,6 +297,7 @@ import { api } from '../lib/api/client'
 import { useDataFetch } from '../composables/useDataFetch'
 import LoadingSpinner from '../components/shared/LoadingSpinner.vue'
 import ErrorAlert from '../components/shared/ErrorAlert.vue'
+import EmptyState from '../components/shared/EmptyState.vue'
 import { formatError } from '../lib/utils'
 import { usePlanStore } from '../stores/planStore'
 import FeatureGate from '../components/FeatureGate.vue'
@@ -401,7 +402,7 @@ function summarize(event: AuditEvent): string {
   const p = event.payload_json ?? {}
   const name = (p as Record<string, unknown>).name ?? (p as Record<string, unknown>).display_name ?? null
 
-  let parts = [action.charAt(0).toUpperCase() + action.slice(1), resource]
+  const parts = [action.charAt(0).toUpperCase() + action.slice(1), resource]
   if (name) parts.push(`"${name}"`)
   return parts.join(' ')
 }

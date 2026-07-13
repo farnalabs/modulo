@@ -224,6 +224,7 @@ import PageHeader from '../components/shared/PageHeader.vue'
 import FilterBar from '../components/shared/FilterBar.vue'
 import { Button } from '@/components/ui/button'
 import ErrorAlert from '../components/shared/ErrorAlert.vue'
+import EmptyState from '../components/shared/EmptyState.vue'
 import {
   Tooltip,
   TooltipTrigger,

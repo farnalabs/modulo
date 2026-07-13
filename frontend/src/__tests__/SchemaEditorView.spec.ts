@@ -74,6 +74,15 @@ import SchemaEditorView from '../views/SchemaEditorView.vue'
 describe('SchemaEditorView', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(JSON.stringify({
+      items: [],
+      total: 0,
+      page: 1,
+      page_size: 1,
+    }), {
+      status: 200,
+      headers: { 'Content-Type': 'application/json' },
+    })))
   })
 
   it('renders without crashing', async () => {

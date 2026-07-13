@@ -71,9 +71,14 @@
     <div
       v-if="showCreateDialog"
       class="fixed inset-0 z-50 flex items-center justify-center bg-black/50"
-      @click.self="showCreateDialog = false"
     >
-      <div class="w-full max-w-md rounded-lg border bg-card p-6 shadow-lg">
+      <button
+        type="button"
+        class="absolute inset-0 cursor-default"
+        :aria-label="$t('common.close')"
+        @click="showCreateDialog = false"
+      ></button>
+      <div class="relative w-full max-w-md rounded-lg border bg-card p-6 shadow-lg" role="dialog" aria-modal="true">
         <h3 class="mb-4 text-lg font-semibold">{{ $t('views.PipelineListView.new_folder') }}</h3>
         <div class="space-y-4">
           <div>
@@ -104,9 +109,14 @@
     <div
       v-if="showRenameDialog"
       class="fixed inset-0 z-50 flex items-center justify-center bg-black/50"
-      @click.self="showRenameDialog = false"
     >
-      <div class="w-full max-w-md rounded-lg border bg-card p-6 shadow-lg">
+      <button
+        type="button"
+        class="absolute inset-0 cursor-default"
+        :aria-label="$t('common.close')"
+        @click="showRenameDialog = false"
+      ></button>
+      <div class="relative w-full max-w-md rounded-lg border bg-card p-6 shadow-lg" role="dialog" aria-modal="true">
         <h3 class="mb-4 text-lg font-semibold">{{ $t('views.PipelineListView.rename_folder') }}</h3>
         <div class="space-y-4">
           <div>
@@ -137,9 +147,14 @@
     <div
       v-if="showDeleteConfirm"
       class="fixed inset-0 z-50 flex items-center justify-center bg-black/50"
-      @click.self="showDeleteConfirm = false"
     >
-      <div class="w-full max-w-md rounded-lg border bg-card p-6 shadow-lg">
+      <button
+        type="button"
+        class="absolute inset-0 cursor-default"
+        :aria-label="$t('common.close')"
+        @click="showDeleteConfirm = false"
+      ></button>
+      <div class="relative w-full max-w-md rounded-lg border bg-card p-6 shadow-lg" role="dialog" aria-modal="true">
         <h3 class="mb-4 text-lg font-semibold text-destructive">{{ $t('views.PipelineListView.delete_folder') }}</h3>
         <p class="mb-4 text-sm text-muted-foreground">
           {{ $t('views.PipelineListView.delete_folder_confirm') }}
@@ -162,7 +177,7 @@
 
 <script setup lang="ts">
 import { ref, computed, onMounted } from 'vue'
-import { api } from '../../lib/api/client'
+import { useApi } from '@/composables/useApi'
 import { formatApiError } from '../../lib/api/formatError'
 import { Button } from '@/components/ui/button'
 
@@ -187,6 +202,8 @@ const emit = defineEmits<{
   (e: 'select-folder', folderId: string | null): void
   (e: 'folders-changed'): void
 }>()
+
+const { get, post, patch, delete: deleteRequest } = useApi()
 
 const allFolders = ref<FolderItem[]>([])
 const loading = ref(false)
@@ -240,12 +257,7 @@ async function loadFolders() {
   loading.value = true
   error.value = null
   try {
-    const response = await api.GET('/api/v1/pipeline-folders')
-    if (response.error) {
-      error.value = formatApiError(response.error)
-    } else {
-      allFolders.value = (response.data as unknown as FolderItem[]) ?? []
-    }
+    allFolders.value = await get<FolderItem[]>('/api/v1/pipeline-folders')
   } catch (e: unknown) {
     error.value = formatApiError(e)
   } finally {
@@ -264,13 +276,7 @@ async function handleCreate() {
   creating.value = true
   createError.value = null
   try {
-    const response = await api.POST('/api/v1/pipeline-folders', {
-      body: { name: newFolderName.value.trim() },
-    })
-    if (response.error) {
-      createError.value = formatApiError(response.error)
-      return
-    }
+    await post<FolderItem>('/api/v1/pipeline-folders', { name: newFolderName.value.trim() })
     showCreateDialog.value = false
     emit('folders-changed')
     await loadFolders()
@@ -293,14 +299,9 @@ async function handleRename() {
   renaming.value = true
   renameError.value = null
   try {
-    const response = await api.PATCH('/api/v1/pipeline-folders/{folder_id}', {
-      params: { path: { folder_id: renameTarget.value.id } },
-      body: { name: renameFolderName.value.trim() },
+    await patch<FolderItem>(`/api/v1/pipeline-folders/${renameTarget.value.id}`, {
+      name: renameFolderName.value.trim(),
     })
-    if (response.error) {
-      renameError.value = formatApiError(response.error)
-      return
-    }
     showRenameDialog.value = false
     renameTarget.value = null
     emit('folders-changed')
@@ -323,13 +324,7 @@ async function handleDelete() {
   deleting.value = true
   deleteError.value = null
   try {
-    const response = await api.DELETE('/api/v1/pipeline-folders/{folder_id}', {
-      params: { path: { folder_id: deleteTarget.value.id } },
-    })
-    if (response.error) {
-      deleteError.value = formatApiError(response.error)
-      return
-    }
+    await deleteRequest<void>(`/api/v1/pipeline-folders/${deleteTarget.value.id}`)
     const deletedId = deleteTarget.value.id
     showDeleteConfirm.value = false
     deleteTarget.value = null

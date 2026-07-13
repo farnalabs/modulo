@@ -138,7 +138,7 @@ describe('ViewToggle', () => {
       (items[0] as HTMLElement).click()
     } else {
       const select = wrapper.findComponent({ name: 'Select' })
-      await (select as any).vm.$emit('update:model-value', 'view-1')
+      await (select as any).vm.$emit('update:modelValue', 'view-1')
     }
     await nextTick()
     await nextTick()
