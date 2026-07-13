@@ -93,13 +93,9 @@ def do_run_migrations(connection: Connection) -> None:
     # before any migration runs so the version UPDATE never truncates.
     if backend == "postgresql":
         from sqlalchemy import inspect as sa_inspect
+
         if sa_inspect(connection).has_table("alembic_version"):
-            connection.execute(
-                sa.text(
-                    "ALTER TABLE alembic_version "
-                    "ALTER COLUMN version_num TYPE VARCHAR(255)"
-                )
-            )
+            connection.execute(sa.text("ALTER TABLE alembic_version ALTER COLUMN version_num TYPE VARCHAR(255)"))
             _log.info("Widened alembic_version.version_num to VARCHAR(255)")
 
     context.configure(
