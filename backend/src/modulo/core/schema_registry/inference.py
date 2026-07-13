@@ -68,7 +68,7 @@ class SchemaInferenceService:
     async def infer(self, samples: list[dict[str, Any]]) -> dict[str, Any]:
         if not isinstance(samples, list):
             raise SchemaInferenceError("samples must be a list of dicts")
-        if not all(isinstance(r, dict) for r in samples):
+        if any(not isinstance(record, dict) for record in samples):
             raise SchemaInferenceError("samples must be a list of dicts")
 
         try:

@@ -66,6 +66,8 @@ def _is_configured(forwarder_type: str, config_json: dict | None) -> bool:
         "loki": ["push_url"],
     }
     keys = required_keys.get(forwarder_type, [])
+    if not keys:
+        return False
     return all(config_json.get(k) for k in keys)
 
 

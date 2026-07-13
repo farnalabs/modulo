@@ -124,6 +124,7 @@ async def _verify_db_connectivity(settings: Settings) -> None:
     preventing the app from starting in a broken state.
     """
     engine = get_or_create_engine(settings)
+    last_exc: Exception | None = None
     for attempt in range(1, 4):
         try:
             async with engine.connect() as conn:
@@ -131,6 +132,7 @@ async def _verify_db_connectivity(settings: Settings) -> None:
             logger.info("startup.db_connected")
             return
         except Exception as exc:
+            last_exc = exc
             logger.warning(
                 "startup.db_connectivity_attempt_failed",
                 extra={"attempt": attempt, "error": str(exc)},
@@ -138,7 +140,7 @@ async def _verify_db_connectivity(settings: Settings) -> None:
             if attempt < 3:
                 await asyncio.sleep(attempt * 2)
     logger.error("startup.db_unreachable")
-    raise RuntimeError("Database is unreachable after 3 retry attempts — cannot start.")
+    raise RuntimeError("Database is unreachable after 3 retry attempts — cannot start.") from last_exc
 
 
 async def _run_migrations(settings: Settings) -> None:
@@ -445,8 +447,9 @@ async def _seed_sso_providers(settings: Settings) -> None:
             logger.warning("startup.sso_providers_invalid_json")
             return
 
+        required_fields = ("provider_id", "client_id", "client_secret", "discovery_url")
         for entry in entries:
-            if not all(k in entry for k in ("provider_id", "client_id", "client_secret", "discovery_url")):
+            if not isinstance(entry, dict) or any(key not in entry for key in required_fields):
                 logger.warning("startup.sso_provider_skipped", extra={"entry": str(entry)})
                 continue
 

@@ -126,7 +126,9 @@ class TestDbConnectivity:
             patch("modulo.api.main.get_or_create_engine", return_value=engine) as mock_engine,
             patch("modulo.api.main.asyncio.sleep"),
         ):
-            with pytest.raises(RuntimeError, match="Database is unreachable"):
+            with pytest.raises(RuntimeError, match="Database is unreachable") as exc_info:
                 await _verify_db_connectivity(settings)
+            assert isinstance(exc_info.value.__cause__, ConnectionError)
+            assert str(exc_info.value.__cause__) == "db down"
             mock_engine.assert_called_once_with(settings)
             assert conn.execute.await_count == 0
