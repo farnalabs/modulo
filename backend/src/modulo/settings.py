@@ -32,6 +32,7 @@ class Settings(BaseSettings):
 
     modulo_public_url: str = Field("http://localhost:8000")
     modulo_demo_mode: bool = Field(False)
+    modulo_dogfood_enabled: bool = Field(False)
     modulo_license_key: str = Field("")
     # Ed25519 public key (hex) for license signature verification.
     # Defaults to dev/test key — set MODULO_LICENSE_PUBLIC_KEY in production.
