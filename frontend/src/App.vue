@@ -12,7 +12,13 @@ import LoginView from './views/LoginView.vue'
 import AppLayout from './components/AppLayout.vue'
 
 const router = useRouter()
-const isAuthenticated = ref(!!getAccessToken())
+
+// When auto-login is configured, don't trust localStorage tokens at
+// startup — wait for the auto-login API call to complete first.
+const autoLoginUser = import.meta.env.VITE_AUTO_LOGIN_USERNAME as string | undefined
+const autoLoginPass = import.meta.env.VITE_AUTO_LOGIN_PASSWORD as string | undefined
+const hasAutoLogin = !!(autoLoginUser && autoLoginPass)
+const isAuthenticated = ref(hasAutoLogin ? false : !!getAccessToken())
 
 onAuthChange((token) => {
   isAuthenticated.value = !!token
@@ -21,8 +27,8 @@ onAuthChange((token) => {
 onMounted(async () => {
   if (isAuthenticated.value) return
 
-  const username = import.meta.env.VITE_AUTO_LOGIN_USERNAME as string | undefined
-  const password = import.meta.env.VITE_AUTO_LOGIN_PASSWORD as string | undefined
+  const username = autoLoginUser
+  const password = autoLoginPass
   if (!username || !password) return
 
   try {
