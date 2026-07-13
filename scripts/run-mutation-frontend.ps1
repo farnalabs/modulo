@@ -19,7 +19,6 @@ $ImageName = "modulo-stryker"
 Write-Host "Building mutation testing image..." -ForegroundColor Cyan
 docker build -t $ImageName `
     -f "$RepoRoot/frontend/Dockerfile.mutation" `
-    --ignorefile "$RepoRoot/.dockerignore-mutation" `
     "$RepoRoot"
 if ($LASTEXITCODE -ne 0) {
     Write-Host "Build failed" -ForegroundColor Red
