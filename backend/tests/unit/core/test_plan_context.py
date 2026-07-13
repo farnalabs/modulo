@@ -77,9 +77,13 @@ class TestLicenseKeyTier:
 
 
 class TestDbPlanContext:
-    def test_from_db(self) -> None:
+    async def test_from_db(self) -> None:
         session = AsyncMock()
-        plan_ctx = DbPlanContext.from_db(session, "community")
+        with (
+            patch("modulo.db.crud.tier_catalog.list_tiers", return_value=[]),
+            patch("modulo.db.crud.tier_catalog.list_feature_flags", return_value=[]),
+        ):
+            plan_ctx = await DbPlanContext.from_db(session, "community")
         assert plan_ctx is not None
 
 
