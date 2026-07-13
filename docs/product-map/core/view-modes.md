@@ -19,7 +19,7 @@ code:
   - frontend/src/components/AppLayout.vue
   - frontend/src/components/ViewModeToggle.vue
 depends-on:
-  - feat-core-auth
+  - feat-auth-jwt-auth
   - feat-core-feature-flag-ui
 status: partial
 ---

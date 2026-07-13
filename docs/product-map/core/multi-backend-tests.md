@@ -1,6 +1,6 @@
 ---
 id: feat-core-multi-backend-tests
-prd: 6.2
+prd: 6.2, 12
 bdd:
   - backend/tests/bdd/features/organisation/multi_backend.feature
 code:
