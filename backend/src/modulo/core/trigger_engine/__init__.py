@@ -123,7 +123,7 @@ def _is_unique_violation(exc: IntegrityError) -> bool:
     if "UNIQUE constraint failed" in msg:
         return True
 
-    # MariaDB / MySQL — asyncmy raises with args[0] as error number
+    # MariaDB / MySQL DBAPI errors expose the numeric code in args[0].
     if isinstance(orig, Exception):
         err_args = getattr(orig, "args", None)
         if err_args and len(err_args) > 0 and err_args[0] == 1062:

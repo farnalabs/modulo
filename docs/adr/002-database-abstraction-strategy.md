@@ -25,7 +25,7 @@ SQLAlchemy 2.0 already supports PostgreSQL, MySQL/MariaDB, SQLite, Oracle, and M
 |---|---|---|
 | Async | Native (`create_async_engine`) | — |
 | Postgres | asyncpg | — |
-| MySQL/MariaDB | aiomysql/asyncmy (untested against MariaDB) | Need testing |
+| MySQL/MariaDB | aiomysql (untested against MariaDB) | Need testing |
 | SQLite | aiosqlite | Already works (dev-only today) |
 | UUID PKs | Built-in `Uuid` (2.0.23+) | Replace `postgresql.UUID` |
 | JSON columns | Generic `JSON` type | Already generic |
