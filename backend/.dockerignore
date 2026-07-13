@@ -1,0 +1,23 @@
+# Source control and local agent state
+.git/
+.gitignore
+.agents/
+
+# Python development artifacts
+.venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+.coverage
+htmlcov/
+.mypy_cache/
+.pytest_cache/
+.ruff_cache/
+
+# Not used by the backend development image
+tests/
+docs/
+*.md
+*.log
+build/
+dist/
