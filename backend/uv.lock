@@ -1154,7 +1154,7 @@ wheels = [
 
 [[package]]
 name = "farnalabs-modulo"
-version = "0.3.315"
+version = "0.3.316"
 source = { editable = "." }
 dependencies = [
     { name = "aiosqlite" },
