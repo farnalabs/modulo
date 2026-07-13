@@ -1297,6 +1297,11 @@ async def move_pipeline_to_folder_endpoint(
             await set_rls_org(session, principal.organisation_id)
             await set_rls_user_context(session, principal.account_id, principal.org_role)
             pipeline = await move_pipeline_to_folder(session, pipeline_id, req.folder_id)
+    except ValueError as e:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=str(e),
+        ) from None
     except ProgrammingError:
         logger.exception("routes.pipelines")
         raise HTTPException(
