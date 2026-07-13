@@ -6,7 +6,7 @@ and verifies integration through the MCP tool handlers.
 
 import uuid
 from collections.abc import Generator
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -288,21 +288,30 @@ class TestToolHandlerScopeErrorFormat:
         from modulo.api.mcp_server import review_hitl as _rh
 
         _role.set("runner")
-        with patch("modulo.api.mcp_server._session") as mock_session:
+        gate = MagicMock(claim_token="claim-token", expires_at=None)
+        with (
+            patch("modulo.api.mcp_server._session") as mock_session,
+            patch("modulo.api.mcp_server.HITLManager") as manager_class,
+        ):
             mock_session.return_value.__aenter__.return_value = AsyncMock()
+            manager_class.return_value.claim = AsyncMock(return_value=gate)
             result = await _rh(
                 run_id=_FAKE_ID,
                 gate_id="gate-1",
                 action="claim",
             )
-            assert result["error"] != "insufficient_scope"
+            assert result.get("error") != "insufficient_scope"
 
     async def test_list_pipelines_no_scope_check(self) -> None:
         from modulo.api.mcp_server import _ctx_role as _role
         from modulo.api.mcp_server import list_pipelines_tool as _lpt
 
         _role.set(None)
-        with patch("modulo.api.mcp_server._session"):
+        page = MagicMock(items=[], total=0, next_cursor=None, has_more=False)
+        with (
+            patch("modulo.api.mcp_server._session"),
+            patch("modulo.db.crud.pipeline.list_pipelines", new=AsyncMock(return_value=page)),
+        ):
             result = await _lpt()
         assert "insufficient_scope" not in result
 
@@ -311,6 +320,9 @@ class TestToolHandlerScopeErrorFormat:
         from modulo.api.mcp_server import get_run_status as _grs
 
         _role.set(None)
-        with patch("modulo.api.mcp_server._session"):
+        with (
+            patch("modulo.api.mcp_server._session"),
+            patch("modulo.api.mcp_server.get_run", new=AsyncMock(return_value=None)),
+        ):
             result = await _grs(run_id=_FAKE_ID)
         assert "insufficient_scope" not in result
