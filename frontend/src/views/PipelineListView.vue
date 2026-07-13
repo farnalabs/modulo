@@ -42,7 +42,15 @@
       </div>
     </header>
 
-    <main role="button" tabindex="0" @keydown.enter="($event.currentTarget as HTMLElement).click()" @keydown.space.prevent="($event.currentTarget as HTMLElement).click()" class="page-wide" @click.self="showActionMenu = null">
+    <div class="flex">
+      <!-- Folder sidebar -->
+      <FolderTree
+        :selected-folder-id="selectedFolderId"
+        @select-folder="onSelectFolder"
+        @folders-changed="loadPipelines"
+      />
+
+      <main role="button" tabindex="0" @keydown.enter="($event.currentTarget as HTMLElement).click()" @keydown.space.prevent="($event.currentTarget as HTMLElement).click()" class="flex-1 page-wide" @click.self="showActionMenu = null">
       <div v-if="loading" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
         <div v-for="i in 6" :key="i" class="card p-5 animate-pulse">
           <div class="h-5 w-3/4 bg-muted rounded mb-2" />
@@ -126,6 +134,7 @@
                     <button class="flex w-full items-center gap-2 px-3 py-2 text-left text-sm hover:bg-accent" @click.stop="openRename(p)">Rename</button>
                     <button v-if="!p.archived_at" class="flex w-full items-center gap-2 px-3 py-2 text-left text-sm hover:bg-accent" @click.stop="handleArchive(p)">Archive</button>
                     <button v-else class="flex w-full items-center gap-2 px-3 py-2 text-left text-sm hover:bg-accent" @click.stop="handleUnarchive(p)">Unarchive</button>
+                    <button class="flex w-full items-center gap-2 px-3 py-2 text-left text-sm hover:bg-accent" @click.stop="openMoveToFolder(p)">{{ $t('views.PipelineListView.move_to_folder') }}</button>
                     <button v-if="planStore.featureEnabled('pipeline_delete')" class="flex w-full items-center gap-2 px-3 py-2 text-left text-sm text-destructive hover:bg-destructive/10" @click.stop="openDelete(p)">Delete</button>
                   </div>
                 </div>
@@ -174,6 +183,13 @@
             <template #cell-name="{ row }">
               <span class="font-medium text-foreground">{{ row.name }}</span>
             </template>
+            <template #cell-folder_name="{ row }">
+              <span v-if="row.folder_id && folderNameMap.has(row.folder_id)" class="flex items-center gap-1 text-muted-foreground text-sm">
+                <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 20h16a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.93a2 2 0 0 1-1.66-.9l-.82-1.2A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13c0 1.1.9 2 2 2Z"/></svg>
+                {{ folderNameMap.get(row.folder_id) }}
+              </span>
+              <span v-else class="text-muted-foreground/50 italic text-sm">{{ $t('views.PipelineListView.no_folder') }}</span>
+            </template>
             <template #cell-description="{ row }">
               <span v-if="row.description" class="text-muted-foreground truncate block max-w-xs">{{ row.description }}</span>
               <span v-else class="text-muted-foreground/50 italic">{{ $t('views.PipelineListView.no_description') }}</span>
@@ -203,6 +219,7 @@
                   <button class="flex w-full items-center gap-2 px-3 py-2 text-left text-sm hover:bg-accent" @click.stop="openRename(row)">Rename</button>
                   <button v-if="!row.archived_at" class="flex w-full items-center gap-2 px-3 py-2 text-left text-sm hover:bg-accent" @click.stop="handleArchive(row)">Archive</button>
                   <button v-else class="flex w-full items-center gap-2 px-3 py-2 text-left text-sm hover:bg-accent" @click.stop="handleUnarchive(row)">Unarchive</button>
+                  <button class="flex w-full items-center gap-2 px-3 py-2 text-left text-sm hover:bg-accent" @click.stop="openMoveToFolder(row)">{{ $t('views.PipelineListView.move_to_folder') }}</button>
                   <button v-if="planStore.featureEnabled('pipeline_delete')" class="flex w-full items-center gap-2 px-3 py-2 text-left text-sm text-destructive hover:bg-destructive/10" @click.stop="openDelete(row)">Delete</button>
                 </div>
               </div>
@@ -233,6 +250,7 @@
         </button>
       </div>
     </main>
+    </div>
       <!-- Run dialog modal -->
       <div role="button" tabindex="0" @keydown.enter="($event.currentTarget as HTMLElement).click()" @keydown.space.prevent="($event.currentTarget as HTMLElement).click()"
         v-if="showRunDialog"
@@ -334,6 +352,48 @@
         </div>
       </div>
 
+      <!-- Move to Folder dialog -->
+      <div role="button" tabindex="0" @keydown.enter="($event.currentTarget as HTMLElement).click()" @keydown.space.prevent="($event.currentTarget as HTMLElement).click()"
+        v-if="showMoveToFolder"
+        class="fixed inset-0 z-50 flex items-center justify-center bg-black/50"
+        @click.self="showMoveToFolder = false"
+      >
+        <div class="w-full max-w-md rounded-lg border bg-card p-6 shadow-lg">
+          <h3 class="mb-4 text-lg font-semibold">{{ $t('views.PipelineListView.move_to_folder') }}</h3>
+          <div class="space-y-3">
+            <button
+              v-for="f in foldersList"
+              :key="f.id"
+              class="flex w-full items-center gap-2 rounded-lg border px-3 py-2 text-sm hover:bg-accent transition-colors text-left"
+              :class="moveToFolderId === f.id ? 'border-primary bg-accent' : 'border-border'"
+              @click="moveToFolderId = f.id"
+            >
+              <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="shrink-0 text-muted-foreground"><path d="M4 20h16a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.93a2 2 0 0 1-1.66-.9l-.82-1.2A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13c0 1.1.9 2 2 2Z"/></svg>
+              {{ f.name }}
+            </button>
+            <button
+              class="flex w-full items-center gap-2 rounded-lg border border-border px-3 py-2 text-sm hover:bg-accent transition-colors text-left"
+              :class="moveToFolderId === null ? 'border-primary bg-accent' : ''"
+              @click="moveToFolderId = null"
+            >
+              <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="shrink-0 text-muted-foreground"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>
+              {{ $t('views.PipelineListView.no_folder') }}
+            </button>
+          </div>
+          <div v-if="moveError" class="mt-4 rounded-lg border border-destructive/50 bg-destructive/10 p-3 text-sm text-destructive">
+            {{ moveError }}
+          </div>
+          <div class="mt-4 flex justify-end gap-2">
+            <button class="rounded-lg border border-input bg-background px-4 py-2 text-sm hover:bg-accent" @click="showMoveToFolder = false">
+              {{ $t('common.cancel') }}
+            </button>
+            <Button :disabled="moving" @click="handleMoveToFolder">
+              {{ moving ? $t('common.saving') : $t('common.save') }}
+            </Button>
+          </div>
+        </div>
+      </div>
+
       <!-- Rename dialog -->
       <div role="button" tabindex="0" @keydown.enter="($event.currentTarget as HTMLElement).click()" @keydown.space.prevent="($event.currentTarget as HTMLElement).click()"
         v-if="showRenameDialog"
@@ -407,10 +467,11 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed } from 'vue'
+import { ref, computed, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import PageHeader from '../components/shared/PageHeader.vue'
 import FilterBar from '../components/shared/FilterBar.vue'
+import FolderTree from '../components/pipelines/FolderTree.vue'
 import { useDataFetch } from '../composables/useDataFetch'
 import { usePlanStore } from '../stores/planStore'
 import ErrorAlert from '../components/shared/ErrorAlert.vue'
@@ -431,6 +492,15 @@ interface PipelineItem {
   created_at: string
   updated_at: string
   archived_at: string | null
+  folder_id?: string | null
+}
+
+interface FolderItem {
+  id: string
+  organisation_id: string
+  name: string
+  parent_id: string | null
+  sort_order: number
 }
 
 interface PipelineListResponse {
@@ -444,9 +514,15 @@ const router = useRouter()
 const planStore = usePlanStore()
 const { post: postUntyped } = useApi()
 
+const selectedFolderId = ref<string | null>(null)
+
 const { loading, error, data: pipelinesResp, load: loadPipelines } = useDataFetch<PipelineListResponse>(
   async () => {
-    const response = await api.GET('/api/v1/pipelines', { params: { query: { page_size: 100 } } })
+    const params: Record<string, any> = { page_size: 100 }
+    if (selectedFolderId.value) {
+      params.folder_id = selectedFolderId.value
+    }
+    const response = await api.GET('/api/v1/pipelines', { params: { query: params } })
     return { data: response.data as unknown as PipelineListResponse | undefined, error: response.error }
   },
   { initialValue: { items: [] as PipelineItem[], total: 0, page: 1, page_size: 100 } },
@@ -454,6 +530,41 @@ const { loading, error, data: pipelinesResp, load: loadPipelines } = useDataFetc
 
 const allPipelines = computed(() => pipelinesResp.value?.items ?? [])
 const showActionMenu = ref<string | null>(null)
+
+const foldersList = ref<FolderItem[]>([])
+
+async function loadFolders() {
+  try {
+    const response = await api.GET('/api/v1/pipeline-folders')
+    if (!response.error) {
+      foldersList.value = (response.data as unknown as FolderItem[]) ?? []
+    }
+  } catch {
+    // folders are non-critical; fail silently
+  }
+}
+
+const folderNameMap = computed(() => {
+  const map = new Map<string, string>()
+  for (const f of foldersList.value) {
+    map.set(f.id, f.name)
+  }
+  return map
+})
+
+function onSelectFolder(folderId: string | null) {
+  selectedFolderId.value = folderId
+  page.value = 1
+  loadPipelines()
+  loadFolders()
+}
+
+// Move to folder state
+const showMoveToFolder = ref(false)
+const moveTarget = ref<PipelineItem | null>(null)
+const moveToFolderId = ref<string | null>(null)
+const moving = ref(false)
+const moveError = ref<string | null>(null)
 const showRenameDialog = ref(false)
 const renameTarget = ref<PipelineItem | null>(null)
 const renameName = ref('')
@@ -485,6 +596,7 @@ function setViewMode(mode: 'card' | 'table') {
 const tableColumns: Column[] = [
   { key: 'name', label: 'Name' },
   { key: 'description', label: 'Description' },
+  { key: 'folder_name', label: 'Folder' },
   { key: 'visibility', label: 'Visibility' },
   { key: 'created_at', label: 'Created' },
   { key: 'actions', label: '' },
@@ -545,6 +657,35 @@ function openRename(p: PipelineItem) {
   renameName.value = p.name
   renameError.value = null
   showRenameDialog.value = true
+}
+
+function openMoveToFolder(p: PipelineItem) {
+  showActionMenu.value = null
+  moveTarget.value = p
+  moveToFolderId.value = p.folder_id ?? null
+  moveError.value = null
+  showMoveToFolder.value = true
+}
+
+async function handleMoveToFolder() {
+  if (!moveTarget.value) return
+  moving.value = true
+  moveError.value = null
+  try {
+    const folderId = moveToFolderId.value ?? null
+    await api.PATCH('/api/v1/pipelines/{pipeline_id}/folder', {
+      params: { path: { pipeline_id: moveTarget.value.id } },
+      body: { folder_id: folderId },
+    })
+    showMoveToFolder.value = false
+    moveTarget.value = null
+    await loadPipelines()
+    await loadFolders()
+  } catch (e: unknown) {
+    moveError.value = formatApiError(e)
+  } finally {
+    moving.value = false
+  }
 }
 
 async function handleRename() {
@@ -648,4 +789,8 @@ async function triggerRun() {
     running.value = false
   }
 }
+
+onMounted(() => {
+  loadFolders()
+})
 </script>
