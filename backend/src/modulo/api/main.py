@@ -300,6 +300,11 @@ async def _seed_demo_data(settings: Settings) -> None:
 
         org_id = org.id
 
+        # Set org to Team Plan so all team-tier features are active
+        if org.plan_id != "team":
+            org.plan_id = "team"
+            logger.info("startup.demo_org_plan_set_to_team")
+
         # Seed or update demo account with admin role
         demo_email = "demo"
         result = await session.execute(select(Account).where(Account.email == demo_email))
