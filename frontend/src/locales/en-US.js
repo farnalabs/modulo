@@ -536,6 +536,17 @@ export default {
       "toggle_details": "Toggle details",
       "collapse_details": "Collapse details"
     },
+    "RunsListView": {
+      "runs": "Runs",
+      "view_all_pipeline_executions": "View all pipeline executions across your organisation",
+      "search_by_pipeline_name": "Search by pipeline name...",
+      "pipeline": "Pipeline",
+      "status": "Status",
+      "trigger": "Trigger",
+      "created": "Created",
+      "cost": "Cost",
+      "no_runs_found": "No runs found",
+    },
     "DashboardView": {
       "dashboard": "Dashboard",
       "total_runs": "Total Runs",
@@ -1449,6 +1460,7 @@ export default {
       "item_templates": "Templates",
       "item_copy_pipeline": "Copy Pipeline",
       "item_stages_board": "Stages Board",
+      "item_runs_list": "Runs",
       "item_output_diff": "Output Diff",
       "item_evals": "Evals",
       "item_eval_proposals": "Eval Proposals",

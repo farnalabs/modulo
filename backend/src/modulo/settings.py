@@ -32,6 +32,7 @@ class Settings(BaseSettings):
 
     modulo_public_url: str = Field("http://localhost:8000")
     modulo_demo_mode: bool = Field(False)
+    modulo_dogfood_enabled: bool = Field(False)
     modulo_license_key: str = Field("")
     # Ed25519 public key (hex) for license signature verification.
     # Defaults to dev/test key — set MODULO_LICENSE_PUBLIC_KEY in production.
@@ -210,7 +211,9 @@ class Settings(BaseSettings):
         if url.startswith("mysql+asyncmy://"):
             url = "mysql+aiomysql://" + url[len("mysql+asyncmy://") :]
             _log.warning("settings.legacy_asyncmy_url_replaced")
-        url = url.replace("?sslmode=disable", "?ssl=disable")
+        # asyncpg doesn't understand sslmode in URLs — strip it entirely.
+        # Without it, asyncpg defaults to "prefer" SSL (try SSL, fall back).
+        url = url.replace("?sslmode=disable", "").replace("&sslmode=disable", "")
         if url != self.database_url:
             self.database_url = url
             _log.info("settings.database_url_fixed")

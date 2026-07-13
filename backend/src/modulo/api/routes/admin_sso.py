@@ -89,8 +89,11 @@ class SsoProviderResponse(BaseModel):
                 value = json.loads(value)
             except json.JSONDecodeError:
                 return None
-        if isinstance(value, list) and all(isinstance(scope, str) for scope in value):
-            return value
+        if isinstance(value, list):
+            if not value:
+                return []
+            if all(isinstance(scope, str) for scope in value):
+                return value
         return None
 
     @field_validator("client_secret", mode="before")

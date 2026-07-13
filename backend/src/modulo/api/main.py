@@ -126,13 +126,8 @@ _shutdown_manager = ShutdownManager()
 
 
 async def _verify_db_connectivity(settings: Settings) -> None:
-    """Verify the database is reachable at startup.
-
-    Raises RuntimeError if the DB is unreachable after several retries,
-    preventing the app from starting in a broken state.
-    """
+    """Check database connectivity without preventing application startup."""
     engine = get_or_create_engine(settings)
-    last_exc: Exception | None = None
     for attempt in range(1, 4):
         try:
             async with engine.connect() as conn:
@@ -140,7 +135,6 @@ async def _verify_db_connectivity(settings: Settings) -> None:
             logger.info("startup.db_connected")
             return
         except Exception as exc:
-            last_exc = exc
             logger.warning(
                 "startup.db_connectivity_attempt_failed",
                 extra={"attempt": attempt, "error": str(exc)},
@@ -148,7 +142,7 @@ async def _verify_db_connectivity(settings: Settings) -> None:
             if attempt < 3:
                 await asyncio.sleep(attempt * 2)
     logger.error("startup.db_unreachable")
-    raise RuntimeError("Database is unreachable after 3 retry attempts — cannot start.") from last_exc
+    logger.warning("startup.continuing_without_db — app will retry connections at runtime")
 
 
 async def _run_migrations(settings: Settings) -> None:
@@ -642,10 +636,19 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
     await _run_migrations(settings)
 
     # Ensure at least one organisation exists before seeding users.
-    await _ensure_default_org(settings)
+    # Non-fatal: if the organisations table doesn't exist (migration state
+    # mismatch), the app starts without an org and retries on next restart.
+    try:
+        await _ensure_default_org(settings)
+    except Exception:
+        logger.warning("startup.default_org_failed", exc_info=True)
 
     # Seed MODULO_USERS env var entries into the user table (idempotent).
-    await _seed_modulo_users(settings)
+    # Non-fatal: if tables are missing, seeding is retried on next restart.
+    try:
+        await _seed_modulo_users(settings)
+    except Exception:
+        logger.warning("startup.user_seed_failed", exc_info=True)
 
     # Seed demo data if MODULO_DEMO_MODE is enabled.
     try:
