@@ -16,6 +16,7 @@ from modulo.api.dependencies import _get_engine, get_db_session, get_plan_contex
 from modulo.api.main import app
 from modulo.auth.dependencies import get_current_user
 from modulo.auth.jwt import AuthenticatedPrincipal
+from tests.unit.api.mock_session import configure_mock_session
 
 _ALLOWED_ORIGIN = "http://localhost:5173"
 _DISALLOWED_ORIGIN = "http://evil.com"
@@ -23,7 +24,7 @@ _VALID_32 = "a" * 32
 
 
 def _make_mock_session() -> AsyncMock:
-    session = AsyncMock()
+    session = configure_mock_session(AsyncMock())
     begin_cm = AsyncMock()
     begin_cm.__aenter__ = AsyncMock(return_value=None)
     begin_cm.__aexit__ = AsyncMock(return_value=False)
