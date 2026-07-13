@@ -13,7 +13,16 @@
 #>
 
 $exitCode = 0
-$repoRoot = Split-Path -Parent (Split-Path -Parent $MyInvocation.MyCommand.Path)
+# Resolve modulo root via git -- works from main repo and valid worktrees
+Try { $commonDir = git rev-parse --git-common-dir 2>$null } Catch { }
+if (-not $commonDir) { Try { $commonDir = git rev-parse --show-toplevel 2>$null } Catch { } }
+if ($commonDir) {
+  $ModuloRoot = (Resolve-Path (Join-Path (Get-Item $commonDir).FullName "..")).Path
+} else {
+  # Fallback for non-git contexts (manual testing only)
+  $ModuloRoot = Split-Path -Parent $PSScriptRoot
+}
+$DevtoolsRoot = Join-Path (Split-Path -Parent $ModuloRoot) "devtools"
 
 function Check($Label, $Condition, $FixHint) {
     if (-not (& $Condition)) {
@@ -26,7 +35,7 @@ function Check($Label, $Condition, $FixHint) {
 }
 
 # Check 1: No continue-on-error on product-map-validate or manifest-validate
-$ciYml = Join-Path $repoRoot ".github/workflows/ci.yml"
+$ciYml = Join-Path $ModuloRoot ".github/workflows/ci.yml"
 Check "No continue-on-error on CI validation jobs" {
     $content = Get-Content -Raw -LiteralPath $ciYml -ErrorAction SilentlyContinue
     if (-not $content) { return $false }
@@ -44,8 +53,7 @@ Check "No continue-on-error on CI validation jobs" {
 } "Remove continue-on-error: true from product-map-validate and manifest-validate jobs in .github/workflows/ci.yml"
 
 # Check 2: verify-main.ps1 must use Fail (not Warn) for vue-tsc, npm-audit, pip-audit
-$verifyMain = "..\..\..\devtools\harness\tools\verify-main.ps1"
-$verifyMainPath = Join-Path $repoRoot $verifyMain
+$verifyMainPath = Join-Path $DevtoolsRoot "harness/tools/verify-main.ps1"
 Check "verify-main.ps1 uses Fail for vue-tsc" {
     if (-not (Test-Path -LiteralPath $verifyMainPath)) { return $false }
     $content = Get-Content -Raw -LiteralPath $verifyMainPath
@@ -65,8 +73,7 @@ Check "verify-main.ps1 uses Fail for pip-audit" {
 } "Change Warn to Fail for pip-audit check in $verifyMain"
 
 # Check 3: gate.ps1 has Playwright @smoke
-$gatePs1 = "..\..\..\devtools\harness\tools\gate.ps1"
-$gatePs1Path = Join-Path $repoRoot $gatePs1
+$gatePs1Path = Join-Path $DevtoolsRoot "harness/tools/gate.ps1"
 Check "gate.ps1 has Playwright @smoke step" {
     if (-not (Test-Path -LiteralPath $gatePs1Path)) { return $false }
     $content = Get-Content -Raw -LiteralPath $gatePs1Path
@@ -74,7 +81,7 @@ Check "gate.ps1 has Playwright @smoke step" {
 } "Add Playwright @smoke step to $gatePs1 (Phase 4b, after merge)"
 
 # Check 4: AGENTS.md has enforcement gates section
-$agentsMd = Join-Path $repoRoot "AGENTS.md"
+$agentsMd = Join-Path $ModuloRoot "AGENTS.md"
 Check "AGENTS.md has Non-Negotiable Enforcement Gates section" {
     if (-not (Test-Path -LiteralPath $agentsMd)) { return $false }
     $content = Get-Content -Raw -LiteralPath $agentsMd
