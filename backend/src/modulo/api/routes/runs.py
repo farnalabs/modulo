@@ -43,6 +43,9 @@ from modulo.db.crud.run import (
     request_cancellation,
     update_run_status,
 )
+from modulo.db.crud.run import (
+    list_runs as db_list_runs,
+)
 from modulo.db.models.agent import Agent
 from modulo.db.models.pipeline_snapshot import PipelineSnapshot
 from modulo.db.rls import set_rls_org
@@ -53,6 +56,85 @@ _log = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/v1/runs", tags=["runs"])
 
 _TERMINAL_STATUSES = frozenset({"complete", "failed", "cancelled", "eval_failed"})
+
+
+@router.get("")
+async def list_runs_endpoint(
+    pipeline_id: uuid.UUID | None = Query(None),
+    run_status: str | None = Query(None, alias="status"),
+    trigger_type: str | None = Query(None),
+    search: str | None = Query(None, max_length=200),
+    page: int = Query(1, ge=1),
+    page_size: int = Query(20, ge=1, le=100),
+    session: AsyncSession = Depends(get_db_session),
+    user: TenantPrincipal = Depends(get_current_tenant_user),
+) -> dict[str, Any]:
+    try:
+        async with session.begin():
+            await set_rls_org(session, user.organisation_id)
+            result = await db_list_runs(
+                session,
+                pipeline_id=pipeline_id,
+                status=run_status,
+                trigger_type=trigger_type,
+                search=search,
+                page=page,
+                page_size=page_size,
+            )
+            items = []
+            for run in result.items:
+                pipeline_name = run.pipeline.name if run.pipeline else None
+                items.append(
+                    {
+                        "run_id": str(run.id),
+                        "pipeline_id": str(run.pipeline_id),
+                        "pipeline_name": pipeline_name,
+                        "status": run.status,
+                        "trigger_type": run.trigger_type,
+                        "run_number": run.run_number,
+                        "created_at": run.created_at.isoformat() if run.created_at else None,
+                        "started_at": run.started_at.isoformat() if run.started_at else None,
+                        "completed_at": run.completed_at.isoformat() if run.completed_at else None,
+                        "error_code": run.error_code,
+                        "total_cost_usd": run.total_cost_usd,
+                        "account_id": str(run.account_id) if run.account_id else None,
+                    }
+                )
+    except IntegrityError:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="A resource with this value already exists",
+        ) from None
+    except ProgrammingError:
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="Feature is not available. This feature requires a database update. Please contact support.",
+        ) from None
+    except SQLAlchemyError:
+        _log.warning("route.db_error", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Database temporarily unavailable.",
+        ) from None
+    except HTTPException:
+        raise
+    except Exception:
+        _log.exception("pipeline_execution.unexpected_error")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="An unexpected error occurred.",
+        ) from None
+
+    return {
+        "items": items,
+        "total": result.total,
+        "page": result.page,
+        "page_size": result.page_size,
+        "next_cursor": result.next_cursor,
+        "has_more": result.has_more,
+    }
+
+
 _NAMESPACE_TRACE = uuid.UUID("6ba7b810-9dad-11d1-80b4-00c04fd430c8")
 
 
@@ -185,7 +267,7 @@ async def trigger_run(
     except ProgrammingError:
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="Feature is not available. Run database migrations to enable it.",
+            detail="Feature is not available. This feature requires a database update. Please contact support.",
         ) from None
 
     except SQLAlchemyError:
@@ -246,7 +328,7 @@ async def trigger_run(
     except ProgrammingError:
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="Feature is not available. Run database migrations to enable it.",
+            detail="Feature is not available. This feature requires a database update. Please contact support.",
         ) from None
 
     except SQLAlchemyError:
@@ -289,15 +371,10 @@ async def get_run_stats_endpoint(
         async with session.begin():
             await set_rls_org(session, principal.organisation_id)
             return await get_run_stats(session, period)
-    except IntegrityError:
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail="A resource with this value already exists",
-        ) from None
     except ProgrammingError:
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="Feature is not available. Run database migrations to enable it.",
+            detail="Feature is not available. This feature requires a database update. Please contact support.",
         ) from None
 
     except SQLAlchemyError:
@@ -328,15 +405,10 @@ async def get_run_heatmap_endpoint(
         async with session.begin():
             await set_rls_org(session, principal.organisation_id)
             return await get_run_heatmap(session, year)
-    except IntegrityError:
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail="A resource with this value already exists",
-        ) from None
     except ProgrammingError:
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="Feature is not available. Run database migrations to enable it.",
+            detail="Feature is not available. This feature requires a database update. Please contact support.",
         ) from None
 
     except SQLAlchemyError:
@@ -374,7 +446,7 @@ async def get_run_status(
     except ProgrammingError:
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="Feature is not available. Run database migrations to enable it.",
+            detail="Feature is not available. This feature requires a database update. Please contact support.",
         ) from None
 
     except SQLAlchemyError:
@@ -431,7 +503,7 @@ async def cancel_run(
     except ProgrammingError:
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="Feature is not available. Run database migrations to enable it.",
+            detail="Feature is not available. This feature requires a database update. Please contact support.",
         ) from None
 
     except SQLAlchemyError:
@@ -508,7 +580,7 @@ def _build_fixture_map(
     if isinstance(out, dict) and any(isinstance(v, dict) and "input" in v and "output" in v for v in out.values()):
         for _node_id, node_io in out.items():
             if isinstance(node_io, dict):
-                node_input = node_io.get("input", str(inp))
+                node_input = node_io.get("input", json.dumps(inp, sort_keys=True))
                 node_output = node_io.get("output", "")
                 key = " ".join(str(node_input).split())
                 fixture[key] = str(node_output)
@@ -549,7 +621,7 @@ async def get_run_io_endpoint(
     except ProgrammingError:
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="Feature is not available. Run database migrations to enable it.",
+            detail="Feature is not available. This feature requires a database update. Please contact support.",
         ) from None
 
     except SQLAlchemyError:
@@ -609,7 +681,7 @@ async def export_run_fixture(
     except ProgrammingError:
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="Feature is not available. Run database migrations to enable it.",
+            detail="Feature is not available. This feature requires a database update. Please contact support.",
         ) from None
 
     except SQLAlchemyError:
@@ -673,7 +745,7 @@ async def get_run_workspace_lease(
     except ProgrammingError:
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="Feature is not available. Run database migrations to enable it.",
+            detail="Feature is not available. This feature requires a database update. Please contact support.",
         ) from None
 
     except SQLAlchemyError:
@@ -735,7 +807,7 @@ async def get_run_workspace_events(
     except ProgrammingError:
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="Feature is not available. Run database migrations to enable it.",
+            detail="Feature is not available. This feature requires a database update. Please contact support.",
         ) from None
 
     except SQLAlchemyError:
@@ -822,7 +894,7 @@ async def get_run_node_output(
     except ProgrammingError:
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="Feature is not available. Run database migrations to enable it.",
+            detail="Feature is not available. This feature requires a database update. Please contact support.",
         ) from None
 
     except SQLAlchemyError:
@@ -897,7 +969,7 @@ async def observe_run_node(
     except ProgrammingError:
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="Feature is not available. Run database migrations to enable it.",
+            detail="Feature is not available. This feature requires a database update. Please contact support.",
         ) from None
 
     except SQLAlchemyError:
@@ -936,7 +1008,7 @@ async def observe_run_node(
     except ProgrammingError:
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="Feature is not available. Run database migrations to enable it.",
+            detail="Feature is not available. This feature requires a database update. Please contact support.",
         ) from None
 
     except SQLAlchemyError:
@@ -1019,7 +1091,7 @@ async def recover_run_node(
                     actor_id=principal.account_id,
                 )
             except RecoveryNotAllowedError as exc:
-                raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+                raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)[:200]) from exc
             except NodeNotFoundInGraphError as exc:
                 raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
             except NodeAlreadyCompletedError as exc:
@@ -1034,7 +1106,7 @@ async def recover_run_node(
     except ProgrammingError:
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="Feature is not available. Run database migrations to enable it.",
+            detail="Feature is not available. This feature requires a database update. Please contact support.",
         ) from None
 
     except SQLAlchemyError:
@@ -1334,7 +1406,7 @@ async def reveal_node_prompt(
     except ProgrammingError:
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="Feature is not available. Run database migrations to enable it.",
+            detail="Feature is not available. This feature requires a database update. Please contact support.",
         ) from None
     except HTTPException:
         raise
@@ -1397,15 +1469,10 @@ async def diff_node_output(
             await set_rls_org(session, principal.organisation_id)
             run_a = await get_run(session, req.run_id_a)
             run_b = await get_run(session, req.run_id_b)
-    except IntegrityError:
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail="A resource with this value already exists",
-        ) from None
     except ProgrammingError:
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="Feature is not available. Run database migrations to enable it.",
+            detail="Feature is not available. This feature requires a database update. Please contact support.",
         ) from None
 
     except SQLAlchemyError:

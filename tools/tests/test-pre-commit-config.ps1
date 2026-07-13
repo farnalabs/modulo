@@ -11,4 +11,9 @@ Describe "Pre-commit command portability" {
     It "does not wrap uv hooks in Bash" {
         $config | Should -Not -Match '(?m)^\s*entry:\s*(?:/bin/)?bash\b[^\r\n]*\buv\b'
     }
+
+    It "runs the migration collision check through a worktree-aware wrapper" {
+        $config | Should -Match '(?m)^\s*entry:\s*powershell -NoProfile -File tools/run-check-migration-heads\.ps1\s*$'
+        Test-Path -LiteralPath (Join-Path $repoRoot "tools/run-check-migration-heads.ps1") | Should -BeTrue
+    }
 }
