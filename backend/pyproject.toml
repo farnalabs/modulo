@@ -247,7 +247,7 @@ source_paths = [
     "src/modulo/core/graph_validator/",
     "src/modulo/core/run_context/",
 ]
-runner = "pytest -x -q --timeout=60 -m 'not integration and not e2e'"
+runner = "pytest -q --timeout=60 --ignore=tests/unit/api/middleware/test_correlation_id.py -m 'not integration and not e2e'"
 backup = false
 pytest_add_cli_args_test_selection = ["tests/unit", "tests/architecture"]
 

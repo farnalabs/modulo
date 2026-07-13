@@ -29,7 +29,7 @@ try {
     Copy-Item -Path "$RepoRoot/backend/pyproject.toml" -Destination "$BackendDir/"
     Copy-Item -Path "$RepoRoot/backend/uv.lock" -Destination "$BackendDir/"
     Copy-Item -Path "$RepoRoot/backend/src" -Destination "$BackendDir/src" -Recurse
-    Copy-Item -Path "$RepoRoot/backend/tests" -Destination "$BackendDir/tests" -Recurse
+    Copy-Item -Path "$RepoRoot/backend/tests" -Destination "$BackendDir/tests" -Recurse -Exclude @(".pytest_cache", "__pycache__", "*.pyc")
 
     Write-Host "Building mutation testing image..." -ForegroundColor Cyan
     docker build -t $ImageName "$TempDir"
