@@ -17,6 +17,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.db.crud.base import PageResult
 from modulo.db.crud.pagination import CursorPaginator
+from modulo.db.models.pipeline import Pipeline
 from modulo.db.models.run import Run
 
 
@@ -107,18 +108,26 @@ async def list_runs(
     *,
     pipeline_id: uuid.UUID | None = None,
     status: str | None = None,
+    trigger_type: str | None = None,
+    search: str | None = None,
     page: int = 1,
     page_size: int = 20,
     cursor: str | None = None,
 ) -> PageResult[Run]:
-    q = select(Run)
-    count_q = select(func.count()).select_from(Run)
+    q = select(Run).join(Pipeline, Run.pipeline_id == Pipeline.id, isouter=False)
+    count_q = select(func.count()).select_from(Run).join(Pipeline, Run.pipeline_id == Pipeline.id, isouter=False)
     if pipeline_id is not None:
         q = q.where(Run.pipeline_id == pipeline_id)
         count_q = count_q.where(Run.pipeline_id == pipeline_id)
     if status is not None:
         q = q.where(Run.status == status)
         count_q = count_q.where(Run.status == status)
+    if trigger_type is not None:
+        q = q.where(Run.trigger_type == trigger_type)
+        count_q = count_q.where(Run.trigger_type == trigger_type)
+    if search is not None:
+        q = q.where(Pipeline.name.ilike(f"%{search}%"))
+        count_q = count_q.where(Pipeline.name.ilike(f"%{search}%"))
 
     if cursor is not None:
         paginator = CursorPaginator()
