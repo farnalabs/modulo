@@ -61,7 +61,7 @@ docker compose -f docker-compose.yml -f docker-compose.mariadb.yml up -d
 ```
 
 The backend auto-detects MariaDB and configures the connection string
-(`mysql+asyncmy://modulo:modulo@localhost:3306/modulo`).
+(`mysql+aiomysql://modulo:modulo@localhost:3306/modulo`).
 
 ---
 

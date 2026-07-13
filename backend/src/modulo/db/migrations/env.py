@@ -15,6 +15,7 @@ _log = logging.getLogger(__name__)
 _DRIVER_MAP: dict[str, str] = {
     "postgresql+asyncpg": "postgresql+psycopg",
     "sqlite+aiosqlite": "sqlite",
+    "mysql+aiomysql": "mysql+pymysql",
     "mysql+asyncmy": "mysql+pymysql",
     "postgresql": "postgresql+psycopg",
     "postgres": "postgresql+psycopg",

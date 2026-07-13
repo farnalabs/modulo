@@ -53,7 +53,8 @@ dependencies = [
     "asyncpg>=0.29.0",
     "aiosqlite>=0.20.0",
     # MariaDB (async MySQL)
-    "asyncmy>=0.2.9",
+    "aiomysql>=0.3.2",
+    "pymysql>=1.1.1",
     # HTTP client (GitHub connector)
     "httpx>=0.28.1",
     # Auth + crypto
