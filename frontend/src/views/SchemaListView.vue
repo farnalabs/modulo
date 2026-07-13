@@ -25,7 +25,7 @@
             <tr>
               <th class="px-4 py-3 font-medium">{{ $t('views.SchemaListView.name') }}</th>
               <th class="px-4 py-3 font-medium">{{ $t('views.SchemaListView.description') }}</th>
-              <th class="px-4 py-3 font-medium">{{ $t('views.SchemaListView.status') }}</th>
+              <th class="px-4 py-3 font-medium capitalize">{{ $t('views.SchemaListView.status') }}</th>
               <th class="px-4 py-3 font-medium text-right">{{ $t('views.SchemaListView.actions') }}</th>
             </tr>
           </thead>
@@ -158,7 +158,12 @@ async function deprecateSchema() {
       const idx = schemas.value.findIndex(s => s.id === deprecateConfirmId.value)
       if (idx >= 0) {
         const s = schemasResp.value
-        if (s) s.items[idx] = data
+        if (s) {
+          schemasResp.value = {
+            ...s,
+            items: s.items.map((item, itemIdx) => itemIdx === idx ? data : item),
+          }
+        }
       }
       deprecateConfirmId.value = null
     }

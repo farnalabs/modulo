@@ -44,6 +44,7 @@ test-results/
 node_modules/
 frontend/dist/
 frontend/.vite/
+frontend/.cache/
 *.local
 
 # IDE

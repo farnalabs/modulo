@@ -41,6 +41,7 @@ const mockRoute = {
 }
 
 const mockRouter = {
+  install: vi.fn(),
   push: vi.fn(),
   replace: vi.fn(),
   resolve: vi.fn(),
