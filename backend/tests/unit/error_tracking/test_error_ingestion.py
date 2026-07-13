@@ -9,12 +9,21 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from pydantic import ValidationError
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.api.middleware.rate_limiter import RateLimitMiddleware
 from modulo.api.models.error import ErrorEventInput, ErrorGroupResult, ErrorIngestRequest, ErrorIngestResponse
 from modulo.core.error_tracking import ErrorIngestionService, SessionKeyStore
 
 _ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
+
+
+def _make_session() -> AsyncMock:
+    session = AsyncMock(spec=AsyncSession)
+    result = MagicMock()
+    result.scalars.return_value.all.return_value = []
+    session.execute.return_value = result
+    return session
 
 
 # =========================================================================
@@ -131,7 +140,7 @@ class _IngestMocks:
 class TestIngest:
     async def test_creates_event_and_group(self) -> None:
         svc = ErrorIngestionService()
-        session = AsyncMock()
+        session = _make_session()
         event_mock = MagicMock()
         event_mock.id = uuid.uuid4()
 
@@ -156,7 +165,7 @@ class TestIngest:
 
     async def test_ingest_existing_group_returns_is_new_false(self) -> None:
         svc = ErrorIngestionService()
-        session = AsyncMock()
+        session = _make_session()
         event_mock = MagicMock()
         event_mock.id = uuid.uuid4()
         existing_group = MagicMock()
@@ -182,7 +191,7 @@ class TestIngest:
 class TestIngestBatch:
     async def test_batch_creates_multiple_events(self) -> None:
         svc = ErrorIngestionService()
-        session = AsyncMock()
+        session = _make_session()
         event_mock = MagicMock()
         event_mock.id = uuid.uuid4()
         grp = MagicMock()
