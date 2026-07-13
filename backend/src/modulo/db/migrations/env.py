@@ -92,15 +92,15 @@ def do_run_migrations(connection: Connection) -> None:
     # 0006_post_squash_pipeline_archived_at is 44 chars).  Widen the column
     # before any migration runs so the version UPDATE never truncates.
     if backend == "postgresql":
-        try:
+        from sqlalchemy import inspect as sa_inspect
+        if sa_inspect(connection).has_table("alembic_version"):
             connection.execute(
                 sa.text(
                     "ALTER TABLE alembic_version "
                     "ALTER COLUMN version_num TYPE VARCHAR(255)"
                 )
             )
-        except Exception:
-            _log.warning("Could not widen alembic_version column — table may not exist yet")
+            _log.info("Widened alembic_version.version_num to VARCHAR(255)")
 
     context.configure(
         connection=connection,
