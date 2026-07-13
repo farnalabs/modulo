@@ -60,7 +60,7 @@
             <span class="font-medium">{{ value || '(deleted pipeline)' }}</span>
           </template>
           <template #cell-status="{ value }">
-            <span :class="statusBadgeClass(value as string)" class="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium capitalize">
+            <span :class="runStatusBadgeClass(value as string)" class="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium capitalize">
               {{ value }}
             </span>
           </template>
@@ -71,7 +71,7 @@
             <span class="tabular-nums">{{ value ?? '—' }}</span>
           </template>
           <template #cell-created_at="{ value }">
-            <span class="whitespace-nowrap text-muted-foreground">{{ formatDate(value as string) }}</span>
+            <span class="whitespace-nowrap text-muted-foreground">{{ formatRunDate(value as string) }}</span>
           </template>
           <template #cell-total_cost_usd="{ value }">
             <span class="tabular-nums">{{ value != null ? '$' + Number(value).toFixed(4) : '—' }}</span>
@@ -120,6 +120,7 @@ import { formatApiError } from '../lib/api/formatError'
 import { Button } from '@/components/ui/button'
 import { DataTable } from '../components/ui/data-table'
 import EmptyState from '../components/shared/EmptyState.vue'
+import { runStatusBadgeClass, formatRunDate } from '../utils/runUtils'
 
 const router = useRouter()
 const route = useRoute()
@@ -184,30 +185,4 @@ function navigateToDetail(id: string) {
   router.push(`/runs/${id}`)
 }
 
-function statusBadgeClass(status: string): string {
-  const map: Record<string, string> = {
-    complete: 'bg-success/10 text-success',
-    failed: 'bg-destructive/10 text-destructive',
-    running: 'bg-primary/10 text-primary',
-    pending: 'bg-muted text-muted-foreground',
-    awaiting_human: 'bg-warning/10 text-warning',
-    cancelled: 'bg-muted text-muted-foreground',
-    eval_failed: 'bg-destructive/10 text-destructive',
-    claimed: 'bg-warning/10 text-warning',
-    waiting_for_lock: 'bg-muted text-muted-foreground',
-  }
-  return map[status] ?? 'bg-muted text-muted-foreground'
-}
-
-function formatDate(dateStr: string | null): string {
-  if (!dateStr) return '—'
-  const d = new Date(dateStr)
-  if (isNaN(d.getTime())) return dateStr
-  return d.toLocaleString(undefined, {
-    month: 'short',
-    day: 'numeric',
-    hour: '2-digit',
-    minute: '2-digit',
-  })
-}
 </script>

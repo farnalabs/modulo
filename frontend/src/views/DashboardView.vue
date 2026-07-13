@@ -143,7 +143,7 @@
         <!-- Eval pass rate card -->
         <router-link to="/eval-editor" class="card card-hover p-4 block">
           <p class="text-sm font-medium text-muted-foreground mb-2">{{ $t('views.DashboardView.eval_pass_rate') }}</p>
-          <div v-if="summary.eval_pass_rate">
+          <div v-if="summary.eval_pass_rate != null">
             <p class="text-2xl font-semibold tabular-nums">{{ summary.eval_pass_rate.overall_pass_rate }}%</p>
             <div class="flex items-center gap-2 mt-1">
               <span :class="evalTrendClass" class="inline-flex items-center text-sm font-medium">
@@ -210,8 +210,8 @@
                 @keydown.space.prevent="toggleTeam(team.id)">
               <td class="py-2.5 font-medium">{{ team.name }}</td>
               <td class="py-2.5 text-right">{{ team.total_runs }}</td>
-              <td class="py-2.5 text-right text-success">{{ team.run_counts_by_status.running }}</td>
-              <td class="py-2.5 text-right text-destructive">{{ team.run_counts_by_status.failed }}</td>
+              <td class="py-2.5 text-right text-success">{{ team.run_counts_by_status?.running ?? 0 }}</td>
+              <td class="py-2.5 text-right text-destructive">{{ team.run_counts_by_status?.failed ?? 0 }}</td>
               <td class="py-2.5 text-right">{{ team.eval_pass_rate ? team.eval_pass_rate.pass_rate + '%' : '—' }}</td>
               <td class="py-2.5 text-right">
                 <svg v-if="expandedTeam === team.id" xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="18 15 12 9 6 15"/></svg>
@@ -281,10 +281,10 @@
                   <p>{{ run.pipeline_name }}</p>
                 </TooltipContent>
               </Tooltip>
-              <p class="text-xs text-muted-foreground">{{ formatTimestamp(run.created_at) }}</p>
+              <p class="text-xs text-muted-foreground">{{ formatRunDate(run.created_at) }}</p>
             </div>
             <div class="flex items-center gap-2 ml-3">
-              <span :class="statusBadgeClass(run.status)" class="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium capitalize">
+              <span :class="runStatusBadgeClass(run.status)" class="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium capitalize">
                 {{ run.status }}
               </span>
               <span class="text-xs text-muted-foreground hidden sm:inline">{{ run.trigger_type }}</span>
@@ -320,6 +320,7 @@ import {
   TooltipTrigger,
   TooltipContent,
 } from '../components/ui/tooltip'
+import { runStatusBadgeClass, formatRunDate } from '../utils/runUtils'
 
 const { t } = useI18n()
 
@@ -465,29 +466,7 @@ const trendRunCounts = computed(() => trendData.value.map(d => d.run_count))
 const trendEvalRates = computed(() => trendData.value.map(d => d.eval_pass_rate ?? 0))
 const trendSpendData = computed(() => trendData.value.map(d => d.token_spend_usd))
 
-function statusBadgeClass(status: string): string {
-  const map: Record<string, string> = {
-    complete: 'bg-success/10 text-success',
-    failed: 'bg-destructive/10 text-destructive',
-    running: 'bg-primary/10 text-primary',
-    pending: 'bg-muted text-muted-foreground',
-    awaiting_human: 'bg-warning/10 text-warning',
-    cancelled: 'bg-muted text-muted-foreground',
-    eval_failed: 'bg-destructive/10 text-destructive',
-    claimed: 'bg-warning/10 text-warning',
-    waiting_for_lock: 'bg-muted text-muted-foreground',
-  }
-  return map[status] ?? 'bg-muted text-muted-foreground'
-}
 
-function formatTimestamp(iso: string): string {
-  try {
-    const d = new Date(iso)
-    return d.toLocaleString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })
-  } catch {
-    return iso
-  }
-}
 
 onMounted(async () => {
   const promises: Promise<unknown>[] = [
