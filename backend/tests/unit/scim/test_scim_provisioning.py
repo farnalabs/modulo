@@ -828,6 +828,10 @@ class TestCreateUser:
                 "modulo.db.crud.account.get_account_by_email",
                 return_value=_MOCK_USER,
             ),
+            patch(
+                "modulo.db.crud.org_membership.get_membership_by_account_and_org",
+                return_value=_MOCK_MEMBERSHIP,
+            ),
             patch("modulo.api.routes.scim.set_rls_org"),
         ):
             resp = client.post(
