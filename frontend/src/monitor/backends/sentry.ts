@@ -17,12 +17,23 @@
  * @module
  */
 
-import type { MonitorBackend, MonitorConfig, Breadcrumb, UserInfo } from '../types'
+import type { Breadcrumb, ErrorEventInput, MonitorBackend, MonitorConfig, MonitorLevel, UserInfo } from '../types'
+import { isModuleNotFound } from './sdk-utils'
+
+interface SentryApi {
+  init(config: Record<string, unknown>): void
+  captureException(error: Error, context: { extra: Record<string, unknown> }): void
+  captureMessage(message: string, level: string): void
+  setUser(user: Record<string, unknown> | null): void
+  setTag(key: string, value: string): void
+  addBreadcrumb(breadcrumb: Record<string, unknown>): void
+  close(): void
+}
 
 export class SentryMonitorBackend implements MonitorBackend {
   readonly key = 'sentry'
   private initialized = false
-  private Sentry: any = null
+  private sentry: SentryApi | null = null
 
   async init(config: MonitorConfig): Promise<boolean> {
     if (!config.sentry?.dsn) {
@@ -32,22 +43,22 @@ export class SentryMonitorBackend implements MonitorBackend {
 
     try {
       const sentryModule = await import(/* @vite-ignore */ '@sentry/vue')
-      this.Sentry = sentryModule
+      this.sentry = sentryModule as SentryApi
 
       sentryModule.init({
         dsn: config.sentry.dsn,
         environment: config.sentry.environment ?? 'production',
         integrations: [],
-        tracesSampleRate: config.sentry.replaysSessionSampleRate ?? 0,
+        tracesSampleRate: config.sentry.tracesSampleRate ?? 0,
         replaysSessionSampleRate: config.sentry.replaysSessionSampleRate ?? 0,
-        replaysOnErrorSampleRate: config.sentry.replaysSessionSampleRate != null ? 1.0 : 0,
+        replaysOnErrorSampleRate: config.sentry.replaysOnErrorSampleRate ?? 0,
       })
 
       this.initialized = true
-      console.info('[monitor] Sentry backend initialized')
+      console.warn('[monitor] Sentry backend initialized')
       return true
-    } catch (e: any) {
-      if (e?.code === 'MODULE_NOT_FOUND' || e?.message?.includes('Cannot find module')) {
+    } catch (e: unknown) {
+      if (isModuleNotFound(e)) {
         console.warn('[monitor] @sentry/vue not installed — Sentry backend unavailable. Run: npm install @sentry/vue')
       } else {
         console.error('[monitor] Sentry init failed:', e)
@@ -56,29 +67,31 @@ export class SentryMonitorBackend implements MonitorBackend {
     }
   }
 
-  captureRawError(error: Error, context?: Record<string, unknown>): void {
-    if (!this.initialized || !this.Sentry) return
+  captureError(event: ErrorEventInput, error?: Error, context?: Record<string, unknown>): void {
+    if (!this.initialized || !this.sentry) return
     try {
-      this.Sentry.captureException(error, { extra: context })
+      this.sentry.captureException(error ?? new Error(event.message), {
+        extra: { ...event.context_json, ...context },
+      })
     } catch (e) {
       console.warn('[monitor] Sentry.captureException failed:', e)
     }
   }
 
-  captureMessage(message: string, level: 'error' | 'warning' | 'critical'): void {
-    if (!this.initialized || !this.Sentry) return
+  captureMessage(message: string, level: MonitorLevel): void {
+    if (!this.initialized || !this.sentry) return
     const mappedLevel = level === 'critical' ? 'fatal' : level
     try {
-      this.Sentry.captureMessage(message, mappedLevel)
+      this.sentry.captureMessage(message, mappedLevel)
     } catch (e) {
       console.warn('[monitor] Sentry.captureMessage failed:', e)
     }
   }
 
   setUser(user: UserInfo | null): void {
-    if (!this.initialized || !this.Sentry) return
+    if (!this.initialized || !this.sentry) return
     try {
-      this.Sentry.setUser(user ? {
+      this.sentry.setUser(user ? {
         id: user.id,
         email: user.email,
         username: user.name,
@@ -89,10 +102,10 @@ export class SentryMonitorBackend implements MonitorBackend {
   }
 
   setTags(tags: Record<string, string>): void {
-    if (!this.initialized || !this.Sentry) return
+    if (!this.initialized || !this.sentry) return
     try {
       for (const [key, value] of Object.entries(tags)) {
-        this.Sentry.setTag(key, value)
+        this.sentry.setTag(key, value)
       }
     } catch (e) {
       console.warn('[monitor] Sentry.setTags failed:', e)
@@ -100,9 +113,9 @@ export class SentryMonitorBackend implements MonitorBackend {
   }
 
   addBreadcrumb(breadcrumb: Breadcrumb): void {
-    if (!this.initialized || !this.Sentry) return
+    if (!this.initialized || !this.sentry) return
     try {
-      this.Sentry.addBreadcrumb({
+      this.sentry.addBreadcrumb({
         type: breadcrumb.type,
         category: breadcrumb.type,
         data: breadcrumb.data,
@@ -116,12 +129,12 @@ export class SentryMonitorBackend implements MonitorBackend {
   }
 
   dispose(): void {
-    if (this.Sentry) {
+    if (this.sentry) {
       try {
-        this.Sentry.close()
+        this.sentry.close()
       } catch { /* ignore */ }
     }
     this.initialized = false
-    this.Sentry = null
+    this.sentry = null
   }
 }

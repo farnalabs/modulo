@@ -1,4 +1,4 @@
-﻿<script setup lang="ts">
+<script setup lang="ts">
 import { ref } from "vue";
 import { Button } from "@/components/ui/button";
 import { useApi } from "../../../composables/useApi";
@@ -146,6 +146,7 @@ async function detectPlaceholders() {
       emit("update:ports", [...props.ports, ...newPorts]);
     }
   } catch {
+    // Detection errors are surfaced by the API client; retain existing ports.
   } finally {
     detectLoading.value = false
   }
@@ -251,30 +252,30 @@ async function detectPlaceholders() {
       </h4>
       <div class="space-y-3">
         <div>
-          <label class="mb-1 block text-xs font-medium text-muted-foreground"
+          <label for="portdefinitionpanel-field-6" class="mb-1 block text-xs font-medium text-muted-foreground"
             >{{ $t('components.pipeline.composite.PortDefinitionPanel.name') }}</label
           >
-          <input
+          <input id="portdefinitionpanel-field-6"
             v-model="form.name"
             class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm"
             placeholder="model_temperature"
           />
         </div>
         <div>
-          <label class="mb-1 block text-xs font-medium text-muted-foreground"
+          <label for="portdefinitionpanel-field-5" class="mb-1 block text-xs font-medium text-muted-foreground"
             >{{ $t('components.pipeline.composite.PortDefinitionPanel.label') }}</label
           >
-          <input
+          <input id="portdefinitionpanel-field-5"
             v-model="form.label"
             class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm"
             :placeholder="$t('components.pipeline.composite.PortDefinitionPanel.model_temperature')"
           />
         </div>
         <div>
-          <label class="mb-1 block text-xs font-medium text-muted-foreground"
+          <label for="portdefinitionpanel-field-4" class="mb-1 block text-xs font-medium text-muted-foreground"
             >Description</label
           >
-          <textarea
+          <textarea id="portdefinitionpanel-field-4"
             v-model="form.description"
             class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm"
             rows="2"
@@ -282,10 +283,10 @@ async function detectPlaceholders() {
           />
         </div>
         <div>
-          <label class="mb-1 block text-xs font-medium text-muted-foreground"
+          <label for="portdefinitionpanel-field-3" class="mb-1 block text-xs font-medium text-muted-foreground"
             >Type</label
           >
-          <select
+          <select id="portdefinitionpanel-field-3"
             v-model="form.type"
             aria-label="Port type"
             class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm"
@@ -299,26 +300,26 @@ async function detectPlaceholders() {
           </select>
         </div>
         <div class="flex items-center gap-2">
-          <input
+          <input aria-label="checkbox"
             v-model="form.required"
             type="checkbox"
             class="h-4 w-4 rounded border-gray-300 text-indigo-500 focus:ring-indigo-500"
           />
-          <label class="text-xs text-muted-foreground">Required</label>
+          <label for="portdefinitionpanel-field-2" class="text-xs text-muted-foreground">Required</label>
         </div>
         <div v-if="form.type === 'string'" class="flex items-center gap-2">
-          <input
+          <input id="portdefinitionpanel-field-2"
             v-model="form.multiline"
             type="checkbox"
             class="h-4 w-4 rounded border-gray-300 text-indigo-500 focus:ring-indigo-500"
           />
-          <label class="text-xs text-muted-foreground">Multiline</label>
+          <span class="text-xs text-muted-foreground">Multiline</span>
         </div>
         <div v-if="form.type !== 'boolean'">
-          <label class="mb-1 block text-xs font-medium text-muted-foreground"
+          <label for="portdefinitionpanel-field-1" class="mb-1 block text-xs font-medium text-muted-foreground"
             >{{ $t('components.pipeline.composite.PortDefinitionPanel.default_value') }}</label
           >
-          <input
+          <input id="portdefinitionpanel-field-1"
             v-model="form.default"
             class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm"
             :placeholder="$t('components.pipeline.composite.PortDefinitionPanel.formtype_number_07_default_value')"

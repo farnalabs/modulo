@@ -20,7 +20,7 @@
       <Background :gap="24" :size="1" />
       <Controls :show-interactive="false" position="bottom-right" />
       <template #node-stage="nodeProps">
-        <div
+        <div role="button" tabindex="0" @keydown.enter="($event.currentTarget as HTMLElement).click()" @keydown.space.prevent="($event.currentTarget as HTMLElement).click()"
           class="stage-node rounded-lg border-2 px-4 py-3 shadow-sm min-w-[180px] max-w-[260px] transition-shadow hover:shadow-md"
           :class="stageNodeClasses(nodeProps.data)"
           @click="onStageClick(nodeProps)"
@@ -59,7 +59,7 @@
 
 <script setup lang="ts">
 import { computed } from 'vue'
-import { VueFlow } from '@vue-flow/core'
+import { MarkerType, VueFlow, type DefaultEdgeOptions } from '@vue-flow/core'
 import { Background } from '@vue-flow/background'
 import { Controls } from '@vue-flow/controls'
 import '@vue-flow/core/dist/style.css'
@@ -73,12 +73,12 @@ const props = defineProps<{
   onExternalStageClick?: (stage: LifecycleMapStage) => void
 }>()
 
-const defaultEdgeOptions = {
+const defaultEdgeOptions: DefaultEdgeOptions = {
   type: 'smoothstep',
   animated: false,
   style: { stroke: '#888', strokeWidth: 2 },
   markerEnd: {
-    type: 'arrowclosed',
+    type: MarkerType.ArrowClosed,
     width: 16,
     height: 16,
     color: '#888',

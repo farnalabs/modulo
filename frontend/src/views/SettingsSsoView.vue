@@ -1,4 +1,4 @@
-﻿<template>
+<template>
   <FeatureGate feature-name="sso" required-tier="team" show-disabled>
 
     <div class="page-narrow">
@@ -16,7 +16,7 @@
 
       <LoadingSpinner v-if="loading" />
 
-      <ErrorAlert v-else-if="error" :message="error" :on-retry="loadProviders" :retryable="errorRetryable" />
+      <ErrorAlert v-else-if="error" :message="error" :on-retry="loadProviders" />
 
       <template v-else>
         <div v-if="formMode === 'add'" class="card p-6">
@@ -85,7 +85,7 @@
                   </svg>
                 </button>
                 <TableActions :actions="ssoActions(provider)" />
-                <label
+                <span tabindex="0"
                   class="relative inline-flex cursor-pointer items-center"
                   data-testid="settings-sso-toggle"
                   :aria-label="$t('views.SettingsSsoView.toggle_provider')"
@@ -93,6 +93,8 @@
                   :aria-checked="provider.enabled"
                   :class="{ 'opacity-50 pointer-events-none': togglingId === provider.id }"
                   @click.prevent.stop="toggleProvider(provider)"
+                  @keydown.enter.prevent.stop="toggleProvider(provider)"
+                  @keydown.space.prevent.stop="toggleProvider(provider)"
                 >
                   <div
                     class="h-6 w-11 rounded-full transition-colors"
@@ -104,7 +106,7 @@
                       style="margin-top: 2px;"
                     />
                   </div>
-                </label>
+                </span>
               </div>
             </div>
 
@@ -217,7 +219,6 @@ function emptyForm(): SsoFormState {
 const { loading, error, data: providers, load: loadProviders } = useDataFetch<SsoProviderResponse[]>(
   async () => {
     const resp = await api.GET('/api/v1/admin/sso/providers')
-    if (resp.error) return { error: resp.error }
     return { data: (Array.isArray(resp.data) ? resp.data : (resp.data as any)?.items ?? []) }
   },
   { initialValue: [] as SsoProviderResponse[] }
@@ -296,6 +297,7 @@ function buildCreateBody(): SsoProviderCreate {
     name: formData.name.trim(),
     auto_provision: formData.auto_provision,
     default_role: formData.default_role,
+    enabled: true,
   }
 
   if (formData.provider_type === 'oidc') {

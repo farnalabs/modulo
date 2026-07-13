@@ -10,42 +10,17 @@ Usage:
 """
 
 import asyncio
+import importlib
 import json
 import logging
 import uuid
 from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass
-from typing import Any, Self
+from typing import Any, Self, cast
 
 from modulo.core.plugin_registry import get_plugin_registry
 from modulo.core.secrets_backend import SecretsBackend
-from modulo.model_backends.ai21 import Ai21Backend
-from modulo.model_backends.anthropic import AnthropicBackend
-from modulo.model_backends.azure_openai import AzureOpenAIBackend
 from modulo.model_backends.base import HealthResult, ModelBackendBase
-from modulo.model_backends.bedrock import BedrockBackend
-from modulo.model_backends.cohere import CohereBackend
-from modulo.model_backends.deepseek import DeepSeekBackend
-from modulo.model_backends.fireworks import FireworksBackend
-from modulo.model_backends.gemini import GeminiBackend
-from modulo.model_backends.grok import GrokBackend
-from modulo.model_backends.groq import GroqBackend
-from modulo.model_backends.jan import JanBackend
-from modulo.model_backends.llamacpp import LLamaCppBackend
-from modulo.model_backends.lm_studio import LmStudioBackend
-from modulo.model_backends.localai import LocalAIBackend
-from modulo.model_backends.mistral import MistralBackend
-from modulo.model_backends.ollama import OllamaBackend
-from modulo.model_backends.openai import OpenAIBackend
-from modulo.model_backends.opencode import OpenCodeBackend
-from modulo.model_backends.openrouter import OpenRouterBackend
-from modulo.model_backends.perplexity import PerplexityBackend
-from modulo.model_backends.qwen import QwenBackend
-from modulo.model_backends.tgi import TgiBackend
-from modulo.model_backends.togetherai import TogetherAIBackend
-from modulo.model_backends.vertexai import VertexAIBackend
-from modulo.model_backends.vllm import VllmBackend
-from modulo.model_backends.watsonx import WatsonXBackend
 
 logger = logging.getLogger(__name__)
 
@@ -335,33 +310,40 @@ class ModelBackendHub:
         return frozenset(self._backends)
 
 
-_SIMPLE_API_KEY_BACKENDS: dict[str, type[ModelBackendBase]] = {
-    "ai21": Ai21Backend,
-    "anthropic": AnthropicBackend,
-    "cohere": CohereBackend,
-    "deepseek": DeepSeekBackend,
-    "fireworks": FireworksBackend,
-    "gemini": GeminiBackend,
-    "grok": GrokBackend,
-    "groq": GroqBackend,
-    "mistral": MistralBackend,
-    "openai": OpenAIBackend,
-    "opencode": OpenCodeBackend,
-    "openrouter": OpenRouterBackend,
-    "perplexity": PerplexityBackend,
-    "qwen": QwenBackend,
-    "togetherai": TogetherAIBackend,
+_SIMPLE_API_KEY_BACKENDS: dict[str, str] = {
+    "ai21": "Ai21Backend",
+    "anthropic": "AnthropicBackend",
+    "cohere": "CohereBackend",
+    "deepseek": "DeepSeekBackend",
+    "fireworks": "FireworksBackend",
+    "gemini": "GeminiBackend",
+    "grok": "GrokBackend",
+    "groq": "GroqBackend",
+    "mistral": "MistralBackend",
+    "openai": "OpenAIBackend",
+    "opencode": "OpenCodeBackend",
+    "openrouter": "OpenRouterBackend",
+    "perplexity": "PerplexityBackend",
+    "qwen": "QwenBackend",
+    "togetherai": "TogetherAIBackend",
 }
 
-_LOCAL_BACKENDS: dict[str, tuple[type[ModelBackendBase], str]] = {
-    "jan": (JanBackend, "http://localhost:1337/v1"),
-    "llamacpp": (LLamaCppBackend, _LOCALHOST_V1_URL),
-    "lm_studio": (LmStudioBackend, "http://localhost:1234/v1"),
-    "localai": (LocalAIBackend, _LOCALHOST_V1_URL),
-    "ollama": (OllamaBackend, "http://localhost:11434/v1"),
-    "tgi": (TgiBackend, _LOCALHOST_V1_URL),
-    "vllm": (VllmBackend, "http://localhost:8000/v1"),
+_LOCAL_BACKENDS: dict[str, tuple[str, str]] = {
+    "jan": ("JanBackend", "http://localhost:1337/v1"),
+    "llamacpp": ("LLamaCppBackend", _LOCALHOST_V1_URL),
+    "lm_studio": ("LmStudioBackend", "http://localhost:1234/v1"),
+    "localai": ("LocalAIBackend", _LOCALHOST_V1_URL),
+    "ollama": ("OllamaBackend", "http://localhost:11434/v1"),
+    "tgi": ("TgiBackend", _LOCALHOST_V1_URL),
+    "vllm": ("VllmBackend", "http://localhost:8000/v1"),
 }
+
+
+def _backend_class(provider: str, class_name: str) -> type[ModelBackendBase]:
+    """Import a provider adapter only when that provider is configured."""
+    module = importlib.import_module(f"modulo.model_backends.{provider}")
+    return cast(type[ModelBackendBase], getattr(module, class_name))
+
 
 _API_KEY_REQUIRED_PROVIDERS: frozenset[str] = frozenset(
     {
@@ -397,7 +379,7 @@ def _build_backend(
             raise ValueError("Missing 'aws_access_key_id' in credentials for provider 'bedrock'")
         if "aws_secret_access_key" not in creds:
             raise ValueError("Missing 'aws_secret_access_key' in credentials for provider 'bedrock'")
-        return BedrockBackend(
+        return _backend_class("bedrock", "BedrockBackend")(
             aws_access_key_id=creds["aws_access_key_id"],
             aws_secret_access_key=creds["aws_secret_access_key"],
             model_id=model_id,
@@ -407,7 +389,7 @@ def _build_backend(
     if provider == "vertexai":
         if "project" not in creds:
             raise ValueError("Missing 'project' in credentials for provider 'vertexai'")
-        return VertexAIBackend(
+        return _backend_class("vertexai", "VertexAIBackend")(
             project=creds["project"],
             model_id=model_id,
             location=creds.get("location", "us-central-1"),
@@ -416,15 +398,15 @@ def _build_backend(
     if provider in _API_KEY_REQUIRED_PROVIDERS and "api_key" not in creds:
         raise ValueError(f"Missing 'api_key' in credentials for provider {provider!r}")
 
-    cls = _SIMPLE_API_KEY_BACKENDS.get(provider)
-    if cls is not None:
-        return cls(api_key=creds["api_key"], model_id=model_id, **default_params)
+    class_name = _SIMPLE_API_KEY_BACKENDS.get(provider)
+    if class_name is not None:
+        return _backend_class(provider, class_name)(api_key=creds["api_key"], model_id=model_id, **default_params)
 
     local_config = _LOCAL_BACKENDS.get(provider)
     if local_config is not None:
-        cls, default_url = local_config
+        class_name, default_url = local_config
         base_url = creds.get("base_url", default_url)
-        return cls(
+        return _backend_class(provider, class_name)(
             api_key=creds.get("api_key", ""),
             model_id=model_id,
             base_url=base_url,
@@ -436,7 +418,7 @@ def _build_backend(
         if not azure_endpoint:
             raise ValueError("Missing 'azure_endpoint' in credentials for provider 'azure_openai'")
         api_version = creds.get("api_version", "2024-10-01-preview")
-        return AzureOpenAIBackend(
+        return _backend_class("azure_openai", "AzureOpenAIBackend")(
             api_key=creds["api_key"],
             model_id=model_id,
             azure_endpoint=azure_endpoint,
@@ -447,7 +429,7 @@ def _build_backend(
     if provider == "watsonx":
         if "project_id" not in creds:
             raise ValueError("Missing 'project_id' in credentials for provider 'watsonx'")
-        return WatsonXBackend(
+        return _backend_class("watsonx", "WatsonXBackend")(
             api_key=creds["api_key"],
             model_id=model_id,
             project_id=creds["project_id"],

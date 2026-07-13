@@ -1,4 +1,4 @@
-﻿<template>
+<template>
   <BackLink to="/admin/errors" label="Back to Error Dashboard" />
   <div class="page-wide">
     <header class="flex items-center justify-between">
@@ -216,6 +216,7 @@ import LoadingSpinner from '../components/shared/LoadingSpinner.vue'
 import ErrorAlert from '../components/shared/ErrorAlert.vue'
 import BackLink from '../components/BackLink.vue'
 import { formatApiError } from '../lib/api/formatError'
+import { shortId } from '../utils/format'
 
 const route = useRoute()
 const router = useRouter()

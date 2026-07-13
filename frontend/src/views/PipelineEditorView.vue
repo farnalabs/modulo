@@ -1,4 +1,4 @@
-﻿<template>
+<template>
   <BackLink to="/library" label="Back to Library" class="ml-6" />
   <div class="flex h-[calc(100vh-3.5rem)]">
     <div v-if="loading" class="flex flex-1 items-center justify-center">
@@ -194,8 +194,8 @@
 
         <div class="flex items-center justify-between">
           <h3 class="text-sm font-semibold">HITL Gate</h3>
-          <label class="inline-flex cursor-pointer items-center">
-            <input
+          <label for="pipelineeditorview-field-15" class="inline-flex cursor-pointer items-center">
+            <input id="pipelineeditorview-field-15"
               v-model="edgeForm.hitl_enabled"
               type="checkbox"
               class="h-4 w-4 rounded border-gray-300 text-primary focus:ring-primary"
@@ -206,16 +206,16 @@
 
         <div v-if="edgeForm.hitl_enabled" class="mt-4 space-y-4">
           <div>
-            <label class="mb-1 block text-xs font-medium text-muted-foreground">Label</label>
-            <input
+            <label for="pipelineeditorview-field-14" class="mb-1 block text-xs font-medium text-muted-foreground">Label</label>
+            <input id="pipelineeditorview-field-14"
               v-model="edgeForm.label"
               class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm"
               placeholder="e.g. Review before deploy"
             />
           </div>
           <div>
-            <label class="mb-1 block text-xs font-medium text-muted-foreground">Description</label>
-            <textarea
+            <label for="pipelineeditorview-field-13" class="mb-1 block text-xs font-medium text-muted-foreground">Description</label>
+            <textarea id="pipelineeditorview-field-13"
               v-model="edgeForm.description"
               class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm"
               placeholder="Describe what the reviewer should check"
@@ -223,8 +223,8 @@
             />
           </div>
           <div>
-            <label class="mb-1 block text-xs font-medium text-muted-foreground">Claim Expiry (minutes)</label>
-            <input
+            <label for="pipelineeditorview-field-12" class="mb-1 block text-xs font-medium text-muted-foreground">Claim Expiry (minutes)</label>
+            <input id="pipelineeditorview-field-12"
               v-model.number="edgeForm.claim_expiry_minutes"
               type="number"
               min="1"
@@ -233,19 +233,19 @@
             />
           </div>
           <div class="flex items-center gap-2">
-            <input
+            <input aria-label="checkbox"
               v-model="edgeForm.human_only"
               type="checkbox"
               class="h-4 w-4 rounded border-gray-300 text-primary focus:ring-primary"
             />
-            <label class="text-xs text-muted-foreground">Human only (block LLM auto-approval)</label>
+            <span class="text-xs text-muted-foreground">Human only (block LLM auto-approval)</span>
           </div>
 
           <hr class="border-t" />
 
           <div>
-            <label class="mb-1 block text-xs font-medium text-muted-foreground">Condition Type</label>
-            <select
+            <label for="pipelineeditorview-field-11" class="mb-1 block text-xs font-medium text-muted-foreground">Condition Type</label>
+            <select id="pipelineeditorview-field-11"
               v-model="edgeForm.condition_type"
               aria-label="Condition type"
               class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm"
@@ -257,8 +257,8 @@
           </div>
 
           <div v-if="edgeForm.condition_type === 'jmespath'">
-            <label class="mb-1 block text-xs font-medium text-muted-foreground">JMESPath Condition</label>
-            <input
+            <label for="pipelineeditorview-field-10" class="mb-1 block text-xs font-medium text-muted-foreground">JMESPath Condition</label>
+            <input id="pipelineeditorview-field-10"
               v-model="edgeForm.condition"
               class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm font-mono"
               placeholder="e.g. score > `0.5`"
@@ -270,8 +270,8 @@
 
           <div v-if="edgeForm.condition_type === 'eval'" class="space-y-3">
             <div>
-              <label class="mb-1 block text-xs font-medium text-muted-foreground">Eval Name</label>
-              <input
+              <label for="pipelineeditorview-field-9" class="mb-1 block text-xs font-medium text-muted-foreground">Eval Name</label>
+              <input id="pipelineeditorview-field-9"
                 v-model="edgeForm.eval_name"
                 class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm font-mono"
                 placeholder="e.g. quality-check"
@@ -279,8 +279,8 @@
             </div>
             <div class="flex gap-2">
               <div class="flex-1">
-                <label class="mb-1 block text-xs font-medium text-muted-foreground">Threshold</label>
-                <input
+                <label for="pipelineeditorview-field-8" class="mb-1 block text-xs font-medium text-muted-foreground">Threshold</label>
+                <input id="pipelineeditorview-field-8"
                   v-model.number="edgeForm.eval_threshold"
                   type="number"
                   min="0"
@@ -290,8 +290,8 @@
                 />
               </div>
               <div class="flex-1">
-                <label class="mb-1 block text-xs font-medium text-muted-foreground">Operator</label>
-                <select
+                <label for="pipelineeditorview-field-7" class="mb-1 block text-xs font-medium text-muted-foreground">Operator</label>
+                <select id="pipelineeditorview-field-7"
                   v-model="edgeForm.eval_operator"
                   aria-label="Operator"
                   class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm"
@@ -343,8 +343,8 @@
     >
       <div class="space-y-4">
           <div>
-            <label class="mb-1 block text-sm font-medium">{{ $t('views.PipelineEditorView.agent') }}</label>
-            <select
+            <label for="pipelineeditorview-field-6" class="mb-1 block text-sm font-medium">{{ $t('views.PipelineEditorView.agent') }}</label>
+            <select id="pipelineeditorview-field-6"
               v-model="pickerAgentId"
               data-testid="pipeline-editor-agent-select"
               aria-label="Agent"
@@ -356,8 +356,8 @@
             </select>
           </div>
           <div v-if="selectedAgent">
-            <label class="mb-1 block text-sm font-medium">{{ $t('views.PipelineEditorView.connector') }}</label>
-            <select
+            <label for="pipelineeditorview-field-5" class="mb-1 block text-sm font-medium">{{ $t('views.PipelineEditorView.connector') }}</label>
+            <select id="pipelineeditorview-field-5"
               v-model="pickerConnectorId"
               data-testid="pipeline-editor-connector-select"
               aria-label="Connector"
@@ -368,7 +368,7 @@
             </select>
           </div>
           <div v-if="selectedAgent">
-            <label class="mb-1 block text-sm font-medium">{{ $t('views.PipelineEditorView.model_backend_label') }}</label>
+            <span class="mb-1 block text-sm font-medium">{{ $t('views.PipelineEditorView.model_backend_label') }}</span>
             <div class="rounded-lg border bg-muted px-3 py-2 text-sm">
               {{ modelBackendName || $t('views.PipelineEditorView.loading') }}
             </div>
@@ -402,8 +402,8 @@
           {{ $t('views.PipelineEditorView.select_snapshot_description') }}
         </p>
         <div>
-          <label class="mb-1 block text-sm font-medium">{{ $t('views.PipelineEditorView.snapshot_label') }}</label>
-          <select
+          <label for="pipelineeditorview-field-4" class="mb-1 block text-sm font-medium">{{ $t('views.PipelineEditorView.snapshot_label') }}</label>
+          <select id="pipelineeditorview-field-4"
             v-model="revertSnapshotId"
             data-testid="pipeline-editor-snapshot-select"
             aria-label="Snapshot"
@@ -441,16 +441,16 @@
       </p>
       <div class="space-y-4">
         <div>
-          <label class="mb-1 block text-sm font-medium">Name *</label>
-          <input
+          <label for="pipelineeditorview-field-3" class="mb-1 block text-sm font-medium">Name *</label>
+          <input id="pipelineeditorview-field-3"
             v-model="saveAsName"
             class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm"
             placeholder="My Composite"
           />
         </div>
         <div>
-          <label class="mb-1 block text-sm font-medium">Description</label>
-          <textarea
+          <label for="pipelineeditorview-field-2" class="mb-1 block text-sm font-medium">Description</label>
+          <textarea id="pipelineeditorview-field-2"
             v-model="saveAsDescription"
             class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm"
             rows="3"
@@ -458,7 +458,7 @@
           />
         </div>
         <div>
-          <label class="mb-1 block text-sm font-medium">Selected Nodes</label>
+          <span class="mb-1 block text-sm font-medium">Selected Nodes</span>
           <div class="max-h-32 space-y-1 overflow-y-auto">
             <label
               v-for="node in rawNodes"
@@ -492,8 +492,8 @@
     >
       <div class="space-y-4">
         <div>
-          <label class="mb-1 block text-sm font-medium">Name</label>
-          <input
+          <label for="pipelineeditorview-field-1" class="mb-1 block text-sm font-medium">Name</label>
+          <input id="pipelineeditorview-field-1"
             v-model="renameName"
             class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm"
             placeholder="Pipeline name"
@@ -538,6 +538,7 @@ import BackLink from '../components/BackLink.vue'
 import FormDialog from '../components/shared/FormDialog.vue'
 import { shortId } from '../utils/format'
 import { api } from '../lib/api/client'
+import { useApi } from '../composables/useApi'
 import { Button } from '@/components/ui/button'
 
 const planStore = usePlanStore()
@@ -568,6 +569,7 @@ const pickerAgentId = ref<string>('')
 const pickerConnectorId = ref<string>('')
 const revertSnapshotId = ref<string>('')
 const convertError = ref<string | null>(null)
+const { post: postUntyped } = useApi()
 const revertError = ref<string | null>(null)
 const revertLoading = ref(false)
 
@@ -906,8 +908,10 @@ async function revertToManual() {
   try {
     const nodeId = selectedNodeData.value.id
     await api.POST('/api/v1/pipelines/{pipeline_id}/nodes/{node_id}/revert-to-manual', {
-      params: { path: { pipeline_id: pipelineId, node_id: nodeId } },
-      body: { snapshot_id: revertSnapshotId.value },
+      params: {
+        path: { pipeline_id: pipelineId, node_id: nodeId },
+        query: { snapshot_id: revertSnapshotId.value },
+      },
     })
     showRevertDialog.value = false
     await loadGraph()
@@ -956,10 +960,7 @@ async function handleRename() {
 
 async function handleArchive() {
   try {
-    const { data } = await api.POST('/api/v1/pipelines/{pipeline_id}/archive', {
-      params: { path: { pipeline_id: pipelineId } },
-    })
-    pipeline.value = data as any
+    pipeline.value = await postUntyped<Record<string, unknown>>(`/api/v1/pipelines/${pipelineId}/archive`)
   } catch (e: unknown) {
     pageError.value = `Failed to archive pipeline: ${formatApiError(e)}`
   }
@@ -967,10 +968,7 @@ async function handleArchive() {
 
 async function handleUnarchive() {
   try {
-    const { data } = await api.POST('/api/v1/pipelines/{pipeline_id}/unarchive', {
-      params: { path: { pipeline_id: pipelineId } },
-    })
-    pipeline.value = data as any
+    pipeline.value = await postUntyped<Record<string, unknown>>(`/api/v1/pipelines/${pipelineId}/unarchive`)
   } catch (e: unknown) {
     pageError.value = `Failed to unarchive pipeline: ${formatApiError(e)}`
   }
@@ -988,7 +986,7 @@ async function handleDelete() {
   }
 }
 
-const { loading, error: pageErrorRef, load: loadAll } = useDataFetch(
+const { loading, error: pageErrorRef } = useDataFetch(
   async () => {
     await Promise.all([loadPipeline(), loadGraph(), loadCatalog()])
     return {}

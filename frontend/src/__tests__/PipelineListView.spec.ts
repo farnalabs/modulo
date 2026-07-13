@@ -8,15 +8,9 @@ const mockResponses: Record<string, unknown> = {
   default: { items: [], total: 0, page: 1, page_size: 100 },
 }
 
-vi.mock('../composables/useApi', () => ({
-  useApi: vi.fn(() => ({
-    get: vi.fn((url: string) => Promise.resolve(mockResponses[url] ?? mockResponses.default)),
-  })),
-}))
-
 vi.mock('../lib/api/client', () => ({
   api: {
-    GET: vi.fn().mockResolvedValue({ data: null, error: undefined }),
+    GET: vi.fn(() => Promise.resolve({ data: mockResponses['/api/v1/pipelines?page_size=100'] ?? mockResponses.default, error: undefined })),
     PUT: vi.fn().mockResolvedValue({ data: null, error: undefined }),
     POST: vi.fn().mockResolvedValue({ data: null, error: undefined }),
     DELETE: vi.fn().mockResolvedValue({ data: null, error: undefined }),
@@ -63,7 +57,7 @@ describe('PipelineListView', () => {
         stubs: { ErrorAlert: true },
       },
     })
-    expect(wrapper.find('[data-testid="pipeline-list-search"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="filter-bar-search"]').exists()).toBe(true)
   })
 
   it('renders empty state when no pipelines exist', async () => {

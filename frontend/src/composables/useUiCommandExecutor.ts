@@ -1,4 +1,4 @@
-﻿import { formatApiError } from '../lib/api/formatError'
+import { formatApiError } from '../lib/api/formatError'
 
 import router from '@/router'
 
@@ -65,7 +65,7 @@ async function acquireElementLock(selector: string, timeout = 5000): Promise<boo
 
     function cleanup() {
       if (timer) clearTimeout(timer)
-      channel.removeEventListener('message', handleMessage)
+      channel?.removeEventListener('message', handleMessage)
       resolved = true
     }
 
@@ -147,6 +147,7 @@ const HIGHLIGHT_OUTLINE = '2px solid #3b82f6'
 const HIGHLIGHT_BG = 'rgba(59, 130, 246, 0.1)'
 
 export function abortUiCommands() {
+  releaseAllLocks()
   _paused = false
   if (_resumeResolver) {
     _resumeResolver()
@@ -621,4 +622,3 @@ export function waitForDomStable(timeout = 10000): Promise<void> {
     }, timeout)
   })
 }
-

@@ -230,7 +230,7 @@ def _export_credentials_references_sync(raw_url: str) -> dict[str, list[dict[str
         for table in _CREDENTIALS_TABLES:
             rows: list[dict[str, Any]] = []
             with conn.cursor() as cur:
-                sql = f"SELECT id, organisation_id, name, credentials_ciphertext FROM {table} ORDER BY id"  # noqa: S608 — guarded by whitelist in loop source
+                sql = f"SELECT id, organisation_id, name, credentials_ciphertext FROM {table} ORDER BY id"  # nosec B608  # noqa: S608 -- table comes from a fixed whitelist
                 cur.execute(sql)
                 for row in cur:
                     org_id = row.get("organisation_id")
@@ -371,7 +371,7 @@ def _re_encrypt_credentials_sync(
                         _log.warning("Invalid UUID in credentials row: %s", row.get("id", "?"))
                         continue
                     cur.execute(
-                        f"UPDATE {table} SET credentials_ciphertext = %s WHERE id = %s",  # noqa: S608 — guarded by whitelist assertion
+                        f"UPDATE {table} SET credentials_ciphertext = %s WHERE id = %s",  # nosec B608  # noqa: S608 -- table is whitelist-validated
                         (new_ct, row_id),
                     )
                     rekeyed += 1

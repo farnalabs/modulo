@@ -69,11 +69,6 @@
       </div>
 
       <EmptyState
-        v-else-if="section === 'native' && nativePrimitives.length === 0 && previewPrimitives.length === 0"
-        :title="$t('views.LibraryView.no_primitives_found')"
-      />
-
-      <EmptyState
         v-else-if="section === 'community' && communityPrimitives.length === 0"
         :title="$t('views.LibraryView.no_primitives_found')"
       />
@@ -337,6 +332,15 @@ interface ListResponse {
 const router = useRouter()
 const route = useRoute()
 
+const search = ref('')
+const typeFilter = ref('')
+const page = ref(1)
+const pageSize = ref(12)
+const total = ref(0)
+
+type LibrarySection = 'native' | 'community'
+const section = ref<LibrarySection>('native')
+
 const { loading, error, data: loadResp, load: loadPrimitives } = useDataFetch<ListResponse>(
   async () => {
     const params = new URLSearchParams({
@@ -358,11 +362,7 @@ const { loading, error, data: loadResp, load: loadPrimitives } = useDataFetch<Li
 
 const primitives = ref<LibraryPrimitive[]>([])
 
-type LibrarySection = 'native' | 'community'
-const section = ref<LibrarySection>('native')
-const total = ref(0)
-
-watch(loadResp, (d) => {
+watch([loadResp, section], ([d]) => {
   if (d) {
     primitives.value = section.value === 'native' ? d.items.filter(p => p.source !== 'community') : d.items
     total.value = section.value === 'native' ? primitives.value.length : d.total
@@ -375,11 +375,6 @@ function switchSection(next: LibrarySection) {
   page.value = 1
   loadPrimitives()
 }
-
-const search = ref('')
-const typeFilter = ref('')
-const page = ref(1)
-const pageSize = ref(12)
 
 const nativePrimitives = computed(() => primitives.value.filter(p => (p.tier ?? 'native') !== 'preview' && (p.tier ?? 'native') !== 'in_dev'))
 const previewPrimitives = computed(() => primitives.value.filter(p => p.tier === 'preview'))
@@ -437,8 +432,8 @@ async function toggleAutoUpdate(prim: LibraryPrimitive) {
   const newValue = !prim.auto_update
   toggleLoading.value[prim.id] = true
   try {
-    const { data } = await api.PATCH('/api/v1/libraries/{library_id}', {
-      params: { path: { library_id: prim.id } },
+    const { data } = await api.PATCH('/api/v1/libraries/{primitive_id}', {
+      params: { path: { primitive_id: prim.id } },
       body: { auto_update: newValue },
     })
     const idx = primitives.value.findIndex(x => x.id === prim.id)

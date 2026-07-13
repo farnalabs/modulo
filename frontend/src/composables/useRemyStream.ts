@@ -3,8 +3,7 @@ import { useRemyStore } from './useRemyStore'
 import { usePlanStore } from '../stores/planStore'
 import { getAuthHeaders } from '@/lib/api/client'
 import { parseSSEStream } from '@/lib/sse'
-import { executeCommandBatch, isPaused as isExecutorPaused, resumeUiCommands } from './useUiCommandExecutor'
-import type { UiCommandResult } from './useUiCommandExecutor'
+import { executeCommandBatch, isPaused as isExecutorPaused } from './useUiCommandExecutor'
 
 export interface ToolCallEvent {
   tool_call_id: string

@@ -24,8 +24,8 @@ describe('BuiltinMonitorBackend', () => {
     expect(backend.key).toBe('builtin')
   })
 
-  it('init returns true', () => {
-    expect(backend.init({})).toBe(true)
+  it('init returns true', async () => {
+    await expect(backend.init({ monitorBackends: [] })).resolves.toBe(true)
   })
 
   describe('captureError', () => {

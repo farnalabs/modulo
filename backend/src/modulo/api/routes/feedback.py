@@ -40,7 +40,6 @@ from modulo.db.models.pipeline_snapshot import PipelineSnapshot
 from modulo.db.models.run import Run
 from modulo.db.rls import set_rls_org
 
-
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/v1", tags=["feedback"])

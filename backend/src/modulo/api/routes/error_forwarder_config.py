@@ -1,13 +1,12 @@
 """API routes for error forwarder configuration — list, configure, test."""
 
 from __future__ import annotations
-from typing import ClassVar
-
 
 import asyncio
 import logging
 import uuid
 from datetime import UTC, datetime
+from typing import ClassVar
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy import select

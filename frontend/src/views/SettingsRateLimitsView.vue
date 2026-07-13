@@ -1,4 +1,4 @@
-﻿<template>
+<template>
   <div data-theme="agent" class="page-narrow">
     <PageHeader :title="$t('views.SettingsRateLimitsView.rate_limits')" data-test-id="rate-limits-title" :subtitle="$t('views.SettingsRateLimitsView.view_perroute_rate_limiting_rules_and_current_usage')" />
 
@@ -49,13 +49,10 @@
 <script setup lang="ts">
 import { computed } from 'vue'
 import { api } from '../lib/api/client'
-import type { components } from '../lib/api/client'
 import { useDataFetch } from '../composables/useDataFetch'
 import PageHeader from '../components/shared/PageHeader.vue'
 import LoadingSpinner from '../components/shared/LoadingSpinner.vue'
 import ErrorAlert from '../components/shared/ErrorAlert.vue'
-
-type RateLimitRule = components['schemas']['RateLimitRuleResponse']
 
 const { loading, error: loadError, data, load: loadRules } = useDataFetch(
   () => api.GET('/api/v1/admin/rate-limits'),

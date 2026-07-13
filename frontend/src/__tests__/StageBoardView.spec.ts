@@ -4,21 +4,21 @@ import { createPinia, setActivePinia } from 'pinia'
 import { createRouter, createWebHistory } from 'vue-router'
 import { nextTick } from 'vue'
 
-vi.mock('../composables/useApi', () => ({
-  useApi: vi.fn(() => ({
-    get: vi.fn().mockImplementation((url: string) => {
+vi.mock('../lib/api/client', () => ({
+  api: {
+    GET: vi.fn().mockImplementation((url: string) => {
       if (url === '/api/v1/stages') {
-        return Promise.resolve({
+        return Promise.resolve({ data: {
           items: [
             { id: 'stage-1', name: 'Development', description: 'Build stage', position: 0, visibility: 'org', owner_team_id: null, created_at: '2026-06-01T00:00:00Z', updated_at: '2026-06-01T00:00:00Z' },
             { id: 'stage-2', name: 'Testing', description: 'QA stage', position: 1, visibility: 'org', owner_team_id: 'team-alpha', created_at: '2026-06-01T00:00:00Z', updated_at: '2026-06-01T00:00:00Z' },
             { id: 'stage-3', name: 'Production', description: 'Live stage', position: 2, visibility: 'team', owner_team_id: 'team-beta', created_at: '2026-06-01T00:00:00Z', updated_at: '2026-06-01T00:00:00Z' },
           ],
           total: 3,
-        })
+        }, error: undefined })
       }
       if (url === '/api/v1/pipelines') {
-        return Promise.resolve({
+        return Promise.resolve({ data: {
           items: [
             { id: 'pipeline-1', name: 'Feature X', status: 'running', stage_id: 'stage-1', team_name: 'Alpha', created_at: '2026-06-28T10:00:00Z' },
             { id: 'pipeline-2', name: 'Bugfix Y', status: 'complete', stage_id: 'stage-2', team_name: 'Beta', created_at: '2026-06-27T10:00:00Z' },
@@ -26,21 +26,21 @@ vi.mock('../composables/useApi', () => ({
             { id: 'pipeline-4', name: 'Refactor A', status: 'failed', stage_id: 'stage-1', team_name: 'Beta', created_at: '2026-06-25T10:00:00Z' },
           ],
           total: 4,
-        })
+        }, error: undefined })
       }
       if (url === '/api/v1/teams') {
-        return Promise.resolve({
+        return Promise.resolve({ data: {
           items: [
             { id: 'team-alpha', name: 'Alpha' },
             { id: 'team-beta', name: 'Beta' },
           ],
-        })
+        }, error: undefined })
       }
-      return Promise.resolve({ items: [] })
+      return Promise.resolve({ data: { items: [] }, error: undefined })
     }),
-    post: vi.fn().mockResolvedValue({}),
-    patch: vi.fn().mockResolvedValue({}),
-  })),
+    POST: vi.fn().mockResolvedValue({ data: {}, error: undefined }),
+    PATCH: vi.fn().mockResolvedValue({ data: {}, error: undefined }),
+  },
 }))
 
 import StageBoardView from '../views/StageBoardView.vue'

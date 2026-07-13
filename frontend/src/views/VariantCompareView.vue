@@ -105,7 +105,7 @@
                         class="inline-flex items-center gap-0.5 rounded bg-muted px-1.5 py-0.5 text-[10px] tabular-nums text-muted-foreground"
                         :title="er.detail ?? undefined"
                       >
-                        {{ er.score !== null ? er.score.toFixed(2) : '�' }}
+                        {{ er.score !== null ? er.score.toFixed(2) : '-' }}
                       </span>
                     </div>
                   </div>
@@ -164,9 +164,9 @@
         <div v-if="nodeNames.length > 0 && diffVariantsAvailable.length >= 2" class="space-y-4">
           <h2 class="text-base font-semibold">{{ $t('views.variantCompare.outputDiffViewer') }}</h2>
           <div class="flex flex-wrap gap-4">
-            <label class="flex items-center gap-2 text-sm">
+            <label for="variantcompareview-field-3" class="flex items-center gap-2 text-sm">
               <span class="text-muted-foreground">{{ $t('views.variantCompare.node') }}:</span>
-              <select
+              <select id="variantcompareview-field-3"
                 v-model="diffNode"
                 data-testid="variant-compare-diff-node"
                 aria-label="Diff node"
@@ -175,9 +175,9 @@
                 <option v-for="n in nodeNames" :key="n" :value="n">{{ n }}</option>
               </select>
             </label>
-            <label class="flex items-center gap-2 text-sm">
+            <label for="variantcompareview-field-2" class="flex items-center gap-2 text-sm">
               <span class="text-muted-foreground">{{ $t('views.variantCompare.variantA') }}:</span>
-              <select
+              <select id="variantcompareview-field-2"
                 v-model="diffVarA"
                 data-testid="variant-compare-diff-variant-a"
                 aria-label="Variant A"
@@ -186,9 +186,9 @@
                 <option v-for="v in diffVariantsAvailable" :key="v" :value="v">{{ v }}</option>
               </select>
             </label>
-            <label class="flex items-center gap-2 text-sm">
+            <label for="variantcompareview-field-1" class="flex items-center gap-2 text-sm">
               <span class="text-muted-foreground">{{ $t('views.variantCompare.variantB') }}:</span>
-              <select
+              <select id="variantcompareview-field-1"
                 v-model="diffVarB"
                 data-testid="variant-compare-diff-variant-b"
                 aria-label="Variant B"
@@ -201,13 +201,13 @@
           <div class="grid grid-cols-1 gap-4 md:grid-cols-2">
             <div class="overflow-auto rounded-lg border bg-card">
               <div class="border-b bg-muted/50 px-3 py-2 text-xs font-medium text-muted-foreground">
-                {{ diffVarA || '�' }}
+                {{ diffVarA || '-' }}
               </div>
               <pre class="overflow-x-auto p-3 text-xs leading-relaxed"><code>{{ diffContentA }}</code></pre>
             </div>
             <div class="overflow-auto rounded-lg border bg-card">
               <div class="border-b bg-muted/50 px-3 py-2 text-xs font-medium text-muted-foreground">
-                {{ diffVarB || '�' }}
+                {{ diffVarB || '-' }}
               </div>
               <pre class="overflow-x-auto p-3 text-xs leading-relaxed"><code>{{ diffContentB }}</code></pre>
             </div>
@@ -250,8 +250,20 @@ const { t } = useI18n()
 type VariantGroup = components['schemas']['VariantGroupResponse']
 type RunResponse = components['schemas']['RunResponse']
 type RunIOResponse = components['schemas']['RunIOResponse']
-type RunEvalItem = components['schemas']['RunEvalItem']
-type RunEvalListResponse = components['schemas']['RunEvalListResponse']
+interface RunEvalItem {
+  eval_id: string
+  node_id: string
+  passed: boolean
+  score: number | null
+  detail?: string | null
+}
+
+interface RunEvalListResponse { items?: RunEvalItem[] }
+interface VariantDefinition {
+  [key: string]: unknown
+  name: string
+  weight: number
+}
 
 interface RunEntry {
   runId: string
@@ -263,7 +275,7 @@ interface RunEntry {
   evalResults: RunEvalItem[]
 }
 
-const { loading, error, data: groupsResp, load: fetchGroups } = useDataFetch(
+const { loading, error, data: groupsResp } = useDataFetch(
   () => api.GET('/api/v1/variant-groups'),
   { initialValue: [] as VariantGroup[] },
 )
@@ -286,7 +298,12 @@ const diffVarB = ref<string | null>(null)
 
 const terminalStatuses = new Set(['complete', 'failed', 'cancelled', 'eval_failed'])
 
-const variants = computed(() => selectedGroup.value?.variants ?? [])
+const variants = computed<VariantDefinition[]>(() =>
+  (selectedGroup.value?.variants ?? []).filter(
+    (variant): variant is VariantDefinition =>
+      typeof variant.name === 'string' && typeof variant.weight === 'number',
+  ),
+)
 
 const nodeNames = computed(() => {
   const names = new Set<string>()
@@ -501,8 +518,8 @@ async function pollRunStatus(runId: string, variantName: string) {
           runEntries.value.set(variantName, {
             ...existing,
             runStatus: status,
-            totalCostUsd: runResp.total_cost_usd,
-            tokenConsumption: runResp.token_consumption,
+            totalCostUsd: runResp.total_cost_usd == null ? null : Number(runResp.total_cost_usd),
+            tokenConsumption: runResp.token_consumption ?? null,
           })
         }
 
@@ -535,7 +552,7 @@ async function fetchRunIO(runId: string, variantName: string) {
       if (existing) {
         runEntries.value.set(variantName, {
           ...existing,
-          nodeOutputs: ioResp.outputs_json,
+          nodeOutputs: ioResp.outputs_json ?? null,
         })
       }
 

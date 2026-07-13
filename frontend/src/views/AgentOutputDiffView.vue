@@ -1,4 +1,4 @@
-﻿<template>
+<template>
   <div class="page-wide">
     <LoadingSpinner v-if="loading" />
     <ErrorAlert v-else-if="error" :message="error" />
@@ -21,7 +21,7 @@
                 {{ run.pipeline_name }} — {{ run.status }} ({{ run.created_at }})
               </option>
             </select>
-            <input
+            <input aria-label="Paste a run ID (or select from dropdown)"
               v-model="runIdA"
               data-testid="diff-run-id-a"
               type="text"
@@ -30,9 +30,9 @@
             />
           </div>
         </div>
-        <label class="flex flex-col gap-1.5">
+        <label for="agentoutputdiffview-field-1" class="flex flex-col gap-1.5">
           <span class="text-xs font-medium text-muted-foreground">{{ $t('views.AgentOutputDiffView.node_id') }}</span>
-          <input
+          <input id="agentoutputdiffview-field-1"
             v-model="nodeId"
             data-testid="diff-node-id"
             type="text"
@@ -55,7 +55,7 @@
                 {{ run.pipeline_name }} — {{ run.status }} ({{ run.created_at }})
               </option>
             </select>
-            <input
+            <input aria-label="Paste a run ID (or select from dropdown)"
               v-model="runIdB"
               data-testid="diff-run-id-b"
               type="text"
@@ -69,7 +69,7 @@
           data-testid="diff-compare-btn"
           variant="default"
           class="px-5 py-2"
-          @click="compare"
+          @click="handleCompare"
         >
           Compare
         </Button>
@@ -144,6 +144,8 @@
 <script setup lang="ts">
 import { ref, computed } from 'vue'
 import { api } from '../lib/api/client'
+import { formatApiError } from '../lib/api/formatError'
+import { useApi } from '../composables/useApi'
 import { useDataFetch } from '../composables/useDataFetch'
 import { useMutation } from '../composables/useMutation'
 import type { components } from '../lib/api/client'
@@ -167,8 +169,9 @@ interface RecentRun {
   created_at: string
 }
 
+const { get: getUntyped } = useApi()
 const { loading: loadingRuns, data: summaryResp } = useDataFetch(
-  () => api.GET('/api/v1/admin/dashboard/summary'),
+  async () => ({ data: await getUntyped<{ recent_runs: RecentRun[] }>('/api/v1/admin/dashboard/summary') }),
   { immediate: true },
 )
 
@@ -225,7 +228,7 @@ function diffMarker(line: NodeOutputDiffLine): string {
 }
 
 const { loading, error, mutate: compare } = useMutation(async () => {
-  const { data } = await api.POST('/api/v1/runs/diff', {
+  const { data, error: apiError } = await api.POST('/api/v1/runs/diff', {
     body: {
       run_id_a: runIdA.value.trim(),
       node_id_a: nodeId.value.trim(),
@@ -233,7 +236,16 @@ const { loading, error, mutate: compare } = useMutation(async () => {
       node_id_b: nodeId.value.trim(),
     },
   })
+  if (apiError) throw new Error(formatApiError(apiError))
   result.value = data as unknown as NodeOutputDiffResponse
   return data
 })
+
+async function handleCompare() {
+  try {
+    await compare()
+  } catch {
+    // useMutation exposes the error for the page-level alert.
+  }
+}
 </script>

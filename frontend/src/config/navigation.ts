@@ -201,7 +201,8 @@ export function canSeeItem(
   if (item.requiredTier && !plan.isAtMinimumTier(item.requiredTier)) return false
   if (item.requiredPermissions != null) {
     if (item.requiredPermissions.length === 0) return false
-    if (!user.permissions || !item.requiredPermissions.some((p) => user.permissions.includes(p))) return false
+    const permissions = user.permissions
+    if (!permissions || !item.requiredPermissions.some((p) => permissions.includes(p))) return false
   }
   return true
 }

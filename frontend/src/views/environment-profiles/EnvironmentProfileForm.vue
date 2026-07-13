@@ -18,8 +18,8 @@
 
     <form @submit.prevent="handleSubmit" class="card p-6 space-y-5">
       <div>
-        <label class="mb-1 block text-sm font-medium">Name <span class="text-destructive">*</span></label>
-        <input
+        <label for="environmentprofileform-field-7" class="mb-1 block text-sm font-medium">Name <span class="text-destructive">*</span></label>
+        <input id="environmentprofileform-field-7"
           v-model="form.name"
           type="text"
           class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm"
@@ -31,8 +31,8 @@
       </div>
 
       <div>
-        <label class="mb-1 block text-sm font-medium">Description</label>
-        <textarea
+        <label for="environmentprofileform-field-6" class="mb-1 block text-sm font-medium">Description</label>
+        <textarea id="environmentprofileform-field-6"
           v-model="form.description"
           rows="3"
           class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm"
@@ -42,8 +42,8 @@
       </div>
 
       <div>
-        <label class="mb-1 block text-sm font-medium">Provider Type <span class="text-destructive">*</span></label>
-        <select
+        <label for="environmentprofileform-field-5" class="mb-1 block text-sm font-medium">Provider Type <span class="text-destructive">*</span></label>
+        <select id="environmentprofileform-field-5"
           v-model="form.provider_type"
           aria-label="Provider type"
           class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm"
@@ -57,8 +57,8 @@
       </div>
 
       <div>
-        <label class="mb-1 block text-sm font-medium">Image Reference</label>
-        <input
+        <label for="environmentprofileform-field-4" class="mb-1 block text-sm font-medium">Image Reference</label>
+        <input id="environmentprofileform-field-4"
           v-model="form.image_ref"
           type="text"
           class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm"
@@ -68,7 +68,7 @@
       </div>
 
       <div>
-        <label class="mb-1 block text-sm font-medium">Capabilities</label>
+        <span class="mb-1 block text-sm font-medium">Capabilities</span>
         <div class="flex flex-wrap gap-2">
           <label
             v-for="cap in availableCapabilities"
@@ -89,8 +89,8 @@
       </div>
 
       <div>
-        <label class="mb-1 block text-sm font-medium">Network Policy</label>
-        <select
+        <label for="environmentprofileform-field-3" class="mb-1 block text-sm font-medium">Network Policy</label>
+        <select id="environmentprofileform-field-3"
           v-model="form.network_policy"
           aria-label="Network policy"
           class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm"
@@ -103,8 +103,8 @@
       </div>
 
       <div>
-        <label class="mb-1 block text-sm font-medium">Initialisation Strategy</label>
-        <select
+        <label for="environmentprofileform-field-2" class="mb-1 block text-sm font-medium">Initialisation Strategy</label>
+        <select id="environmentprofileform-field-2"
           v-model="form.initialisation_strategy"
           aria-label="Initialisation strategy"
           class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm"
@@ -117,8 +117,8 @@
       </div>
 
       <div>
-        <label class="mb-1 block text-sm font-medium">Persistence Policy</label>
-        <select
+        <label for="environmentprofileform-field-1" class="mb-1 block text-sm font-medium">Persistence Policy</label>
+        <select id="environmentprofileform-field-1"
           v-model="form.persistence_policy"
           aria-label="Persistence policy"
           class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm"

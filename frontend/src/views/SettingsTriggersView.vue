@@ -1,4 +1,4 @@
-﻿<template>
+<template>
   <FeatureGate feature-name="webhook_trigger" required-tier="community" show-disabled>
 
     <div data-theme="agent" class="page-wide">
@@ -68,10 +68,10 @@
                 </button>
               </td>
               <td class="px-4 py-3 text-muted-foreground">
-                {{ formatTimestamp(t.last_fired_at) }}
+                {{ formatTimestamp(t.last_fired_at ?? null) }}
               </td>
               <td class="px-4 py-3 text-muted-foreground">
-                {{ formatTimestamp(t.next_fire_at) }}
+                {{ formatTimestamp(t.next_fire_at ?? null) }}
               </td>
               <td class="px-4 py-3 text-right">
                 <TableActions :actions="triggerActions(t)" />
@@ -93,8 +93,8 @@
     >
       <form @submit.prevent="saveTrigger" class="space-y-4">
         <div>
-          <label class="mb-1 block text-sm font-medium">Pipeline</label>
-          <select
+          <label for="settingstriggersview-field-15" class="mb-1 block text-sm font-medium">Pipeline</label>
+          <select id="settingstriggersview-field-15"
             v-model="form.pipeline_id"
             class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm"
             data-testid="settings-triggers-form-pipeline"
@@ -107,8 +107,8 @@
         </div>
 
         <div v-if="!editingId">
-          <label class="mb-1 block text-sm font-medium">Trigger Type</label>
-          <select
+          <label for="settingstriggersview-field-14" class="mb-1 block text-sm font-medium">Trigger Type</label>
+          <select id="settingstriggersview-field-14"
             v-model="form.trigger_type"
             class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm"
             data-testid="settings-triggers-form-type"
@@ -129,8 +129,8 @@
         <!-- Webhook config -->
         <template v-if="form.trigger_type === 'webhook'">
           <div>
-            <label class="mb-1 block text-sm font-medium">URL</label>
-            <input
+            <label for="settingstriggersview-field-13" class="mb-1 block text-sm font-medium">URL</label>
+            <input id="settingstriggersview-field-13"
               v-model="form.webhook_url"
               type="url"
               class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm"
@@ -139,8 +139,8 @@
             />
           </div>
           <div>
-            <label class="mb-1 block text-sm font-medium">HTTP Method</label>
-            <select
+            <label for="settingstriggersview-field-12" class="mb-1 block text-sm font-medium">HTTP Method</label>
+            <select id="settingstriggersview-field-12"
               v-model="form.webhook_method"
               class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm"
               data-testid="settings-triggers-form-webhook-method"
@@ -152,8 +152,8 @@
             </select>
           </div>
           <div>
-            <label class="mb-1 block text-sm font-medium">Headers (JSON)</label>
-            <textarea
+            <label for="settingstriggersview-field-11" class="mb-1 block text-sm font-medium">Headers (JSON)</label>
+            <textarea id="settingstriggersview-field-11"
               v-model="form.webhook_headers"
               rows="3"
               class="w-full rounded-lg border border-input bg-background px-3 py-2 font-mono text-sm"
@@ -166,8 +166,8 @@
         <!-- Cron config -->
         <template v-if="form.trigger_type === 'cron'">
           <div>
-            <label class="mb-1 block text-sm font-medium">Cron Expression</label>
-            <input
+            <label for="settingstriggersview-field-10" class="mb-1 block text-sm font-medium">Cron Expression</label>
+            <input id="settingstriggersview-field-10"
               v-model="form.cron_expression"
               type="text"
               class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm font-mono"
@@ -176,8 +176,8 @@
             />
           </div>
           <div>
-            <label class="mb-1 block text-sm font-medium">Timezone</label>
-            <input
+            <label for="settingstriggersview-field-9" class="mb-1 block text-sm font-medium">Timezone</label>
+            <input id="settingstriggersview-field-9"
               v-model="form.cron_timezone"
               type="text"
               class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm"
@@ -186,8 +186,8 @@
             />
           </div>
           <div>
-            <label class="mb-1 block text-sm font-medium">Input Template (JSON)</label>
-            <textarea
+            <label for="settingstriggersview-field-8" class="mb-1 block text-sm font-medium">Input Template (JSON)</label>
+            <textarea id="settingstriggersview-field-8"
               v-model="form.input_template"
               rows="3"
               class="w-full rounded-lg border border-input bg-background px-3 py-2 font-mono text-sm"
@@ -200,8 +200,8 @@
         <!-- Polling config -->
         <template v-if="form.trigger_type === 'polling'">
           <div>
-            <label class="mb-1 block text-sm font-medium">Connector Instance ID</label>
-            <input
+            <label for="settingstriggersview-field-7" class="mb-1 block text-sm font-medium">Connector Instance ID</label>
+            <input id="settingstriggersview-field-7"
               v-model="form.connector_instance_id"
               type="text"
               class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm font-mono"
@@ -210,8 +210,8 @@
             />
           </div>
           <div>
-            <label class="mb-1 block text-sm font-medium">Query</label>
-            <textarea
+            <label for="settingstriggersview-field-6" class="mb-1 block text-sm font-medium">Query</label>
+            <textarea id="settingstriggersview-field-6"
               v-model="form.poll_query"
               rows="3"
               class="w-full rounded-lg border border-input bg-background px-3 py-2 font-mono text-sm"
@@ -220,8 +220,8 @@
             />
           </div>
           <div>
-            <label class="mb-1 block text-sm font-medium">Poll Interval (seconds)</label>
-            <input
+            <label for="settingstriggersview-field-5" class="mb-1 block text-sm font-medium">Poll Interval (seconds)</label>
+            <input id="settingstriggersview-field-5"
               v-model="form.poll_interval"
               type="number"
               min="10"
@@ -231,8 +231,8 @@
             />
           </div>
           <div>
-            <label class="mb-1 block text-sm font-medium">Condition Expression (JMESPath)</label>
-            <input
+            <label for="settingstriggersview-field-4" class="mb-1 block text-sm font-medium">Condition Expression (JMESPath)</label>
+            <input id="settingstriggersview-field-4"
               v-model="form.condition_expression"
               type="text"
               class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm font-mono"
@@ -245,8 +245,8 @@
         <!-- Agent Signal config -->
         <template v-if="form.trigger_type === 'agent_signal'">
           <div>
-            <label class="mb-1 block text-sm font-medium">Source Pipeline</label>
-            <select
+            <label for="settingstriggersview-field-3" class="mb-1 block text-sm font-medium">Source Pipeline</label>
+            <select id="settingstriggersview-field-3"
               v-model="form.signal_source_pipeline"
               class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm"
               data-testid="settings-triggers-form-signal-pipeline"
@@ -257,8 +257,8 @@
             </select>
           </div>
           <div>
-            <label class="mb-1 block text-sm font-medium">Source Node ID</label>
-            <input
+            <label for="settingstriggersview-field-2" class="mb-1 block text-sm font-medium">Source Node ID</label>
+            <input id="settingstriggersview-field-2"
               v-model="form.signal_source_node"
               type="text"
               class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm font-mono"
@@ -269,8 +269,8 @@
         </template>
 
         <div class="flex items-center gap-2">
-          <label class="flex items-center gap-2 text-sm">
-            <input
+          <label for="settingstriggersview-field-1" class="flex items-center gap-2 text-sm">
+            <input id="settingstriggersview-field-1"
               v-model="form.active"
               type="checkbox"
               class="rounded border-input"
@@ -315,8 +315,18 @@ import { shortId } from '../utils/format'
 
 const planStore = usePlanStore()
 
-type TriggerItem = components['schemas']['TriggerItem']
-type PipelineItem = components['schemas']['PipelineItem']
+interface TriggerItem {
+  id: string
+  pipeline_id: string
+  trigger_type: string
+  active: boolean
+  config_json: Record<string, unknown>
+  cron_expression?: string | null
+  cron_timezone?: string | null
+  last_fired_at?: string | null
+  next_fire_at?: string | null
+}
+type PipelineItem = components['schemas']['PipelineResponse']
 
 interface TriggerForm {
   pipeline_id: string
@@ -343,8 +353,12 @@ const { data: pipelinesData, load: loadPipelines } = useDataFetch(
   () => api.GET('/api/v1/pipelines', {}),
   { immediate: false }
 )
-const items = computed(() => (triggersData.value as any)?.items ?? [])
-const pipelines = computed(() => (pipelinesData.value as any)?.items ?? [])
+const items = computed<TriggerItem[]>(() =>
+  ((triggersData.value as { items?: TriggerItem[] } | null)?.items ?? []),
+)
+const pipelines = computed<PipelineItem[]>(() =>
+  ((pipelinesData.value as { items?: PipelineItem[] } | null)?.items ?? []),
+)
 
 const dialogOpen = ref(false)
 const deleteDialogOpen = ref(false)

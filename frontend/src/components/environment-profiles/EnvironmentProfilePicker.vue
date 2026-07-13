@@ -1,8 +1,8 @@
 <template>
   <div class="space-y-3">
-    <label class="mb-1 block text-sm font-medium">Environment Profile</label>
+    <label for="environmentprofilepicker-field-1" class="mb-1 block text-sm font-medium">Environment Profile</label>
 
-    <select
+    <select id="environmentprofilepicker-field-1"
       v-model="selectedId"
       aria-label="Environment profile"
       class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm"

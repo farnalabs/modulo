@@ -20,7 +20,6 @@ from sqlalchemy.exc import ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
 from modulo.api.dependencies import _get_engine, get_db_session, get_or_create_engine, pg_connection_string
-from modulo.settings import get_settings
 from modulo.auth.dependencies import get_current_user
 from modulo.auth.jwt import AuthenticatedPrincipal
 from modulo.core.pipeline_engine.executor import PipelineExecutor
@@ -36,6 +35,7 @@ from modulo.core.trigger_engine import (
 )
 from modulo.db.models.trigger import Trigger
 from modulo.db.rls import set_rls_org
+from modulo.settings import get_settings
 
 _log = logging.getLogger(__name__)
 

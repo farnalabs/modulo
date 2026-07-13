@@ -2,7 +2,7 @@
   <div class="space-y-2">
     <h3 class="px-1 text-xs font-semibold uppercase tracking-wider text-muted-foreground">Stage Types</h3>
     <div class="space-y-1.5">
-      <div
+      <div role="button" tabindex="0" @keydown.enter="($event.currentTarget as HTMLElement).click()" @keydown.space.prevent="($event.currentTarget as HTMLElement).click()"
         v-for="item in paletteItems"
         :key="item.type"
         draggable="true"
@@ -21,10 +21,10 @@
 
 <script setup lang="ts">
 import {
-  CogIcon,
-  GlobeIcon,
-  UserIcon,
-  HelpCircleIcon,
+  Cog as CogIcon,
+  Globe as GlobeIcon,
+  User as UserIcon,
+  CircleHelp as HelpCircleIcon,
 } from '@lucide/vue'
 import type { StageType } from '../../../types/lifecycleMap'
 

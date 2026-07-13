@@ -6,6 +6,26 @@ import { formatApiError } from "../lib/api/formatError";
 import { registerHandler } from "./syncRegistry";
 import type { EventBusEvent } from "@/types/events";
 
+interface ApiResult<T> {
+  data?: T;
+  error?: unknown;
+}
+
+interface FeatureFlagsPayload {
+  license: { tier: string };
+  flags: Array<{ name: string; currently_active: boolean }>;
+}
+
+interface LicensePayload {
+  expires_at?: string | null;
+  org_id?: string | null;
+  tier?: string;
+}
+
+interface TiersPayload {
+  tiers: Array<{ tier_id: string; label: string; rank: number }>;
+}
+
 export const usePlanStore = defineStore("plan", () => {
   const currentTier = ref("community");
   const features = ref<Record<string, boolean>>({});
@@ -70,7 +90,7 @@ export const usePlanStore = defineStore("plan", () => {
       const [flagsSettled, licenseSettled, tiersSettled] = results;
 
       if (flagsSettled.status === "fulfilled") {
-        const flagsRes = flagsSettled.value;
+        const flagsRes = flagsSettled.value as unknown as ApiResult<FeatureFlagsPayload>;
         if (flagsRes.error) {
           apiErrors.push(`Feature flags: ${formatApiError(flagsRes.error)}`);
         } else if (flagsRes.data) {
@@ -86,7 +106,7 @@ export const usePlanStore = defineStore("plan", () => {
       }
 
       if (licenseSettled.status === "fulfilled") {
-        const licenseRes = licenseSettled.value;
+        const licenseRes = licenseSettled.value as unknown as ApiResult<LicensePayload>;
         if (licenseRes.error) {
           apiErrors.push(`License: ${formatApiError(licenseRes.error)}`);
         } else if (licenseRes.data) {
@@ -99,7 +119,7 @@ export const usePlanStore = defineStore("plan", () => {
       }
 
       if (tiersSettled.status === "fulfilled") {
-        const tiersRes = tiersSettled.value;
+        const tiersRes = tiersSettled.value as unknown as ApiResult<TiersPayload>;
         if (tiersRes.error) {
           apiErrors.push(`Tiers: ${formatApiError(tiersRes.error)}`);
         } else if (tiersRes.data) {

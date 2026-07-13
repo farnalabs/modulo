@@ -1,4 +1,4 @@
-﻿<template>
+<template>
   <FeatureGate feature-name="model_backend_management" show-disabled>
     <div class="page-narrow">
       <header class="flex items-center justify-between">
@@ -23,8 +23,8 @@
           <form @submit.prevent="createBackend">
             <div class="space-y-4">
               <div>
-                <label class="mb-1 block text-sm font-medium">{{ $t('views.AdminModelBackendsView.name') }}</label>
-                <input
+                <label for="adminmodelbackendsview-field-14" class="mb-1 block text-sm font-medium">{{ $t('views.AdminModelBackendsView.name') }}</label>
+                <input id="adminmodelbackendsview-field-14"
                   v-model="formData.name"
                   type="text"
                   class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm"
@@ -33,8 +33,8 @@
                 />
               </div>
               <div>
-                <label class="mb-1 block text-sm font-medium">{{ $t('views.AdminModelBackendsView.display_name') }}</label>
-                <input
+                <label for="adminmodelbackendsview-field-13" class="mb-1 block text-sm font-medium">{{ $t('views.AdminModelBackendsView.display_name') }}</label>
+                <input id="adminmodelbackendsview-field-13"
                   v-model="formData.display_name"
                   type="text"
                   class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm"
@@ -43,8 +43,8 @@
                 />
               </div>
               <div>
-                <label class="mb-1 block text-sm font-medium">{{ $t('views.AdminModelBackendsView.provider') }}</label>
-                <select
+                <label for="adminmodelbackendsview-field-12" class="mb-1 block text-sm font-medium">{{ $t('views.AdminModelBackendsView.provider') }}</label>
+                <select id="adminmodelbackendsview-field-12"
                   v-model="formData.provider"
                   aria-label="Provider"
                   class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm"
@@ -66,8 +66,8 @@
                 </select>
               </div>
               <div v-if="showBaseUrl">
-                <label class="mb-1 block text-sm font-medium">{{ $t('views.AdminModelBackendsView.base_url') }}</label>
-                <input
+                <label for="adminmodelbackendsview-field-11" class="mb-1 block text-sm font-medium">{{ $t('views.AdminModelBackendsView.base_url') }}</label>
+                <input id="adminmodelbackendsview-field-11"
                   v-model="formData.base_url"
                   type="text"
                   class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm"
@@ -76,8 +76,8 @@
                 />
               </div>
               <div>
-                <label class="mb-1 block text-sm font-medium">{{ $t('views.AdminModelBackendsView.model_id') }}</label>
-                <input
+                <label for="adminmodelbackendsview-field-10" class="mb-1 block text-sm font-medium">{{ $t('views.AdminModelBackendsView.model_id') }}</label>
+                <input id="adminmodelbackendsview-field-10"
                   v-model="formData.model_id"
                   type="text"
                   class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm"
@@ -86,8 +86,8 @@
                 />
               </div>
               <div>
-                <label class="mb-1 block text-sm font-medium">{{ $t('views.AdminModelBackendsView.api_key') }}</label>
-                <input
+                <label for="adminmodelbackendsview-field-9" class="mb-1 block text-sm font-medium">{{ $t('views.AdminModelBackendsView.api_key') }}</label>
+                <input id="adminmodelbackendsview-field-9"
                   v-model="formData.api_key"
                   type="password"
                   class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm"
@@ -96,8 +96,8 @@
                 />
               </div>
               <div>
-                <label class="mb-1 block text-sm font-medium">{{ $t('views.AdminModelBackendsView.default_params_json') }}</label>
-                <textarea
+                <label for="adminmodelbackendsview-field-8" class="mb-1 block text-sm font-medium">{{ $t('views.AdminModelBackendsView.default_params_json') }}</label>
+                <textarea id="adminmodelbackendsview-field-8"
                   v-model="formData.default_params"
                   rows="4"
                   class="w-full rounded-lg border border-input bg-background px-3 py-2 font-mono text-sm"
@@ -106,8 +106,8 @@
                 ></textarea>
               </div>
               <div>
-                <label class="mb-1 block text-sm font-medium">{{ $t('views.AdminModelBackendsView.visibility') }}</label>
-                <select
+                <label for="adminmodelbackendsview-field-7" class="mb-1 block text-sm font-medium">{{ $t('views.AdminModelBackendsView.visibility') }}</label>
+                <select id="adminmodelbackendsview-field-7"
                   v-model="formData.visibility"
                   aria-label="Visibility"
                   class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm"
@@ -244,8 +244,8 @@
           <form @submit.prevent="updateBackend">
             <div class="space-y-4">
               <div>
-                <label class="mb-1 block text-sm font-medium">{{ $t('views.AdminModelBackendsView.name') }}</label>
-                <input
+                <label for="adminmodelbackendsview-field-6" class="mb-1 block text-sm font-medium">{{ $t('views.AdminModelBackendsView.name') }}</label>
+                <input id="adminmodelbackendsview-field-6"
                   v-model="formData.name"
                   type="text"
                   class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm"
@@ -253,8 +253,8 @@
                 />
               </div>
               <div>
-                <label class="mb-1 block text-sm font-medium">{{ $t('views.AdminModelBackendsView.display_name') }}</label>
-                <input
+                <label for="adminmodelbackendsview-field-5" class="mb-1 block text-sm font-medium">{{ $t('views.AdminModelBackendsView.display_name') }}</label>
+                <input id="adminmodelbackendsview-field-5"
                   v-model="formData.display_name"
                   type="text"
                   class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm"
@@ -262,8 +262,8 @@
                 />
               </div>
               <div>
-                <label class="mb-1 block text-sm font-medium">{{ $t('views.AdminModelBackendsView.model_id') }}</label>
-                <input
+                <label for="adminmodelbackendsview-field-4" class="mb-1 block text-sm font-medium">{{ $t('views.AdminModelBackendsView.model_id') }}</label>
+                <input id="adminmodelbackendsview-field-4"
                   v-model="formData.model_id"
                   type="text"
                   class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm"
@@ -271,8 +271,8 @@
                 />
               </div>
               <div>
-                <label class="mb-1 block text-sm font-medium">{{ $t('views.AdminModelBackendsView.api_key_leave_blank_to_keep_existing') }}</label>
-                <input
+                <label for="adminmodelbackendsview-field-3" class="mb-1 block text-sm font-medium">{{ $t('views.AdminModelBackendsView.api_key_leave_blank_to_keep_existing') }}</label>
+                <input id="adminmodelbackendsview-field-3"
                   v-model="formData.api_key"
                   type="password"
                   class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm"
@@ -281,8 +281,8 @@
                 />
               </div>
               <div>
-                <label class="mb-1 block text-sm font-medium">{{ $t('views.AdminModelBackendsView.default_params_json') }}</label>
-                <textarea
+                <label for="adminmodelbackendsview-field-2" class="mb-1 block text-sm font-medium">{{ $t('views.AdminModelBackendsView.default_params_json') }}</label>
+                <textarea id="adminmodelbackendsview-field-2"
                   v-model="formData.default_params"
                   rows="4"
                   class="w-full rounded-lg border border-input bg-background px-3 py-2 font-mono text-sm"
@@ -290,8 +290,8 @@
                 ></textarea>
               </div>
               <div>
-                <label class="mb-1 block text-sm font-medium">{{ $t('views.AdminModelBackendsView.visibility') }}</label>
-                <select
+                <label for="adminmodelbackendsview-field-1" class="mb-1 block text-sm font-medium">{{ $t('views.AdminModelBackendsView.visibility') }}</label>
+                <select id="adminmodelbackendsview-field-1"
                   v-model="formData.visibility"
                   aria-label="Visibility"
                   class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm"

@@ -19,8 +19,8 @@
           </span>
         </div>
         <div v-if="mapData?.versions && mapData.versions.length > 1" class="flex items-center gap-2">
-          <label class="text-sm text-muted-foreground">Version:</label>
-          <select
+          <label for="lifecyclemapview-field-1" class="text-sm text-muted-foreground">Version:</label>
+          <select id="lifecyclemapview-field-1"
             v-model="selectedVersion"
             class="rounded-lg border border-input bg-background px-3 py-1.5 text-sm"
             @change="onVersionChange"

@@ -1,8 +1,8 @@
-﻿<template>
+<template>
   <div class="space-y-4">
     <div>
-      <label class="mb-1 block text-sm font-medium">Name</label>
-      <input
+      <label for="nodecategoryeditor-field-5" class="mb-1 block text-sm font-medium">Name</label>
+      <input id="nodecategoryeditor-field-5"
         v-model="form.name"
         type="text"
         class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
@@ -11,8 +11,8 @@
     </div>
 
     <div>
-      <label class="mb-1 block text-sm font-medium">Description</label>
-      <textarea
+      <label for="nodecategoryeditor-field-4" class="mb-1 block text-sm font-medium">Description</label>
+      <textarea id="nodecategoryeditor-field-4"
         v-model="form.description"
         rows="3"
         class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
@@ -21,14 +21,14 @@
     </div>
 
     <div>
-      <label class="mb-1 block text-sm font-medium">Color</label>
+      <label for="nodecategoryeditor-field-3" class="mb-1 block text-sm font-medium">Color</label>
       <div class="flex items-center gap-3">
-        <input
+        <input id="nodecategoryeditor-field-3"
           v-model="form.color"
           type="color"
           class="h-9 w-14 cursor-pointer rounded border border-input bg-background p-0.5"
         />
-        <input
+        <input aria-label="#6366f1"
           v-model="form.color"
           type="text"
           class="flex-1 rounded-lg border border-input bg-background px-3 py-2 text-sm font-mono ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
@@ -39,8 +39,8 @@
     </div>
 
     <div>
-      <label class="mb-1 block text-sm font-medium">Icon</label>
-      <select
+      <label for="nodecategoryeditor-field-2" class="mb-1 block text-sm font-medium">Icon</label>
+      <select id="nodecategoryeditor-field-2"
         v-model="form.icon"
         aria-label="Icon"
         class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
@@ -62,8 +62,8 @@
     </div>
 
     <div>
-      <label class="mb-1 block text-sm font-medium">{{ $t('components.NodeCategoryEditor.sort_order') }}</label>
-      <input
+      <label for="nodecategoryeditor-field-1" class="mb-1 block text-sm font-medium">{{ $t('components.NodeCategoryEditor.sort_order') }}</label>
+      <input id="nodecategoryeditor-field-1"
         v-model.number="form.sort_order"
         type="number"
         min="0"

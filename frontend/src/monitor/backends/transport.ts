@@ -1,14 +1,19 @@
-import type { MonitorBackend, MonitorEvent, UserInfo } from '../types'
+import type { ErrorEventInput, MonitorBackend, MonitorConfig, MonitorLevel, UserInfo } from '../types'
 import { enqueueError } from '../../lib/error-tracking/transport'
-import type { ErrorEventInput } from '../../lib/error-tracking/types'
 
 export class TransportBackend implements MonitorBackend {
-  captureError(event: MonitorEvent, error: Error, context?: Record<string, unknown>): void {
-    enqueueError(event as unknown as ErrorEventInput)
+  readonly key = 'transport'
+
+  async init(_config: MonitorConfig): Promise<boolean> {
+    return true
   }
 
-  captureMessage(message: string, level: string): void {
-    enqueueError({ level, message } as unknown as ErrorEventInput)
+  captureError(event: ErrorEventInput, _error?: Error, _context?: Record<string, unknown>): void {
+    enqueueError(event)
+  }
+
+  captureMessage(message: string, level: MonitorLevel): void {
+    enqueueError({ level, message })
   }
 
   setUser(_user: UserInfo | null): void {}

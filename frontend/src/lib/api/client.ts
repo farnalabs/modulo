@@ -3,7 +3,6 @@ import type { paths } from './schema'
 import { toProblemDetail } from './formatError'
 import {
   getAuthHeaders,
-  getAccessToken,
   attemptTokenRefresh,
   clearAccessToken,
   redirectToLogin,
@@ -25,11 +24,11 @@ export const api = createClient<paths>({
 
 // openapi-fetch doesn't support dynamic headers, so we wrap the methods
 // to inject the auth token on every request.
-const _origGet = api.GET.bind(api)
-const _origPost = api.POST.bind(api)
-const _origPut = api.PUT.bind(api)
-const _origPatch = api.PATCH.bind(api)
-const _origDelete = api.DELETE.bind(api)
+const _origGet = api.GET
+const _origPost = api.POST
+const _origPut = api.PUT
+const _origPatch = api.PATCH
+const _origDelete = api.DELETE
 
 function withAuth(fn: (...args: any[]) => any) {
   return async (...args: any[]) => {

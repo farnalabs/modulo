@@ -83,13 +83,14 @@ class TrelloTicketTracker(TicketTrackerBase):
         return {"ticket_id": ticket.id, "url": ticket.url or ""}
 
     async def list_tickets(self, ticket_filter: TicketFilter | None = None) -> list[Ticket]:
+        if ticket_filter and ticket_filter.offset:
+            logger.warning("offset is not supported by Trello's API; ignoring offset=%s", ticket_filter.offset)
+
         async with httpx.AsyncClient() as client:
             params: dict[str, Any] = self._auth()
             params["fields"] = TRELLO_CARD_FIELDS
             if ticket_filter and ticket_filter.limit:
                 params["limit"] = str(min(ticket_filter.limit, 100))
-            if ticket_filter and ticket_filter.offset:
-                logger.warning("offset is not supported by Trello's API; ignoring offset=%s", ticket_filter.offset)
             try:
                 resp = await client.get(
                     f"{self._base_url}/boards/{self._board_id}/cards",

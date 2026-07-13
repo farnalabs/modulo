@@ -17,6 +17,8 @@ jobs:
         working-directory: backend
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - uses: astral-sh/setup-uv@v7
         with:
           python-version: "3.12"
@@ -25,7 +27,15 @@ jobs:
       - run: uv run --no-sync ruff check .
       - run: uv run --no-sync mypy src/modulo/
       - run: uv run --no-sync bandit -r src/modulo/ -ll
-      - run: uv run --no-sync semgrep --config=../.semgrep/ .
+      - name: Semgrep (block new findings)
+        shell: bash
+        run: |
+          if [ "$GITHUB_EVENT_NAME" = "pull_request" ]; then
+            baseline="origin/$GITHUB_BASE_REF"
+          else
+            baseline="HEAD^"
+          fi
+          uv run --no-sync semgrep --config=../.semgrep/ --baseline-commit "$baseline" --error .
       - run: uv run --no-sync pip-audit
 
   backend-test:

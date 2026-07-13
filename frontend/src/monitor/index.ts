@@ -1,4 +1,9 @@
 import type { MonitorConfig } from './types'
+import type { MonitorBackend } from './types'
+import { BuiltinMonitorBackend } from './backends/builtin'
+import { DatadogRumMonitorBackend } from './backends/datadog-rum'
+import { GrafanaFaroMonitorBackend } from './backends/grafana-faro'
+import { SentryMonitorBackend } from './backends/sentry'
 
 export function loadMonitorConfig(): MonitorConfig {
   const runtime = (window as unknown as Record<string, unknown>).__MODULO_CONFIG__
@@ -29,15 +34,25 @@ export function loadMonitorConfig(): MonitorConfig {
   }
 }
 
-export async function loadBackends(config: MonitorConfig): Promise<string[]> {
-  const envBackends = (import.meta.env.VITE_MONITOR_BACKEND || 'builtin')
-    .split(',')
-    .map((s: string) => s.trim())
-    .filter(Boolean)
-
-  if (envBackends.length > 0) {
-    return envBackends
+export async function loadBackends(config: MonitorConfig): Promise<MonitorBackend[]> {
+  const factories: Record<string, () => MonitorBackend> = {
+    builtin: () => new BuiltinMonitorBackend(),
+    sentry: () => new SentryMonitorBackend(),
+    'datadog-rum': () => new DatadogRumMonitorBackend(),
+    datadog_rum: () => new DatadogRumMonitorBackend(),
+    'grafana-faro': () => new GrafanaFaroMonitorBackend(),
+    grafana_faro: () => new GrafanaFaroMonitorBackend(),
   }
 
-  return config.monitorBackends
+  const backends: MonitorBackend[] = []
+  for (const key of config.monitorBackends) {
+    const create = factories[key]
+    if (!create) {
+      console.warn(`[monitor] Unknown backend: ${key}`)
+      continue
+    }
+    const backend = create()
+    if (await backend.init(config)) backends.push(backend)
+  }
+  return backends
 }

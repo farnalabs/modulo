@@ -1,10 +1,10 @@
-import type { MonitorBackend, MonitorConfig, ErrorEventInput } from '../types'
+import type { ErrorEventInput, MonitorBackend, MonitorConfig, MonitorLevel, UserInfo } from '../types'
 import { enqueueError, disposeTransport } from '../../lib/error-tracking/transport'
 
 export class BuiltinMonitorBackend implements MonitorBackend {
   readonly key = 'builtin'
 
-  init(_config: MonitorConfig): boolean {
+  async init(_config: MonitorConfig): Promise<boolean> {
     return true
   }
 
@@ -15,13 +15,17 @@ export class BuiltinMonitorBackend implements MonitorBackend {
     })
   }
 
-  captureMessage(message: string, level: 'error' | 'warning' | 'critical'): void {
+  captureMessage(message: string, level: MonitorLevel): void {
     enqueueError({
       level,
       message,
       source: 'frontend',
     })
   }
+
+  setUser(_user: UserInfo | null): void {}
+
+  setTags(_tags: Record<string, string>): void {}
 
   dispose(): void {
     disposeTransport()
