@@ -72,12 +72,20 @@ def get_or_create_engine(settings: Settings) -> AsyncEngine:
     """
     global _engine
     if _engine is None:
+        connect_args: dict[str, Any] = {"timeout": 10}
+        db_type = settings.modulo_db.lower()
+
+        # asyncpg defaults to "prefer" SSL which causes ConnectionResetError
+        # on Fly Postgres private networks (no TLS listener). Explicitly
+        # disable SSL to match bootstrap_db.py's ssl=False pattern.
+        if db_type == "postgres":
+            connect_args["ssl"] = False
+
         kw: dict[str, Any] = {
             "url": settings.database_url,
             "pool_pre_ping": True,
-            "connect_args": {"timeout": 10},
+            "connect_args": connect_args,
         }
-        db_type = settings.modulo_db.lower()
         if db_type != "sqlite":
             kw["pool_size"] = 20
             kw["max_overflow"] = 10
