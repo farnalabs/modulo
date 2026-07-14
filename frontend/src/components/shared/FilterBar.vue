@@ -20,8 +20,8 @@
     <Select
       v-for="filter in selectFilters"
       :key="filter.key"
-      :model-value="filterValues[filter.key] ?? ''"
-      @update:model-value="(val: string) => $emit('update:filter', filter.key, val)"
+      :model-value="(filterValues[filter.key] ?? '') || '__all__'"
+      @update:model-value="(val: string) => $emit('update:filter', filter.key, val === '__all__' ? '' : val)"
     >
       <SelectTrigger
         class="w-auto min-w-[140px]"
@@ -31,7 +31,7 @@
         <SelectValue :placeholder="filter.label" />
       </SelectTrigger>
       <SelectContent>
-        <SelectItem value="">{{ filter.label }}</SelectItem>
+        <SelectItem value="__all__">{{ filter.label }}</SelectItem>
         <SelectItem v-for="opt in filter.options" :key="opt.value" :value="opt.value">
           {{ opt.label }}
         </SelectItem>
