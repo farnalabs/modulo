@@ -325,6 +325,7 @@ class McpAuthMiddleware(BaseHTTPMiddleware):
             request.scope["auth_principal"] = {
                 "type": "user",
                 "org_id": str(principal.organisation_id) if principal.organisation_id else "",
+                "user_id": str(principal.account_id) if principal.account_id else "",
             }
             resp4: Response = await call_next(request)
             return resp4
