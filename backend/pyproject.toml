@@ -258,7 +258,20 @@ source_paths = [
 ]
 runner = "pytest -q --timeout=60 -m 'not integration and not e2e'"
 backup = false
-pytest_add_cli_args_test_selection = ["tests/unit", "tests/architecture"]
+pytest_add_cli_args_test_selection = [
+    "tests/unit/auth",
+    "tests/unit/core",
+    "tests/unit/db",
+    "tests/unit/graph_validator",
+    "tests/unit/audit_logger",
+    "tests/unit/pipeline_engine",
+    "tests/unit/connector_hub",
+    "tests/unit/model_backend_hub",
+    "tests/unit/cost_controller",
+    "tests/unit/eval_engine",
+    "tests/unit/run_context",
+    "tests/architecture",
+]
 
 [tool.importlinter]
 root_package = "modulo"
