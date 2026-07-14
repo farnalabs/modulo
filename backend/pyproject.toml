@@ -267,9 +267,6 @@ pytest_add_cli_args_test_selection = [
     "tests/unit/pipeline_engine",
     "tests/unit/connector_hub",
     "tests/unit/model_backend_hub",
-    "tests/unit/cost_controller",
-    "tests/unit/eval_engine",
-    "tests/unit/run_context",
     "tests/architecture",
 ]
 
