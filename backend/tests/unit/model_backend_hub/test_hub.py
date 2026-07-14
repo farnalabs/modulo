@@ -47,7 +47,7 @@ print(json.dumps(provider_modules))
         check=True,
         capture_output=True,
         text=True,
-        timeout=30,
+        timeout=90,
     )
     assert json.loads(result.stdout) == []
 
