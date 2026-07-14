@@ -1168,9 +1168,9 @@ async def copy_library_primitive(
             )
         except LookupError:
             return {"error": "not_found", "primitive_id": primitive_id}
-    except Exception as e:
-        _log.exception("copy_library_primitive failed")
-        return {"error": "internal_error", "detail": f"Failed to copy library primitive: {e}"}
+        except Exception:
+            _log.exception("copy_library_primitive failed")
+            return _tool_error("Failed to copy library primitive")
 
     return {
         "status": "copied",
