@@ -2,6 +2,20 @@
 
 Full PRD: `docs/prd.md`. This file covers how to build. Conflicts between files → fix the conflict.
 
+## Diagnostic Order (MANDATORY — database/connection issues)
+
+When encountering ANY database connection error (`ConnectionResetError`, `ConnectionDoesNotExistError`, timeout, 503), follow this order BEFORE making code changes:
+
+1. **Check DB health** — `fly checks list --app modulo-app-db` (or the relevant DB app). If `pg` or `role` checks are critical/passing, the DB is fine. If critical, SSH in and restart: `fly ssh console --app <db-app> --machine <id> --command "su - postgres -c '/usr/lib/postgresql/17/bin/pg_ctl start -D /data/postgresql'"`. The `check-db-health.ps1` watchdog runs every 5 minutes as a scheduled task — check its log first.
+
+2. **Check app health** — `fly status --app app-modulo`. Look at VERSION and CHECKS columns. Machines on the latest version with "passing" are healthy. Machines on old versions are stale and can be cleaned up.
+
+3. **Check machine logs** — `fly logs --app app-modulo --no-tail | Select-Object -Last 20`. Look for the actual exception type — this determines the root cause.
+
+4. **Check whether the handover framed the issue** — the previous handover may contain diagnostic bias. Always verify the DB is healthy before accepting "SSL issue" or "network issue" diagnoses.
+
+The most common root cause (July 2026): Postgres process crashes silently, new connection pools can't form, but old pools keep serving. Health check passes on old machines, fails on new ones. Fix is always: restart Postgres + bluegreen deploy.
+
 ## Non-Negotiable Enforcement Gates
 
 The following enforcement mechanisms are STRUCTURALLY PROTECTED. Any agent observed weakening, bypassing, or removing any of these will be blocked with a violation. These rules exist because every previous gap (continue-on-error, WARN-only checks, skippable integration tests, no E2E in gate) was exploited by rot.
