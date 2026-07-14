@@ -21,6 +21,7 @@
             <button v-if="!pipeline?.archived_at" class="rounded-md border border-input bg-background px-3 py-1 text-xs font-medium hover:bg-accent" @click="handleArchive">Archive</button>
             <button v-else class="rounded-md border border-input bg-background px-3 py-1 text-xs font-medium hover:bg-accent" @click="handleUnarchive">Unarchive</button>
             <button v-if="planStore.featureEnabled('pipeline_delete')" class="rounded-md border border-destructive/50 bg-destructive/10 px-3 py-1 text-xs font-medium text-destructive hover:bg-destructive/20" @click="showDeleteConfirm = true">Delete</button>
+            <Button variant="outline" size="xs" @click="addNode">Add Node</Button>
           </div>
         </div>
         <!-- Toolbar -->
@@ -78,6 +79,15 @@
             <button v-else class="rounded-md border border-input bg-background px-2 py-1 text-xs font-medium hover:bg-accent" @click="handleUnarchive">Unarchive</button>
             <button v-if="planStore.featureEnabled('pipeline_delete')" class="rounded-md border border-destructive/50 bg-destructive/10 px-2 py-1 text-xs font-medium text-destructive hover:bg-destructive/20" @click="showDeleteConfirm = true">Delete</button>
           </div>
+          <span class="mx-2 h-4 w-px bg-border" />
+          <button
+            class="rounded-md border border-input bg-background px-2 py-1 text-xs font-medium hover:bg-accent flex items-center gap-1"
+            @click="fitView"
+            title="Fit view"
+          >
+            <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="15 3 21 3 21 9"/><polyline points="9 21 3 21 3 15"/><line x1="21" y1="3" x2="14" y2="10"/><line x1="3" y1="21" x2="10" y2="14"/></svg>
+            Fit View
+          </button>
         </div>
 
         <VueFlow
@@ -546,7 +556,7 @@
 <script setup lang="ts">
 import { ref, computed, reactive } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { VueFlow } from '@vue-flow/core'
+import { VueFlow, useVueFlow } from '@vue-flow/core'
 import { Background } from '@vue-flow/background'
 import { Controls } from '@vue-flow/controls'
 import '@vue-flow/core/dist/style.css'
@@ -575,6 +585,7 @@ const selectedNodeData = ref<any | null>(null)
 const selectedEdgeData = ref<any | null>(null)
 const showSaveAsDropdown = ref(false)
 const nodeTypes = { agent: 'agent', manual: 'manual' }
+const { fitView } = useVueFlow()
 
 const agents = ref<any[]>([])
 const connectors = ref<any[]>([])
@@ -860,6 +871,23 @@ function onPaneClick() {
   selectedNodeData.value = null
   selectedEdgeData.value = null
   showSaveAsDropdown.value = false
+}
+
+function addNode() {
+  const id = `node-${Date.now()}`
+  const newNode = {
+    id,
+    type: 'agent',
+    position: { x: 250, y: 100 },
+    data: { label: 'New Node' },
+  }
+  flowNodes.value = [...flowNodes.value, newNode]
+  rawNodes.value = [...rawNodes.value, {
+    id,
+    node_type: 'agent',
+    label: 'New Node',
+    position: { x: 250, y: 100 },
+  }]
 }
 
 function openAgentPicker() {
