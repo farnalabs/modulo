@@ -1,5 +1,6 @@
 """POST /api/v1/runs — manual pipeline trigger and run lifecycle endpoints."""
 
+import asyncio
 import difflib
 import json
 import logging
@@ -58,6 +59,72 @@ router = APIRouter(prefix="/api/v1/runs", tags=["runs"])
 _TERMINAL_STATUSES = frozenset({"complete", "failed", "cancelled", "eval_failed"})
 
 
+async def _run_with_retry(fn, max_retries=2, base_delay=0.5):
+    """Execute fn with retry on transient connection errors."""
+    last_exc = None
+    for attempt in range(max_retries + 1):
+        try:
+            return await fn()
+        except (TimeoutError, ConnectionResetError, OSError) as exc:
+            last_exc = exc
+            if attempt < max_retries:
+                _log.warning("route.db_retry", extra={"attempt": attempt + 1, "error": str(exc)})
+                await asyncio.sleep(base_delay * (2**attempt))
+            else:
+                _log.warning("route.db_retry_exhausted", extra={"error": str(exc)})
+    raise last_exc
+
+
+async def _do_list_runs(
+    session: AsyncSession,
+    user: TenantPrincipal,
+    pipeline_id,
+    run_status,
+    trigger_type,
+    search,
+    page,
+    page_size,
+) -> dict[str, Any]:
+    async with session.begin():
+        await set_rls_org(session, user.organisation_id)
+        result = await db_list_runs(
+            session,
+            pipeline_id=pipeline_id,
+            status=run_status,
+            trigger_type=trigger_type,
+            search=search,
+            page=page,
+            page_size=page_size,
+        )
+        items = []
+        for run in result.items:
+            pipeline_name = run.pipeline.name if run.pipeline else None
+            items.append(
+                {
+                    "run_id": str(run.id),
+                    "pipeline_id": str(run.pipeline_id),
+                    "pipeline_name": pipeline_name,
+                    "status": run.status,
+                    "trigger_type": run.trigger_type,
+                    "run_number": run.run_number,
+                    "created_at": run.created_at.isoformat() if run.created_at else None,
+                    "started_at": run.started_at.isoformat() if run.started_at else None,
+                    "completed_at": run.completed_at.isoformat() if run.completed_at else None,
+                    "error_code": run.error_code,
+                    "total_cost_usd": run.total_cost_usd,
+                    "account_id": str(run.account_id) if run.account_id else None,
+                }
+            )
+    return {
+        "items": items,
+        "total": result.total,
+        "page": result.page,
+        "page_size": result.page_size,
+        "next_cursor": result.next_cursor,
+        "has_more": result.has_more,
+    }
+
+
 @router.get("")
 async def list_runs_endpoint(
     pipeline_id: uuid.UUID | None = Query(None),
@@ -70,36 +137,9 @@ async def list_runs_endpoint(
     user: TenantPrincipal = Depends(get_current_tenant_user),
 ) -> dict[str, Any]:
     try:
-        async with session.begin():
-            await set_rls_org(session, user.organisation_id)
-            result = await db_list_runs(
-                session,
-                pipeline_id=pipeline_id,
-                status=run_status,
-                trigger_type=trigger_type,
-                search=search,
-                page=page,
-                page_size=page_size,
-            )
-            items = []
-            for run in result.items:
-                pipeline_name = run.pipeline.name if run.pipeline else None
-                items.append(
-                    {
-                        "run_id": str(run.id),
-                        "pipeline_id": str(run.pipeline_id),
-                        "pipeline_name": pipeline_name,
-                        "status": run.status,
-                        "trigger_type": run.trigger_type,
-                        "run_number": run.run_number,
-                        "created_at": run.created_at.isoformat() if run.created_at else None,
-                        "started_at": run.started_at.isoformat() if run.started_at else None,
-                        "completed_at": run.completed_at.isoformat() if run.completed_at else None,
-                        "error_code": run.error_code,
-                        "total_cost_usd": run.total_cost_usd,
-                        "account_id": str(run.account_id) if run.account_id else None,
-                    }
-                )
+        return await _run_with_retry(
+            lambda: _do_list_runs(session, user, pipeline_id, run_status, trigger_type, search, page, page_size)
+        )
     except IntegrityError:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
@@ -114,7 +154,7 @@ async def list_runs_endpoint(
         _log.warning("route.db_error", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Database temporarily unavailable.",
+            detail="Database temporarily unavailable. Retrying may help.",
         ) from None
     except HTTPException:
         raise
@@ -124,15 +164,6 @@ async def list_runs_endpoint(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="An unexpected error occurred.",
         ) from None
-
-    return {
-        "items": items,
-        "total": result.total,
-        "page": result.page,
-        "page_size": result.page_size,
-        "next_cursor": result.next_cursor,
-        "has_more": result.has_more,
-    }
 
 
 _NAMESPACE_TRACE = uuid.UUID("6ba7b810-9dad-11d1-80b4-00c04fd430c8")
