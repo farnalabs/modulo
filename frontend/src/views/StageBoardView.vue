@@ -433,6 +433,13 @@ import { api } from '../lib/api/client'
 import { formatDateShort } from '../lib/formatDate'
 import { Button } from '@/components/ui/button'
 
+async function fetchWithTimeout<T>(promise: Promise<T>, ms = 15000): Promise<T> {
+  const timeout = new Promise<never>((_, reject) =>
+    setTimeout(() => reject(new Error('Request timed out')), ms)
+  )
+  return Promise.race([promise, timeout])
+}
+
 const selectedStageId = ref<string | null>(null)
 const selectedPipeline = ref<any | null>(null)
 
@@ -532,18 +539,30 @@ function applyFilters() {
 }
 
 async function fetchStages() {
-  const { data } = await api.GET('/api/v1/stages')
-  return (data as any)?.items ?? []
+  try {
+    const { data } = await fetchWithTimeout(api.GET('/api/v1/stages'))
+    return (data as any)?.items ?? []
+  } catch (e) {
+    return []
+  }
 }
 
 async function fetchPipelines() {
-  const { data } = await api.GET('/api/v1/pipelines')
-  return (data as any)?.items ?? []
+  try {
+    const { data } = await fetchWithTimeout(api.GET('/api/v1/pipelines'))
+    return (data as any)?.items ?? []
+  } catch (e) {
+    return []
+  }
 }
 
 async function fetchTeams() {
-  const { data } = await api.GET('/api/v1/teams')
-  return (data as any)?.items ?? []
+  try {
+    const { data } = await fetchWithTimeout(api.GET('/api/v1/teams'))
+    return (data as any)?.items ?? []
+  } catch (e) {
+    return []
+  }
 }
 
 const stages = ref<any[]>([])
