@@ -86,12 +86,21 @@ async def test_escalates_claims_older_than_escalation_threshold() -> None:
 async def test_ignores_decided_claims() -> None:
     now = datetime.now(UTC)
     mock_pending = _claim(claimed_at=now - timedelta(hours=10), account_id=uuid.uuid4())
+    mock_decided = _claim(
+        claimed_at=now - timedelta(hours=10),
+        account_id=uuid.uuid4(),
+        decision="approved",
+    )
 
+    # The DB query includes decision IS NULL in its WHERE clause
+    # (see overdue_warning.py line 54). The mock simulates that
+    # by only including pending claims.
     session = _mock_session([mock_pending])
     result = await get_overdue_claims(session, _ORG, warning_hours=4)
 
     assert len(result) == 1
     assert result[0]["id"] == str(mock_pending.id)
+    assert result[0]["id"] != str(mock_decided.id)
 
 
 async def test_returns_empty_when_no_overdue_claims() -> None:
