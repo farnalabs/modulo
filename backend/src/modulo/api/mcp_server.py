@@ -598,6 +598,76 @@ async def update_pipeline_graph(
         return _tool_error("Failed to update pipeline graph")
 
 
+@mcp.tool(
+    description="Bind a connector instance to a pipeline node. "
+    "Updates the node's connector_binding in the pipeline graph. "
+    "The connector must already exist in the organisation."
+)
+async def bind_connector_to_node(
+    pipeline_id: str,
+    node_id: str,
+    connector_type: str,
+    connector_instance_id: str,
+) -> dict[str, Any]:
+    try:
+        if not await validate_current_auth():
+            return _tool_auth_error("Token revoked or expired — re-authenticate")
+        check_tool_scope(_ctx_role_val(), "bind_connector_to_node")
+
+        from modulo.db.crud.connector_instance import get_connector_instance
+
+        org_id = _ctx_org_id_val()
+        try:
+            pid = uuid.UUID(pipeline_id)
+            nid = uuid.UUID(node_id)
+            cid = uuid.UUID(connector_instance_id)
+        except ValueError:
+            return {"error": "invalid_id", "detail": "One or more IDs have invalid UUID format"}
+
+        async with _session(org_id) as s:
+            # Verify connector exists in org
+            connector = await get_connector_instance(s, cid)
+            if connector is None or connector.organisation_id != org_id:
+                return {"error": "connector_not_found", "detail": "Connector not found in this organisation"}
+
+            # Get pipeline and update node
+            from sqlalchemy import select, update as sa_update
+            from modulo.db.models.pipeline import Pipeline
+
+            pipeline = (await s.execute(select(Pipeline).where(Pipeline.id == pid).with_for_update())).scalar_one_or_none()
+            if pipeline is None:
+                return {"error": "pipeline_not_found", "pipeline_id": pipeline_id}
+
+            nodes = list(pipeline.graph_nodes_json) if pipeline.graph_nodes_json else []
+            target = None
+            for node in nodes:
+                if uuid.UUID(node["id"]) == nid:
+                    target = node
+                    break
+            if target is None:
+                return {"error": "node_not_found", "detail": f"Node {node_id} not found in pipeline graph"}
+
+            target["connector_binding"] = {
+                "type": connector_type,
+                "instance_id": connector_instance_id,
+            }
+            pipeline.graph_nodes_json = nodes
+            await s.flush()
+
+        return {
+            "pipeline_id": pipeline_id,
+            "node_id": node_id,
+            "connector_type": connector_type,
+            "connector_instance_id": connector_instance_id,
+            "status": "bound",
+        }
+    except MCPAuthorizationError as exc:
+        return {"error": "insufficient_scope", "detail": str(exc)}
+    except Exception:
+        _log.exception("bind_connector_to_node failed")
+        return _tool_error("Failed to bind connector to node")
+
+
 @mcp.tool(description="Fire a pipeline run and return immediately with run_id. Poll get_run_status to track progress.")
 async def trigger_pipeline(
     pipeline_id: str,
