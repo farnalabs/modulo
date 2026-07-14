@@ -41,24 +41,6 @@ def _gen_rsa_keypair() -> tuple[rsa.RSAPrivateKey, rsa.RSAPublicKey]:
     return private_key, private_key.public_key()
 
 
-def _pubkey_to_jwk(public_key: rsa.RSAPublicKey, kid: str = "test-key-1") -> dict:
-    pub_numbers = public_key.public_numbers()
-
-    def _int_to_base64url(num: int) -> str:
-        byte_len = (num.bit_length() + 7) // 8
-        num_bytes = num.to_bytes(byte_len, byteorder="big")
-        return base64.urlsafe_b64encode(num_bytes).rstrip(b"=").decode()
-
-    return {
-        "kty": "RSA",
-        "n": _int_to_base64url(pub_numbers.n),
-        "e": _int_to_base64url(pub_numbers.e),
-        "alg": "RS256",
-        "kid": kid,
-        "use": "sig",
-    }
-
-
 def _create_id_token(
     private_key: rsa.RSAPrivateKey,
     *,
@@ -83,6 +65,28 @@ def _create_id_token(
         encryption_algorithm=serialization.NoEncryption(),
     )
     return str(pyjwt.encode(claims, pem_key, algorithm="RS256", headers={"kid": kid}))
+
+
+_RSA_KEYPAIR: tuple[rsa.RSAPrivateKey, rsa.RSAPublicKey] = _gen_rsa_keypair()
+_ID_TOKEN: str = _create_id_token(_RSA_KEYPAIR[0])
+
+
+def _pubkey_to_jwk(public_key: rsa.RSAPublicKey, kid: str = "test-key-1") -> dict:
+    pub_numbers = public_key.public_numbers()
+
+    def _int_to_base64url(num: int) -> str:
+        byte_len = (num.bit_length() + 7) // 8
+        num_bytes = num.to_bytes(byte_len, byteorder="big")
+        return base64.urlsafe_b64encode(num_bytes).rstrip(b"=").decode()
+
+    return {
+        "kty": "RSA",
+        "n": _int_to_base64url(pub_numbers.n),
+        "e": _int_to_base64url(pub_numbers.e),
+        "alg": "RS256",
+        "kid": kid,
+        "use": "sig",
+    }
 
 
 def _pubkey_to_ec_jwk(public_key: ec.EllipticCurvePublicKey, kid: str = "test-ec-key-1") -> dict:
@@ -171,7 +175,7 @@ def _reset_cache() -> None:
 
 @pytest.fixture()
 def keypair() -> tuple[rsa.RSAPrivateKey, rsa.RSAPublicKey]:
-    return _gen_rsa_keypair()
+    return _RSA_KEYPAIR
 
 
 @pytest.fixture()

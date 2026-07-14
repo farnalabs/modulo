@@ -32,6 +32,7 @@ async def test_tenant_dependency_returns_validated_principal() -> None:
 @pytest.mark.parametrize(
     ("organisation_id", "org_role"),
     [(None, "admin"), (uuid.uuid4(), None)],
+    ids=["missing_org_id", "missing_org_role"],
 )
 async def test_tenant_dependency_rejects_missing_tenant_claims(
     organisation_id: uuid.UUID | None,

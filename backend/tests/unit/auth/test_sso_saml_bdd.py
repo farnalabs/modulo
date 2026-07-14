@@ -80,8 +80,11 @@ def _saml_settings(license_key: str = "test-license-key") -> Settings:
     )
 
 
-_app = FastAPI()
-_app.include_router(sso_router)
+@pytest.fixture(scope="module")
+def _app() -> FastAPI:
+    app = FastAPI()
+    app.include_router(sso_router)
+    return app
 
 
 @pytest.fixture(autouse=True)
@@ -94,7 +97,7 @@ def _clear_cache() -> Generator[None, None, None]:
 
 
 @pytest.fixture()
-def client() -> Generator[TestClient, None, None]:
+def client(_app: FastAPI) -> Generator[TestClient, None, None]:
     mock_session = AsyncMock(spec=AsyncSession)
 
     async def _override_session() -> AsyncGenerator[AsyncMock, None]:
@@ -136,7 +139,7 @@ class TestSpMetadata:
         assert "/api/v1/auth/saml/acs" in body
         assert "HTTP-POST" in body
 
-    def test_metadata_requires_license(self, client: TestClient) -> None:
+    def test_metadata_requires_license(self, client: TestClient, _app: FastAPI) -> None:
         _app.dependency_overrides[get_settings] = lambda: _saml_settings(license_key="")
         _app.dependency_overrides[get_plan_context] = lambda: CommunityTier()
         get_settings.cache_clear()
@@ -144,7 +147,7 @@ class TestSpMetadata:
         resp = client.get("/api/v1/auth/saml/metadata")
         assert resp.status_code == 402
 
-    def test_metadata_returns_400_when_saml_disabled(self, client: TestClient) -> None:
+    def test_metadata_returns_400_when_saml_disabled(self, client: TestClient, _app: FastAPI) -> None:
         _app.dependency_overrides[get_settings] = lambda: Settings(
             database_url="postgresql+asyncpg://localhost/test",
             secret_key=_VALID_32,
@@ -406,7 +409,7 @@ class TestAcsGroupMapping:
 
 
 class TestEnterpriseGate:
-    def test_saml_acs_blocked_without_license(self, client: TestClient) -> None:
+    def test_saml_acs_blocked_without_license(self, client: TestClient, _app: FastAPI) -> None:
         _app.dependency_overrides[get_settings] = lambda: _saml_settings(license_key="")
         _app.dependency_overrides[get_plan_context] = lambda: CommunityTier()
         get_settings.cache_clear()
@@ -420,22 +423,13 @@ class TestEnterpriseGate:
         detail = resp.json().get("detail", "")
         assert "sso" in detail.lower()
 
-    def test_saml_login_blocked_without_license(self, client: TestClient) -> None:
+    def test_saml_login_blocked_without_license(self, client: TestClient, _app: FastAPI) -> None:
         _app.dependency_overrides[get_settings] = lambda: _saml_settings(license_key="")
         _app.dependency_overrides[get_plan_context] = lambda: CommunityTier()
         get_settings.cache_clear()
 
         resp = client.get("/api/v1/auth/saml/login", follow_redirects=False)
         assert resp.status_code == 402
-
-
-# ---------------------------------------------------------------------------
-# Scenario: SAML login initiates redirect to IdP
-# ---------------------------------------------------------------------------
-
-
-class TestSamlLoginRedirect:
-    def test_redirects_to_idp_sso_url(self, client: TestClient) -> None:
         with patch("modulo.auth.sso._saml_fetch_idp_metadata", new_callable=AsyncMock) as mock_fetch:
             mock_fetch.return_value = _SAMPLE_IDP_METADATA
 
@@ -446,7 +440,7 @@ class TestSamlLoginRedirect:
         assert "idp.example.com" in location
         assert "SAMLRequest" in location
 
-    def test_login_requires_license(self, client: TestClient) -> None:
+    def test_login_requires_license(self, client: TestClient, _app: FastAPI) -> None:
         _app.dependency_overrides[get_settings] = lambda: _saml_settings(license_key="")
         _app.dependency_overrides[get_plan_context] = lambda: CommunityTier()
         get_settings.cache_clear()
@@ -454,7 +448,7 @@ class TestSamlLoginRedirect:
         resp = client.get("/api/v1/auth/saml/login", follow_redirects=False)
         assert resp.status_code == 402
 
-    def test_login_raises_400_when_saml_disabled(self, client: TestClient) -> None:
+    def test_login_raises_400_when_saml_disabled(self, client: TestClient, _app: FastAPI) -> None:
         _app.dependency_overrides[get_settings] = lambda: Settings(
             database_url="postgresql+asyncpg://localhost/test",
             secret_key=_VALID_32,
