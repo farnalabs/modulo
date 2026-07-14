@@ -657,7 +657,10 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
         logger.warning("startup.demo_seed_failed", exc_info=True)
 
     # Seed SSO providers from deprecated env vars into the DB table (idempotent).
-    await _seed_sso_providers(settings)
+    try:
+        await _seed_sso_providers(settings)
+    except Exception:
+        logger.warning("startup.sso_providers_seed_failed", exc_info=True)
 
     # Seed the default modulo-dev EnvironmentProfile for the dogfood pipeline.
     try:
