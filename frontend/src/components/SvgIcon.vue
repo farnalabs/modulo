@@ -1,7 +1,12 @@
 <template>
+  <CirclePlay
+    v-if="name === 'CirclePlay'"
+    aria-hidden="true"
+    :size="16"
+  />
   <svg
     aria-hidden="true"
-    v-if="name === 'LayoutDashboard'"
+    v-else-if="name === 'LayoutDashboard'"
     xmlns="http://www.w3.org/2000/svg"
     width="16"
     height="16"
@@ -789,6 +794,7 @@
   </template>
 
 <script setup lang="ts">
+import { CirclePlay } from "@lucide/vue";
 import { watch } from "vue";
 
 const props = defineProps<{
@@ -804,6 +810,7 @@ const knownIcons = [
   "Clock", "Cpu", "Zap", "Building", "ShieldQuestion", "Bell",
   "Container", "LayoutTemplate", "Map", "SlidersHorizontal", "Building2",
   "Bot", "AlertTriangle", "GitCommit", "FlaskConical", "Search", "Mail", "File",
+  "CirclePlay",
 ];
 
 watch(
