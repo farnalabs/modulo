@@ -503,7 +503,9 @@ async function handleNewSession() {
   try {
     const session = await store.createSession();
     if (session) {
-      store.setPanelState("floating");
+      if (store.panelState !== 'closed') {
+        store.setPanelState("floating");
+      }
       activeTab.value = "chat";
     }
   } catch (e) {
