@@ -430,6 +430,15 @@ class TestEnterpriseGate:
 
         resp = client.get("/api/v1/auth/saml/login", follow_redirects=False)
         assert resp.status_code == 402
+
+
+# ---------------------------------------------------------------------------
+# Scenario: SAML login initiates redirect to IdP
+# ---------------------------------------------------------------------------
+
+
+class TestSamlLoginRedirect:
+    def test_redirects_to_idp_sso_url(self, client: TestClient, _app: FastAPI) -> None:
         with patch("modulo.auth.sso._saml_fetch_idp_metadata", new_callable=AsyncMock) as mock_fetch:
             mock_fetch.return_value = _SAMPLE_IDP_METADATA
 

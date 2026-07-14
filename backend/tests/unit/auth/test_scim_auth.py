@@ -7,6 +7,7 @@ import pytest
 from fastapi import HTTPException
 from fastapi.security import HTTPAuthorizationCredentials
 from sqlalchemy.exc import ProgrammingError
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.api.models.problem import ProblemException
 from modulo.auth.scim_auth import (
@@ -102,8 +103,11 @@ class TestGetScimPlanContext:
     async def test_programming_error_returns_501(self) -> None:
         principal = ScimPrincipal(organisation_id=uuid.uuid4())
         settings = _settings()
-        session = AsyncMock()
-        session.begin.side_effect = ProgrammingError("mock", {}, None)
+        session = AsyncMock(spec=AsyncSession)
+        begin_cm = AsyncMock()
+        begin_cm.__aenter__ = AsyncMock(side_effect=ProgrammingError("mock", {}, None))
+        begin_cm.__aexit__ = AsyncMock(return_value=False)
+        session.begin = MagicMock(return_value=begin_cm)
         with pytest.raises(HTTPException) as exc:
             await get_scim_plan_context(principal, settings, session)
         assert exc.value.status_code == 501

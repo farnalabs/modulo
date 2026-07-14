@@ -26,6 +26,8 @@ def _override(admin_password: str = "testpass") -> Settings:
         secret_key=_VALID_32,
         fernet_key=_VALID_32,
         modulo_admin_password=admin_password,
+        modulo_auth_rate_limit_enabled=False,
+        redis_url="",
     )
 
 
