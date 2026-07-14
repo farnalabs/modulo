@@ -231,3 +231,20 @@ The Remy in-memory event registries (`_pending_ui_results`, `_pending_permission
 ### Module-level raises for optional deps block the entire application
 
 - Never `raise ImportError(...)` at module level for an optional dependency. A module-level raise prevents the module from loading, which cascades up to crash the entire uvicorn process (or any caller that imports the module). Instead, use a graceful fallback pattern: catch `ImportError`, set a boolean flag (e.g. `CELERY_AVAILABLE = False`), and replace the imported class with a stub (`_CeleryTask = object`). Guard the optional-class definition behind the flag, and let consumers check `CELERY_AVAILABLE` at call time. Found in `webhook_dedup_cleanup.py` where `from celery import Task` raised at import time, blocking uvicorn startup.
+
+### SQL: `FOR UPDATE` is not allowed with aggregate functions
+
+- `SELECT max(run_number) ... FOR UPDATE` raises `asyncpg.exceptions.FeatureNotSupportedError` — PostgreSQL explicitly forbids `FOR UPDATE` on aggregate queries. `FOR UPDATE` locks rows, but aggregates operate on the result set as a whole. Only use `FOR UPDATE` on queries that select individual rows (e.g. `SELECT ... FROM pipelines WHERE id = :pid FOR UPDATE`). Found in `db/crud/run.py:create_run()` where the `SELECT max(run_number)` for the next run number had a dangling `.with_for_update()`. The error surfaced as a generic 503 ("Database temporarily unavailable") because:
+  1. The aggregate `FOR UPDATE` raised `FeatureNotSupportedError` (subclass of `SQLAlchemyError`)
+  2. Route handlers and MCP tools caught `except SQLAlchemyError` / `except Exception` and returned opaque error messages
+  3. The `_log.exception()` output was invisible in Fly logs (JSON-structured logging format not rendered by `fly logs`)
+
+### Exception handlers must log the full traceback — generic catch blocks hide root causes
+
+- Every `except SQLAlchemyError:` and `except Exception:` handler that returns a generic error message (503, internal_error) MUST call `_log.exception()` with the full traceback BEFORE returning. Without logging, the actual error (e.g. `FeatureNotSupportedError: FOR UPDATE is not allowed with aggregate functions`) is lost behind an opaque "Database temporarily unavailable." After deploying with detailed error messaging (`print(f"ERROR: {e}\n{traceback.format_exc()}", flush=True)`), the real cause was visible. Without it, the error looked like a connection pool issue for hours.
+
+- `_log.exception()` output using the structured `JsonFormatter` may NOT appear in `fly logs` output — Fly's log shipper doesn't reliably render JSON-formatted log lines. For guaranteed visibility during debugging, use `print(f"ERROR: ...", flush=True)` to stderr or stdout. Remove debug prints before merging to release.
+
+### MCP `trigger_pipeline` creates run records but does NOT execute them
+
+- The MCP `trigger_pipeline` tool creates a `Run` record with `status="pending"` and returns immediately. The run stays `pending` forever because the MCP tool doesn't start LangGraph execution. Only the REST API route (`POST /api/v1/runs`) calls `background_tasks.add_task(_run_in_background, executor, ...)` which actually runs the pipeline. The MCP tool should either start execution itself or clearly document that the run requires a separate execution step. As of July 2026, use the REST API to trigger executable runs.
