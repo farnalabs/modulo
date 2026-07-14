@@ -13,6 +13,11 @@
           <span class="animate-spin h-5 w-5 border-2 border-primary border-t-transparent rounded-full" />
         </div>
 
+        <div v-else-if="error" class="flex flex-col items-center justify-center h-32 gap-3">
+          <p class="text-destructive text-sm">{{ error.detail || error.message || 'Failed to load monitoring configuration' }}</p>
+          <Button size="sm" variant="outline" @click="load()">Retry</Button>
+        </div>
+
         <template v-else>
           <div class="space-y-6">
             <div
@@ -147,7 +152,7 @@ const backendForms = reactive<BackendForm[]>([
   },
 ])
 
-const { loading, load } = useDataFetch(
+const { loading, load, error } = useDataFetch(
   async () => {
     const res = await api.GET('/api/v1/admin/monitor-config')
     if (res.data) {
