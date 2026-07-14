@@ -499,7 +499,6 @@ async def test_run_command_with_cwd_and_env(provider: _FakeRuntimeProvider, prov
     assert "npm run build" in cmd
 
 
-
 async def test_write_file_failure(provider: _FakeRuntimeProvider, provider_ref: str) -> None:
     """Write file when runtime provider returns non-zero exit code."""
     provider.set_exec_result(
