@@ -62,8 +62,11 @@ def _sign_state(provider_id: str, secret_key: str = _VALID_32) -> str:
     return sign_state(f"{provider_id}:{uuid.uuid4().hex}", secret_key)
 
 
-_app = FastAPI()
-_app.include_router(sso_router)
+@pytest.fixture(scope="module")
+def _app() -> FastAPI:
+    app = FastAPI()
+    app.include_router(sso_router)
+    return app
 
 
 @pytest.fixture(autouse=True)
@@ -76,7 +79,7 @@ def _clear_cache() -> Generator[None, None, None]:
 
 
 @pytest.fixture()
-def client() -> Generator[TestClient, None, None]:
+def client(_app: FastAPI) -> Generator[TestClient, None, None]:
     mock_session = AsyncMock(spec=AsyncSession)
 
     async def _override_session() -> AsyncMock:
@@ -292,7 +295,7 @@ class TestCallbackStateValidation:
 
 
 class TestEnterpriseGate:
-    def test_oidc_login_blocked_without_license(self, client: TestClient) -> None:
+    def test_oidc_login_blocked_without_license(self, client: TestClient, _app: FastAPI) -> None:
         _app.dependency_overrides[get_settings] = lambda: _oidc_settings(license_key="")
         _app.dependency_overrides[get_plan_context] = lambda: DbPlanContext(
             FeatureFlagRegistry(current_tier="community")
@@ -304,7 +307,7 @@ class TestEnterpriseGate:
         body = resp.json()
         assert "sso" in body.get("detail", "").lower()
 
-    def test_oidc_callback_blocked_without_license(self, client: TestClient) -> None:
+    def test_oidc_callback_blocked_without_license(self, client: TestClient, _app: FastAPI) -> None:
         _app.dependency_overrides[get_settings] = lambda: _oidc_settings(license_key="")
         _app.dependency_overrides[get_plan_context] = lambda: DbPlanContext(
             FeatureFlagRegistry(current_tier="community")
@@ -316,7 +319,7 @@ class TestEnterpriseGate:
         body = resp.json()
         assert "sso" in body.get("detail", "").lower()
 
-    def test_sso_providers_blocked_without_license(self, client: TestClient) -> None:
+    def test_sso_providers_blocked_without_license(self, client: TestClient, _app: FastAPI) -> None:
         _app.dependency_overrides[get_settings] = lambda: _oidc_settings(license_key="")
         _app.dependency_overrides[get_plan_context] = lambda: DbPlanContext(
             FeatureFlagRegistry(current_tier="community")

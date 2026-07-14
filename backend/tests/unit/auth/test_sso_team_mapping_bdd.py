@@ -122,9 +122,12 @@ def _sign_state(provider_id: str, secret_key: str = _VALID_32) -> str:
     return sign_state(f"{provider_id}:{uuid.uuid4().hex}", secret_key)
 
 
-_app = FastAPI()
-_app.include_router(sso_router_module.router)
-_app.include_router(admin_sso_router_module.router)
+@pytest.fixture(scope="module")
+def _app() -> FastAPI:
+    app = FastAPI()
+    app.include_router(sso_router_module.router)
+    app.include_router(admin_sso_router_module.router)
+    return app
 
 
 @pytest.fixture(autouse=True)
@@ -137,7 +140,7 @@ def _clear_cache() -> Generator[None, None, None]:
 
 
 @pytest.fixture()
-def client() -> Generator[TestClient, None, None]:
+def client(_app: FastAPI) -> Generator[TestClient, None, None]:
     mock_session = AsyncMock(spec=AsyncSession)
 
     async def _override_session() -> AsyncGenerator[AsyncMock, None]:
@@ -169,7 +172,7 @@ def client() -> Generator[TestClient, None, None]:
 
 
 @pytest.fixture()
-def saml_client() -> Generator[TestClient, None, None]:
+def saml_client(_app: FastAPI) -> Generator[TestClient, None, None]:
     mock_session = AsyncMock(spec=AsyncSession)
 
     async def _override_session() -> AsyncGenerator[AsyncMock, None]:
@@ -232,10 +235,7 @@ class TestAdminSetGroupMappings:
 
         assert resp.status_code == 404
 
-    def test_requires_admin_role(self, client: TestClient) -> None:
-        _app.dependency_overrides[get_plan_context] = lambda: LicenseKeyTier(
-            LicenseData(tier="team", features=["sso"], expires_at="", org_id="", raw_payload={}, raw_key="k")
-        )
+    def test_requires_admin_role(self, client: TestClient, _app: FastAPI) -> None:
         from modulo.auth.dependencies import get_current_user
         from modulo.auth.jwt import AuthenticatedPrincipal
 
