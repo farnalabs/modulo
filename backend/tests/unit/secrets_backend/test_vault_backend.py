@@ -1,6 +1,5 @@
 """Unit tests for VaultSecretsBackend."""
 
-import os
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -14,22 +13,10 @@ try:
 except ImportError:
     _HVAC_AVAILABLE = False
 
-pytestmark = pytest.mark.skipif(
-    not _HVAC_AVAILABLE,
-    reason="hvac package not installed",
-)
-
-
-@pytest.fixture(autouse=True)
-def _env():
-    with patch.dict(
-        os.environ,
-        {
-            "VAULT_ADDR": "http://localhost:8200",
-            "VAULT_TOKEN": "test-token",
-        },
-    ):
-        yield
+pytestmark = [
+    pytest.mark.skipif(not _HVAC_AVAILABLE, reason="hvac package not installed"),
+    pytest.mark.usefixtures("vault_env"),
+]
 
 
 @pytest.fixture
@@ -66,7 +53,7 @@ class TestVaultSecretsBackend:
         assert value == "my-value"
         backend._client.secrets.kv.v2.read_secret_version.assert_called_once()
 
-    async def test_get_secret_unknown_key_raises(self, mock_hvac):
+    async def test_get_secret_unknown_key_raises_key_error(self, mock_hvac):
         backend = _make_backend(mock_hvac)
         backend._client.secrets.kv.v2.read_secret_version.side_effect = mock_hvac.exceptions.InvalidPath()
 
