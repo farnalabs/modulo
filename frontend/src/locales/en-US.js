@@ -1495,6 +1495,7 @@ export default {
       "item_node_categories": "Node Categories",
       "item_feature_flags": "Feature Flags",
       "item_environments": "Environments",
+      "item_environment_profiles": "Environment Profiles",
       "item_run_retention": "Run Retention",
       "item_saved_views": "Saved Views",
       "item_error_dashboard": "Error Dashboard",
