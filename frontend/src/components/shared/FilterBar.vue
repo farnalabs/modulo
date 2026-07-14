@@ -23,7 +23,7 @@
       :value="filterValues[filter.key] ?? ''"
       :aria-label="filter.label"
       :data-testid="`filter-bar-${filter.key}`"
-      class="rounded-lg border border-input bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring"
+      class="rounded-lg border border-input bg-background px-3 py-2 pr-10 text-sm focus:outline-none focus:ring-2 focus:ring-ring"
       @change="$emit('update:filter', filter.key, ($event.target as HTMLSelectElement).value)"
     >
       <option value="">{{ filter.label }}</option>
