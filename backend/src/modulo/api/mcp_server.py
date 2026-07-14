@@ -16,6 +16,7 @@ Org context validated per-event for streaming (SSE) connections.
 import contextvars
 import json
 import logging
+import traceback as _traceback
 import uuid
 from collections.abc import AsyncGenerator, Awaitable, Callable
 from contextlib import asynccontextmanager
@@ -2692,6 +2693,30 @@ async def _oauth_token(request: Request) -> JSONResponse:
 # ---------------------------------------------------------------------------
 
 
+async def _mcp_exception_handler(request: Request, exc: Exception) -> JSONResponse:
+    """Log unhandled MCP exceptions and return a structured JSON error.
+
+    Starlette's ``ServerErrorMiddleware`` (outermost in the middleware stack)
+    catches unhandled exceptions and calls this handler instead of the default
+    ``PlainTextResponse("Internal Server Error")`` — making errors observable
+    in production logs for the first time.
+    """
+    _log.exception(
+        "mcp.unhandled_exception",
+        extra={
+            "method": request.method,
+            "path": str(request.url.path),
+            "exc_type": type(exc).__name__,
+            "exc_repr": str(exc),
+            "traceback": _traceback.format_exc(),
+        },
+    )
+    return JSONResponse(
+        status_code=500,
+        content={"error": "internal_error", "detail": "An unexpected error occurred"},
+    )
+
+
 def build_mcp_asgi_app() -> Starlette:
     """Return the MCP Starlette app wrapped with auth middleware."""
     inner = mcp.streamable_http_app()
@@ -2716,6 +2741,7 @@ def build_mcp_asgi_app() -> Starlette:
             Middleware(McpAuthMiddleware),
             Middleware(RateLimiterMiddleware),  # type: ignore[arg-type]
         ],
+        exception_handlers={Exception: _mcp_exception_handler},
         # Note: lifespan is managed by the parent FastAPI app's _lifespan
         # to ensure it is called — Starlette does not invoke sub-app lifespans.
     )
