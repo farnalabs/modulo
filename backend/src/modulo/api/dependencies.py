@@ -81,6 +81,7 @@ def get_or_create_engine(settings: Settings) -> AsyncEngine:
         # disable SSL to match bootstrap_db.py's ssl=False pattern.
         if db_type == "postgres":
             connect_args["ssl"] = False
+            connect_args["statement_cache_size"] = 0  # HAProxy compat: disable asyncpg statement cache
 
         kw: dict[str, Any] = {
             "url": settings.database_url,
