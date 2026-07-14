@@ -7,9 +7,7 @@ import pytest
 from cryptography.fernet import Fernet
 
 from modulo.core.secrets_backend import create_secrets_backend, validate_key
-from modulo.core.secrets_backend.aws import AWSSecretsManagerBackend
 from modulo.core.secrets_backend.fernet import FernetSecretsBackend
-from modulo.core.secrets_backend.vault import VaultSecretsBackend
 
 _KEY = Fernet.generate_key().decode()
 
@@ -25,6 +23,8 @@ def test_fernet_backend_created_by_name():
 
 
 def test_vault_backend_created_by_name():
+    from modulo.core.secrets_backend.vault import VaultSecretsBackend
+
     with (
         patch("modulo.core.secrets_backend._check_external_secrets_licensed", return_value=True),
         patch("modulo.core.secrets_backend.vault._MODULE_AVAILABLE", True),
@@ -36,6 +36,8 @@ def test_vault_backend_created_by_name():
 
 
 def test_aws_backend_created_by_name():
+    from modulo.core.secrets_backend.aws import AWSSecretsManagerBackend
+
     with (
         patch("modulo.core.secrets_backend._check_external_secrets_licensed", return_value=True),
         patch("modulo.core.secrets_backend.aws._MODULE_AVAILABLE", True),
@@ -69,7 +71,7 @@ def test_env_var_used_when_no_backend_name():
     [
         pytest.param(
             "vault",
-            VaultSecretsBackend,
+            None,
             {"VAULT_ADDR": "http://vault:8200", "VAULT_TOKEN": "x"},
             "modulo.core.secrets_backend.vault",
             "modulo.core.secrets_backend.vault._hvac",
@@ -77,7 +79,7 @@ def test_env_var_used_when_no_backend_name():
         ),
         pytest.param(
             "aws",
-            AWSSecretsManagerBackend,
+            None,
             {"AWS_REGION": "us-east-1", "AWS_ACCESS_KEY_ID": "x", "AWS_SECRET_ACCESS_KEY": "y"},
             "modulo.core.secrets_backend.aws",
             "modulo.core.secrets_backend.aws._boto3",
@@ -86,6 +88,10 @@ def test_env_var_used_when_no_backend_name():
     ],
 )
 def test_fernet_key_optional_for_external_backend(backend_name, expected_cls, env_vars, module_patch, lib_patch):
+    if backend_name == "vault":
+        from modulo.core.secrets_backend.vault import VaultSecretsBackend as expected_cls
+    else:
+        from modulo.core.secrets_backend.aws import AWSSecretsManagerBackend as expected_cls
     with (
         patch("modulo.core.secrets_backend._check_external_secrets_licensed", return_value=True),
         patch(f"{module_patch}._MODULE_AVAILABLE", True),
@@ -99,6 +105,8 @@ def test_fernet_key_optional_for_external_backend(backend_name, expected_cls, en
 @pytest.mark.parametrize("name", ["  Vault  ", "  vault  "])
 def test_backend_name_normalized(name):
     """Factory lowercases and strips backend_name before matching."""
+    from modulo.core.secrets_backend.vault import VaultSecretsBackend
+
     with (
         patch("modulo.core.secrets_backend._check_external_secrets_licensed", return_value=True),
         patch("modulo.core.secrets_backend.vault._MODULE_AVAILABLE", True),
