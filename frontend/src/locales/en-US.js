@@ -550,7 +550,7 @@ export default {
     "DashboardView": {
       "dashboard": "Dashboard",
       "total_runs": "Total Runs",
-      "active_pipelines": "Active Pipelines",
+      "pipelines": "Pipelines",
       "running": "Running",
       "awaiting_human": "Awaiting Human",
       "failed": "Failed",
