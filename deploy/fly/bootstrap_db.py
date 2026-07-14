@@ -6,6 +6,7 @@
 
 import asyncio
 import os
+import re
 import sys
 
 import asyncpg
@@ -14,11 +15,10 @@ import asyncpg
 admin_url = os.environ.get("DATABASE_ADMIN_URL") or os.environ.get("DATABASE_URL", "")
 original = admin_url
 admin_url = admin_url.replace("postgres://", "postgresql+asyncpg://", 1)
-# Strip sslmode — asyncpg and psycopg use different param names and
-# neither handles the other's format in a URL. Without any SSL param,
-# asyncpg defaults to "prefer" (try SSL, fall back to plain), which
-# works on Fly private networks where Postgres doesn't expect SSL.
-admin_url = admin_url.replace("?sslmode=disable", "").replace("&sslmode=disable", "")
+ # Strip any sslmode parameter (disable, require, prefer, etc.) — asyncpg
+ # defaults to "prefer" (try SSL, fall back to plain) on Fly's private
+ # networks where Postgres doesn't expect SSL, causing ConnectionResetError.
+ admin_url = re.sub(r"[?&]sslmode=[^&]*", "", admin_url).rstrip("?")
 os.environ["DATABASE_ADMIN_URL"] = admin_url
 if admin_url != original:
     print("Fixed DATABASE_ADMIN_URL scheme + stripped sslmode")
@@ -27,7 +27,7 @@ if admin_url != original:
 runtime_url = os.environ.get("DATABASE_URL", "")
 if runtime_url:
     runtime_url = runtime_url.replace("postgres://", "postgresql+asyncpg://", 1)
-    runtime_url = runtime_url.replace("?sslmode=disable", "").replace("&sslmode=disable", "")
+     runtime_url = re.sub(r"[?&]sslmode=[^&]*", "", runtime_url).rstrip("?")
     os.environ["DATABASE_URL"] = runtime_url
 
 # Step 2: Create alembic_version table with VARCHAR(255)
