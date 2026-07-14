@@ -151,8 +151,16 @@ async def list_runs_endpoint(
             detail="Feature is not available. This feature requires a database update. Please contact support.",
         ) from None
     except SQLAlchemyError:
-        import sys, traceback
-        print("DEBUG_ROUTE_DB_ERROR", type(sys.exc_info()[1]).__name__, str(sys.exc_info()[1])[:200], flush=True, file=sys.stderr)
+        import sys
+        import traceback
+
+        print(
+            "DEBUG_ROUTE_DB_ERROR",
+            type(sys.exc_info()[1]).__name__,
+            str(sys.exc_info()[1])[:200],
+            flush=True,
+            file=sys.stderr,
+        )
         traceback.print_exc(file=sys.stderr)
         _log.warning("route.db_error", exc_info=True)
         raise HTTPException(
