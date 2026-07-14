@@ -1,5 +1,5 @@
 <template>
-  <div class="min-h-screen bg-background">
+  <div class="min-h-screen bg-background flex flex-col">
     <header class="bg-card border-b border-border px-6 py-4">
       <div class="mx-auto flex items-center justify-between gap-3 max-w-6xl">
         <PageHeader :title="$t('views.PipelineListView.title')" />
@@ -42,7 +42,7 @@
       </div>
     </header>
 
-    <div class="flex">
+    <div class="flex flex-1">
       <!-- Folder sidebar -->
       <FolderTree
         :selected-folder-id="selectedFolderId"
