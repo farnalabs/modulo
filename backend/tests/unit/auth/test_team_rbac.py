@@ -1,5 +1,7 @@
 """Unit tests for team-level RBAC: role hierarchy and effective access model."""
 
+import pytest
+
 from modulo.auth.team_rbac import (
     ORG_ROLE_HIERARCHY,
     TEAM_ROLE_HIERARCHY,
@@ -35,24 +37,25 @@ class TestConstants:
 
 
 class TestEffectiveAccessModel:
-    def test_viewer_org_all_team_roles_capped_to_viewer(self) -> None:
-        for team_role in VALID_TEAM_ROLES:
-            assert get_effective_team_role("viewer", team_role) == "viewer"
-
-    def test_runner_org_caps_team_roles_above_runner(self) -> None:
-        assert get_effective_team_role("runner", "viewer") == "viewer"
-        assert get_effective_team_role("runner", "runner") == "runner"
-        assert get_effective_team_role("runner", "operator") == "runner"
-
-    def test_operator_org_caps_team_roles_above_operator(self) -> None:
-        assert get_effective_team_role("operator", "viewer") == "viewer"
-        assert get_effective_team_role("operator", "runner") == "runner"
-        assert get_effective_team_role("operator", "operator") == "operator"
-
-    def test_admin_org_allows_all_team_roles(self) -> None:
-        assert get_effective_team_role("admin", "viewer") == "viewer"
-        assert get_effective_team_role("admin", "runner") == "runner"
-        assert get_effective_team_role("admin", "operator") == "operator"
+    @pytest.mark.parametrize(
+        ("org_role", "team_role", "expected"),
+        [
+            ("viewer", "viewer", "viewer"),
+            ("viewer", "runner", "viewer"),
+            ("viewer", "operator", "viewer"),
+            ("runner", "viewer", "viewer"),
+            ("runner", "runner", "runner"),
+            ("runner", "operator", "runner"),
+            ("operator", "viewer", "viewer"),
+            ("operator", "runner", "runner"),
+            ("operator", "operator", "operator"),
+            ("admin", "viewer", "viewer"),
+            ("admin", "runner", "runner"),
+            ("admin", "operator", "operator"),
+        ],
+    )
+    def test_effective_team_role(self, org_role: str, team_role: str, expected: str) -> None:
+        assert get_effective_team_role(org_role, team_role) == expected
 
 
 class TestGetEffectiveTeamRole:

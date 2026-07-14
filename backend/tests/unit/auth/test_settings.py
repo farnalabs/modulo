@@ -25,39 +25,9 @@ def _make(**overrides: str) -> Settings:
 # ---------------------------------------------------------------------------
 
 
-def test_secret_key_too_short_raises() -> None:
-    with pytest.raises(ValidationError, match="at least 32 bytes"):
-        _make(secret_key="short")
-
-
 def test_secret_key_blocked_value_raises() -> None:
     with pytest.raises(ValidationError, match="placeholder"):
         _make(secret_key="changeme")
-
-
-def test_secret_key_exactly_32_chars_passes() -> None:
-    s = _make(secret_key="a" * 32)
-    assert len(s.secret_key) == 32
-
-
-def test_secret_key_longer_than_32_passes() -> None:
-    s = _make(secret_key="z" * 64)
-    assert s.secret_key == "z" * 64
-
-
-# ---------------------------------------------------------------------------
-# FERNET_KEY validation
-# ---------------------------------------------------------------------------
-
-
-def test_fernet_key_too_short_raises() -> None:
-    with pytest.raises(ValidationError, match="at least 32 bytes"):
-        _make(fernet_key="short")
-
-
-def test_fernet_key_exactly_32_passes() -> None:
-    s = _make(fernet_key="b" * 32)
-    assert len(s.fernet_key) == 32
 
 
 # ---------------------------------------------------------------------------

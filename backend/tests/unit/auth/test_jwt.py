@@ -28,13 +28,13 @@ def _make_access_token(subject: str = "alice") -> str:
     return create_access_token(subject, _KEY, organisation_id=_ORG, account_id=_ACCOUNT, org_role="admin")
 
 
-def test_roundtrip() -> None:
+def test_create_access_token_and_decode_principal_roundtrip() -> None:
     token = _make_access_token()
     principal = decode_principal(token, _KEY)
     assert principal.username == "alice"
 
 
-def test_wrong_key_raises() -> None:
+def test_decode_principal_rejects_wrong_key() -> None:
     token = _make_access_token()
     with pytest.raises(JWTError):
         decode_principal(token, "wrong_key_but_long_enough_to_pass_validator")

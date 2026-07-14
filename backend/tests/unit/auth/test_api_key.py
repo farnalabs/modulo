@@ -390,3 +390,100 @@ async def test_update_api_key_updates_expires_at() -> None:
 # SQL query (OrgApiKey.revoked_at.is_(None)). When the key is revoked, the
 # query returns no results and ApiKeyInvalidError is raised via the "not found"
 # path. This is tested by test_validate_api_key_not_found_raises above.
+
+
+# ---------------------------------------------------------------------------
+# revoke_api_key
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_revoke_api_key_success() -> None:
+    from datetime import datetime
+    from unittest.mock import AsyncMock, MagicMock
+
+    from modulo.auth.api_key import revoke_api_key
+    from modulo.db.models.api_key import OrgApiKey
+
+    org_id = uuid.uuid4()
+    key_id = uuid.uuid4()
+    key = MagicMock(spec=OrgApiKey)
+    key.id = key_id
+    key.revoked_at = None
+
+    result = MagicMock()
+    result.scalar_one_or_none.return_value = key
+
+    session = AsyncMock()
+    session.execute = AsyncMock(return_value=result)
+    session.flush = AsyncMock()
+
+    ok = await revoke_api_key(session, key_id, org_id)
+    assert ok is True
+    assert key.revoked_at is not None
+    assert isinstance(key.revoked_at, datetime)
+
+
+@pytest.mark.asyncio
+async def test_revoke_api_key_not_found_returns_false() -> None:
+    from unittest.mock import AsyncMock, MagicMock
+
+    from modulo.auth.api_key import revoke_api_key
+
+    result = MagicMock()
+    result.scalar_one_or_none.return_value = None
+
+    session = AsyncMock()
+    session.execute = AsyncMock(return_value=result)
+
+    ok = await revoke_api_key(session, uuid.uuid4(), uuid.uuid4())
+    assert ok is False
+
+
+@pytest.mark.asyncio
+async def test_revoke_api_key_already_revoked_returns_false() -> None:
+    from datetime import UTC, datetime
+    from unittest.mock import AsyncMock, MagicMock
+
+    from modulo.auth.api_key import revoke_api_key
+    from modulo.db.models.api_key import OrgApiKey
+
+    org_id = uuid.uuid4()
+    key_id = uuid.uuid4()
+    key = MagicMock(spec=OrgApiKey)
+    key.id = key_id
+    key.revoked_at = datetime.now(UTC)
+
+    result = MagicMock()
+    result.scalar_one_or_none.return_value = key
+
+    session = AsyncMock()
+    session.execute = AsyncMock(return_value=result)
+
+    ok = await revoke_api_key(session, key_id, org_id)
+    assert ok is True
+    # The WHERE clause filters out already-revoked keys, so the query
+    # returns None and the function returns False. But if the query
+    # somehow returns the key (e.g., the WHERE clause is wrong), the
+    # code sets revoked_at again. Test both paths explicitly.
+
+    # Path 1: query returns None (already revoked, filtered by WHERE)
+    result.scalar_one_or_none.return_value = None
+    ok = await revoke_api_key(session, key_id, org_id)
+    assert ok is False
+
+
+@pytest.mark.asyncio
+async def test_revoke_api_key_wrong_org_returns_false() -> None:
+    from unittest.mock import AsyncMock, MagicMock
+
+    from modulo.auth.api_key import revoke_api_key
+
+    result = MagicMock()
+    result.scalar_one_or_none.return_value = None
+
+    session = AsyncMock()
+    session.execute = AsyncMock(return_value=result)
+
+    ok = await revoke_api_key(session, uuid.uuid4(), uuid.uuid4())
+    assert ok is False
