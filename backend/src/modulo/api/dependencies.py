@@ -82,7 +82,7 @@ def get_or_create_engine(settings: Settings) -> AsyncEngine:
         kw: dict[str, Any] = {
             "url": settings.database_url,
             "pool_pre_ping": True,
-            "connect_args": {"timeout": 10, "ssl": "disable"},
+            "connect_args": {"timeout": 10, "ssl": False},
         }
         db_type = settings.modulo_db.lower()
         if db_type != "sqlite":
