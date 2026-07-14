@@ -398,7 +398,7 @@ async def test_handle_webhook_applies_payload_mapping() -> None:
         patch("modulo.core.trigger_engine.create_run", return_value=run_mock) as mock_create,
         patch("modulo.core.trigger_engine.time.time", return_value=_VALID_TS),
     ):
-        await TriggerEngine().handle_webhook(
+        _, _, input_payload = await TriggerEngine().handle_webhook(
             session,
             trigger_id=trigger.id,
             org_id=_ORG,
@@ -411,32 +411,7 @@ async def test_handle_webhook_applies_payload_mapping() -> None:
 
     called_payload = mock_create.call_args.kwargs["input_payload"]
     assert called_payload == {"action": "opened", "pr_num": 42}
-
-
-async def test_handle_webhook_returns_mapped_input_payload() -> None:
-    mapping = {"pr_num": "number"}
-    trigger = _make_trigger(payload_mapping=mapping)
-    session = _make_session(trigger=trigger, active_run_count=0)
-
-    run_mock = MagicMock()
-    run_mock.id = uuid.uuid4()
-
-    with (
-        patch("modulo.core.trigger_engine.create_run", return_value=run_mock),
-        patch("modulo.core.trigger_engine.time.time", return_value=_VALID_TS),
-    ):
-        _, _, input_payload = await TriggerEngine().handle_webhook(
-            session,
-            trigger_id=trigger.id,
-            org_id=_ORG,
-            raw_body=_RAW_BODY,
-            raw_payload=_RAW_PAYLOAD,
-            hmac_signature=None,
-            modulo_timestamp=str(_VALID_TS),
-            snapshot_id=_SNAP,
-        )
-
-    assert input_payload == {"pr_num": 42}
+    assert input_payload == called_payload
 
 
 # ---------------------------------------------------------------------------

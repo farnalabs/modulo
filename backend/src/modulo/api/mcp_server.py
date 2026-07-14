@@ -722,7 +722,6 @@ async def trigger_pipeline(
 
         tb = traceback.format_exc()
         _log.exception("trigger_pipeline failed")
-        print(f"TRIGGER_PIPELINE_ERROR: {e}\n{tb}", flush=True)
         return {"error": "internal_error", "detail": f"Failed to trigger pipeline: {e}\n{tb[:500]}"}
 
 
