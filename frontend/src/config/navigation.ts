@@ -31,7 +31,7 @@ const routeConfigMap: Record<string, { icon: string; labelKey: string }> = {
 
   'pipeline-copy': { icon: 'Copy', labelKey: 'components.SidebarNav.item_copy_pipeline' },
   stages: { icon: 'Columns', labelKey: 'components.SidebarNav.item_stages_board' },
-  'runs-list': { icon: 'PlayCircle', labelKey: 'components.SidebarNav.item_runs_list' },
+  'runs-list': { icon: 'CirclePlay', labelKey: 'components.SidebarNav.item_runs_list' },
   'runs-diff': { icon: 'GitCommit', labelKey: 'components.SidebarNav.item_output_diff' },
   'eval-editor': { icon: 'CheckSquare', labelKey: 'components.SidebarNav.item_evals' },
   'eval-proposals-queue': { icon: 'Clipboard', labelKey: 'components.SidebarNav.item_eval_proposals' },
