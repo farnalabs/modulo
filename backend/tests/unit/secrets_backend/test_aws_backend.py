@@ -1,6 +1,5 @@
 """Unit tests for AWSSecretsManagerBackend."""
 
-import os
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -14,23 +13,10 @@ try:
 except ImportError:
     _BOTO3_AVAILABLE = False
 
-pytestmark = pytest.mark.skipif(
-    not _BOTO3_AVAILABLE,
-    reason="boto3 package not installed",
-)
-
-
-@pytest.fixture(autouse=True)
-def _env():
-    with patch.dict(
-        os.environ,
-        {
-            "AWS_REGION": "us-east-1",
-            "AWS_ACCESS_KEY_ID": "test-key",
-            "AWS_SECRET_ACCESS_KEY": "test-secret",
-        },
-    ):
-        yield
+pytestmark = [
+    pytest.mark.skipif(not _BOTO3_AVAILABLE, reason="boto3 package not installed"),
+    pytest.mark.usefixtures("aws_env"),
+]
 
 
 @pytest.fixture
@@ -67,7 +53,7 @@ class TestAWSSecretsManagerBackend:
         assert value == "my-value"
         backend._client.get_secret_value.assert_called_once_with(SecretId="my-key")
 
-    async def test_get_secret_unknown_key_raises(self, mock_boto3):
+    async def test_get_secret_unknown_key_raises_key_error(self, mock_boto3):
         backend = _make_backend()
         backend._client.get_secret_value.side_effect = backend._client.exceptions.ResourceNotFoundException()
 
