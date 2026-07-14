@@ -8,11 +8,11 @@
         <circle cx="11" cy="11" r="8" />
         <path d="m21 21-4.3-4.3" />
       </svg>
-      <input aria-label="search.placeholder || "
+      <input :aria-label="search.placeholder || $t('common.search')"
         data-testid="filter-bar-search"
         :value="searchValue"
         type="text"
-        :placeholder="search.placeholder || 'Search...'"
+        :placeholder="search.placeholder || $t('common.search')"
         class="w-full rounded-lg border border-input bg-background py-2 pl-9 pr-3 text-sm focus:outline-none focus:ring-2 focus:ring-ring sm:w-auto"
         @input="$emit('update:search', ($event.target as HTMLInputElement).value)"
       />
