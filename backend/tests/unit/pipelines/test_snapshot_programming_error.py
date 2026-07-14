@@ -1,6 +1,5 @@
 """Tests for snapshot route error handling — ProgrammingError→501, SQLAlchemyError→503."""
 
-import os
 import uuid
 from collections.abc import AsyncGenerator, Generator
 from types import SimpleNamespace
@@ -10,8 +9,6 @@ import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy.exc import ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
-
-os.environ.setdefault("MODULO_CSRF_ENABLED", "false")
 
 from modulo.api.dependencies import get_db_session
 from modulo.api.main import app
