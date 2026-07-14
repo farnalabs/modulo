@@ -714,9 +714,9 @@ async def trigger_pipeline(
         }
     except MCPAuthorizationError as exc:
         return {"error": "insufficient_scope", "detail": str(exc)}
-    except Exception:
+    except Exception as e:
         _log.exception("trigger_pipeline failed")
-        return _tool_error("Failed to trigger pipeline")
+        return {"error": "internal_error", "detail": f"Failed to trigger pipeline: {e}"}
 
 
 @mcp.tool(description="Get current run status. Pass detail=true for per-node breakdown.")
@@ -1162,9 +1162,9 @@ async def copy_library_primitive(
             )
         except LookupError:
             return {"error": "not_found", "primitive_id": primitive_id}
-        except Exception:
-            _log.exception("copy_library_primitive failed")
-            return _tool_error("Failed to copy library primitive")
+    except Exception as e:
+        _log.exception("copy_library_primitive failed")
+        return {"error": "internal_error", "detail": f"Failed to copy library primitive: {e}"}
 
     return {
         "status": "copied",
@@ -1658,9 +1658,9 @@ async def create_agent(
         }
     except MCPAuthorizationError as exc:
         return {"error": "insufficient_scope", "detail": str(exc)}
-    except Exception:
+    except Exception as e:
         _log.exception("create_agent failed")
-        return _tool_error("Failed to create agent")
+        return {"error": "internal_error", "detail": f"Failed to create agent: {e}"}
 
 
 # ---------------------------------------------------------------------------
