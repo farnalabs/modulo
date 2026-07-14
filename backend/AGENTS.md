@@ -176,6 +176,25 @@ The Remy in-memory event registries (`_pending_ui_results`, `_pending_permission
 
 - `set_rls_org(session, org_id)` calls `_ensure_active_transaction()` which raises `RuntimeError` if there is no active transaction. With `session.autobegin=False` (the DI default), calling `set_rls_org` before `async with session.begin():` will always crash. Always place `set_rls_org` inside the `async with session.begin():` block, never before it.
 
+### PostgreSQL trigger functions casting non-UUID columns crash on VARCHAR values
+
+- `enforce_same_organisation()` trigger function used `(to_jsonb(NEW) ->> TG_ARGV[1])::uuid` which casts EVERY column value to UUID, regardless of column type. For VARCHAR columns like `agents.input_schema_version` (value `"latest"`), this raises `invalid input syntax for type uuid` which surfaces as a 503 (`SQLAlchemyError`). Always check `information_schema.columns.data_type` before casting in a trigger function:
+  ```sql
+  SELECT data_type INTO col_type FROM information_schema.columns
+  WHERE table_name = TG_TABLE_NAME AND column_name = TG_ARGV[1];
+  IF col_type IS DISTINCT FROM 'uuid' THEN
+    RETURN NEW;
+  END IF;
+  ```
+
+### MCP `auth_principal` fields must be consistent across all auth paths
+
+- The MCP auth middleware sets `request.scope["auth_principal"]` with different field sets depending on the auth path (API key, OAuth, JWT). Missing fields in one path (e.g. `user_id` missing from JWT path) cause `KeyError` in downstream middleware like `RateLimitMiddleware._client_key()`. When adding a field to `auth_principal` in any auth path, verify all other auth paths set the same field — or use `.get()` with defaults in consumers.
+
+### MCP Starlette sub-apps need custom exception handlers for visibility
+
+- `Starlette` adds `ServerErrorMiddleware` automatically, which catches unhandled exceptions and returns a plain text `"Internal Server Error"` with **no logging**. When building a Starlette sub-app (like the MCP server), always add `exception_handlers={Exception: handler}` with `_log.exception()` so production errors are visible in logs instead of silently swallowed.
+
 ### Module docstring must precede `from __future__ import annotations` (E402)
 
 - Placing the module docstring AFTER `from __future__ import annotations` causes the triple-quoted string to be treated as a bare expression statement (not a docstring), triggering ruff E402 on ALL subsequent imports ("module-level import not at top of file"). The fix is always: docstring → `from __future__ import annotations` → other imports. This was the single most common finding across the QA sweep (~200+ occurrences in error_tracking, pipeline_engine, connectors, model_backends, otel_bridge, secrets_backend, and many more modules).
