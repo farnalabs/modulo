@@ -122,7 +122,7 @@ export const usePlanStore = defineStore("plan", () => {
         const tiersRes = tiersSettled.value as unknown as ApiResult<TiersPayload>;
         if (tiersRes.error) {
           apiErrors.push(`Tiers: ${formatApiError(tiersRes.error)}`);
-        } else if (tiersRes.data) {
+        } else if (tiersRes.data?.tiers?.length) {
           const labels: Record<string, string> = {};
           const ranks: Record<string, number> = {};
           for (const t of tiersRes.data.tiers) {
