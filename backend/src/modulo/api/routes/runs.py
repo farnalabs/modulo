@@ -148,29 +148,28 @@ async def list_runs_endpoint(
             detail="A resource with this value already exists",
         ) from None
     except ProgrammingError:
+        import sys; sys.stderr.write(f"DBG_HANDLER=ProgrammingError type={sys.exc_info()[1].__class__.__name__}\n"); sys.stderr.flush()
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. This feature requires a database update. Please contact support.",
         ) from None
     except TimeoutError:
-        _log.warning("route.timeout_error", exc_info=True)
+        import sys; sys.stderr.write(f"DBG_HANDLER=TimeoutError type={sys.exc_info()[1].__class__.__name__}\n"); sys.stderr.flush()
         raise HTTPException(
             status_code=status.HTTP_504_GATEWAY_TIMEOUT,
             detail="Database connection timed out.",
         ) from None
     except SQLAlchemyError:
-        import sys
-        sys.stderr.write(f"DBG_RUNS_503 type={sys.exc_info()[1].__class__.__name__} msg={sys.exc_info()[1]}\n")
-        sys.stderr.flush()
-        _log.warning("route.db_error", exc_info=True)
+        import sys; sys.stderr.write(f"DBG_HANDLER=SQLAlchemyError type={sys.exc_info()[1].__class__.__name__} msg={sys.exc_info()[1]}\n"); sys.stderr.flush()
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database temporarily unavailable.",
         ) from None
     except HTTPException:
+        import sys; sys.stderr.write(f"DBG_HANDLER=HTTPException type={sys.exc_info()[1].__class__.__name__}\n"); sys.stderr.flush()
         raise
     except Exception:
-        _log.exception("pipeline_execution.unexpected_error")
+        import sys; sys.stderr.write(f"DBG_HANDLER=Exception type={sys.exc_info()[1].__class__.__name__} msg={sys.exc_info()[1]}\n"); sys.stderr.flush()
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="An unexpected error occurred.",
