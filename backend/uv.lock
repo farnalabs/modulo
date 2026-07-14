@@ -1130,7 +1130,7 @@ wheels = [
 
 [[package]]
 name = "farnalabs-modulo"
-version = "0.3.321"
+version = "0.3.322"
 source = { editable = "." }
 dependencies = [
     { name = "aiomysql" },
