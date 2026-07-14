@@ -152,7 +152,16 @@ async def list_runs_endpoint(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. This feature requires a database update. Please contact support.",
         ) from None
+    except TimeoutError:
+        _log.warning("route.timeout_error", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_504_GATEWAY_TIMEOUT,
+            detail="Database connection timed out.",
+        ) from None
     except SQLAlchemyError:
+        import sys
+        sys.stderr.write(f"DBG_RUNS_503 type={sys.exc_info()[1].__class__.__name__} msg={sys.exc_info()[1]}\n")
+        sys.stderr.flush()
         _log.warning("route.db_error", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
