@@ -116,14 +116,14 @@ def _is_unique_violation(exc: IntegrityError) -> bool:
     # PostgreSQL — asyncpg raises with pgcode attribute
     pgcode = getattr(orig, "pgcode", None)
     if pgcode is not None:
-        return pgcode == "23505"
+        return str(pgcode) == "23505"
 
     # SQLite — aiosqlite wraps the message as a string
     msg = str(orig)
     if "UNIQUE constraint failed" in msg:
         return True
 
-    # MariaDB / MySQL — asyncmy raises with args[0] as error number
+    # MariaDB / MySQL DBAPI errors expose the numeric code in args[0].
     if isinstance(orig, Exception):
         err_args = getattr(orig, "args", None)
         if err_args and len(err_args) > 0 and err_args[0] == 1062:

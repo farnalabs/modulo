@@ -13,6 +13,7 @@ from modulo.api.main import app
 from modulo.auth.dependencies import get_current_user
 from modulo.auth.jwt import AuthenticatedPrincipal
 from modulo.settings import Settings, get_settings
+from tests.unit.api.mock_session import configure_mock_session
 
 _ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
 _USER_ID = uuid.UUID("00000000-0000-0000-0000-000000000002")
@@ -46,6 +47,7 @@ def _make_mock_endpoint(**overrides: object) -> MagicMock:
 
 def _make_mock_session() -> AsyncMock:
     session = AsyncMock()
+    configure_mock_session(session)
     begin_cm = AsyncMock()
     begin_cm.__aenter__ = AsyncMock(return_value=None)
     begin_cm.__aexit__ = AsyncMock(return_value=False)
@@ -127,9 +129,41 @@ def test_retry_delivery_exception_returns_500(client: TestClient) -> None:
 
 
 def test_create_webhook_returns_201(client: TestClient) -> None:
+    session = _make_mock_session()
+
+    async def override_session() -> AsyncGenerator[AsyncMock, None]:
+        yield session
+
+    client.app.dependency_overrides[get_db_session] = override_session
     with patch("modulo.api.routes.admin_notifications.set_rls_org"):
         resp = client.post(
             "/api/v1/admin/notifications",
             json={"url": "https://example.com/hook", "events": ["hitl_awaiting"]},
         )
     assert resp.status_code == 201
+    persisted = session.add.call_args.args[0]
+    assert isinstance(persisted.events, list)
+    assert persisted.events == ["hitl_awaiting"]
+
+
+@pytest.mark.parametrize(
+    ("stored_events", "expected"),
+    [
+        ([], []),
+        (["hitl_awaiting", "run_failed"], ["hitl_awaiting", "run_failed"]),
+        (["hitl_awaiting", 1], []),
+        ("[]", []),
+        ('["hitl_awaiting", "run_failed"]', ["hitl_awaiting", "run_failed"]),
+        ('["hitl_awaiting", 1]', []),
+    ],
+)
+def test_admin_response_normalizes_stored_events(stored_events: object, expected: list[str]) -> None:
+    from modulo.api.routes.admin_notifications import _ep_to_response
+
+    endpoint = _make_mock_endpoint(events=stored_events)
+    endpoint.disabled_at = None
+    endpoint.created_at = None
+
+    response = _ep_to_response(endpoint)
+
+    assert response.events == expected

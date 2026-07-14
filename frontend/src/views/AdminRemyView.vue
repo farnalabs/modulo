@@ -1,4 +1,5 @@
 <template>
+  <FeatureGate feature-name="remy" required-tier="team" show-disabled>
   <div data-theme="agent" class="page-wide">
     <PageHeader :title="$t('views.AdminRemyView.remy_configuration')" :subtitle="$t('views.AdminRemyView.configure_remy_ai_assistant_behaviour_access_and_skills')" />
 
@@ -704,6 +705,7 @@
       </TooltipProvider>
     </template>
   </div>
+  </FeatureGate>
 </template>
 
 <script setup lang="ts">
@@ -714,6 +716,7 @@ import { api } from '../lib/api/client'
 import { useDataFetch } from '../composables/useDataFetch'
 import { formatApiError } from '../lib/api/formatError'
 import LoadingSpinner from '../components/shared/LoadingSpinner.vue'
+import FeatureGate from '../components/FeatureGate.vue'
 import RemySkillDialog from '../components/remy/RemySkillDialog.vue'
 import AccessEntitySelector from '../components/remy/AccessEntitySelector.vue'
 import {
@@ -790,13 +793,13 @@ const { data: contextSourcesData, loading: contextSourcesLoading, load: loadCont
 
 watch(() => contextSourcesData.value, (data) => {
   if (data) {
-    contextSources.value = data as Record<string, string>
-    const modes = contextSources.value
+    const modes = { ...(data as Record<string, string>) }
     for (const src of contextSourceDefs) {
       if (!modes[src.key]) {
         modes[src.key] = 'always_on'
       }
     }
+    contextSources.value = modes
   }
   contextLoading.value = false
 })

@@ -1,6 +1,7 @@
 import asyncio
 import logging
 import uuid
+from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, Field
@@ -171,7 +172,7 @@ async def admin_test_email_settings(
     req: TestEmailRequest,
     current_user: AuthenticatedPrincipal = Depends(get_current_user),
     session: AsyncSession = Depends(get_db_session),
-) -> dict:
+) -> dict[str, Any]:
     if not current_user.is_system_admin and current_user.organisation_id != org_id:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied")
 
@@ -206,7 +207,7 @@ async def admin_test_email_settings(
     smtp_host = email_cfg.get("smtp_host", "")
     if not smtp_host:
         raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail="SMTP is not configured. Save email settings before testing.",
         )
 

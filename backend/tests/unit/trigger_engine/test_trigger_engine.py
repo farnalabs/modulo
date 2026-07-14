@@ -108,6 +108,7 @@ def _make_session(
     # Replace AsyncMock get_bind with sync MagicMock (Python 3.13+ AsyncMock returns coroutines)
     bind_mock = MagicMock()
     bind_mock.dialect.name = "postgresql"
+    session.in_transaction = MagicMock(return_value=True)
     session.get_bind = MagicMock(return_value=bind_mock)
 
     nested_cm = AsyncMock()
@@ -189,6 +190,11 @@ def webhook_client() -> Generator[TestClient, None, None]:
     snapshot_mock.id = uuid.uuid4()
 
     session = AsyncMock()
+    bind = MagicMock()
+    bind.dialect.name = "sqlite"
+    session.in_transaction = MagicMock(return_value=True)
+    session.get_bind = MagicMock(return_value=bind)
+    session.info = {}
     session.execute = AsyncMock(return_value=execute_result)
     begin_cm = AsyncMock()
     begin_cm.__aenter__ = AsyncMock(return_value=None)

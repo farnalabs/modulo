@@ -12,7 +12,7 @@ import os
 import sys
 from urllib.parse import unquote, urlparse
 
-import asyncpg
+import asyncpg  # type: ignore[import-untyped]  # asyncpg does not publish a py.typed marker
 
 REQUIRED_VARS = ["DATABASE_ADMIN_URL", "DATABASE_URL"]
 

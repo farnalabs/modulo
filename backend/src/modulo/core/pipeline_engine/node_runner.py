@@ -37,7 +37,7 @@ Eval-before-interrupt (§8.17):
   - ``eval_definitions``:  list of ``EvalDefinition`` DTOs scoped to the
     upstream node.  Evaluated *after* the condition check but *before* the
     interrupt.  If any eval with ``failure_behaviour='block'`` fails, an
-    ``EvalBlockedError`` is raised instead of a ``NodeInterrupt``.
+    ``EvalBlockedError`` is raised instead of a ``GraphInterrupt``.
 """
 
 import asyncio
@@ -50,7 +50,7 @@ from typing import Any
 
 import jmespath
 from langchain_core.messages import HumanMessage
-from langgraph.errors import NodeInterrupt
+from langgraph.types import interrupt
 
 from modulo.core.eval_engine import EvalDefinition, EvalEngine, EvalResult
 from modulo.core.pipeline_engine.decorator import cancellable_node
@@ -240,7 +240,7 @@ def make_hitl_gate_fn(
                 }
             is_rejected = action == "rejected"
             result_status = "rejected" if is_rejected else "approved"
-            result: dict[str, Any] = {
+            gate_result: dict[str, Any] = {
                 "artifacts": [
                     {
                         "node_id": gate_id,
@@ -254,8 +254,8 @@ def make_hitl_gate_fn(
             # downstream nodes receive the human's version instead of the
             # original agent output.
             if isinstance(decision, dict) and "modified_output" in decision:
-                result["output"] = decision["modified_output"]
-            return result
+                gate_result["output"] = decision["modified_output"]
+            return gate_result
 
         # --- Conditional gate (§8.17) — evaluate condition against state. ---
         if condition_expr:
@@ -283,17 +283,17 @@ def make_hitl_gate_fn(
         if eval_definitions:
             engine = EvalEngine()
             for eval_def in eval_definitions:
-                result = engine.evaluate(state, eval_def)
-                eval_results_by_name[eval_def.name] = result
+                eval_result = engine.evaluate(state, eval_def)
+                eval_results_by_name[eval_def.name] = eval_result
                 _log.info(
                     "hitl_gate.eval_result",
                     extra={
                         "gate_id": gate_id,
                         "eval_name": eval_def.name,
                         "eval_id": str(eval_def.id),
-                        "passed": result.passed,
-                        "score": result.score,
-                        "detail": result.detail,
+                        "passed": eval_result.passed,
+                        "score": eval_result.score,
+                        "detail": eval_result.detail,
                     },
                 )
             # If any block eval failed, EvalBlockedError was raised above.
@@ -394,8 +394,8 @@ def make_hitl_gate_fn(
         hitl_gates.append(hitl_gate_config)
         state["_hitl_gates"] = hitl_gates
 
-        # State mutations before the raise are persisted by the checkpointer.
-        raise NodeInterrupt(
+        # State mutations before the interrupt are persisted by the checkpointer.
+        decision = interrupt(
             {
                 "gate_id": gate_id,
                 "autonomy_level": autonomy.value,
@@ -404,6 +404,7 @@ def make_hitl_gate_fn(
                 "required_team_id": required_team_id,
             }
         )
+        return await _hitl_gate({**state, "_hitl_decision": decision})
 
     _hitl_gate.__name__ = f"hitl_gate_{gate_id}"
     return _hitl_gate
@@ -464,7 +465,7 @@ def make_manual_node_fn(
             },
         )
 
-        raise NodeInterrupt(
+        decision = interrupt(
             {
                 "manual": True,
                 "node_id": node_id,
@@ -472,6 +473,7 @@ def make_manual_node_fn(
                 "output_schema_id": node_def.get("output_schema_id"),
             }
         )
+        return await _manual_node({**state, "_hitl_decision": decision})
 
     _manual_node.__name__ = f"manual_{node_id}"
     return _manual_node

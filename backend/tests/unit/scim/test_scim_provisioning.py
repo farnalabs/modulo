@@ -42,8 +42,12 @@ def _make_settings() -> Settings:
     )
 
 
-def _make_mock_session() -> AsyncMock:
-    session = AsyncMock()
+def _make_mock_session() -> MagicMock:
+    session = MagicMock()
+    session.execute = AsyncMock()
+    session.flush = AsyncMock()
+    session.delete = AsyncMock()
+    session.rollback = AsyncMock()
     begin_cm = AsyncMock()
     begin_cm.__aenter__ = AsyncMock(return_value=None)
     begin_cm.__aexit__ = AsyncMock(return_value=False)
@@ -55,7 +59,7 @@ def _make_mock_session() -> AsyncMock:
 def client() -> Generator[TestClient, None, None]:
     mock_session = _make_mock_session()
 
-    async def override_session() -> AsyncGenerator[AsyncMock, None]:
+    async def override_session() -> AsyncGenerator[MagicMock, None]:
         yield mock_session
 
     app.dependency_overrides[get_settings] = _make_settings
@@ -195,7 +199,7 @@ class TestAuthEdgeCases:
         mock_session = _make_mock_session()
         mock_session.execute = AsyncMock(return_value=AsyncMock(scalar_one_or_none=MagicMock(return_value=None)))
 
-        async def override_session() -> AsyncGenerator[AsyncMock, None]:
+        async def override_session() -> AsyncGenerator[MagicMock, None]:
             yield mock_session
 
         app.dependency_overrides[get_settings] = _make_settings
@@ -823,6 +827,10 @@ class TestCreateUser:
             patch(
                 "modulo.db.crud.account.get_account_by_email",
                 return_value=_MOCK_USER,
+            ),
+            patch(
+                "modulo.db.crud.org_membership.get_membership_by_account_and_org",
+                return_value=_MOCK_MEMBERSHIP,
             ),
             patch("modulo.api.routes.scim.set_rls_org"),
         ):

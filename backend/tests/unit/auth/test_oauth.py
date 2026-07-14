@@ -5,9 +5,9 @@ from datetime import UTC, datetime, timedelta
 from typing import Self
 from unittest.mock import AsyncMock, MagicMock
 
+import jwt as pyjwt
 import pytest
-from jose import JWTError
-from jose import jwt as jose_jwt
+from jwt import InvalidTokenError as JWTError
 
 from modulo.auth.oauth import (
     InvalidClientError,
@@ -459,7 +459,7 @@ class TestOAuthAccessToken:
             "iat": datetime.now(UTC),
             "exp": datetime.now(UTC) + timedelta(hours=1),
         }
-        token = jose_jwt.encode(claims, _SECRET_KEY, algorithm="HS256")
+        token = pyjwt.encode(claims, _SECRET_KEY, algorithm="HS256")
         with pytest.raises(JWTError, match="purpose"):
             decode_oauth_access_token(token, _SECRET_KEY)
 
@@ -473,7 +473,7 @@ class TestOAuthAccessToken:
             "iat": datetime.now(UTC),
             "exp": datetime.now(UTC) + timedelta(hours=1),
         }
-        token = jose_jwt.encode(claims, _SECRET_KEY, algorithm="HS256")
+        token = pyjwt.encode(claims, _SECRET_KEY, algorithm="HS256")
         with pytest.raises(JWTError, match="sub"):
             decode_oauth_access_token(token, _SECRET_KEY)
 
@@ -487,7 +487,7 @@ class TestOAuthAccessToken:
             "iat": datetime.now(UTC),
             "exp": datetime.now(UTC) + timedelta(hours=1),
         }
-        token = jose_jwt.encode(claims, _SECRET_KEY, algorithm="HS256")
+        token = pyjwt.encode(claims, _SECRET_KEY, algorithm="HS256")
         with pytest.raises(JWTError, match="org_id"):
             decode_oauth_access_token(token, _SECRET_KEY)
 
@@ -501,7 +501,7 @@ class TestOAuthAccessToken:
             "iat": datetime.now(UTC),
             "exp": datetime.now(UTC) + timedelta(hours=1),
         }
-        token = jose_jwt.encode(claims, _SECRET_KEY, algorithm="HS256")
+        token = pyjwt.encode(claims, _SECRET_KEY, algorithm="HS256")
         with pytest.raises(JWTError, match="token_family"):
             decode_oauth_access_token(token, _SECRET_KEY)
 
@@ -515,7 +515,7 @@ class TestOAuthAccessToken:
             "iat": datetime.now(UTC),
             "exp": datetime.now(UTC) + timedelta(hours=1),
         }
-        token = jose_jwt.encode(claims, _SECRET_KEY, algorithm="HS256")
+        token = pyjwt.encode(claims, _SECRET_KEY, algorithm="HS256")
         with pytest.raises(JWTError, match="token_sequence"):
             decode_oauth_access_token(token, _SECRET_KEY)
 
@@ -530,7 +530,7 @@ class TestOAuthAccessToken:
             "iat": datetime.now(UTC),
             "exp": datetime.now(UTC) + timedelta(hours=1),
         }
-        token = jose_jwt.encode(claims, _SECRET_KEY, algorithm="HS256")
+        token = pyjwt.encode(claims, _SECRET_KEY, algorithm="HS256")
         with pytest.raises(JWTError, match="org_id"):
             decode_oauth_access_token(token, _SECRET_KEY)
 
@@ -545,7 +545,7 @@ class TestOAuthAccessToken:
             "iat": datetime.now(UTC) - timedelta(hours=2),
             "exp": datetime.now(UTC) - timedelta(hours=1),
         }
-        token = jose_jwt.encode(claims, _SECRET_KEY, algorithm="HS256")
+        token = pyjwt.encode(claims, _SECRET_KEY, algorithm="HS256")
         with pytest.raises(JWTError):
             decode_oauth_access_token(token, _SECRET_KEY)
 

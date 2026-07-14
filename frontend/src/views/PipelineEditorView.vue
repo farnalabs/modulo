@@ -1020,8 +1020,7 @@ async function handleDelete() {
 
 async function loadFolders() {
   try {
-    const { data } = await api.GET('/api/v1/pipeline-folders')
-    folders.value = (data as unknown as any[]) ?? []
+    folders.value = await get<any[]>('/api/v1/pipeline-folders')
   } catch (e) {
     console.warn('Failed to load folders', e)
   }
@@ -1029,7 +1028,8 @@ async function loadFolders() {
 
 async function loadLifecycleMaps() {
   try {
-    const summaries = await get<any[]>('/api/v1/lifecycle-maps')
+    const response = await get<any[] | { items?: any[] }>('/api/v1/lifecycle-maps')
+    const summaries = Array.isArray(response) ? response : (response.items ?? [])
     const first10 = (summaries ?? []).slice(0, 10)
     const fullMaps = await Promise.all(
       first10.map((m: any) =>
@@ -1047,7 +1047,7 @@ async function loadLifecycleMaps() {
 const { loading, error: pageErrorRef } = useDataFetch(
   async () => {
     await Promise.all([loadPipeline(), loadGraph(), loadCatalog(), loadFolders(), loadLifecycleMaps()])
-    return {}
+    return { data: {} }
   },
   { initialValue: {} },
 )

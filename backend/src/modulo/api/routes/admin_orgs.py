@@ -193,7 +193,7 @@ async def admin_create_org_user(
 
     if req.org_role not in ("admin", "operator", "runner", "viewer"):
         raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail=f"Invalid role: {req.org_role}. Must be one of: admin, operator, runner, viewer",
         )
 
@@ -201,7 +201,7 @@ async def admin_create_org_user(
         validate_password_strength(req.password)
     except ValueError as exc:
         raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail=str(exc),
         ) from exc
 
@@ -430,11 +430,11 @@ async def admin_set_org_license(
     except HTTPException:
         raise
     except Exception as exc:
-        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from exc
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(exc)) from exc
 
     if not validation.valid or validation.license_data is None:
         raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail=validation.error or "Invalid license key",
         )
 

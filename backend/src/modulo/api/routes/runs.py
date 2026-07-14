@@ -5,8 +5,9 @@ import json
 import logging
 import uuid
 from decimal import Decimal
-from typing import Any, ClassVar, Literal
+from typing import Any, Literal
 
+from cryptography.fernet import Fernet
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, status
 from pydantic import BaseModel, Field
 from sqlalchemy import select, text
@@ -20,8 +21,8 @@ from modulo.api.dependencies import (
     pg_connection_string,
 )
 from modulo.api.middleware.sensitive_mask import is_sensitive_key, mask_sensitive_value
-from modulo.auth.dependencies import get_current_user
-from modulo.auth.jwt import AuthenticatedPrincipal
+from modulo.auth.dependencies import get_current_tenant_user
+from modulo.auth.jwt import TenantPrincipal
 from modulo.core.pipeline_engine.executor import PipelineExecutor
 from modulo.core.pipeline_engine.recovery import (
     ConcurrentRecoveryError,
@@ -42,6 +43,9 @@ from modulo.db.crud.run import (
     request_cancellation,
     update_run_status,
 )
+from modulo.db.crud.run import (
+    list_runs as db_list_runs,
+)
 from modulo.db.models.agent import Agent
 from modulo.db.models.pipeline_snapshot import PipelineSnapshot
 from modulo.db.rls import set_rls_org
@@ -52,6 +56,85 @@ _log = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/v1/runs", tags=["runs"])
 
 _TERMINAL_STATUSES = frozenset({"complete", "failed", "cancelled", "eval_failed"})
+
+
+@router.get("")
+async def list_runs_endpoint(
+    pipeline_id: uuid.UUID | None = Query(None),
+    run_status: str | None = Query(None, alias="status"),
+    trigger_type: str | None = Query(None),
+    search: str | None = Query(None, max_length=200),
+    page: int = Query(1, ge=1),
+    page_size: int = Query(20, ge=1, le=100),
+    session: AsyncSession = Depends(get_db_session),
+    user: TenantPrincipal = Depends(get_current_tenant_user),
+) -> dict[str, Any]:
+    try:
+        async with session.begin():
+            await set_rls_org(session, user.organisation_id)
+            result = await db_list_runs(
+                session,
+                pipeline_id=pipeline_id,
+                status=run_status,
+                trigger_type=trigger_type,
+                search=search,
+                page=page,
+                page_size=page_size,
+            )
+            items = []
+            for run in result.items:
+                pipeline_name = run.pipeline.name if run.pipeline else None
+                items.append(
+                    {
+                        "run_id": str(run.id),
+                        "pipeline_id": str(run.pipeline_id),
+                        "pipeline_name": pipeline_name,
+                        "status": run.status,
+                        "trigger_type": run.trigger_type,
+                        "run_number": run.run_number,
+                        "created_at": run.created_at.isoformat() if run.created_at else None,
+                        "started_at": run.started_at.isoformat() if run.started_at else None,
+                        "completed_at": run.completed_at.isoformat() if run.completed_at else None,
+                        "error_code": run.error_code,
+                        "total_cost_usd": run.total_cost_usd,
+                        "account_id": str(run.account_id) if run.account_id else None,
+                    }
+                )
+    except IntegrityError:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="A resource with this value already exists",
+        ) from None
+    except ProgrammingError:
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="Feature is not available. This feature requires a database update. Please contact support.",
+        ) from None
+    except SQLAlchemyError:
+        _log.warning("route.db_error", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Database temporarily unavailable.",
+        ) from None
+    except HTTPException:
+        raise
+    except Exception:
+        _log.exception("pipeline_execution.unexpected_error")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="An unexpected error occurred.",
+        ) from None
+
+    return {
+        "items": items,
+        "total": result.total,
+        "page": result.page,
+        "page_size": result.page_size,
+        "next_cursor": result.next_cursor,
+        "has_more": result.has_more,
+    }
+
+
 _NAMESPACE_TRACE = uuid.UUID("6ba7b810-9dad-11d1-80b4-00c04fd430c8")
 
 
@@ -121,15 +204,21 @@ async def _validate_run_input_basics(
     edges = graph_json.get("edges", [])
     if not nodes:
         raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail="Pipeline graph has no nodes",
         )
 
-    target_ids = {str(e.get("target_node_id", e.get("target"))) for e in edges}
+    target_ids: set[str] = set()
+    for edge in edges:
+        target_id = edge.get("target_node_id")
+        if target_id is None:
+            target_id = edge.get("target")
+        if target_id is not None:
+            target_ids.add(str(target_id))
     entry_candidates = [n for n in nodes if str(n.get("id")) not in target_ids]
     if not entry_candidates:
         raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail="Pipeline graph has no entry node (cycle detected)",
         )
 
@@ -142,13 +231,13 @@ async def _validate_run_input_basics(
     agent = agent_result.scalar_one_or_none()
     if agent is None:
         raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail=f"Entry agent {agent_id_str} not found",
         )
 
     if not isinstance(input_payload, dict):
         raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail="Input payload must be a JSON object",
         )
 
@@ -159,7 +248,7 @@ async def trigger_run(
     background_tasks: BackgroundTasks,
     session: AsyncSession = Depends(get_db_session),
     engine: AsyncEngine = Depends(_get_engine),
-    principal: AuthenticatedPrincipal = Depends(get_current_user),
+    principal: TenantPrincipal = Depends(get_current_tenant_user),
 ) -> RunResponse:
     """Manually trigger a pipeline run.
 
@@ -178,7 +267,7 @@ async def trigger_run(
     except ProgrammingError:
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="Feature is not available. Run database migrations to enable it.",
+            detail="Feature is not available. This feature requires a database update. Please contact support.",
         ) from None
 
     except SQLAlchemyError:
@@ -239,7 +328,7 @@ async def trigger_run(
     except ProgrammingError:
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="Feature is not available. Run database migrations to enable it.",
+            detail="Feature is not available. This feature requires a database update. Please contact support.",
         ) from None
 
     except SQLAlchemyError:
@@ -275,22 +364,17 @@ async def trigger_run(
 async def get_run_stats_endpoint(
     period: str = Query(default="30d", pattern=r"^(7d|30d|90d)$"),
     session: AsyncSession = Depends(get_db_session),
-    principal: AuthenticatedPrincipal = Depends(get_current_user),
+    principal: TenantPrincipal = Depends(get_current_tenant_user),
 ) -> dict[str, Any]:
     """Aggregated run stats for a period (7d|30d|90d)."""
     try:
         async with session.begin():
             await set_rls_org(session, principal.organisation_id)
             return await get_run_stats(session, period)
-    except IntegrityError:
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail="A resource with this value already exists",
-        ) from None
     except ProgrammingError:
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="Feature is not available. Run database migrations to enable it.",
+            detail="Feature is not available. This feature requires a database update. Please contact support.",
         ) from None
 
     except SQLAlchemyError:
@@ -314,22 +398,17 @@ async def get_run_stats_endpoint(
 async def get_run_heatmap_endpoint(
     year: int = Query(default=2026, ge=2020, le=2100),
     session: AsyncSession = Depends(get_db_session),
-    principal: AuthenticatedPrincipal = Depends(get_current_user),
+    principal: TenantPrincipal = Depends(get_current_tenant_user),
 ) -> list[dict[str, Any]]:
     """Run counts per day for the given year (calendar heatmap)."""
     try:
         async with session.begin():
             await set_rls_org(session, principal.organisation_id)
             return await get_run_heatmap(session, year)
-    except IntegrityError:
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail="A resource with this value already exists",
-        ) from None
     except ProgrammingError:
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="Feature is not available. Run database migrations to enable it.",
+            detail="Feature is not available. This feature requires a database update. Please contact support.",
         ) from None
 
     except SQLAlchemyError:
@@ -353,7 +432,7 @@ async def get_run_heatmap_endpoint(
 async def get_run_status(
     run_id: uuid.UUID,
     session: AsyncSession = Depends(get_db_session),
-    principal: AuthenticatedPrincipal = Depends(get_current_user),
+    principal: TenantPrincipal = Depends(get_current_tenant_user),
 ) -> RunResponse:
     try:
         async with session.begin():
@@ -367,7 +446,7 @@ async def get_run_status(
     except ProgrammingError:
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="Feature is not available. Run database migrations to enable it.",
+            detail="Feature is not available. This feature requires a database update. Please contact support.",
         ) from None
 
     except SQLAlchemyError:
@@ -395,7 +474,7 @@ async def get_run_status(
 async def cancel_run(
     run_id: uuid.UUID,
     session: AsyncSession = Depends(get_db_session),
-    principal: AuthenticatedPrincipal = Depends(get_current_user),
+    principal: TenantPrincipal = Depends(get_current_tenant_user),
 ) -> dict[str, str]:
     """Request cancellation of a run.
 
@@ -424,7 +503,7 @@ async def cancel_run(
     except ProgrammingError:
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="Feature is not available. Run database migrations to enable it.",
+            detail="Feature is not available. This feature requires a database update. Please contact support.",
         ) from None
 
     except SQLAlchemyError:
@@ -494,14 +573,14 @@ def _build_fixture_map(
     fixture_map entry.  Otherwise a single entry maps the full
     input_payload to the serialised outputs.
     """
-    fixture: ClassVar[dict[str, str]] = {}
+    fixture: dict[str, str] = {}
     inp = input_payload or {}
     out = outputs_json or {}
 
     if isinstance(out, dict) and any(isinstance(v, dict) and "input" in v and "output" in v for v in out.values()):
         for _node_id, node_io in out.items():
             if isinstance(node_io, dict):
-                node_input = node_io.get("input", str(inp))
+                node_input = node_io.get("input", json.dumps(inp, sort_keys=True))
                 node_output = node_io.get("output", "")
                 key = " ".join(str(node_input).split())
                 fixture[key] = str(node_output)
@@ -527,7 +606,7 @@ class FixtureExportResponse(BaseModel):
 async def get_run_io_endpoint(
     run_id: uuid.UUID,
     session: AsyncSession = Depends(get_db_session),
-    principal: AuthenticatedPrincipal = Depends(get_current_user),
+    principal: TenantPrincipal = Depends(get_current_tenant_user),
 ) -> RunIOResponse:
     """Return per-node IO for a completed run, plus generated fixture_map."""
     try:
@@ -542,7 +621,7 @@ async def get_run_io_endpoint(
     except ProgrammingError:
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="Feature is not available. Run database migrations to enable it.",
+            detail="Feature is not available. This feature requires a database update. Please contact support.",
         ) from None
 
     except SQLAlchemyError:
@@ -575,7 +654,7 @@ async def get_run_io_endpoint(
 async def export_run_fixture(
     run_id: uuid.UUID,
     session: AsyncSession = Depends(get_db_session),
-    principal: AuthenticatedPrincipal = Depends(get_current_user),
+    principal: TenantPrincipal = Depends(get_current_tenant_user),
 ) -> FixtureExportResponse:
     """Export run IO data as a StubModelBackend-compatible fixture.
 
@@ -602,7 +681,7 @@ async def export_run_fixture(
     except ProgrammingError:
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="Feature is not available. Run database migrations to enable it.",
+            detail="Feature is not available. This feature requires a database update. Please contact support.",
         ) from None
 
     except SQLAlchemyError:
@@ -648,7 +727,7 @@ async def export_run_fixture(
 async def get_run_workspace_lease(
     run_id: uuid.UUID,
     session: AsyncSession = Depends(get_db_session),
-    principal: AuthenticatedPrincipal = Depends(get_current_user),
+    principal: TenantPrincipal = Depends(get_current_tenant_user),
 ) -> dict[str, Any] | None:
     """Return the WorkspaceLease associated with a run, if any."""
     try:
@@ -666,7 +745,7 @@ async def get_run_workspace_lease(
     except ProgrammingError:
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="Feature is not available. Run database migrations to enable it.",
+            detail="Feature is not available. This feature requires a database update. Please contact support.",
         ) from None
 
     except SQLAlchemyError:
@@ -703,7 +782,7 @@ async def get_run_workspace_lease(
 async def get_run_workspace_events(
     run_id: uuid.UUID,
     session: AsyncSession = Depends(get_db_session),
-    principal: AuthenticatedPrincipal = Depends(get_current_user),
+    principal: TenantPrincipal = Depends(get_current_tenant_user),
 ) -> list[dict[str, str]]:
     """Return workspace lifecycle events for a run as a timeline."""
     try:
@@ -728,7 +807,7 @@ async def get_run_workspace_events(
     except ProgrammingError:
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="Feature is not available. Run database migrations to enable it.",
+            detail="Feature is not available. This feature requires a database update. Please contact support.",
         ) from None
 
     except SQLAlchemyError:
@@ -795,7 +874,7 @@ async def get_run_node_output(
     run_id: uuid.UUID,
     node_id: str,
     session: AsyncSession = Depends(get_db_session),
-    principal: AuthenticatedPrincipal = Depends(get_current_user),
+    principal: TenantPrincipal = Depends(get_current_tenant_user),
 ) -> NodeOutputResponse:
     """Return a specific node's output from a completed pipeline run.
 
@@ -815,7 +894,7 @@ async def get_run_node_output(
     except ProgrammingError:
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="Feature is not available. Run database migrations to enable it.",
+            detail="Feature is not available. This feature requires a database update. Please contact support.",
         ) from None
 
     except SQLAlchemyError:
@@ -865,7 +944,7 @@ async def observe_run_node(
     run_id: uuid.UUID,
     node_id: str,
     session: AsyncSession = Depends(get_db_session),
-    principal: AuthenticatedPrincipal = Depends(get_current_user),
+    principal: TenantPrincipal = Depends(get_current_tenant_user),
 ) -> ObserveNodeResponse:
     """Mark a node as observed by a human.
 
@@ -890,7 +969,7 @@ async def observe_run_node(
     except ProgrammingError:
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="Feature is not available. Run database migrations to enable it.",
+            detail="Feature is not available. This feature requires a database update. Please contact support.",
         ) from None
 
     except SQLAlchemyError:
@@ -929,7 +1008,7 @@ async def observe_run_node(
     except ProgrammingError:
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="Feature is not available. Run database migrations to enable it.",
+            detail="Feature is not available. This feature requires a database update. Please contact support.",
         ) from None
 
     except SQLAlchemyError:
@@ -982,7 +1061,7 @@ async def recover_run_node(
     req: NodeRecoverRequest,
     session: AsyncSession = Depends(get_db_session),
     engine: AsyncEngine = Depends(_get_engine),
-    principal: AuthenticatedPrincipal = Depends(get_current_user),
+    principal: TenantPrincipal = Depends(get_current_tenant_user),
 ) -> NodeRecoverResponse:
     """Recover a failed manual-input node.
 
@@ -1012,7 +1091,7 @@ async def recover_run_node(
                     actor_id=principal.account_id,
                 )
             except RecoveryNotAllowedError as exc:
-                raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+                raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)[:200]) from exc
             except NodeNotFoundInGraphError as exc:
                 raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
             except NodeAlreadyCompletedError as exc:
@@ -1027,7 +1106,7 @@ async def recover_run_node(
     except ProgrammingError:
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="Feature is not available. Run database migrations to enable it.",
+            detail="Feature is not available. This feature requires a database update. Please contact support.",
         ) from None
 
     except SQLAlchemyError:
@@ -1126,8 +1205,6 @@ async def _get_checkpoint_state(
     fernet_key: str | None = None,
 ) -> dict[str, Any] | None:
     """Fetch the latest checkpoint state for a thread, decrypting if needed."""
-    from cryptography.fernet import Fernet
-
     result = await session.execute(
         text("""
             SELECT checkpoint, checkpoint_id
@@ -1183,7 +1260,7 @@ def _build_messages_from_agent_and_state(
     from the input payload or checkpoint state, and assistant messages
     from previous node outputs.
     """
-    messages: ClassVar[list[dict[str, str]]] = []
+    messages: list[dict[str, str]] = []
 
     if agent is not None:
         system_content = agent.prompt_template or ""
@@ -1238,7 +1315,7 @@ async def reveal_node_prompt(
     run_id: uuid.UUID,
     node_id: str,
     session: AsyncSession = Depends(get_db_session),
-    principal: AuthenticatedPrincipal = Depends(get_current_user),
+    principal: TenantPrincipal = Depends(get_current_tenant_user),
     settings: Settings = Depends(get_settings),
 ) -> PromptRevealResponse:
     """Reconstruct and reveal the exact prompt sent to the LLM for a node.
@@ -1329,7 +1406,7 @@ async def reveal_node_prompt(
     except ProgrammingError:
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="Feature is not available. Run database migrations to enable it.",
+            detail="Feature is not available. This feature requires a database update. Please contact support.",
         ) from None
     except HTTPException:
         raise
@@ -1379,7 +1456,7 @@ class NodeOutputDiffResponse(BaseModel):
 async def diff_node_output(
     req: NodeOutputDiffRequest,
     session: AsyncSession = Depends(get_db_session),
-    principal: AuthenticatedPrincipal = Depends(get_current_user),
+    principal: TenantPrincipal = Depends(get_current_tenant_user),
 ) -> NodeOutputDiffResponse:
     """Diff a specific node's output across two runs.
 
@@ -1392,15 +1469,10 @@ async def diff_node_output(
             await set_rls_org(session, principal.organisation_id)
             run_a = await get_run(session, req.run_id_a)
             run_b = await get_run(session, req.run_id_b)
-    except IntegrityError:
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail="A resource with this value already exists",
-        ) from None
     except ProgrammingError:
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="Feature is not available. Run database migrations to enable it.",
+            detail="Feature is not available. This feature requires a database update. Please contact support.",
         ) from None
 
     except SQLAlchemyError:
@@ -1456,7 +1528,7 @@ async def diff_node_output(
     lines_b = text_b.splitlines(keepends=True)
 
     differ = difflib.SequenceMatcher(None, lines_a, lines_b)
-    diff_lines: ClassVar[list[NodeOutputDiffLine]] = []
+    diff_lines: list[NodeOutputDiffLine] = []
     line_a = 1
     line_b = 1
 

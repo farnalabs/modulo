@@ -20,8 +20,8 @@ from sqlalchemy.exc import ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
 from modulo.api.dependencies import _get_engine, get_db_session, get_or_create_engine, pg_connection_string
-from modulo.auth.dependencies import get_current_user
-from modulo.auth.jwt import AuthenticatedPrincipal
+from modulo.auth.dependencies import get_current_tenant_user
+from modulo.auth.jwt import TenantPrincipal
 from modulo.core.pipeline_engine.executor import PipelineExecutor
 from modulo.core.trigger_engine import (
     ConcurrentRunLimitError,
@@ -33,6 +33,7 @@ from modulo.core.trigger_engine import (
     TriggerInactiveError,
     TriggerNotFoundError,
 )
+from modulo.db.crud.run import update_run_status
 from modulo.db.models.trigger import Trigger
 from modulo.db.rls import set_rls_org
 from modulo.settings import get_settings
@@ -50,7 +51,7 @@ async def receive_webhook(
     request: Request,
     background_tasks: BackgroundTasks,
     session: AsyncSession = Depends(get_db_session),
-    principal: AuthenticatedPrincipal = Depends(get_current_user),
+    principal: TenantPrincipal = Depends(get_current_tenant_user),
     engine: AsyncEngine = Depends(_get_engine),
 ) -> dict[str, Any]:
     """Receive an incoming webhook and enqueue a pipeline run.
@@ -161,7 +162,7 @@ async def replay_webhook(
     event_id: uuid.UUID,
     background_tasks: BackgroundTasks,
     session: AsyncSession = Depends(get_db_session),
-    principal: AuthenticatedPrincipal = Depends(get_current_user),
+    principal: TenantPrincipal = Depends(get_current_tenant_user),
     engine: AsyncEngine = Depends(_get_engine),
 ) -> dict[str, Any]:
     """Re-fire a webhook run from a previous TriggerEvent log entry.
@@ -240,7 +241,7 @@ async def replay_webhook(
 @router.post("/cleanup-expired", status_code=status.HTTP_200_OK)
 async def cleanup_expired(
     session: AsyncSession = Depends(get_db_session),
-    principal: AuthenticatedPrincipal = Depends(get_current_user),
+    principal: TenantPrincipal = Depends(get_current_tenant_user),
 ) -> dict[str, int]:
     """Delete expired dedup hashes and webhook payloads.
 
@@ -289,9 +290,6 @@ async def _run_in_background(
             settings = get_settings()
             engine = get_or_create_engine(settings)
             factory = async_sessionmaker(engine, expire_on_commit=False)
-            from modulo.db.crud.run import update_run_status
-            from modulo.db.rls import set_rls_org
-
             async with factory() as session, session.begin():
                 await set_rls_org(session, org_id)
                 await update_run_status(session, run_id, "failed", error_code="internal_error")

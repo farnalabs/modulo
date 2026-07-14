@@ -27,9 +27,10 @@ class DatadogConnector(ConnectorBase):
     def __init__(self, api_key: str, app_key: str, site: str = "us") -> None:
         self._api_key = api_key
         self._app_key = app_key
-        self._base = _SITES.get(site)
-        if not self._base:
+        base = _SITES.get(site)
+        if base is None:
             raise ValueError(f"Unknown Datadog site: {site!r}. Choose from: {', '.join(_SITES)}")
+        self._base = base
 
     @property
     def connector_type(self) -> ConnectorType:

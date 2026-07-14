@@ -3,7 +3,7 @@ import json
 import logging
 
 import pytest
-from pythonjsonlogger import jsonlogger
+from pythonjsonlogger.json import JsonFormatter
 
 from modulo.core.logging_config import (
     CorrelationIdFilter,
@@ -92,7 +92,7 @@ def test_json_output_valid_json() -> None:
     stream = io.StringIO()
     handler = logging.StreamHandler(stream)
     handler.setFormatter(
-        jsonlogger.JsonFormatter(
+        JsonFormatter(
             fmt="%(message)s %(level)s %(name)s",
             timestamp=True,
         )
@@ -117,7 +117,7 @@ def test_log_level_filtering() -> None:
     """Test that DEBUG messages are filtered when level is INFO."""
     stream = io.StringIO()
     handler = logging.StreamHandler(stream)
-    handler.setFormatter(jsonlogger.JsonFormatter(fmt="%(message)s"))
+    handler.setFormatter(JsonFormatter(fmt="%(message)s"))
     logger = logging.getLogger("test_level_filter")
     logger.setLevel(logging.INFO)
     logger.addHandler(handler)
@@ -143,7 +143,7 @@ def test_per_module_level_env_var(monkeypatch: pytest.MonkeyPatch) -> None:
 
     stream = io.StringIO()
     handler = logging.StreamHandler(stream)
-    handler.setFormatter(jsonlogger.JsonFormatter(fmt="%(message)s"))
+    handler.setFormatter(JsonFormatter(fmt="%(message)s"))
 
     test_logger = logging.getLogger("modulo.core.pipeline_engine.executor")
     test_logger.setLevel(logging.DEBUG)

@@ -161,7 +161,7 @@ WebSocket auth tokens, algorithm pinning, and SECRET_KEY entropy enforcement (PR
 - Fixed CRITICAL: added SQLAlchemyError→503 catches to all 4 auth routes (login, refresh, logout, me) — connection/deadlock failures previously propagated as raw 500
 - Fixed CRITICAL: added IntegrityError→409 catch on login route (token family creation race)
 - Fixed MAJOR: corrected BDD feature file API paths from `/api/auth/` to `/api/v1/auth/` to match actual router prefix
-- Fixed MAJOR: `test_none_algorithm_rejected` now properly verifies decode-time rejection of `alg: none` tokens (manually crafted JWT bypasses python-jose encode-time validation)
+- Fixed MAJOR: `test_none_algorithm_rejected` now properly verifies decode-time rejection of `alg: none` tokens (manually crafted JWT bypasses PyJWT encode-time validation)
 - Added 5 new tests in test_auth_programming_error.py (integrity error→409 on login, SQLAlchemyError→503 on login, refresh, logout, me)
 - Updated Error Handling section with 5 new [x] checkboxes
 - 9 existing tests + 5 new tests all pass

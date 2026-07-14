@@ -7,7 +7,7 @@ import uuid
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from fastapi.responses import JSONResponse
-from jose import JWTError
+from jwt import InvalidTokenError as JWTError
 from pydantic import BaseModel, Field
 from sqlalchemy.exc import IntegrityError, ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -96,8 +96,9 @@ async def login(
     try:
         async with session.begin():
             account = await get_account_by_email(session, req.email)
-            if not account or (limiter is not None and not authenticate_db_user(req.password, account)):
-                await limiter.record_failure(ip)
+            if not account or not authenticate_db_user(req.password, account):
+                if limiter is not None:
+                    await limiter.record_failure(ip)
                 raise HTTPException(
                     status_code=status.HTTP_401_UNAUTHORIZED,
                     detail="Incorrect email or password",
@@ -130,7 +131,7 @@ async def login(
             detail="Account already has an active session. Try again.",
         ) from None
     except ProgrammingError:
-        _log.warning("login.programming_error")
+        _log.warning("login.programming_error", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
@@ -267,7 +268,7 @@ async def refresh(
     org_id_val = claims.get("org_id")
     account_id_val = account_id_claim
     org_role_val = claims.get("org_role")
-    if not all(isinstance(v, str) for v in [sub_val, org_id_val, account_id_val]) or (
+    if any(not isinstance(value, str) for value in (sub_val, org_id_val, account_id_val)) or (
         org_id_val is not None and not isinstance(org_id_val, str)
     ):
         raise HTTPException(

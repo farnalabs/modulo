@@ -250,8 +250,8 @@ class TestListAuditEvents:
             resp = client.get(f"{self.URL}?from_date=2025-01-01T00:00:00Z&to_date=2025-12-31T23:59:59Z")
         assert resp.status_code == 200
         _, kwargs = mock_list.call_args
-        assert kwargs.get("from_date") == "2025-01-01T00:00:00Z"
-        assert kwargs.get("to_date") == "2025-12-31T23:59:59Z"
+        assert kwargs.get("from_date") == datetime(2025, 1, 1, tzinfo=UTC)
+        assert kwargs.get("to_date") == datetime(2025, 12, 31, 23, 59, 59, tzinfo=UTC)
 
     def test_unauthorized_returns_4xx(self, unauth_client: TestClient) -> None:
         resp = unauth_client.get(self.URL)
@@ -366,8 +366,8 @@ class TestExportChain:
         assert kwargs.get("event_type") == "pipeline.run"
         assert kwargs.get("actor_user_id") == _USER_ID
         assert kwargs.get("resource_type") == "pipeline"
-        assert kwargs.get("from_date") == "2025-01-01"
-        assert kwargs.get("to_date") == "2025-12-31"
+        assert kwargs.get("from_date") == datetime(2025, 1, 1)
+        assert kwargs.get("to_date") == datetime(2025, 12, 31)
 
     def test_export_page_beyond_data(self, client: TestClient) -> None:
         with (

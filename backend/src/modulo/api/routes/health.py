@@ -6,6 +6,10 @@ import time
 from datetime import UTC, datetime
 from typing import Literal
 
+import asyncpg  # type: ignore[import-untyped]
+import redis.asyncio as aioredis
+from alembic.config import Config
+from alembic.script import ScriptDirectory
 from fastapi import APIRouter, Response
 from pydantic import BaseModel
 from sqlalchemy import text
@@ -61,8 +65,6 @@ async def _check_redis() -> CheckResult:
     start = time.monotonic()
     r = None
     try:
-        import redis.asyncio as aioredis
-
         r = aioredis.Redis.from_url(settings.redis_url, socket_connect_timeout=2)
         await r.ping()
         latency_ms = (time.monotonic() - start) * 1000
@@ -87,8 +89,6 @@ async def _check_redis() -> CheckResult:
 async def _check_checkpointer() -> CheckResult:
     settings = get_settings()
     try:
-        import asyncpg  # type: ignore[import-untyped]
-
         conn_string = pg_connection_string(settings.database_url)
         conn = await asyncpg.connect(conn_string, timeout=5)
         try:
@@ -109,9 +109,6 @@ async def _check_checkpointer() -> CheckResult:
 async def _check_migrations() -> CheckResult:
     settings = get_settings()
     try:
-        from alembic.config import Config
-        from alembic.script import ScriptDirectory
-
         alembic_cfg = Config("alembic.ini")
         alembic_cfg.set_main_option("sqlalchemy.url", settings.database_url)
 

@@ -14,6 +14,7 @@ from modulo.api.main import app
 from modulo.auth.dependencies import get_current_user
 from modulo.auth.jwt import AuthenticatedPrincipal
 from modulo.settings import Settings, get_settings
+from tests.unit.api.mock_session import configure_mock_session
 
 _VALID_32 = "a" * 32
 _ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
@@ -29,7 +30,7 @@ def _make_settings() -> Settings:
 
 
 def _make_mock_session() -> AsyncMock:
-    session = AsyncMock()
+    session = configure_mock_session(AsyncMock())
     begin_cm = AsyncMock()
     begin_cm.__aenter__ = AsyncMock(return_value=None)
     begin_cm.__aexit__ = AsyncMock(return_value=False)
@@ -239,6 +240,7 @@ class TestSchemaVersionListErrors:
     def test_list_versions_programming_error_returns_501(self, client: TestClient) -> None:
         mock_list = AsyncMock(side_effect=ProgrammingError("stmt", "params", "table missing"))
         with (
+            patch("modulo.api.routes.schemas.get_schema", new=AsyncMock(return_value=MagicMock())),
             patch("modulo.api.routes.schemas.list_schema_versions", mock_list),
             patch("modulo.api.routes.schemas.set_rls_org"),
         ):
@@ -248,6 +250,7 @@ class TestSchemaVersionListErrors:
     def test_list_versions_sqlalchemy_error_returns_503(self, client: TestClient) -> None:
         mock_list = AsyncMock(side_effect=SQLAlchemyError("connection failed"))
         with (
+            patch("modulo.api.routes.schemas.get_schema", new=AsyncMock(return_value=MagicMock())),
             patch("modulo.api.routes.schemas.list_schema_versions", mock_list),
             patch("modulo.api.routes.schemas.set_rls_org"),
         ):

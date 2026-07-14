@@ -7,6 +7,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from pydantic import ValidationError
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.api.models.error_notification_rule import ErrorNotificationRuleCreate, ErrorNotificationRuleUpdate
 from modulo.core.error_tracking.alert_dispatcher import _format_slack_payload
@@ -15,6 +16,10 @@ from modulo.db.models.error_notification_rule import ErrorNotificationRule
 
 _ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
 _GROUP_ID = uuid.UUID("00000000-0000-0000-0000-000000000010")
+
+
+def _make_session() -> AsyncMock:
+    return AsyncMock(spec=AsyncSession)
 
 
 def _make_rule(**overrides: object) -> MagicMock:
@@ -42,7 +47,7 @@ def _make_rule(**overrides: object) -> MagicMock:
 class TestAlertEngineEvaluate:
     async def test_level_match_triggers_alert(self) -> None:
         engine = AlertEngine()
-        session = AsyncMock()
+        session = _make_session()
         session.execute = AsyncMock(
             return_value=MagicMock(
                 scalars=MagicMock(return_value=MagicMock(all=MagicMock(return_value=[_make_rule()])))
@@ -62,7 +67,7 @@ class TestAlertEngineEvaluate:
 
     async def test_level_mismatch_skips(self) -> None:
         engine = AlertEngine()
-        session = AsyncMock()
+        session = _make_session()
         session.execute = AsyncMock(
             return_value=MagicMock(
                 scalars=MagicMock(return_value=MagicMock(all=MagicMock(return_value=[_make_rule()])))
@@ -82,7 +87,7 @@ class TestAlertEngineEvaluate:
     async def test_count_below_threshold_skips(self) -> None:
         rule = _make_rule(condition_min_count=5)
         engine = AlertEngine()
-        session = AsyncMock()
+        session = _make_session()
         session.execute = AsyncMock(
             return_value=MagicMock(scalars=MagicMock(return_value=MagicMock(all=MagicMock(return_value=[rule]))))
         )
@@ -100,7 +105,7 @@ class TestAlertEngineEvaluate:
     async def test_count_meets_threshold_triggers(self) -> None:
         rule = _make_rule(condition_min_count=5)
         engine = AlertEngine()
-        session = AsyncMock()
+        session = _make_session()
         session.execute = AsyncMock(
             return_value=MagicMock(scalars=MagicMock(return_value=MagicMock(all=MagicMock(return_value=[rule]))))
         )
@@ -119,7 +124,7 @@ class TestAlertEngineEvaluate:
         r1 = _make_rule(name="Rule A", condition_level="error")
         r2 = _make_rule(name="Rule B", condition_level="error")
         engine = AlertEngine()
-        session = AsyncMock()
+        session = _make_session()
         session.execute = AsyncMock(
             return_value=MagicMock(scalars=MagicMock(return_value=MagicMock(all=MagicMock(return_value=[r1, r2]))))
         )
@@ -137,7 +142,7 @@ class TestAlertEngineEvaluate:
     async def test_disabled_rule_not_evaluated(self) -> None:
         rule = _make_rule(enabled=False)
         engine = AlertEngine()
-        session = AsyncMock()
+        session = _make_session()
         session.execute = AsyncMock(
             return_value=MagicMock(scalars=MagicMock(return_value=MagicMock(all=MagicMock(return_value=[rule]))))
         )
@@ -154,7 +159,7 @@ class TestAlertEngineEvaluate:
 
     async def test_no_rules_for_org_returns_empty(self) -> None:
         engine = AlertEngine()
-        session = AsyncMock()
+        session = _make_session()
         session.execute = AsyncMock(
             return_value=MagicMock(scalars=MagicMock(return_value=MagicMock(all=MagicMock(return_value=[]))))
         )
@@ -178,7 +183,7 @@ class TestAlertEngineEvaluate:
 class TestAlertEngineCooldown:
     async def test_same_rule_group_does_not_duplicate_within_cooldown(self) -> None:
         engine = AlertEngine()
-        session = AsyncMock()
+        session = _make_session()
         session.execute = AsyncMock(
             return_value=MagicMock(
                 scalars=MagicMock(return_value=MagicMock(all=MagicMock(return_value=[_make_rule()])))
@@ -209,7 +214,7 @@ class TestAlertEngineCooldown:
 
     async def test_different_group_not_affected_by_cooldown(self) -> None:
         engine = AlertEngine()
-        session = AsyncMock()
+        session = _make_session()
         session.execute = AsyncMock(
             return_value=MagicMock(
                 scalars=MagicMock(return_value=MagicMock(all=MagicMock(return_value=[_make_rule()])))
@@ -241,7 +246,7 @@ class TestAlertEngineCooldown:
         r1 = _make_rule(name="Rule A", condition_min_count=1)
         r2 = _make_rule(name="Rule B", condition_min_count=5)
         engine = AlertEngine()
-        session = AsyncMock()
+        session = _make_session()
         session.execute = AsyncMock(
             return_value=MagicMock(scalars=MagicMock(return_value=MagicMock(all=MagicMock(return_value=[r1, r2]))))
         )
@@ -325,7 +330,7 @@ class TestDispatchWebhook:
             level="error",
             count=1,
         )
-        session = AsyncMock()
+        session = _make_session()
         error_group = MagicMock()
         error_group.sample_event = None
 

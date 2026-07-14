@@ -7,8 +7,8 @@ from sqlalchemy.exc import ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.api.dependencies import get_db_session
-from modulo.auth.dependencies import get_current_user
-from modulo.auth.jwt import AuthenticatedPrincipal
+from modulo.auth.dependencies import get_current_tenant_user
+from modulo.auth.jwt import TenantPrincipal
 from modulo.db.crud.system_config import get_config, set_config
 
 logger = logging.getLogger(__name__)
@@ -27,7 +27,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
 _KNOWN_BACKENDS = frozenset({"builtin", "sentry", "datadog_rum", "grafana_faro"})
 
 
-def _require_admin(principal: AuthenticatedPrincipal) -> None:
+def _require_admin(principal: TenantPrincipal) -> None:
     if principal.org_role != "admin":
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
@@ -71,7 +71,7 @@ def _merge(entry: Any | None) -> dict[str, Any]:
 
 @router.get("", response_model=MonitorConfigResponse)
 async def get_monitor_config(
-    current_user: AuthenticatedPrincipal = Depends(get_current_user),
+    current_user: TenantPrincipal = Depends(get_current_tenant_user),
     session: AsyncSession = Depends(get_db_session),
 ) -> dict[str, Any]:
     _require_admin(current_user)
@@ -101,7 +101,7 @@ async def get_monitor_config(
 @router.put("", response_model=MonitorConfigResponse)
 async def set_monitor_config(
     req: MonitorConfigUpdate,
-    current_user: AuthenticatedPrincipal = Depends(get_current_user),
+    current_user: TenantPrincipal = Depends(get_current_tenant_user),
     session: AsyncSession = Depends(get_db_session),
 ) -> dict[str, Any]:
     _require_admin(current_user)

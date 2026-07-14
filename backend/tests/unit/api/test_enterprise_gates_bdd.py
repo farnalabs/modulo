@@ -19,6 +19,7 @@ from modulo.api.main import app
 from modulo.auth.dependencies import get_current_user
 from modulo.auth.jwt import AuthenticatedPrincipal
 from modulo.settings import Settings, get_settings
+from tests.unit.api.mock_session import configure_mock_session
 
 _VALID_32 = "a" * 32
 _ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
@@ -57,7 +58,7 @@ def _make_settings(*, license_key: str = "") -> Settings:
 
 
 def _make_mock_session() -> AsyncMock:
-    session = AsyncMock()
+    session = configure_mock_session(AsyncMock())
     begin_cm = AsyncMock()
     begin_cm.__aenter__ = AsyncMock(return_value=None)
     begin_cm.__aexit__ = AsyncMock(return_value=False)
@@ -148,8 +149,8 @@ class TestSsoGating:
         mock_provider.auto_provision = True
         mock_provider.default_role = "runner"
         mock_provider.group_mappings = []
-        mock_provider.created_at = None
-        mock_provider.updated_at = None
+        mock_provider.created_at = datetime(2025, 1, 1, tzinfo=UTC)
+        mock_provider.updated_at = datetime(2025, 1, 1, tzinfo=UTC)
 
         with patch("modulo.api.routes.admin_sso.list_providers", new=AsyncMock(return_value=[mock_provider])):
             resp = licensed_client.get("/api/v1/admin/sso/providers")

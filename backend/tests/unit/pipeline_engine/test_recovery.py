@@ -14,6 +14,7 @@ from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.core.pipeline_engine.recovery import (
     ConcurrentRecoveryError,
@@ -76,12 +77,17 @@ def _make_snapshot() -> MagicMock:
 
 
 def _mock_session() -> AsyncMock:
-    """A bare AsyncSession mock that provides begin/flush/execute stubs."""
-    session = AsyncMock()
+    """Return a contract-shaped AsyncSession mock for recovery tests."""
+    session = AsyncMock(spec=AsyncSession)
     begin_cm = AsyncMock()
     begin_cm.__aenter__ = AsyncMock(return_value=None)
     begin_cm.__aexit__ = AsyncMock(return_value=None)
     session.begin = MagicMock(return_value=begin_cm)
+    session.in_transaction.return_value = True
+    bind = MagicMock()
+    bind.dialect.name = "sqlite"
+    session.get_bind.return_value = bind
+    session.info = {}
     session.flush = AsyncMock()
     return session
 

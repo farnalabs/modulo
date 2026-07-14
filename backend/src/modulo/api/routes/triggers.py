@@ -13,7 +13,7 @@ import hashlib
 import json
 import logging
 import uuid
-from typing import Any, ClassVar
+from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, Field
@@ -23,8 +23,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.api.dependencies import get_db_session
 from modulo.api.middleware.sensitive_mask import mask_config_json
-from modulo.auth.dependencies import get_current_user
-from modulo.auth.jwt import AuthenticatedPrincipal
+from modulo.auth.dependencies import get_current_tenant_user
+from modulo.auth.jwt import TenantPrincipal
 from modulo.core.cron_scheduler import compute_next_fire, validate_cron_expression
 from modulo.core.trigger_engine import TriggerEngine
 from modulo.db.models.trigger import Trigger
@@ -43,7 +43,7 @@ async def list_triggers(
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
     session: AsyncSession = Depends(get_db_session),
-    principal: AuthenticatedPrincipal = Depends(get_current_user),
+    principal: TenantPrincipal = Depends(get_current_tenant_user),
 ) -> dict[str, Any]:
     """List all triggers, optionally filtered by pipeline or type."""
     try:
@@ -120,12 +120,29 @@ class CronConfigUpdate(BaseModel):
     input_template: dict[str, Any] | None = None
 
 
+def _validated_next_fire(cron_expression: str | None, cron_timezone: str | None) -> datetime.datetime:
+    """Validate a complete cron configuration and return its next UTC fire time."""
+    if cron_expression is None:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail="Cron expression is required",
+        )
+    timezone = cron_timezone or "UTC"
+    error = validate_cron_expression(cron_expression, timezone)
+    if error:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail=f"Invalid cron expression: {error}",
+        )
+    return compute_next_fire(cron_expression, timezone=timezone)
+
+
 @router.patch("/triggers/{trigger_id}/cron", status_code=status.HTTP_200_OK)
 async def update_cron_config(
     trigger_id: uuid.UUID,
     req: CronConfigUpdate,
     session: AsyncSession = Depends(get_db_session),
-    principal: AuthenticatedPrincipal = Depends(get_current_user),
+    principal: TenantPrincipal = Depends(get_current_tenant_user),
 ) -> dict[str, Any]:
     """Update cron configuration for a trigger.
 
@@ -151,30 +168,21 @@ async def update_cron_config(
                     detail="Only cron triggers can have cron configuration",
                 )
 
+            next_fire_at: datetime.datetime | None = None
+            if req.cron_expression is not None or req.cron_timezone is not None:
+                next_fire_at = _validated_next_fire(
+                    req.cron_expression if req.cron_expression is not None else trigger.cron_expression,
+                    req.cron_timezone if req.cron_timezone is not None else trigger.cron_timezone,
+                )
+
             if req.active is not None:
                 trigger.active = req.active
-
             if req.cron_expression is not None:
-                err = validate_cron_expression(
-                    req.cron_expression,
-                    req.cron_timezone or trigger.cron_timezone or "UTC",
-                )
-                if err:
-                    raise HTTPException(
-                        status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-                        detail=f"Invalid cron expression: {err}",
-                    )
                 trigger.cron_expression = req.cron_expression
-
             if req.cron_timezone is not None:
                 trigger.cron_timezone = req.cron_timezone
-
-            # Recompute next_fire_at if relevant
-            if req.cron_expression is not None or (req.cron_timezone is not None and trigger.cron_expression):
-                tz = trigger.cron_timezone or "UTC"
-                err = validate_cron_expression(trigger.cron_expression, tz)
-                if err is None:
-                    trigger.next_fire_at = compute_next_fire(trigger.cron_expression)
+            if next_fire_at is not None:
+                trigger.next_fire_at = next_fire_at
 
             if req.snapshot_id is not None:
                 trigger.config_json = {**(trigger.config_json or {}), "snapshot_id": req.snapshot_id}
@@ -217,7 +225,7 @@ async def preview_cron_schedule(
     trigger_id: uuid.UUID,
     count: int = Query(5, ge=1, le=50),
     session: AsyncSession = Depends(get_db_session),
-    principal: AuthenticatedPrincipal = Depends(get_current_user),
+    principal: TenantPrincipal = Depends(get_current_tenant_user),
 ) -> dict[str, Any]:
     """Preview the next *count* fire times for a cron trigger."""
     try:
@@ -239,13 +247,15 @@ async def preview_cron_schedule(
                     detail="Trigger has no cron expression configured",
                 )
 
-            from croniter import croniter
-
-            cron = croniter(trigger.cron_expression, datetime.datetime.now(datetime.UTC))
-            times: ClassVar[list[str]] = []
+            times: list[str] = []
+            next_fire = datetime.datetime.now(datetime.UTC)
             for _ in range(count):
-                next_dt = cron.get_next(datetime.datetime)
-                times.append(next_dt.isoformat())
+                next_fire = compute_next_fire(
+                    trigger.cron_expression,
+                    after=next_fire,
+                    timezone=trigger.cron_timezone or "UTC",
+                )
+                times.append(next_fire.isoformat())
     except ProgrammingError:
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
@@ -294,7 +304,7 @@ async def update_polling_config(
     trigger_id: uuid.UUID,
     req: PollingConfigUpdate,
     session: AsyncSession = Depends(get_db_session),
-    principal: AuthenticatedPrincipal = Depends(get_current_user),
+    principal: TenantPrincipal = Depends(get_current_tenant_user),
 ) -> dict[str, Any]:
     """Update polling configuration for a trigger.
 
@@ -393,7 +403,7 @@ async def test_polling_condition(
     trigger_id: uuid.UUID,
     req: PollingTestRequest,
     session: AsyncSession = Depends(get_db_session),
-    principal: AuthenticatedPrincipal = Depends(get_current_user),
+    principal: TenantPrincipal = Depends(get_current_tenant_user),
 ) -> dict[str, Any]:
     """Test a polling trigger's query and condition expression without firing a run.
 
@@ -468,12 +478,20 @@ async def create_trigger(
     pipeline_id: uuid.UUID,
     req: TriggerCreate,
     session: AsyncSession = Depends(get_db_session),
-    principal: AuthenticatedPrincipal = Depends(get_current_user),
+    principal: TenantPrincipal = Depends(get_current_tenant_user),
 ) -> dict[str, Any]:
     """Create a new trigger for a pipeline."""
     try:
         async with session.begin():
             await set_rls_org(session, principal.organisation_id)
+            next_fire_at = None
+            if req.cron_expression is not None or req.cron_timezone is not None:
+                if req.trigger_type != "cron":
+                    raise HTTPException(
+                        status_code=status.HTTP_400_BAD_REQUEST,
+                        detail="Only cron triggers can have cron configuration",
+                    )
+                next_fire_at = _validated_next_fire(req.cron_expression, req.cron_timezone)
             trigger = Trigger(
                 organisation_id=principal.organisation_id,
                 pipeline_id=pipeline_id,
@@ -484,15 +502,8 @@ async def create_trigger(
                 cron_expression=req.cron_expression,
                 cron_timezone=req.cron_timezone,
                 account_id=principal.account_id,
+                next_fire_at=next_fire_at,
             )
-            if req.cron_expression:
-                err = validate_cron_expression(req.cron_expression, req.cron_timezone or "UTC")
-                if err:
-                    raise HTTPException(
-                        status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-                        detail=f"Invalid cron expression: {err}",
-                    )
-                trigger.next_fire_at = compute_next_fire(req.cron_expression)
             session.add(trigger)
             await session.flush()
     except ProgrammingError:
@@ -542,7 +553,7 @@ async def update_trigger(
     trigger_id: uuid.UUID,
     req: TriggerUpdate,
     session: AsyncSession = Depends(get_db_session),
-    principal: AuthenticatedPrincipal = Depends(get_current_user),
+    principal: TenantPrincipal = Depends(get_current_tenant_user),
 ) -> dict[str, Any]:
     """Update a trigger's general configuration."""
     try:
@@ -558,32 +569,31 @@ async def update_trigger(
             if trigger is None:
                 raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Trigger not found")
 
+            if (req.cron_expression is not None or req.cron_timezone is not None) and trigger.trigger_type != "cron":
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="Only cron triggers can have cron configuration",
+                )
+
+            next_fire_at: datetime.datetime | None = None
+            if req.cron_expression is not None or req.cron_timezone is not None:
+                next_fire_at = _validated_next_fire(
+                    req.cron_expression if req.cron_expression is not None else trigger.cron_expression,
+                    req.cron_timezone if req.cron_timezone is not None else trigger.cron_timezone,
+                )
+
             if req.active is not None:
                 trigger.active = req.active
             if req.max_concurrent_runs is not None:
                 trigger.max_concurrent_runs = req.max_concurrent_runs
             if req.config_json is not None:
                 trigger.config_json = req.config_json
-            if req.cron_expression is not None and trigger.trigger_type != "cron":
-                raise HTTPException(
-                    status_code=status.HTTP_400_BAD_REQUEST,
-                    detail="Only cron triggers can have cron expressions",
-                )
-                tz = req.cron_timezone or trigger.cron_timezone or "UTC"
-                err = validate_cron_expression(req.cron_expression, tz)
-                if err:
-                    raise HTTPException(
-                        status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-                        detail=f"Invalid cron expression: {err}",
-                    )
+            if req.cron_expression is not None:
                 trigger.cron_expression = req.cron_expression
             if req.cron_timezone is not None:
                 trigger.cron_timezone = req.cron_timezone
-            if req.cron_expression is not None or (req.cron_timezone is not None and trigger.cron_expression):
-                tz = trigger.cron_timezone or "UTC"
-                err = validate_cron_expression(trigger.cron_expression, tz)
-                if err is None:
-                    trigger.next_fire_at = compute_next_fire(trigger.cron_expression)
+            if next_fire_at is not None:
+                trigger.next_fire_at = next_fire_at
 
             await session.flush()
     except ProgrammingError:
@@ -623,7 +633,7 @@ async def update_trigger(
 async def delete_trigger(
     trigger_id: uuid.UUID,
     session: AsyncSession = Depends(get_db_session),
-    principal: AuthenticatedPrincipal = Depends(get_current_user),
+    principal: TenantPrincipal = Depends(get_current_tenant_user),
 ) -> None:
     """Delete a trigger and its associated events (cascade)."""
     try:
@@ -663,7 +673,7 @@ async def delete_trigger(
 async def toggle_trigger(
     trigger_id: uuid.UUID,
     session: AsyncSession = Depends(get_db_session),
-    principal: AuthenticatedPrincipal = Depends(get_current_user),
+    principal: TenantPrincipal = Depends(get_current_tenant_user),
 ) -> dict[str, Any]:
     """Toggle a trigger's active state."""
     try:
@@ -712,7 +722,7 @@ async def test_trigger(
     trigger_id: uuid.UUID,
     req: TestTriggerRequest,
     session: AsyncSession = Depends(get_db_session),
-    principal: AuthenticatedPrincipal = Depends(get_current_user),
+    principal: TenantPrincipal = Depends(get_current_tenant_user),
 ) -> dict[str, Any]:
     """Fire a test event for a trigger.
 
@@ -805,7 +815,7 @@ async def list_trigger_events(
     cursor: str | None = Query(None, description="Cursor: createdAt_eventId"),
     limit: int = Query(20, ge=1, le=100),
     session: AsyncSession = Depends(get_db_session),
-    principal: AuthenticatedPrincipal = Depends(get_current_user),
+    principal: TenantPrincipal = Depends(get_current_tenant_user),
 ) -> dict[str, Any]:
     """List trigger events with cursor-based pagination.
 
@@ -906,7 +916,7 @@ async def list_pipeline_triggers(
     pipeline_id: uuid.UUID,
     trigger_type: str | None = Query(None),
     session: AsyncSession = Depends(get_db_session),
-    principal: AuthenticatedPrincipal = Depends(get_current_user),
+    principal: TenantPrincipal = Depends(get_current_tenant_user),
 ) -> dict[str, Any]:
     """List triggers for a specific pipeline."""
     try:

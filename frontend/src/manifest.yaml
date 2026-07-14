@@ -93,6 +93,18 @@ routes:
         <<: *community
         deprecated: false
 
+    /runs:
+        name: runs-list
+        breadcrumb: Runs
+        parent: /
+        product_map:
+        sidebar_group: core
+        sidebar_order: 5
+        type: list_page
+        <<: *community
+        deprecated: false
+        exact: true
+
     /runs/diff:
         name: runs-diff
         breadcrumb: Output Diff

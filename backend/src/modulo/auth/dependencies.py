@@ -4,9 +4,9 @@ import logging
 
 from fastapi import Depends, HTTPException, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
-from jose import JWTError
+from jwt import InvalidTokenError as JWTError
 
-from modulo.auth.jwt import AuthenticatedPrincipal, decode_principal
+from modulo.auth.jwt import AuthenticatedPrincipal, TenantPrincipal, decode_principal
 from modulo.settings import Settings, get_settings
 
 _log = logging.getLogger(__name__)
@@ -30,6 +30,24 @@ async def get_current_user(
         ) from None
 
     return principal
+
+
+async def get_current_tenant_user(
+    current_user: AuthenticatedPrincipal = Depends(get_current_user),
+) -> TenantPrincipal:
+    """Require the tenant claims used by organisation-scoped API routes."""
+    if current_user.organisation_id is None or current_user.org_role is None:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Organisation membership required",
+        )
+    return TenantPrincipal(
+        username=current_user.username,
+        organisation_id=current_user.organisation_id,
+        account_id=current_user.account_id,
+        org_role=current_user.org_role,
+        is_system_admin=current_user.is_system_admin,
+    )
 
 
 async def require_system_admin(

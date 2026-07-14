@@ -135,6 +135,20 @@ def test_login_wrong_password(client: TestClient) -> None:
     assert resp.status_code == 401
 
 
+def test_login_wrong_password_when_rate_limiter_unavailable(client: TestClient) -> None:
+    mock_user = _make_mock_user()
+    with (
+        patch("modulo.api.routes.auth.get_auth_rate_limiter", return_value=None),
+        patch("modulo.api.routes.auth.get_account_by_email", new=AsyncMock(return_value=mock_user)),
+        patch("modulo.api.routes.auth.authenticate_db_user", return_value=False),
+    ):
+        resp = client.post(
+            "/api/v1/auth/login",
+            json={"email": "admin@example.com", "password": "wrong"},
+        )
+    assert resp.status_code == 401
+
+
 def test_login_unknown_user(client: TestClient) -> None:
     with patch("modulo.api.routes.auth.get_account_by_email", new=AsyncMock(return_value=None)):
         resp = client.post(

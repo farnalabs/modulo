@@ -1,19 +1,20 @@
 import json
 import logging
 import uuid
+from datetime import datetime
 from typing import Any
 
 import httpx
 from defusedxml import ElementTree
 from fastapi import APIRouter, Depends, HTTPException, status
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 from sqlalchemy.exc import IntegrityError, ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.api.dependencies import get_db_session, require_feature
 from modulo.api.middleware.sensitive_mask import SensitiveValue
-from modulo.auth.dependencies import get_current_user
-from modulo.auth.jwt import AuthenticatedPrincipal
+from modulo.auth.dependencies import get_current_tenant_user
+from modulo.auth.jwt import TenantPrincipal
 from modulo.db.crud.sso_provider import (
     create_provider,
     delete_provider,
@@ -60,7 +61,7 @@ class SsoProviderUpdate(BaseModel):
 
 
 class SsoProviderResponse(BaseModel):
-    id: str
+    id: uuid.UUID
     provider_type: str
     name: str
     client_id: str | None = None
@@ -73,36 +74,36 @@ class SsoProviderResponse(BaseModel):
     enabled: bool
     auto_provision: bool
     default_role: str
-    created_at: str
-    updated_at: str
+    created_at: datetime
 
+    model_config = {"from_attributes": True}
+    updated_at: datetime
+
+    @field_validator("scopes", mode="before")
     @classmethod
-    def from_orm(cls, provider: Any) -> "SsoProviderResponse":
-        scopes = None
-        if provider.scopes:
+    def _normalize_scopes(cls, value: object) -> list[str] | None:
+        if value is None:
+            return None
+        if isinstance(value, str):
             try:
-                parsed = json.loads(provider.scopes)
-                scopes = parsed if isinstance(parsed, list) else [str(parsed)]
-            except (json.JSONDecodeError, TypeError):
-                scopes = None
+                value = json.loads(value)
+            except json.JSONDecodeError:
+                return None
+        if isinstance(value, list):
+            if not value:
+                return []
+            if all(isinstance(scope, str) for scope in value):
+                return value
+        return None
 
-        return cls(
-            id=str(provider.id),
-            provider_type=provider.provider_type,
-            name=provider.name,
-            client_id=provider.client_id,
-            client_secret=provider.client_secret,
-            discovery_url=provider.discovery_url,
-            metadata_url=provider.metadata_url,
-            metadata_xml=provider.metadata_xml,
-            entity_id=provider.entity_id,
-            scopes=scopes,
-            enabled=provider.enabled,
-            auto_provision=provider.auto_provision,
-            default_role=provider.default_role,
-            created_at=provider.created_at.isoformat() if provider.created_at else "",
-            updated_at=provider.updated_at.isoformat() if provider.updated_at else "",
-        )
+    @field_validator("client_secret", mode="before")
+    @classmethod
+    def _normalize_client_secret(cls, value: object) -> str | None:
+        if value is None:
+            return None
+        if isinstance(value, str | bytes):
+            return "configured" if value else ""
+        raise ValueError("client_secret has an unsupported storage type")
 
 
 class SsoProviderTestResult(BaseModel):
@@ -111,7 +112,7 @@ class SsoProviderTestResult(BaseModel):
     provider_info: dict[str, Any] | None = None
 
 
-def _require_admin(principal: AuthenticatedPrincipal) -> None:
+def _require_admin(principal: TenantPrincipal) -> None:
     if principal.org_role != "admin":
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
@@ -121,14 +122,14 @@ def _require_admin(principal: AuthenticatedPrincipal) -> None:
 
 @router.get("/providers", response_model=list[SsoProviderResponse])
 async def get_providers(
-    _: None = require_feature("sso"),
-    current_user: AuthenticatedPrincipal = Depends(get_current_user),
+    _: object = require_feature("sso"),
+    current_user: TenantPrincipal = Depends(get_current_tenant_user),
     session: AsyncSession = Depends(get_db_session),
 ) -> list[SsoProviderResponse]:
     _require_admin(current_user)
     try:
         providers = await list_providers(session)
-        return [SsoProviderResponse.from_orm(p) for p in providers]
+        return [SsoProviderResponse.model_validate(p) for p in providers]
     except ProgrammingError as exc:
         _log.warning("SSO providers table not available: %s", exc, exc_info=True)
         raise HTTPException(
@@ -154,9 +155,10 @@ async def get_providers(
 @router.post("/providers", response_model=SsoProviderResponse, status_code=status.HTTP_201_CREATED)
 async def create_provider_endpoint(
     req: SsoProviderCreate,
-    _: None = require_feature("sso"),
-    current_user: AuthenticatedPrincipal = Depends(get_current_user),
+    _: object = require_feature("sso"),
+    current_user: TenantPrincipal = Depends(get_current_tenant_user),
     session: AsyncSession = Depends(get_db_session),
+    settings: Settings = Depends(get_settings),
 ) -> SsoProviderResponse:
     _require_admin(current_user)
     try:
@@ -174,6 +176,7 @@ async def create_provider_endpoint(
             enabled=req.enabled,
             auto_provision=req.auto_provision,
             default_role=req.default_role,
+            fernet_key=settings.fernet_key,
             org_id=current_user.organisation_id,
             actor_user_id=current_user.account_id,
         )
@@ -204,16 +207,17 @@ async def create_provider_endpoint(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Internal server error",
         ) from None
-    return SsoProviderResponse.from_orm(provider)  # type: ignore[pydantic-orm]
+    return SsoProviderResponse.model_validate(provider)
 
 
 @router.put("/providers/{provider_id}", response_model=SsoProviderResponse)
 async def update_provider_endpoint(
     provider_id: uuid.UUID,
     req: SsoProviderUpdate,
-    _: None = require_feature("sso"),
-    current_user: AuthenticatedPrincipal = Depends(get_current_user),
+    _: object = require_feature("sso"),
+    current_user: TenantPrincipal = Depends(get_current_tenant_user),
     session: AsyncSession = Depends(get_db_session),
+    settings: Settings = Depends(get_settings),
 ) -> SsoProviderResponse:
     _require_admin(current_user)
     updates = req.model_dump(exclude_unset=True)
@@ -221,7 +225,13 @@ async def update_provider_endpoint(
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No fields to update")
 
     try:
-        provider = await update_provider(session, provider_id, actor_user_id=current_user.account_id, **updates)
+        provider = await update_provider(
+            session,
+            provider_id,
+            actor_user_id=current_user.account_id,
+            fernet_key=settings.fernet_key,
+            **updates,
+        )
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
     except IntegrityError as exc:
@@ -255,14 +265,14 @@ async def update_provider_endpoint(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="SSO provider not found",
         )
-    return SsoProviderResponse.from_orm(provider)  # type: ignore[pydantic-orm]
+    return SsoProviderResponse.model_validate(provider)
 
 
 @router.delete("/providers/{provider_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_provider_endpoint(
     provider_id: uuid.UUID,
-    _: None = require_feature("sso"),
-    current_user: AuthenticatedPrincipal = Depends(get_current_user),
+    _: object = require_feature("sso"),
+    current_user: TenantPrincipal = Depends(get_current_tenant_user),
     session: AsyncSession = Depends(get_db_session),
 ) -> None:
     _require_admin(current_user)
@@ -303,8 +313,8 @@ async def delete_provider_endpoint(
 @router.post("/providers/{provider_id}/test", response_model=SsoProviderTestResult)
 async def test_provider_connection(
     provider_id: uuid.UUID,
-    _: None = require_feature("sso"),
-    current_user: AuthenticatedPrincipal = Depends(get_current_user),
+    _: object = require_feature("sso"),
+    current_user: TenantPrincipal = Depends(get_current_tenant_user),
     session: AsyncSession = Depends(get_db_session),
     settings: Settings = Depends(get_settings),
 ) -> SsoProviderTestResult:
@@ -486,8 +496,8 @@ async def _test_saml_connection(provider: Any) -> SsoProviderTestResult:
 @router.put("/providers/{provider_id}/toggle", response_model=SsoProviderResponse)
 async def toggle_provider_endpoint(
     provider_id: uuid.UUID,
-    _: None = require_feature("sso"),
-    current_user: AuthenticatedPrincipal = Depends(get_current_user),
+    _: object = require_feature("sso"),
+    current_user: TenantPrincipal = Depends(get_current_tenant_user),
     session: AsyncSession = Depends(get_db_session),
 ) -> SsoProviderResponse:
     _require_admin(current_user)
@@ -523,7 +533,7 @@ async def toggle_provider_endpoint(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="SSO provider not found",
         )
-    return SsoProviderResponse.from_orm(provider)  # type: ignore[pydantic-orm]
+    return SsoProviderResponse.model_validate(provider)
 
 
 class GroupMappingItem(BaseModel):
@@ -544,8 +554,8 @@ class GroupMappingsResponse(BaseModel):
 async def set_group_mappings_endpoint(
     provider_id: uuid.UUID,
     req: GroupMappingsRequest,
-    _: None = require_feature("sso"),
-    current_user: AuthenticatedPrincipal = Depends(get_current_user),
+    _: object = require_feature("sso"),
+    current_user: TenantPrincipal = Depends(get_current_tenant_user),
     session: AsyncSession = Depends(get_db_session),
 ) -> GroupMappingsResponse:
     _require_admin(current_user)
@@ -588,8 +598,8 @@ async def set_group_mappings_endpoint(
 @router.get("/providers/{provider_id}/group-mappings", response_model=GroupMappingsResponse)
 async def get_group_mappings_endpoint(
     provider_id: uuid.UUID,
-    _: None = require_feature("sso"),
-    current_user: AuthenticatedPrincipal = Depends(get_current_user),
+    _: object = require_feature("sso"),
+    current_user: TenantPrincipal = Depends(get_current_tenant_user),
     session: AsyncSession = Depends(get_db_session),
 ) -> GroupMappingsResponse:
     _require_admin(current_user)

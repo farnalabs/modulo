@@ -112,7 +112,7 @@ class ViewInfo(BaseModel):
     name: str
     description: str | None
     view_type: str
-    filters: dict
+    filters: dict[str, Any]
     columns: list[str] | None
     sort_by: str | None
     sort_order: str
@@ -200,7 +200,7 @@ async def me(
     try:
         async with session.begin():
             await set_rls_org(session, current_user.organisation_id)
-            await set_rls_user_context(session, current_user.account_id, current_user.org_role)
+            await set_rls_user_context(session, current_user.account_id, current_user.org_role or "admin")
             memberships = await list_team_memberships_for_account(session, current_user.account_id)
     except ProgrammingError:
         raise HTTPException(
@@ -403,7 +403,7 @@ async def viewmodel_list_views(
     try:
         async with session.begin():
             await set_rls_org(session, current_user.organisation_id)
-            await set_rls_user_context(session, current_user.account_id, current_user.org_role)
+            await set_rls_user_context(session, current_user.account_id, current_user.org_role or "admin")
             result = await list_views(session, page=page, page_size=page_size)
     except ProgrammingError:
         raise HTTPException(

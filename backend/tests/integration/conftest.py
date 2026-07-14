@@ -15,7 +15,28 @@ from sqlalchemy import inspect, text
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker, create_async_engine
 from testcontainers.postgres import PostgresContainer
 
+# Collection imports the FastAPI app before database fixtures run. Provide only
+# test-local defaults here so standalone collection never depends on a caller's
+# shell environment. ``setdefault`` still lets CI supply explicit values.
+os.environ.setdefault("DATABASE_URL", "postgresql+asyncpg://localhost/modulo_integration")
+os.environ.setdefault("SECRET_KEY", "a" * 32)
+os.environ.setdefault("FERNET_KEY", "a" * 32)
+os.environ.setdefault("REDIS_URL", "")
+os.environ.setdefault("MODULO_ADMIN_PASSWORD", "test")
+os.environ.setdefault("MODULO_AUTH_RATE_LIMIT_ENABLED", "false")
+os.environ.setdefault("MODULO_CSRF_ENABLED", "false")
+
 BACKEND_ROOT = Path(__file__).parents[2]
+
+
+@pytest.fixture(autouse=True)
+def _reset_settings_cache() -> Generator[None, None, None]:
+    """Keep settings derived from one integration test out of the next."""
+    from modulo.settings import get_settings
+
+    get_settings.cache_clear()
+    yield
+    get_settings.cache_clear()
 
 
 async def _domain_table_names(database_url: str) -> set[str]:

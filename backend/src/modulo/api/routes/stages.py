@@ -10,8 +10,8 @@ from sqlalchemy.exc import ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.api.dependencies import get_db_session
-from modulo.auth.dependencies import get_current_user
-from modulo.auth.jwt import AuthenticatedPrincipal
+from modulo.auth.dependencies import get_current_tenant_user
+from modulo.auth.jwt import TenantPrincipal
 from modulo.db.crud.stage import (
     create_stage,
     delete_stage,
@@ -70,7 +70,7 @@ async def list_stages_endpoint(
     page_size: int = Query(default=20, ge=1, le=100),
     owner_team_id: uuid.UUID | None = Query(default=None),
     session: AsyncSession = Depends(get_db_session),
-    principal: AuthenticatedPrincipal = Depends(get_current_user),
+    principal: TenantPrincipal = Depends(get_current_tenant_user),
 ) -> StageListResponse:
     try:
         async with session.begin():
@@ -107,7 +107,7 @@ async def list_stages_endpoint(
 async def create_stage_endpoint(
     req: StageCreate,
     session: AsyncSession = Depends(get_db_session),
-    principal: AuthenticatedPrincipal = Depends(get_current_user),
+    principal: TenantPrincipal = Depends(get_current_tenant_user),
 ) -> StageResponse:
     try:
         async with session.begin():
@@ -148,7 +148,7 @@ async def create_stage_endpoint(
 async def get_stage_endpoint(
     stage_id: uuid.UUID,
     session: AsyncSession = Depends(get_db_session),
-    principal: AuthenticatedPrincipal = Depends(get_current_user),
+    principal: TenantPrincipal = Depends(get_current_tenant_user),
 ) -> StageResponse:
     try:
         async with session.begin():
@@ -183,7 +183,7 @@ async def update_stage_endpoint(
     stage_id: uuid.UUID,
     req: StageUpdate,
     session: AsyncSession = Depends(get_db_session),
-    principal: AuthenticatedPrincipal = Depends(get_current_user),
+    principal: TenantPrincipal = Depends(get_current_tenant_user),
 ) -> StageResponse:
     updates = req.model_dump(exclude_unset=True)
     try:
@@ -218,7 +218,7 @@ async def update_stage_endpoint(
 async def delete_stage_endpoint(
     stage_id: uuid.UUID,
     session: AsyncSession = Depends(get_db_session),
-    principal: AuthenticatedPrincipal = Depends(get_current_user),
+    principal: TenantPrincipal = Depends(get_current_tenant_user),
 ) -> None:
     try:
         async with session.begin():

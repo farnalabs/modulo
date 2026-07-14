@@ -10,8 +10,8 @@ from sqlalchemy.exc import ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.api.dependencies import get_db_session
-from modulo.auth.dependencies import get_current_user
-from modulo.auth.jwt import AuthenticatedPrincipal
+from modulo.auth.dependencies import get_current_tenant_user
+from modulo.auth.jwt import TenantPrincipal
 from modulo.core.license import (
     LicenseError,
     get_license,
@@ -47,7 +47,7 @@ class LicenseUploadResponse(BaseModel):
     org_id: str | None = None
 
 
-def _require_admin(principal: AuthenticatedPrincipal) -> None:
+def _require_admin(principal: TenantPrincipal) -> None:
     if principal.org_role != "admin":
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
@@ -104,7 +104,7 @@ def _resolve_effective_license(settings: Settings, org: Organisation | None = No
 @router.get("", response_model=LicenseStatusResponse)
 async def get_license_status(
     settings: Settings = Depends(get_settings),
-    current_user: AuthenticatedPrincipal = Depends(get_current_user),
+    current_user: TenantPrincipal = Depends(get_current_tenant_user),
     session: AsyncSession = Depends(get_db_session),
 ) -> LicenseStatusResponse:
     _require_admin(current_user)
@@ -141,7 +141,7 @@ async def get_license_status(
 @router.post("", response_model=LicenseUploadResponse, status_code=status.HTTP_200_OK)
 async def upload_license(
     req: LicenseUploadRequest,
-    current_user: AuthenticatedPrincipal = Depends(get_current_user),
+    current_user: TenantPrincipal = Depends(get_current_tenant_user),
 ) -> LicenseUploadResponse:
     _require_admin(current_user)
 
@@ -149,13 +149,13 @@ async def upload_license(
         validation = parse_and_verify(req.license_key)
     except LicenseError as exc:
         raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail=str(exc),
         ) from exc
 
     if not validation.valid or validation.license_data is None:
         raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail=validation.error or "Invalid license key",
         )
 

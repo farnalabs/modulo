@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 import enum
+from collections.abc import Sequence
 from typing import Any
 
-from fastapi import HTTPException, Request
+from fastapi import Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
+from starlette.exceptions import HTTPException
 
 
 class ProblemType(enum.StrEnum):
@@ -136,7 +138,7 @@ def problem_from_http_exception(
 
 def problem_from_validation_error(
     request: Request,
-    errors: list[dict[str, Any]],
+    errors: Sequence[dict[str, Any]],
 ) -> ProblemDetail:
     detail = "; ".join(f"{'.'.join(str(p) for p in e.get('loc', []))}: {e.get('msg', '')}" for e in errors)
     return ProblemDetail.from_type(

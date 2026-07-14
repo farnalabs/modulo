@@ -11,8 +11,8 @@ from sqlalchemy.exc import ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.api.dependencies import get_db_session
-from modulo.auth.dependencies import get_current_user
-from modulo.auth.jwt import AuthenticatedPrincipal
+from modulo.auth.dependencies import get_current_tenant_user
+from modulo.auth.jwt import TenantPrincipal
 from modulo.db.models.trigger_event import TriggerEvent
 from modulo.db.rls import set_rls_org
 
@@ -21,7 +21,7 @@ _log = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/v1/admin/trigger-events", tags=["admin-trigger-events"])
 
 
-def _require_admin(principal: AuthenticatedPrincipal) -> None:
+def _require_admin(principal: TenantPrincipal) -> None:
     if principal.org_role != "admin":
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
@@ -54,7 +54,7 @@ async def list_trigger_events(
     cursor: str | None = Query(None, description="Cursor: createdAt_id"),
     limit: int = Query(25, ge=1, le=100),
     session: AsyncSession = Depends(get_db_session),
-    principal: AuthenticatedPrincipal = Depends(get_current_user),
+    principal: TenantPrincipal = Depends(get_current_tenant_user),
 ) -> TriggerEventListResponse:
     _require_admin(principal)
     try:
@@ -130,12 +130,14 @@ async def list_trigger_events(
         prev_cursor = f"{first.created_at.isoformat()}_{first.id}"
 
     try:
-        count_result = await session.execute(
-            select(func.count(TriggerEvent.id)).where(
-                TriggerEvent.organisation_id == principal.organisation_id,
+        async with session.begin():
+            await set_rls_org(session, principal.organisation_id)
+            count_result = await session.execute(
+                select(func.count(TriggerEvent.id)).where(
+                    TriggerEvent.organisation_id == principal.organisation_id,
+                )
             )
-        )
-        total = count_result.scalar() or 0
+            total = count_result.scalar() or 0
     except ProgrammingError:
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
