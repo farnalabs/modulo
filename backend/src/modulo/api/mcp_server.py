@@ -13,6 +13,7 @@ Dual-layer enforcement:
 Org context validated per-event for streaming (SSE) connections.
 """
 
+import asyncio
 import contextvars
 import json
 import logging
@@ -34,7 +35,7 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse, Response
 from starlette.routing import Route
 
-from modulo.api.dependencies import get_or_create_engine, get_or_create_session_factory
+from modulo.api.dependencies import get_or_create_engine, get_or_create_session_factory, pg_connection_string
 from modulo.api.middleware.rate_limiter import RateLimitMiddleware as RateLimiterMiddleware
 from modulo.auth.api_key import ApiKeyInvalidError, validate_api_key
 from modulo.auth.oauth import (
@@ -59,9 +60,10 @@ from modulo.core.library_service import (
     list_primitives,
 )
 from modulo.core.mcp.scope_validator import MCPAuthorizationError, check_tool_scope
+from modulo.core.pipeline_engine.executor import PipelineExecutor
 from modulo.db.crud.model_backend import create_model_backend as db_create_model_backend
 from modulo.db.crud.pipeline import get_pipeline
-from modulo.db.crud.run import get_run
+from modulo.db.crud.run import get_run, update_run_status
 from modulo.db.crud.schema import get_schema
 from modulo.db.crud.schema import list_schemas as db_list_schemas
 from modulo.db.models.hitl_claim import HitlClaim
@@ -80,6 +82,7 @@ from modulo.settings import get_settings
 # under concurrent multi-tenant load a global would resolve to whichever org
 # authenticated last, leaking cross-tenant data.
 _log = logging.getLogger(__name__)
+_background_tasks: set[asyncio.Task[None]] = set()
 
 _ctx_org_id: contextvars.ContextVar[uuid.UUID] = contextvars.ContextVar("mcp_org_id")
 _ctx_role: contextvars.ContextVar[str] = contextvars.ContextVar("mcp_role")
@@ -672,6 +675,27 @@ async def bind_connector_to_node(
         return _tool_error("Failed to bind connector to node")
 
 
+async def _run_in_background(
+    executor: PipelineExecutor,
+    run_id: uuid.UUID,
+    org_id: uuid.UUID,
+    input_payload: dict[str, Any],
+) -> None:
+    try:
+        await executor.execute(run_id=run_id, org_id=org_id, input_payload=input_payload)
+    except Exception:
+        _log.exception("run.background_execution_error", extra={"run_id": str(run_id)})
+        try:
+            settings = get_settings()
+            engine = get_or_create_engine(settings)
+            factory = async_sessionmaker(engine, expire_on_commit=False)
+            async with factory() as session, session.begin():
+                await set_rls_org(session, org_id)
+                await update_run_status(session, run_id, "failed", error_code="internal_error")
+        except Exception:
+            _log.exception("run.mark_failed_error", extra={"run_id": str(run_id)})
+
+
 @mcp.tool(description="Fire a pipeline run and return immediately with run_id. Poll get_run_status to track progress.")
 async def trigger_pipeline(
     pipeline_id: str,
@@ -710,6 +734,15 @@ async def trigger_pipeline(
             run_id = run.id
             thread_id = run.langgraph_thread_id
 
+        engine = get_or_create_engine(get_settings())
+        executor = PipelineExecutor(
+            engine,
+            checkpointer_conn_string=pg_connection_string(str(engine.url)),
+        )
+        task = asyncio.create_task(_run_in_background(executor, run_id, org_id, payload))
+        _background_tasks.add(task)
+        task.add_done_callback(_background_tasks.discard)
+
         return {
             "run_id": str(run_id),
             "status": "pending",
@@ -717,12 +750,9 @@ async def trigger_pipeline(
         }
     except MCPAuthorizationError as exc:
         return {"error": "insufficient_scope", "detail": str(exc)}
-    except Exception as e:
-        import traceback
-
-        tb = traceback.format_exc()
+    except Exception:
         _log.exception("trigger_pipeline failed")
-        return {"error": "internal_error", "detail": f"Failed to trigger pipeline: {e}\n{tb[:500]}"}
+        return _tool_error("Failed to trigger pipeline")
 
 
 @mcp.tool(description="Get current run status. Pass detail=true for per-node breakdown.")
