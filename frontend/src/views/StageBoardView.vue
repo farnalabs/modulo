@@ -32,33 +32,31 @@
     <div class="flex flex-wrap items-center gap-4">
       <div class="flex items-center gap-2">
         <label for="stageboardview-field-8" class="text-sm font-medium text-muted-foreground">Team</label>
-        <select id="stageboardview-field-8"
-          v-model="teamFilter"
-          data-testid="stage-board-team-filter"
-          aria-label="Team"
-          class="rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-          @change="applyFilters"
-        >
-          <option value="">All Teams</option>
-          <option v-for="t in teams" :key="t.id" :value="t.id">{{ t.name }}</option>
-        </select>
+        <Select :model-value="teamFilter" @update:model-value="teamFilter = $event; applyFilters()">
+          <SelectTrigger class="w-auto min-w-[140px]" aria-label="Team" data-testid="stage-board-team-filter">
+            <SelectValue placeholder="All Teams" />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="">All Teams</SelectItem>
+            <SelectItem v-for="t in teams" :key="t.id" :value="t.id">{{ t.name }}</SelectItem>
+          </SelectContent>
+        </Select>
       </div>
       <div class="flex items-center gap-2">
         <label for="stageboardview-field-7" class="text-sm font-medium text-muted-foreground">Status</label>
-        <select id="stageboardview-field-7"
-          v-model="statusFilter"
-          data-testid="stage-board-status-filter"
-          aria-label="Status"
-          class="rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-          @change="applyFilters"
-        >
-          <option value="">All Statuses</option>
-          <option value="running">Running</option>
-          <option value="idle">Idle</option>
-          <option value="failed">Failed</option>
-          <option value="complete">Complete</option>
-          <option value="awaiting_human">Awaiting Human</option>
-        </select>
+        <Select :model-value="statusFilter" @update:model-value="statusFilter = $event; applyFilters()">
+          <SelectTrigger class="w-auto min-w-[140px]" aria-label="Status" data-testid="stage-board-status-filter">
+            <SelectValue placeholder="All Statuses" />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="">All Statuses</SelectItem>
+            <SelectItem value="running">Running</SelectItem>
+            <SelectItem value="idle">Idle</SelectItem>
+            <SelectItem value="failed">Failed</SelectItem>
+            <SelectItem value="complete">Complete</SelectItem>
+            <SelectItem value="awaiting_human">Awaiting Human</SelectItem>
+          </SelectContent>
+        </Select>
       </div>
       <div class="flex items-center gap-2">
         <label for="stageboardview-field-6" class="text-sm font-medium text-muted-foreground">From</label>
@@ -345,15 +343,15 @@
         </div>
         <div>
           <label for="stageboardview-field-1" class="mb-1 block text-sm font-medium">Visibility</label>
-          <select id="stageboardview-field-1"
-            v-model="createVisibility"
-            data-testid="stage-board-create-visibility"
-            aria-label="Visibility"
-            class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-          >
-            <option value="org">Org</option>
-            <option value="team">Team</option>
-          </select>
+          <Select :model-value="createVisibility" @update:model-value="createVisibility = $event">
+            <SelectTrigger class="w-full" aria-label="Visibility" data-testid="stage-board-create-visibility">
+              <SelectValue placeholder="Select visibility" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="org">Org</SelectItem>
+              <SelectItem value="team">Team</SelectItem>
+            </SelectContent>
+          </Select>
         </div>
         <div v-if="createError" class="rounded-lg border border-destructive/50 bg-destructive/10 p-3 text-sm text-destructive">
           {{ createError }}
@@ -431,6 +429,7 @@ import { useDataFetch } from '../composables/useDataFetch'
 import { formatApiError } from '../lib/api/formatError'
 import { api } from '../lib/api/client'
 import { formatDateShort } from '../lib/formatDate'
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Button } from '@/components/ui/button'
 
 async function fetchWithTimeout<T>(promise: Promise<T>, ms = 15000): Promise<T> {
