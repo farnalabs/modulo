@@ -19,6 +19,7 @@ from modulo.auth.dependencies import get_current_user
 from modulo.auth.jwt import AuthenticatedPrincipal
 from modulo.db.models.trigger import Trigger
 from modulo.settings import Settings, get_settings
+from tests.unit.api.mock_session import configure_mock_session
 
 _ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
 _USER_ID = uuid.UUID("00000000-0000-0000-0000-000000000002")
@@ -54,6 +55,7 @@ def _make_trigger_result(triggers: list[MagicMock]) -> MagicMock:
 
 def _make_mock_session(execute_result=None) -> AsyncMock:
     session = AsyncMock()
+    configure_mock_session(session)
     begin_cm = AsyncMock()
     begin_cm.__aenter__ = AsyncMock(return_value=None)
     begin_cm.__aexit__ = AsyncMock(return_value=False)
@@ -103,11 +105,7 @@ def test_create_cron_trigger_with_full_config_returns_201(client: TestClient) ->
         cron_timezone="America/New_York",
         config_json={"input_template": {"topic": "summary", "format": "markdown"}},
     )
-    with (
-        patch("modulo.api.routes.triggers.set_rls_org"),
-        patch("modulo.api.routes.triggers.validate_cron_expression", return_value=None),
-        patch("modulo.api.routes.triggers.compute_next_fire", return_value=_NOW + datetime.timedelta(hours=1)),
-    ):
+    with patch("modulo.api.routes.triggers.set_rls_org"):
         session = _make_mock_session()
         session.execute = AsyncMock(return_value=_make_trigger_result([trigger]))
 
@@ -131,6 +129,28 @@ def test_create_cron_trigger_with_full_config_returns_201(client: TestClient) ->
     assert body["cron_timezone"] == "America/New_York"
     assert body["input_template"] == {"topic": "summary", "format": "markdown"}
     assert body["next_fire_at"] is not None
+    _cleanup_client(client)
+
+
+def test_timezone_only_update_rejects_invalid_zone_without_mutation(client: TestClient) -> None:
+    trigger_id = uuid.uuid4()
+    trigger = _make_mock_trigger(id=trigger_id, active=True, cron_timezone="UTC")
+    session = _make_mock_session(_make_trigger_result([trigger]))
+
+    async def override_session() -> AsyncGenerator[AsyncMock, None]:
+        yield session
+
+    client.app.dependency_overrides[get_db_session] = override_session
+    with patch("modulo.api.routes.triggers.set_rls_org"):
+        response = client.patch(
+            f"/api/v1/triggers/{trigger_id}/cron",
+            json={"cron_timezone": "Mars/Olympus", "active": False},
+        )
+
+    assert response.status_code == 422
+    assert "Invalid timezone" in response.json()["detail"]
+    assert trigger.cron_timezone == "UTC"
+    assert trigger.active is True
     _cleanup_client(client)
 
 
@@ -169,7 +189,11 @@ def test_create_cron_trigger_invalid_expression_returns_422(client: TestClient) 
 async def test_cron_trigger_fires_and_creates_run() -> None:
     trigger_id = uuid.uuid4()
     run_id = uuid.uuid4()
-    trigger = _make_mock_trigger(id=trigger_id, cron_expression="0 6 * * *")
+    trigger = _make_mock_trigger(
+        id=trigger_id,
+        cron_expression="0 6 * * *",
+        cron_timezone="America/New_York",
+    )
     run_mock = MagicMock(id=run_id, status="pending")
 
     result = MagicMock()
@@ -178,6 +202,7 @@ async def test_cron_trigger_fires_and_creates_run() -> None:
     event_mock = MagicMock(id=uuid.uuid4())
 
     session = AsyncMock()
+    configure_mock_session(session)
     session.__aenter__ = AsyncMock(return_value=session)
     session.__aexit__ = AsyncMock(return_value=False)
     begin_cm = AsyncMock()
@@ -194,7 +219,10 @@ async def test_cron_trigger_fires_and_creates_run() -> None:
         patch("modulo.core.cron_scheduler._count_active_runs", new_callable=AsyncMock, return_value=0),
         patch("modulo.core.cron_scheduler.create_run", new_callable=AsyncMock, return_value=run_mock),
         patch("modulo.core.cron_scheduler._log_event", new_callable=AsyncMock, return_value=event_mock),
-        patch("modulo.core.cron_scheduler.compute_next_fire", return_value=_NOW + datetime.timedelta(hours=1)),
+        patch(
+            "modulo.core.cron_scheduler.compute_next_fire",
+            return_value=_NOW + datetime.timedelta(hours=1),
+        ) as mock_compute_next_fire,
     ):
         from modulo.core.cron_scheduler import fire_cron_trigger
 
@@ -209,6 +237,7 @@ async def test_cron_trigger_fires_and_creates_run() -> None:
     assert result_data["status"] == "fired"
     assert result_data["run_id"] == str(run_id)
     assert result_data["next_fire_at"] is not None
+    assert mock_compute_next_fire.call_args.kwargs["timezone"] == "America/New_York"
 
 
 # ---------------------------------------------------------------------------
@@ -232,6 +261,7 @@ async def test_daily_spend_limit_stops_trigger() -> None:
     cost_result.scalar_one.return_value = Decimal("55.00")
 
     session = AsyncMock()
+    configure_mock_session(session)
     session.__aenter__ = AsyncMock(return_value=session)
     session.__aexit__ = AsyncMock(return_value=False)
     begin_cm = AsyncMock()
@@ -284,6 +314,7 @@ async def test_input_template_populates_run_input() -> None:
     cost_result.scalar_one.return_value = Decimal(0)
 
     session = AsyncMock()
+    configure_mock_session(session)
     session.__aenter__ = AsyncMock(return_value=session)
     session.__aexit__ = AsyncMock(return_value=False)
     begin_cm = AsyncMock()
@@ -340,6 +371,7 @@ async def test_trigger_event_logged_on_fire() -> None:
     cost_result.scalar_one.return_value = Decimal(0)
 
     session = AsyncMock()
+    configure_mock_session(session)
     session.__aenter__ = AsyncMock(return_value=session)
     session.__aexit__ = AsyncMock(return_value=False)
     begin_cm = AsyncMock()
@@ -430,6 +462,7 @@ async def test_disabled_cron_trigger_skipped() -> None:
     trigger_result.scalar_one_or_none.return_value = trigger
 
     session = AsyncMock()
+    configure_mock_session(session)
     session.__aenter__ = AsyncMock(return_value=session)
     session.__aexit__ = AsyncMock(return_value=False)
     begin_cm = AsyncMock()

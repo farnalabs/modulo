@@ -5,13 +5,10 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-from typing import TYPE_CHECKING, Any, ClassVar
+from typing import TYPE_CHECKING, Any, ClassVar, cast
 from urllib.parse import urlparse
 
-try:
-    import redis.asyncio as aioredis
-except ImportError:
-    aioredis = None  # type: ignore[assignment]
+import redis.asyncio as aioredis
 
 if TYPE_CHECKING:
     from redis.asyncio.client import PubSub
@@ -61,12 +58,13 @@ class RedisEventBroker:
         return url
 
     def _make_client(self) -> aioredis.Redis:
-        if aioredis is None:
-            raise RuntimeError("redis package is not installed. Install with: pip install modulo[redis]")
-        return aioredis.from_url(  # type: ignore[no-untyped-call]
-            self._redis_url,
-            decode_responses=True,
-            **self._REDIS_TIMEOUTS,
+        return cast(
+            aioredis.Redis,
+            aioredis.from_url(  # type: ignore[no-untyped-call]  # redis-py omits this annotation
+                self._redis_url,
+                decode_responses=True,
+                **self._REDIS_TIMEOUTS,
+            ),
         )
 
     async def connect(self) -> None:

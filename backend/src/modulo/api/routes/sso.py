@@ -48,7 +48,7 @@ class SsoProvidersResponse(BaseModel):
 
 @router.get("/sso/providers", response_model=SsoProvidersResponse)
 async def sso_providers(
-    _: None = require_feature("sso"),
+    _: object = require_feature("sso"),
     settings: Settings = Depends(get_settings),
 ) -> SsoProvidersResponse:
     """List configured SSO providers (OIDC) and whether SAML is enabled."""
@@ -82,7 +82,7 @@ async def sso_providers(
 async def oidc_login(
     provider: str,
     request: Request,
-    _: None = require_feature("sso"),
+    _: object = require_feature("sso"),
     settings: Settings = Depends(get_settings),
 ) -> Any:
     """Redirect the user to the OIDC provider's authorization page."""
@@ -109,7 +109,7 @@ async def oidc_login(
 async def oidc_callback(
     provider: str,
     request: Request,
-    _: None = require_feature("sso"),
+    _: object = require_feature("sso"),
     settings: Settings = Depends(get_settings),
     session: AsyncSession = Depends(get_db_session),
 ) -> RedirectResponse:
@@ -138,7 +138,7 @@ async def oidc_callback(
             detail=str(exc),
         ) from None
     except ProgrammingError as exc:
-        _log.warning("OIDC callback failed â€” DB table missing: %s", exc, exc_info=True)
+        _log.warning("OIDC callback failed — DB table missing: %s", exc, exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
@@ -170,7 +170,7 @@ async def oidc_callback(
 @router.get("/saml/login")
 async def saml_login(
     request: Request,
-    _: None = require_feature("sso"),
+    _: object = require_feature("sso"),
     settings: Settings = Depends(get_settings),
     session: AsyncSession = Depends(get_db_session),
 ) -> Any:
@@ -184,7 +184,7 @@ async def saml_login(
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from None
     except ProgrammingError as exc:
-        _log.warning("SAML login failed â€” DB table missing: %s", exc, exc_info=True)
+        _log.warning("SAML login failed — DB table missing: %s", exc, exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
@@ -210,7 +210,7 @@ async def saml_login(
 @router.post("/saml/acs")
 async def saml_acs(
     request: Request,
-    _: None = require_feature("sso"),
+    _: object = require_feature("sso"),
     settings: Settings = Depends(get_settings),
     session: AsyncSession = Depends(get_db_session),
 ) -> RedirectResponse:
@@ -237,7 +237,7 @@ async def saml_acs(
             detail=str(exc),
         ) from None
     except ProgrammingError as exc:
-        _log.warning("SAML ACS failed â€” DB table missing: %s", exc, exc_info=True)
+        _log.warning("SAML ACS failed — DB table missing: %s", exc, exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
@@ -264,7 +264,7 @@ async def saml_acs(
 @router.get("/saml/metadata", response_class=PlainTextResponse)
 async def saml_metadata(
     request: Request,
-    _: None = require_feature("sso"),
+    _: object = require_feature("sso"),
     settings: Settings = Depends(get_settings),
 ) -> str:
     """Return SP metadata XML for SAML IdP configuration."""

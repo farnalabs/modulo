@@ -1,0 +1,14 @@
+rules:
+  - id: continue-on-error-in-ci
+    pattern: |
+      continue-on-error: true
+    paths:
+      include:
+        - "/.github/workflows/*.yml"
+    message: >
+      `continue-on-error: true` silently masks CI failures. If a job's failure
+      should not block the pipeline, use an explicit `if: failure()` aggregate
+      step with `exit 1` instead. See Non-Negotiable Enforcement Gates in AGENTS.md.
+    languages:
+      - generic
+    severity: WARNING

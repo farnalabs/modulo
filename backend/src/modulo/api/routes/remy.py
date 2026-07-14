@@ -29,7 +29,7 @@ import time as _time
 import uuid
 from collections.abc import AsyncGenerator
 from datetime import UTC, datetime, timedelta
-from typing import Any, ClassVar
+from typing import Any
 
 import httpx
 from cryptography.fernet import Fernet
@@ -52,8 +52,8 @@ from modulo.api.ui_tools import (
     UI_TOOL_NAMES,
     WRITE_TOOLS,
 )
-from modulo.auth.dependencies import get_current_user
-from modulo.auth.jwt import AuthenticatedPrincipal
+from modulo.auth.dependencies import get_current_tenant_user
+from modulo.auth.jwt import TenantPrincipal
 from modulo.core.feature_flags import get_registry
 from modulo.core.remy.config_service import RemyConfig, RemyConfigService
 from modulo.core.remy.skill_loader import SkillLoader
@@ -69,7 +69,7 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/v1/remy", tags=["remy"])
 
 # ── Provider → backend class mapping ──────────────────────────────────────
-_SUPPORTED_PROVIDERS: frozenset[str] = frozenset(
+SUPPORTED_PROVIDERS: frozenset[str] = frozenset(
     {
         "ai21",
         "anthropic",
@@ -91,11 +91,11 @@ _SUPPORTED_PROVIDERS: frozenset[str] = frozenset(
 # For multi-worker deployments, replace with Redis pub/sub.
 
 _pending_permissions: dict[str, tuple[asyncio.Event, str]] = {}
-_permission_decisions: dict[str, dict] = {}
+_permission_decisions: dict[str, dict[str, Any]] = {}
 _pending_ui_results: dict[str, asyncio.Event] = {}
-_ui_command_results: dict[str, list[dict]] = {}
+_ui_command_results: dict[str, list[dict[str, Any]]] = {}
 _resume_events: dict[str, asyncio.Event] = {}
-_session_approvals: dict[str, dict[str, dict]] = {}
+_session_approvals: dict[str, dict[str, dict[str, Any]]] = {}
 _SESSION_APPROVAL_TTL = timedelta(minutes=30)
 
 # ── Redis registry (lazy-init, multi-worker capable) ─────────────────────
@@ -190,7 +190,7 @@ class UiCommandResultItem(BaseModel):
     id: str
     name: str
     success: bool
-    result: dict | None = None
+    result: dict[str, Any] | None = None
     error: str | None = None
 
 
@@ -252,7 +252,8 @@ def _message_to_langchain(m: ChatMessage) -> BaseMessage:
         case "tool_result":
             tool_call_id = ""
             if m.tool_results_json:
-                tool_call_id = m.tool_results_json.get("tool_call_id", "")
+                raw_tool_call_id = m.tool_results_json.get("tool_call_id", "")
+                tool_call_id = raw_tool_call_id if isinstance(raw_tool_call_id, str) else ""
             return ToolMessage(content=m.content or "", tool_call_id=tool_call_id)
         case "summary":
             return SystemMessage(content=m.content or "")
@@ -262,10 +263,10 @@ def _message_to_langchain(m: ChatMessage) -> BaseMessage:
 
 
 def _build_backend(provider: str, model: str, api_key: str, **kwargs: Any) -> ModelBackendBase:
-    if provider not in _SUPPORTED_PROVIDERS:
+    if provider not in SUPPORTED_PROVIDERS:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Unsupported provider: {provider!r}. Supported: {', '.join(sorted(_SUPPORTED_PROVIDERS))}",
+            detail=f"Unsupported provider: {provider!r}. Supported: {', '.join(sorted(SUPPORTED_PROVIDERS))}",
         )
 
     if provider == "ai21":
@@ -371,7 +372,10 @@ async def _call_mcp_tool(
                     await asyncio.sleep(min(retry_after, 30))
                     continue
                 resp.raise_for_status()
-                return resp.json()
+                result = resp.json()
+                if not isinstance(result, dict):
+                    raise ValueError("MCP tool returned a non-object response")
+                return result
         except httpx.TimeoutException:
             logger.warning("MCP tool %r timed out (attempt %d/3)", tool_name, attempt + 1)
             last_exc = None
@@ -394,7 +398,7 @@ async def _call_mcp_tool(
 
 
 def _reconstruct_tool_calls(buffers: dict[int, dict[str, Any]]) -> list[dict[str, Any]]:
-    tool_calls: ClassVar[list[dict[str, Any]]] = []
+    tool_calls: list[dict[str, Any]] = []
     for idx in sorted(buffers):
         buf = buffers[idx]
         try:
@@ -438,7 +442,7 @@ async def _is_ui_driving_enabled(
 
 async def _validate_session_ownership(
     session_id: uuid.UUID,
-    principal: AuthenticatedPrincipal,
+    principal: TenantPrincipal,
     db: AsyncSession,
 ) -> ChatSession:
     chat_session = await db.get(ChatSession, session_id)
@@ -519,7 +523,8 @@ def _resolve_tool_permission(config: RemyConfig, tool_name: str, args: dict[str,
 async def _is_approved_for_session(session_id: str, tool_name: str, page_path: str) -> bool:
     registry = _get_registry()
     if registry is not None:
-        return await registry.is_session_approved(session_id, tool_name, page_path)
+        approved = await registry.is_session_approved(session_id, tool_name, page_path)
+        return bool(approved)
     session_approvals = _session_approvals.get(session_id)
     if not session_approvals:
         return False
@@ -565,7 +570,7 @@ def clear_all_session_approvals() -> None:
 
 def _get_all_tool_definitions(include_ui_tools: bool = True) -> list[dict[str, Any]]:
     """Combine UI tool and MCP tool definitions for the LLM's tools parameter."""
-    tools: ClassVar[list[dict[str, Any]]] = []
+    tools: list[dict[str, Any]] = []
     if include_ui_tools:
         for name, schema in _UI_TOOLS.items():
             tools.append(
@@ -593,7 +598,7 @@ async def list_sessions(
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
     session: AsyncSession = Depends(get_db_session),
-    principal: AuthenticatedPrincipal = Depends(get_current_user),
+    principal: TenantPrincipal = Depends(get_current_tenant_user),
 ) -> dict[str, Any]:
     try:
         async with session.begin():
@@ -650,7 +655,7 @@ async def list_sessions(
 async def create_session(
     req: CreateSessionRequest,
     session: AsyncSession = Depends(get_db_session),
-    principal: AuthenticatedPrincipal = Depends(get_current_user),
+    principal: TenantPrincipal = Depends(get_current_tenant_user),
 ) -> dict[str, Any]:
     try:
         async with session.begin():
@@ -660,7 +665,7 @@ async def create_session(
                     ChatSession.user_id == principal.account_id
                 )
             )
-            next_session_number = max_sn.scalar() + 1
+            next_session_number = (max_sn.scalar() or 0) + 1
 
             provider = req.provider
             model = req.model
@@ -725,7 +730,7 @@ async def create_session(
 async def get_session(
     session_id: uuid.UUID,
     session: AsyncSession = Depends(get_db_session),
-    principal: AuthenticatedPrincipal = Depends(get_current_user),
+    principal: TenantPrincipal = Depends(get_current_tenant_user),
 ) -> dict[str, Any]:
     try:
         async with session.begin():
@@ -763,7 +768,7 @@ async def rename_session(
     session_id: uuid.UUID,
     req: RenameSessionRequest,
     session: AsyncSession = Depends(get_db_session),
-    principal: AuthenticatedPrincipal = Depends(get_current_user),
+    principal: TenantPrincipal = Depends(get_current_tenant_user),
 ) -> dict[str, Any]:
     try:
         async with session.begin():
@@ -799,7 +804,7 @@ async def rename_session(
 async def delete_session(
     session_id: uuid.UUID,
     session: AsyncSession = Depends(get_db_session),
-    principal: AuthenticatedPrincipal = Depends(get_current_user),
+    principal: TenantPrincipal = Depends(get_current_tenant_user),
 ) -> dict[str, str]:
     try:
         async with session.begin():
@@ -857,7 +862,7 @@ async def list_messages(
     page: int = Query(1, ge=1),
     page_size: int = Query(100, ge=1, le=500),
     session: AsyncSession = Depends(get_db_session),
-    principal: AuthenticatedPrincipal = Depends(get_current_user),
+    principal: TenantPrincipal = Depends(get_current_tenant_user),
 ) -> dict[str, Any]:
     try:
         async with session.begin():
@@ -910,7 +915,7 @@ async def append_message(
     session_id: uuid.UUID,
     req: AppendMessageRequest,
     session: AsyncSession = Depends(get_db_session),
-    principal: AuthenticatedPrincipal = Depends(get_current_user),
+    principal: TenantPrincipal = Depends(get_current_tenant_user),
 ) -> dict[str, Any]:
     try:
         async with session.begin():
@@ -961,7 +966,7 @@ async def stream_chat(
     req: StreamRequest,
     request: Request,
     session: AsyncSession = Depends(get_db_session),
-    principal: AuthenticatedPrincipal = Depends(get_current_user),
+    principal: TenantPrincipal = Depends(get_current_tenant_user),
     settings: Settings = Depends(get_settings),
 ) -> StreamingResponse:
     # Validate the session exists and belongs to user
@@ -1079,7 +1084,7 @@ async def stream_chat(
                 # ── Agentic loop ────────────────────────────────────────
                 while True:
                     full_content = ""
-                    tool_call_buffers: ClassVar[dict[int, dict[str, Any]]] = {}
+                    tool_call_buffers: dict[int, dict[str, Any]] = {}
 
                     tools_param = None
                     if getattr(backend, "supports_tools", False):
@@ -1091,26 +1096,28 @@ async def stream_chat(
                     async for chunk in backend.stream(langchain_messages, tools=tools_param):
                         if await request.is_disconnected():
                             return
-                        if isinstance(chunk, AIMessageChunk) and chunk.content:
+                        if isinstance(chunk, AIMessageChunk) and isinstance(chunk.content, str) and chunk.content:
                             full_content += chunk.content
                             yield f"event: token\ndata: {json.dumps({'token': chunk.content})}\n\n"
                             if chunk.tool_call_chunks:
-                                for tc in chunk.tool_call_chunks:
-                                    idx = tc.get("index", 0)
+                                for chunk_call in chunk.tool_call_chunks:
+                                    idx = chunk_call.get("index")
+                                    if idx is None:
+                                        idx = 0
                                     buf = tool_call_buffers.get(idx)
                                     if buf is None:
                                         tool_call_buffers[idx] = {
-                                            "id": tc.get("id", "") or "",
-                                            "name": tc.get("name", "") or "",
-                                            "args": tc.get("args", "") or "",
+                                            "id": chunk_call.get("id", "") or "",
+                                            "name": chunk_call.get("name", "") or "",
+                                            "args": chunk_call.get("args", "") or "",
                                         }
                                     else:
-                                        if tc.get("id"):
-                                            buf["id"] = tc["id"]
-                                        if tc.get("name"):
-                                            buf["name"] = tc["name"]
-                                        if tc.get("args"):
-                                            buf["args"] += tc["args"]
+                                        if chunk_call.get("id"):
+                                            buf["id"] = chunk_call["id"] or ""
+                                        if chunk_call.get("name"):
+                                            buf["name"] = chunk_call["name"] or ""
+                                        if chunk_call.get("args"):
+                                            buf["args"] += chunk_call["args"] or ""
 
                     if await request.is_disconnected():
                         return
@@ -1176,16 +1183,21 @@ async def stream_chat(
                     ui_tool_calls = [tc for tc in tool_calls if tc["name"] in UI_TOOL_NAMES]
                     mcp_tool_calls = [tc for tc in tool_calls if tc["name"] not in UI_TOOL_NAMES]
 
-                    tool_results: ClassVar[list[dict[str, Any]]] = []
+                    tool_results: list[dict[str, Any]] = []
 
                     # Execute MCP tools
                     if mcp_tool_calls and not req.mcp_api_key:
-                        yield (
-                            "event: error\ndata: "
-                            + json.dumps({"detail": "Tool execution requires an MCP API key"})
-                            + "\n\n"
-                        )
-                        return
+                        for tc in mcp_tool_calls:
+                            tool_results.append(
+                                {
+                                    "tool_call_id": tc["id"],
+                                    "tool_name": tc["name"],
+                                    "success": False,
+                                    "error": "Tool execution requires an MCP API key",
+                                }
+                            )
+                            yield f"event: tool_call\ndata: {json.dumps(tool_results[-1])}\n\n"
+                    elif req.mcp_api_key is not None:
                         for tc in mcp_tool_calls:
                             try:
                                 result = await _call_mcp_tool(
@@ -1291,8 +1303,8 @@ async def stream_chat(
                                     with contextlib.suppress(TimeoutError):
                                         await asyncio.wait_for(resume_ev.wait(), timeout=300.0)
 
-                        approved_calls: ClassVar[list[dict[str, Any]]] = []
-                        pending_permission_calls: ClassVar[list[dict[str, Any]]] = []
+                        approved_calls: list[dict[str, Any]] = []
+                        pending_permission_calls: list[dict[str, Any]] = []
 
                         for tc in ui_tool_calls:
                             perm = _resolve_tool_permission(config, tc["name"], tc["args"], req.page_context or "")
@@ -1516,7 +1528,7 @@ async def submit_permission_response(
     session_id: uuid.UUID,
     req: PermissionResponse,
     session: AsyncSession = Depends(get_db_session),
-    principal: AuthenticatedPrincipal = Depends(get_current_user),
+    principal: TenantPrincipal = Depends(get_current_tenant_user),
 ) -> dict[str, str]:
     if not await _is_ui_driving_enabled(principal.organisation_id, session):
         raise HTTPException(
@@ -1573,7 +1585,7 @@ async def submit_ui_command_results(
     session_id: uuid.UUID,
     req: UiCommandResultsBatch,
     session: AsyncSession = Depends(get_db_session),
-    principal: AuthenticatedPrincipal = Depends(get_current_user),
+    principal: TenantPrincipal = Depends(get_current_tenant_user),
 ) -> dict[str, str]:
     if not await _is_ui_driving_enabled(principal.organisation_id, session):
         raise HTTPException(
@@ -1623,7 +1635,7 @@ async def submit_ui_command_results(
 async def reset_session_permissions(
     session_id: uuid.UUID,
     session: AsyncSession = Depends(get_db_session),
-    principal: AuthenticatedPrincipal = Depends(get_current_user),
+    principal: TenantPrincipal = Depends(get_current_tenant_user),
 ) -> dict[str, str]:
     try:
         async with session.begin():
@@ -1659,7 +1671,7 @@ async def reset_session_permissions(
 async def resume_session(
     session_id: uuid.UUID,
     session: AsyncSession = Depends(get_db_session),
-    principal: AuthenticatedPrincipal = Depends(get_current_user),
+    principal: TenantPrincipal = Depends(get_current_tenant_user),
 ) -> dict[str, str]:
     try:
         async with session.begin():
@@ -1698,7 +1710,7 @@ async def resume_session(
 async def stop_session(
     session_id: uuid.UUID,
     session: AsyncSession = Depends(get_db_session),
-    principal: AuthenticatedPrincipal = Depends(get_current_user),
+    principal: TenantPrincipal = Depends(get_current_tenant_user),
 ) -> dict[str, str]:
     try:
         async with session.begin():
@@ -1747,7 +1759,7 @@ async def stop_session(
 async def get_audit_trail(
     session_id: uuid.UUID,
     session: AsyncSession = Depends(get_db_session),
-    principal: AuthenticatedPrincipal = Depends(get_current_user),
+    principal: TenantPrincipal = Depends(get_current_tenant_user),
 ) -> dict[str, Any]:
     if not principal.is_system_admin:
         raise HTTPException(
@@ -1770,12 +1782,15 @@ async def get_audit_trail(
         trail = []
         for m in messages:
             tr = m.tool_results_json or {}
-            snapshot = tr.get("result", {}).get("snapshotBefore", {}) if isinstance(tr.get("result"), dict) else {}
+            result_data = tr.get("result")
+            result_dict = result_data if isinstance(result_data, dict) else {}
+            snapshot_data = result_dict.get("snapshotBefore")
+            snapshot = snapshot_data if isinstance(snapshot_data, dict) else {}
             trail.append(
                 {
                     "timestamp": m.created_at.isoformat() if m.created_at else None,
                     "action": tr.get("tool_name", ""),
-                    "args": tr.get("result", {}).get("args", {}) if isinstance(tr.get("result"), dict) else {},
+                    "args": result_dict.get("args", {}),
                     "url": snapshot.get("url", ""),
                     "success": tr.get("success", False),
                     "error": tr.get("error"),
@@ -1806,7 +1821,7 @@ async def get_audit_trail(
 async def undo_last_action(
     session_id: uuid.UUID,
     session: AsyncSession = Depends(get_db_session),
-    principal: AuthenticatedPrincipal = Depends(get_current_user),
+    principal: TenantPrincipal = Depends(get_current_tenant_user),
 ) -> dict[str, Any]:
     try:
         async with session.begin():
@@ -1834,7 +1849,7 @@ async def undo_last_action(
         if isinstance(inner_result, dict):
             tool_args = inner_result.get("args", {})
 
-        inverse: dict | None = None
+        inverse: dict[str, Any] | None = None
         match tool_name:
             case "navigate":
                 inverse = {"name": "go_back", "args": {}}

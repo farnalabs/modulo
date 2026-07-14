@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 import uuid
 from datetime import UTC, datetime
+from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import func, select
@@ -18,8 +19,8 @@ from modulo.api.models.error_notification_rule import (
     ErrorNotificationRuleResponse,
     ErrorNotificationRuleUpdate,
 )
-from modulo.auth.dependencies import get_current_user
-from modulo.auth.jwt import AuthenticatedPrincipal
+from modulo.auth.dependencies import get_current_tenant_user
+from modulo.auth.jwt import TenantPrincipal
 from modulo.db.models.error_notification_rule import ErrorNotificationRule
 from modulo.db.rls import set_rls_org
 
@@ -31,7 +32,7 @@ _MAX_RULES_PER_ORG = 10
 _MAX_RULES_COMMUNITY = 3
 
 
-def _serialize_rule(rule: ErrorNotificationRule) -> dict:
+def _serialize_rule(rule: ErrorNotificationRule) -> dict[str, Any]:
     return {
         "id": str(rule.id),
         "name": rule.name,
@@ -47,7 +48,7 @@ def _serialize_rule(rule: ErrorNotificationRule) -> dict:
     }
 
 
-def _require_admin(principal: AuthenticatedPrincipal) -> None:
+def _require_admin(principal: TenantPrincipal) -> None:
     if principal.org_role != "admin":
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
@@ -60,8 +61,8 @@ async def list_notification_rules(
     limit: int = Query(20, ge=1, le=100),
     offset: int = Query(0, ge=0),
     session: AsyncSession = Depends(get_db_session),
-    principal: AuthenticatedPrincipal = Depends(get_current_user),
-) -> dict:
+    principal: TenantPrincipal = Depends(get_current_tenant_user),
+) -> dict[str, Any]:
     org_id = principal.organisation_id
     if org_id is None:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No organisation")
@@ -115,8 +116,8 @@ async def list_notification_rules(
 async def create_notification_rule(
     req: ErrorNotificationRuleCreate,
     session: AsyncSession = Depends(get_db_session),
-    principal: AuthenticatedPrincipal = Depends(get_current_user),
-) -> dict:
+    principal: TenantPrincipal = Depends(get_current_tenant_user),
+) -> dict[str, Any]:
     org_id = principal.organisation_id
     if org_id is None:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No organisation")
@@ -136,7 +137,7 @@ async def create_notification_rule(
 
             if current_count >= max_rules:
                 raise HTTPException(
-                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                    status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
                     detail=f"Maximum {max_rules} notification rules per organisation reached",
                 )
 
@@ -181,8 +182,8 @@ async def update_notification_rule(
     rule_id: uuid.UUID,
     req: ErrorNotificationRuleUpdate,
     session: AsyncSession = Depends(get_db_session),
-    principal: AuthenticatedPrincipal = Depends(get_current_user),
-) -> dict:
+    principal: TenantPrincipal = Depends(get_current_tenant_user),
+) -> dict[str, Any]:
     org_id = principal.organisation_id
     if org_id is None:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No organisation")
@@ -250,7 +251,7 @@ async def update_notification_rule(
 async def delete_notification_rule(
     rule_id: uuid.UUID,
     session: AsyncSession = Depends(get_db_session),
-    principal: AuthenticatedPrincipal = Depends(get_current_user),
+    principal: TenantPrincipal = Depends(get_current_tenant_user),
 ) -> None:
     org_id = principal.organisation_id
     if org_id is None:

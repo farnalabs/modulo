@@ -91,22 +91,16 @@ jobs:
       - name: Install Playwright browsers
         run: npx playwright install chromium
       - name: Run WCAG contrast tests
-        id: wcag-contrast
         run: npx playwright test wcag-contrast
-        continue-on-error: true
       - run: npm run lint
       - run: npm run type-check
       - run: npm run test:unit
       - run: npm run build
       - run: npm audit
-      - name: Fail job on WCAG contrast failure
-        if: steps.wcag-contrast.outcome == 'failure'
-        run: exit 1
 
   product-map-validate:
     name: Product map validation
     runs-on: self-hosted
-    continue-on-error: true
     steps:
       - uses: actions/checkout@v7
       - name: Validate product map graph
@@ -117,13 +111,26 @@ jobs:
   manifest-validate:
     name: Manifest validation
     runs-on: self-hosted
-    continue-on-error: true
     steps:
       - uses: actions/checkout@v7
       - name: Validate manifest.yaml
         shell: powershell
         run: |
           & tools\validate-manifest.ps1 -CI
+
+  powershell-tests:
+    name: PowerShell tests (Pester 5)
+    runs-on: [self-hosted, windows, docker]
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/cache@v5
+        with:
+          path: .tool-cache/powershell
+          key: pester-5.7.1-${{ runner.os }}-${{ runner.arch }}
+      - name: Run PowerShell tests
+        shell: powershell
+        run: |
+          & tools\run-pester-tests.ps1
 
   gitleaks:
     name: Secret scan

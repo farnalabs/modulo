@@ -8,11 +8,13 @@ from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from fastapi import HTTPException
 from fastapi.testclient import TestClient
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.api.dependencies import _get_engine, get_db_session, get_plan_context
 from modulo.api.main import app
+from modulo.api.routes.runs import _validate_run_input_basics
 from modulo.auth.dependencies import get_current_user
 from modulo.auth.jwt import AuthenticatedPrincipal
 from modulo.settings import Settings, get_settings
@@ -24,6 +26,16 @@ _PIPELINE_ID = uuid.uuid4()
 _RUN_ID = uuid.uuid4()
 _SNAPSHOT_ID = uuid.uuid4()
 _THREAD_ID = str(uuid.uuid4())
+
+
+async def test_run_input_uses_legacy_target_when_new_target_is_null():
+    graph = {
+        "nodes": [{"id": "only-node"}],
+        "edges": [{"target_node_id": None, "target": "only-node"}],
+    }
+
+    with pytest.raises(HTTPException, match="cycle detected"):
+        await _validate_run_input_basics(AsyncMock(), graph, MagicMock(), {})
 
 
 # ---------------------------------------------------------------------------

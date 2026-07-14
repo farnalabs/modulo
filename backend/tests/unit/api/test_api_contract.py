@@ -17,6 +17,7 @@ from modulo.api.models.problem import ProblemDetail
 from modulo.auth.dependencies import get_current_user
 from modulo.auth.jwt import AuthenticatedPrincipal
 from modulo.settings import Settings, get_settings
+from tests.unit.api.mock_session import configure_mock_session
 
 _VALID_32 = "a" * 32
 _ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
@@ -34,7 +35,7 @@ def _make_settings() -> Settings:
 
 
 def _make_mock_session() -> AsyncMock:
-    session = AsyncMock()
+    session = configure_mock_session(AsyncMock())
     begin_cm = AsyncMock()
     begin_cm.__aenter__ = AsyncMock(return_value=None)
     begin_cm.__aexit__ = AsyncMock(return_value=False)
@@ -62,6 +63,7 @@ def _make_mock_pipeline(**kwargs: Any) -> MagicMock:
     p.description = kwargs.get("description")
     p.visibility = kwargs.get("visibility", "org")
     p.owner_team_id = kwargs.get("owner_team_id")
+    p.folder_id = kwargs.get("folder_id")
     p.max_concurrent_runs = kwargs.get("max_concurrent_runs", 5)
     p.lock_wait_timeout_seconds = kwargs.get("lock_wait_timeout_seconds", 300)
     p.node_timeout_seconds = kwargs.get("node_timeout_seconds", 300)

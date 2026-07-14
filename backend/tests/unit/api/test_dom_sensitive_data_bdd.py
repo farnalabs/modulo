@@ -10,6 +10,7 @@ from datetime import UTC, datetime
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from cryptography.fernet import Fernet
 from fastapi.testclient import TestClient
 
 from modulo.api.dependencies import _get_engine, get_db_session, get_plan_context
@@ -22,23 +23,25 @@ from modulo.api.middleware.sensitive_mask import (
 from modulo.auth.dependencies import get_current_user
 from modulo.auth.jwt import AuthenticatedPrincipal
 from modulo.settings import Settings, get_settings
+from tests.unit.api.mock_session import configure_mock_session
 
 _ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
 _USER_ID = uuid.UUID("00000000-0000-0000-0000-000000000002")
 _VALID_32 = "a" * 32
+_FERNET_KEY = Fernet.generate_key().decode()
 
 
 def _make_settings() -> Settings:
     return Settings(
         database_url="postgresql+asyncpg://localhost/test",
         secret_key=_VALID_32,
-        fernet_key=_VALID_32,
+        fernet_key=_FERNET_KEY,
         modulo_admin_password="testpass",
     )
 
 
 def _make_mock_session() -> AsyncMock:
-    session = AsyncMock()
+    session = configure_mock_session(AsyncMock())
     begin_cm = AsyncMock()
     begin_cm.__aenter__ = AsyncMock(return_value=None)
     begin_cm.__aexit__ = AsyncMock(return_value=False)

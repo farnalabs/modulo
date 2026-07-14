@@ -13,10 +13,11 @@ import logging
 import os
 import sys
 import traceback as tb_module
+import uuid
 from contextvars import ContextVar
 from typing import Any
 
-from pythonjsonlogger import jsonlogger
+from pythonjsonlogger.json import JsonFormatter
 from sqlalchemy.exc import ProgrammingError
 
 correlation_id_var: ContextVar[str | None] = ContextVar("correlation_id", default=None)
@@ -133,6 +134,11 @@ class ErrorTrackingLogHandler(logging.Handler):
             org_id = org_id_var.get()
             if org_id is None:
                 return
+            try:
+                org_uuid = uuid.UUID(org_id)
+            except ValueError:
+                logging.getLogger(__name__).warning("Ignoring log event with invalid organisation ID")
+                return
 
             message = record.getMessage()
             level = "error"
@@ -165,10 +171,10 @@ class ErrorTrackingLogHandler(logging.Handler):
 
             service = ErrorIngestionService()
             async with factory() as session:
-                await set_rls_org(session, org_id)
+                await set_rls_org(session, org_uuid)
                 try:
                     async with session.begin():
-                        await service.ingest(session, org_id, event_data)
+                        await service.ingest(session, org_uuid, event_data)
                 except ProgrammingError:
                     logging.getLogger(__name__).exception("Database unavailable while forwarding a log event")
 
@@ -190,7 +196,7 @@ def configure_logging() -> None:
     handler = logging.StreamHandler(sys.stdout)
     handler.setLevel(logging.DEBUG)
 
-    formatter = jsonlogger.JsonFormatter(  # type: ignore[attr-defined]
+    formatter = JsonFormatter(
         fmt="%(timestamp)s %(level)s %(name)s %(module)s %(funcName)s %(lineno)d %(message)s %(correlation_id)s",
         rename_fields={
             "timestamp": "timestamp",

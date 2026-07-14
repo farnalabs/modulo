@@ -8,7 +8,8 @@ from typing import Any
 from unittest.mock import patch
 
 import pytest
-from langgraph.errors import NodeInterrupt
+from langgraph.errors import GraphInterrupt
+from langgraph.types import Interrupt
 from pytest_bdd import given, parsers, scenarios, then, when
 
 from modulo.core.eval_engine import EvalBlockedError
@@ -458,11 +459,15 @@ def _run_gate_fn(
     async def _run() -> Any:
         return await node_fn(state)
 
+    def _raise_interrupt(value: Any) -> None:
+        raise GraphInterrupt((Interrupt(value=value),))
+
     try:
-        result = asyncio.run(_run())
+        with patch("modulo.core.pipeline_engine.node_runner.interrupt", _raise_interrupt):
+            result = asyncio.run(_run())
         ctx["_gate_result"] = result
         ctx["_interrupt_raised"] = False
-    except NodeInterrupt:
+    except GraphInterrupt:
         ctx["_gate_result"] = None
         ctx["_interrupt_raised"] = True
     except EvalBlockedError:

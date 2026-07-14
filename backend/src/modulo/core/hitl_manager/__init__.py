@@ -32,7 +32,8 @@ import uuid
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
-from jose import ExpiredSignatureError, JWTError
+from jwt import ExpiredSignatureError
+from jwt import InvalidTokenError as JWTError
 from sqlalchemy import func, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -218,15 +219,15 @@ class HITLManager:
             raise AlreadyClaimedError(run_id, gate_id)
         if gate_check.required_team_id is not None:
             # Lock the gate row so the team check is serialised with the UPDATE.
-            gate_check_locked = await session.execute(
+            locked_result = await session.execute(
                 select(HitlClaim).where(HitlClaim.id == gate_check.id).with_for_update()
             )
-            gate_check_locked = gate_check_locked.scalar_one_or_none()
-            if gate_check_locked is None:
+            locked_gate = locked_result.scalar_one_or_none()
+            if locked_gate is None:
                 raise GateNotFoundError(run_id, gate_id)
-            if gate_check_locked.decision is not None:
+            if locked_gate.decision is not None:
                 raise GateAlreadyDecidedError(run_id, gate_id)
-            if gate_check_locked.account_id is not None:
+            if locked_gate.account_id is not None:
                 raise AlreadyClaimedError(run_id, gate_id)
             tm_result = await session.execute(
                 select(TeamMembership).where(
@@ -553,6 +554,7 @@ class HITLManager:
                 "minutes_overdue": int((now - g.claimed_at).total_seconds() / 60),
             }
             for g in gates
+            if g.claimed_at is not None
         ]
 
     async def count_overdue(

@@ -84,8 +84,12 @@ def _make_no_license_settings() -> Settings:
     )
 
 
-def _make_mock_session() -> AsyncMock:
-    session = AsyncMock()
+def _make_mock_session() -> MagicMock:
+    session = MagicMock()
+    session.execute = AsyncMock()
+    session.flush = AsyncMock()
+    session.delete = AsyncMock()
+    session.rollback = AsyncMock()
     begin_cm = AsyncMock()
     begin_cm.__aenter__ = AsyncMock(return_value=None)
     begin_cm.__aexit__ = AsyncMock(return_value=False)
@@ -123,7 +127,7 @@ def _make_mock_team(**overrides: object) -> MagicMock:
 def client() -> Generator[TestClient, None, None]:
     mock_session = _make_mock_session()
 
-    async def override_session() -> AsyncGenerator[AsyncMock, None]:
+    async def override_session() -> AsyncGenerator[MagicMock, None]:
         yield mock_session
 
     app.dependency_overrides[get_settings] = _make_settings
@@ -215,6 +219,7 @@ class TestReplaceScimUser:
         updated = _make_mock_user(email="jane.updated@example.com")
 
         with (
+            patch("modulo.api.routes.scim.scim_get_user", return_value=updated),
             patch("modulo.api.routes.scim.scim_update_user", return_value=updated),
             patch("modulo.api.routes.scim.set_rls_org"),
         ):
@@ -370,6 +375,8 @@ class TestCreateScimGroup:
             patch("modulo.db.crud.team.get_team_by_name", return_value=None),
             patch("modulo.db.crud.org_membership.list_memberships_for_org", return_value=[]),
             patch("modulo.api.routes.scim.scim_create_group", return_value=mock_team),
+            patch("modulo.api.routes.scim.scim_get_user", return_value=_make_mock_user()),
+            patch("modulo.api.routes.scim.scim_add_group_member", return_value=None),
             patch("modulo.api.routes.scim.set_rls_org"),
         ):
             headers = {"Authorization": f"Bearer {_SCIM_TOKEN}"}
@@ -385,6 +392,8 @@ class TestCreateScimGroup:
         from sqlalchemy.exc import IntegrityError
 
         with (
+            patch("modulo.db.crud.team.get_team_by_name", return_value=None),
+            patch("modulo.db.crud.org_membership.list_memberships_for_org", return_value=[]),
             patch(
                 "modulo.api.routes.scim.scim_create_group",
                 side_effect=IntegrityError("mock", {}, Exception("mock dup")),
@@ -511,11 +520,12 @@ class TestScimAuth:
         app.dependency_overrides[get_db_session] = lambda: _make_mock_session()
         app.dependency_overrides[_get_engine] = lambda: MagicMock()
         headers = {"X-CSRF-Token": "test-csrf-token"}
-        resp = TestClient(app).post(
+        test_client = TestClient(app)
+        test_client.cookies.set("XSRF-TOKEN", "test-csrf-token")
+        resp = test_client.post(
             "/scim/v2/Users",
             json=_USER_CREATE_BODY,
             headers=headers,
-            cookies={"XSRF-TOKEN": "test-csrf-token"},
         )
         app.dependency_overrides.clear()
         assert resp.status_code == 401

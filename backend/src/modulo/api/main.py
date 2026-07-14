@@ -4,8 +4,9 @@ import logging
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager, suppress
 from datetime import UTC, datetime
-from typing import ClassVar
+from typing import Protocol, cast
 
+import anyio
 from fastapi import FastAPI
 from fastapi.exceptions import RequestValidationError
 from sqlalchemy import text
@@ -111,6 +112,13 @@ from modulo.settings import Settings, get_settings
 # Uptime tracking — set at module import time, read by health endpoints.
 logger = logging.getLogger(__name__)
 
+
+class _TaskGroupSessionManager(Protocol):
+    """FastMCP session-manager surface used by the application lifespan."""
+
+    _task_group: anyio.abc.TaskGroup | None
+
+
 _START_TIME = datetime.now(UTC)
 
 # Graceful shutdown manager — resources registered during lifespan startup.
@@ -118,11 +126,7 @@ _shutdown_manager = ShutdownManager()
 
 
 async def _verify_db_connectivity(settings: Settings) -> None:
-    """Verify the database is reachable at startup.
-
-    Raises RuntimeError if the DB is unreachable after several retries,
-    preventing the app from starting in a broken state.
-    """
+    """Check database connectivity without preventing application startup."""
     engine = get_or_create_engine(settings)
     for attempt in range(1, 4):
         try:
@@ -138,7 +142,7 @@ async def _verify_db_connectivity(settings: Settings) -> None:
             if attempt < 3:
                 await asyncio.sleep(attempt * 2)
     logger.error("startup.db_unreachable")
-    raise RuntimeError("Database is unreachable after 3 retry attempts — cannot start.")
+    logger.warning("startup.continuing_without_db — app will retry connections at runtime")
 
 
 async def _run_migrations(settings: Settings) -> None:
@@ -213,9 +217,9 @@ async def _seed_modulo_users(settings: Settings) -> None:
             existing_account = result.scalar_one_or_none()
             pw_hash = pw_part if pw_part.startswith("$2") else hash_password(pw_part)
 
-            if (
-                existing_account is not None and not existing_account.password_hash
-            ) or not existing_account.password_hash.startswith("$2"):
+            if existing_account is not None and (
+                not existing_account.password_hash or not existing_account.password_hash.startswith("$2")
+            ):
                 existing_account.password_hash = pw_hash
                 logger.info("startup.user_rehashed", extra={"email": email})
 
@@ -429,6 +433,7 @@ async def _seed_sso_providers(settings: Settings) -> None:
     from sqlalchemy import select
 
     from modulo.api.dependencies import get_or_create_engine, get_or_create_session_factory
+    from modulo.auth.secret_storage import encrypt_stored_secret
     from modulo.db.models.sso_provider import SsoProvider
 
     engine = get_or_create_engine(settings)
@@ -445,8 +450,9 @@ async def _seed_sso_providers(settings: Settings) -> None:
             logger.warning("startup.sso_providers_invalid_json")
             return
 
+        required_fields = ("provider_id", "client_id", "client_secret", "discovery_url")
         for entry in entries:
-            if not all(k in entry for k in ("provider_id", "client_id", "client_secret", "discovery_url")):
+            if not isinstance(entry, dict) or any(key not in entry for key in required_fields):
                 logger.warning("startup.sso_provider_skipped", extra={"entry": str(entry)})
                 continue
 
@@ -454,7 +460,7 @@ async def _seed_sso_providers(settings: Settings) -> None:
                 provider_type="oidc",
                 name=entry.get("provider_id", entry.get("name", "Imported OIDC Provider")),
                 client_id=entry["client_id"],
-                client_secret=entry["client_secret"],
+                client_secret=encrypt_stored_secret(entry["client_secret"], settings.fernet_key),
                 discovery_url=entry["discovery_url"],
                 scopes=json.dumps(["openid", "profile", "email"]),
                 enabled=True,
@@ -598,7 +604,7 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
             "caching, and session state. Provision Upstash Redis and set REDIS_URL in fly.toml."
         )
     logger.info("startup.redis_configured — Celery beat available for distributed scheduling")
-    _scheduler_tasks: ClassVar[list[asyncio.Task]] = []
+    _scheduler_tasks: list[asyncio.Task[None]] = []
 
     setup_otel(
         service_name=settings.modulo_otel_service_name,
@@ -630,10 +636,19 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
     await _run_migrations(settings)
 
     # Ensure at least one organisation exists before seeding users.
-    await _ensure_default_org(settings)
+    # Non-fatal: if the organisations table doesn't exist (migration state
+    # mismatch), the app starts without an org and retries on next restart.
+    try:
+        await _ensure_default_org(settings)
+    except Exception:
+        logger.warning("startup.default_org_failed", exc_info=True)
 
     # Seed MODULO_USERS env var entries into the user table (idempotent).
-    await _seed_modulo_users(settings)
+    # Non-fatal: if tables are missing, seeding is retried on next restart.
+    try:
+        await _seed_modulo_users(settings)
+    except Exception:
+        logger.warning("startup.user_seed_failed", exc_info=True)
 
     # Seed demo data if MODULO_DEMO_MODE is enabled.
     try:
@@ -674,7 +689,11 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
     # initialised and can't use DI.  Dispose both so no connections leak.
     try:
         _di_engine = get_or_create_engine(settings)
-        _shutdown_manager.register("otel", shutdown_otel)
+
+        async def shutdown_otel_async() -> None:
+            shutdown_otel()
+
+        _shutdown_manager.register("otel", shutdown_otel_async)
         _shutdown_manager.register("db_engine", db_engine.dispose)
         _shutdown_manager.register("di_engine", _di_engine.dispose)
         _shutdown_manager.register("rate_limiter_redis", shutdown_rate_limiters)
@@ -701,12 +720,12 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
     await _claim_expiry_job.start()
 
     # Start MCP task group so FastMCP's _handle_stateless_request can use tg.start().
-    import anyio
-
     from modulo.api.mcp_server import mcp
 
     _mcp_tg = await anyio.create_task_group().__aenter__()
-    mcp.session_manager._task_group = _mcp_tg
+    # FastMCP annotates this private integration slot as None despite assigning a TaskGroup at runtime.
+    session_manager = cast(_TaskGroupSessionManager, mcp.session_manager)
+    session_manager._task_group = _mcp_tg
 
     yield
 
@@ -761,7 +780,7 @@ DeprecationHeaderMiddleware.deprecate(
 )
 app.add_middleware(SecurityHeadersMiddleware)  # type: ignore[arg-type]
 app.add_middleware(CatchAllMiddleware)
-app.add_middleware(ShutdownMiddleware, manager=_shutdown_manager)  # type: ignore[arg-type]
+app.add_middleware(ShutdownMiddleware, manager=_shutdown_manager)
 app.add_middleware(RequestTimeoutMiddleware, timeout_seconds=120, overrides={"/healthz": 5, "/healthz/ready": 15})
 
 app.include_router(health_router)

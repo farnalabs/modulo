@@ -17,8 +17,9 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
+import jwt
 from fastapi import HTTPException, status
-from jose import JWTError, jwt
+from jwt import InvalidTokenError as JWTError
 from sqlalchemy import delete as sa_delete
 from sqlalchemy import select
 from sqlalchemy.exc import ProgrammingError

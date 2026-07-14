@@ -5,8 +5,8 @@ from pydantic import BaseModel, Field
 
 from modulo.api.dependencies import require_feature
 from modulo.api.middleware.rate_limiter import RateLimitMiddleware, redis_available
-from modulo.auth.dependencies import get_current_user
-from modulo.auth.jwt import AuthenticatedPrincipal
+from modulo.auth.dependencies import get_current_tenant_user
+from modulo.auth.jwt import TenantPrincipal
 
 _log = logging.getLogger(__name__)
 
@@ -34,7 +34,7 @@ class RateLimitUpdateRequest(BaseModel):
     rules: list[RateLimitRuleUpdate]
 
 
-def _require_admin(principal: AuthenticatedPrincipal) -> None:
+def _require_admin(principal: TenantPrincipal) -> None:
     if principal.org_role != "admin":
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
@@ -44,7 +44,7 @@ def _require_admin(principal: AuthenticatedPrincipal) -> None:
 
 @router.get("", response_model=RateLimitStatusResponse, dependencies=[require_feature("rate_limits")])
 async def get_rate_limits(
-    current_user: AuthenticatedPrincipal = Depends(get_current_user),
+    current_user: TenantPrincipal = Depends(get_current_tenant_user),
 ) -> RateLimitStatusResponse:
     _require_admin(current_user)
     rules = [RateLimitRuleResponse(path_prefix=p, max_requests=m, window_s=w) for p, m, w in RateLimitMiddleware.RULES]
@@ -57,7 +57,7 @@ async def get_rate_limits(
 @router.put("", response_model=RateLimitStatusResponse, dependencies=[require_feature("rate_limits")])
 async def update_rate_limits(
     req: RateLimitUpdateRequest,
-    current_user: AuthenticatedPrincipal = Depends(get_current_user),
+    current_user: TenantPrincipal = Depends(get_current_tenant_user),
 ) -> RateLimitStatusResponse:
     _require_admin(current_user)
     new_rules = [(r.path_prefix, r.max_requests, r.window_s) for r in req.rules]

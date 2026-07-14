@@ -178,49 +178,49 @@
           <DataTable
             :columns="tableColumns"
             :rows="tableRows"
-            @row-click="openPipeline"
+            @row-click="openPipelineRow"
           >
             <template #cell-name="{ row }">
-              <span class="font-medium text-foreground">{{ row.name }}</span>
+              <span class="font-medium text-foreground">{{ pipelineRow(row).name }}</span>
             </template>
             <template #cell-folder_name="{ row }">
-              <span v-if="row.folder_id && folderNameMap.has(row.folder_id)" class="flex items-center gap-1 text-muted-foreground text-sm">
+              <span v-if="pipelineRow(row).folder_id && folderNameMap.has(pipelineRow(row).folder_id!)" class="flex items-center gap-1 text-muted-foreground text-sm">
                 <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 20h16a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.93a2 2 0 0 1-1.66-.9l-.82-1.2A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13c0 1.1.9 2 2 2Z"/></svg>
-                {{ folderNameMap.get(row.folder_id) }}
+                {{ folderNameMap.get(pipelineRow(row).folder_id!) }}
               </span>
               <span v-else class="text-muted-foreground/50 italic text-sm">{{ $t('views.PipelineListView.no_folder') }}</span>
             </template>
             <template #cell-description="{ row }">
-              <span v-if="row.description" class="text-muted-foreground truncate block max-w-xs">{{ row.description }}</span>
+              <span v-if="pipelineRow(row).description" class="text-muted-foreground truncate block max-w-xs">{{ pipelineRow(row).description }}</span>
               <span v-else class="text-muted-foreground/50 italic">{{ $t('views.PipelineListView.no_description') }}</span>
             </template>
             <template #cell-visibility="{ row }">
-              <span class="badge text-xs" :class="row.visibility === 'org' ? 'badge-context-blue' : 'badge-context-purple'">
-                {{ row.visibility === 'org' ? 'Org' : 'Team' }}
+              <span class="badge text-xs" :class="pipelineRow(row).visibility === 'org' ? 'badge-context-blue' : 'badge-context-purple'">
+                {{ pipelineRow(row).visibility === 'org' ? 'Org' : 'Team' }}
               </span>
             </template>
             <template #cell-created_at="{ row }">
-              <span class="text-muted-foreground">{{ formatDate(row.created_at) }}</span>
+              <span class="text-muted-foreground">{{ formatDate(pipelineRow(row).created_at) }}</span>
             </template>
             <template #cell-actions="{ row }">
               <div class="relative flex justify-end" @click.stop>
                 <button
                   class="rounded p-1 hover:bg-accent"
-                  @click.stop="showActionMenu = (showActionMenu === row.id ? null : row.id)"
+                  @click.stop="showActionMenu = (showActionMenu === pipelineRow(row).id ? null : pipelineRow(row).id)"
                   data-testid="pipeline-list-action-menu"
                 >
                   <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="1"/><circle cx="12" cy="5" r="1"/><circle cx="12" cy="19" r="1"/></svg>
                 </button>
                 <div
-                  v-if="showActionMenu === row.id"
+                  v-if="showActionMenu === pipelineRow(row).id"
                   class="absolute right-0 top-full z-20 mt-1 w-40 rounded-lg border bg-card py-1 shadow-lg"
                   @click.stop
                 >
-                  <button class="flex w-full items-center gap-2 px-3 py-2 text-left text-sm hover:bg-accent" @click.stop="openRename(row)">Rename</button>
-                  <button v-if="!row.archived_at" class="flex w-full items-center gap-2 px-3 py-2 text-left text-sm hover:bg-accent" @click.stop="handleArchive(row)">Archive</button>
-                  <button v-else class="flex w-full items-center gap-2 px-3 py-2 text-left text-sm hover:bg-accent" @click.stop="handleUnarchive(row)">Unarchive</button>
-                  <button class="flex w-full items-center gap-2 px-3 py-2 text-left text-sm hover:bg-accent" @click.stop="openMoveToFolder(row)">{{ $t('views.PipelineListView.move_to_folder') }}</button>
-                  <button v-if="planStore.featureEnabled('pipeline_delete')" class="flex w-full items-center gap-2 px-3 py-2 text-left text-sm text-destructive hover:bg-destructive/10" @click.stop="openDelete(row)">Delete</button>
+                  <button class="flex w-full items-center gap-2 px-3 py-2 text-left text-sm hover:bg-accent" @click.stop="openRename(pipelineRow(row))">Rename</button>
+                  <button v-if="!pipelineRow(row).archived_at" class="flex w-full items-center gap-2 px-3 py-2 text-left text-sm hover:bg-accent" @click.stop="handleArchive(pipelineRow(row))">Archive</button>
+                  <button v-else class="flex w-full items-center gap-2 px-3 py-2 text-left text-sm hover:bg-accent" @click.stop="handleUnarchive(pipelineRow(row))">Unarchive</button>
+                  <button class="flex w-full items-center gap-2 px-3 py-2 text-left text-sm hover:bg-accent" @click.stop="openMoveToFolder(pipelineRow(row))">{{ $t('views.PipelineListView.move_to_folder') }}</button>
+                  <button v-if="planStore.featureEnabled('pipeline_delete')" class="flex w-full items-center gap-2 px-3 py-2 text-left text-sm text-destructive hover:bg-destructive/10" @click.stop="openDelete(pipelineRow(row))">Delete</button>
                 </div>
               </div>
             </template>
@@ -481,7 +481,7 @@ import { api } from '../lib/api/client'
 import { useApi } from '../composables/useApi'
 import { formatDateShort } from '../lib/formatDate'
 import DataTable from '../components/ui/data-table/DataTable.vue'
-import type { Column } from '../components/ui/data-table/DataTable.vue'
+import type { Column, DataTableRow } from '../components/ui/data-table/DataTable.vue'
 
 interface PipelineItem {
   id: string
@@ -512,7 +512,7 @@ interface PipelineListResponse {
 
 const router = useRouter()
 const planStore = usePlanStore()
-const { post: postUntyped } = useApi()
+const { get, post: postUntyped, patch: patchUntyped } = useApi()
 
 const selectedFolderId = ref<string | null>(null)
 
@@ -535,10 +535,7 @@ const foldersList = ref<FolderItem[]>([])
 
 async function loadFolders() {
   try {
-    const response = await api.GET('/api/v1/pipeline-folders')
-    if (!response.error) {
-      foldersList.value = (response.data as unknown as FolderItem[]) ?? []
-    }
+    foldersList.value = await get<FolderItem[]>('/api/v1/pipeline-folders')
   } catch (e) {
     console.warn('Failed to load folders', e)
   }
@@ -608,6 +605,14 @@ const tableRows = computed(() =>
   }))
 )
 
+function pipelineRow(row: DataTableRow): PipelineItem {
+  return row as unknown as PipelineItem
+}
+
+function openPipelineRow(row: DataTableRow) {
+  openPipeline(pipelineRow(row))
+}
+
 const filteredPipelines = computed(() => {
   const q = search.value.toLowerCase().trim()
   if (!q) return allPipelines.value
@@ -673,14 +678,9 @@ async function handleMoveToFolder() {
   moveError.value = null
   try {
     const folderId = moveToFolderId.value ?? null
-    const { error } = await api.PATCH('/api/v1/pipelines/{pipeline_id}/folder', {
-      params: { path: { pipeline_id: moveTarget.value.id } },
-      body: { folder_id: folderId },
+    await patchUntyped(`/api/v1/pipelines/${moveTarget.value.id}/folder`, {
+      folder_id: folderId,
     })
-    if (error) {
-      moveError.value = formatApiError(error)
-      return
-    }
     showMoveToFolder.value = false
     moveTarget.value = null
     await loadPipelines()

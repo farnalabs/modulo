@@ -1,8 +1,6 @@
 import vue from '@vitejs/plugin-vue'
-import VueI18nPlugin from '@intlify/unplugin-vue-i18n/vite'
 import { defineConfig } from 'vitest/config'
 import { fileURLToPath, URL } from 'node:url'
-import { resolve, dirname } from 'node:path'
 import { createRequire } from 'node:module'
 
 const require = createRequire(import.meta.url)
@@ -26,9 +24,6 @@ function yamlPlugin() {
 export default defineConfig({
   plugins: [
     vue(),
-    VueI18nPlugin({
-      include: [resolve(dirname(fileURLToPath(import.meta.url)), './src/locales/*.js')],
-    }),
     yamlPlugin(),
   ],
   resolve: {
@@ -40,6 +35,11 @@ export default defineConfig({
     environment: 'jsdom',
     exclude: ['tests/e2e/**', 'node_modules/**'],
     setupFiles: ['./src/__tests__/setup.ts'],
+  },
+  build: {
+    rolldownOptions: {
+      checks: { pluginTimings: false },
+    },
   },
   optimizeDeps: {
     exclude: ['vue-i18n'],

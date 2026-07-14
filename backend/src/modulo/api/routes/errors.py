@@ -7,7 +7,7 @@ import logging
 import time as _time
 import uuid
 from datetime import UTC, datetime, timedelta
-from typing import Any, ClassVar
+from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from sqlalchemy import select
@@ -25,8 +25,8 @@ from modulo.api.models.error import (
     ErrorListResponse,
     SessionKeyResponse,
 )
-from modulo.auth.dependencies import get_current_user
-from modulo.auth.jwt import AuthenticatedPrincipal
+from modulo.auth.dependencies import get_current_tenant_user
+from modulo.auth.jwt import TenantPrincipal
 from modulo.core.error_tracking import ErrorIngestionService, SessionKeyStore
 from modulo.db.crud.error_tracking import (
     count_error_events_by_group,
@@ -90,7 +90,7 @@ def _get_key_store(settings: Settings | None = None) -> SessionKeyStore:
 
 @router.post("/session-key", response_model=SessionKeyResponse, status_code=status.HTTP_201_CREATED)
 async def create_session_key(
-    principal: AuthenticatedPrincipal = Depends(get_current_user),
+    principal: TenantPrincipal = Depends(get_current_tenant_user),
 ) -> dict[str, Any]:
     """Generate a per-session HMAC key for signing error ingest requests.
 
@@ -107,7 +107,7 @@ async def create_session_key(
 async def ingest_errors(
     request: Request,
     session: AsyncSession = Depends(get_db_session),
-    principal: AuthenticatedPrincipal = Depends(get_current_user),
+    principal: TenantPrincipal = Depends(get_current_tenant_user),
 ) -> dict[str, Any]:
     """Ingest one or more error events.
 
@@ -136,7 +136,7 @@ async def ingest_errors(
         data: dict[str, Any] = json.loads(raw_body)
     except json.JSONDecodeError as exc:
         raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail="Invalid JSON body",
         ) from exc
 
@@ -144,7 +144,7 @@ async def ingest_errors(
         ingest_request = ErrorIngestRequest(**data)
     except Exception as exc:
         raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail=str(exc),
         ) from exc
 
@@ -203,7 +203,7 @@ async def ingest_errors_public(
     raw_body = await request.body()
     if len(raw_body) > 10000:
         raise HTTPException(
-            status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+            status_code=status.HTTP_413_CONTENT_TOO_LARGE,
             detail="Request body exceeds 10,000 bytes",
         )
 
@@ -223,7 +223,7 @@ async def ingest_errors_public(
         data: dict[str, Any] = json.loads(raw_body)
     except json.JSONDecodeError as exc:
         raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail="Invalid JSON body",
         ) from exc
 
@@ -231,7 +231,7 @@ async def ingest_errors_public(
         ingest_request = ErrorIngestRequest(**data)
     except Exception as exc:
         raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail=str(exc),
         ) from exc
 
@@ -343,7 +343,7 @@ async def list_error_groups(
     limit: int = Query(20, ge=1, le=100),
     offset: int = Query(0, ge=0),
     session: AsyncSession = Depends(get_db_session),
-    principal: AuthenticatedPrincipal = Depends(get_current_user),
+    principal: TenantPrincipal = Depends(get_current_tenant_user),
 ) -> dict[str, Any]:
     org_id = principal.organisation_id
     if org_id is None:
@@ -374,7 +374,7 @@ async def list_error_groups(
             )
 
             sample_ids = [g.sample_event_id for g in groups if g.sample_event_id is not None]
-            sample_events: ClassVar[dict[uuid.UUID, ErrorEvent]] = {}
+            sample_events: dict[uuid.UUID, ErrorEvent] = {}
             if sample_ids:
                 result = await session.execute(
                     select(ErrorEvent).where(
@@ -414,7 +414,7 @@ async def list_error_groups(
 async def get_error_group_detail(
     error_id: uuid.UUID,
     session: AsyncSession = Depends(get_db_session),
-    principal: AuthenticatedPrincipal = Depends(get_current_user),
+    principal: TenantPrincipal = Depends(get_current_tenant_user),
 ) -> dict[str, Any]:
     org_id = principal.organisation_id
     if org_id is None:
@@ -465,7 +465,7 @@ async def patch_error_group(
     error_id: uuid.UUID,
     req: ErrorGroupUpdate,
     session: AsyncSession = Depends(get_db_session),
-    principal: AuthenticatedPrincipal = Depends(get_current_user),
+    principal: TenantPrincipal = Depends(get_current_tenant_user),
 ) -> dict[str, Any]:
     org_id = principal.organisation_id
     if org_id is None:
@@ -525,7 +525,7 @@ async def list_error_events(
     limit: int = Query(20, ge=1, le=100),
     offset: int = Query(0, ge=0),
     session: AsyncSession = Depends(get_db_session),
-    principal: AuthenticatedPrincipal = Depends(get_current_user),
+    principal: TenantPrincipal = Depends(get_current_tenant_user),
 ) -> dict[str, Any]:
     org_id = principal.organisation_id
     if org_id is None:

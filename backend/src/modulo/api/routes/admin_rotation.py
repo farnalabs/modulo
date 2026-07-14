@@ -12,9 +12,10 @@ from sqlalchemy.exc import IntegrityError, ProgrammingError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from modulo.api.dependencies import get_db_session, get_or_create_engine, get_or_create_session_factory
-from modulo.auth.dependencies import get_current_user
-from modulo.auth.jwt import AuthenticatedPrincipal
+from modulo.auth.dependencies import get_current_tenant_user
+from modulo.auth.jwt import TenantPrincipal
 from modulo.core.audit_logger import append_audit_event
+from modulo.core.fernet_rotation import rotate_all_encrypted_data
 from modulo.settings import Settings, get_settings
 
 _MIN_KEY_LEN = 32
@@ -52,7 +53,7 @@ class RotationStatusResponse(BaseModel):
 def _validate_fernet_key(key: str, label: str) -> None:
     if len(key.encode()) < _MIN_KEY_LEN:
         raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail=f"{label} must be at least {_MIN_KEY_LEN} bytes; got {len(key.encode())}",
         )
 
@@ -63,7 +64,7 @@ def _validate_fernet_key(key: str, label: str) -> None:
 @router.post("/rotate-key", response_model=RotateKeyResponse, status_code=status.HTTP_202_ACCEPTED)
 async def rotate_key(
     req: RotateKeyRequest,
-    current_user: AuthenticatedPrincipal = Depends(get_current_user),
+    current_user: TenantPrincipal = Depends(get_current_tenant_user),
     session: AsyncSession = Depends(get_db_session),
     settings: Settings = Depends(get_settings),
 ) -> RotateKeyResponse:
@@ -151,7 +152,7 @@ async def rotate_key(
 
 @router.get("/status", response_model=RotationStatusResponse)
 async def rotation_status(
-    current_user: AuthenticatedPrincipal = Depends(get_current_user),
+    current_user: TenantPrincipal = Depends(get_current_tenant_user),
 ) -> RotationStatusResponse:
     """Return the current rotation state."""
     try:
@@ -194,8 +195,6 @@ async def _run_rotation_background(
 
     try:
         async with factory() as session, session.begin():
-            from modulo.core.fernet_rotation import rotate_all_encrypted_data
-
             result = await rotate_all_encrypted_data(session, new_key, old_key)
 
             # Log completion inside the transaction so it gets committed

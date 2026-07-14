@@ -9,9 +9,10 @@ if test isolation is needed.
 
 import logging
 from collections.abc import AsyncGenerator
-from typing import Any
+from typing import Any, cast
 
 from fastapi import Depends, HTTPException, status
+from fastapi.params import Depends as DependsParameter
 from sqlalchemy.exc import ProgrammingError
 from sqlalchemy.ext.asyncio import (
     AsyncEngine,
@@ -29,7 +30,7 @@ from modulo.settings import Settings, get_settings
 logger = logging.getLogger(__name__)
 
 
-def require_feature(feature_name: str):
+def require_feature(feature_name: str) -> DependsParameter:
     """FastAPI dependency factory — blocks access if the named feature is not enabled on the current plan.
 
     Returns 402 Payment Required when the feature is unavailable.
@@ -37,7 +38,7 @@ def require_feature(feature_name: str):
 
     .. code-block:: python
 
-       _: None = require_feature("sso")           # route parameter
+       _: object = require_feature("sso")           # route parameter
        dependencies=[require_feature("team_rbac")]  # decorator
     """
 
@@ -49,21 +50,14 @@ def require_feature(feature_name: str):
                 instance=feature_name,
             )
 
-    return Depends(_check)
+    return cast(DependsParameter, Depends(_check))
 
 
 def pg_connection_string(database_url: str) -> str:
-    """Strip SQLAlchemy+asyncpg prefix to get a psycopg-compatible URL.
-
-    Ensures ``sslmode=require`` is present for Fly.io Postgres connections
-    (the internal wireguard link sometimes drops non-SSL connections).
-    """
-    result = database_url.replace("postgresql+asyncpg://", "postgresql://").replace(
+    """Strip SQLAlchemy+asyncpg prefix to get a psycopg-compatible URL."""
+    return database_url.replace("postgresql+asyncpg://", "postgresql://").replace(
         "postgresql+psycopg://", "postgresql://"
     )
-    if "sslmode" not in result:
-        result += "&sslmode=require" if "?" in result else "?sslmode=require"
-    return result
 
 
 _engine: AsyncEngine | None = None
@@ -79,12 +73,20 @@ def get_or_create_engine(settings: Settings) -> AsyncEngine:
     """
     global _engine
     if _engine is None:
+        connect_args: dict[str, Any] = {"timeout": 10}
+        db_type = settings.modulo_db.lower()
+
+        # asyncpg defaults to "prefer" SSL which causes ConnectionResetError
+        # on Fly Postgres private networks (no TLS listener). Explicitly
+        # disable SSL to match bootstrap_db.py's ssl=False pattern.
+        if db_type == "postgres":
+            connect_args["ssl"] = False
+
         kw: dict[str, Any] = {
             "url": settings.database_url,
             "pool_pre_ping": True,
-            "connect_args": {"timeout": 10, "ssl": "disable"},
+            "connect_args": connect_args,
         }
-        db_type = settings.modulo_db.lower()
         if db_type != "sqlite":
             kw["pool_size"] = 20
             kw["max_overflow"] = 10

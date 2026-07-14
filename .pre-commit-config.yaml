@@ -33,21 +33,34 @@ repos:
         language: system
         files: ^docs/product-map/
         pass_filenames: false
+      - id: validate-enforcement-gates
+        name: validate enforcement gates
+        entry: powershell -NoProfile -File tools/validate-enforcement-gates.ps1
+        language: system
+        files: ^(\.github/workflows/ci\.yml|AGENTS\.md)$
+        pass_filenames: false
       - id: pre-commit-checks
         name: pre-commit checks (Lessons Learned)
         entry: powershell -NoProfile -File tools/run-pre-commit-checks.ps1
         language: system
         files: \.(vue|ts|py|ps1)$
         pass_filenames: false
+      - id: pester
+        name: Pester 5 PowerShell tests
+        entry: powershell -NoProfile -File tools/run-pester-tests.ps1
+        language: system
+        files: ^tools/.*\.ps1$
+        pass_filenames: false
+        stages: [pre-commit, manual]
       - id: check-migration-heads
         name: check migration number/revision collisions
-        entry: powershell -NoProfile -File ..\devtools\harness\tools\check-migration-heads.ps1
+        entry: powershell -NoProfile -File tools/run-check-migration-heads.ps1
         language: system
         files: ^backend/src/modulo/db/migrations/versions/.*\.py$
         pass_filenames: false
       - id: semgrep
         name: semgrep
-        entry: bash -c 'cd backend && uv run semgrep --config=../.semgrep/ --error src/'
+        entry: uv run --project backend --no-sync semgrep scan --config=.semgrep/ --error --baseline-commit=HEAD backend/src/
         language: system
         files: ^backend/src/
         pass_filenames: false
@@ -76,7 +89,7 @@ repos:
       - id: pip-audit
         name: pip-audit (backend)
         args:
-          - --project=backend/
+          - backend/
         files: ^backend/(pyproject\.toml|uv\.lock)$
         pass_filenames: false
         stages: [manual]
@@ -85,7 +98,7 @@ repos:
     hooks:
       - id: import-linter
         name: import-linter
-        entry: bash -c 'cd backend && uv run lint-imports'
+        entry: uv --directory backend run lint-imports
         language: system
         files: ^backend/src/
         pass_filenames: false

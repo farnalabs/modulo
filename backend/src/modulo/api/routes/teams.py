@@ -2,7 +2,6 @@
 
 import logging
 import uuid
-from typing import ClassVar
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, Field, field_validator
@@ -10,8 +9,8 @@ from sqlalchemy.exc import IntegrityError, ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.api.dependencies import get_db_session, require_feature
-from modulo.auth.dependencies import get_current_user
-from modulo.auth.jwt import AuthenticatedPrincipal
+from modulo.auth.dependencies import get_current_tenant_user
+from modulo.auth.jwt import TenantPrincipal
 from modulo.auth.team_rbac import ORG_ROLE_HIERARCHY, TEAM_ROLE_HIERARCHY
 from modulo.db.crud.team import (
     create_team,
@@ -107,7 +106,7 @@ class MembershipListResponse(BaseModel):
     page_size: int
 
 
-def _require_admin(principal: AuthenticatedPrincipal) -> None:
+def _require_admin(principal: TenantPrincipal) -> None:
     if ORG_ROLE_HIERARCHY.get(principal.org_role, -1) < ORG_ROLE_HIERARCHY["admin"]:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
@@ -119,7 +118,7 @@ def _require_admin(principal: AuthenticatedPrincipal) -> None:
 async def list_teams_endpoint(
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
-    current_user: AuthenticatedPrincipal = Depends(get_current_user),
+    current_user: TenantPrincipal = Depends(get_current_tenant_user),
     session: AsyncSession = Depends(get_db_session),
 ) -> TeamListResponse:
     try:
@@ -169,7 +168,7 @@ async def list_teams_endpoint(
 @router.post("", response_model=TeamResponse, status_code=status.HTTP_201_CREATED)
 async def create_team_endpoint(
     req: CreateTeamRequest,
-    current_user: AuthenticatedPrincipal = Depends(get_current_user),
+    current_user: TenantPrincipal = Depends(get_current_tenant_user),
     session: AsyncSession = Depends(get_db_session),
 ) -> TeamResponse:
     _require_admin(current_user)
@@ -258,7 +257,7 @@ async def create_team_endpoint(
 @router.get("/{team_id}", response_model=TeamResponse)
 async def get_team_endpoint(
     team_id: uuid.UUID,
-    current_user: AuthenticatedPrincipal = Depends(get_current_user),
+    current_user: TenantPrincipal = Depends(get_current_tenant_user),
     session: AsyncSession = Depends(get_db_session),
 ) -> TeamResponse:
     try:
@@ -311,7 +310,7 @@ async def get_team_endpoint(
 async def update_team_endpoint(
     team_id: uuid.UUID,
     req: UpdateTeamRequest,
-    current_user: AuthenticatedPrincipal = Depends(get_current_user),
+    current_user: TenantPrincipal = Depends(get_current_tenant_user),
     session: AsyncSession = Depends(get_db_session),
 ) -> TeamResponse:
     _require_admin(current_user)
@@ -406,7 +405,7 @@ async def update_team_endpoint(
 @router.delete("/{team_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_team_endpoint(
     team_id: uuid.UUID,
-    current_user: AuthenticatedPrincipal = Depends(get_current_user),
+    current_user: TenantPrincipal = Depends(get_current_tenant_user),
     session: AsyncSession = Depends(get_db_session),
 ) -> None:
     _require_admin(current_user)
@@ -424,7 +423,7 @@ async def delete_team_endpoint(
             from modulo.db.models.pipeline import Pipeline
             from modulo.db.models.stage import Stage
 
-            resource_checks: ClassVar[list[tuple[str, int]]] = []
+            resource_checks: list[tuple[str, int]] = []
             for model_cls, label in [
                 (Pipeline, "pipeline"),
                 (Stage, "stage"),
@@ -434,7 +433,9 @@ async def delete_team_endpoint(
             ]:
                 count = (
                     await session.execute(
-                        select(func.count()).select_from(model_cls).where(model_cls.owner_team_id == team_id)
+                        select(func.count())
+                        .select_from(model_cls)
+                        .where(model_cls.__table__.c.owner_team_id == team_id)
                     )
                 ).scalar() or 0
                 if count > 0:
@@ -516,7 +517,7 @@ async def list_members_endpoint(
     team_id: uuid.UUID,
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
-    current_user: AuthenticatedPrincipal = Depends(get_current_user),
+    current_user: TenantPrincipal = Depends(get_current_tenant_user),
     session: AsyncSession = Depends(get_db_session),
 ) -> MembershipListResponse:
     try:
@@ -582,7 +583,7 @@ async def list_members_endpoint(
 async def add_member_endpoint(
     team_id: uuid.UUID,
     req: AddMemberRequest,
-    current_user: AuthenticatedPrincipal = Depends(get_current_user),
+    current_user: TenantPrincipal = Depends(get_current_tenant_user),
     session: AsyncSession = Depends(get_db_session),
 ) -> MembershipResponse:
     user_id = uuid.UUID(req.user_id)
@@ -610,7 +611,7 @@ async def add_member_endpoint(
                     )
                 if TEAM_ROLE_HIERARCHY.get(req.role, -1) > TEAM_ROLE_HIERARCHY.get(caller_membership.role, -1):
                     raise HTTPException(
-                        status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                        status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
                         detail=f"Cannot grant role '{req.role}' above your own team role '{caller_membership.role}'",
                     )
 
@@ -621,7 +622,7 @@ async def add_member_endpoint(
 
             if TEAM_ROLE_HIERARCHY.get(req.role, -1) > ORG_ROLE_HIERARCHY.get(target_membership.role, -1):
                 raise HTTPException(
-                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                    status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
                     detail=f"Team role '{req.role}' exceeds user's org role '{target_membership.role}'",
                 )
 
@@ -677,7 +678,7 @@ async def add_member_endpoint(
 async def remove_member_endpoint(
     team_id: uuid.UUID,
     membership_id: uuid.UUID,
-    current_user: AuthenticatedPrincipal = Depends(get_current_user),
+    current_user: TenantPrincipal = Depends(get_current_tenant_user),
     session: AsyncSession = Depends(get_db_session),
 ) -> None:
     try:
@@ -746,7 +747,7 @@ async def change_member_role_endpoint(
     team_id: uuid.UUID,
     membership_id: uuid.UUID,
     req: ChangeMemberRoleRequest,
-    current_user: AuthenticatedPrincipal = Depends(get_current_user),
+    current_user: TenantPrincipal = Depends(get_current_tenant_user),
     session: AsyncSession = Depends(get_db_session),
 ) -> MembershipResponse:
     try:
@@ -768,7 +769,7 @@ async def change_member_role_endpoint(
                     )
                 if TEAM_ROLE_HIERARCHY.get(req.role, -1) > TEAM_ROLE_HIERARCHY.get(caller_membership.role, -1):
                     raise HTTPException(
-                        status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                        status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
                         detail=f"Cannot grant role '{req.role}' above your own team role '{caller_membership.role}'",
                     )
 

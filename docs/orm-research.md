@@ -26,18 +26,18 @@
 | Driver | MariaDB compatible? | Status |
 |---|---|---|
 | **aiomysql** | Partial — `aiomysql` is technically a MySQL driver. It works with MariaDB if you stick to MySQL-compatible features. **Not officially tested or supported** by the aiomysql project for MariaDB. |
-| **asyncmy** | Same situation as aiomysql — built for MySQL, may work with MariaDB in simple cases. |
+| **asyncmy** | Rejected: GHSA-qhqw-rrw9-25rm affects every released version through 0.2.11 with no patched release. |
 | **asyncpg** | PostgreSQL only. No relation to MariaDB. |
 | **aiosqlite** | SQLite only. |
 
-**Key issues with aiomysql/asyncmy on MariaDB:**
+**Key issues with aiomysql on MariaDB:**
 - Character set handling differs (utf8mb4 vs utf8)
 - `information_schema` queries can return different results
 - JSON column type handling differs
 - UUID type support is absent in both MySQL and MariaDB (they have no native UUID column type — you store as CHAR(32/36) or BINARY(16))
-- MariaDB 10.7+ has a native `UUID` data type, but `aiomysql`/`asyncmy` don't know about it
+- MariaDB 10.7+ has a native `UUID` data type, but `aiomysql` doesn't know about it
 
-**Verdict:** If you need async MariaDB, you are in uncharted territory. SQLAlchemy 2.0's async extension (`create_async_engine`) supports `aiomysql` and `asyncmy` as drivers, but neither is tested against MariaDB. Expect subtle breakage with JSON, UUID, and connection pooling.
+**Verdict:** If you need async MariaDB, you are in uncharted territory. SQLAlchemy 2.0's async extension (`create_async_engine`) supports `aiomysql`, but it is not tested against MariaDB. `asyncmy` is excluded because it has no release patched for GHSA-qhqw-rrw9-25rm. Expect subtle breakage with JSON, UUID, and connection pooling.
 
 ### Can you use the same models across asyncpg, aiomysql, aiosqlite with just a connection string change?
 
@@ -91,7 +91,7 @@ engine = create_async_engine("mysql+aiomysql://user:pass@host/db")
 
 | Feature | PostgreSQL | MySQL | MariaDB | SQLite |
 |---|---|---|---|---|
-| **Async driver** | asyncpg (excellent) | aiomysql/asyncmy (stable) | aiomysql/asyncmy (untested) | aiosqlite (excellent) |
+| **Async driver** | asyncpg (excellent) | aiomysql (stable) | aiomysql (untested) | aiosqlite (excellent) |
 | **Native UUID** | Yes | No | Partial (10.7+) | No |
 | **SQLAlchemy UUID cross-backend** | Native UUID | CHAR(32) | CHAR(32) | CHAR(32)/BLOB |
 | **Native JSON** | JSONB | JSON | JSON | TEXT |
@@ -145,10 +145,10 @@ However:
 
 | ORM | Latest | Last Release | Async | Backends (Async) | Stars | Open Issues | Maintained? | UUID Cross-Backend | JSON Cross-Backend | RLS | One-Line Swap |
 |---|---|---|---|---|---|---|---|---|---|---|---|
-| **SQLAlchemy** | 2.0.51 | 15 Jun 2026 | ✅ Native | PG (asyncpg), MySQL (aiomysql/asyncmy), SQLite (aiosqlite), MSSQL (aioodbc) | 11,950 | 205 | ✅ Very active | ✅ (Uuid type) | ✅ (JSON type) | ❌ (PG only, no abstraction) | ✅ Mostly |
+| **SQLAlchemy** | 2.0.51 | 15 Jun 2026 | ✅ Native | PG (asyncpg), MySQL (aiomysql), SQLite (aiosqlite), MSSQL (aioodbc) | 11,950 | 205 | ✅ Very active | ✅ (Uuid type) | ✅ (JSON type) | ❌ (PG only, no abstraction) | ✅ Mostly |
 | **Peewee** | 4.1.0 | 2026 | ✅ Native async | PG (asyncpg), MySQL (aiomysql), SQLite (aiosqlite) | 11,984 | 0 | ✅ Active | ⚠️ (UUIDField, stored as text on non-PG) | ⚠️ (JSONField, stored as text on SQLite) | ❌ | ✅ (db proxy) |
 | **SQLModel** | 0.0.39 | 2026 | ✅ (via SA 2.0) | Same as SQLAlchemy (wraps SA) | 18,148 | 64 | ✅ Active | ✅ (via SA Uuid) | ✅ (via SA JSON) | ❌ (via SA) | ✅ (via SA) |
-| **Tortoise ORM** | 1.1.7 | 2026 | ✅ Native | PG (asyncpg), MySQL (aiomysql/asyncmy), SQLite (aiosqlite), MSSQL (asyncodbc), Oracle | 5,593 | 519 | ✅ Active | ✅ (UUIDField) | ✅ (JSONField) | ❌ | ✅ (db_url swap) |
+| **Tortoise ORM** | 1.1.7 | 2026 | ✅ Native | PG (asyncpg), MySQL (aiomysql), SQLite (aiosqlite), MSSQL (asyncodbc), Oracle | 5,593 | 519 | ✅ Active | ✅ (UUIDField) | ✅ (JSONField) | ❌ | ✅ (db_url swap) |
 | **Piccolo** | 1.34.0 | 26 May 2026 | ✅ Native | PG (asyncpg), SQLite (aiosqlite) | 1,915 | 36 | ✅ Active | ✅ (UUID column) | ✅ (JSON column) | ❌ | ⚠️ (PG only for production) |
 | **Ormar** | 0.26.0 | 2026 | ✅ (via SA + databases) | PG (asyncpg), MySQL (aiomysql), SQLite (aiosqlite) | ~600 (est) | N/A (rate-limited) | ✅ Active | ✅ (UUID field) | ✅ (JSON field) | ❌ | ✅ (via SA) |
 | **Edgy** | 0.35.10 | 2026 | ✅ (via SQLAlchemy core) | PG (asyncpg), MySQL (aiomysql), SQLite (aiosqlite), MSSQL | 434 | 3 | ✅ Active | ✅ (UUIDField) | ✅ (JSONField) | ❌ | ✅ (connection string) |
@@ -170,7 +170,7 @@ However:
 - `JSON` / `JSONB` type works cross-backend.
 - Async via `create_async_engine()` with the `[asyncio]` extra.
 - **RLS**: No built-in abstraction. You must use `Session.execute(text("SET ..."))` or PostgreSQL advisory locks manually.
-- **Gotcha**: MariaDB + aiomysql/asyncmy is unsupported territory. Use with extreme caution.
+- **Gotcha**: MariaDB + aiomysql is unsupported territory. Use with extreme caution.
 - **Alembic** for migrations — mature, well-documented.
 
 #### Peewee (4.1.0)
@@ -341,7 +341,7 @@ async with async_session() as session:
 
 1. **SQLAlchemy 2.0 is the safest bet** for multi-backend async Python ORM work. Its `Uuid` and `JSON` types are genuinely cross-backend. But async MariaDB is not officially supported.
 
-2. **Async MariaDB doesn't have a strong ecosystem.** Neither `aiomysql` nor `asyncmy` is tested against MariaDB. If MariaDB is a requirement, consider using synchronous `pymysql`/`mysqlclient` with SQLAlchemy 2.0's sync engine, or use Tortoise ORM (which lists async MySQL drivers but also doesn't specifically claim MariaDB support).
+2. **Async MariaDB doesn't have a strong ecosystem.** `aiomysql` is not tested against MariaDB, and `asyncmy` is excluded due to its unpatched SQL-injection advisory. If MariaDB is a requirement, consider using synchronous `pymysql`/`mysqlclient` with SQLAlchemy 2.0's sync engine, or use Tortoise ORM (which lists async MySQL drivers but also doesn't specifically claim MariaDB support).
 
 3. **No ORM abstracts RLS.** RLS is a PostgreSQL-only feature, and no ORM provides a cross-backend abstraction for it. You need application-level row filtering for cross-backend portability.
 

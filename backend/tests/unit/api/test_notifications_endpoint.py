@@ -16,6 +16,7 @@ from modulo.api.main import app
 from modulo.auth.dependencies import get_current_user
 from modulo.auth.jwt import AuthenticatedPrincipal
 from modulo.settings import Settings, get_settings
+from tests.unit.api.mock_session import configure_mock_session
 
 _ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
 _USER_ID = uuid.UUID("00000000-0000-0000-0000-000000000002")
@@ -48,6 +49,7 @@ def _make_mock_endpoint(**overrides: object) -> MagicMock:
 
 def _make_mock_session() -> AsyncMock:
     session = AsyncMock()
+    configure_mock_session(session)
     begin_cm = AsyncMock()
     begin_cm.__aenter__ = AsyncMock(return_value=None)
     begin_cm.__aexit__ = AsyncMock(return_value=False)
@@ -146,6 +148,42 @@ def test_create_endpoint_returns_201(client: TestClient) -> None:
     assert body["url"] == "https://hooks.example.com/notify"
     assert "secret" not in body
     assert body["events"] == ["hitl.review_required"]
+    persisted = session.add.call_args.args[0]
+    assert isinstance(persisted.events, list)
+    assert persisted.events == ["hitl.review_required"]
+
+
+@pytest.mark.parametrize(
+    ("stored_events", "expected"),
+    [
+        ([], []),
+        (["hitl.review_required", "run.failed"], ["hitl.review_required", "run.failed"]),
+        (["hitl.review_required", 1], []),
+        ("[]", []),
+        ('["hitl.review_required", "run.failed"]', ["hitl.review_required", "run.failed"]),
+        ('["hitl.review_required", 1]', []),
+    ],
+)
+def test_list_endpoints_normalizes_stored_events(
+    client: TestClient,
+    stored_events: object,
+    expected: list[str],
+) -> None:
+    ep = _make_mock_endpoint(events=stored_events, team_id=None)
+    session = _make_mock_session()
+    result_mock = MagicMock()
+    result_mock.scalars.return_value = [ep]
+    session.execute = AsyncMock(return_value=result_mock)
+
+    async def override_session() -> AsyncGenerator[AsyncMock, None]:
+        yield session
+
+    client.app.dependency_overrides[get_db_session] = override_session
+    with patch("modulo.api.routes.notifications.set_rls_org"):
+        resp = client.get("/api/v1/notifications")
+
+    assert resp.status_code == 200
+    assert resp.json()[0]["events"] == expected
 
 
 def test_create_endpoint_with_secret_encrypts_it(client: TestClient) -> None:

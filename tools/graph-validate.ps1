@@ -54,7 +54,8 @@ if($Fix){$idx=Join-Path $productMap "_index.md";$ic=Get-Content -Raw -Encoding U
 Write-Host "Manifest validation" -ForegroundColor Cyan
 $manifestValidator = Join-Path $PSScriptRoot "validate-manifest.ps1"
 if (Test-Path -LiteralPath $manifestValidator) {
-    $manifestOutput = & $manifestValidator -CI 2>&1
+    $powershellExecutable = (Get-Process -Id $PID).Path
+    $manifestOutput = & $powershellExecutable -NoProfile -File $manifestValidator -CI 2>&1
     $manifestExitCode = $LASTEXITCODE
     if ($manifestExitCode -ne 0) {
         $manifestOutput | ForEach-Object { $issues += "MANIFEST|$($_.Trim())" }
@@ -122,4 +123,4 @@ if (Test-Path -LiteralPath $manifestValidator) {
         }
     }
 
-if($issues.Count-eq 0){if(-not$CI){Write-Host "Graph is clean - $($entries.Count) entries, all refs resolve." -ForegroundColor Green};exit 0}else{if(-not$CI){Write-Host "$($issues.Count) issues found:" -ForegroundColor Red;$issues|ForEach-Object{$p=$_-split'\|';Write-Host "  [$($p[0])] $($p[1]) -> $($p[2])" -ForegroundColor Yellow}}else{$issues|ForEach-Object{Write-Host $_}};exit 1}
+if($issues.Count-eq 0){if(-not$CI){Write-Host "Graph is clean - $($entries.Count) entries, all refs resolve." -ForegroundColor Green};exit 0}else{if(-not$CI){Write-Host "$($issues.Count) issues found:" -ForegroundColor Red;$issues|ForEach-Object{$p=$_-split'\|',3;$detail=if($p.Count-gt 2){"$($p[1]) -> $($p[2])"}else{$p[1]};Write-Host "  [$($p[0])] $detail" -ForegroundColor Yellow}}else{$issues|ForEach-Object{Write-Host $_}};exit 1}

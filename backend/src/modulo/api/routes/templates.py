@@ -3,7 +3,7 @@
 import logging
 import uuid
 from datetime import datetime
-from typing import Any, ClassVar
+from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, Field
@@ -11,8 +11,8 @@ from sqlalchemy.exc import IntegrityError, ProgrammingError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.api.dependencies import get_db_session
-from modulo.auth.dependencies import get_current_user
-from modulo.auth.jwt import AuthenticatedPrincipal
+from modulo.auth.dependencies import get_current_tenant_user
+from modulo.auth.jwt import TenantPrincipal
 from modulo.db.crud.pipeline import create_pipeline
 from modulo.db.crud.template import (
     _agent_count_from_content,
@@ -78,7 +78,7 @@ async def list_templates_endpoint(
     category: str | None = None,
     search: str | None = None,
     session: AsyncSession = Depends(get_db_session),
-    principal: AuthenticatedPrincipal = Depends(get_current_user),
+    principal: TenantPrincipal = Depends(get_current_tenant_user),
 ) -> TemplateListResponse:
     try:
         async with session.begin():
@@ -121,7 +121,7 @@ async def list_templates_endpoint(
 async def create_pipeline_from_template_endpoint(
     template_id: uuid.UUID,
     session: AsyncSession = Depends(get_db_session),
-    principal: AuthenticatedPrincipal = Depends(get_current_user),
+    principal: TenantPrincipal = Depends(get_current_tenant_user),
 ) -> FromTemplateResponse:
     try:
         async with session.begin():
@@ -138,8 +138,8 @@ async def create_pipeline_from_template_endpoint(
         graph_nodes: list[dict[str, Any]] = content.get("graph_nodes", [])
         edges: list[dict[str, Any]] = content.get("edges", [])
 
-        agent_ids: ClassVar[dict[int, uuid.UUID]] = {}
-        created_agents: ClassVar[list[dict[str, Any]]] = []
+        agent_ids: dict[int, uuid.UUID] = {}
+        created_agents: list[dict[str, Any]] = []
 
         async with session.begin():
             await set_rls_org(session, principal.organisation_id)
@@ -163,7 +163,7 @@ async def create_pipeline_from_template_endpoint(
                 description=template.description or f"Created from template: {template.name}",
             )
 
-            resolved_nodes: ClassVar[list[dict[str, Any]]] = []
+            resolved_nodes: list[dict[str, Any]] = []
             for node in graph_nodes:
                 agent_idx = node.get("agent_index", -1)
                 resolved_id_str = str(uuid.uuid4())
@@ -192,12 +192,12 @@ async def create_pipeline_from_template_endpoint(
 
             from modulo.db.models.pipeline_edge import PipelineEdge
 
-            persisted_edges: ClassVar[list[PipelineEdge]] = []
-            node_id_by_label: ClassVar[dict[str, str]] = {}
+            persisted_edges: list[PipelineEdge] = []
+            node_id_by_label: dict[str, str] = {}
             for n in resolved_nodes:
                 node_id_by_label[n["label"]] = n["id"]
 
-            source_map: ClassVar[dict[str, str]] = {}
+            source_map: dict[str, str] = {}
             for i, n in enumerate(graph_nodes):
                 source_map[n.get("id", str(i))] = resolved_nodes[i]["id"]
 

@@ -816,6 +816,11 @@ Left-to-right kanban of user-defined Stages. Each card: name, active run count, 
 
 **Stage board controls**: search by pipeline name, filter by status (`running`, `awaiting_human`, `failed`, `idle`), sort by last run (default) / name / status. Filter by team added in v1 when team management ships. The `awaiting_human` filter is surfaced prominently — time-sensitive items should be easy to reach.
 
+#### Pipeline Folders
+The pipeline library supports organisation-scoped, nested folders for grouping pipelines. Users can create, rename, reorder, and delete folders, filter the pipeline list by folder, and move a pipeline into a folder or back to the unfiled list. Folder access uses the same organisation RLS context as pipeline access.
+
+Deleting a folder does not delete pipelines: pipelines directly assigned to it become unfiled, and direct child folders become top-level folders. Folder ordering is represented by a non-negative `sort_order`; names are required and limited to 255 characters. The folder API returns `501 Not Implemented` when the required database migration has not been applied.
+
 #### Agent Picker
 Adding a node to the pipeline canvas opens a slide-out agent picker panel: searchable by name and tag; shows agent description, input schema name, output schema name, and last-modified date; lists org agents and accessible library agents in separate tabs; "Add to pipeline" closes the panel and places the node. Schema compatibility is indicated: if the selected agent's input schema is incompatible with the previous node's output schema, a warning badge is shown (does not block selection — user may resolve in agent config).
 
@@ -900,6 +905,8 @@ Errors shown inline on canvas with user-readable messages.
 - `cron` (v1): `{schedule: cron-string, timezone: IANA-tz, input_template: JSON-object}`
 - `polling` (v1): `{connector_instance_id, poll_query, condition_expression, poll_interval_seconds}`
 - `agent_signal` (v1): `{source_pipeline_id, source_node_id, signal_schema_id}`
+
+Cron expressions are evaluated as wall-clock schedules in their named IANA timezone, while `next_fire_at` is persisted in UTC. Across daylight-saving transitions, a nonexistent local time advances to the first valid instant and an ambiguous local time uses its first occurrence, matching `croniter` with `zoneinfo`.
 
 **Cardinality**: one trigger belongs to exactly one pipeline. One pipeline may have multiple triggers. When a trigger is deleted: in-flight runs continue against their snapshot to completion; no new runs initiated. Trigger record cascade-deleted; run records retained.
 
@@ -2426,6 +2433,8 @@ The SSE stream handler runs a `while True` loop:
 6. Feed results into the next LLM call (loop continues)
 7. When LLM emits no tool calls, yield `done`
 
+`mcp_api_key` is optional and is required only for MCP calls. If a turn mixes UI and MCP calls without an MCP credential, each MCP call produces a failed `tool_call` result while manifest and browser UI calls continue; all results are fed back to the LLM on the next turn. A missing MCP credential does not abort the SSE stream.
+
 This allows multi-step workflows in a single stream: "Let me check the current config… [extract] → I see X is not set. Let me update it. [navigate → click → fill → click → go_back] → Done!"
 
 #### 8.27.7 Component Support
@@ -3050,7 +3059,7 @@ Telemetry is opt-in and disabled by default. The OTel bridge (`setup_otel`) is c
 | Encryption | cryptography (Fernet) | Connector credentials + model backend credentials |
 | API keys | SHA-256 hash storage | `mk_<lookup_prefix>_<secret>` format |
 | Task queue | Celery + Redis | Optional alpha; required for v1 cron/polling triggers |
-| Auth (v1+) | python-jose (JWT), passlib (bcrypt), python-saml, authlib (OIDC) | |
+| Auth (v1+) | PyJWT[crypto] (JWT/JWK), passlib (bcrypt), python-saml, authlib (OIDC) | |
 
 ### Frontend
 | Layer | Technology | Notes |

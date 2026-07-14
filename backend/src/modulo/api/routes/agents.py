@@ -15,8 +15,8 @@ from sqlalchemy.exc import IntegrityError, ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.api.dependencies import get_db_session
-from modulo.auth.dependencies import get_current_user
-from modulo.auth.jwt import AuthenticatedPrincipal
+from modulo.auth.dependencies import get_current_tenant_user
+from modulo.auth.jwt import TenantPrincipal
 from modulo.core.prompt_optimizer import OptimizationFailedError, PromptOptimizer
 from modulo.core.secrets_backend import create_secrets_backend
 from modulo.db.crud.agent import (
@@ -231,7 +231,7 @@ async def list_agents_endpoint(
     page: int = Query(default=1, ge=1),
     page_size: int = Query(default=20, ge=1, le=100),
     session: AsyncSession = Depends(get_db_session),
-    principal: AuthenticatedPrincipal = Depends(get_current_user),
+    principal: TenantPrincipal = Depends(get_current_tenant_user),
 ) -> AgentListResponse:
     try:
         async with session.begin():
@@ -265,7 +265,7 @@ async def list_agents_endpoint(
 async def create_agent_endpoint(
     req: AgentCreate,
     session: AsyncSession = Depends(get_db_session),
-    principal: AuthenticatedPrincipal = Depends(get_current_user),
+    principal: TenantPrincipal = Depends(get_current_tenant_user),
 ) -> AgentResponse:
     _validate_generic_agent(
         name=req.name,
@@ -303,7 +303,7 @@ async def create_agent_endpoint(
             )
     except IntegrityError:
         raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail="Referenced schema version or model backend not found. Verify the IDs are correct.",
         ) from None
     except ProgrammingError:
@@ -329,7 +329,7 @@ async def create_agent_endpoint(
 async def get_agent_endpoint(
     agent_id: uuid.UUID,
     session: AsyncSession = Depends(get_db_session),
-    principal: AuthenticatedPrincipal = Depends(get_current_user),
+    principal: TenantPrincipal = Depends(get_current_tenant_user),
 ) -> AgentResponse:
     try:
         async with session.begin():
@@ -361,7 +361,7 @@ async def update_agent_endpoint(
     agent_id: uuid.UUID,
     req: AgentUpdate,
     session: AsyncSession = Depends(get_db_session),
-    principal: AuthenticatedPrincipal = Depends(get_current_user),
+    principal: TenantPrincipal = Depends(get_current_tenant_user),
 ) -> AgentResponse:
     try:
         async with session.begin():
@@ -435,11 +435,11 @@ async def optimize_prompt(
     version: str,
     req: PromptOptimizeRequest,
     session: AsyncSession = Depends(get_db_session),
-    principal: AuthenticatedPrincipal = Depends(get_current_user),
+    principal: TenantPrincipal = Depends(get_current_tenant_user),
 ) -> PromptOptimizeResponse:
     if not req.eval_result_ids:
         raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail="At least one eval_result_id is required",
         )
 
@@ -462,9 +462,11 @@ async def optimize_prompt(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Agent not found")
 
     try:
-        eval_results, eval_defs = await get_eval_results_with_defs(
-            session, req.eval_result_ids, principal.organisation_id
-        )
+        async with session.begin():
+            await set_rls_org(session, principal.organisation_id)
+            eval_results, eval_defs = await get_eval_results_with_defs(
+                session, req.eval_result_ids, principal.organisation_id
+            )
     except ProgrammingError:
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
@@ -485,12 +487,14 @@ async def optimize_prompt(
     backend_id = req.model_backend_id or agent.model_backend_id
 
     try:
-        mb_result = await session.execute(
-            select(ModelBackend).where(
-                ModelBackend.id == backend_id,
-                ModelBackend.organisation_id == principal.organisation_id,
+        async with session.begin():
+            await set_rls_org(session, principal.organisation_id)
+            mb_result = await session.execute(
+                select(ModelBackend).where(
+                    ModelBackend.id == backend_id,
+                    ModelBackend.organisation_id == principal.organisation_id,
+                )
             )
-        )
     except ProgrammingError:
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
@@ -563,7 +567,7 @@ async def apply_optimized_prompt(
     version: str,
     req: ApplyOptimizedPromptRequest,
     session: AsyncSession = Depends(get_db_session),
-    principal: AuthenticatedPrincipal = Depends(get_current_user),
+    principal: TenantPrincipal = Depends(get_current_tenant_user),
 ) -> AgentResponse:
     try:
         async with session.begin():
@@ -607,7 +611,7 @@ async def apply_optimized_prompt(
 async def list_prompt_versions(
     agent_id: uuid.UUID,
     session: AsyncSession = Depends(get_db_session),
-    principal: AuthenticatedPrincipal = Depends(get_current_user),
+    principal: TenantPrincipal = Depends(get_current_tenant_user),
 ) -> list[PromptVersionListEntry]:
     try:
         async with session.begin():
@@ -650,7 +654,7 @@ async def get_prompt_version_endpoint(
     agent_id: uuid.UUID,
     version: str,
     session: AsyncSession = Depends(get_db_session),
-    principal: AuthenticatedPrincipal = Depends(get_current_user),
+    principal: TenantPrincipal = Depends(get_current_tenant_user),
 ) -> PromptVersionDetail:
     try:
         async with session.begin():
@@ -689,7 +693,7 @@ async def rollback_prompt(
     agent_id: uuid.UUID,
     version: str,
     session: AsyncSession = Depends(get_db_session),
-    principal: AuthenticatedPrincipal = Depends(get_current_user),
+    principal: TenantPrincipal = Depends(get_current_tenant_user),
 ) -> PromptRollbackResponse:
     try:
         async with session.begin():
@@ -732,7 +736,7 @@ async def diff_prompt_versions(
     agent_id: uuid.UUID,
     req: PromptDiffRequest,
     session: AsyncSession = Depends(get_db_session),
-    principal: AuthenticatedPrincipal = Depends(get_current_user),
+    principal: TenantPrincipal = Depends(get_current_tenant_user),
 ) -> PromptDiffResponse:
     try:
         async with session.begin():
@@ -786,7 +790,7 @@ async def diff_prompt_versions(
     lines_b = template_b.splitlines(keepends=True)
 
     differ = difflib.SequenceMatcher(None, lines_a, lines_b)
-    diff_lines: ClassVar[list[DiffLine]] = []
+    diff_lines: list[DiffLine] = []
     line_a = 1
     line_b = 1
 
@@ -859,7 +863,7 @@ async def diff_prompt_versions(
 async def delete_agent_endpoint(
     agent_id: uuid.UUID,
     session: AsyncSession = Depends(get_db_session),
-    principal: AuthenticatedPrincipal = Depends(get_current_user),
+    principal: TenantPrincipal = Depends(get_current_tenant_user),
 ) -> None:
     try:
         async with session.begin():

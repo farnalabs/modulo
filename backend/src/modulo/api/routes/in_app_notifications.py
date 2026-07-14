@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import logging
 import uuid
+from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, Field
@@ -15,8 +16,8 @@ from sqlalchemy.exc import IntegrityError, ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.api.dependencies import get_db_session
-from modulo.auth.dependencies import get_current_user
-from modulo.auth.jwt import AuthenticatedPrincipal
+from modulo.auth.dependencies import get_current_tenant_user
+from modulo.auth.jwt import TenantPrincipal
 from modulo.core.events.event_bus import get_event_bus
 from modulo.db.crud.notifications import (
     count_notifications_for_user,
@@ -103,7 +104,7 @@ def _notification_to_response(n: Notification) -> NotificationResponse:
 @router.get("/dashboard", response_model=DashboardNotificationResponse)
 async def get_dashboard(
     session: AsyncSession = Depends(get_db_session),
-    principal: AuthenticatedPrincipal = Depends(get_current_user),
+    principal: TenantPrincipal = Depends(get_current_tenant_user),
 ) -> DashboardNotificationResponse:
     try:
         async with session.begin():
@@ -144,8 +145,8 @@ async def get_dashboard(
 @router.get("/unread-count", response_model=dict)
 async def get_unread(
     session: AsyncSession = Depends(get_db_session),
-    principal: AuthenticatedPrincipal = Depends(get_current_user),
-) -> dict:
+    principal: TenantPrincipal = Depends(get_current_tenant_user),
+) -> dict[str, Any]:
     try:
         async with session.begin():
             await set_rls_org(session, principal.organisation_id)
@@ -176,13 +177,13 @@ async def get_unread(
 @router.get("", response_model=PaginatedNotificationsResponse)
 async def list_notifications(
     session: AsyncSession = Depends(get_db_session),
-    principal: AuthenticatedPrincipal = Depends(get_current_user),
+    principal: TenantPrincipal = Depends(get_current_tenant_user),
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
     level: str | None = Query(None),
     scope: str | None = Query(None),
     category: str | None = Query(None),
-    status: str | None = Query(None),
+    status_filter: str | None = Query(None, alias="status"),
 ) -> PaginatedNotificationsResponse:
     try:
         async with session.begin():
@@ -196,7 +197,7 @@ async def list_notifications(
                 level=level,
                 scope=scope,
                 category=category,
-                status_filter=status,
+                status_filter=status_filter,
                 limit=page_size,
                 offset=offset,
             )
@@ -207,7 +208,7 @@ async def list_notifications(
                 level=level,
                 scope=scope,
                 category=category,
-                status_filter=status,
+                status_filter=status_filter,
             )
     except ProgrammingError:
         raise HTTPException(
@@ -236,7 +237,7 @@ async def list_notifications(
 async def get_notification_detail(
     notification_id: uuid.UUID,
     session: AsyncSession = Depends(get_db_session),
-    principal: AuthenticatedPrincipal = Depends(get_current_user),
+    principal: TenantPrincipal = Depends(get_current_tenant_user),
 ) -> NotificationResponse:
     try:
         async with session.begin():
@@ -271,8 +272,8 @@ async def get_notification_detail(
 async def review_later_endpoint(
     notification_id: uuid.UUID,
     session: AsyncSession = Depends(get_db_session),
-    principal: AuthenticatedPrincipal = Depends(get_current_user),
-) -> dict:
+    principal: TenantPrincipal = Depends(get_current_tenant_user),
+) -> dict[str, Any]:
     try:
         async with session.begin():
             await set_rls_org(session, principal.organisation_id)
@@ -322,8 +323,8 @@ async def dismiss_endpoint(
     notification_id: uuid.UUID,
     req: DismissRequest,
     session: AsyncSession = Depends(get_db_session),
-    principal: AuthenticatedPrincipal = Depends(get_current_user),
-) -> dict:
+    principal: TenantPrincipal = Depends(get_current_tenant_user),
+) -> dict[str, Any]:
     try:
         async with session.begin():
             await set_rls_org(session, principal.organisation_id)
@@ -374,7 +375,7 @@ async def dismiss_endpoint(
 @router.get("/preferences", response_model=NotificationPreferencesResponse)
 async def get_preferences(
     session: AsyncSession = Depends(get_db_session),
-    principal: AuthenticatedPrincipal = Depends(get_current_user),
+    principal: TenantPrincipal = Depends(get_current_tenant_user),
 ) -> NotificationPreferencesResponse:
     raise HTTPException(
         status_code=status.HTTP_501_NOT_IMPLEMENTED,
@@ -386,7 +387,7 @@ async def get_preferences(
 async def update_preferences(
     req: NotificationPreferencesUpdate,
     session: AsyncSession = Depends(get_db_session),
-    principal: AuthenticatedPrincipal = Depends(get_current_user),
+    principal: TenantPrincipal = Depends(get_current_tenant_user),
 ) -> NotificationPreferencesResponse:
     raise HTTPException(
         status_code=status.HTTP_501_NOT_IMPLEMENTED,

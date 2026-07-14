@@ -114,7 +114,7 @@ class TestDbConnectivity:
             conn.execute.assert_awaited_once()
 
     @pytest.mark.asyncio
-    async def test_db_connectivity_retries_then_errors(self) -> None:
+    async def test_db_connectivity_retries_without_blocking_startup(self) -> None:
         settings = _make_settings()
         engine = MagicMock()
         conn = AsyncMock()
@@ -124,9 +124,10 @@ class TestDbConnectivity:
 
         with (
             patch("modulo.api.main.get_or_create_engine", return_value=engine) as mock_engine,
-            patch("modulo.api.main.asyncio.sleep"),
+            patch("modulo.api.main.asyncio.sleep") as mock_sleep,
         ):
-            with pytest.raises(RuntimeError, match="Database is unreachable"):
-                await _verify_db_connectivity(settings)
+            await _verify_db_connectivity(settings)
             mock_engine.assert_called_once_with(settings)
+            assert engine.connect.call_count == 3
+            assert mock_sleep.await_count == 2
             assert conn.execute.await_count == 0

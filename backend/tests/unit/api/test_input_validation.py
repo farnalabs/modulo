@@ -23,6 +23,7 @@ from modulo.api.main import app
 from modulo.auth.dependencies import get_current_user
 from modulo.auth.jwt import AuthenticatedPrincipal
 from modulo.settings import Settings, get_settings
+from tests.unit.api.mock_session import configure_mock_session
 
 _VALID_32 = "a" * 32
 _ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
@@ -44,7 +45,7 @@ def _make_settings() -> Settings:
 
 
 def _make_mock_session() -> AsyncMock:
-    session = AsyncMock()
+    session = configure_mock_session(AsyncMock())
     begin_cm = AsyncMock()
     begin_cm.__aenter__ = AsyncMock(return_value=None)
     begin_cm.__aexit__ = AsyncMock(return_value=False)
@@ -113,11 +114,14 @@ def test_pipeline_create_valid_minimal(client: TestClient) -> None:
     pipeline.description = None
     pipeline.visibility = "org"
     pipeline.owner_team_id = None
+    pipeline.folder_id = None
     pipeline.max_concurrent_runs = 5
     pipeline.lock_wait_timeout_seconds = 300
     pipeline.node_timeout_seconds = 300
     pipeline.run_context_defaults = {}
     pipeline.default_autonomy_level = "manual_approval"
+    pipeline.snapshot_count = 0
+    pipeline.archived_at = None
     pipeline.created_by = uuid.uuid4()
     pipeline.account_id = uuid.uuid4()
     pipeline.created_at = datetime(2025, 1, 1, tzinfo=UTC)

@@ -105,7 +105,7 @@ PRD §6.1 (Layered Architecture), §6.2 (SaaS-First Multi-Tenant).
 ### Migration Framework
 
 - [x] Alembic config at `backend/alembic.ini`
-- [x] `env.py` converts async URLs to sync (`+asyncpg` → `+psycopg2`, `+asyncmy` → `+pymysql`)
+- [x] `env.py` converts async URLs to sync (`+asyncpg` → `+psycopg`, `+aiomysql` → `+pymysql`)
 - [x] `env.py` supports `DATABASE_URL` env var override
 - [x] Batch mode (`render_as_batch=True`) enabled for SQLite migrations
 - [x] 69 migrations from 0001 (initial schema) through 0059 (feedback annotation)

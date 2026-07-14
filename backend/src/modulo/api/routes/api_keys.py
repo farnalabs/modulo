@@ -12,8 +12,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.api.dependencies import get_db_session
 from modulo.auth.api_key import create_api_key, list_api_keys, revoke_api_key, update_api_key
-from modulo.auth.dependencies import get_current_user
-from modulo.auth.jwt import AuthenticatedPrincipal
+from modulo.auth.dependencies import get_current_tenant_user
+from modulo.auth.jwt import TenantPrincipal
 from modulo.auth.team_rbac import ORG_ROLE_HIERARCHY
 from modulo.core.feature_flags import resolve_plan_context
 from modulo.db.rls import set_rls_org, set_rls_user_context
@@ -69,7 +69,7 @@ async def _require_team_rbac(settings: Settings, session: AsyncSession) -> None:
         )
 
 
-def _require_admin(principal: AuthenticatedPrincipal) -> None:
+def _require_admin(principal: TenantPrincipal) -> None:
     if ORG_ROLE_HIERARCHY.get(principal.org_role, -1) < ORG_ROLE_HIERARCHY["admin"]:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
@@ -81,12 +81,12 @@ def _require_admin(principal: AuthenticatedPrincipal) -> None:
 async def create_api_key_endpoint(
     req: ApiKeyCreate,
     session: AsyncSession = Depends(get_db_session),
-    principal: AuthenticatedPrincipal = Depends(get_current_user),
+    principal: TenantPrincipal = Depends(get_current_tenant_user),
     settings: Settings = Depends(get_settings),
 ) -> ApiKeyCreatedResponse:
     if req.role not in ("operator", "runner"):
         raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail="role must be 'operator' or 'runner'. admin keys are prohibited.",
         )
     team_id: uuid.UUID | None = None
@@ -148,7 +148,7 @@ async def create_api_key_endpoint(
 @router.get("", response_model=list[dict[str, Any]])
 async def list_api_keys_endpoint(
     session: AsyncSession = Depends(get_db_session),
-    principal: AuthenticatedPrincipal = Depends(get_current_user),
+    principal: TenantPrincipal = Depends(get_current_tenant_user),
 ) -> list[dict[str, Any]]:
     try:
         async with session.begin():
@@ -181,12 +181,12 @@ async def update_api_key_endpoint(
     key_id: uuid.UUID,
     req: ApiKeyUpdate,
     session: AsyncSession = Depends(get_db_session),
-    principal: AuthenticatedPrincipal = Depends(get_current_user),
+    principal: TenantPrincipal = Depends(get_current_tenant_user),
     settings: Settings = Depends(get_settings),
 ) -> dict[str, Any]:
     if req.role is not None and req.role not in ("operator", "runner"):
         raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail="role must be 'operator' or 'runner'.",
         )
     team_id: uuid.UUID | None = None
@@ -252,7 +252,7 @@ async def update_api_key_endpoint(
 async def revoke_api_key_endpoint(
     key_id: uuid.UUID,
     session: AsyncSession = Depends(get_db_session),
-    principal: AuthenticatedPrincipal = Depends(get_current_user),
+    principal: TenantPrincipal = Depends(get_current_tenant_user),
 ) -> ApiKeyRevokeResponse:
     try:
         async with session.begin():
@@ -294,7 +294,7 @@ async def revoke_api_key_endpoint(
 @router.get("/mcp-config", response_model=McpConfigResponse)
 async def mcp_config_endpoint(
     settings: Settings = Depends(get_settings),
-    _: str = Depends(get_current_user),
+    _: str = Depends(get_current_tenant_user),
 ) -> McpConfigResponse:
     """Return the MCP server URL and config snippet for Claude Desktop / Cursor."""
     try:

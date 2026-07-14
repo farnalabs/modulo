@@ -3,7 +3,7 @@
 import logging
 import uuid
 from datetime import datetime
-from typing import Any, ClassVar, Literal
+from typing import Any, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, Field
@@ -11,8 +11,8 @@ from sqlalchemy.exc import ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.api.dependencies import get_db_session
-from modulo.auth.dependencies import get_current_user
-from modulo.auth.jwt import AuthenticatedPrincipal
+from modulo.auth.dependencies import get_current_tenant_user
+from modulo.auth.jwt import TenantPrincipal
 from modulo.db.crud.composite_template import (
     create_composite_template,
     delete_composite_template,
@@ -100,7 +100,7 @@ async def list_composite_templates_endpoint(
     page: int = Query(default=1, ge=1),
     page_size: int = Query(default=20, ge=1, le=100),
     session: AsyncSession = Depends(get_db_session),
-    principal: AuthenticatedPrincipal = Depends(get_current_user),
+    principal: TenantPrincipal = Depends(get_current_tenant_user),
 ) -> CompositeTemplateListResponse:
     try:
         async with session.begin():
@@ -141,7 +141,7 @@ async def list_composite_templates_endpoint(
 async def create_composite_template_endpoint(
     req: CompositeTemplateCreate,
     session: AsyncSession = Depends(get_db_session),
-    principal: AuthenticatedPrincipal = Depends(get_current_user),
+    principal: TenantPrincipal = Depends(get_current_tenant_user),
 ) -> CompositeTemplateResponse:
     try:
         async with session.begin():
@@ -183,7 +183,7 @@ async def create_composite_template_endpoint(
 async def get_composite_template_endpoint(
     template_id: uuid.UUID,
     session: AsyncSession = Depends(get_db_session),
-    principal: AuthenticatedPrincipal = Depends(get_current_user),
+    principal: TenantPrincipal = Depends(get_current_tenant_user),
 ) -> CompositeTemplateResponse:
     try:
         async with session.begin():
@@ -217,9 +217,9 @@ async def update_composite_template_endpoint(
     template_id: uuid.UUID,
     req: CompositeTemplateUpdate,
     session: AsyncSession = Depends(get_db_session),
-    principal: AuthenticatedPrincipal = Depends(get_current_user),
+    principal: TenantPrincipal = Depends(get_current_tenant_user),
 ) -> CompositeTemplateResponse:
-    updates: ClassVar[dict[str, Any]] = {}
+    updates: dict[str, Any] = {}
     for k, v in req.model_dump(exclude_unset=True).items():
         if k == "parameter_ports_json" and v is not None:
             updates[k] = [p.model_dump() if isinstance(p, BaseModel) else p for p in v]
@@ -256,7 +256,7 @@ async def update_composite_template_endpoint(
 async def delete_composite_template_endpoint(
     template_id: uuid.UUID,
     session: AsyncSession = Depends(get_db_session),
-    principal: AuthenticatedPrincipal = Depends(get_current_user),
+    principal: TenantPrincipal = Depends(get_current_tenant_user),
 ) -> None:
     try:
         async with session.begin():
@@ -305,7 +305,7 @@ class EditorGraphUpdate(BaseModel):
 async def get_composite_editor_endpoint(
     template_id: uuid.UUID,
     session: AsyncSession = Depends(get_db_session),
-    principal: AuthenticatedPrincipal = Depends(get_current_user),
+    principal: TenantPrincipal = Depends(get_current_tenant_user),
 ) -> EditorGraphResponse:
     try:
         async with session.begin():
@@ -338,7 +338,7 @@ async def save_composite_editor_endpoint(
     template_id: uuid.UUID,
     req: EditorGraphUpdate,
     session: AsyncSession = Depends(get_db_session),
-    principal: AuthenticatedPrincipal = Depends(get_current_user),
+    principal: TenantPrincipal = Depends(get_current_tenant_user),
 ) -> EditorGraphResponse:
     try:
         async with session.begin():
@@ -403,7 +403,7 @@ class DetectParamsResponse(BaseModel):
 @router.post("/detect-params", response_model=DetectParamsResponse)
 async def detect_params_endpoint(
     req: DetectParamsRequest,
-    principal: AuthenticatedPrincipal = Depends(get_current_user),
+    principal: TenantPrincipal = Depends(get_current_tenant_user),
 ) -> DetectParamsResponse:
     """Scan sub-pipeline agent prompts for ``{{parameter.*}}`` placeholders.
 
@@ -442,7 +442,7 @@ async def publish_composite_endpoint(
     template_id: uuid.UUID,
     req: PublishRequest,
     session: AsyncSession = Depends(get_db_session),
-    principal: AuthenticatedPrincipal = Depends(get_current_user),
+    principal: TenantPrincipal = Depends(get_current_tenant_user),
 ) -> PublishResponse:
     version = req.version or "1.0.0"
     try:

@@ -1,6 +1,6 @@
 {
     "name": "modulo-frontend",
-    "version": "0.3.312",
+    "version": "0.3.321",
     "private": true,
     "scripts": {
         "generate:api": "powershell -ExecutionPolicy Bypass -File scripts/generate-api-types.ps1",
@@ -12,9 +12,10 @@
         "test:e2e:coverage": "cross-env VITE_COVERAGE=true playwright test",
         "test:all": "npm run test:unit && npm run test:e2e:smoke",
         "test:e2e:smoke": "playwright test --grep \"@smoke\"",
-        "test:unit": "vitest run src",
+        "test:mutation": "stryker run",
+        "test:unit": "vitest run src --pool=threads --maxWorkers=4",
         "preview": "vite preview",
-        "lint": "eslint \"src/**/*.{vue,ts,js}\"",
+        "lint": "eslint src --cache --cache-location .cache/eslint",
         "test:contrast": "playwright test wcag-contrast",
         "lint:fix": "npm run lint -- --fix",
         "type-check": "vue-tsc --noEmit",
@@ -46,27 +47,24 @@
     },
     "devDependencies": {
         "@axe-core/playwright": "^4.12.1",
-        "@intlify/unplugin-vue-i18n": "^6.0.8",
         "@playwright/test": "^1.61.1",
         "@rollup/plugin-yaml": "^5.0.0",
-        "@rushstack/eslint-patch": "^1.16.1",
+        "@stryker-mutator/core": "^9.6.1",
+        "@stryker-mutator/vitest-runner": "^9.6.1",
         "@types/node": "^26.1.1",
-        "@typescript-eslint/eslint-plugin": "^7.0.0",
-        "@typescript-eslint/parser": "^7.0.0",
         "@vitejs/plugin-vue": "^6.0.7",
-        "@vue/eslint-config-typescript": "^13.0.0",
+        "@vue/eslint-config-typescript": "^14.9.0",
         "@vue/test-utils": "^2.4.6",
         "autoprefixer": "^10.5.0",
         "cross-env": "^10.1.0",
-        "eslint": "^8.57.0",
-        "eslint-plugin-no-secrets": "^2.3.3",
-        "eslint-plugin-vue": "^9.24.0",
+        "eslint": "^9.39.2",
+        "eslint-plugin-vue": "^10.9.2",
         "eslint-plugin-vuejs-accessibility": "^2.5.0",
         "istanbul-lib-coverage": "^3.2.2",
         "istanbul-lib-instrument": "^6.0.3",
         "istanbul-lib-report": "^3.0.1",
         "istanbul-reports": "^3.2.0",
-        "jsdom": "^26.1.0",
+        "jsdom": "^29.1.1",
         "magic-string": "^0.30.21",
         "openapi-fetch": "^0.17.0",
         "openapi-typescript": "^7.13.0",
@@ -81,6 +79,7 @@
         "vue-tsc": "^2.0.0"
     },
     "overrides": {
-        "esbuild": ">=0.28.1"
+        "esbuild": ">=0.28.1",
+        "qs": ">=6.15.3"
     }
 }

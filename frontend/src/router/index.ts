@@ -3,6 +3,7 @@ import { formatApiError } from '../lib/api/formatError'
 import { createRouter, createWebHistory } from 'vue-router'
 import { getAccessToken } from '../lib/api/client'
 import manifest from '@/manifest.yaml'
+import LoginView from '../views/LoginView.vue'
 
 declare module 'vue-router' {
   interface RouteMeta {
@@ -47,7 +48,6 @@ function decodeJwtPayload(token: string | null): Record<string, unknown> | null 
 }
 
 const DashboardView = () => import('../views/DashboardView.vue')
-const LoginView = () => import('../views/LoginView.vue')
 const LibraryView = () => import('../views/LibraryView.vue')
 const LibraryPipelineWizard = () => import('../views/LibraryPipelineWizard.vue')
 const SettingsObservabilityView = () => import('../views/SettingsObservabilityView.vue')
@@ -64,6 +64,7 @@ const EvalEditorView = () => import('../views/EvalEditorView.vue')
 const EvalProposalsQueueView = () => import('../views/EvalProposalsQueueView.vue')
 const VariantCompareView = () => import('../views/VariantCompareView.vue')
 const ABTestModelsView = () => import('../views/ABTestModelsView.vue')
+const RunsListView = () => import('../views/RunsListView.vue')
 const RunDetailView = () => import('../views/RunDetailView.vue')
 const AgentOutputDiffView = () => import('../views/AgentOutputDiffView.vue')
 const AdminAuditView = () => import('../views/AdminAuditView.vue')
@@ -257,14 +258,19 @@ const router = createRouter({
       component: ABTestModelsView,
     },
     {
-      path: '/runs/:id',
-      name: 'run-detail',
-      component: RunDetailView,
+      path: '/runs',
+      name: 'runs-list',
+      component: RunsListView,
     },
     {
       path: '/runs/diff',
       name: 'runs-diff',
       component: AgentOutputDiffView,
+    },
+    {
+      path: '/runs/:id',
+      name: 'run-detail',
+      component: RunDetailView,
     },
     {
       path: '/admin',

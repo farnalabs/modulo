@@ -10,7 +10,7 @@ import logging
 import re
 import uuid
 from datetime import datetime
-from typing import Any, ClassVar, Literal
+from typing import Any, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, Field, ValidationError, model_validator
@@ -20,8 +20,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.api.db_error_handling import handle_db_errors
 from modulo.api.dependencies import get_db_session
-from modulo.auth.dependencies import get_current_user
-from modulo.auth.jwt import AuthenticatedPrincipal
+from modulo.auth.dependencies import get_current_tenant_user
+from modulo.auth.jwt import TenantPrincipal
 from modulo.core.audit_logger import append_audit_event
 from modulo.core.graph_validator import GraphValidator
 from modulo.core.reports.quality_report import (
@@ -162,8 +162,8 @@ class PipelineGraphNode(BaseModel):
     autonomy_recommendation: str | None = None
     composite_ref: uuid.UUID | None = None
     composite_parameter_values: dict[str, Any] | None = None
-    composite_input_mapping: dict | None = None
-    composite_output_mapping: dict | None = None
+    composite_input_mapping: dict[str, Any] | None = None
+    composite_output_mapping: dict[str, Any] | None = None
 
     @model_validator(mode="after")
     def validate_node_type(self) -> "PipelineGraphNode":
@@ -294,7 +294,7 @@ def _graph_response(
     except ValidationError:
         _log.exception("Pipeline graph data validation failed")
         raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail="Pipeline graph contains invalid data. This may be caused by a schema migration.",
         ) from None
 
@@ -324,7 +324,7 @@ async def _resolve_graph_references(
     missing_agent_ids = sorted(agent_ids - agents_by_id.keys(), key=str)
     if missing_agent_ids:
         raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail=f"Unknown agent IDs for this organisation: {missing_agent_ids}",
         )
 
@@ -348,12 +348,12 @@ async def _resolve_graph_references(
     missing_schema_ids = sorted(manual_schema_ids - existing_schema_ids, key=str)
     if missing_schema_ids:
         raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail=f"Unknown manual output schema IDs for this organisation: {missing_schema_ids}",
         )
 
-    schema_pins: ClassVar[list[dict[str, Any]]] = []
-    model_backend_pins: ClassVar[list[dict[str, Any]]] = []
+    schema_pins: list[dict[str, Any]] = []
+    model_backend_pins: list[dict[str, Any]] = []
     for node in nodes:
         if node.agent_id is not None:
             agent = agents_by_id[node.agent_id]
@@ -397,7 +397,7 @@ async def list_pipelines_endpoint(
     include_archived: bool = Query(default=False),
     folder_id: uuid.UUID | None = Query(default=None),
     session: AsyncSession = Depends(get_db_session),
-    principal: AuthenticatedPrincipal = Depends(get_current_user),
+    principal: TenantPrincipal = Depends(get_current_tenant_user),
 ) -> PipelineListResponse:
     try:
         async with session.begin():
@@ -433,7 +433,7 @@ async def list_pipelines_endpoint(
 async def create_pipeline_endpoint(
     req: PipelineCreate,
     session: AsyncSession = Depends(get_db_session),
-    principal: AuthenticatedPrincipal = Depends(get_current_user),
+    principal: TenantPrincipal = Depends(get_current_tenant_user),
 ) -> PipelineResponse:
     try:
         async with session.begin():
@@ -469,7 +469,7 @@ async def create_pipeline_endpoint(
 async def get_pipeline_endpoint(
     pipeline_id: uuid.UUID,
     session: AsyncSession = Depends(get_db_session),
-    principal: AuthenticatedPrincipal = Depends(get_current_user),
+    principal: TenantPrincipal = Depends(get_current_tenant_user),
 ) -> PipelineResponse:
     try:
         async with session.begin():
@@ -494,7 +494,7 @@ async def get_pipeline_endpoint(
 async def get_pipeline_graph_endpoint(
     pipeline_id: uuid.UUID,
     session: AsyncSession = Depends(get_db_session),
-    principal: AuthenticatedPrincipal = Depends(get_current_user),
+    principal: TenantPrincipal = Depends(get_current_tenant_user),
 ) -> PipelineGraphResponse:
     try:
         async with session.begin():
@@ -521,7 +521,7 @@ async def replace_pipeline_graph_endpoint(
     pipeline_id: uuid.UUID,
     req: PipelineGraphUpdate,
     session: AsyncSession = Depends(get_db_session),
-    principal: AuthenticatedPrincipal = Depends(get_current_user),
+    principal: TenantPrincipal = Depends(get_current_tenant_user),
 ) -> PipelineGraphResponse:
     node_data = [node.model_dump(mode="json") for node in req.nodes]
     edge_data = [
@@ -614,7 +614,7 @@ async def update_pipeline_endpoint(
     pipeline_id: uuid.UUID,
     req: PipelineUpdate,
     session: AsyncSession = Depends(get_db_session),
-    principal: AuthenticatedPrincipal = Depends(get_current_user),
+    principal: TenantPrincipal = Depends(get_current_tenant_user),
 ) -> PipelineResponse:
     updates = req.model_dump(exclude_unset=True)
     try:
@@ -657,7 +657,7 @@ async def update_pipeline_endpoint(
 async def delete_pipeline_endpoint(
     pipeline_id: uuid.UUID,
     session: AsyncSession = Depends(get_db_session),
-    principal: AuthenticatedPrincipal = Depends(get_current_user),
+    principal: TenantPrincipal = Depends(get_current_tenant_user),
 ) -> None:
     try:
         async with session.begin():
@@ -681,7 +681,7 @@ async def delete_pipeline_endpoint(
 async def archive_pipeline_endpoint(
     pipeline_id: uuid.UUID,
     session: AsyncSession = Depends(get_db_session),
-    principal: AuthenticatedPrincipal = Depends(get_current_user),
+    principal: TenantPrincipal = Depends(get_current_tenant_user),
 ) -> PipelineResponse:
     try:
         async with session.begin():
@@ -704,7 +704,7 @@ async def archive_pipeline_endpoint(
 async def unarchive_pipeline_endpoint(
     pipeline_id: uuid.UUID,
     session: AsyncSession = Depends(get_db_session),
-    principal: AuthenticatedPrincipal = Depends(get_current_user),
+    principal: TenantPrincipal = Depends(get_current_tenant_user),
 ) -> PipelineResponse:
     try:
         async with session.begin():
@@ -742,7 +742,7 @@ async def clone_pipeline_endpoint(
     pipeline_id: uuid.UUID,
     req: PipelineCloneRequest,
     session: AsyncSession = Depends(get_db_session),
-    principal: AuthenticatedPrincipal = Depends(get_current_user),
+    principal: TenantPrincipal = Depends(get_current_tenant_user),
 ) -> PipelineResponse:
     _log.info("Copy request: pipeline=%s org=%s user=%s", pipeline_id, principal.organisation_id, principal.account_id)
 
@@ -778,7 +778,7 @@ async def clone_pipeline_endpoint(
             if not await check_pipeline_name_available(session, principal.organisation_id, target_name):
                 _log.warning("Copy aborted: name '%s' already exists in org %s", target_name, principal.organisation_id)
                 raise HTTPException(
-                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                    status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
                     detail=(
                         f"pipeline_copy_failed: A pipeline named '{target_name}' already exists in this organisation"
                     ),
@@ -848,7 +848,7 @@ async def save_as_composite_endpoint(
     pipeline_id: uuid.UUID,
     req: SaveAsCompositeRequest,
     session: AsyncSession = Depends(get_db_session),
-    principal: AuthenticatedPrincipal = Depends(get_current_user),
+    principal: TenantPrincipal = Depends(get_current_tenant_user),
 ) -> dict[str, Any]:
     try:
         async with session.begin():
@@ -864,7 +864,7 @@ async def save_as_composite_endpoint(
             sub_nodes = [n for n in all_nodes if str(n.get("id")) in selected_ids_str]
             if not sub_nodes:
                 raise HTTPException(
-                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                    status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
                     detail="No valid nodes selected",
                 )
 
@@ -872,7 +872,7 @@ async def save_as_composite_endpoint(
 
             # Auto-detect parameter placeholders: scan all agent prompts referenced by selected nodes
             agent_ids = {n.get("agent_id") for n in sub_nodes if n.get("agent_id") is not None}
-            detected_ports: ClassVar[list[dict[str, Any]]] = []
+            detected_ports: list[dict[str, Any]] = []
             if agent_ids:
                 agents_result = await session.execute(
                     select(Agent).where(Agent.id.in_(agent_ids), Agent.organisation_id == principal.organisation_id)
@@ -966,7 +966,7 @@ class QualityReportResponse(BaseModel):
 async def trigger_quality_report(
     pipeline_id: uuid.UUID,
     session: AsyncSession = Depends(get_db_session),
-    principal: AuthenticatedPrincipal = Depends(get_current_user),
+    principal: TenantPrincipal = Depends(get_current_tenant_user),
 ) -> QualityReportResponse:
     try:
         async with session.begin():
@@ -987,16 +987,20 @@ async def trigger_quality_report(
                 )
             ).scalars()
 
-            recipient_urls: ClassVar[list[str]] = []
+            recipient_urls: list[str] = []
             for ep in endpoints:
-                try:
-                    events = json.loads(ep.events) if ep.events else []
-                except (json.JSONDecodeError, TypeError):
-                    events = []
+                raw_events: object = ep.events
+                events = raw_events if isinstance(raw_events, list) else []
+                if isinstance(raw_events, str):
+                    try:
+                        parsed = json.loads(raw_events)
+                        events = parsed if isinstance(parsed, list) else []
+                    except (json.JSONDecodeError, TypeError):
+                        events = []
                 if "quality_report" in events:
                     recipient_urls.append(ep.url)
 
-            deliveries: ClassVar[list[dict[str, Any]]] = []
+            deliveries: list[dict[str, Any]] = []
             if recipient_urls:
                 deliveries = await deliver_quality_report(report, {"webhook_urls": recipient_urls})
     except ProgrammingError:
@@ -1108,7 +1112,7 @@ async def list_snapshot_endpoint(
     page: int = Query(default=1, ge=1),
     page_size: int = Query(default=20, ge=1, le=100),
     session: AsyncSession = Depends(get_db_session),
-    principal: AuthenticatedPrincipal = Depends(get_current_user),
+    principal: TenantPrincipal = Depends(get_current_tenant_user),
 ) -> SnapshotListResponse:
     try:
         async with session.begin():
@@ -1135,7 +1139,7 @@ async def get_snapshot_detail_endpoint(
     pipeline_id: uuid.UUID,
     snapshot_id: uuid.UUID,
     session: AsyncSession = Depends(get_db_session),
-    principal: AuthenticatedPrincipal = Depends(get_current_user),
+    principal: TenantPrincipal = Depends(get_current_tenant_user),
 ) -> SnapshotDetailResponse:
     try:
         async with session.begin():
@@ -1162,7 +1166,7 @@ async def tag_snapshot_endpoint(
     snapshot_id: uuid.UUID,
     req: SnapshotTagUpdate,
     session: AsyncSession = Depends(get_db_session),
-    principal: AuthenticatedPrincipal = Depends(get_current_user),
+    principal: TenantPrincipal = Depends(get_current_tenant_user),
 ) -> SnapshotResponse:
     try:
         async with session.begin():
@@ -1188,7 +1192,7 @@ async def rollback_snapshot_endpoint(
     pipeline_id: uuid.UUID,
     snapshot_id: uuid.UUID,
     session: AsyncSession = Depends(get_db_session),
-    principal: AuthenticatedPrincipal = Depends(get_current_user),
+    principal: TenantPrincipal = Depends(get_current_tenant_user),
 ) -> SnapshotResponse:
     try:
         async with session.begin():
@@ -1219,7 +1223,7 @@ async def delete_snapshot_endpoint(
     pipeline_id: uuid.UUID,
     snapshot_id: uuid.UUID,
     session: AsyncSession = Depends(get_db_session),
-    principal: AuthenticatedPrincipal = Depends(get_current_user),
+    principal: TenantPrincipal = Depends(get_current_tenant_user),
 ) -> None:
     if principal.org_role not in ("admin", "owner"):
         raise HTTPException(
@@ -1252,7 +1256,7 @@ async def diff_snapshot_endpoint(
     pipeline_id: uuid.UUID,
     req: SnapshotDiffQuery,
     session: AsyncSession = Depends(get_db_session),
-    principal: AuthenticatedPrincipal = Depends(get_current_user),
+    principal: TenantPrincipal = Depends(get_current_tenant_user),
 ) -> SnapshotDiffResponse:
     try:
         async with session.begin():
@@ -1290,7 +1294,7 @@ async def move_pipeline_to_folder_endpoint(
     pipeline_id: uuid.UUID,
     req: PipelineFolderMoveRequest,
     session: AsyncSession = Depends(get_db_session),
-    principal: AuthenticatedPrincipal = Depends(get_current_user),
+    principal: TenantPrincipal = Depends(get_current_tenant_user),
 ) -> PipelineResponse:
     try:
         async with session.begin():
@@ -1299,7 +1303,7 @@ async def move_pipeline_to_folder_endpoint(
             pipeline = await move_pipeline_to_folder(session, pipeline_id, req.folder_id)
     except ValueError as e:
         raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail=str(e),
         ) from None
     except ProgrammingError:
@@ -1334,7 +1338,7 @@ async def convert_node_to_agent_endpoint(
     node_id: uuid.UUID,
     req: ConvertToAgentRequest,
     session: AsyncSession = Depends(get_db_session),
-    principal: AuthenticatedPrincipal = Depends(get_current_user),
+    principal: TenantPrincipal = Depends(get_current_tenant_user),
 ) -> PipelineGraphResponse:
     try:
         async with session.begin():
@@ -1347,14 +1351,16 @@ async def convert_node_to_agent_endpoint(
             if pipeline_row is None:
                 raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Pipeline not found")
             nodes = list(pipeline_row.graph_nodes_json) if pipeline_row.graph_nodes_json else []
-            edges = list(pipeline_row.edges) if pipeline_row.edges else []
+            edges = list(
+                (await session.execute(select(PipelineEdge).where(PipelineEdge.pipeline_id == pipeline_id))).scalars()
+            )
 
             target = _find_node_in_list(nodes, node_id)
             if target is None:
                 raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Node not found")
             if target.get("node_type") != "manual":
                 raise HTTPException(
-                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                    status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
                     detail="Only manual nodes can be converted to agent",
                 )
 
@@ -1381,7 +1387,7 @@ async def convert_node_to_agent_endpoint(
                 raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Connector not found")
             if connector.connector_type_id != req.connector_binding.type:
                 raise HTTPException(
-                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                    status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
                     detail="Connector type mismatch",
                 )
 
@@ -1410,7 +1416,7 @@ async def convert_node_to_agent_endpoint(
                 actor_user_id=principal.account_id,
                 event_type="pipeline.node.convert_to_agent",
                 resource_type="pipeline",
-                resource_id=str(pipeline_id),
+                resource_id=pipeline_id,
                 payload_json={
                     "node_id": str(node_id),
                     "agent_id": str(req.agent_id),
@@ -1442,7 +1448,7 @@ async def revert_node_to_manual_endpoint(
     node_id: uuid.UUID,
     snapshot_id: uuid.UUID = Query(...),
     session: AsyncSession = Depends(get_db_session),
-    principal: AuthenticatedPrincipal = Depends(get_current_user),
+    principal: TenantPrincipal = Depends(get_current_tenant_user),
 ) -> PipelineGraphResponse:
     try:
         async with session.begin():
@@ -1455,14 +1461,16 @@ async def revert_node_to_manual_endpoint(
             if pipeline_row is None:
                 raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Pipeline not found")
             nodes = list(pipeline_row.graph_nodes_json) if pipeline_row.graph_nodes_json else []
-            edges = list(pipeline_row.edges) if pipeline_row.edges else []
+            edges = list(
+                (await session.execute(select(PipelineEdge).where(PipelineEdge.pipeline_id == pipeline_id))).scalars()
+            )
 
             target = _find_node_in_list(nodes, node_id)
             if target is None:
                 raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Node not found")
             if target.get("node_type") != "agent":
                 raise HTTPException(
-                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                    status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
                     detail="Only agent nodes can be reverted to manual",
                 )
 
@@ -1474,19 +1482,19 @@ async def revert_node_to_manual_endpoint(
             snapshot_node = _find_node_in_list(snapshot_nodes, node_id)
             if snapshot_node is None:
                 raise HTTPException(
-                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                    status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
                     detail="Snapshot does not contain this node",
                 )
             if snapshot_node.get("node_type") != "manual":
                 raise HTTPException(
-                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                    status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
                     detail="Snapshot node was not a manual node",
                 )
 
             output_schema_id = snapshot_node.get("output_schema_id")
             if output_schema_id is None:
                 raise HTTPException(
-                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                    status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
                     detail="Snapshot node has no output schema",
                 )
 
@@ -1504,7 +1512,7 @@ async def revert_node_to_manual_endpoint(
                 actor_user_id=principal.account_id,
                 event_type="pipeline.node.revert_to_manual",
                 resource_type="pipeline",
-                resource_id=str(pipeline_id),
+                resource_id=pipeline_id,
                 payload_json={
                     "node_id": str(node_id),
                     "snapshot_id": str(snapshot_id),
