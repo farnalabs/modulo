@@ -248,3 +248,7 @@ The Remy in-memory event registries (`_pending_ui_results`, `_pending_permission
 ### MCP `trigger_pipeline` creates run records but does NOT execute them
 
 - The MCP `trigger_pipeline` tool creates a `Run` record with `status="pending"` and returns immediately. The run stays `pending` forever because the MCP tool doesn't start LangGraph execution. Only the REST API route (`POST /api/v1/runs`) calls `background_tasks.add_task(_run_in_background, executor, ...)` which actually runs the pipeline. The MCP tool should either start execution itself or clearly document that the run requires a separate execution step. As of July 2026, use the REST API to trigger executable runs.
+
+### Route auth: admin-only routes must use `get_current_user`, not `get_current_tenant_user`
+
+- When a route checks admin permissions internally (via `_require_admin` or `is_system_admin`), use `Depends(get_current_user)` for the auth dependency — NOT `Depends(get_current_tenant_user)`. The tenant user dependency requires `organisation_id` and `org_role` to be non-None, which system admins may not have (they can be admin without org membership). Using `get_current_tenant_user` causes a 403 "Organisation membership required" before the admin check even runs. The `_require_admin` guard is the sole gate needed for system-admin routes. Found in the feature-flag org-override endpoints.

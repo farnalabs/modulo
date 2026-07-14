@@ -97,6 +97,14 @@ is edited, re-run `npm install` (not just the script) to ensure the hook fires.
 
 - When multiple save functions (`saveAccessList`, `saveModelConfig`, `saveToolPerms`, etc.) all PUT to the same API endpoint, they must share a `configSaving` flag to prevent concurrent requests. Without the guard, clicking "Save" in two sections simultaneously fires parallel PUT calls — one section's changes silently overwrite the other's. Pattern: `if (configSaving.value) return; configSaving.value = true; ... configSaving.value = false` at the start and end of every save function that targets the shared endpoint.
 
+### `aria-label` must have `:` (v-bind) prefix for dynamic expressions
+
+- `aria-label="search.placeholder || "` without the `:` prefix is treated as a literal string by Vue, not a JavaScript expression. Always use `:aria-label="..."` when the value is a JS expression (i18n key, computed, ternary). A missing `:` causes the raw expression text to appear in the DOM as the actual aria-label value, breaking accessibility for screen readers. Same pattern applies to all HTML attributes that expect dynamic values (`:placeholder`, `:title`, `:alt`, etc.). Found in `FilterBar.vue`.
+
+### `useDataFetch`: always destructure `error` alongside `loading`
+
+- Every component that calls `useDataFetch` must destructure `error` from the return value and provide an error-state UI in the template, not just a loading spinner. Without `error`, API failures (4xx, 5xx) silently leave the user looking at a broken empty form. Pattern: `const { loading, load, error } = useDataFetch(...)` → `v-else-if="error"` block with a retry button. Found in `SettingsMonitorConfigView.vue`.
+
 ## Design System
 
 ### Animation & Motion Philosophy
