@@ -5,6 +5,7 @@ from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 from httpx import ASGITransport, AsyncClient
 
+
 @pytest.fixture
 def app() -> FastAPI:
     from modulo.api.middleware.correlation_id import CorrelationIdMiddleware

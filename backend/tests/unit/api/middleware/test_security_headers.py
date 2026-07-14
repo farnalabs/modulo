@@ -20,6 +20,7 @@ EXPECTED_PERMISSIONS = "camera=(), microphone=(), geolocation=()"
 @pytest.fixture
 def app() -> FastAPI:
     from modulo.api.middleware.security_headers import SecurityHeadersMiddleware
+
     app = FastAPI()
 
     @app.get("/test")
