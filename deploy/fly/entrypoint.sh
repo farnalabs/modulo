@@ -51,10 +51,10 @@ if [ -f /tmp/database_admin_url.env ]; then
 fi
 
 echo "=== Bootstrapping modulo_app role ==="
-.venv/bin/python3 -m modulo.db.bootstrap_role
+.venv/bin/python3 -m modulo.db.bootstrap_role || echo "  WARNING: role bootstrap failed (non-fatal)"
 
 echo "=== Running DB migrations ==="
-.venv/bin/alembic upgrade head && echo "  Migrations complete"
+.venv/bin/alembic upgrade head && echo "  Migrations complete" || echo "  WARNING: migrations failed (will retry in lifespan)"
 
 echo "=== Admin user seeding handled by backend lifespan startup (_seed_modulo_users) ==="
 
