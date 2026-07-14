@@ -17,24 +17,33 @@
         @input="$emit('update:search', ($event.target as HTMLInputElement).value)"
       />
     </div>
-    <select
+    <Select
       v-for="filter in selectFilters"
       :key="filter.key"
-      :value="filterValues[filter.key] ?? ''"
-      :aria-label="filter.label"
-      :data-testid="`filter-bar-${filter.key}`"
-      class="rounded-lg border border-input bg-background px-3 py-2 pr-10 text-sm focus:outline-none focus:ring-2 focus:ring-ring"
-      @change="$emit('update:filter', filter.key, ($event.target as HTMLSelectElement).value)"
+      :model-value="filterValues[filter.key] ?? ''"
+      @update:model-value="(val: string) => $emit('update:filter', filter.key, val)"
     >
-      <option value="">{{ filter.label }}</option>
-      <option v-for="opt in filter.options" :key="opt.value" :value="opt.value">{{ opt.label }}</option>
-    </select>
+      <SelectTrigger
+        class="w-auto min-w-[140px]"
+        :aria-label="filter.label"
+        :data-testid="`filter-bar-${filter.key}`"
+      >
+        <SelectValue :placeholder="filter.label" />
+      </SelectTrigger>
+      <SelectContent>
+        <SelectItem value="">{{ filter.label }}</SelectItem>
+        <SelectItem v-for="opt in filter.options" :key="opt.value" :value="opt.value">
+          {{ opt.label }}
+        </SelectItem>
+      </SelectContent>
+    </Select>
     <slot name="after" />
   </div>
 </template>
 
 <script setup lang="ts">
 import { computed } from 'vue'
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 
 const props = defineProps<{
   search?: { placeholder?: string }
