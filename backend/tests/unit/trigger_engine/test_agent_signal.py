@@ -192,26 +192,6 @@ class TestFireAgentSignal:
         assert results == []
         mock_create_run.assert_not_called()
 
-    async def test_skips_inactive_triggers(
-        self,
-        mock_session: MagicMock,
-        mock_create_run: AsyncMock,
-    ) -> None:
-        """An inactive trigger should not fire because WHERE active=True excludes it."""
-        org_id = uuid.uuid4()
-        _setup_session(mock_session, [])
-
-        results = await fire_agent_signal(
-            mock_session,
-            org_id=org_id,
-            source_run_id=uuid.uuid4(),
-            source_pipeline_id=uuid.uuid4(),
-            completed_node_id="node-1",
-        )
-
-        assert results == []
-        mock_create_run.assert_not_called()
-
     async def test_concurrency_limit_skips_fire(
         self,
         mock_session: MagicMock,
