@@ -44,6 +44,13 @@
 
 - Every API endpoint that runs database queries needs BOTH `except SQLAlchemyError:` (for SQL failures) AND `except Exception:` (for Python-level errors like `TypeError`, `AttributeError`, `ValueError` from data processing). Without the generic catch, non-SQL errors propagate to the CatchAllMiddleware and produce an opaque 500 with no structured detail.
 
+- Every `except SQLAlchemyError:` and `except Exception:` handler must log the exception with `_log.exception()` before returning the error response. Without logging, a SQLAlchemyError (like a trigger function crashing on a non-UUID column) produces an opaque 503 with no traceback, making root-cause investigation impossible. The pattern is:
+  ```python
+  except SQLAlchemyError:
+      _log.exception("agents.create_agent")  # <-- always log
+      raise HTTPException(status_code=503, detail="Database temporarily unavailable.")
+  ```
+
 - `model_validate()` error handlers must never use bare `raise` — always raise a structured `HTTPException` instead. A bare `raise` inside an `except Exception` block propagates the original exception to the CatchAllMiddleware, producing an opaque 500 with no structured detail. Pattern: `except Exception: raise HTTPException(status_code=500, detail="...") from None`.
 
 - PATCH endpoint `model_dump(exclude_none=True)` → use `exclude_unset=True`. `exclude_none=True` prevents clearing nullable fields because keys with `None` values are omitted from the dump, so setting a field to `None` becomes a no-op instead of a NULL update.
