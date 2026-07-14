@@ -189,6 +189,7 @@ class TestConstants:
             "list_runs",
             "get_run_evals",
             "list_eval_definitions",
+            "bind_connector_to_node",
             "list_triggers",
         }
         assert set(TOOL_SCOPE_REQUIREMENTS) == expected_tools

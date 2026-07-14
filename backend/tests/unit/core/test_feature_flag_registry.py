@@ -120,6 +120,7 @@ class TestRefresh:
         assert flag.currently_active is True
 
     def test_unknown_tier_falls_back_to_rank_zero(self) -> None:
+        FeatureFlagRegistry._overrides.clear()
         registry = FeatureFlagRegistry(current_tier="nonexistent")
         # Unknown tier defaults to rank 0 via TIER_RANK.get(tier, 0)
         # Community flags (rank 0) are active; team+ flags (rank >= 1) are not
