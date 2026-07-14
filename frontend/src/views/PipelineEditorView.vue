@@ -708,12 +708,16 @@ function convertBackendEdge(e: any, i: number): any {
 
 async function loadGraph() {
   try {
-    const { data } = await api.GET('/api/v1/pipelines/{pipeline_id}/graph', {
+    const { data, error: graphError } = await api.GET('/api/v1/pipelines/{pipeline_id}/graph', {
       params: { path: { pipeline_id: pipelineId } },
     })
+    if (graphError) {
+      pageError.value = `Failed to load graph: ${formatApiError(graphError)}`
+      return
+    }
     const result = data as any
-    rawNodes.value = result.nodes || []
-    rawEdges.value = result.edges || []
+    rawNodes.value = result?.nodes || []
+    rawEdges.value = result?.edges || []
     flowNodes.value = rawNodes.value.map(convertBackendNode)
     flowEdges.value = rawEdges.value.map(convertBackendEdge)
   } catch (e: unknown) {
