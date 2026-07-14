@@ -717,12 +717,9 @@ async def trigger_pipeline(
         }
     except MCPAuthorizationError as exc:
         return {"error": "insufficient_scope", "detail": str(exc)}
-    except Exception as e:
-        import traceback
-
-        tb = traceback.format_exc()
+    except Exception:
         _log.exception("trigger_pipeline failed")
-        return {"error": "internal_error", "detail": f"Failed to trigger pipeline: {e}\n{tb[:500]}"}
+        return _tool_error("Failed to trigger pipeline")
 
 
 @mcp.tool(description="Get current run status. Pass detail=true for per-node breakdown.")
