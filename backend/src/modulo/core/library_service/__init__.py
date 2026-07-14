@@ -915,6 +915,64 @@ _MODULO_PRIMITIVES: list[LibraryPrimitive] = [
         },
         tags=["composite", "complexity", "estimation", "sizing", "planning"],
     ),
+    # -----------------------------------------------------------------------
+    # Merge Fixer primitives
+    # -----------------------------------------------------------------------
+    _make_modulo(
+        pid="00000000-0000-0000-0000-000000000098",
+        primitive_type="agent",
+        name="Merge Fixer Agent",
+        slug="merge-fixer",
+        description=(
+            "Diagnoses merge failures from CI test results, identifies root cause, "
+            "applies fixes, and commits the corrected merge to main. Triggered by "
+            "webhook from the Merge to Main GitHub Action when the full test suite fails."
+        ),
+        content_json={
+            "input_schema": "prompt-input",
+            "output_schema": "code-diff-output",
+            "prompt_template": (
+                "You are a merge-fix engineer. A batch of PRs was squash-merged into main "
+                "but the full test suite failed. Diagnose the issue and fix it.\n\n"
+                "CONTEXT:\n"
+                "Repository: {{ input.prompt }}\n"
+                "CI Run URL: {{ input.context }}\n\n"
+                "Steps:\n"
+                "1. Read the previous merge commit and its parent\n"
+                "2. Run 'uv run pytest tests/unit/ -x --tb=long' and capture the failure\n"
+                "3. Analyse what PR caused the breakage and why\n"
+                "4. Apply the minimum fix to make tests pass\n"
+                "5. Run the full unit test suite to confirm\n"
+                "6. Commit the fix with message 'fix: resolve merge-induced test failures'\n\n"
+                "Output a list of files changed and a summary of what was wrong and how it was fixed."
+            ),
+            "connector_type_refs": [
+                {"connector_type": "shell", "capabilities": ["read", "write"]},
+                {"connector_type": "github", "capabilities": ["create_pr", "read"]},
+            ],
+            "required_environment_capabilities": ["git", "shell", "python>=3.12"],
+        },
+        tags=["agent", "merge-fixer", "ci", "dogfood"],
+    ),
+    _make_modulo(
+        pid="00000000-0000-0000-0000-000000000099",
+        primitive_type="workflow",
+        name="Merge Fixer",
+        slug="merge-fixer",
+        description=(
+            "Webhook-triggered pipeline that diagnoses and fixes merge failures. "
+            "Called by the Merge to Main GitHub Action when the full test suite fails "
+            "after a batch squash-merge of open PRs."
+        ),
+        content_json={
+            "nodes": [
+                {"id": "diagnose", "agent": "merge-fixer"},
+            ],
+            "edges": [],
+            "entry": "diagnose",
+        },
+        tags=["workflow", "merge-fixer", "ci", "dogfood", "pipeline"],
+    ),
 ]
 
 # ---------------------------------------------------------------------------
