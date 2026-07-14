@@ -197,7 +197,7 @@ def mutate_response(draw, valid_response: dict) -> dict:
 
 # ── Helper ───────────────────────────────────────────────────────────────
 
-_SAFE_EXCEPTIONS = (httpx.HTTPStatusError, ValueError, KeyError, AttributeError)
+_SAFE_EXCEPTIONS = (httpx.HTTPStatusError, ValueError)
 """Exceptions that connectors may legitimately raise from malformed input."""
 
 
