@@ -213,38 +213,36 @@ async def _seed_modulo_users(settings: Settings) -> None:
             existing_account = result.scalar_one_or_none()
             pw_hash = pw_part if pw_part.startswith("$2") else hash_password(pw_part)
 
-            if (
-                existing_account is not None and not existing_account.password_hash
-            ) or not existing_account.password_hash.startswith("$2"):
-                existing_account.password_hash = pw_hash
-                logger.info("startup.user_rehashed", extra={"email": email})
-
-                # Ensure OrgMembership exists and role is correct
-                mem_result = await session.execute(
-                    select(OrgMembership).where(
-                        OrgMembership.account_id == existing_account.id,
-                        OrgMembership.organisation_id == org.id,
-                    )
-                )
-                membership = mem_result.scalar_one_or_none()
-                admin_role = "admin" if email in ("admin", "admin@modulo.run") else None
-                if membership is not None:
-                    if admin_role and membership.role != "admin":
-                        membership.role = "admin"
-                        logger.info("startup.user_role_set_admin", extra={"email": email})
-                    else:
-                        logger.info("startup.user_exists", extra={"email": email})
-                else:
-                    new_membership = OrgMembership(
-                        account_id=existing_account.id,
-                        organisation_id=org.id,
-                        role=admin_role or "runner",
-                    )
-                    session.add(new_membership)
-                    logger.info("startup.user_membership_created", extra={"email": email})
-                continue
-
             if existing_account is not None:
+                if not existing_account.password_hash or not existing_account.password_hash.startswith("$2"):
+                    existing_account.password_hash = pw_hash
+                    logger.info("startup.user_rehashed", extra={"email": email})
+
+                    # Ensure OrgMembership exists and role is correct
+                    mem_result = await session.execute(
+                        select(OrgMembership).where(
+                            OrgMembership.account_id == existing_account.id,
+                            OrgMembership.organisation_id == org.id,
+                        )
+                    )
+                    membership = mem_result.scalar_one_or_none()
+                    admin_role = "admin" if email in ("admin", "admin@modulo.run") else None
+                    if membership is not None:
+                        if admin_role and membership.role != "admin":
+                            membership.role = "admin"
+                            logger.info("startup.user_role_set_admin", extra={"email": email})
+                        else:
+                            logger.info("startup.user_exists", extra={"email": email})
+                    else:
+                        new_membership = OrgMembership(
+                            account_id=existing_account.id,
+                            organisation_id=org.id,
+                            role=admin_role or "runner",
+                        )
+                        session.add(new_membership)
+                        logger.info("startup.user_membership_created", extra={"email": email})
+                    continue
+
                 logger.info("startup.user_exists", extra={"email": email})
                 continue
 
