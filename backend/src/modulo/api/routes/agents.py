@@ -243,6 +243,7 @@ async def list_agents_endpoint(
             detail="Feature is not available. Run database migrations to enable it.",
         ) from None
     except SQLAlchemyError:
+        _log.exception("Database operation failed")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database operation failed. Please try again.",
@@ -312,6 +313,7 @@ async def create_agent_endpoint(
             detail="Feature is not available. Run database migrations to enable it.",
         ) from None
     except SQLAlchemyError:
+        _log.exception("Database operation failed during agent creation")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database operation failed. Please try again.",
@@ -341,6 +343,7 @@ async def get_agent_endpoint(
             detail="Feature is not available. Run database migrations to enable it.",
         ) from None
     except SQLAlchemyError:
+        _log.exception("Database operation failed")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database operation failed. Please try again.",
@@ -373,6 +376,7 @@ async def update_agent_endpoint(
             detail="Feature is not available. Run database migrations to enable it.",
         ) from None
     except SQLAlchemyError:
+        _log.exception("Database operation failed")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database operation failed. Please try again.",
@@ -414,6 +418,7 @@ async def update_agent_endpoint(
             detail="Feature is not available. Run database migrations to enable it.",
         ) from None
     except SQLAlchemyError:
+        _log.exception("Database operation failed")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database operation failed. Please try again.",
@@ -453,6 +458,7 @@ async def optimize_prompt(
             detail="Feature is not available. Run database migrations to enable it.",
         ) from None
     except SQLAlchemyError:
+        _log.exception("Database operation failed")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database operation failed. Please try again.",
@@ -473,6 +479,7 @@ async def optimize_prompt(
             detail="Feature is not available. Run database migrations to enable it.",
         ) from None
     except SQLAlchemyError:
+        _log.exception("Database operation failed")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database operation failed. Please try again.",
@@ -501,6 +508,7 @@ async def optimize_prompt(
             detail="Feature is not available. Run database migrations to enable it.",
         ) from None
     except SQLAlchemyError:
+        _log.exception("Database operation failed")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database operation failed. Please try again.",
@@ -592,6 +600,7 @@ async def apply_optimized_prompt(
             detail="Feature is not available. Run database migrations to enable it.",
         ) from None
     except SQLAlchemyError:
+        _log.exception("Database operation failed")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database operation failed. Please try again.",
@@ -623,6 +632,7 @@ async def list_prompt_versions(
             detail="Feature is not available. Run database migrations to enable it.",
         ) from None
     except SQLAlchemyError:
+        _log.exception("Database operation failed")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database operation failed. Please try again.",
@@ -666,6 +676,7 @@ async def get_prompt_version_endpoint(
             detail="Feature is not available. Run database migrations to enable it.",
         ) from None
     except SQLAlchemyError:
+        _log.exception("Database operation failed")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database operation failed. Please try again.",
@@ -710,6 +721,7 @@ async def rollback_prompt(
             detail="Feature is not available. Run database migrations to enable it.",
         ) from None
     except SQLAlchemyError:
+        _log.exception("Database operation failed")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database operation failed. Please try again.",
@@ -748,6 +760,7 @@ async def diff_prompt_versions(
             detail="Feature is not available. Run database migrations to enable it.",
         ) from None
     except SQLAlchemyError:
+        _log.exception("Database operation failed")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database operation failed. Please try again.",
@@ -880,6 +893,7 @@ async def delete_agent_endpoint(
             detail="Feature is not available. Run database migrations to enable it.",
         ) from None
     except SQLAlchemyError:
+        _log.exception("Database operation failed")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database operation failed. Please try again.",
