@@ -5,9 +5,6 @@ from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 from httpx import ASGITransport, AsyncClient
 
-from modulo.core.logging_config import correlation_id_var
-
-
 @pytest.fixture
 def app() -> FastAPI:
     from modulo.api.middleware.correlation_id import CorrelationIdMiddleware
@@ -70,6 +67,8 @@ async def test_correlation_id_consistent(app: FastAPI) -> None:
 
 @pytest.mark.anyio
 async def test_correlation_id_contextvar_propagated(app: FastAPI) -> None:
+    from modulo.core.logging_config import correlation_id_var
+
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as client:
         resp = await client.get("/test")
