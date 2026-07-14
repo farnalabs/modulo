@@ -120,7 +120,7 @@ describe('DashboardView', () => {
     await flushPromises()
     expect(wrapper.text()).toContain('142')
     expect(wrapper.text()).toContain('Total Runs')
-    expect(wrapper.text()).toContain('Active Pipelines')
+    expect(wrapper.text()).toContain('Pipelines')
     expect(wrapper.text()).toContain('Running')
     expect(wrapper.text()).toContain('Awaiting Human')
     expect(wrapper.text()).toContain('Failed')
