@@ -148,27 +148,21 @@ async def list_runs_endpoint(
             detail="A resource with this value already exists",
         ) from None
     except ProgrammingError:
-        print(f"DBG_HANDLER=ProgrammingError", flush=True)
+        _log.exception("route.programming_error")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. This feature requires a database update. Please contact support.",
         ) from None
-    except TimeoutError:
-        print(f"DBG_HANDLER=TimeoutError", flush=True)
-        raise HTTPException(
-            status_code=status.HTTP_504_GATEWAY_TIMEOUT,
-            detail="Database connection timed out.",
-        ) from None
     except SQLAlchemyError:
-        import sys; print(f"DBG_HANDLER=SQLAlchemyError type={sys.exc_info()[1].__class__.__name__} msg={sys.exc_info()[1]}", flush=True)
+        _log.exception("route.db_error")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database temporarily unavailable.",
         ) from None
     except HTTPException:
         raise
-    except Exception:
-        import sys; print(f"DBG_HANDLER=Exception type={sys.exc_info()[1].__class__.__name__} msg={sys.exc_info()[1]}", flush=True)
+    except Exception as exc:
+        _log.exception("runs_list.unexpected_error", extra={"type": type(exc).__name__})
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="An unexpected error occurred.",
