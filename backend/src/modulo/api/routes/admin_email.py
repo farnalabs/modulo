@@ -50,7 +50,11 @@ async def admin_get_email_settings(
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied")
 
     try:
-        org = await get_organisation(session, org_id)
+        async with session.begin():
+            org = await get_organisation(session, org_id)
+            if org is None:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Organisation not found")
+            cfg = org.settings_json or {}
     except ProgrammingError:
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
@@ -59,7 +63,10 @@ async def admin_get_email_settings(
     except SQLAlchemyError:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Database error while fetching email settings.",
+            detail=(
+                "Database error while fetching email settings."
+                " Check that the latest database migrations have been applied."
+            ),
         ) from None
     except HTTPException:
         raise
@@ -72,10 +79,6 @@ async def admin_get_email_settings(
             detail="Internal server error",
         ) from None
 
-    if org is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Organisation not found")
-
-    cfg = org.settings_json or {}
     email_cfg = cfg.get("email", {})
     return EmailSettingsResponse(
         smtp_host=email_cfg.get("smtp_host", ""),
