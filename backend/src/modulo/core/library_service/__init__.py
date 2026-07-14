@@ -289,6 +289,123 @@ _MODULO_PRIMITIVES: list[LibraryPrimitive] = [
         tags=["test_fixture", "example", "prd"],
     ),
     # -----------------------------------------------------------------------
+    # Code Diff Output schema (needed by prompt-executor agent)
+    # -----------------------------------------------------------------------
+    _make_modulo(
+        pid="00000000-0000-0000-0000-000000000052",
+        primitive_type="schema",
+        name="Code Diff Output Schema",
+        slug="code-diff-output",
+        description="Generated code changes as a list of file diffs.",
+        content_json={
+            "fields": [
+                {
+                    "name": "files",
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "path": {"type": "string"},
+                            "content": {"type": "string"},
+                        },
+                    },
+                    "required": True,
+                },
+            ],
+        },
+        tags=["schema", "code", "diff", "dogfood"],
+    ),
+    # -----------------------------------------------------------------------
+    # Generic Prompt Input Schema (used by prompt-executor agent)
+    # -----------------------------------------------------------------------
+    _make_modulo(
+        pid="00000000-0000-0000-0000-000000000080",
+        primitive_type="schema",
+        name="Generic Prompt Input Schema",
+        slug="prompt-input",
+        description="A freeform prompt with optional target paths for codebase operations.",
+        content_json={
+            "fields": [
+                {"name": "prompt", "type": "string", "required": True},
+                {"name": "target_paths", "type": "array", "items": "string", "required": False},
+                {"name": "context", "type": "string", "required": False},
+            ]
+        },
+        tags=["schema", "prompt", "generic"],
+    ),
+    # -----------------------------------------------------------------------
+    # Prompt Executor agent — takes a freeform prompt and produces file diffs
+    # -----------------------------------------------------------------------
+    _make_modulo(
+        pid="00000000-0000-0000-0000-000000000081",
+        primitive_type="agent",
+        name="Prompt Executor Agent",
+        slug="prompt-executor",
+        description=(
+            "Takes a freeform prompt and target codebase paths, examines the code, "
+            "and produces structured file diffs implementing the requested changes."
+        ),
+        content_json={
+            "input_schema": "prompt-input",
+            "output_schema": "code-diff-output",
+            "prompt_template": (
+                "You are an AI software engineer. Given the following prompt and codebase "
+                "context, examine the relevant files and implement the requested changes.\n\n"
+                "PROMPT:\n{{ input.prompt }}\n\n"
+                "{% if input.target_paths %}Target paths:\n"
+                "{{ input.target_paths | join(', ') }}{% endif %}\n"
+                "{% if input.context %}Additional context:\n"
+                "{{ input.context }}{% endif %}\n\n"
+                "Read the existing code at the target paths (if specified), understand the "
+                "codebase, and implement the changes described in the prompt. Output a list "
+                "of files with their full content (new or modified).\n\n"
+                "Respond with a JSON object containing:\n"
+                "- files: array of {path: string, content: string} — each file to create or modify\n"
+                "- summary: string — brief description of what was changed and why"
+            ),
+            "connector_type_refs": [{"connector_type": "shell", "capabilities": ["read"]}],
+            "required_environment_capabilities": ["git", "shell"],
+        },
+        tags=["agent", "prompt-executor", "llm"],
+    ),
+    # -----------------------------------------------------------------------
+    # Prompt to PR workflow — full pipeline from prompt to pull request
+    # -----------------------------------------------------------------------
+    _make_modulo(
+        pid="00000000-0000-0000-0000-000000000097",
+        primitive_type="workflow",
+        name="Prompt to PR",
+        slug="prompt-to-pr",
+        description=(
+            "Takes a freeform prompt, implements the requested changes in the codebase, "
+            "validates them, and creates a pull request with human review. Reusable for "
+            "any codebase operation expressed in natural language."
+        ),
+        content_json={
+            "nodes": [
+                {"id": "prompt-executor", "agent": "prompt-executor"},
+                {"id": "code-applier", "agent": "code-applier"},
+                {"id": "test-runner", "agent": "test-runner"},
+                {"id": "pr-creator", "agent": "pr-creator"},
+            ],
+            "edges": [
+                {"source": "prompt-executor", "target": "code-applier"},
+                {"source": "code-applier", "target": "test-runner"},
+                {
+                    "source": "test-runner",
+                    "target": "pr-creator",
+                    "hitl_gate_config": {
+                        "human_only": False,
+                        "gate_id": "review_before_pr",
+                        "overdue_threshold_minutes": 60,
+                    },
+                },
+            ],
+            "entry": "prompt-executor",
+        },
+        tags=["workflow", "dogfood", "prompt-to-pr", "pipeline", "generic"],
+    ),
+    # -----------------------------------------------------------------------
     # Simplest Workflow primitives (agent + workflow)
     # -----------------------------------------------------------------------
     _make_modulo(
