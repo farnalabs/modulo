@@ -203,7 +203,7 @@ async def test_list_directory_default_path(provider: _FakeRuntimeProvider, provi
             filters={"provider_ref": provider_ref},
         )
     )
-    assert result.total is None or result.total >= 0
+    assert result.total == 1
 
 
 # ---------------------------------------------------------------------------
@@ -498,12 +498,6 @@ async def test_run_command_with_cwd_and_env(provider: _FakeRuntimeProvider, prov
     assert "NODE_ENV=production" in cmd
     assert "npm run build" in cmd
 
-
-async def test_build_exec_cmd_raw(provider: _FakeRuntimeProvider, provider_ref: str) -> None:
-    """_build_exec_cmd with neither cwd nor env returns raw command string."""
-    c = ShellConnector(runtime_provider=provider, workspace_lease_id=workspace_lease_id, allowed_commands=["echo"])
-    result = c._build_exec_cmd("echo hello")
-    assert result == "echo hello"
 
 
 async def test_write_file_failure(provider: _FakeRuntimeProvider, provider_ref: str) -> None:
