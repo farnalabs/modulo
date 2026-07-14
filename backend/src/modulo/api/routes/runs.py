@@ -87,37 +87,36 @@ async def _do_list_runs(
     page,
     page_size,
 ) -> dict[str, Any]:
-    async with factory() as session:
-        async with session.begin():
-            await set_rls_org(session, user.organisation_id)
-            result = await db_list_runs(
-                session,
-                pipeline_id=pipeline_id,
-                status=run_status,
-                trigger_type=trigger_type,
-                search=search,
-                page=page,
-                page_size=page_size,
+    async with factory() as session, session.begin():
+        await set_rls_org(session, user.organisation_id)
+        result = await db_list_runs(
+            session,
+            pipeline_id=pipeline_id,
+            status=run_status,
+            trigger_type=trigger_type,
+            search=search,
+            page=page,
+            page_size=page_size,
+        )
+        items = []
+        for run in result.items:
+            pipeline_name = run.pipeline.name if run.pipeline else None
+            items.append(
+                {
+                    "run_id": str(run.id),
+                    "pipeline_id": str(run.pipeline_id),
+                    "pipeline_name": pipeline_name,
+                    "status": run.status,
+                    "trigger_type": run.trigger_type,
+                    "run_number": run.run_number,
+                    "created_at": run.created_at.isoformat() if run.created_at else None,
+                    "started_at": run.started_at.isoformat() if run.started_at else None,
+                    "completed_at": run.completed_at.isoformat() if run.completed_at else None,
+                    "error_code": run.error_code,
+                    "total_cost_usd": run.total_cost_usd,
+                    "account_id": str(run.account_id) if run.account_id else None,
+                }
             )
-            items = []
-            for run in result.items:
-                pipeline_name = run.pipeline.name if run.pipeline else None
-                items.append(
-                    {
-                        "run_id": str(run.id),
-                        "pipeline_id": str(run.pipeline_id),
-                        "pipeline_name": pipeline_name,
-                        "status": run.status,
-                        "trigger_type": run.trigger_type,
-                        "run_number": run.run_number,
-                        "created_at": run.created_at.isoformat() if run.created_at else None,
-                        "started_at": run.started_at.isoformat() if run.started_at else None,
-                        "completed_at": run.completed_at.isoformat() if run.completed_at else None,
-                        "error_code": run.error_code,
-                        "total_cost_usd": run.total_cost_usd,
-                        "account_id": str(run.account_id) if run.account_id else None,
-                    }
-                )
     return {
         "items": items,
         "total": result.total,
