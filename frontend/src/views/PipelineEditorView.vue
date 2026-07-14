@@ -7,21 +7,22 @@
     <div v-else-if="pageError" class="flex flex-1 items-center justify-center">
       <div class="rounded-lg border border-destructive/50 bg-destructive/10 p-4 text-destructive">{{ pageError }}</div>
     </div>
-    <div v-else-if="flowNodes.length === 0" class="flex flex-1 flex-col items-center justify-center gap-4">
-      <div class="text-center">
-        <h2 class="text-xl font-semibold">{{ pipeline?.name || 'Pipeline' }}</h2>
-        <p v-if="pipeline?.description" class="mt-1 text-sm text-muted-foreground">{{ pipeline.description }}</p>
-        <p class="mt-4 text-sm italic text-muted-foreground/60 select-none">no components in pipeline</p>
-      </div>
-      <div class="flex items-center gap-2">
-        <Button variant="default" size="xs" @click="openRenameDialog">Rename</Button>
-        <button v-if="!pipeline?.archived_at" class="rounded-md border border-input bg-background px-3 py-1 text-xs font-medium hover:bg-accent" @click="handleArchive">Archive</button>
-        <button v-else class="rounded-md border border-input bg-background px-3 py-1 text-xs font-medium hover:bg-accent" @click="handleUnarchive">Unarchive</button>
-        <button v-if="planStore.featureEnabled('pipeline_delete')" class="rounded-md border border-destructive/50 bg-destructive/10 px-3 py-1 text-xs font-medium text-destructive hover:bg-destructive/20" @click="showDeleteConfirm = true">Delete</button>
-      </div>
-    </div>
     <template v-else>
       <div class="relative flex-1">
+        <!-- Empty-state overlay on top of the canvas -->
+        <div v-if="flowNodes.length === 0" class="absolute inset-0 z-20 flex flex-col items-center justify-center gap-4 pointer-events-none">
+          <div class="text-center">
+            <h2 class="text-xl font-semibold">{{ pipeline?.name || 'Pipeline' }}</h2>
+            <p v-if="pipeline?.description" class="mt-1 text-sm text-muted-foreground">{{ pipeline.description }}</p>
+            <p class="mt-4 text-sm italic text-muted-foreground/60 select-none">no components in pipeline</p>
+          </div>
+          <div class="flex items-center gap-2 pointer-events-auto">
+            <Button variant="default" size="xs" @click="openRenameDialog">Rename</Button>
+            <button v-if="!pipeline?.archived_at" class="rounded-md border border-input bg-background px-3 py-1 text-xs font-medium hover:bg-accent" @click="handleArchive">Archive</button>
+            <button v-else class="rounded-md border border-input bg-background px-3 py-1 text-xs font-medium hover:bg-accent" @click="handleUnarchive">Unarchive</button>
+            <button v-if="planStore.featureEnabled('pipeline_delete')" class="rounded-md border border-destructive/50 bg-destructive/10 px-3 py-1 text-xs font-medium text-destructive hover:bg-destructive/20" @click="showDeleteConfirm = true">Delete</button>
+          </div>
+        </div>
         <!-- Toolbar -->
         <div class="absolute left-4 top-4 z-10 flex items-center gap-2 rounded-lg border bg-card px-3 py-2 shadow-sm">
           <div class="flex items-center gap-2">
