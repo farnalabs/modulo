@@ -14,6 +14,7 @@ ignore_imports =
     modulo.api.routes.runs -> modulo.core.pipeline_engine.executor
     modulo.api.routes.webhooks -> modulo.core.pipeline_engine.executor
     modulo.api.routes.hitl -> modulo.core.pipeline_engine.executor
+    modulo.api.mcp_server -> modulo.core.pipeline_engine.executor
 
 [importlinter:contract:connectors-do-not-import-api]
 name = Connectors layer is independent of API
