@@ -18,6 +18,7 @@ from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
 from modulo.api.dependencies import (
     _get_engine,
+    _get_session_factory,
     get_db_session,
     get_or_create_engine,
     pg_connection_string,
@@ -77,7 +78,7 @@ async def _run_with_retry(fn, max_retries=2, base_delay=0.5):
 
 
 async def _do_list_runs(
-    session: AsyncSession,
+    factory: async_sessionmaker[AsyncSession],
     user: TenantPrincipal,
     pipeline_id,
     run_status,
@@ -86,7 +87,7 @@ async def _do_list_runs(
     page,
     page_size,
 ) -> dict[str, Any]:
-    async with session.begin():
+    async with factory() as session, session.begin():
         await set_rls_org(session, user.organisation_id)
         result = await db_list_runs(
             session,
@@ -134,12 +135,12 @@ async def list_runs_endpoint(
     search: str | None = Query(None, max_length=200),
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
-    session: AsyncSession = Depends(get_db_session),
+    factory: async_sessionmaker[AsyncSession] = Depends(_get_session_factory),
     user: TenantPrincipal = Depends(get_current_tenant_user),
 ) -> dict[str, Any]:
     try:
         return await _run_with_retry(
-            lambda: _do_list_runs(session, user, pipeline_id, run_status, trigger_type, search, page, page_size)
+            lambda: _do_list_runs(factory, user, pipeline_id, run_status, trigger_type, search, page, page_size)
         )
     except IntegrityError:
         raise HTTPException(
@@ -147,20 +148,21 @@ async def list_runs_endpoint(
             detail="A resource with this value already exists",
         ) from None
     except ProgrammingError:
+        _log.exception("route.programming_error")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. This feature requires a database update. Please contact support.",
         ) from None
     except SQLAlchemyError:
-        _log.warning("route.db_error", exc_info=True)
+        _log.exception("route.db_error")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database temporarily unavailable.",
         ) from None
     except HTTPException:
         raise
-    except Exception:
-        _log.exception("pipeline_execution.unexpected_error")
+    except Exception as exc:
+        _log.exception("runs_list.unexpected_error", extra={"type": type(exc).__name__})
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="An unexpected error occurred.",

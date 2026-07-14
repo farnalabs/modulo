@@ -211,8 +211,10 @@ class Settings(BaseSettings):
         if url.startswith("mysql+asyncmy://"):
             url = "mysql+aiomysql://" + url[len("mysql+asyncmy://") :]
             _log.warning("settings.legacy_asyncmy_url_replaced")
-        # asyncpg doesn't understand sslmode in URLs — strip it entirely.
-        # Without it, asyncpg defaults to "prefer" SSL (try SSL, fall back).
+        # asyncpg doesn't understand sslmode in URLs — strip it so it doesn't
+        # cause a URL parsing error. The actual SSL mode is set via
+        # connect_args["ssl"] in get_or_create_engine() (dependencies.py); that
+        # module MUST always set ssl=False for Postgres to match this.
         url = url.replace("?sslmode=disable", "").replace("&sslmode=disable", "")
         if url != self.database_url:
             self.database_url = url
