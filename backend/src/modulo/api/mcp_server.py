@@ -52,11 +52,11 @@ from modulo.core.hitl_manager import (
     NotTeamMemberError,
 )
 from modulo.core.library_service import (
-    get_primitive_by_slug,
-    list_primitives,
+    copy_to_adapt as library_copy_to_adapt,
 )
 from modulo.core.library_service import (
-    copy_to_adapt as library_copy_to_adapt,
+    get_primitive_by_slug,
+    list_primitives,
 )
 from modulo.core.mcp.scope_validator import MCPAuthorizationError, check_tool_scope
 from modulo.db.crud.model_backend import create_model_backend as db_create_model_backend
@@ -632,10 +632,13 @@ async def bind_connector_to_node(
                 return {"error": "connector_not_found", "detail": "Connector not found in this organisation"}
 
             # Get pipeline and update node
-            from sqlalchemy import select, update as sa_update
+            from sqlalchemy import select
+
             from modulo.db.models.pipeline import Pipeline
 
-            pipeline = (await s.execute(select(Pipeline).where(Pipeline.id == pid).with_for_update())).scalar_one_or_none()
+            pipeline = (
+                await s.execute(select(Pipeline).where(Pipeline.id == pid).with_for_update())
+            ).scalar_one_or_none()
             if pipeline is None:
                 return {"error": "pipeline_not_found", "pipeline_id": pipeline_id}
 
