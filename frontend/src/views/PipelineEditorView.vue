@@ -716,8 +716,15 @@ async function loadGraph() {
       return
     }
     const result = data as any
-    rawNodes.value = result?.nodes || []
-    rawEdges.value = result?.edges || []
+    if (!result) {
+      rawNodes.value = []
+      rawEdges.value = []
+      flowNodes.value = []
+      flowEdges.value = []
+      return
+    }
+    rawNodes.value = result.nodes || []
+    rawEdges.value = result.edges || []
     flowNodes.value = rawNodes.value.map(convertBackendNode)
     flowEdges.value = rawEdges.value.map(convertBackendEdge)
   } catch (e: unknown) {
