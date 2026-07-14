@@ -13,8 +13,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from starlette.responses import Response
 
 from modulo.api.dependencies import get_db_session
-from modulo.auth.dependencies import get_current_tenant_user, get_current_user
-from modulo.auth.jwt import AuthenticatedPrincipal, TenantPrincipal
+from modulo.auth.dependencies import get_current_user
+from modulo.auth.jwt import AuthenticatedPrincipal
 from modulo.core.feature_flags import FeatureFlagRegistry
 from modulo.core.license import get_license, parse_and_verify
 from modulo.db.crud.organisation import get_organisation
@@ -302,7 +302,7 @@ async def toggle_feature_flag(
 @router.get("/{flag_name}/org-override", response_model=None)
 async def get_org_flag_override(
     flag_name: str,
-    current_user: TenantPrincipal = Depends(get_current_tenant_user),
+    current_user: AuthenticatedPrincipal = Depends(get_current_user),
     session: AsyncSession = Depends(get_db_session),
 ) -> Response | dict[str, Any]:
     _require_admin(current_user)
@@ -354,7 +354,7 @@ async def get_org_flag_override(
 async def set_org_flag_override(
     flag_name: str,
     req: ToggleFlagRequest,
-    current_user: TenantPrincipal = Depends(get_current_tenant_user),
+    current_user: AuthenticatedPrincipal = Depends(get_current_user),
     session: AsyncSession = Depends(get_db_session),
 ) -> Response | dict[str, Any]:
     _require_admin(current_user)
@@ -410,7 +410,7 @@ async def set_org_flag_override(
 @router.delete("/{flag_name}/org-override", response_model=None)
 async def clear_org_flag_override(
     flag_name: str,
-    current_user: TenantPrincipal = Depends(get_current_tenant_user),
+    current_user: AuthenticatedPrincipal = Depends(get_current_user),
     session: AsyncSession = Depends(get_db_session),
 ) -> Response | dict[str, Any]:
     _require_admin(current_user)
