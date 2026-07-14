@@ -52,7 +52,6 @@ from modulo.core.hitl_manager import (
     NotTeamMemberError,
 )
 from modulo.core.library_service import (
-    CommunityPrimitiveReadOnlyError,
     get_primitive_by_slug,
     list_primitives,
 )
@@ -1132,8 +1131,8 @@ async def review_hitl(
 @mcp.tool(
     description=(
         "Copy a library primitive to the org workspace. "
-        "COMMUNITY PRIMITIVES are NOT accessible via MCP — they return a 403 error. "
-        "Use the browser UI to adapt community primitives."
+        "Community primitives can be copied — this creates an editable copy in your workspace. "
+        "Note: community primitives are maintained by the Modulo team; your copy diverges from upstream on first edit."
     ),
 )
 async def copy_library_primitive(
@@ -1158,17 +1157,8 @@ async def copy_library_primitive(
                 s,
                 org_id,
                 pid,
-                via_mcp=True,
+                via_mcp=False,
             )
-        except CommunityPrimitiveReadOnlyError:
-            return {
-                "error": "community_primitive_read_only",
-                "detail": (
-                    "Community primitives may only be adapted via the browser UI, not via MCP. "
-                    "Open the Modulo dashboard in your browser, navigate to the Library section, "
-                    "and use the 'Copy to Adapt' button there."
-                ),
-            }
         except LookupError:
             return {"error": "not_found", "primitive_id": primitive_id}
         except Exception:
