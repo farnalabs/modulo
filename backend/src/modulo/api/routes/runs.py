@@ -18,6 +18,7 @@ from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
 from modulo.api.dependencies import (
     _get_engine,
+    _get_session_factory,
     get_db_session,
     get_or_create_engine,
     pg_connection_string,
@@ -77,7 +78,7 @@ async def _run_with_retry(fn, max_retries=2, base_delay=0.5):
 
 
 async def _do_list_runs(
-    session: AsyncSession,
+    factory: async_sessionmaker[AsyncSession],
     user: TenantPrincipal,
     pipeline_id,
     run_status,
@@ -86,36 +87,37 @@ async def _do_list_runs(
     page,
     page_size,
 ) -> dict[str, Any]:
-    async with session.begin():
-        await set_rls_org(session, user.organisation_id)
-        result = await db_list_runs(
-            session,
-            pipeline_id=pipeline_id,
-            status=run_status,
-            trigger_type=trigger_type,
-            search=search,
-            page=page,
-            page_size=page_size,
-        )
-        items = []
-        for run in result.items:
-            pipeline_name = run.pipeline.name if run.pipeline else None
-            items.append(
-                {
-                    "run_id": str(run.id),
-                    "pipeline_id": str(run.pipeline_id),
-                    "pipeline_name": pipeline_name,
-                    "status": run.status,
-                    "trigger_type": run.trigger_type,
-                    "run_number": run.run_number,
-                    "created_at": run.created_at.isoformat() if run.created_at else None,
-                    "started_at": run.started_at.isoformat() if run.started_at else None,
-                    "completed_at": run.completed_at.isoformat() if run.completed_at else None,
-                    "error_code": run.error_code,
-                    "total_cost_usd": run.total_cost_usd,
-                    "account_id": str(run.account_id) if run.account_id else None,
-                }
+    async with factory() as session:
+        async with session.begin():
+            await set_rls_org(session, user.organisation_id)
+            result = await db_list_runs(
+                session,
+                pipeline_id=pipeline_id,
+                status=run_status,
+                trigger_type=trigger_type,
+                search=search,
+                page=page,
+                page_size=page_size,
             )
+            items = []
+            for run in result.items:
+                pipeline_name = run.pipeline.name if run.pipeline else None
+                items.append(
+                    {
+                        "run_id": str(run.id),
+                        "pipeline_id": str(run.pipeline_id),
+                        "pipeline_name": pipeline_name,
+                        "status": run.status,
+                        "trigger_type": run.trigger_type,
+                        "run_number": run.run_number,
+                        "created_at": run.created_at.isoformat() if run.created_at else None,
+                        "started_at": run.started_at.isoformat() if run.started_at else None,
+                        "completed_at": run.completed_at.isoformat() if run.completed_at else None,
+                        "error_code": run.error_code,
+                        "total_cost_usd": run.total_cost_usd,
+                        "account_id": str(run.account_id) if run.account_id else None,
+                    }
+                )
     return {
         "items": items,
         "total": result.total,
@@ -134,12 +136,12 @@ async def list_runs_endpoint(
     search: str | None = Query(None, max_length=200),
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
-    session: AsyncSession = Depends(get_db_session),
+    factory: async_sessionmaker[AsyncSession] = Depends(_get_session_factory),
     user: TenantPrincipal = Depends(get_current_tenant_user),
 ) -> dict[str, Any]:
     try:
         return await _run_with_retry(
-            lambda: _do_list_runs(session, user, pipeline_id, run_status, trigger_type, search, page, page_size)
+            lambda: _do_list_runs(factory, user, pipeline_id, run_status, trigger_type, search, page, page_size)
         )
     except IntegrityError:
         raise HTTPException(
