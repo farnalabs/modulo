@@ -43,6 +43,8 @@ def _compute_retry_delay(attempt: int, response: httpx.Response | None = None) -
 
 
 def _check_slack_ok(body: Any, context: str) -> None:
+    if not isinstance(body, dict):
+        raise ValueError(f"Slack API returned non-JSON-object response in {context}: {type(body).__name__}")
     if not body.get("ok"):
         raise ValueError(f"Slack API error in {context}: {body.get('error', 'unknown')}")
 
@@ -159,9 +161,10 @@ class SlackConnector(ConnectorBase):
         r = await self._call_api("GET", "/conversations.list", params=params)
         body = await self._parse_json(r)
         _check_slack_ok(body, "conversations.list")
+        meta = body.get("response_metadata") or {}
         return ConnectorResult(
             records=body.get("channels", []),
-            next_cursor=body.get("response_metadata", {}).get("next_cursor"),
+            next_cursor=meta.get("next_cursor") if isinstance(meta, dict) else None,
         )
 
     async def _get_messages(self, q: ConnectorQuery) -> ConnectorResult:
@@ -176,9 +179,10 @@ class SlackConnector(ConnectorBase):
         r = await self._call_api("GET", "/conversations.history", params=params)
         body = await self._parse_json(r)
         _check_slack_ok(body, "conversations.history")
+        meta = body.get("response_metadata") or {}
         return ConnectorResult(
             records=body.get("messages", []),
-            next_cursor=body.get("response_metadata", {}).get("next_cursor"),
+            next_cursor=meta.get("next_cursor") if isinstance(meta, dict) else None,
         )
 
     async def _list_users(self, q: ConnectorQuery) -> ConnectorResult:
@@ -188,9 +192,10 @@ class SlackConnector(ConnectorBase):
         r = await self._call_api("GET", "/users.list", params=params)
         body = await self._parse_json(r)
         _check_slack_ok(body, "users.list")
+        meta = body.get("response_metadata") or {}
         return ConnectorResult(
             records=body.get("members", []),
-            next_cursor=body.get("response_metadata", {}).get("next_cursor"),
+            next_cursor=meta.get("next_cursor") if isinstance(meta, dict) else None,
         )
 
     async def _post_message(self, data: dict[str, Any]) -> dict[str, Any]:

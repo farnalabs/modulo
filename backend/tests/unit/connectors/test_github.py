@@ -195,13 +195,11 @@ async def test_write_issue_label(connector):
     assert result[0]["name"] == "bug"
 
 
-@respx.mock
 async def test_query_issues_missing_repo_filter(connector):
     with pytest.raises(ValueError, match="requires 'repo' filter"):
         await connector.query(ConnectorQuery(resource="issues"))
 
 
-@respx.mock
 async def test_write_issue_missing_title(connector):
     with pytest.raises(ValueError, match="requires 'title' in data"):
         await connector.write(ConnectorPayload(resource="issue", data={"repo": "owner/repo"}))
@@ -251,19 +249,16 @@ async def test_write_file_http_error(connector):
         )
 
 
-@respx.mock
 async def test_query_file_missing_filters(connector):
     with pytest.raises(ValueError, match="requires 'path' filter"):
         await connector.query(ConnectorQuery(resource="file", filters={"repo": "owner/repo"}))
 
 
-@respx.mock
 async def test_query_pulls_missing_repo_filter(connector):
     with pytest.raises(ValueError, match="requires 'repo' filter"):
         await connector.query(ConnectorQuery(resource="pulls"))
 
 
-@respx.mock
 async def test_write_file_missing_content(connector):
     with pytest.raises(ValueError, match="requires 'content' in data"):
         await connector.write(ConnectorPayload(resource="file", data={"repo": "owner/repo", "path": "x"}))
@@ -376,7 +371,6 @@ async def test_write_pr_update(connector):
     assert sent["title"] == "Updated PR"
 
 
-@respx.mock
 async def test_write_pr_missing_head(connector):
     with pytest.raises(ValueError, match="requires 'head' in data"):
         await connector.write(
@@ -485,13 +479,11 @@ async def test_query_pulls_pagination_cursor(connector):
 # ---------------------------------------------------------------------------
 
 
-@respx.mock
 async def test_query_pr_commits_missing_pull_number(connector):
     with pytest.raises(ValueError, match="requires 'pull_number' filter"):
         await connector.query(ConnectorQuery(resource="pr_commits", filters={"repo": "owner/repo"}))
 
 
-@respx.mock
 async def test_write_pr_missing_base(connector):
     with pytest.raises(ValueError, match="requires 'base' in data"):
         await connector.write(
@@ -502,7 +494,6 @@ async def test_write_pr_missing_base(connector):
         )
 
 
-@respx.mock
 async def test_write_pr_comment_missing_body(connector):
     with pytest.raises(ValueError, match="requires 'body' in data"):
         await connector.write(
