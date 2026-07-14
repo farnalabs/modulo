@@ -719,6 +719,7 @@ async def trigger_pipeline(
         return {"error": "insufficient_scope", "detail": str(exc)}
     except Exception as e:
         import traceback
+
         tb = traceback.format_exc()
         _log.exception("trigger_pipeline failed")
         print(f"TRIGGER_PIPELINE_ERROR: {e}\n{tb}", flush=True)
