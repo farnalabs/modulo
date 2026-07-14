@@ -12,7 +12,7 @@ from cryptography.fernet import Fernet
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, status
 from pydantic import BaseModel, Field
 from sqlalchemy import select, text
-from sqlalchemy.exc import IntegrityError, ProgrammingError, SQLAlchemyError
+from sqlalchemy.exc import IntegrityError, ProgrammingError, SQLAlchemyError, TimeoutError as SA_TimeoutError
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
 from modulo.api.dependencies import (
@@ -65,7 +65,7 @@ async def _run_with_retry(fn, max_retries=2, base_delay=0.5):
     for attempt in range(max_retries + 1):
         try:
             return await fn()
-        except (TimeoutError, ConnectionResetError, OSError) as exc:
+        except (TimeoutError, ConnectionResetError, OSError, SA_TimeoutError) as exc:
             last_exc = exc
             if attempt < max_retries:
                 _log.warning("route.db_retry", extra={"attempt": attempt + 1, "error": str(exc)})
@@ -151,13 +151,10 @@ async def list_runs_endpoint(
             detail="Feature is not available. This feature requires a database update. Please contact support.",
         ) from None
     except SQLAlchemyError:
-        import sys, traceback
-        print("DEBUG_ROUTE_DB_ERROR", type(sys.exc_info()[1]).__name__, str(sys.exc_info()[1])[:200], flush=True, file=sys.stderr)
-        traceback.print_exc(file=sys.stderr)
         _log.warning("route.db_error", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Database temporarily unavailable. Retrying may help.",
+            detail="Database temporarily unavailable.",
         ) from None
     except HTTPException:
         raise
