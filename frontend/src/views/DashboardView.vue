@@ -115,7 +115,7 @@
 
       <!-- Row 1: Summary stat cards -->
       <div class="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-        <StatCard :label="$t('views.DashboardView.pipelines')" :value="summary.active_pipelines || dashboardStore.fallbackPipelineCount" color="primary" to="/pipelines">
+        <StatCard :label="$t('views.DashboardView.pipelines')" :value="summary.active_pipelines" color="primary" to="/pipelines">
           <template #icon><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></template>
         </StatCard>
         <StatCard :label="$t('views.DashboardView.total_runs')" :value="summary.total_runs" color="primary" to="/runs">
