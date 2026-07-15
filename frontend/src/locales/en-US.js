@@ -1582,5 +1582,15 @@ export default {
   },
   "nav": {
     "environment-profiles": "Environment Profiles"
+  },
+  "OnboardingBanner": {
+    "set_up_modulo": "Set up Modulo",
+    "actions_completed": "{completed} of {total} actions completed",
+    "next_action": "Next: {title}",
+    "recommended_actions": "Recommended actions",
+    "skip": "Skip",
+    "dismiss": "Dismiss",
+    "seed_examples": "Seed example primitives",
+    "dismiss_hint": "Click anywhere to dismiss this guide"
   }
 }

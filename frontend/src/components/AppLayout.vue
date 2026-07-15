@@ -257,6 +257,7 @@
       class="flex-1 overflow-auto bg-background pt-14 md:pt-0"
       :style="remyDockedStyle"
     >
+      <OnboardingBanner />
       <Breadcrumb class="px-6 pt-4 pb-3" />
       <router-view v-slot="{ Component, route }">
         <transition name="page">
@@ -273,6 +274,7 @@
       </div>
     </div>
 
+    <SpotlightOverlay />
     <RemyPanel />
   </div>
   </TooltipProvider>
@@ -294,6 +296,8 @@ import { TooltipProvider } from "./ui/tooltip";
 import { useSidebar } from "../composables/useSidebar";
 import { useRemyStore } from "../composables/useRemyStore";
 import { abortUiCommands } from "../composables/useUiCommandExecutor";
+import OnboardingBanner from "./onboarding/OnboardingBanner.vue";
+import SpotlightOverlay from "./onboarding/SpotlightOverlay.vue";
 
 const viewModeOptions = [
   { label: 'Essentials', value: 'simple' },
