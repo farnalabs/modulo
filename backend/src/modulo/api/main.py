@@ -782,26 +782,25 @@ async def _seed_tier_catalog(settings: object) -> None:
 
     from modulo.db.session import db_engine
 
-    async with AsyncSession(db_engine, autobegin=False) as session:
+    async with AsyncSession(db_engine, autobegin=False) as session, session.begin():
         for tier in TIERS:
             await session.execute(
                 text("""
-                    INSERT INTO tier_catalog (tier_id, label, rank, requires_license, description)
-                    VALUES (:tier_id, :label, :rank, :requires_license, :description)
-                    ON CONFLICT (tier_id) DO NOTHING
-                """),
+                        INSERT INTO tier_catalog (tier_id, label, rank, requires_license, description)
+                        VALUES (:tier_id, :label, :rank, :requires_license, :description)
+                        ON CONFLICT (tier_id) DO NOTHING
+                    """),
                 tier,
             )
         for flag in FLAGS:
             await session.execute(
                 text("""
-                    INSERT INTO feature_flag_catalog (name, description, tier_id, depends_on, is_active)
-                    VALUES (:name, :description, :tier_id, :depends_on, true)
-                    ON CONFLICT (name) DO NOTHING
-                """),
+                        INSERT INTO feature_flag_catalog (name, description, tier_id, depends_on, is_active)
+                        VALUES (:name, :description, :tier_id, :depends_on, true)
+                        ON CONFLICT (name) DO NOTHING
+                    """),
                 flag,
             )
-        await session.commit()
 
 
 app = FastAPI(
