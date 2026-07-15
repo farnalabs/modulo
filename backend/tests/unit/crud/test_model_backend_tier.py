@@ -66,7 +66,7 @@ async def test_excluded_tiers_empty_skips_filter() -> None:
     session = _mock_session()
     session.execute = _mock_execute(count=5)
 
-    result = await list_model_backends(session, excluded_tiers=[])
+    result = await list_model_backends(session, org_id=_ORG_ID, excluded_tiers=[])
 
     assert result.total == 5
 
@@ -75,6 +75,6 @@ async def test_excluded_tiers_preview() -> None:
     session = _mock_session()
     session.execute = _mock_execute(count=3)
 
-    result = await list_model_backends(session, excluded_tiers=["preview"])
+    result = await list_model_backends(session, org_id=_ORG_ID, excluded_tiers=["preview"])
 
     assert result.total == 3
