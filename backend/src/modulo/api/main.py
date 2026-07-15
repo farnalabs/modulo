@@ -140,6 +140,7 @@ async def _verify_db_connectivity(settings: Settings) -> None:
             logger.warning(
                 "startup.db_connectivity_attempt_failed",
                 extra={"attempt": attempt, "error": str(exc)},
+                exc_info=True,
             )
             if attempt < 3:
                 await asyncio.sleep(attempt * 2)
