@@ -41,12 +41,19 @@ def get_or_compile(
     pipeline_id: uuid.UUID,
     snapshot_id: uuid.UUID,
     factory: Callable[[], Any],
+    *,
+    checkpointer: Any = None,
 ) -> Any:
     """Return cached compiled graph or call factory() and cache the result.
 
     Uses a per-key lock so concurrent calls for the same uncached key
     compile only once.
+
+    When *checkpointer* is provided, caching is bypassed — the factory is
+    called every time so a fresh compile with the checkpointer is produced.
     """
+    if checkpointer is not None:
+        return factory()
     key = (pipeline_id, snapshot_id)
     if key in _CACHE:
         _CACHE.move_to_end(key)
@@ -164,6 +171,7 @@ def build_graph_from_json(
     eval_definitions_by_node: dict[str, list[EvalDefinition]] | None = None,
     session_factory: Callable[..., Any] | None = None,
     org_id: uuid.UUID | None = None,
+    checkpointer: Any = None,
 ) -> Any:
     """Compile a StateGraph from the serialised graph_json stored in a snapshot.
 
@@ -313,7 +321,7 @@ def build_graph_from_json(
         raise ValueError("graph_json has a cycle or no entry node")
     graph.set_entry_point(entry_candidates[0])
 
-    return graph.compile()
+    return graph.compile(checkpointer=checkpointer)
 
 
 def evict(pipeline_id: uuid.UUID, snapshot_id: uuid.UUID) -> None:
