@@ -123,7 +123,7 @@ class ModelBackendHub:
                             _settings = get_settings()
                             f = Fernet(_settings.fernet_key.encode())
                             plaintext = f.decrypt(ciphertext)
-                            raw_str = plaintext.decode()
+                            raw_str = json.dumps({"api_key": plaintext.decode()})
                         except Exception:
                             logger.warning("Failed to decrypt credentials_ciphertext for backend %s", mb.id)
                             raise BackendDecryptError(mb.id) from None
