@@ -284,8 +284,8 @@ type ApiKeyCreatedResponse = components['schemas']['ApiKeyCreatedResponse']
 const { loading, error: loadError, data: mcpData, load: loadAll } = useDataFetch<McpPageData>(
   async () => {
     const [mcpResp, keysResp] = await Promise.all([
-      (api as any).GET('/api/v1/api-keys/mcp-config'),
-      (api as any).GET('/api/v1/api-keys'),
+      (api as any).GET('/api/v1/api-keys/mcp-config').catch(() => null),
+      (api as any).GET('/api/v1/api-keys').catch(() => null),
     ])
     if (mcpResp.error) return { error: mcpResp.error }
     if (keysResp.error) return { error: keysResp.error }

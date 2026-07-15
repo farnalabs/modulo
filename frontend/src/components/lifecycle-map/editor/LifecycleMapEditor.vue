@@ -271,8 +271,8 @@ function edgeToBackend(edge: any): LifecycleEdge {
 async function loadData() {
   try {
     const [mapData, pipelinesData] = await Promise.all([
-      get<any>(`/api/v1/lifecycle-maps/${props.mapId}`),
-      get<{ items: PipelineSummary[] }>('/api/v1/pipelines?limit=200'),
+      get<any>(`/api/v1/lifecycle-maps/${props.mapId}`).catch(() => null),
+      get<{ items: PipelineSummary[] }>('/api/v1/pipelines?limit=200').catch(() => ({ items: [] })),
     ])
     mapName.value = mapData.name
     pipelines.value = pipelinesData.items || []
