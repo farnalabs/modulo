@@ -1,6 +1,6 @@
 """Add parameter_schemas and parameter_sets tables.
 
-Implements RFC §10 Phase 1: Parameter Schema + Parameter Sets data model.
+Implements RFC ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â§10 Phase 1: Parameter Schema + Parameter Sets data model.
 
 Changes:
   - Create parameter_schemas table
@@ -8,8 +8,8 @@ Changes:
   - Add parameter_schema_id column to agents table
   - Add indexes on FK columns
 
-Revision ID: 0012_parameter_schemas
-Revises: 0011_database_review_fixes
+Revision ID: 0014_parameter_schemas
+Revises: 0013_add_local_provider_type
 Create Date: 2026-07-15
 
 """
@@ -19,10 +19,13 @@ from collections.abc import Sequence
 import sqlalchemy as sa
 from alembic import op
 
-revision: str = "0012_parameter_schemas"
-down_revision: str | None = "0011_database_review_fixes"
+revision: str = "0014_parameter_schemas"
+down_revision: str | None = "0013_add_local_provider_type"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
+
+# Tables that need RLS policies (scanned by test_rls_coverage.py)
+_RLS_TABLES = ("parameter_schemas", "parameter_sets")
 
 
 def upgrade() -> None:
@@ -30,9 +33,11 @@ def upgrade() -> None:
     _create_parameter_sets_table()
     _add_agent_column()
     _add_indexes()
+    _enable_rls()
 
 
 def downgrade() -> None:
+    _disable_rls()
     _remove_indexes()
     _remove_agent_column()
     _drop_parameter_sets_table()
@@ -126,3 +131,19 @@ def _remove_indexes() -> None:
     op.drop_index(op.f("ix_parameter_sets_organisation_id"), table_name="parameter_sets")
     op.drop_index(op.f("ix_parameter_sets_parameter_schema_id"), table_name="parameter_sets")
     op.drop_index(op.f("ix_parameter_schemas_organisation_id"), table_name="parameter_schemas")
+
+
+def _enable_rls() -> None:
+    strict = "organisation_id = current_setting('app.organisation_id')::uuid"
+    null_context = "current_setting('app.organisation_id', true) IS NULL OR organisation_id = current_setting('app.organisation_id')::uuid"
+    for table in _RLS_TABLES:
+        op.execute(sa.text(f'ALTER TABLE "{table}" ENABLE ROW LEVEL SECURITY'))
+        op.execute(sa.text(f'CREATE POLICY rls_org_isolation ON "{table}" USING ({strict})'))
+        op.execute(sa.text(f'CREATE POLICY rls_org_isolation_null_context ON "{table}" USING ({null_context})'))
+
+
+def _disable_rls() -> None:
+    for table in _RLS_TABLES:
+        op.execute(sa.text(f'DROP POLICY IF EXISTS rls_org_isolation ON "{table}"'))
+        op.execute(sa.text(f'DROP POLICY IF EXISTS rls_org_isolation_null_context ON "{table}"'))
+        op.execute(sa.text(f'ALTER TABLE "{table}" DISABLE ROW LEVEL SECURITY'))
