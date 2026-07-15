@@ -79,9 +79,9 @@ class ShellConnector(ConnectorBase):
         return HealthResult(ok=True, detail="ShellConnector ready")
 
     def _check_workspace_lease(self) -> None:
-        if self._workspace_lease_id is None:
+        if self._workspace_lease_id is None and self._runtime_provider is None:
             raise ConnectorPermissionError(
-                "No active workspace lease. Shell access is only available inside a running pipeline.",
+                "No active workspace lease and no runtime provider configured.",
             )
 
     async def _resolve_profile_from_hub(self) -> Any | None:
@@ -89,9 +89,13 @@ class ShellConnector(ConnectorBase):
             return None
         try:
             from modulo.db.crud.environment_profile import get_environment_profile
-            from modulo.db.session import AsyncSessionLocal
+            from modulo.api.dependencies import get_or_create_engine, get_or_create_session_factory
+            from modulo.settings import get_settings
 
-            async with AsyncSessionLocal() as session:
+            _settings = get_settings()
+            _engine = get_or_create_engine(_settings)
+            _factory = get_or_create_session_factory(_engine)
+            async with _factory() as session:
                 return await get_environment_profile(session, self._environment_profile_id)
         except Exception:
             _log.exception("Failed to resolve environment profile from hub")
@@ -126,7 +130,14 @@ class ShellConnector(ConnectorBase):
         self._check_workspace_lease()
         provider_ref: str | None = q.filters.get("provider_ref")
         if not provider_ref:
-            raise ValueError("provider_ref is required in query filters")
+            # Default provider ref for pipeline execution context
+            try:
+                result = await self._runtime_provider.execute_command(
+                    "/", "echo ok", timeout_seconds=10,
+                )
+                provider_ref = "/"
+            except Exception:
+                raise ValueError("provider_ref is required in query filters")
 
         match q.resource:
             case "file":
@@ -177,7 +188,7 @@ class ShellConnector(ConnectorBase):
         self._check_workspace_lease()
         provider_ref: str | None = payload.data.get("provider_ref")
         if not provider_ref:
-            raise ValueError("provider_ref is required in payload data")
+            provider_ref = "/"
 
         match payload.resource:
             case "command":

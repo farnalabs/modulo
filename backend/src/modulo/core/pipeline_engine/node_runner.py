@@ -501,10 +501,10 @@ def make_connector_fn(
     @cancellable_node(timeout=timeout)
     async def _connector_node(state: dict[str, Any]) -> dict[str, Any]:
         from modulo.core.pipeline_engine.decorator import get_connector_hub
+        from modulo.connectors.base import ConnectorQuery, ConnectorPayload
 
         hub = get_connector_hub()
         if hub is None:
-            # No ConnectorHub available — return stub
             return {"artifacts": [{"node_id": node_id, "status": "executed", "output": {"note": "no connector hub"}}]}
 
         instance_id_str = binding.get("instance_id")
@@ -520,18 +520,20 @@ def make_connector_fn(
 
         run_context = state.get("run_context") or {}
         raw_input = run_context.get("input", {})
-        # Build filter / data from input payload
+        resource: str = binding.get("resource", "command")
         filters = dict(binding.get("filters", {}))
         data = dict(binding.get("data", {}))
-        if raw_input:
-            filters.update(raw_input.get("filters", {}))
-            data.update(raw_input.get("data", {}))
+        if isinstance(raw_input, dict):
+            filters.update({k: v for k, v in raw_input.items() if k not in data})
+            data.update({k: v for k, v in raw_input.items() if k not in filters})
 
         try:
             if op == "write":
-                result = await connector.write(data, filters=filters)
+                payload = ConnectorPayload(resource=resource, data=data)
+                result = await connector.write(payload)
             else:
-                result = await connector.query(filters)
+                query = ConnectorQuery(resource=resource, filters=filters)
+                result = await connector.query(query)
         except Exception as exc:
             return {"artifacts": [{"node_id": node_id, "status": "failed", "error": str(exc)}]}
 
