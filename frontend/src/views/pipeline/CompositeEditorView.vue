@@ -201,14 +201,16 @@ function convertBackendEdge(e: any, i: number): any {
 
 const { loading, error: pageError } = useDataFetch(
   async () => {
-    const [{ data: templateData }, { data: editorData }] = await Promise.all([
+    const [templateResp, editorResp] = await Promise.all([
       api.GET('/api/v1/composite-templates/{template_id}', {
         params: { path: { template_id: compositeId } },
-      }),
+      }).catch(() => ({ data: null })),
       api.GET('/api/v1/composite-templates/{template_id}/editor', {
         params: { path: { template_id: compositeId } },
-      }),
+      }).catch(() => ({ data: null })),
     ])
+    const templateData = templateResp?.data ?? null
+    const editorData = editorResp?.data ?? null
 
     const template = templateData as any
     const editor = editorData as any

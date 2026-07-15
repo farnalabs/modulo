@@ -251,10 +251,14 @@ const pipelineNames = ref<Map<string, string>>(new Map())
 async function fetchAndMerge(): Promise<{ data?: ViewData; error?: { detail: string } }> {
   expandedTeamId.value = null
 
-  const [{ data: summaryResult, error: summaryErr }, { data: teamsResult, error: teamsErr }] = await Promise.all([
-    api.GET('/api/v1/dashboard/summary'),
-    api.GET('/api/v1/admin/teams', { params: { query: { page_size: 100 } as any } }),
+  const [summaryResultP, teamsResultP] = await Promise.all([
+    api.GET('/api/v1/dashboard/summary').catch(() => ({ data: null, error: 'Failed to load summary' })),
+    api.GET('/api/v1/admin/teams', { params: { query: { page_size: 100 } as any } }).catch(() => ({ data: null, error: 'Failed to load teams' })),
   ])
+  const summaryErr = summaryResultP?.error ?? null
+  const teamsErr = teamsResultP?.error ?? null
+  const summaryResult = summaryResultP?.data ?? null
+  const teamsResult = teamsResultP?.data ?? null
 
   if (summaryErr) {
     return { error: { detail: t('views.TeamComparisonView.failed_to_load_dashboard') + ' ' + formatError(summaryErr) } }
