@@ -23,6 +23,7 @@ from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession
 from modulo.api.db_error_handling import handle_db_errors
 from modulo.api.dependencies import _get_engine, get_db_session, pg_connection_string
 from modulo.auth.dependencies import get_current_tenant_user
+from modulo.settings import get_settings
 from modulo.auth.jwt import TenantPrincipal
 from modulo.core.hitl_manager import (
     AlreadyClaimedError,
@@ -253,7 +254,7 @@ async def approve_gate(
     try:
         executor = PipelineExecutor(
             engine,
-            checkpointer_conn_string=pg_connection_string(str(engine.url)),
+            checkpointer_conn_string=pg_connection_string(get_settings().database_url),
         )
         await executor.resume(
             run_id=run_id,
@@ -349,7 +350,7 @@ async def approve_gate_with_modification(
     try:
         executor = PipelineExecutor(
             engine,
-            checkpointer_conn_string=pg_connection_string(str(engine.url)),
+            checkpointer_conn_string=pg_connection_string(get_settings().database_url),
         )
         await executor.resume(
             run_id=run_id,
