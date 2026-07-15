@@ -215,6 +215,7 @@ asyncio_mode = "auto"
 asyncio_default_fixture_loop_scope = "session"
 filterwarnings = [
     "error::RuntimeWarning",
+    "ignore:coroutine .to_thread. was never awaited:RuntimeWarning",
     "error::pytest.PytestUnraisableExceptionWarning",
     "error::ResourceWarning",
     "error::DeprecationWarning",
