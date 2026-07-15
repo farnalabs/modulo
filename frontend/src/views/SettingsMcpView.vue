@@ -113,14 +113,19 @@
         </CardHeader>
         <CardContent class="space-y-4">
           <div class="flex items-center gap-2">
-            <label for="settingsmcpview-field-3" class="text-sm font-medium whitespace-nowrap">Client:</label>
-            <select id="settingsmcpview-field-3" v-model="selectedMcpClient" aria-label="Client" class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm">
-              <option value="opencode">opencode / Claude Code</option>
-              <option value="claude">Claude Desktop</option>
-              <option value="cursor">Cursor</option>
-              <option value="continue">Continue.dev</option>
-              <option value="custom">Custom</option>
-            </select>
+            <label class="text-sm font-medium whitespace-nowrap">Client:</label>
+            <Select v-model="selectedMcpClient">
+              <SelectTrigger class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm" aria-label="Client">
+                <SelectValue placeholder="Select client" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="opencode">opencode / Claude Code</SelectItem>
+                <SelectItem value="claude">Claude Desktop</SelectItem>
+                <SelectItem value="cursor">Cursor</SelectItem>
+                <SelectItem value="continue">Continue.dev</SelectItem>
+                <SelectItem value="custom">Custom</SelectItem>
+              </SelectContent>
+            </Select>
           </div>
           <div class="rounded-lg bg-muted/30 p-4">
             <pre class="text-xs font-mono whitespace-pre-wrap break-all">{{ mcpConfigSnippet }}</pre>
@@ -168,16 +173,16 @@
           >Key name is required.</p>
         </div>
         <div>
-          <label for="settingsmcpview-field-1" class="mb-1 block text-sm font-medium">Role</label>
-          <select id="settingsmcpview-field-1"
-            v-model="createKeyRole"
-            data-testid="settings-mcp-create-key-role"
-            aria-label="Role"
-            class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-          >
-            <option value="operator">Operator</option>
-            <option value="runner">Runner</option>
-          </select>
+          <label class="mb-1 block text-sm font-medium">Role</label>
+          <Select v-model="createKeyRole">
+            <SelectTrigger class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring" aria-label="Role" data-testid="settings-mcp-create-key-role">
+              <SelectValue placeholder="Select role" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="operator">Operator</SelectItem>
+              <SelectItem value="runner">Runner</SelectItem>
+            </SelectContent>
+          </Select>
         </div>
         <div v-if="createKeyError" class="text-sm text-destructive">{{ createKeyError }}</div>
       </div>

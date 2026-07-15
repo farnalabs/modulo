@@ -138,12 +138,17 @@
         </div>
         <div>
           <label for="adminusersview-field-1" class="block text-sm font-medium mb-1">Role</label>
-          <select id="adminusersview-field-1" v-model="newUser.org_role" data-testid="admin-users-create-role" aria-label="Role" class="w-full px-3 py-2 border border-input bg-background rounded-lg text-sm">
-            <option value="runner">Runner</option>
-            <option value="operator">Operator</option>
-            <option value="admin">Admin</option>
-            <option value="viewer">Viewer</option>
-          </select>
+          <Select v-model="newUser.org_role">
+            <SelectTrigger class="w-full px-3 py-2 border border-input bg-background rounded-lg text-sm" aria-label="Role" data-testid="admin-users-create-role">
+              <SelectValue placeholder="Select role" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="runner">Runner</SelectItem>
+              <SelectItem value="operator">Operator</SelectItem>
+              <SelectItem value="admin">Admin</SelectItem>
+              <SelectItem value="viewer">Viewer</SelectItem>
+            </SelectContent>
+          </Select>
         </div>
         <p v-if="createError" class="text-sm text-destructive">{{ createError }}</p>
         <button type="submit" hidden>Create</button>
