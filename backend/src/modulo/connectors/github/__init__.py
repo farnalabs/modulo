@@ -191,6 +191,9 @@ class GitHubConnector(ConnectorBase):
             raise ValueError(f"Cannot verify scopes: {exc}") from exc
 
         token_scopes = self._parse_scopes_from_headers(r)
+        # admin:org is a superset of read:org
+        if "admin:org" in token_scopes:
+            token_scopes.add("read:org")
         return set(REQUIRED_SCOPES - token_scopes)
 
     async def health_check(self) -> HealthResult:
