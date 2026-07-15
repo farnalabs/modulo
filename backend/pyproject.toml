@@ -1,4 +1,4 @@
-﻿# Security Audit Policy
+# Security Audit Policy
 # ---------------------
 # Dependency versions are pinned to minimums that fix known CVEs where possible.
 # Run `pip-audit` after any dependency change. The CI workflow
