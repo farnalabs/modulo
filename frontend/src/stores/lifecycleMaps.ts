@@ -163,7 +163,7 @@ export const useLifecycleMapsStore = defineStore('lifecycleMaps', () => {
       })
       return data
     } catch (e: unknown) {
-      error.value = e instanceof Error ? e.message : 'Failed to save version'
+      error.value = formatApiError(e)
       throw e
     } finally {
       saving.value = false
@@ -179,7 +179,7 @@ export const useLifecycleMapsStore = defineStore('lifecycleMaps', () => {
       })
       return data
     } catch (e: unknown) {
-      error.value = e instanceof Error ? e.message : 'Failed to update version'
+      error.value = formatApiError(e)
       throw e
     } finally {
       saving.value = false
@@ -196,7 +196,7 @@ export const useLifecycleMapsStore = defineStore('lifecycleMaps', () => {
       )
       return data
     } catch (e: unknown) {
-      error.value = e instanceof Error ? e.message : 'Failed to graduate stage'
+      error.value = formatApiError(e)
       throw e
     } finally {
       saving.value = false
