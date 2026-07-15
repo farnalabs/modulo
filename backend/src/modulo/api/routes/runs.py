@@ -55,6 +55,13 @@ from modulo.db.models.run import Run
 from modulo.db.rls import set_rls_org
 from modulo.settings import Settings, get_settings
 
+_bg_executor_engine = create_async_engine(
+    str(get_settings().database_url),
+    pool_size=3,
+    max_overflow=6,
+    pool_pre_ping=True,
+)
+
 _log = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/v1/runs", tags=["runs"])
@@ -404,9 +411,8 @@ async def trigger_run(
             detail="An unexpected error occurred.",
         ) from None
     _settings_for_bg = get_settings()
-    _bg_engine = create_async_engine(str(_settings_for_bg.database_url), pool_size=2, max_overflow=4, pool_pre_ping=True)
     executor = PipelineExecutor(
-        _bg_engine,
+        _bg_executor_engine,
         checkpointer_conn_string=pg_connection_string(str(_settings_for_bg.database_url)),
     )
     background_tasks.add_task(_run_in_background, executor, run_id, org_id, req.input_payload)
@@ -595,9 +601,7 @@ async def _run_in_background(
     except Exception:
         _log.exception("run.background_execution_error", extra={"run_id": str(run_id)})
         try:
-            settings = get_settings()
-            engine = create_async_engine(str(settings.database_url), pool_size=1, pool_pre_ping=True)
-            factory = async_sessionmaker(engine, expire_on_commit=False)
+            factory = async_sessionmaker(_bg_executor_engine, expire_on_commit=False)
             async with factory() as session, session.begin():
                 await set_rls_org(session, org_id)
                 await update_run_status(session, run_id, "failed", error_code="internal_error")
