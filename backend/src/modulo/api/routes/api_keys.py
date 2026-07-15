@@ -80,7 +80,6 @@ def _require_admin(principal: TenantPrincipal) -> None:
         )
 
 
-@router.post("", response_model=ApiKeyCreatedResponse, status_code=status.HTTP_201_CREATED)
 @handle_db_errors("api_keys.create_api_key_endpoint")
 @router.post("", response_model=ApiKeyCreatedResponse, status_code=status.HTTP_201_CREATED)
 async def create_api_key_endpoint(
@@ -150,7 +149,6 @@ async def create_api_key_endpoint(
     )
 
 
-@router.get("", response_model=list[dict[str, Any]])
 @handle_db_errors("api_keys.list_api_keys_endpoint")
 @router.get("", response_model=list[dict[str, Any]])
 async def list_api_keys_endpoint(
@@ -183,7 +181,6 @@ async def list_api_keys_endpoint(
         ) from None
 
 
-@router.put("/{key_id}")
 @handle_db_errors("api_keys.update_api_key_endpoint")
 @router.put("/{key_id}")
 async def update_api_key_endpoint(
@@ -257,7 +254,6 @@ async def update_api_key_endpoint(
     }
 
 
-@router.delete("/{key_id}", response_model=ApiKeyRevokeResponse)
 @handle_db_errors("api_keys.revoke_api_key_endpoint")
 @router.delete("/{key_id}", response_model=ApiKeyRevokeResponse)
 async def revoke_api_key_endpoint(
@@ -302,7 +298,6 @@ async def revoke_api_key_endpoint(
     return ApiKeyRevokeResponse(id=key_id, revoked=True)
 
 
-@router.get("/mcp-config", response_model=McpConfigResponse)
 @handle_db_errors("api_keys.mcp_config_endpoint")
 @router.get("/mcp-config", response_model=McpConfigResponse)
 async def mcp_config_endpoint(

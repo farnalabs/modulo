@@ -61,7 +61,6 @@ class DeleteOAuthClientResponse(BaseModel):
     deleted: bool
 
 
-@router.post("/clients", response_model=CreateOAuthClientResponse, status_code=status.HTTP_201_CREATED)
 @handle_db_errors("mcp_oauth.register_oauth_client")
 @router.post("/clients", response_model=CreateOAuthClientResponse, status_code=status.HTTP_201_CREATED)
 async def register_oauth_client(
@@ -141,7 +140,6 @@ async def register_oauth_client(
     )
 
 
-@router.get("/clients", response_model=list[OAuthClientItem])
 @handle_db_errors("mcp_oauth.list_oauth_clients_endpoint")
 @router.get("/clients", response_model=list[OAuthClientItem])
 async def list_oauth_clients_endpoint(
@@ -179,7 +177,6 @@ async def list_oauth_clients_endpoint(
     return [OAuthClientItem(**c) for c in clients]
 
 
-@router.delete("/clients/{client_id}", response_model=DeleteOAuthClientResponse)
 @handle_db_errors("mcp_oauth.remove_oauth_client")
 @router.delete("/clients/{client_id}", response_model=DeleteOAuthClientResponse)
 async def remove_oauth_client(

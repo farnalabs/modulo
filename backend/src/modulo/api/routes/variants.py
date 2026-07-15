@@ -100,7 +100,6 @@ def _variant_to_response(group: Any) -> dict[str, Any]:
     }
 
 
-@router.post("", response_model=VariantGroupResponse, status_code=status.HTTP_201_CREATED)
 @handle_db_errors("variants.create_group")
 @router.post("", response_model=VariantGroupResponse, status_code=status.HTTP_201_CREATED)
 async def create_group(
@@ -149,7 +148,6 @@ async def create_group(
     return _variant_to_response(group)
 
 
-@router.get("", response_model=list[VariantGroupResponse])
 @handle_db_errors("variants.list_groups")
 @router.get("", response_model=list[VariantGroupResponse])
 async def list_groups(
@@ -189,7 +187,6 @@ async def list_groups(
     return [_variant_to_response(g) for g in items]
 
 
-@router.get("/{group_id}", response_model=VariantGroupResponse)
 @handle_db_errors("variants.get_group")
 @router.get("/{group_id}", response_model=VariantGroupResponse)
 async def get_group(
@@ -229,7 +226,6 @@ async def get_group(
     return _variant_to_response(group)
 
 
-@router.put("/{group_id}", response_model=VariantGroupResponse)
 @handle_db_errors("variants.update_group")
 @router.put("/{group_id}", response_model=VariantGroupResponse)
 async def update_group(
@@ -279,7 +275,6 @@ async def update_group(
     return _variant_to_response(group)
 
 
-@router.delete("/{group_id}", status_code=status.HTTP_204_NO_CONTENT)
 @handle_db_errors("variants.delete_group")
 @router.delete("/{group_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_group(
@@ -319,7 +314,6 @@ async def delete_group(
     return
 
 
-@router.post("/{group_id}/run", response_model=RunVariantResponse)
 @handle_db_errors("variants.run_variant")
 @router.post("/{group_id}/run", response_model=RunVariantResponse)
 async def run_variant(
@@ -394,7 +388,6 @@ async def run_variant(
     }
 
 
-@router.get("/{group_id}/coverage-gaps", response_model=list[CoverageGap])
 @handle_db_errors("variants.coverage_gaps")
 @router.get("/{group_id}/coverage-gaps", response_model=list[CoverageGap])
 async def coverage_gaps(
@@ -438,7 +431,6 @@ async def coverage_gaps(
     return gaps
 
 
-@router.get("/{group_id}/prompt-diffs", response_model=list[PromptDiffEntry])
 @handle_db_errors("variants.prompt_diffs")
 @router.get("/{group_id}/prompt-diffs", response_model=list[PromptDiffEntry])
 async def prompt_diffs(

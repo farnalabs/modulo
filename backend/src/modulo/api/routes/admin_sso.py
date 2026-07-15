@@ -121,7 +121,6 @@ def _require_admin(principal: TenantPrincipal) -> None:
         )
 
 
-@router.get("/providers", response_model=list[SsoProviderResponse])
 @handle_db_errors("admin.sso.get_providers")
 @router.get("/providers", response_model=list[SsoProviderResponse])
 async def get_providers(
@@ -155,7 +154,6 @@ async def get_providers(
         ) from None
 
 
-@router.post("/providers", response_model=SsoProviderResponse, status_code=status.HTTP_201_CREATED)
 @handle_db_errors("admin.sso.create_provider_endpoint")
 @router.post("/providers", response_model=SsoProviderResponse, status_code=status.HTTP_201_CREATED)
 async def create_provider_endpoint(
@@ -215,7 +213,6 @@ async def create_provider_endpoint(
     return SsoProviderResponse.model_validate(provider)
 
 
-@router.put("/providers/{provider_id}", response_model=SsoProviderResponse)
 @handle_db_errors("admin.sso.update_provider_endpoint")
 @router.put("/providers/{provider_id}", response_model=SsoProviderResponse)
 async def update_provider_endpoint(
@@ -275,7 +272,6 @@ async def update_provider_endpoint(
     return SsoProviderResponse.model_validate(provider)
 
 
-@router.delete("/providers/{provider_id}", status_code=status.HTTP_204_NO_CONTENT)
 @handle_db_errors("admin.sso.delete_provider_endpoint")
 @router.delete("/providers/{provider_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_provider_endpoint(
@@ -319,7 +315,6 @@ async def delete_provider_endpoint(
         )
 
 
-@router.post("/providers/{provider_id}/test", response_model=SsoProviderTestResult)
 @handle_db_errors("admin.sso.test_provider_connection")
 @router.post("/providers/{provider_id}/test", response_model=SsoProviderTestResult)
 async def test_provider_connection(
@@ -504,7 +499,6 @@ async def _test_saml_connection(provider: Any) -> SsoProviderTestResult:
     )
 
 
-@router.put("/providers/{provider_id}/toggle", response_model=SsoProviderResponse)
 @handle_db_errors("admin.sso.toggle_provider_endpoint")
 @router.put("/providers/{provider_id}/toggle", response_model=SsoProviderResponse)
 async def toggle_provider_endpoint(
@@ -563,7 +557,6 @@ class GroupMappingsResponse(BaseModel):
     mappings: list[GroupMappingItem]
 
 
-@router.put("/providers/{provider_id}/group-mappings", response_model=GroupMappingsResponse)
 @handle_db_errors("admin.sso.set_group_mappings_endpoint")
 @router.put("/providers/{provider_id}/group-mappings", response_model=GroupMappingsResponse)
 async def set_group_mappings_endpoint(
@@ -610,7 +603,6 @@ async def set_group_mappings_endpoint(
     return GroupMappingsResponse(mappings=[GroupMappingItem(**m) for m in provider.group_mappings])
 
 
-@router.get("/providers/{provider_id}/group-mappings", response_model=GroupMappingsResponse)
 @handle_db_errors("admin.sso.get_group_mappings_endpoint")
 @router.get("/providers/{provider_id}/group-mappings", response_model=GroupMappingsResponse)
 async def get_group_mappings_endpoint(

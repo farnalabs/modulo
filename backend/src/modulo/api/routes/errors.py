@@ -89,7 +89,6 @@ def _get_key_store(settings: Settings | None = None) -> SessionKeyStore:
     return _key_store
 
 
-@router.post("/session-key", response_model=SessionKeyResponse, status_code=status.HTTP_201_CREATED)
 @handle_db_errors("errors.create_session_key")
 @router.post("/session-key", response_model=SessionKeyResponse, status_code=status.HTTP_201_CREATED)
 async def create_session_key(
@@ -106,7 +105,6 @@ async def create_session_key(
     return {"key": key, "expires_in_seconds": 3600}
 
 
-@router.post("/ingest", response_model=ErrorIngestResponse, status_code=status.HTTP_201_CREATED)
 @handle_db_errors("errors.ingest_errors")
 @router.post("/ingest", response_model=ErrorIngestResponse, status_code=status.HTTP_201_CREATED)
 async def ingest_errors(
@@ -187,7 +185,6 @@ async def ingest_errors(
     return {"results": [ErrorGroupResult(**r) for r in results]}
 
 
-@router.post("/ingest/public", response_model=ErrorIngestResponse, status_code=status.HTTP_201_CREATED)
 @handle_db_errors("errors.ingest_errors_public")
 @router.post("/ingest/public", response_model=ErrorIngestResponse, status_code=status.HTTP_201_CREATED)
 async def ingest_errors_public(
@@ -340,7 +337,6 @@ async def _fetch_sample_event(session: AsyncSession, org_id: uuid.UUID, group: E
     return result.scalar_one_or_none()
 
 
-@router.get("", response_model=ErrorListResponse)
 @handle_db_errors("errors.list_error_groups")
 @router.get("", response_model=ErrorListResponse)
 async def list_error_groups(
@@ -419,7 +415,6 @@ async def list_error_groups(
     return {"items": items, "total": total, "limit": limit, "offset": offset}
 
 
-@router.get("/{error_id}", response_model=ErrorGroupDetail)
 @handle_db_errors("errors.get_error_group_detail")
 @router.get("/{error_id}", response_model=ErrorGroupDetail)
 async def get_error_group_detail(
@@ -471,7 +466,6 @@ async def get_error_group_detail(
     }
 
 
-@router.patch("/{error_id}", response_model=ErrorGroupDetail)
 @handle_db_errors("errors.patch_error_group")
 @router.patch("/{error_id}", response_model=ErrorGroupDetail)
 async def patch_error_group(
@@ -532,7 +526,6 @@ async def patch_error_group(
     }
 
 
-@router.get("/{error_id}/events", response_model=ErrorEventListResponse)
 @handle_db_errors("errors.list_error_events")
 @router.get("/{error_id}/events", response_model=ErrorEventListResponse)
 async def list_error_events(

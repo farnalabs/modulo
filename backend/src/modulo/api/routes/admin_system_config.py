@@ -28,7 +28,6 @@ class ConfigEntry(BaseModel):
     updated_at: str | None = None
 
 
-@router.get("")
 @handle_db_errors("admin.system_config.admin_list_config")
 @router.get("")
 async def admin_list_config(
@@ -72,7 +71,6 @@ class SetConfigRequest(BaseModel):
     value: Any = Field(..., description="JSON value to store")
 
 
-@router.put("/{key}")
 @handle_db_errors("admin.system_config.admin_set_config")
 @router.put("/{key}")
 async def admin_set_config(
@@ -116,7 +114,6 @@ async def admin_set_config(
         raise HTTPException(status_code=500, detail="Internal server error") from None
 
 
-@router.delete("/{key}", status_code=status.HTTP_204_NO_CONTENT)
 @handle_db_errors("admin.system_config.admin_delete_config")
 @router.delete("/{key}", status_code=status.HTTP_204_NO_CONTENT)
 async def admin_delete_config(

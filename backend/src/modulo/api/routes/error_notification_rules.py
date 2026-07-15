@@ -57,7 +57,6 @@ def _require_admin(principal: TenantPrincipal) -> None:
         )
 
 
-@router.get("", response_model=ErrorNotificationRuleListResponse)
 @handle_db_errors("error_notification_rules.list_notification_rules")
 @router.get("", response_model=ErrorNotificationRuleListResponse)
 async def list_notification_rules(
@@ -115,7 +114,6 @@ async def list_notification_rules(
     }
 
 
-@router.post("", response_model=ErrorNotificationRuleResponse, status_code=status.HTTP_201_CREATED)
 @handle_db_errors("error_notification_rules.create_notification_rule")
 @router.post("", response_model=ErrorNotificationRuleResponse, status_code=status.HTTP_201_CREATED)
 async def create_notification_rule(
@@ -182,7 +180,6 @@ async def create_notification_rule(
     return _serialize_rule(rule)
 
 
-@router.put("/{rule_id}", response_model=ErrorNotificationRuleResponse)
 @handle_db_errors("error_notification_rules.update_notification_rule")
 @router.put("/{rule_id}", response_model=ErrorNotificationRuleResponse)
 async def update_notification_rule(
@@ -254,7 +251,6 @@ async def update_notification_rule(
     return _serialize_rule(rule)
 
 
-@router.delete("/{rule_id}", status_code=status.HTTP_204_NO_CONTENT)
 @handle_db_errors("error_notification_rules.delete_notification_rule")
 @router.delete("/{rule_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_notification_rule(

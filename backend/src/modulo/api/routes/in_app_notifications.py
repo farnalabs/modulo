@@ -102,7 +102,6 @@ def _notification_to_response(n: Notification) -> NotificationResponse:
     )
 
 
-@router.get("/dashboard", response_model=DashboardNotificationResponse)
 @handle_db_errors("in_app_notifications.get_dashboard")
 @router.get("/dashboard", response_model=DashboardNotificationResponse)
 async def get_dashboard(
@@ -145,7 +144,6 @@ async def get_dashboard(
     )
 
 
-@router.get("/unread-count", response_model=dict)
 @handle_db_errors("in_app_notifications.get_unread")
 @router.get("/unread-count", response_model=dict)
 async def get_unread(
@@ -179,7 +177,6 @@ async def get_unread(
     return {"count": count}
 
 
-@router.get("", response_model=PaginatedNotificationsResponse)
 @handle_db_errors("in_app_notifications.list_notifications")
 @router.get("", response_model=PaginatedNotificationsResponse)
 async def list_notifications(
@@ -240,7 +237,6 @@ async def list_notifications(
     )
 
 
-@router.get("/{notification_id}", response_model=NotificationResponse)
 @handle_db_errors("in_app_notifications.get_notification_detail")
 @router.get("/{notification_id}", response_model=NotificationResponse)
 async def get_notification_detail(
@@ -277,7 +273,6 @@ async def get_notification_detail(
     return _notification_to_response(n)
 
 
-@router.post("/{notification_id}/review-later", status_code=status.HTTP_200_OK)
 @handle_db_errors("in_app_notifications.review_later_endpoint")
 @router.post("/{notification_id}/review-later", status_code=status.HTTP_200_OK)
 async def review_later_endpoint(
@@ -329,7 +324,6 @@ async def review_later_endpoint(
     return {"status": "review_later"}
 
 
-@router.post("/{notification_id}/dismiss", status_code=status.HTTP_200_OK)
 @handle_db_errors("in_app_notifications.dismiss_endpoint")
 @router.post("/{notification_id}/dismiss", status_code=status.HTTP_200_OK)
 async def dismiss_endpoint(
@@ -385,7 +379,6 @@ async def dismiss_endpoint(
     return {"status": f"dismissed_{scope_label}"}
 
 
-@router.get("/preferences", response_model=NotificationPreferencesResponse)
 @handle_db_errors("in_app_notifications.get_preferences")
 @router.get("/preferences", response_model=NotificationPreferencesResponse)
 async def get_preferences(
@@ -398,7 +391,6 @@ async def get_preferences(
     )
 
 
-@router.put("/preferences", response_model=NotificationPreferencesResponse)
 @handle_db_errors("in_app_notifications.update_preferences")
 @router.put("/preferences", response_model=NotificationPreferencesResponse)
 async def update_preferences(

@@ -134,7 +134,6 @@ class SchemaVersionListResponse(BaseModel):
 # ---------------------------------------------------------------------------
 
 
-@router.get("", response_model=SchemaListResponse)
 @handle_db_errors("schemas.list_schemas_endpoint")
 @router.get("", response_model=SchemaListResponse)
 async def list_schemas_endpoint(
@@ -182,7 +181,6 @@ async def list_schemas_endpoint(
     )
 
 
-@router.post("", response_model=SchemaResponse, status_code=status.HTTP_201_CREATED)
 @handle_db_errors("schemas.create_schema_endpoint")
 @router.post("", response_model=SchemaResponse, status_code=status.HTTP_201_CREATED)
 async def create_schema_endpoint(
@@ -241,7 +239,6 @@ async def create_schema_endpoint(
     return SchemaResponse.model_validate(schema)
 
 
-@router.get("/{schema_id}", response_model=SchemaResponse)
 @handle_db_errors("schemas.get_schema_endpoint")
 @router.get("/{schema_id}", response_model=SchemaResponse)
 async def get_schema_endpoint(
@@ -285,7 +282,6 @@ async def get_schema_endpoint(
     return SchemaResponse.model_validate(schema)
 
 
-@router.patch("/{schema_id}", response_model=SchemaResponse)
 @handle_db_errors("schemas.update_schema_endpoint")
 @router.patch("/{schema_id}", response_model=SchemaResponse)
 async def update_schema_endpoint(
@@ -332,7 +328,6 @@ async def update_schema_endpoint(
     return SchemaResponse.model_validate(schema)
 
 
-@router.patch("/{schema_id}/deprecate", response_model=SchemaResponse)
 @handle_db_errors("schemas.deprecate_schema_endpoint")
 @router.patch("/{schema_id}/deprecate", response_model=SchemaResponse)
 async def deprecate_schema_endpoint(
@@ -377,7 +372,6 @@ async def deprecate_schema_endpoint(
     return SchemaResponse.model_validate(schema)
 
 
-@router.delete("/{schema_id}", status_code=status.HTTP_204_NO_CONTENT)
 @handle_db_errors("schemas.delete_schema_endpoint")
 @router.delete("/{schema_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_schema_endpoint(
@@ -610,7 +604,6 @@ class SchemaFieldListResponse(BaseModel):
     fields: list[SchemaFieldResponse]
 
 
-@router.get("/{schema_id}/fields", response_model=SchemaFieldListResponse)
 @handle_db_errors("schemas.list_schema_fields_endpoint")
 @router.get("/{schema_id}/fields", response_model=SchemaFieldListResponse)
 async def list_schema_fields_endpoint(
@@ -706,7 +699,6 @@ class SchemaInferResponse(BaseModel):
     suggestion_description: str | None = None
 
 
-@router.post("/infer", response_model=SchemaInferResponse)
 @handle_db_errors("schemas.infer_schema_endpoint")
 @router.post("/infer", response_model=SchemaInferResponse)
 async def infer_schema_endpoint(
@@ -918,7 +910,6 @@ class SchemaGenerateResponse(BaseModel):
     definition_json: dict[str, Any]
 
 
-@router.post("/generate", response_model=SchemaGenerateResponse)
 @handle_db_errors("schemas.generate_schema_endpoint")
 @router.post("/generate", response_model=SchemaGenerateResponse)
 async def generate_schema_endpoint(
@@ -1072,7 +1063,6 @@ class SchemaMigrationPlanRequest(BaseModel):
     to_definition: dict[str, Any]
 
 
-@router.post("/migrate", response_model=SchemaMigrationResponse)
 @handle_db_errors("schemas.migrate_data_endpoint")
 @router.post("/migrate", response_model=SchemaMigrationResponse)
 async def migrate_data_endpoint(
@@ -1180,7 +1170,6 @@ async def migrate_data_endpoint(
     )
 
 
-@router.post("/migrate/plan", response_model=dict[str, Any])
 @handle_db_errors("schemas.migration_plan_endpoint")
 @router.post("/migrate/plan", response_model=dict[str, Any])
 async def migration_plan_endpoint(
@@ -1267,7 +1256,6 @@ def _find_json_location(raw: str, instance: dict[str, Any], error_path: str) -> 
     return None, None
 
 
-@router.post("/validate", response_model=SchemaValidateResponse)
 @handle_db_errors("schemas.validate_schema_endpoint")
 @router.post("/validate", response_model=SchemaValidateResponse)
 async def validate_schema_endpoint(
@@ -1322,7 +1310,6 @@ class SchemaImportResponse(BaseModel):
     fields: list[SchemaImportField]
 
 
-@router.post("/import", response_model=SchemaImportResponse)
 @handle_db_errors("schemas.import_schema_endpoint")
 @router.post("/import", response_model=SchemaImportResponse)
 async def import_schema_endpoint(

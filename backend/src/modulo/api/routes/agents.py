@@ -227,7 +227,6 @@ def _validate_generic_agent(
         )
 
 
-@router.get("", response_model=AgentListResponse)
 @handle_db_errors("agents.list_agents_endpoint")
 @router.get("", response_model=AgentListResponse)
 async def list_agents_endpoint(
@@ -265,7 +264,6 @@ async def list_agents_endpoint(
     )
 
 
-@router.post("", response_model=AgentResponse, status_code=status.HTTP_201_CREATED)
 @handle_db_errors("agents.create_agent_endpoint")
 @router.post("", response_model=AgentResponse, status_code=status.HTTP_201_CREATED)
 async def create_agent_endpoint(
@@ -332,7 +330,6 @@ async def create_agent_endpoint(
     return AgentResponse.model_validate(agent)
 
 
-@router.get("/{agent_id}", response_model=AgentResponse)
 @handle_db_errors("agents.get_agent_endpoint")
 @router.get("/{agent_id}", response_model=AgentResponse)
 async def get_agent_endpoint(
@@ -366,7 +363,6 @@ async def get_agent_endpoint(
     return AgentResponse.model_validate(agent)
 
 
-@router.patch("/{agent_id}", response_model=AgentResponse)
 @handle_db_errors("agents.update_agent_endpoint")
 @router.patch("/{agent_id}", response_model=AgentResponse)
 async def update_agent_endpoint(
@@ -443,7 +439,6 @@ async def update_agent_endpoint(
     return AgentResponse.model_validate(updated)
 
 
-@router.post("/{agent_id}/prompts/{version}/optimize", response_model=PromptOptimizeResponse)
 @handle_db_errors("agents.optimize_prompt")
 @router.post("/{agent_id}/prompts/{version}/optimize", response_model=PromptOptimizeResponse)
 async def optimize_prompt(
@@ -580,7 +575,6 @@ async def optimize_prompt(
     )
 
 
-@router.post("/{agent_id}/prompts/{version}/apply", response_model=AgentResponse)
 @handle_db_errors("agents.apply_optimized_prompt")
 @router.post("/{agent_id}/prompts/{version}/apply", response_model=AgentResponse)
 async def apply_optimized_prompt(
@@ -629,7 +623,6 @@ async def apply_optimized_prompt(
     return AgentResponse.model_validate(agent)
 
 
-@router.get("/{agent_id}/prompts", response_model=list[PromptVersionListEntry])
 @handle_db_errors("agents.list_prompt_versions")
 @router.get("/{agent_id}/prompts", response_model=list[PromptVersionListEntry])
 async def list_prompt_versions(
@@ -674,7 +667,6 @@ async def list_prompt_versions(
     ]
 
 
-@router.get("/{agent_id}/prompts/{version}", response_model=PromptVersionDetail)
 @handle_db_errors("agents.get_prompt_version_endpoint")
 @router.get("/{agent_id}/prompts/{version}", response_model=PromptVersionDetail)
 async def get_prompt_version_endpoint(
@@ -716,7 +708,6 @@ async def get_prompt_version_endpoint(
     )
 
 
-@router.put("/{agent_id}/prompts/rollback/{version}", response_model=PromptRollbackResponse)
 @handle_db_errors("agents.rollback_prompt")
 @router.put("/{agent_id}/prompts/rollback/{version}", response_model=PromptRollbackResponse)
 async def rollback_prompt(
@@ -762,7 +753,6 @@ async def rollback_prompt(
     )
 
 
-@router.post("/{agent_id}/prompts/diff", response_model=PromptDiffResponse)
 @handle_db_errors("agents.diff_prompt_versions")
 @router.post("/{agent_id}/prompts/diff", response_model=PromptDiffResponse)
 async def diff_prompt_versions(
@@ -893,7 +883,6 @@ async def diff_prompt_versions(
     return PromptDiffResponse(version_a=req.version_a, version_b=req.version_b, lines=diff_lines)
 
 
-@router.delete("/{agent_id}", status_code=status.HTTP_204_NO_CONTENT)
 @handle_db_errors("agents.delete_agent_endpoint")
 @router.delete("/{agent_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_agent_endpoint(
