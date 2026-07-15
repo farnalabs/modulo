@@ -342,7 +342,7 @@ async def _resolve_api_key(
             ModelBackend.organisation_id == org_id,
             ModelBackend.provider == provider,
             ModelBackend.status == "active",
-            ModelBackend.credentials_ciphertext != b'',
+            ModelBackend.credentials_ciphertext != b"",
         )
     )
     backend = result.scalar_one_or_none()
@@ -681,7 +681,7 @@ async def create_session(
                     select(ModelBackend)
                     .where(
                         ModelBackend.organisation_id == principal.organisation_id,
-                        ModelBackend.credentials_ciphertext != b'',
+                        ModelBackend.credentials_ciphertext != b"",
                     )
                     .limit(1)
                 )
