@@ -100,7 +100,9 @@ async def _do_get_run(
         await set_rls_org(session, principal.organisation_id)
         from sqlalchemy import select
         from sqlalchemy.orm import selectinload
+
         from modulo.db.models.run import Run
+
         stmt = select(Run).options(selectinload(Run.pipeline)).where(Run.id == run_id)
         run = (await session.execute(stmt)).scalar_one_or_none()
         if run is None:
