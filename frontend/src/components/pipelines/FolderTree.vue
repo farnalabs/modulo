@@ -1,5 +1,5 @@
 <template>
-  <div data-testid="folder-tree" class="w-64 border-r border-border h-full overflow-y-auto bg-card flex flex-col">
+  <div data-testid="folder-tree" class="w-64 border-r border-border h-full self-stretch overflow-y-auto bg-card flex flex-col">
     <div class="p-3 border-b border-border flex items-center justify-between shrink-0">
       <h3 class="text-sm font-semibold text-foreground">{{ $t('views.PipelineListView.folders') }}</h3>
       <button

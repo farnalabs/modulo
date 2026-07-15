@@ -2,7 +2,7 @@
   <TooltipProvider :delay-duration="300">
   <div class="flex items-start min-h-screen">
     <!-- Sidebar -->
-    <aside class="hidden md:flex w-64 border-r bg-background p-4 flex-col">
+    <aside class="hidden md:flex w-64 border-r bg-background p-4 flex-col h-screen sticky top-0">
       <div class="mb-6 flex items-center gap-2.5 pl-1">
         <router-link to="/" class="flex items-center gap-2.5">
           <div
