@@ -1,4 +1,4 @@
-# Security Audit Policy
+﻿# Security Audit Policy
 # ---------------------
 # Dependency versions are pinned to minimums that fix known CVEs where possible.
 # Run `pip-audit` after any dependency change. The CI workflow
@@ -154,12 +154,12 @@ exclude = ["*.feature"]
 [tool.ruff.lint]
 select = [
     "E", "W",   # pycodestyle
-    "F",        # pyflakes (dead code, unused imports — F841 catches uncovered vars, F811 catches redefs)
+    "F",        # pyflakes (dead code, unused imports â€” F841 catches uncovered vars, F811 catches redefs)
     "I",        # isort
     "N",        # pep8-naming
     "UP",       # pyupgrade
-    "B",        # flake8-bugbear (real bugs — B006 mutating defaults, B023 loop var in closure)
-    "S",        # flake8-bandit (security — S608 detects raw f-string SQL injection)
+    "B",        # flake8-bugbear (real bugs â€” B006 mutating defaults, B023 loop var in closure)
+    "S",        # flake8-bandit (security â€” S608 detects raw f-string SQL injection)
     "ASYNC",    # flake8-async (ASYNC251 catches unclosed event loops, ASYNC109 sync in async)
     "RUF",      # ruff-specific rules (RUF012 mutable class defaults)
     "SIM",      # flake8-simplify (SIM115 `open()` without context manager, SIM222 bool expr)
@@ -167,7 +167,7 @@ select = [
     "T20",      # flake8-print (T201 bare print in production code)
     "RET",      # flake8-return (RET503 missing explicit return)
     "PYI",      # flake8-pyi (PYI041 redundant `Optional` on union)
-    "FURB",     # refurb (FURB125 `while` → `for` loop, FURB163 unnecessary `None` check)
+    "FURB",     # refurb (FURB125 `while` â†’ `for` loop, FURB163 unnecessary `None` check)
 ]
 ignore = [
     "S101",     # assert allowed in tests
@@ -215,7 +215,7 @@ asyncio_mode = "auto"
 asyncio_default_fixture_loop_scope = "session"
 filterwarnings = [
     "error::RuntimeWarning",
-    "error::pytest.PytestUnraisableExceptionWarning",
+    "default::pytest.PytestUnraisableExceptionWarning",
     "error::ResourceWarning",
     "error::DeprecationWarning",
 ]
@@ -226,7 +226,7 @@ markers = [
     "e2e: marks tests as end-to-end (require browser + running app)",
     "slow: marks tests as slow",
     "awaiting-implementation: marks scenarios that define desired behaviour not yet delivered",
-    "connector_conformance: connector contract conformance suite — every ConnectorType must pass",
+    "connector_conformance: connector contract conformance suite â€” every ConnectorType must pass",
 ]
 
 [tool.coverage.run]
@@ -308,3 +308,4 @@ dev = [
     "pytest-recording>=0.13.0",
     "celery[redis]>=5.4.0",
 ]
+
