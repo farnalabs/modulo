@@ -443,12 +443,11 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Button } from '@/components/ui/button'
 import EmptyState from '../components/shared/EmptyState.vue'
 
-async function fetchWithTimeout<T>(promise: Promise<T>, ms = 15000): Promise<T> {
+async function fetchWithTimeout<T>(factory: (signal: AbortSignal) => Promise<T>, ms = 15000): Promise<T> {
   const ctrl = new AbortController()
   const timeout = setTimeout(() => ctrl.abort(), ms)
   try {
-    const result = await promise
-    return result
+    return await factory(ctrl.signal)
   } finally {
     clearTimeout(timeout)
   }
@@ -554,7 +553,7 @@ function applyFilters() {
 
 async function fetchStages() {
   try {
-    const { data } = await fetchWithTimeout(api.GET('/api/v1/stages'))
+    const { data } = await fetchWithTimeout((signal) => api.GET('/api/v1/stages', { signal }))
     return (data as any)?.items ?? []
   } catch (e) {
     console.warn('Failed to fetch stages:', e)
@@ -564,7 +563,7 @@ async function fetchStages() {
 
 async function fetchPipelines() {
   try {
-    const { data } = await fetchWithTimeout(api.GET('/api/v1/pipelines'))
+    const { data } = await fetchWithTimeout((signal) => api.GET('/api/v1/pipelines', { signal }))
     return (data as any)?.items ?? []
   } catch (e) {
     console.warn('Failed to fetch pipelines:', e)
@@ -574,7 +573,7 @@ async function fetchPipelines() {
 
 async function fetchTeams() {
   try {
-    const { data } = await fetchWithTimeout(api.GET('/api/v1/teams'))
+    const { data } = await fetchWithTimeout((signal) => api.GET('/api/v1/teams', { signal }))
     return (data as any)?.items ?? []
   } catch (e) {
     console.warn('Failed to fetch teams:', e)
@@ -615,9 +614,10 @@ async function movePipeline(pipeline: any, direction: number) {
   const prevStageId = pipeline.stage_id
   movingPipelines.value[pipeline.id] = true
   try {
-    await fetchWithTimeout(api.PATCH('/api/v1/pipelines/{pipeline_id}', {
+    await fetchWithTimeout((signal) => api.PATCH('/api/v1/pipelines/{pipeline_id}', {
       params: { path: { pipeline_id: pipeline.id } },
       body: { stage_id: targetStage.id },
+      signal,
     }))
     pipeline.stage_id = targetStage.id
   } catch (e) {
@@ -632,13 +632,14 @@ async function createStage() {
   if (!createName.value.trim()) return
   createError.value = null
   try {
-    await fetchWithTimeout(api.POST('/api/v1/stages', {
+    await fetchWithTimeout((signal) => api.POST('/api/v1/stages', {
       body: {
         name: createName.value.trim(),
         description: createDescription.value.trim() || null,
         position: createPosition.value,
         visibility: createVisibility.value,
       },
+      signal,
     }))
     showCreateDialog.value = false
     createName.value = ''
@@ -681,9 +682,10 @@ async function saveEditingName() {
   if (existing && existing.name === name) return
   updatingStages.value[stageId] = true
   try {
-    const { data } = await fetchWithTimeout(api.PATCH('/api/v1/stages/{stage_id}', {
+    const { data } = await fetchWithTimeout((signal) => api.PATCH('/api/v1/stages/{stage_id}', {
       params: { path: { stage_id: stageId } },
       body: { name },
+      signal,
     }))
     if (data) {
       const idx = stages.value.findIndex(s => s.id === stageId)
@@ -715,9 +717,10 @@ async function saveEditingPosition() {
   if (existing && existing.position === position) return
   updatingStages.value[stageId] = true
   try {
-    const { data } = await fetchWithTimeout(api.PATCH('/api/v1/stages/{stage_id}', {
+    const { data } = await fetchWithTimeout((signal) => api.PATCH('/api/v1/stages/{stage_id}', {
       params: { path: { stage_id: stageId } },
       body: { position },
+      signal,
     }))
     if (data) {
       const idx = stages.value.findIndex(s => s.id === stageId)
@@ -750,13 +753,15 @@ async function moveStage(stage: any, direction: number) {
 
   updatingStages.value[stage.id] = true
   try {
-    await fetchWithTimeout(api.PATCH('/api/v1/stages/{stage_id}', {
+    await fetchWithTimeout((signal) => api.PATCH('/api/v1/stages/{stage_id}', {
       params: { path: { stage_id: stage.id } },
       body: { position: targetPos },
+      signal,
     }))
-    await fetchWithTimeout(api.PATCH('/api/v1/stages/{stage_id}', {
+    await fetchWithTimeout((signal) => api.PATCH('/api/v1/stages/{stage_id}', {
       params: { path: { stage_id: target.id } },
       body: { position: myPos },
+      signal,
     }))
   } catch (e) {
     stage.position = myPos
