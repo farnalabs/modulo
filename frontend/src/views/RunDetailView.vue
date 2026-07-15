@@ -630,11 +630,14 @@ const { loading, error } = useDataFetch<RunFetchResult>(
     }
 
     try {
-      const [{ data: runData }, { data: ioData }, { data: wsData }] = await Promise.all([
-        api.GET('/api/v1/runs/{run_id}', { params: { path: { run_id: runId } } }),
-        api.GET('/api/v1/runs/{run_id}/io', { params: { path: { run_id: runId } } }),
-        api.GET('/api/v1/runs/{run_id}/workspace-lease', { params: { path: { run_id: runId } } }),
+      const [runResp, ioResp, wsResp] = await Promise.all([
+        api.GET('/api/v1/runs/{run_id}', { params: { path: { run_id: runId } } }).catch(() => ({ data: null })),
+        api.GET('/api/v1/runs/{run_id}/io', { params: { path: { run_id: runId } } }).catch(() => ({ data: null })),
+        api.GET('/api/v1/runs/{run_id}/workspace-lease', { params: { path: { run_id: runId } } }).catch(() => ({ data: null })),
       ])
+      const runData = runResp?.data
+      const ioData = ioResp?.data
+      const wsData = wsResp?.data
 
       if (runData) run.value = runData as unknown as RunResponse
       if (ioData) runIO.value = ioData as unknown as RunIOResponse

@@ -157,8 +157,8 @@ const router = useRouter()
 const { data: orgData, loading, error: loadError, load: loadData } = useDataFetch(
   async () => {
     const [overviewResp, exportResp] = await Promise.all([
-      (api as any).GET('/api/v1/admin/billing/overview'),
-      (api as any).GET('/api/v1/admin/org/export'),
+      (api as any).GET('/api/v1/admin/billing/overview').catch(() => null),
+      (api as any).GET('/api/v1/admin/org/export').catch(() => null),
     ])
     if (overviewResp.error) return { error: { detail: `Failed to load org info: ${formatApiError(overviewResp.error)}` } }
     if (exportResp.error) return { error: { detail: `Failed to load org info: ${formatApiError(exportResp.error)}` } }
