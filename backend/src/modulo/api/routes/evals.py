@@ -116,7 +116,6 @@ class EvalDefinitionListResponse(BaseModel):
 # ---------------------------------------------------------------------------
 
 
-@router.post("/evals", response_model=dict[str, Any], status_code=status.HTTP_201_CREATED)
 @handle_db_errors("evals.create_eval_definition")
 @router.post("/evals", response_model=dict[str, Any], status_code=status.HTTP_201_CREATED)
 async def create_eval_definition(
@@ -185,7 +184,6 @@ async def create_eval_definition(
 # ---------------------------------------------------------------------------
 
 
-@router.get("/evals", response_model=EvalDefinitionListResponse)
 @handle_db_errors("evals.list_eval_definitions")
 @router.get("/evals", response_model=EvalDefinitionListResponse)
 async def list_eval_definitions(
@@ -256,7 +254,6 @@ async def list_eval_definitions(
 # ---------------------------------------------------------------------------
 
 
-@router.get("/evals/coverage", status_code=status.HTTP_200_OK)
 @handle_db_errors("evals.eval_coverage")
 @router.get("/evals/coverage", status_code=status.HTTP_200_OK)
 async def eval_coverage(
@@ -358,7 +355,6 @@ async def eval_coverage(
     }
 
 
-@router.get("/evals/{eval_id}", response_model=dict[str, Any])
 @handle_db_errors("evals.get_eval_definition")
 @router.get("/evals/{eval_id}", response_model=dict[str, Any])
 async def get_eval_definition(
@@ -407,7 +403,6 @@ async def get_eval_definition(
     return _eval_def_to_dict(eval_def)
 
 
-@router.put("/evals/{eval_id}", response_model=dict[str, Any])
 @handle_db_errors("evals.update_eval_definition")
 @router.put("/evals/{eval_id}", response_model=dict[str, Any])
 async def update_eval_definition(
@@ -466,7 +461,6 @@ async def update_eval_definition(
     return _eval_def_to_dict(eval_def)
 
 
-@router.delete("/evals/{eval_id}", status_code=status.HTTP_204_NO_CONTENT)
 @handle_db_errors("evals.delete_eval_definition")
 @router.delete("/evals/{eval_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_eval_definition(
@@ -518,7 +512,6 @@ async def delete_eval_definition(
         ) from None
 
 
-@router.get("/runs/{run_id}/evals", response_model=dict[str, Any], status_code=status.HTTP_200_OK)
 @handle_db_errors("evals.list_run_evals")
 @router.get("/runs/{run_id}/evals", response_model=dict[str, Any], status_code=status.HTTP_200_OK)
 async def list_run_evals(
@@ -636,7 +629,6 @@ class CreateEvalFromRunRequest(BaseModel):
 # ---------------------------------------------------------------------------
 
 
-@router.post("/evals/compare", status_code=status.HTTP_200_OK)
 @handle_db_errors("evals.compare_evals")
 @router.post("/evals/compare", status_code=status.HTTP_200_OK)
 async def compare_evals(
@@ -809,7 +801,6 @@ async def compare_evals(
 # ---------------------------------------------------------------------------
 
 
-@router.post("/evals/from-run", status_code=status.HTTP_201_CREATED)
 @handle_db_errors("evals.create_eval_from_run")
 @router.post("/evals/from-run", status_code=status.HTTP_201_CREATED)
 async def create_eval_from_run(

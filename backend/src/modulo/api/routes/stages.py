@@ -65,7 +65,6 @@ class StageListResponse(BaseModel):
     page_size: int
 
 
-@router.get("", response_model=StageListResponse)
 @handle_db_errors("stages.list_stages_endpoint")
 @router.get("", response_model=StageListResponse)
 async def list_stages_endpoint(
@@ -106,7 +105,6 @@ async def list_stages_endpoint(
     )
 
 
-@router.post("", response_model=StageResponse, status_code=status.HTTP_201_CREATED)
 @handle_db_errors("stages.create_stage_endpoint")
 @router.post("", response_model=StageResponse, status_code=status.HTTP_201_CREATED)
 async def create_stage_endpoint(
@@ -149,7 +147,6 @@ async def create_stage_endpoint(
     return StageResponse.model_validate(stage)
 
 
-@router.get("/{stage_id}", response_model=StageResponse)
 @handle_db_errors("stages.get_stage_endpoint")
 @router.get("/{stage_id}", response_model=StageResponse)
 async def get_stage_endpoint(
@@ -185,7 +182,6 @@ async def get_stage_endpoint(
     return StageResponse.model_validate(stage)
 
 
-@router.patch("/{stage_id}", response_model=StageResponse)
 @handle_db_errors("stages.update_stage_endpoint")
 @router.patch("/{stage_id}", response_model=StageResponse)
 async def update_stage_endpoint(
@@ -223,7 +219,6 @@ async def update_stage_endpoint(
     return StageResponse.model_validate(stage)
 
 
-@router.delete("/{stage_id}", status_code=status.HTTP_204_NO_CONTENT)
 @handle_db_errors("stages.delete_stage_endpoint")
 @router.delete("/{stage_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_stage_endpoint(

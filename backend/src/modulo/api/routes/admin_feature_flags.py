@@ -106,7 +106,6 @@ async def _build_registry(
         )
 
 
-@router.get("", response_model=None)
 @handle_db_errors("admin.feature_flags.list_feature_flags")
 @router.get("", response_model=None)
 async def list_feature_flags(
@@ -179,7 +178,6 @@ async def list_feature_flags(
         )
 
 
-@router.get("/{flag_name}", response_model=None)
 @handle_db_errors("admin.feature_flags.get_feature_flag")
 @router.get("/{flag_name}", response_model=None)
 async def get_feature_flag(
@@ -244,7 +242,6 @@ class ToggleFlagRequest(BaseModel):
     enabled: bool
 
 
-@router.put("/{flag_name}", response_model=None)
 @handle_db_errors("admin.feature_flags.toggle_feature_flag")
 @router.put("/{flag_name}", response_model=None)
 async def toggle_feature_flag(
@@ -308,7 +305,6 @@ async def toggle_feature_flag(
         )
 
 
-@router.get("/{flag_name}/org-override", response_model=None)
 @handle_db_errors("admin.feature_flags.get_org_flag_override")
 @router.get("/{flag_name}/org-override", response_model=None)
 async def get_org_flag_override(
@@ -361,7 +357,6 @@ async def get_org_flag_override(
         )
 
 
-@router.put("/{flag_name}/org-override", response_model=None)
 @handle_db_errors("admin.feature_flags.set_org_flag_override")
 @router.put("/{flag_name}/org-override", response_model=None)
 async def set_org_flag_override(
@@ -420,7 +415,6 @@ async def set_org_flag_override(
         )
 
 
-@router.delete("/{flag_name}/org-override", response_model=None)
 @handle_db_errors("admin.feature_flags.clear_org_flag_override")
 @router.delete("/{flag_name}/org-override", response_model=None)
 async def clear_org_flag_override(

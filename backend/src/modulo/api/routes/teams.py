@@ -115,7 +115,6 @@ def _require_admin(principal: TenantPrincipal) -> None:
         )
 
 
-@router.get("", response_model=TeamListResponse)
 @handle_db_errors("teams.list_teams_endpoint")
 @router.get("", response_model=TeamListResponse)
 async def list_teams_endpoint(
@@ -168,7 +167,6 @@ async def list_teams_endpoint(
     )
 
 
-@router.post("", response_model=TeamResponse, status_code=status.HTTP_201_CREATED)
 @handle_db_errors("teams.create_team_endpoint")
 @router.post("", response_model=TeamResponse, status_code=status.HTTP_201_CREATED)
 async def create_team_endpoint(
@@ -259,7 +257,6 @@ async def create_team_endpoint(
     )
 
 
-@router.get("/{team_id}", response_model=TeamResponse)
 @handle_db_errors("teams.get_team_endpoint")
 @router.get("/{team_id}", response_model=TeamResponse)
 async def get_team_endpoint(
@@ -313,7 +310,6 @@ async def get_team_endpoint(
     )
 
 
-@router.patch("/{team_id}", response_model=TeamResponse)
 @handle_db_errors("teams.update_team_endpoint")
 @router.patch("/{team_id}", response_model=TeamResponse)
 async def update_team_endpoint(
@@ -411,7 +407,6 @@ async def update_team_endpoint(
     )
 
 
-@router.delete("/{team_id}", status_code=status.HTTP_204_NO_CONTENT)
 @handle_db_errors("teams.delete_team_endpoint")
 @router.delete("/{team_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_team_endpoint(
@@ -523,7 +518,6 @@ async def delete_team_endpoint(
         )
 
 
-@router.get("/{team_id}/members", response_model=MembershipListResponse)
 @handle_db_errors("teams.list_members_endpoint")
 @router.get("/{team_id}/members", response_model=MembershipListResponse)
 async def list_members_endpoint(
@@ -588,11 +582,6 @@ async def list_members_endpoint(
     )
 
 
-@router.post(
-    "/{team_id}/members",
-    response_model=MembershipResponse,
-    status_code=status.HTTP_201_CREATED,
-)
 @handle_db_errors("teams.add_member_endpoint")
 @router.post(
     "/{team_id}/members",
@@ -690,10 +679,6 @@ async def add_member_endpoint(
     )
 
 
-@router.delete(
-    "/{team_id}/members/{membership_id}",
-    status_code=status.HTTP_204_NO_CONTENT,
-)
 @handle_db_errors("teams.remove_member_endpoint")
 @router.delete(
     "/{team_id}/members/{membership_id}",
@@ -763,10 +748,6 @@ async def remove_member_endpoint(
         ) from None
 
 
-@router.patch(
-    "/{team_id}/members/{membership_id}",
-    response_model=MembershipResponse,
-)
 @handle_db_errors("teams.change_member_role_endpoint")
 @router.patch(
     "/{team_id}/members/{membership_id}",

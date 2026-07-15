@@ -52,7 +52,6 @@ class CreateOrgResponse(BaseModel):
     created_at: str
 
 
-@router.post("", response_model=CreateOrgResponse, status_code=status.HTTP_201_CREATED)
 @handle_db_errors("admin.orgs.admin_create_org")
 @router.post("", response_model=CreateOrgResponse, status_code=status.HTTP_201_CREATED)
 async def admin_create_org(
@@ -122,7 +121,6 @@ class ListOrgItem(BaseModel):
     created_at: str
 
 
-@router.get("", response_model=list[ListOrgItem])
 @handle_db_errors("admin.orgs.admin_list_orgs")
 @router.get("", response_model=list[ListOrgItem])
 async def admin_list_orgs(
@@ -185,7 +183,6 @@ class CreateOrgUserResponse(BaseModel):
     created_at: str
 
 
-@router.post("/{org_id}/users", response_model=CreateOrgUserResponse, status_code=status.HTTP_201_CREATED)
 @handle_db_errors("admin.orgs.admin_create_org_user")
 @router.post("/{org_id}/users", response_model=CreateOrgUserResponse, status_code=status.HTTP_201_CREATED)
 async def admin_create_org_user(
@@ -285,7 +282,6 @@ async def admin_create_org_user(
 # ── Delete Org ─────────────────────────────────────────────────────────
 
 
-@router.delete("/{org_id}", status_code=status.HTTP_204_NO_CONTENT)
 @handle_db_errors("admin.orgs.admin_delete_org")
 @router.delete("/{org_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def admin_delete_org(
@@ -340,7 +336,6 @@ class SetOrgLicenseRequest(BaseModel):
     license_key: str = Field(min_length=1)
 
 
-@router.get("/{org_id}/license", response_model=OrgLicenseResponse)
 @handle_db_errors("admin.orgs.admin_get_org_license")
 @router.get("/{org_id}/license", response_model=OrgLicenseResponse)
 async def admin_get_org_license(
@@ -403,7 +398,6 @@ async def admin_get_org_license(
     return OrgLicenseResponse(has_license=False)
 
 
-@router.put("/{org_id}/license", response_model=OrgLicenseResponse)
 @handle_db_errors("admin.orgs.admin_set_org_license")
 @router.put("/{org_id}/license", response_model=OrgLicenseResponse)
 async def admin_set_org_license(
@@ -487,7 +481,6 @@ async def admin_set_org_license(
     )
 
 
-@router.delete("/{org_id}/license", response_model=OrgLicenseResponse)
 @handle_db_errors("admin.orgs.admin_remove_org_license")
 @router.delete("/{org_id}/license", response_model=OrgLicenseResponse)
 async def admin_remove_org_license(

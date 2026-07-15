@@ -122,7 +122,6 @@ def _to_response(ci: Any) -> ConnectorResponse:
     )
 
 
-@router.get("", response_model=ConnectorListResponse)
 @handle_db_errors("connectors.list_connectors_endpoint")
 @router.get("", response_model=ConnectorListResponse)
 async def list_connectors_endpoint(
@@ -170,7 +169,6 @@ async def list_connectors_endpoint(
     )
 
 
-@router.post("", response_model=ConnectorResponse, status_code=status.HTTP_201_CREATED)
 @handle_db_errors("connectors.create_connector_endpoint")
 @router.post("", response_model=ConnectorResponse, status_code=status.HTTP_201_CREATED)
 async def create_connector_endpoint(
@@ -245,7 +243,6 @@ async def create_connector_endpoint(
     return _to_response(ci)
 
 
-@router.get("/{connector_id}", response_model=ConnectorResponse)
 @handle_db_errors("connectors.get_connector_endpoint")
 @router.get("/{connector_id}", response_model=ConnectorResponse)
 async def get_connector_endpoint(
@@ -286,7 +283,6 @@ async def get_connector_endpoint(
     return _to_response(ci)
 
 
-@router.patch("/{connector_id}", response_model=ConnectorResponse)
 @handle_db_errors("connectors.update_connector_endpoint")
 @router.patch("/{connector_id}", response_model=ConnectorResponse)
 async def update_connector_endpoint(
@@ -357,7 +353,6 @@ async def update_connector_endpoint(
     return _to_response(ci)
 
 
-@router.delete("/{connector_id}", status_code=status.HTTP_204_NO_CONTENT)
 @handle_db_errors("connectors.delete_connector_endpoint")
 @router.delete("/{connector_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_connector_endpoint(

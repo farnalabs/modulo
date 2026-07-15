@@ -46,7 +46,6 @@ router = APIRouter(prefix="/api/v1/triggers", tags=["webhooks"])
 _trigger_engine = TriggerEngine()
 
 
-@router.post("/{trigger_id}/webhook", status_code=status.HTTP_202_ACCEPTED)
 @handle_db_errors("webhooks.receive_webhook")
 @router.post("/{trigger_id}/webhook", status_code=status.HTTP_202_ACCEPTED)
 async def receive_webhook(
@@ -159,7 +158,6 @@ async def receive_webhook(
     return {"run_id": str(run_id), "status": "accepted"}
 
 
-@router.post("/{trigger_id}/webhook/replay/{event_id}", status_code=status.HTTP_202_ACCEPTED)
 @handle_db_errors("webhooks.replay_webhook")
 @router.post("/{trigger_id}/webhook/replay/{event_id}", status_code=status.HTTP_202_ACCEPTED)
 async def replay_webhook(
@@ -243,7 +241,6 @@ async def replay_webhook(
     return {"run_id": str(run_id), "status": "accepted"}
 
 
-@router.post("/cleanup-expired", status_code=status.HTTP_200_OK)
 @handle_db_errors("webhooks.cleanup_expired")
 @router.post("/cleanup-expired", status_code=status.HTTP_200_OK)
 async def cleanup_expired(

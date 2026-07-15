@@ -146,7 +146,6 @@ class TestResult(BaseModel):
 # ── Non-webhook-scoped routes (MUST precede {webhook_id} routes) ────────
 
 
-@router.get("/deliveries", response_model=DeliveryLogResponse)
 @handle_db_errors("admin.notifications.list_all_deliveries")
 @router.get("/deliveries", response_model=DeliveryLogResponse)
 async def list_all_deliveries(
@@ -307,7 +306,6 @@ async def _list_deliveries(
     return DeliveryLogResponse(items=items, next_cursor=next_cursor, total=total)
 
 
-@router.post("/deliveries/retry-all-failed")
 @handle_db_errors("admin.notifications.retry_all_failed_deliveries")
 @router.post("/deliveries/retry-all-failed")
 async def retry_all_failed_deliveries(
@@ -495,7 +493,6 @@ async def retry_all_failed_deliveries(
     return {"retried": retried, "errors": errors, "success": len(errors) == 0}
 
 
-@router.get("/available-events", response_model=list[str])
 @handle_db_errors("admin.notifications.list_available_events")
 @router.get("/available-events", response_model=list[str])
 async def list_available_events(
@@ -508,7 +505,6 @@ async def list_available_events(
 # ── Webhook CRUD ────────────────────────────────────────────────────────
 
 
-@router.get("", response_model=list[WebhookResponse])
 @handle_db_errors("admin.notifications.list_webhooks")
 @router.get("", response_model=list[WebhookResponse])
 async def list_webhooks(
@@ -549,7 +545,6 @@ async def list_webhooks(
     return [_ep_to_response(ep) for ep in endpoints]
 
 
-@router.post("", response_model=WebhookResponse, status_code=status.HTTP_201_CREATED)
 @handle_db_errors("admin.notifications.create_webhook")
 @router.post("", response_model=WebhookResponse, status_code=status.HTTP_201_CREATED)
 async def create_webhook(
@@ -603,7 +598,6 @@ async def create_webhook(
     return _ep_to_response(ep)
 
 
-@router.get("/{webhook_id}", response_model=WebhookResponse)
 @handle_db_errors("admin.notifications.get_webhook")
 @router.get("/{webhook_id}", response_model=WebhookResponse)
 async def get_webhook(
@@ -646,7 +640,6 @@ async def get_webhook(
     return _ep_to_response(ep)
 
 
-@router.put("/{webhook_id}", response_model=WebhookResponse)
 @handle_db_errors("admin.notifications.update_webhook")
 @router.put("/{webhook_id}", response_model=WebhookResponse)
 async def update_webhook(
@@ -704,7 +697,6 @@ async def update_webhook(
     return _ep_to_response(ep)
 
 
-@router.delete("/{webhook_id}", status_code=status.HTTP_204_NO_CONTENT)
 @handle_db_errors("admin.notifications.delete_webhook")
 @router.delete("/{webhook_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_webhook(
@@ -750,7 +742,6 @@ async def delete_webhook(
 # ── Test ───────────────────────────────────────────────────────────────
 
 
-@router.post("/{webhook_id}/test", response_model=TestResult)
 @handle_db_errors("admin.notifications.test_webhook")
 @router.post("/{webhook_id}/test", response_model=TestResult)
 async def test_webhook(
@@ -832,7 +823,6 @@ async def test_webhook(
 # ── Re-enable ──────────────────────────────────────────────────────────
 
 
-@router.post("/{webhook_id}/re-enable", response_model=WebhookResponse)
 @handle_db_errors("admin.notifications.re_enable_webhook")
 @router.post("/{webhook_id}/re-enable", response_model=WebhookResponse)
 async def re_enable_webhook(
@@ -882,7 +872,6 @@ async def re_enable_webhook(
 # ── Delivery log ───────────────────────────────────────────────────────
 
 
-@router.get("/{webhook_id}/deliveries", response_model=DeliveryLogResponse)
 @handle_db_errors("admin.notifications.list_deliveries")
 @router.get("/{webhook_id}/deliveries", response_model=DeliveryLogResponse)
 async def list_deliveries(
@@ -989,7 +978,6 @@ async def list_deliveries(
 # ── Manual retry ───────────────────────────────────────────────────────
 
 
-@router.post("/{webhook_id}/deliveries/{delivery_id}/retry", response_model=TestResult)
 @handle_db_errors("admin.notifications.retry_delivery")
 @router.post("/{webhook_id}/deliveries/{delivery_id}/retry", response_model=TestResult)
 async def retry_delivery(
