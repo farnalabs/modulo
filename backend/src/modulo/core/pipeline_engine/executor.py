@@ -881,6 +881,7 @@ class PipelineExecutor:
                 total_tokens=total_tokens,
                 total_cost_usd=total_cost_usd_val,
                 node_token_usage=node_token_usage,
+                outputs_json=completed_node_outputs,
             )
 
         if final_run is None:
