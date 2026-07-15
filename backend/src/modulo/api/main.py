@@ -81,6 +81,7 @@ from modulo.api.routes.node_categories import router as node_categories_router
 from modulo.api.routes.notifications import router as notifications_router
 from modulo.api.routes.observability import router as observability_router
 from modulo.api.routes.onboarding import router as onboarding_router
+from modulo.api.routes.parameter_schemas import router as parameter_schemas_router
 from modulo.api.routes.pipeline_folders import router as pipeline_folders_router
 from modulo.api.routes.pipelines import router as pipelines_router
 from modulo.api.routes.plugins import router as plugins_router
@@ -866,6 +867,7 @@ app.include_router(teams_router)
 app.include_router(pipelines_router)
 app.include_router(pipeline_folders_router)
 app.include_router(agents_router)
+app.include_router(parameter_schemas_router)
 app.include_router(hitl_router)
 app.include_router(schemas_router)
 app.include_router(model_backends_router)

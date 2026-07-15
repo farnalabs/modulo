@@ -42,6 +42,8 @@ def test_initial_schema_contains_required_tables() -> None:
         "organisations",
         "pipeline_edges",
         "pipeline_folders",
+        "parameter_schemas",
+        "parameter_sets",
         "pipeline_snapshots",
         "pipelines",
         "primitive_abuse_reports",
