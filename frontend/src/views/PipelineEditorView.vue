@@ -712,6 +712,12 @@ import { api } from '../lib/api/client'
 import { useApi } from '../composables/useApi'
 import { Button } from '@/components/ui/button'
 
+function withTimeout<T>(promise: Promise<T>, ms = 15000): Promise<T> {
+  const ctrl = new AbortController()
+  const timeout = setTimeout(() => ctrl.abort(), ms)
+  return promise.finally(() => clearTimeout(timeout))
+}
+
 const planStore = usePlanStore()
 const route = useRoute()
 const router = useRouter()
@@ -886,10 +892,11 @@ function convertBackendEdge(e: any, i: number): any {
 }
 
 async function loadGraph() {
+  pageError.value = null
   try {
-    const { data, error: graphError } = await api.GET('/api/v1/pipelines/{pipeline_id}/graph', {
+    const { data, error: graphError } = await withTimeout(api.GET('/api/v1/pipelines/{pipeline_id}/graph', {
       params: { path: { pipeline_id: pipelineId } },
-    })
+    }))
     if (graphError) {
       pageError.value = `Failed to load graph: ${formatApiError(graphError)}`
       return
@@ -912,15 +919,16 @@ async function loadGraph() {
 }
 
 async function loadCatalog() {
+  pageError.value = null
   try {
     const [a, c, mb, s, snaps] = await Promise.all([
-      api.GET('/api/v1/agents').then(r => (r.data as any)?.items ?? []),
-      api.GET('/api/v1/connectors').then(r => (r.data as any)?.items ?? []),
-      api.GET('/api/v1/model-backends').then(r => (r.data as any)?.items ?? []),
-      api.GET('/api/v1/schemas').then(r => (r.data as any)?.items ?? []),
-      api.GET('/api/v1/pipelines/{pipeline_id}/snapshots', {
+      withTimeout(api.GET('/api/v1/agents').then(r => (r.data as any)?.items ?? [])).catch(() => [] as any[]),
+      withTimeout(api.GET('/api/v1/connectors').then(r => (r.data as any)?.items ?? [])).catch(() => [] as any[]),
+      withTimeout(api.GET('/api/v1/model-backends').then(r => (r.data as any)?.items ?? [])).catch(() => [] as any[]),
+      withTimeout(api.GET('/api/v1/schemas').then(r => (r.data as any)?.items ?? [])).catch(() => [] as any[]),
+      withTimeout(api.GET('/api/v1/pipelines/{pipeline_id}/snapshots', {
         params: { path: { pipeline_id: pipelineId } },
-      }).then(r => (r.data as any)?.items ?? []),
+      }).then(r => (r.data as any)?.items ?? [])).catch(() => [] as any[]),
     ])
     agents.value = a
     connectors.value = c
@@ -1035,7 +1043,7 @@ async function saveEdgeConfig() {
   })
 
   try {
-    await api.PATCH('/api/v1/pipelines/{pipeline_id}/graph', {
+    await withTimeout(api.PATCH('/api/v1/pipelines/{pipeline_id}/graph', {
       params: { path: { pipeline_id: pipelineId } },
       body: {
         nodes: rawNodes.value.map((n: any) => ({
@@ -1052,7 +1060,7 @@ async function saveEdgeConfig() {
         })),
         edges: updatedEdges,
       },
-    })
+    }))
     await loadGraph()
     const updatedEdge = rawEdges.value.find((e: any) => e.id === selectedEdgeData.value.id)
     if (updatedEdge) {
@@ -1116,14 +1124,14 @@ async function handleSaveAsComposite() {
   saving.value = true
   saveAsError.value = null
   try {
-    await api.POST('/api/v1/pipelines/{pipeline_id}/save-as-composite', {
+    await withTimeout(api.POST('/api/v1/pipelines/{pipeline_id}/save-as-composite', {
       params: { path: { pipeline_id: pipelineId } },
       body: {
         name: saveAsName.value,
         description: saveAsDescription.value || null,
         selected_node_ids: saveAsSelectedNodeIds.value,
       },
-    })
+    }))
     showSaveAsComposite.value = false
     router.push({ name: 'library' })
   } catch (e: unknown) {
@@ -1142,7 +1150,7 @@ async function convertToAgent() {
   convertError.value = null
   try {
     const nodeId = selectedNodeData.value.id
-    await api.POST('/api/v1/pipelines/{pipeline_id}/nodes/{node_id}/convert-to-agent', {
+    await withTimeout(api.POST('/api/v1/pipelines/{pipeline_id}/nodes/{node_id}/convert-to-agent', {
       params: { path: { pipeline_id: pipelineId, node_id: nodeId } },
       body: {
         agent_id: pickerAgentId.value,
@@ -1152,7 +1160,7 @@ async function convertToAgent() {
         },
         model_backend_id: selectedAgent.value?.model_backend_id,
       },
-    })
+    }))
     showAgentPicker.value = false
     await loadGraph()
     selectedNodeData.value = rawNodes.value.find((n: any) => n.id === nodeId) || null
@@ -1167,12 +1175,12 @@ async function revertToManual() {
   revertLoading.value = true
   try {
     const nodeId = selectedNodeData.value.id
-    await api.POST('/api/v1/pipelines/{pipeline_id}/nodes/{node_id}/revert-to-manual', {
+    await withTimeout(api.POST('/api/v1/pipelines/{pipeline_id}/nodes/{node_id}/revert-to-manual', {
       params: {
         path: { pipeline_id: pipelineId, node_id: nodeId },
         query: { snapshot_id: revertSnapshotId.value },
       },
-    })
+    }))
     showRevertDialog.value = false
     await loadGraph()
     selectedNodeData.value = rawNodes.value.find((n: any) => n.id === nodeId) || null
@@ -1184,10 +1192,11 @@ async function revertToManual() {
 }
 
 async function loadPipeline() {
+  pageError.value = null
   try {
-    const { data } = await api.GET('/api/v1/pipelines/{pipeline_id}', {
+    const { data } = await withTimeout(api.GET('/api/v1/pipelines/{pipeline_id}', {
       params: { path: { pipeline_id: pipelineId } },
-    })
+    }))
     pipeline.value = data as any
   } catch (e) {
     pageError.value = `Failed to load pipeline: ${formatApiError(e)}`
@@ -1205,10 +1214,10 @@ async function handleRename() {
   renaming.value = true
   renameError.value = null
   try {
-    const { data } = await api.PATCH('/api/v1/pipelines/{pipeline_id}', {
+    const { data } = await withTimeout(api.PATCH('/api/v1/pipelines/{pipeline_id}', {
       params: { path: { pipeline_id: pipelineId } },
       body: { name: renameName.value.trim() },
-    })
+    }))
     pipeline.value = data as any
     showRenameDialog.value = false
   } catch (e: unknown) {
@@ -1237,9 +1246,9 @@ async function handleUnarchive() {
 async function handleDelete() {
   deleteError.value = null
   try {
-    await api.DELETE('/api/v1/pipelines/{pipeline_id}', {
+    await withTimeout(api.DELETE('/api/v1/pipelines/{pipeline_id}', {
       params: { path: { pipeline_id: pipelineId } },
-    })
+    }))
     router.push({ name: 'library' })
   } catch (e: unknown) {
     deleteError.value = formatApiError(e)
@@ -1262,7 +1271,7 @@ async function saveGraph() {
   savingGraph.value = true
   saveGraphError.value = null
   try {
-    await api.PATCH('/api/v1/pipelines/{pipeline_id}/graph', {
+    await withTimeout(api.PATCH('/api/v1/pipelines/{pipeline_id}/graph', {
       params: { path: { pipeline_id: pipelineId } },
       body: {
         nodes: rawNodes.value.map((n: any) => ({
@@ -1286,7 +1295,7 @@ async function saveGraph() {
           hitl_gate_config: e.hitl_gate_config || null,
         })),
       },
-    })
+    }))
   } catch (e: unknown) {
     saveGraphError.value = formatApiError(e)
   } finally {
@@ -1304,13 +1313,13 @@ async function triggerRun() {
       runError.value = `Failed to save graph: ${saveGraphError.value}`
       return
     }
-    const { data } = await api.POST('/api/v1/pipelines/{pipeline_id}/runs', {
+    const { data } = await withTimeout(api.POST('/api/v1/pipelines/{pipeline_id}/runs', {
       params: { path: { pipeline_id: pipelineId } },
       body: {
         prompt: runPrompt.value.trim() || undefined,
         payload: {},
       },
-    })
+    }))
     showRunDialog.value = false
     if (data) router.push({ name: 'run-detail', params: { id: (data as any).id } })
   } catch (e: unknown) {
@@ -1329,6 +1338,7 @@ async function loadFolders() {
 }
 
 async function loadLifecycleMaps() {
+  pageError.value = null
   try {
     const response = await get<any[] | { items?: any[] }>('/api/v1/lifecycle-maps')
     const summaries = Array.isArray(response) ? response : (response.items ?? [])
@@ -1348,6 +1358,7 @@ async function loadLifecycleMaps() {
 
 const { loading, error: pageErrorRef } = useDataFetch(
   async () => {
+    pageErrorRef.value = null
     await Promise.all([loadPipeline(), loadGraph(), loadCatalog(), loadFolders(), loadLifecycleMaps()])
     return { data: {} }
   },
