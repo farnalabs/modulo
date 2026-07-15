@@ -286,6 +286,97 @@
               <dt class="text-muted-foreground text-xs uppercase tracking-wider">{{ $t('views.PipelineEditorView.connector') }}</dt>
               <dd class="font-medium">{{ connectorName(selectedNodeData.connector_binding) }}</dd>
             </div>
+
+            <!-- Parameter Schema + Set -->
+            <div v-if="agentParamSchema(selectedNodeData.agent_id)">
+              <dt class="text-muted-foreground text-xs uppercase tracking-wider">{{ $t('views.PipelineEditorView.param_schema') }}</dt>
+              <dd class="font-medium">{{ agentParamSchemaName(selectedNodeData.agent_id) }}</dd>
+            </div>
+            <div v-if="agentParamSchema(selectedNodeData.agent_id)">
+              <dt class="text-muted-foreground text-xs uppercase tracking-wider">{{ $t('views.PipelineEditorView.param_set') }}</dt>
+              <dd>
+                <select
+                  v-model="selectedNodeParamSetId"
+                  class="w-full rounded-lg border border-input bg-background px-2 py-1.5 text-sm"
+                  @change="onParamSetChange"
+                  data-testid="pipeline-node-param-set"
+                >
+                  <option :value="undefined">{{ $t('views.PipelineEditorView.no_set') }}</option>
+                  <option
+                    v-for="ps in availableParamSets"
+                    :key="ps.id"
+                    :value="ps.id"
+                  >{{ ps.name }}</option>
+                </select>
+              </dd>
+            </div>
+            <div v-if="selectedNodeParamSetId && paramSetOverridesKeys.length > 0">
+              <dt class="text-muted-foreground text-xs uppercase tracking-wider">{{ $t('views.PipelineEditorView.overrides') }}</dt>
+              <dd class="space-y-2">
+                <div v-for="pkey in paramSetOverridesKeys" :key="pkey" class="flex flex-col gap-0.5">
+                  <label class="text-xs text-muted-foreground">{{ paramDefLabel(pkey) }}</label>
+                  <textarea
+                    v-if="paramDefByKey(pkey)?.type === 'string' && paramDefByKey(pkey)?.multiline"
+                    v-model="selectedNodeOverrides[pkey]"
+                    class="w-full rounded-lg border border-input bg-background px-2 py-1 text-xs"
+                    rows="2"
+                  />
+                  <input
+                    v-else-if="paramDefByKey(pkey)?.type === 'string'"
+                    v-model="selectedNodeOverrides[pkey]"
+                    type="text"
+                    class="w-full rounded-lg border border-input bg-background px-2 py-1 text-xs"
+                  />
+                  <input
+                    v-else-if="paramDefByKey(pkey)?.type === 'number'"
+                    v-model.number="selectedNodeOverrides[pkey]"
+                    type="number"
+                    class="w-full rounded-lg border border-input bg-background px-2 py-1 text-xs"
+                  />
+                  <select
+                    v-else-if="paramDefByKey(pkey)?.type === 'boolean'"
+                    v-model="selectedNodeOverrides[pkey]"
+                    class="w-full rounded-lg border border-input bg-background px-2 py-1 text-xs"
+                  >
+                    <option :value="undefined"></option>
+                    <option :value="true">true</option>
+                    <option :value="false">false</option>
+                  </select>
+                  <select
+                    v-else-if="paramDefByKey(pkey)?.type === 'select'"
+                    v-model="selectedNodeOverrides[pkey]"
+                    class="w-full rounded-lg border border-input bg-background px-2 py-1 text-xs"
+                  >
+                    <option :value="undefined"></option>
+                    <option v-for="o in (paramDefByKey(pkey)?.options || [])" :key="o" :value="o">{{ o }}</option>
+                  </select>
+                  <select
+                    v-else-if="paramDefByKey(pkey)?.type === 'model_backend_ref'"
+                    v-model="selectedNodeOverrides[pkey]"
+                    class="w-full rounded-lg border border-input bg-background px-2 py-1 text-xs"
+                  >
+                    <option :value="undefined"></option>
+                    <option v-for="mb in modelBackends" :key="mb.id" :value="mb.id">{{ mb.display_name || mb.name || mb.id }}</option>
+                  </select>
+                  <select
+                    v-else-if="paramDefByKey(pkey)?.type === 'schema_ref'"
+                    v-model="selectedNodeOverrides[pkey]"
+                    class="w-full rounded-lg border border-input bg-background px-2 py-1 text-xs"
+                  >
+                    <option :value="undefined"></option>
+                    <option v-for="s in schemas" :key="s.id" :value="s.id">{{ s.name || s.id }}</option>
+                  </select>
+                  <span v-else class="text-xs text-muted-foreground">—</span>
+                </div>
+                <button
+                  class="mt-1 text-xs text-indigo-500 hover:text-indigo-400"
+                  data-testid="pipeline-save-param-set"
+                  @click="saveAsNewParamSet"
+                >
+                  {{ $t('views.PipelineEditorView.save_as_new_set') }}
+                </button>
+              </dd>
+            </div>
           </template>
 
           <!-- Lifecycle maps -->
@@ -868,6 +959,98 @@ function connectorName(binding: any): string {
   return binding.instance_id ? `${binding.type} / ${shortId(binding.instance_id)}` : binding.type
 }
 
+// Parameter schema + set support
+const paramSchemas = ref<any[]>([])
+const paramSets = ref<any[]>([])
+const selectedNodeParamSetId = ref<string | undefined>(undefined)
+const selectedNodeOverrides = ref<Record<string, any>>({})
+
+function agentParamSchema(agentId: string): any | undefined {
+  const agent = agents.value.find((a: any) => a.id === agentId)
+  if (!agent?.parameter_schema_id) return undefined
+  return paramSchemas.value.find((ps: any) => ps.id === agent.parameter_schema_id)
+}
+
+function agentParamSchemaName(agentId: string): string | undefined {
+  return agentParamSchema(agentId)?.name
+}
+
+const availableParamSets = computed(() => {
+  const schema = agentParamSchema(selectedNodeData.value?.agent_id)
+  if (!schema) return []
+  return paramSets.value.filter((ps: any) => ps.parameter_schema_id === schema.id)
+})
+
+const paramSetOverridesKeys = computed(() => Object.keys(selectedNodeOverrides.value))
+
+function paramDefByKey(key: string): any | undefined {
+  const schema = agentParamSchema(selectedNodeData.value?.agent_id)
+  return schema?.parameters?.find((p: any) => p.name === key)
+}
+
+function paramDefLabel(key: string): string {
+  const def = paramDefByKey(key)
+  return def?.label || def?.name || key
+}
+
+function onParamSetChange() {
+  if (!selectedNodeParamSetId.value) {
+    selectedNodeOverrides.value = {}
+    return
+  }
+  const set = paramSets.value.find((ps: any) => ps.id === selectedNodeParamSetId.value)
+  selectedNodeOverrides.value = { ...(set?.values || {}) }
+  // Also update the backend node data
+  if (selectedNodeData.value) {
+    selectedNodeData.value.parameter_set_id = selectedNodeParamSetId.value
+    selectedNodeData.value.parameter_overrides = { ...selectedNodeOverrides.value }
+  }
+}
+
+async function saveAsNewParamSet() {
+  const schema = agentParamSchema(selectedNodeData.value?.agent_id)
+  if (!schema) return
+  const name = prompt('Name for new parameter set:')
+  if (!name?.trim()) return
+  try {
+    const resp = await api.POST('/api/v1/parameter-schemas/{id}/sets', {
+      params: { path: { id: schema.id } },
+      body: { name: name.trim(), description: null, values: selectedNodeOverrides.value },
+    })
+    if (resp.error) {
+      console.warn('Failed to create param set:', formatApiError(resp.error))
+      return
+    }
+    await loadParamSets()
+  } catch (err: any) {
+    console.warn('Failed to create param set:', err)
+  }
+}
+
+async function loadParamSets() {
+  const schema = agentParamSchema(selectedNodeData.value?.agent_id)
+  if (!schema) return
+  try {
+    const resp = await api.GET('/api/v1/parameter-schemas/{id}/sets', {
+      params: { path: { id: schema.id }, query: { page: 1, page_size: 100 } },
+    })
+    if (resp.data) paramSets.value = (resp.data as any)?.items ?? []
+  } catch {
+    // non-critical
+  }
+}
+
+async function loadParamSchemas() {
+  try {
+    const resp = await api.GET('/api/v1/parameter-schemas', {
+      params: { query: { page: 1, page_size: 100 } },
+    })
+    if (resp.data) paramSchemas.value = (resp.data as any)?.items ?? []
+  } catch {
+    // non-critical
+  }
+}
+
 const canConvert = computed(() => pickerAgentId.value && pickerConnectorId.value)
 
 function convertBackendNode(n: any): any {
@@ -876,7 +1059,11 @@ function convertBackendNode(n: any): any {
     id: n.id,
     type: nodeType,
     position: n.position || { x: 0, y: 0 },
-    data: { label: n.label || 'Node ' + shortId(n.id) },
+    data: {
+      label: n.label || 'Node ' + shortId(n.id),
+      parameter_set_id: n.parameter_set_id,
+      parameter_overrides: n.parameter_overrides,
+    },
   }
 }
 
@@ -925,7 +1112,7 @@ async function loadGraph() {
 async function loadCatalog() {
   pageError.value = null
   try {
-    const [a, c, mb, s, snaps] = await Promise.all([
+    const [a, c, mb, s, snaps, ps] = await Promise.all([
       withTimeout((signal) => api.GET('/api/v1/agents', { signal }).then(r => (r.data as any)?.items ?? [])).catch(() => [] as any[]),
       withTimeout((signal) => api.GET('/api/v1/connectors', { signal }).then(r => (r.data as any)?.items ?? [])).catch(() => [] as any[]),
       withTimeout((signal) => api.GET('/api/v1/model-backends', { signal }).then(r => (r.data as any)?.items ?? [])).catch(() => [] as any[]),
@@ -934,12 +1121,14 @@ async function loadCatalog() {
         params: { path: { pipeline_id: pipelineId } },
         signal,
       }).then(r => (r.data as any)?.items ?? [])).catch(() => [] as any[]),
+      withTimeout((signal) => api.GET('/api/v1/parameter-schemas', { signal }).then(r => (r.data as any)?.items ?? [])).catch(() => [] as any[]),
     ])
     agents.value = a
     connectors.value = c
     modelBackends.value = mb
     schemas.value = s
     snapshots.value = (snaps as any[]).filter((sn: any) => sn.snapshot_version > 0)
+    paramSchemas.value = ps
   } catch (e) {
     console.warn('Failed to load pipeline data', e)
   }
@@ -951,6 +1140,15 @@ function onNodeClick(event: any) {
   if (!node) return
   const backendNode = rawNodes.value.find((n: any) => n.id === node.id)
   selectedNodeData.value = backendNode || null
+  // Populate parameter set + overrides
+  if (backendNode?.parameter_set_id) {
+    selectedNodeParamSetId.value = backendNode.parameter_set_id
+    selectedNodeOverrides.value = { ...(backendNode.parameter_overrides || {}) }
+    loadParamSets()
+  } else {
+    selectedNodeParamSetId.value = undefined
+    selectedNodeOverrides.value = {}
+  }
 }
 
 function onEdgeClick(event: any) {
@@ -1062,6 +1260,8 @@ async function saveEdgeConfig() {
           role: n.role || null,
           timeout_seconds: n.timeout_seconds || null,
           position: n.position || null,
+          parameter_set_id: n.parameter_set_id || null,
+          parameter_overrides: n.parameter_overrides || null,
         })),
         edges: updatedEdges,
       },
@@ -1084,6 +1284,8 @@ function onPaneClick() {
   selectedNodeData.value = null
   selectedEdgeData.value = null
   showSaveAsDropdown.value = false
+  selectedNodeParamSetId.value = undefined
+  selectedNodeOverrides.value = {}
 }
 
 function addNode() {
@@ -1283,6 +1485,13 @@ async function saveGraph() {
   savingGraph.value = true
   saveGraphError.value = null
   try {
+    // Sync current param set + overrides into selected node data
+    if (selectedNodeData.value) {
+      selectedNodeData.value.parameter_set_id = selectedNodeParamSetId.value || null
+      selectedNodeData.value.parameter_overrides = Object.keys(selectedNodeOverrides.value).length > 0
+        ? { ...selectedNodeOverrides.value }
+        : null
+    }
     await withTimeout((signal) => api.PATCH('/api/v1/pipelines/{pipeline_id}/graph', {
       params: { path: { pipeline_id: pipelineId } },
       body: {
@@ -1297,6 +1506,8 @@ async function saveGraph() {
           role: n.role || null,
           timeout_seconds: n.timeout_seconds || null,
           position: n.position || null,
+          parameter_set_id: n.parameter_set_id || null,
+          parameter_overrides: n.parameter_overrides || null,
         })),
         edges: rawEdges.value.map((e: any) => ({
           id: e.id,
