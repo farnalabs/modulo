@@ -474,11 +474,12 @@ class PipelineExecutor:
                 compiled = get_or_compile(
                     pipeline_id,
                     snapshot_id,
-                    lambda: build_graph_from_json(
+                    lambda cp=saver: build_graph_from_json(
                         graph_json,
                         eval_definitions_by_node=resume_eval_defs_by_node,
                         session_factory=self._session_factory,
                         org_id=org_id,
+                        checkpointer=cp,
                     ),
                     checkpointer=saver,
                 )

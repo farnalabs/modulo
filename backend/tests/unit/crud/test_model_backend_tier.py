@@ -4,6 +4,7 @@ Tests the default-behaviour, None-handling, empty-list, and explicit-filter
 code paths in the function.  No DB — uses mock sessions.
 """
 
+import uuid
 from unittest.mock import AsyncMock, MagicMock
 
 from modulo.db.crud.model_backend import list_model_backends
@@ -30,11 +31,14 @@ def _mock_execute(*, count: int) -> MagicMock:
     return m
 
 
+_ORG_ID = uuid.uuid4()
+
+
 async def test_default_excludes_in_dev() -> None:
     session = _mock_session()
     session.execute = _mock_execute(count=2)
 
-    result = await list_model_backends(session)
+    result = await list_model_backends(session, org_id=_ORG_ID)
 
     assert result.total == 2
     assert len(result.items) == 2
@@ -44,7 +48,7 @@ async def test_excluded_tiers_none_same_as_default() -> None:
     session = _mock_session()
     session.execute = _mock_execute(count=2)
 
-    result = await list_model_backends(session, excluded_tiers=None)
+    result = await list_model_backends(session, org_id=_ORG_ID, excluded_tiers=None)
 
     assert result.total == 2
 
@@ -53,7 +57,7 @@ async def test_excluded_tiers_explicit_in_dev() -> None:
     session = _mock_session()
     session.execute = _mock_execute(count=1)
 
-    result = await list_model_backends(session, excluded_tiers=["in_dev"])
+    result = await list_model_backends(session, org_id=_ORG_ID, excluded_tiers=["in_dev"])
 
     assert result.total == 1
 
