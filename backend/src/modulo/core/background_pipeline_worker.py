@@ -13,7 +13,6 @@ Usage:
 import asyncio
 import logging
 import uuid
-from contextlib import suppress
 from dataclasses import dataclass
 from typing import Any
 
@@ -24,6 +23,12 @@ from modulo.db.crud.run import update_run_status
 from modulo.db.rls import set_rls_org
 
 _log = logging.getLogger(__name__)
+
+_POOL_SIZE = 3
+_MAX_OVERFLOW = 6
+_POOL_TIMEOUT = 10
+_CONSUMER_STOP_TIMEOUT = 5.0
+_RUNNING_JOBS_DRAIN_TIMEOUT = 30.0
 
 
 @dataclass
@@ -48,27 +53,40 @@ class BackgroundPipelineWorker:
         self._queue: asyncio.Queue[PipelineJob] = asyncio.Queue()
         self._consumer_task: asyncio.Task[None] | None = None
         self._running_jobs: set[asyncio.Task[None]] = set()
-        self._stopping = False
+        self._started = False
 
     async def start(self) -> None:
-        """Create the database engine and start the consumer loop."""
+        """Create the database engine and start the consumer loop.
+
+        Idempotent — safe to call multiple times.
+        """
+        if self._started:
+            _log.warning("Background pipeline worker already started — skipping")
+            return
         self._engine = create_async_engine(
             self._database_url,
-            pool_size=3,
-            max_overflow=6,
+            pool_size=_POOL_SIZE,
+            max_overflow=_MAX_OVERFLOW,
             pool_pre_ping=True,
+            pool_timeout=_POOL_TIMEOUT,
         )
         self._consumer_task = asyncio.create_task(
             self._consumer_loop(),
             name="background-pipeline-worker",
         )
+        self._started = True
         _log.info("Background pipeline worker started")
 
     def submit(self, run_id: uuid.UUID, org_id: uuid.UUID, input_payload: dict[str, Any]) -> None:
         """Submit a pipeline run for background execution.
 
         Never blocks — pushes to the internal queue immediately.
+        Returns True if the job was accepted, False if the worker is
+        shutting down and cannot accept new jobs.
         """
+        if not self._started:
+            _log.warning("Background worker not started — run %s rejected", run_id)
+            return
         job = PipelineJob(run_id=run_id, org_id=org_id, input_payload=input_payload)
         self._queue.put_nowait(job)
         _log.info("Pipeline run %s submitted to background worker", run_id)
@@ -76,26 +94,38 @@ class BackgroundPipelineWorker:
     async def stop(self) -> None:
         """Gracefully stop the worker.
 
-        Cancels the consumer task first (no new jobs accepted), then waits
-        for in-flight jobs to complete (with a 30s timeout), then disposes
-        the engine.
+        Drains the queue, cancels in-flight jobs after a timeout,
+        then disposes the engine.
         """
-        self._stopping = True
+        leftover = 0
+        while not self._queue.empty():
+            try:
+                job = self._queue.get_nowait()
+                leftover += 1
+                _log.warning("Background worker shutdown: run %s abandoned in queue", job.run_id)
+            except asyncio.QueueEmpty:
+                break
+        if leftover:
+            _log.warning("Background worker shutdown: %d queued jobs abandoned", leftover)
+
         if self._consumer_task is not None:
             self._consumer_task.cancel()
-            with suppress(asyncio.CancelledError, TimeoutError):
-                await asyncio.wait_for(self._consumer_task, timeout=5.0)
+            try:
+                await asyncio.wait_for(self._consumer_task, timeout=_CONSUMER_STOP_TIMEOUT)
+            except (asyncio.CancelledError, TimeoutError):
+                _log.warning("Background worker consumer task did not stop cleanly")
 
         if self._running_jobs:
             _, pending = await asyncio.wait(
                 self._running_jobs,
-                timeout=30.0,
+                timeout=_RUNNING_JOBS_DRAIN_TIMEOUT,
                 return_when=asyncio.ALL_COMPLETED,
             )
             if pending:
                 _log.warning(
-                    "Background worker shutdown: %d running jobs did not complete within 30s",
+                    "Background worker shutdown: %d running jobs did not complete within %.0fs",
                     len(pending),
+                    _RUNNING_JOBS_DRAIN_TIMEOUT,
                 )
                 for t in pending:
                     t.cancel()
@@ -104,13 +134,16 @@ class BackgroundPipelineWorker:
             await self._engine.dispose()
             _log.info("Background pipeline worker engine disposed")
 
+        self._started = False
         _log.info("Background pipeline worker stopped")
 
     async def _consumer_loop(self) -> None:
         """Consume jobs from the queue and spawn sub-tasks for each."""
+        backoff = 0.1
         while True:
             try:
                 job = await self._queue.get()
+                backoff = 0.1
                 task = asyncio.create_task(
                     self._execute_job(job),
                     name=f"bg-pipeline-run-{job.run_id}",
@@ -121,14 +154,20 @@ class BackgroundPipelineWorker:
                 break
             except Exception:
                 _log.exception("Background worker consumer loop error")
+                await asyncio.sleep(backoff)
+                backoff = min(backoff * 2, 5.0)
 
     async def _execute_job(self, job: PipelineJob) -> None:
         """Execute a single pipeline run."""
         _log.info("Background worker executing run %s", job.run_id)
+        engine = self._engine
+        if engine is None:
+            _log.error("Background worker engine not available — run %s will not execute", job.run_id)
+            return
+
         try:
-            assert self._engine is not None
             executor = PipelineExecutor(
-                self._engine,
+                engine,
                 checkpointer_conn_string=self._checkpointer_conn_string,
             )
             await executor.execute(
@@ -142,8 +181,7 @@ class BackgroundPipelineWorker:
         except Exception:
             _log.exception("Background worker failed for run %s", job.run_id)
             try:
-                assert self._engine is not None
-                factory = async_sessionmaker(self._engine, expire_on_commit=False)
+                factory = async_sessionmaker(engine, expire_on_commit=False)
                 async with factory() as session, session.begin():
                     await set_rls_org(session, job.org_id)
                     await update_run_status(
