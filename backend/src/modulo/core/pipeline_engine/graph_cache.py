@@ -23,6 +23,7 @@ from langgraph.graph import StateGraph
 from modulo.core.eval_engine import EvalDefinition
 from modulo.core.pipeline_engine.node_runner import (
     _is_truthy,
+    make_connector_fn,
     make_hitl_gate_fn,
     make_manual_node_fn,
     make_node_fn,
@@ -208,10 +209,17 @@ def build_graph_from_json(
         max_input_length: int | None = node_def.get("max_input_length")
         token_budget: int | None = node_def.get("token_budget")
 
-        if node_type not in ("agent", "manual"):
+        if node_type not in ("agent", "manual", "connector"):
             raise ValueError(f"Unknown node_type {node_type!r} for node {node_id!r}")
 
-        if node_type == "manual":
+        connector_binding = node_def.get("connector_binding")
+
+        if connector_binding:
+            graph.add_node(
+                node_id,
+                make_connector_fn(node_def, timeout=timeout),
+            )
+        elif node_type == "manual":
             graph.add_node(
                 node_id,
                 make_manual_node_fn(node_def, timeout=timeout),
