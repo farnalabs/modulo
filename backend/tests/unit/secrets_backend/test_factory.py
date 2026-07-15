@@ -89,9 +89,9 @@ def test_env_var_used_when_no_backend_name():
 )
 def test_fernet_key_optional_for_external_backend(backend_name, expected_cls, env_vars, module_patch, lib_patch):
     if backend_name == "vault":
-        from modulo.core.secrets_backend.vault import VaultSecretsBackend as expected_cls
+        from modulo.core.secrets_backend.vault import VaultSecretsBackend as expected_cls  # noqa: N813
     else:
-        from modulo.core.secrets_backend.aws import AWSSecretsManagerBackend as expected_cls
+        from modulo.core.secrets_backend.aws import AWSSecretsManagerBackend as expected_cls  # noqa: N813
     with (
         patch("modulo.core.secrets_backend._check_external_secrets_licensed", return_value=True),
         patch(f"{module_patch}._MODULE_AVAILABLE", True),

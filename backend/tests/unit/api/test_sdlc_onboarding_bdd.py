@@ -2,7 +2,6 @@
 
 import uuid
 from collections.abc import AsyncGenerator, Generator
-from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -95,24 +94,7 @@ def _patch_sdlc_steps() -> Generator[None, None, None]:
 
 @pytest.fixture(autouse=True)
 def _patch_onboarding_persistence() -> Generator[None, None, None]:
-    import modulo.api.routes.onboarding as onboarding_mod
-
-    original_load = onboarding_mod._load_onboarding_json
-    original_save = onboarding_mod._save_onboarding_state
-    state_store: dict[str, Any] | None = None
-
-    def fake_load() -> dict[str, Any] | None:
-        return state_store
-
-    def fake_save(state: Any) -> None:
-        nonlocal state_store
-        state_store = {"is_first_run": state.is_first_run, "completed_steps": state.completed_steps}
-
-    onboarding_mod._load_onboarding_json = fake_load
-    onboarding_mod._save_onboarding_state = fake_save
     yield
-    onboarding_mod._load_onboarding_json = original_load
-    onboarding_mod._save_onboarding_state = original_save
 
 
 def _mock_no_pipelines(mock_session: AsyncMock) -> None:
