@@ -77,6 +77,9 @@
         </button>
       </div>
 
+      <div v-if="store.error" class="text-xs text-destructive px-3 py-1 rounded bg-destructive/10">
+        {{ store.error }}
+      </div>
       <div class="flex items-center justify-between pt-3 mt-1 border-t">
         <button
           v-if="store.actions.some(a => !a.completed && !a.skipped)"
