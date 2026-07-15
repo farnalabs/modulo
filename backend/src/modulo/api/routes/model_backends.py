@@ -301,6 +301,13 @@ async def create_model_backend_endpoint(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="An unexpected error occurred while creating model backend.",
         ) from None
+    import json
+
+    from modulo.core.secrets_backend import create_secrets_backend
+
+    secrets_backend = create_secrets_backend(fernet_key=settings.fernet_key, session=session)
+    secret_value = json.dumps({"api_key": req.api_key})
+    await secrets_backend.set_secret(str(mb.id), secret_value)
     return _to_response(mb)
 
 
@@ -389,6 +396,14 @@ async def update_model_backend_endpoint(
         ) from None
     if mb is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Model backend not found")
+    if req.api_key is not None:
+        import json
+
+        from modulo.core.secrets_backend import create_secrets_backend
+
+        secrets_backend = create_secrets_backend(fernet_key=settings.fernet_key, session=session)
+        secret_value = json.dumps({"api_key": req.api_key})
+        await secrets_backend.set_secret(str(mb.id), secret_value)
     return _to_response(mb)
 
 

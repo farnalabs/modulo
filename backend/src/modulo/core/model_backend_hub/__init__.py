@@ -112,8 +112,23 @@ class ModelBackendHub:
                 except TimeoutError:
                     logger.warning("Timeout fetching secret for backend %s", mb.id)
                     continue
-                except KeyError as exc:
-                    raise BackendDecryptError(mb.id) from exc
+                except KeyError:
+                    ciphertext = getattr(mb, "credentials_ciphertext", None)
+                    if ciphertext and isinstance(ciphertext, bytes) and ciphertext != b"":
+                        try:
+                            from cryptography.fernet import Fernet
+
+                            from modulo.settings import get_settings
+
+                            _settings = get_settings()
+                            f = Fernet(_settings.fernet_key.encode())
+                            plaintext = f.decrypt(ciphertext)
+                            raw_str = plaintext.decode()
+                        except Exception:
+                            logger.warning("Failed to decrypt credentials_ciphertext for backend %s", mb.id)
+                            raise BackendDecryptError(mb.id) from None
+                    else:
+                        raise
                 try:
                     raw_creds: Any = json.loads(raw_str)
                 except json.JSONDecodeError as exc:
