@@ -60,6 +60,9 @@ _cancellation_check_cv: ContextVar[Callable[[], Awaitable[bool]] | None] = Conte
 # ModelBackendHub for the current run — provides model backends to make_node_fn.
 _model_backend_hub_cv: ContextVar[Any | None] = ContextVar("_model_backend_hub", default=None)
 
+# ConnectorHub for the current run — provides connector instances to nodes.
+_connector_hub_cv: ContextVar[Any | None] = ContextVar("_connector_hub", default=None)
+
 
 # Canonical write-log key in LangGraph state.
 _RUN_CONTEXT_WRITE_LOG_KEY = "_run_context_write_log"
@@ -81,6 +84,14 @@ def get_model_backend_hub() -> Any | None:
 
 def set_model_backend_hub(hub: Any | None) -> None:
     _model_backend_hub_cv.set(hub)
+
+
+def get_connector_hub() -> Any | None:
+    return _connector_hub_cv.get()
+
+
+def set_connector_hub(hub: Any | None) -> None:
+    _connector_hub_cv.set(hub)
 
 
 def set_cancellation_check(

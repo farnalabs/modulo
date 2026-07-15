@@ -422,7 +422,7 @@ class PipelineExecutor:
 
             # Load eval definitions while session is active.
             eval_rows = await self._load_eval_defs_for_pipeline(session, run.pipeline_id)
-            resume_eval_defs_by_node = self._build_eval_defs_by_node(eval_rows, org_id, run.pipeline_id)
+            self._build_eval_defs_by_node(eval_rows, org_id, run.pipeline_id)
 
         pipeline_id = run.pipeline_id
         snapshot_id = run.snapshot_id
