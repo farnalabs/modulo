@@ -35,7 +35,9 @@ def test_vault_backend_created_by_name():
         assert isinstance(backend, VaultSecretsBackend)
 
 
-@pytest.mark.skip(reason="Flaky: unawaited coroutine warning in worktree env")\ndef test_aws_backend_created_by_name():
+@pytest.mark.skip(reason="Flaky: unawaited coroutine warning in worktree env")
+
+def test_aws_backend_created_by_name():
     from modulo.core.secrets_backend.aws import AWSSecretsManagerBackend
 
     with (
@@ -125,3 +127,4 @@ def test_fernet_key_required_when_backend_is_fernet():
 def test_empty_key_raises_value_error():
     with pytest.raises(ValueError, match="non-empty"):
         validate_key("")
+
