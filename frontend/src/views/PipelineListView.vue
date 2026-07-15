@@ -50,7 +50,7 @@
         @folders-changed="loadPipelines"
       />
 
-      <main role="button" tabindex="0" @keydown.enter="($event.currentTarget as HTMLElement).click()" @keydown.space.prevent="($event.currentTarget as HTMLElement).click()" class="flex-1 page-wide" @click.self="showActionMenu = null">
+      <main role="button" tabindex="0" @keydown.enter="($event.currentTarget as HTMLElement).click()" @keydown.space.prevent="($event.currentTarget as HTMLElement).click()" class="flex-1 page-wide">
       <div v-if="loading" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
         <div v-for="i in 6" :key="i" class="card p-5 animate-pulse">
           <div class="h-5 w-3/4 bg-muted rounded mb-2" />
@@ -118,26 +118,20 @@
                 >
                   {{ p.visibility === 'org' ? 'Org' : 'Team' }}
                 </span>
-                <div class="relative">
-                  <button
-                    class="rounded p-1 hover:bg-accent"
-                    @click.stop="showActionMenu = (showActionMenu === p.id ? null : p.id)"
-                    data-testid="pipeline-list-action-menu"
-                  >
-                    <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="1"/><circle cx="12" cy="5" r="1"/><circle cx="12" cy="19" r="1"/></svg>
-                  </button>
-                  <div
-                    v-if="showActionMenu === p.id"
-                    class="absolute right-0 top-full z-20 mt-1 w-40 rounded-lg border bg-card py-1 shadow-lg"
-                    @click.stop
-                  >
-                    <button class="flex w-full items-center gap-2 px-3 py-2 text-left text-sm hover:bg-accent" @click.stop="openRename(p)">Rename</button>
-                    <button v-if="!p.archived_at" class="flex w-full items-center gap-2 px-3 py-2 text-left text-sm hover:bg-accent" @click.stop="handleArchive(p)">Archive</button>
-                    <button v-else class="flex w-full items-center gap-2 px-3 py-2 text-left text-sm hover:bg-accent" @click.stop="handleUnarchive(p)">Unarchive</button>
-                    <button class="flex w-full items-center gap-2 px-3 py-2 text-left text-sm hover:bg-accent" @click.stop="openMoveToFolder(p)">{{ $t('views.PipelineListView.move_to_folder') }}</button>
-                    <button v-if="planStore.featureEnabled('pipeline_delete')" class="flex w-full items-center gap-2 px-3 py-2 text-left text-sm text-destructive hover:bg-destructive/10" @click.stop="openDelete(p)">Delete</button>
-                  </div>
-                </div>
+                <DropdownMenu>
+                  <DropdownMenuTrigger as-child>
+                    <button class="rounded p-1 hover:bg-accent" data-testid="pipeline-list-action-menu">
+                      <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="1"/><circle cx="12" cy="5" r="1"/><circle cx="12" cy="19" r="1"/></svg>
+                    </button>
+                  </DropdownMenuTrigger>
+                  <DropdownMenuContent align="end" class="w-40">
+                    <DropdownMenuItem @click="openRename(p)">Rename</DropdownMenuItem>
+                    <DropdownMenuItem v-if="!p.archived_at" @click="handleArchive(p)">Archive</DropdownMenuItem>
+                    <DropdownMenuItem v-else @click="handleUnarchive(p)">Unarchive</DropdownMenuItem>
+                    <DropdownMenuItem @click="openMoveToFolder(p)">{{ $t('views.PipelineListView.move_to_folder') }}</DropdownMenuItem>
+                    <DropdownMenuItem v-if="planStore.featureEnabled('pipeline_delete')" @click="openDelete(p)" class="text-destructive focus:text-destructive">Delete</DropdownMenuItem>
+                  </DropdownMenuContent>
+                </DropdownMenu>
               </div>
             </div>
 
@@ -203,25 +197,21 @@
               <span class="text-muted-foreground">{{ formatDate(pipelineRow(row).created_at) }}</span>
             </template>
             <template #cell-actions="{ row }">
-              <div class="relative flex justify-end" @click.stop>
-                <button
-                  class="rounded p-1 hover:bg-accent"
-                  @click.stop="showActionMenu = (showActionMenu === pipelineRow(row).id ? null : pipelineRow(row).id)"
-                  data-testid="pipeline-list-action-menu"
-                >
-                  <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="1"/><circle cx="12" cy="5" r="1"/><circle cx="12" cy="19" r="1"/></svg>
-                </button>
-                <div
-                  v-if="showActionMenu === pipelineRow(row).id"
-                  class="absolute right-0 top-full z-20 mt-1 w-40 rounded-lg border bg-card py-1 shadow-lg"
-                  @click.stop
-                >
-                  <button class="flex w-full items-center gap-2 px-3 py-2 text-left text-sm hover:bg-accent" @click.stop="openRename(pipelineRow(row))">Rename</button>
-                  <button v-if="!pipelineRow(row).archived_at" class="flex w-full items-center gap-2 px-3 py-2 text-left text-sm hover:bg-accent" @click.stop="handleArchive(pipelineRow(row))">Archive</button>
-                  <button v-else class="flex w-full items-center gap-2 px-3 py-2 text-left text-sm hover:bg-accent" @click.stop="handleUnarchive(pipelineRow(row))">Unarchive</button>
-                  <button class="flex w-full items-center gap-2 px-3 py-2 text-left text-sm hover:bg-accent" @click.stop="openMoveToFolder(pipelineRow(row))">{{ $t('views.PipelineListView.move_to_folder') }}</button>
-                  <button v-if="planStore.featureEnabled('pipeline_delete')" class="flex w-full items-center gap-2 px-3 py-2 text-left text-sm text-destructive hover:bg-destructive/10" @click.stop="openDelete(pipelineRow(row))">Delete</button>
-                </div>
+              <div class="flex justify-end">
+                <DropdownMenu>
+                  <DropdownMenuTrigger as-child>
+                    <button class="rounded p-1 hover:bg-accent" data-testid="pipeline-list-action-menu">
+                      <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="1"/><circle cx="12" cy="5" r="1"/><circle cx="12" cy="19" r="1"/></svg>
+                    </button>
+                  </DropdownMenuTrigger>
+                  <DropdownMenuContent align="end" class="w-40">
+                    <DropdownMenuItem @click="openRename(pipelineRow(row))">Rename</DropdownMenuItem>
+                    <DropdownMenuItem v-if="!pipelineRow(row).archived_at" @click="handleArchive(pipelineRow(row))">Archive</DropdownMenuItem>
+                    <DropdownMenuItem v-else @click="handleUnarchive(pipelineRow(row))">Unarchive</DropdownMenuItem>
+                    <DropdownMenuItem @click="openMoveToFolder(pipelineRow(row))">{{ $t('views.PipelineListView.move_to_folder') }}</DropdownMenuItem>
+                    <DropdownMenuItem v-if="planStore.featureEnabled('pipeline_delete')" @click="openDelete(pipelineRow(row))" class="text-destructive focus:text-destructive">Delete</DropdownMenuItem>
+                  </DropdownMenuContent>
+                </DropdownMenu>
               </div>
             </template>
           </DataTable>
@@ -477,6 +467,7 @@ import { usePlanStore } from '../stores/planStore'
 import ErrorAlert from '../components/shared/ErrorAlert.vue'
 import { formatApiError } from '../lib/api/formatError'
 import { Button } from '@/components/ui/button'
+import { DropdownMenu, DropdownMenuTrigger, DropdownMenuContent, DropdownMenuItem } from '@/components/ui/dropdown-menu'
 import { api } from '../lib/api/client'
 import { useApi } from '../composables/useApi'
 import { formatDateShort } from '../lib/formatDate'
@@ -529,7 +520,6 @@ const { loading, error, data: pipelinesResp, load: loadPipelines } = useDataFetc
 )
 
 const allPipelines = computed(() => pipelinesResp.value?.items ?? [])
-const showActionMenu = ref<string | null>(null)
 
 const foldersList = ref<FolderItem[]>([])
 
@@ -657,7 +647,6 @@ function openRunDialog(p: PipelineItem) {
 }
 
 function openRename(p: PipelineItem) {
-  showActionMenu.value = null
   renameTarget.value = p
   renameName.value = p.name
   renameError.value = null
@@ -665,7 +654,6 @@ function openRename(p: PipelineItem) {
 }
 
 function openMoveToFolder(p: PipelineItem) {
-  showActionMenu.value = null
   moveTarget.value = p
   moveToFolderId.value = p.folder_id ?? null
   moveError.value = null
@@ -702,7 +690,6 @@ async function handleRename() {
       body: { name: renameName.value.trim() },
     })
     showRenameDialog.value = false
-    showActionMenu.value = null
     await loadPipelines()
   } catch (e: unknown) {
     renameError.value = formatApiError(e)
@@ -714,7 +701,6 @@ async function handleRename() {
 async function handleArchive(p: PipelineItem) {
   try {
     await postUntyped(`/api/v1/pipelines/${p.id}/archive`)
-    showActionMenu.value = null
     await loadPipelines()
   } catch (e) {
     error.value = formatApiError(e)
@@ -724,7 +710,6 @@ async function handleArchive(p: PipelineItem) {
 async function handleUnarchive(p: PipelineItem) {
   try {
     await postUntyped(`/api/v1/pipelines/${p.id}/unarchive`)
-    showActionMenu.value = null
     await loadPipelines()
   } catch (e) {
     error.value = formatApiError(e)
@@ -732,7 +717,6 @@ async function handleUnarchive(p: PipelineItem) {
 }
 
 function openDelete(p: PipelineItem) {
-  showActionMenu.value = null
   deleteTarget.value = p
   deleteError.value = null
   showDeleteConfirm.value = true
