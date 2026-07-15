@@ -514,7 +514,7 @@ def make_connector_fn(
         import uuid as _uuid
 
         try:
-            connector = await hub.get(_uuid.UUID(str(instance_id_str)))
+            connector = hub.get(_uuid.UUID(str(instance_id_str)))
         except Exception as _conn_exc:
             return {"artifacts": [{"node_id": node_id, "status": "failed", "error": f"connector error: {_conn_exc}"}]}
 
