@@ -36,6 +36,7 @@ class PipelineSnapshot(OrgScoped):
     prompt_pins_json: Mapped[list[dict[str, Any]]] = mapped_column(JSON, nullable=False)
     model_backend_pins_json: Mapped[list[dict[str, Any]]] = mapped_column(JSON, nullable=False)
     composite_bindings_json: Mapped[list[dict[str, Any]]] = mapped_column(JSON, nullable=False, default=list)
+    parameter_bindings_json: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
     tag: Mapped[str | None] = mapped_column(String(100), nullable=True)
     notes: Mapped[str | None] = mapped_column(String(2000), nullable=True)
     default_autonomy_level: Mapped[str | None] = mapped_column(String(30))
