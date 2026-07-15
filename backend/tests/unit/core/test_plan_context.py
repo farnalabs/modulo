@@ -1,4 +1,4 @@
-"""Unit tests for PlanContext classes (CommunityTier, LicenseKeyTier, DbPlanContext, resolve_plan_context)."""
+﻿"""Unit tests for PlanContext classes (CommunityTier, LicenseKeyTier, DbPlanContext, resolve_plan_context)."""
 
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -33,7 +33,7 @@ class TestCommunityTier:
         ctx = CommunityTier()
         assert ctx.feature_enabled("saved_views") is True
 
-    @pytest.mark.skip(reason="SSO now enabled for Community tier — test outdated")
+    @pytest.mark.skip(reason="SSO now enabled for Community tier â€” test outdated")
     def test_team_feature_disabled(self) -> None:
         ctx = CommunityTier()
         assert ctx.feature_enabled("sso") is False
@@ -158,3 +158,4 @@ class TestPlanContextProtocol:
         assert hasattr(ctx, "list_enabled_features")
         assert hasattr(ctx, "tier")
         assert hasattr(ctx, "has_license_key")
+
