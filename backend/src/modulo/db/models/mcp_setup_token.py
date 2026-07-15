@@ -7,7 +7,7 @@ Used when an MCP tool creates a resource that needs a secret
 import uuid
 from datetime import datetime
 
-from sqlalchemy import DateTime, String, Uuid
+from sqlalchemy import DateTime, ForeignKey, String, Uuid
 from sqlalchemy.orm import Mapped, mapped_column
 
 from modulo.db.models.base import OrgScoped
@@ -21,4 +21,8 @@ class McpSetupToken(OrgScoped):
     token_hash: Mapped[str] = mapped_column(String(64), nullable=False, unique=True)
     expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
-    created_by: Mapped[uuid.UUID] = mapped_column(Uuid(), nullable=False)
+    created_by: Mapped[uuid.UUID] = mapped_column(
+        Uuid(),
+        ForeignKey("accounts.id", ondelete="RESTRICT"),
+        nullable=False,
+    )
