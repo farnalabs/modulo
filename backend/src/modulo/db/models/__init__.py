@@ -30,6 +30,8 @@ from modulo.db.models.oauth_token import OAuthAuthorizationCode, OAuthTokenFamil
 from modulo.db.models.onboarding_progress import OnboardingProgress
 from modulo.db.models.org_membership import OrgMembership
 from modulo.db.models.organisation import Organisation
+from modulo.db.models.parameter_schema import ParameterSchema
+from modulo.db.models.parameter_set import ParameterSet
 from modulo.db.models.pipeline import Pipeline
 from modulo.db.models.pipeline_edge import PipelineEdge
 from modulo.db.models.pipeline_folder import PipelineFolder
@@ -100,6 +102,8 @@ __all__ = [
     "OrgMembership",
     "OrgScoped",
     "Organisation",
+    "ParameterSchema",
+    "ParameterSet",
     "Pipeline",
     "PipelineEdge",
     "PipelineFolder",
