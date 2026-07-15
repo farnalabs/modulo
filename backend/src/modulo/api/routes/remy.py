@@ -680,7 +680,7 @@ async def create_session(
                     select(ModelBackend)
                     .where(
                         ModelBackend.organisation_id == principal.organisation_id,
-                        ModelBackend.credentials_ciphertext.is_not(None),
+                        ModelBackend.credentials_ciphertext != b'',
                     )
                     .limit(1)
                 )
