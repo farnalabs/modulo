@@ -1,4 +1,5 @@
 import { formatApiError } from '../lib/api/formatError'
+import { spotlight } from './useSpotlight'
 
 import router from '@/router'
 
@@ -302,6 +303,16 @@ async function executeSingle(cmd: UiCommand): Promise<UiCommandResult> {
         return { id: cmd.id, name: cmd.name, success: true, result: { url: location.href } }
       case 'press':
         return await pressKey(cmd.args.key as string)
+      case 'spotlight': {
+        const testId = cmd.args?.target as string
+        const msg = cmd.args?.message as string | undefined
+        if (testId) {
+          spotlight.highlight(testId, msg)
+        } else {
+          spotlight.dismiss()
+        }
+        return { id: cmd.id, name: 'spotlight', success: true }
+      }
       default:
         return { id: cmd.id, name: cmd.name, success: false, error: `Unknown command: ${cmd.name}` }
     }
