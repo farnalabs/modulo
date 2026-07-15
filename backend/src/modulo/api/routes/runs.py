@@ -1391,46 +1391,47 @@ async def reveal_node_prompt(
             snapshot_id = run.snapshot_id
             snapshot_result = await session.execute(select(PipelineSnapshot).where(PipelineSnapshot.id == snapshot_id))
             snapshot = snapshot_result.scalar_one_or_none()
-        if snapshot is None:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail=f"Snapshot {snapshot_id} not found for run",
+
+            if snapshot is None:
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail=f"Snapshot {snapshot_id} not found for run",
+                )
+
+            graph_json: dict[str, Any] = snapshot.graph_json
+
+            # Verify node exists in the graph.
+            agent_id = _lookup_agent_for_node(graph_json, node_id)
+            if agent_id is None:
+                # Check if node exists at all (even non-agent nodes).
+                node_ids = {str(n.get("id")) for n in graph_json.get("nodes", [])}
+                if node_id not in node_ids:
+                    raise HTTPException(
+                        status_code=status.HTTP_404_NOT_FOUND,
+                        detail=f"Node {node_id} not found in pipeline graph",
+                    )
+
+            # Load agent for prompt template (if this is an agent node).
+            agent: Agent | None = None
+            prompt_always_visible = False
+            if agent_id is not None:
+                agent_result = await session.execute(select(Agent).where(Agent.id == agent_id))
+                agent = agent_result.scalar_one_or_none()
+                if agent is None:
+                    raise HTTPException(
+                        status_code=status.HTTP_404_NOT_FOUND,
+                        detail=f"Agent {agent_id} not found for node {node_id}",
+                    )
+                prompt_always_visible = bool(agent.prompt_always_visible)
+
+            # Try to load checkpoint state for richer prompt reconstruction.
+            thread_id = run.langgraph_thread_id
+            checkpoint_state = await _get_checkpoint_state(
+                session,
+                thread_id,
+                principal.organisation_id,
+                fernet_key=settings.fernet_key,
             )
-
-        graph_json: dict[str, Any] = snapshot.graph_json
-
-        # Verify node exists in the graph.
-        agent_id = _lookup_agent_for_node(graph_json, node_id)
-        if agent_id is None:
-            # Check if node exists at all (even non-agent nodes).
-            node_ids = {str(n.get("id")) for n in graph_json.get("nodes", [])}
-            if node_id not in node_ids:
-                raise HTTPException(
-                    status_code=status.HTTP_404_NOT_FOUND,
-                    detail=f"Node {node_id} not found in pipeline graph",
-                )
-
-        # Load agent for prompt template (if this is an agent node).
-        agent: Agent | None = None
-        prompt_always_visible = False
-        if agent_id is not None:
-            agent_result = await session.execute(select(Agent).where(Agent.id == agent_id))
-            agent = agent_result.scalar_one_or_none()
-            if agent is None:
-                raise HTTPException(
-                    status_code=status.HTTP_404_NOT_FOUND,
-                    detail=f"Agent {agent_id} not found for node {node_id}",
-                )
-            prompt_always_visible = bool(agent.prompt_always_visible)
-
-        # Try to load checkpoint state for richer prompt reconstruction.
-        thread_id = run.langgraph_thread_id
-        checkpoint_state = await _get_checkpoint_state(
-            session,
-            thread_id,
-            principal.organisation_id,
-            fernet_key=settings.fernet_key,
-        )
 
         messages = _build_messages_from_agent_and_state(
             agent=agent,

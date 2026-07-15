@@ -680,7 +680,6 @@ export default {
       "custom_function": "Custom Function"
     },
     "RunDetailView": {
-      "back_to_dashboard": "Back to Dashboard",
       "copy_run_id": "Copy run ID",
       "copy": "Copy",
       "final_output": "Final Output",
