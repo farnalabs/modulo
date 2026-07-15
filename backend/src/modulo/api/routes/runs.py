@@ -407,7 +407,7 @@ async def trigger_run(
             detail="An unexpected error occurred.",
         ) from None
     _settings_for_bg = get_settings()
-    _bg_engine = create_async_engine(str(_settings_for_bg.database_url), pool_size=2, max_overflow=4)
+    _bg_engine = create_async_engine(str(_settings_for_bg.database_url), pool_size=2, max_overflow=4, pool_pre_ping=True)
     executor = PipelineExecutor(
         _bg_engine,
         checkpointer_conn_string=pg_connection_string(str(_settings_for_bg.database_url)),
@@ -601,7 +601,7 @@ async def _run_in_background(
         _log.exception("run.background_execution_error", extra={"run_id": str(run_id)})
         try:
             settings = get_settings()
-            engine = create_async_engine(str(settings.database_url), pool_size=1)
+            engine = create_async_engine(str(settings.database_url), pool_size=1, pool_pre_ping=True)
             factory = async_sessionmaker(engine, expire_on_commit=False)
             async with factory() as session, session.begin():
                 await set_rls_org(session, org_id)
