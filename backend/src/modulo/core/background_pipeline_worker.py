@@ -69,6 +69,7 @@ class BackgroundPipelineWorker:
             max_overflow=_MAX_OVERFLOW,
             pool_pre_ping=True,
             pool_timeout=_POOL_TIMEOUT,
+            connect_args={"ssl": False, "statement_cache_size": 0},
         )
         self._consumer_task = asyncio.create_task(
             self._consumer_loop(),
