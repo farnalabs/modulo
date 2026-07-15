@@ -18,22 +18,16 @@
   >
     <template #after>
       <div class="flex items-center gap-2">
-        <select
-          v-model="pipelineFilter"
-          data-testid="hitl-review-pipeline-select"
-          aria-label="Pipeline"
-          class="rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-          @change="loadGates"
-        >
-          <option value="">All Pipelines</option>
-          <option
-            v-for="p in pipelines"
-            :key="p.id"
-            :value="p.id"
-          >
-            {{ p.name }}
-          </option>
-        </select>
+        <Select v-model="pipelineFilter" @update:model-value="loadGates">
+          <SelectTrigger data-testid="hitl-review-pipeline-select" aria-label="Pipeline" class="rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
+            <SelectValue placeholder="All Pipelines" />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem v-for="p in pipelines" :key="p.id" :value="p.id">
+              {{ p.name }}
+            </SelectItem>
+          </SelectContent>
+        </Select>
         <input aria-label="date"
           v-model="dateFrom"
           type="date"
@@ -244,6 +238,7 @@ import { usePlanStore } from '../stores/planStore'
 import { formatDateShortWithTime } from '../lib/formatDate'
 import { shortId } from '../utils/format'
 import { Button } from '@/components/ui/button'
+import { Select, SelectTrigger, SelectContent, SelectItem, SelectValue } from '@/components/ui/select'
 
 const planStore = usePlanStore()
 

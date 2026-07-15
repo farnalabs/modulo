@@ -221,18 +221,17 @@
               data-testid="onboarding-wizard-library-search"
               class="flex-1 rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
             />
-            <select
-              v-model="libraryTypeFilter"
-              data-testid="onboarding-wizard-library-type-filter"
-              aria-label="Filter by type"
-              class="rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-            >
-              <option value="">All types</option>
-              <option value="pipeline_template">Pipeline Templates</option>
-              <option value="agent">Agents</option>
-              <option value="schema">Schemas</option>
-              <option value="integration">Integrations</option>
-            </select>
+            <Select v-model="libraryTypeFilter">
+              <SelectTrigger data-testid="onboarding-wizard-library-type-filter" aria-label="Filter by type" class="rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
+                <SelectValue placeholder="All types" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="pipeline_template">Pipeline Templates</SelectItem>
+                <SelectItem value="agent">Agents</SelectItem>
+                <SelectItem value="schema">Schemas</SelectItem>
+                <SelectItem value="integration">Integrations</SelectItem>
+              </SelectContent>
+            </Select>
           </div>
           <div class="grid grid-cols-1 gap-3 sm:grid-cols-2">
             <div role="button" tabindex="0" @keydown.enter="($event.currentTarget as HTMLElement).click()" @keydown.space.prevent="($event.currentTarget as HTMLElement).click()"
@@ -402,6 +401,7 @@ import type { components } from '../lib/api/client'
 import PageHeader from '../components/shared/PageHeader.vue'
 import { formatApiError } from '../lib/api/formatError'
 import { Button } from '@/components/ui/button'
+import { Select, SelectTrigger, SelectContent, SelectItem, SelectValue } from '@/components/ui/select'
 
 type ConnectorItem = components['schemas']['ConnectorResponse']
 

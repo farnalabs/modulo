@@ -13,17 +13,16 @@
       <PageHeader :title="$t('views.variantCompare.title')" :subtitle="$t('views.variantCompare.subtitle')" />
 
       <div class="flex flex-wrap items-center gap-4">
-        <select
-          v-model="selectedGroupId"
-          data-testid="variant-compare-group-select"
-          aria-label="Compare group"
-          class="min-w-[280px] rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-        >
-          <option value="" disabled>{{ $t('views.variantCompare.selectGroup') }}</option>
-          <option v-for="g in groups" :key="g.id" :value="g.id">
-            {{ g.name }}
-          </option>
-        </select>
+        <Select v-model="selectedGroupId">
+          <SelectTrigger data-testid="variant-compare-group-select" aria-label="Compare group" class="min-w-[280px] rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
+            <SelectValue :placeholder="$t('views.variantCompare.selectGroup')" />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem v-for="g in groups" :key="g.id" :value="g.id">
+              {{ g.name }}
+            </SelectItem>
+          </SelectContent>
+        </Select>
 
         <Button
           :disabled="!selectedGroupId || runningVariants.size > 0"
@@ -164,38 +163,38 @@
         <div v-if="nodeNames.length > 0 && diffVariantsAvailable.length >= 2" class="space-y-4">
           <h2 class="text-base font-semibold">{{ $t('views.variantCompare.outputDiffViewer') }}</h2>
           <div class="flex flex-wrap gap-4">
-            <label for="variantcompareview-field-3" class="flex items-center gap-2 text-sm">
+            <label class="flex items-center gap-2 text-sm">
               <span class="text-muted-foreground">{{ $t('views.variantCompare.node') }}:</span>
-              <select id="variantcompareview-field-3"
-                v-model="diffNode"
-                data-testid="variant-compare-diff-node"
-                aria-label="Diff node"
-                class="rounded-lg border border-input bg-background px-3 py-1.5 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-              >
-                <option v-for="n in nodeNames" :key="n" :value="n">{{ n }}</option>
-              </select>
+              <Select v-model="diffNode">
+                <SelectTrigger data-testid="variant-compare-diff-node" aria-label="Diff node" class="rounded-lg border border-input bg-background px-3 py-1.5 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
+                  <SelectValue placeholder="Select node" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem v-for="n in nodeNames" :key="n" :value="n">{{ n }}</SelectItem>
+                </SelectContent>
+              </Select>
             </label>
-            <label for="variantcompareview-field-2" class="flex items-center gap-2 text-sm">
+            <label class="flex items-center gap-2 text-sm">
               <span class="text-muted-foreground">{{ $t('views.variantCompare.variantA') }}:</span>
-              <select id="variantcompareview-field-2"
-                v-model="diffVarA"
-                data-testid="variant-compare-diff-variant-a"
-                aria-label="Variant A"
-                class="rounded-lg border border-input bg-background px-3 py-1.5 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-              >
-                <option v-for="v in diffVariantsAvailable" :key="v" :value="v">{{ v }}</option>
-              </select>
+              <Select v-model="diffVarA">
+                <SelectTrigger data-testid="variant-compare-diff-variant-a" aria-label="Variant A" class="rounded-lg border border-input bg-background px-3 py-1.5 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
+                  <SelectValue placeholder="Select variant" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem v-for="v in diffVariantsAvailable" :key="v" :value="v">{{ v }}</SelectItem>
+                </SelectContent>
+              </Select>
             </label>
-            <label for="variantcompareview-field-1" class="flex items-center gap-2 text-sm">
+            <label class="flex items-center gap-2 text-sm">
               <span class="text-muted-foreground">{{ $t('views.variantCompare.variantB') }}:</span>
-              <select id="variantcompareview-field-1"
-                v-model="diffVarB"
-                data-testid="variant-compare-diff-variant-b"
-                aria-label="Variant B"
-                class="rounded-lg border border-input bg-background px-3 py-1.5 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-              >
-                <option v-for="v in diffVariantsAvailable" :key="v" :value="v">{{ v }}</option>
-              </select>
+              <Select v-model="diffVarB">
+                <SelectTrigger data-testid="variant-compare-diff-variant-b" aria-label="Variant B" class="rounded-lg border border-input bg-background px-3 py-1.5 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
+                  <SelectValue placeholder="Select variant" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem v-for="v in diffVariantsAvailable" :key="v" :value="v">{{ v }}</SelectItem>
+                </SelectContent>
+              </Select>
             </label>
           </div>
           <div class="grid grid-cols-1 gap-4 md:grid-cols-2">
@@ -244,6 +243,7 @@ import PageTabs from "../components/PageTabs.vue"
 import { formatApiError } from '../lib/api/formatError'
 import { Button } from '@/components/ui/button'
 import EmptyState from '../components/shared/EmptyState.vue'
+import { Select, SelectTrigger, SelectContent, SelectItem, SelectValue } from '@/components/ui/select'
 
 const { t } = useI18n()
 

@@ -19,30 +19,28 @@
       <div class="grid gap-6 lg:grid-cols-2">
         <div>
           <label for="evaleditorview-field-8" class="mb-1.5 block text-sm font-medium">{{ $t('views.EvalEditorView.pipeline') }}</label>
-          <select id="evaleditorview-field-8"
-            v-model="selectedPipelineId"
-            data-testid="eval-editor-pipeline"
-            aria-label="Pipeline"
-            class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-            @change="onPipelineChange"
-          >
-            <option value="">{{ $t('views.EvalEditorView.select_a_pipeline') }}</option>
-            <option v-for="p in pipelines" :key="p.id" :value="p.id">{{ p.name }}</option>
-          </select>
+          <Select v-model="selectedPipelineId" @update:model-value="onPipelineChange">
+            <SelectTrigger data-testid="eval-editor-pipeline" aria-label="Pipeline" class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
+              <SelectValue :placeholder="$t('views.EvalEditorView.select_a_pipeline')" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="">{{ $t('views.EvalEditorView.select_a_pipeline') }}</SelectItem>
+              <SelectItem v-for="p in pipelines" :key="p.id" :value="p.id">{{ p.name }}</SelectItem>
+            </SelectContent>
+          </Select>
         </div>
 
         <div>
           <label for="evaleditorview-field-7" class="mb-1.5 block text-sm font-medium">{{ $t('views.EvalEditorView.node') }} <span class="text-muted-foreground">({{ $t('views.EvalEditorView.node_optional') }})</span></label>
-          <select id="evaleditorview-field-7"
-            v-model="form.node_id"
-            :disabled="!selectedPipelineId || nodesLoading"
-            data-testid="eval-editor-node"
-            aria-label="Node"
-            class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-50"
-          >
-            <option value="">{{ $t('views.EvalEditorView.all_pipeline_outputs') }}</option>
-            <option v-for="n in nodes" :key="n.id" :value="n.id">{{ n.label || n.node_type || shortId(n.id) }}</option>
-          </select>
+          <Select v-model="form.node_id" :disabled="!selectedPipelineId || nodesLoading">
+            <SelectTrigger data-testid="eval-editor-node" aria-label="Node" class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-50">
+              <SelectValue :placeholder="$t('views.EvalEditorView.all_pipeline_outputs')" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="">{{ $t('views.EvalEditorView.all_pipeline_outputs') }}</SelectItem>
+              <SelectItem v-for="n in nodes" :key="n.id" :value="n.id">{{ n.label || n.node_type || shortId(n.id) }}</SelectItem>
+            </SelectContent>
+          </Select>
           <div v-if="nodesLoading" class="mt-1 text-xs text-muted-foreground">{{ $t('views.EvalEditorView.loading_nodes') }}</div>
           <div v-if="nodesError" class="mt-1 text-xs text-destructive">{{ nodesError }}</div>
         </div>
@@ -67,17 +65,17 @@
 
               <div>
                 <label for="evaleditorview-field-5" class="mb-1 block text-sm font-medium">{{ $t('views.EvalEditorView.eval_type') }}</label>
-                <select id="evaleditorview-field-5"
-                  v-model="form.eval_type"
-                  data-testid="eval-editor-eval-type"
-                  aria-label="Eval type"
-                  class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-                >
-                  <option value="llm_judge">{{ $t('views.EvalEditorView.llm_judge') }}</option>
-                  <option value="regex">{{ $t('views.EvalEditorView.regex') }}</option>
-                  <option value="json_schema">{{ $t('views.EvalEditorView.json_schema') }}</option>
-                  <option value="custom_function">{{ $t('views.EvalEditorView.custom_function') }}</option>
-                </select>
+                <Select v-model="form.eval_type">
+                  <SelectTrigger data-testid="eval-editor-eval-type" aria-label="Eval type" class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
+                    <SelectValue placeholder="llm_judge" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="llm_judge">{{ $t('views.EvalEditorView.llm_judge') }}</SelectItem>
+                    <SelectItem value="regex">{{ $t('views.EvalEditorView.regex') }}</SelectItem>
+                    <SelectItem value="json_schema">{{ $t('views.EvalEditorView.json_schema') }}</SelectItem>
+                    <SelectItem value="custom_function">{{ $t('views.EvalEditorView.custom_function') }}</SelectItem>
+                  </SelectContent>
+                </Select>
               </div>
 
               <div>
@@ -275,6 +273,7 @@ import { usePlanStore } from '../stores/planStore'
 import FeatureGate from '../components/FeatureGate.vue'
 import PageHeader from '../components/shared/PageHeader.vue'
 import { Button } from '@/components/ui/button'
+import { Select, SelectTrigger, SelectContent, SelectItem, SelectValue } from '@/components/ui/select'
 import PageTabs from "../components/PageTabs.vue"
 import { api } from '../lib/api/client'
 

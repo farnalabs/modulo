@@ -20,21 +20,17 @@
         </div>
         <div v-if="mapData?.versions && mapData.versions.length > 1" class="flex items-center gap-2">
           <label for="lifecyclemapview-field-1" class="text-sm text-muted-foreground">Version:</label>
-          <select id="lifecyclemapview-field-1"
-            v-model="selectedVersion"
-            class="rounded-lg border border-input bg-background px-3 py-1.5 text-sm"
-            @change="onVersionChange"
-            data-testid="lifecycle-map-version-select"
-          >
-            <option
-              v-for="v in sortedVersions"
-              :key="v.version"
-              :value="v.version"
-            >
-              v{{ v.version }}
-              <template v-if="v.created_by"> — {{ v.created_by }}</template>
-            </option>
-          </select>
+          <Select v-model="selectedVersion" @update:model-value="onVersionChange">
+            <SelectTrigger data-testid="lifecycle-map-version-select" class="rounded-lg border border-input bg-background px-3 py-1.5 text-sm">
+              <SelectValue placeholder="Select version" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem v-for="v in sortedVersions" :key="v.version" :value="v.version">
+                v{{ v.version }}
+                <template v-if="v.created_by"> — {{ v.created_by }}</template>
+              </SelectItem>
+            </SelectContent>
+          </Select>
         </div>
       </div>
     </header>
@@ -93,6 +89,7 @@ import { useLifecycleMapsStore } from '../../stores/lifecycleMaps'
 import LifecycleMapRenderer from '../../components/lifecycle-map/LifecycleMapRenderer.vue'
 import ErrorAlert from '../../components/shared/ErrorAlert.vue'
 import type { LifecycleMapStage } from '../../stores/lifecycleMaps'
+import { Select, SelectTrigger, SelectContent, SelectItem, SelectValue } from '@/components/ui/select'
 
 const route = useRoute()
 const router = useRouter()

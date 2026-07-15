@@ -34,17 +34,17 @@
           </div>
           <div>
             <label for="adminviewsview-field-5" class="mb-1 block text-sm font-medium">{{ $t('views.AdminViewsView.view_type') }}</label>
-            <select id="adminviewsview-field-5"
-              v-model="form.view_type"
-              class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary/50"
-              data-testid="admin-views-type-select"
-              aria-label="View type"
-            >
-              <option value="table">Table</option>
-              <option value="grid">Grid</option>
-              <option value="kanban">Kanban</option>
-              <option value="timeline">Timeline</option>
-            </select>
+            <Select v-model="form.view_type">
+              <SelectTrigger data-testid="admin-views-type-select" aria-label="View type" class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary/50">
+                <SelectValue placeholder="table" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="table">Table</SelectItem>
+                <SelectItem value="grid">Grid</SelectItem>
+                <SelectItem value="kanban">Kanban</SelectItem>
+                <SelectItem value="timeline">Timeline</SelectItem>
+              </SelectContent>
+            </Select>
           </div>
           <div>
             <label for="adminviewsview-field-4" class="mb-1 block text-sm font-medium">{{ $t('views.AdminViewsView.filters_json') }}</label>
@@ -77,15 +77,15 @@
             </div>
             <div>
               <label for="adminviewsview-field-1" class="mb-1 block text-sm font-medium">{{ $t('components.NodeCategoryEditor.sort_order') }}</label>
-            <select id="adminviewsview-field-1"
-              v-model="form.sort_order"
-              class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary/50"
-              data-testid="admin-views-sort-order-select"
-              aria-label="Sort order"
-              >
-                <option value="desc">Descending</option>
-                <option value="asc">Ascending</option>
-              </select>
+            <Select v-model="form.sort_order">
+              <SelectTrigger data-testid="admin-views-sort-order-select" aria-label="Sort order" class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary/50">
+                <SelectValue placeholder="desc" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="desc">Descending</SelectItem>
+                <SelectItem value="asc">Ascending</SelectItem>
+              </SelectContent>
+            </Select>
             </div>
           </div>
           <div v-if="saveError" class="text-sm text-destructive">{{ saveError }}</div>
@@ -223,6 +223,7 @@ import {
 import { formatApiError } from '../lib/api/formatError'
 import { formatDateShort } from '../lib/formatDate'
 import { Button } from '@/components/ui/button'
+import { Select, SelectTrigger, SelectContent, SelectItem, SelectValue } from '@/components/ui/select'
 import TableActions from '../components/shared/TableActions.vue'
 
 interface SavedView {

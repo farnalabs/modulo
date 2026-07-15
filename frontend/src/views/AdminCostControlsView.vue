@@ -168,32 +168,30 @@
             <div class="grid grid-cols-1 gap-6 sm:grid-cols-2">
               <div>
                 <label for="admincostcontrolsview-field-2" class="mb-1.5 block text-xs font-medium text-muted-foreground">{{ $t('views.AdminCostControlsView.currency') }}</label>
-                <select id="admincostcontrolsview-field-2"
-                  :value="settings.currency"
-                  @change="onCurrencyChange"
-                  class="w-full rounded-lg border border-border bg-background px-3 py-2 text-sm"
-                  data-testid="cc-currency"
-                  aria-label="Currency"
-                >
-                  <option value="USD">USD ($)</option>
-                  <option value="EUR">EUR (€)</option>
-                  <option value="GBP">GBP (£)</option>
-                </select>
+                <Select :model-value="settings.currency" @update:model-value="onCurrencyChange">
+                  <SelectTrigger data-testid="cc-currency" aria-label="Currency" class="w-full rounded-lg border border-border bg-background px-3 py-2 text-sm">
+                    <SelectValue placeholder="USD ($)" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="USD">USD ($)</SelectItem>
+                    <SelectItem value="EUR">EUR (€)</SelectItem>
+                    <SelectItem value="GBP">GBP (£)</SelectItem>
+                  </SelectContent>
+                </Select>
                 <p v-if="currencySaveError" class="mt-1 text-xs text-destructive">{{ currencySaveError }}</p>
               </div>
               <div>
                 <label for="admincostcontrolsview-field-1" class="mb-1.5 block text-xs font-medium text-muted-foreground">{{ $t('views.AdminCostControlsView.billing_period') }}</label>
-                <select id="admincostcontrolsview-field-1"
-                  :value="settings.billingPeriod"
-                  @change="onBillingPeriodChange"
-                  class="w-full rounded-lg border border-border bg-background px-3 py-2 text-sm"
-                  data-testid="cc-billing-period"
-                  aria-label="Billing period"
-                >
-                  <option value="monthly">Monthly</option>
-                  <option value="quarterly">Quarterly</option>
-                  <option value="annual">Annual</option>
-                </select>
+                <Select :model-value="settings.billingPeriod" @update:model-value="onBillingPeriodChange">
+                  <SelectTrigger data-testid="cc-billing-period" aria-label="Billing period" class="w-full rounded-lg border border-border bg-background px-3 py-2 text-sm">
+                    <SelectValue placeholder="Monthly" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="monthly">Monthly</SelectItem>
+                    <SelectItem value="quarterly">Quarterly</SelectItem>
+                    <SelectItem value="annual">Annual</SelectItem>
+                  </SelectContent>
+                </Select>
                 <p v-if="periodSaveError" class="mt-1 text-xs text-destructive">{{ periodSaveError }}</p>
               </div>
             </div>
@@ -238,6 +236,7 @@ import { Card, CardHeader, CardTitle, CardDescription, CardContent } from '../co
 import { Input } from '../components/ui/input'
 import { Button } from '../components/ui/button'
 import { DataTable } from '../components/ui/data-table'
+import { Select, SelectTrigger, SelectContent, SelectItem, SelectValue } from '@/components/ui/select'
 import PageTabs from "../components/PageTabs.vue"
 
 const planStore = usePlanStore()

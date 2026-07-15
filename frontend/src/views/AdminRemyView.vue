@@ -192,15 +192,15 @@
       >
         <div class="space-y-4">
           <div>
-            <label for="adminremyview-field-12" class="mb-1 block text-sm font-medium">{{ $t('views.AdminRemyView.default_provider') }}</label>
-            <select id="adminremyview-field-12"
-              v-model="modelConfig.defaultProvider"
-              class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm"
-              data-testid="remy-model-provider"
-              aria-label="Default Provider"
-            >
-              <option v-for="p in availableProviders.native" :key="p.id" :value="p.id">{{ p.label }}</option>
-            </select>
+            <label class="mb-1 block text-sm font-medium">{{ $t('views.AdminRemyView.default_provider') }}</label>
+            <Select v-model="modelConfig.defaultProvider">
+              <SelectTrigger class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm" aria-label="Default Provider" data-testid="remy-model-provider">
+                <SelectValue placeholder="Select provider" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem v-for="p in availableProviders.native" :key="p.id" :value="p.id">{{ p.label }}</SelectItem>
+              </SelectContent>
+            </Select>
           </div>
           <div>
             <label for="adminremyview-field-11" class="mb-1 block text-sm font-medium">{{ $t('views.AdminRemyView.default_model') }}</label>
@@ -340,13 +340,18 @@
       <!-- Tool Permissions -->
       <SectionCard title="Tool Permissions" description="Control which UI actions Remy can perform and whether approval is required.">
         <div class="mb-6">
-          <label for="adminremyview-field-8" class="mb-1 block text-sm font-medium">Permission Mode</label>
-          <select id="adminremyview-field-8" v-model="toolPermMode" aria-label="Permission Mode" class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm" @change="applyModePreset">
-            <option value="safe">Safe � read ops auto-allowed, destructive actions require approval (recommended)</option>
-            <option value="full_auto">Full Auto � all actions auto-allowed (with destructive override)</option>
-            <option value="locked_down">Locked Down � all write actions require approval</option>
-            <option value="custom">Custom � manual per-tool configuration</option>
-          </select>
+          <label class="mb-1 block text-sm font-medium">Permission Mode</label>
+          <Select v-model="toolPermMode" @update:model-value="applyModePreset">
+            <SelectTrigger class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm" aria-label="Permission Mode">
+              <SelectValue placeholder="Select mode" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="safe">Safe – read ops auto-allowed, destructive actions require approval (recommended)</SelectItem>
+              <SelectItem value="full_auto">Full Auto – all actions auto-allowed (with destructive override)</SelectItem>
+              <SelectItem value="locked_down">Locked Down – all write actions require approval</SelectItem>
+              <SelectItem value="custom">Custom – manual per-tool configuration</SelectItem>
+            </SelectContent>
+          </Select>
         </div>
 
         <div class="table-wrapper">
@@ -363,11 +368,16 @@
                 <td class="table-cell font-mono text-xs">{{ toolName }}</td>
                 <td class="table-cell text-muted-foreground text-xs">{{ info.description }}</td>
                 <td class="table-cell">
-                  <select v-model="toolPerms[toolName]" :disabled="toolPermMode !== 'custom'" aria-label="Tool permission" class="rounded border border-input bg-background px-2 py-1 text-xs">
-                    <option value="always_allowed">Auto-allow</option>
-                    <option value="requires_approval">Requires approval</option>
-                    <option value="disabled">Disabled</option>
-                  </select>
+                  <Select v-model="toolPerms[toolName]" :disabled="toolPermMode !== 'custom'">
+                    <SelectTrigger class="rounded border border-input bg-background px-2 py-1 text-xs" aria-label="Tool permission">
+                      <SelectValue placeholder="Select" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="always_allowed">Auto-allow</SelectItem>
+                      <SelectItem value="requires_approval">Requires approval</SelectItem>
+                      <SelectItem value="disabled">Disabled</SelectItem>
+                    </SelectContent>
+                  </Select>
                 </td>
               </tr>
             </tbody>
@@ -626,17 +636,16 @@
                   </Tooltip>
                 </td>
                 <td class="table-cell">
-                  <select
-                    v-model="contextSources[src.key]"
-                    class="rounded border border-input bg-background px-2 py-1 text-xs"
-                    aria-label="Context source mode"
-                    :disabled="contextSaving"
-                    @change="saveContextSource(src.key)"
-                  >
-                    <option value="always_on">{{ $t('views.AdminRemyView.always_on') }}</option>
-                    <option value="tool">{{ $t('views.AdminRemyView.tool') }}</option>
-                    <option value="off">{{ $t('views.AdminRemyView.off') }}</option>
-                  </select>
+                  <Select v-model="contextSources[src.key]" :disabled="contextSaving" @update:model-value="saveContextSource(src.key)">
+                    <SelectTrigger class="rounded border border-input bg-background px-2 py-1 text-xs" aria-label="Context source mode">
+                      <SelectValue placeholder="Select" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="always_on">{{ $t('views.AdminRemyView.always_on') }}</SelectItem>
+                      <SelectItem value="tool">{{ $t('views.AdminRemyView.tool') }}</SelectItem>
+                      <SelectItem value="off">{{ $t('views.AdminRemyView.off') }}</SelectItem>
+                    </SelectContent>
+                  </Select>
                 </td>
                 <td class="table-cell table-cell-numeric text-xs text-muted-foreground">
                   <span v-if="src.tokens">{{ src.tokens }}</span>
@@ -667,17 +676,16 @@
               <tr v-for="skill in skills" :key="skill.id" class="hover:bg-muted/30 transition-colors">
                 <td class="table-cell font-medium">{{ skill.name }}</td>
                 <td class="table-cell">
-                  <select
-                    v-model="skillModes[skill.id]"
-                    class="rounded border border-input bg-background px-2 py-1 text-xs"
-                    aria-label="Skill knowledge mode"
-                    :disabled="skillModeSaving[skill.id]"
-                    @change="saveSkillSourceMode(skill)"
-                  >
-                    <option value="always_on">{{ $t('views.AdminRemyView.always_on') }}</option>
-                    <option value="tool">{{ $t('views.AdminRemyView.tool') }}</option>
-                    <option value="off">{{ $t('views.AdminRemyView.off') }}</option>
-                  </select>
+                  <Select v-model="skillModes[skill.id]" :disabled="skillModeSaving[skill.id]" @update:model-value="saveSkillSourceMode(skill)">
+                    <SelectTrigger class="rounded border border-input bg-background px-2 py-1 text-xs" aria-label="Skill knowledge mode">
+                      <SelectValue placeholder="Select" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="always_on">{{ $t('views.AdminRemyView.always_on') }}</SelectItem>
+                      <SelectItem value="tool">{{ $t('views.AdminRemyView.tool') }}</SelectItem>
+                      <SelectItem value="off">{{ $t('views.AdminRemyView.off') }}</SelectItem>
+                    </SelectContent>
+                  </Select>
                 </td>
               </tr>
             </tbody>
@@ -726,6 +734,13 @@ import {
   TooltipContent,
 } from '../components/ui/tooltip'
 import { Button } from '@/components/ui/button'
+import {
+  Select,
+  SelectTrigger,
+  SelectContent,
+  SelectItem,
+  SelectValue,
+} from '@/components/ui/select'
 import type { SkillItem } from '../types/remy'
 
 interface ProviderStatus {
