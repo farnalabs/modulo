@@ -12,7 +12,7 @@ from cryptography.fernet import Fernet
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, Field
 from sqlalchemy import select, text
-from sqlalchemy.exc import IntegrityError, ProgrammingError, SQLAlchemyError
+from sqlalchemy.exc import IntegrityError, OperationalError, ProgrammingError, SQLAlchemyError
 from sqlalchemy.exc import TimeoutError as SA_TimeoutError
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
@@ -80,7 +80,7 @@ async def _run_with_retry(fn, max_retries=2, base_delay=0.5):
     for attempt in range(max_retries + 1):
         try:
             return await fn()
-        except (TimeoutError, ConnectionResetError, OSError, SA_TimeoutError) as exc:
+        except (TimeoutError, ConnectionResetError, OSError, SA_TimeoutError, OperationalError) as exc:
             last_exc = exc
             if attempt < max_retries:
                 _log.warning("route.db_retry", extra={"attempt": attempt + 1, "error": str(exc)})
@@ -508,11 +508,13 @@ async def get_run_status(
             status_code=status.HTTP_409_CONFLICT,
             detail="A resource with this value already exists",
         ) from None
+
     except ProgrammingError:
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. This feature requires a database update. Please contact support.",
         ) from None
+
     except SQLAlchemyError:
         _log.warning("route.db_error", exc_info=True)
         raise HTTPException(
@@ -1523,6 +1525,12 @@ async def diff_node_output(
             await set_rls_org(session, principal.organisation_id)
             run_a = await get_run(session, req.run_id_a)
             run_b = await get_run(session, req.run_id_b)
+    except IntegrityError:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="A resource with this value already exists",
+        ) from None
+
     except ProgrammingError:
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
