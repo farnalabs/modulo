@@ -518,6 +518,17 @@ routes:
         <<: *team
         deprecated: false
 
+    /admin/parameter-schemas:
+        name: admin-parameter-schemas
+        breadcrumb: Parameter Schemas
+        parent: /
+        product_map:
+        sidebar_group: schemas
+        sidebar_order: 4
+        type: list_page
+        <<: *team
+        deprecated: false
+
     /admin/run-retention:
         name: admin-run-retention
         breadcrumb: Run Retention
