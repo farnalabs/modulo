@@ -24,6 +24,11 @@ class CompositeTemplate(OrgScoped):
         ForeignKey("schemas.id", ondelete="SET NULL"),
         nullable=True,
     )
+    parameter_schema_id: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid(),
+        ForeignKey("parameter_schemas.id", ondelete="RESTRICT"),
+        nullable=True,
+    )
     version: Mapped[str] = mapped_column(String(50), nullable=False, default="1.0.0")
     account_id: Mapped[uuid.UUID] = mapped_column(
         Uuid(),

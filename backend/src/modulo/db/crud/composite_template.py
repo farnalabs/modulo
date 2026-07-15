@@ -26,6 +26,7 @@ async def create_composite_template(
     description: str | None = None,
     input_schema_id: uuid.UUID | None = None,
     output_schema_id: uuid.UUID | None = None,
+    parameter_schema_id: uuid.UUID | None = None,
     version: str = "1.0.0",
 ) -> CompositeTemplate:
     template = CompositeTemplate(
@@ -37,6 +38,7 @@ async def create_composite_template(
         parameter_ports_json=parameter_ports_json,
         input_schema_id=input_schema_id,
         output_schema_id=output_schema_id,
+        parameter_schema_id=parameter_schema_id,
         version=version,
     )
     session.add(template)
