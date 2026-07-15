@@ -144,7 +144,7 @@ async def _session(org_id: uuid.UUID) -> AsyncGenerator[AsyncSession, None]:
             role = _ctx_role_val() or ""
             await set_rls_user_context(s, uid, role)
         except (LookupError, ValueError):
-            pass
+            _log.warning("mcp.session_user_context_failed", exc_info=True)
         yield s
 
 
@@ -708,6 +708,8 @@ async def trigger_pipeline(
             snapshot = await create_snapshot_from_live_graph(s, pipeline_id=pid, account_id=None)
             if snapshot is None:
                 return {"error": "snapshot_failed", "pipeline_id": pipeline_id}
+            if not snapshot.graph_json or not snapshot.graph_json.get("nodes"):
+                return {"error": "validation_failed", "detail": "Pipeline graph has no nodes — cannot trigger run"}
             run = await create_run(
                 s,
                 org_id=org_id,
