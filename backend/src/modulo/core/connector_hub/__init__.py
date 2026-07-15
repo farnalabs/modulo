@@ -162,6 +162,7 @@ class ConnectorHub:
                         if ciphertext and isinstance(ciphertext, bytes) and ciphertext != b"":
                             try:
                                 from cryptography.fernet import Fernet
+
                                 from modulo.settings import get_settings
 
                                 _settings = get_settings()

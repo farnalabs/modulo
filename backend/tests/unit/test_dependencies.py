@@ -1,4 +1,4 @@
-﻿"""Unit tests for api/dependencies.py â€” engine creation, session management, plan context."""
+"""Unit tests for api/dependencies.py â€” engine creation, session management, plan context."""
 
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -170,4 +170,3 @@ class TestPgConnectionString:
 
         result = pg_connection_string("postgresql://user:pass@localhost/db")
         assert result == "postgresql://user:pass@localhost/db?sslmode=disable"
-

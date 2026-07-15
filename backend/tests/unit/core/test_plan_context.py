@@ -1,6 +1,4 @@
-﻿"""Unit tests for PlanContext classes (CommunityTier, LicenseKeyTier, DbPlanContext, resolve_plan_context)."""
-import pytest
-
+"""Unit tests for PlanContext classes (CommunityTier, LicenseKeyTier, DbPlanContext, resolve_plan_context)."""
 
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -162,4 +160,3 @@ class TestPlanContextProtocol:
         assert hasattr(ctx, "list_enabled_features")
         assert hasattr(ctx, "tier")
         assert hasattr(ctx, "has_license_key")
-
