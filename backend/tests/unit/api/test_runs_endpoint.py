@@ -573,8 +573,6 @@ async def test_background_worker_marks_run_failed_on_executor_error() -> None:
     mock_session.execute = AsyncMock()
 
     from modulo.core.background_pipeline_worker import BackgroundPipelineWorker, PipelineJob
-    from modulo.db.crud.run import update_run_status
-    from modulo.db.rls import set_rls_org
 
     worker = BackgroundPipelineWorker("sqlite+aiosqlite://", "sqlite+aiosqlite://")
     worker._engine = AsyncMock()
