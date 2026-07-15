@@ -1101,11 +1101,6 @@ class NodeRecoverResponse(BaseModel):
     status: str
 
 
-@router.post(
-    "/{run_id}/nodes/{node_id}/recover",
-    response_model=NodeRecoverResponse,
-    status_code=status.HTTP_200_OK,
-)
 @handle_db_errors("runs.recover_run_node")
 @router.post(
     "/{run_id}/nodes/{node_id}/recover",
