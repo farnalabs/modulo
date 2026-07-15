@@ -25,6 +25,7 @@ from modulo.db.rls import set_rls_org
 _log = logging.getLogger(__name__)
 
 _POOL_SIZE = 3
+_SEMAPHORE_VALUE = _POOL_SIZE
 _MAX_OVERFLOW = 6
 _POOL_TIMEOUT = 10
 _CONSUMER_STOP_TIMEOUT = 5.0
@@ -86,8 +87,8 @@ class BackgroundPipelineWorker:
         Returns True if the job was accepted, False if the worker is
         shutting down and cannot accept new jobs.
         """
-        if not self._started:
-            _log.warning("Background worker not started — run %s rejected", run_id)
+        if not self._started or (self._consumer_task and self._consumer_task.done()):
+            _log.warning("Background worker not available — run %s rejected", run_id)
             return
         job = PipelineJob(run_id=run_id, org_id=org_id, input_payload=input_payload)
         self._queue.put_nowait(job)
@@ -99,6 +100,7 @@ class BackgroundPipelineWorker:
         Drains the queue, cancels in-flight jobs after a timeout,
         then disposes the engine.
         """
+        self._started = False  # Reject new submissions immediately
         leftover = 0
         while not self._queue.empty():
             try:
@@ -136,7 +138,6 @@ class BackgroundPipelineWorker:
             await self._engine.dispose()
             _log.info("Background pipeline worker engine disposed")
 
-        self._started = False
         _log.info("Background pipeline worker stopped")
 
     async def _consumer_loop(self) -> None:
@@ -146,7 +147,6 @@ class BackgroundPipelineWorker:
             try:
                 job = await self._queue.get()
                 backoff = 0.1
-                await self._semaphore.acquire()
                 task = asyncio.create_task(
                     self._execute_job_with_semaphore(job),
                     name=f"bg-pipeline-run-{job.run_id}",
@@ -197,15 +197,13 @@ class BackgroundPipelineWorker:
                 _log.exception("Background worker failed to mark run %s as failed", job.run_id)
 
     async def _execute_job_with_semaphore(self, job: PipelineJob) -> None:
-        try:
+        async with self._semaphore:
             await self._execute_job(job)
-        finally:
-            self._semaphore.release()
 
     def info(self) -> dict[str, Any]:
         return {
             "started": self._started,
             "queue_depth": self._queue.qsize(),
             "in_flight": len(self._running_jobs),
-            "semaphore_available": self._semaphore._value if hasattr(self, "_semaphore") else None,
+            "semaphore_size": _SEMAPHORE_VALUE,
         }

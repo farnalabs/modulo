@@ -89,7 +89,7 @@ async def _check_redis() -> CheckResult:
     except Exception as exc:
         latency_ms = (time.monotonic() - start) * 1000
         return CheckResult(
-            status="unavailable",
+            status="degraded",
             latency_ms=round(latency_ms, 1),
             detail=str(exc),
         )
@@ -103,7 +103,7 @@ async def _check_checkpointer() -> CheckResult:
     settings = get_settings()
     try:
         conn_string = pg_connection_string(settings.database_url)
-        conn = await asyncpg.connect(conn_string, timeout=5, ssl=False)
+        conn = await asyncpg.connect(conn_string, timeout=5)
         try:
             await conn.fetchrow("SELECT 1 FROM checkpoint_migrations LIMIT 1")
         except Exception as exc:

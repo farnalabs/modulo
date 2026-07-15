@@ -1170,8 +1170,7 @@ async def copy_library_primitive(
     except ValueError:
         return {"error": "invalid_id", "field": "primitive_id", "detail": f"Invalid UUID format: {primitive_id}"}
 
-    factory = _get_session_factory()
-    async with factory() as s:
+    async with _session(org_id) as s:
         try:
             result = await library_copy_to_adapt(
                 s,

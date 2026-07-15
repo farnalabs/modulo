@@ -782,7 +782,7 @@ async def _seed_tier_catalog(settings: object) -> None:
 
     from modulo.db.session import db_engine
 
-    async with AsyncSession(db_engine) as session:
+    async with AsyncSession(db_engine, autobegin=False) as session:
         for tier in TIERS:
             await session.execute(
                 text("""
