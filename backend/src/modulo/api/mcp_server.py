@@ -13,7 +13,6 @@ Dual-layer enforcement:
 Org context validated per-event for streaming (SSE) connections.
 """
 
-import asyncio
 import contextvars
 import json
 import logging
@@ -26,7 +25,7 @@ from typing import Any
 from jwt import InvalidTokenError as JWTError
 from mcp.server.fastmcp import FastMCP
 from sqlalchemy.exc import ProgrammingError, SQLAlchemyError
-from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from starlette.applications import Starlette
 from starlette.exceptions import HTTPException as StarletteHTTPException
 from starlette.middleware import Middleware
@@ -35,13 +34,25 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse, Response
 from starlette.routing import Route
 
-from modulo.api.dependencies import get_or_create_engine, get_or_create_session_factory, pg_connection_string
+from modulo.api.dependencies import get_or_create_engine, get_or_create_session_factory
 from modulo.api.middleware.rate_limiter import RateLimitMiddleware as RateLimiterMiddleware
 from modulo.auth.api_key import ApiKeyInvalidError, validate_api_key
 from modulo.auth.oauth import (
     check_oauth_token_family_valid,
     decode_oauth_access_token,
 )
+
+# ContextVars populated by McpAuthMiddleware before each request.
+# Propagation: this server runs FastMCP in stateless HTTP mode, where each request
+# spawns a fresh per-request server task *from the already-authenticated request
+# coroutine* (StreamableHTTPSessionManager._handle_stateless_request calls
+# task_group.start(...) at request time). asyncio/anyio copy the caller's context
+# at task-creation time, so values set here in the middleware propagate to tool
+# handlers. If a handler ever runs without this context, tenant resolution FAILS
+# CLOSED (auth error) — there must never be a process-global fallback, because
+# under concurrent multi-tenant load a global would resolve to whichever org
+# authenticated last, leaking cross-tenant data.
+from modulo.core.background_pipeline_worker import BackgroundPipelineWorker
 from modulo.core.documentation_indexer import DocumentationIndex
 from modulo.core.hitl_manager import (
     AlreadyClaimedError,
@@ -60,10 +71,9 @@ from modulo.core.library_service import (
     list_primitives,
 )
 from modulo.core.mcp.scope_validator import MCPAuthorizationError, check_tool_scope
-from modulo.core.pipeline_engine.executor import PipelineExecutor
 from modulo.db.crud.model_backend import create_model_backend as db_create_model_backend
 from modulo.db.crud.pipeline import get_pipeline
-from modulo.db.crud.run import get_run, update_run_status
+from modulo.db.crud.run import get_run
 from modulo.db.crud.schema import get_schema
 from modulo.db.crud.schema import list_schemas as db_list_schemas
 from modulo.db.models.hitl_claim import HitlClaim
@@ -71,18 +81,14 @@ from modulo.db.models.pipeline_edge import PipelineEdge
 from modulo.db.rls import set_rls_org, set_rls_user_context
 from modulo.settings import get_settings
 
-# ContextVars populated by McpAuthMiddleware before each request.
-# Propagation: this server runs FastMCP in stateless HTTP mode, where each request
-# spawns a fresh per-request server task *from the already-authenticated request
-# coroutine* (StreamableHTTPSessionManager._handle_stateless_request calls
-# task_group.start(...) at request time). asyncio/anyio copy the caller's context
-# at task-creation time, so values set here in the middleware propagate to tool
-# handlers. If a handler ever runs without this context, tenant resolution FAILS
-# CLOSED (auth error) — there must never be a process-global fallback, because
-# under concurrent multi-tenant load a global would resolve to whichever org
-# authenticated last, leaking cross-tenant data.
 _log = logging.getLogger(__name__)
-_background_tasks: set[asyncio.Task[None]] = set()
+_bg_worker: BackgroundPipelineWorker | None = None
+
+
+def set_background_worker(worker: BackgroundPipelineWorker) -> None:
+    global _bg_worker
+    _bg_worker = worker
+
 
 _ctx_org_id: contextvars.ContextVar[uuid.UUID] = contextvars.ContextVar("mcp_org_id")
 _ctx_role: contextvars.ContextVar[str] = contextvars.ContextVar("mcp_role")
@@ -675,27 +681,6 @@ async def bind_connector_to_node(
         return _tool_error("Failed to bind connector to node")
 
 
-async def _run_in_background(
-    executor: PipelineExecutor,
-    run_id: uuid.UUID,
-    org_id: uuid.UUID,
-    input_payload: dict[str, Any],
-) -> None:
-    try:
-        await executor.execute(run_id=run_id, org_id=org_id, input_payload=input_payload)
-    except Exception:
-        _log.exception("run.background_execution_error", extra={"run_id": str(run_id)})
-        try:
-            settings = get_settings()
-            engine = create_async_engine(str(settings.database_url), pool_size=1)
-            factory = async_sessionmaker(engine, expire_on_commit=False)
-            async with factory() as session, session.begin():
-                await set_rls_org(session, org_id)
-                await update_run_status(session, run_id, "failed", error_code="internal_error")
-        except Exception:
-            _log.exception("run.mark_failed_error", extra={"run_id": str(run_id)})
-
-
 @mcp.tool(description="Fire a pipeline run and return immediately with run_id. Poll get_run_status to track progress.")
 async def trigger_pipeline(
     pipeline_id: str,
@@ -734,15 +719,10 @@ async def trigger_pipeline(
             run_id = run.id
             thread_id = run.langgraph_thread_id
 
-        _settings = get_settings()
-        _bg_engine = create_async_engine(str(_settings.database_url), pool_size=2, max_overflow=4)
-        executor = PipelineExecutor(
-            _bg_engine,
-            checkpointer_conn_string=pg_connection_string(str(_settings.database_url)),
-        )
-        task = asyncio.create_task(_run_in_background(executor, run_id, org_id, payload))
-        _background_tasks.add(task)
-        task.add_done_callback(_background_tasks.discard)
+        if _bg_worker is not None:
+            _bg_worker.submit(run_id, org_id, payload)
+        else:
+            _log.warning("MCP: Background worker not initialized — run %s will not execute", run_id)
 
         return {
             "run_id": str(run_id),

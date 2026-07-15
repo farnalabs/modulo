@@ -14,7 +14,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy import select, text
 from sqlalchemy.exc import IntegrityError, ProgrammingError, SQLAlchemyError
 from sqlalchemy.exc import TimeoutError as SA_TimeoutError
-from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker, create_async_engine
+from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
 from modulo.api.db_error_handling import handle_db_errors
 from modulo.api.dependencies import (
@@ -26,6 +26,7 @@ from modulo.api.dependencies import (
 from modulo.api.middleware.sensitive_mask import is_sensitive_key, mask_sensitive_value
 from modulo.auth.dependencies import get_current_tenant_user
 from modulo.auth.jwt import TenantPrincipal
+from modulo.core.background_pipeline_worker import BackgroundPipelineWorker
 from modulo.core.pipeline_engine.executor import PipelineExecutor
 from modulo.core.pipeline_engine.recovery import (
     ConcurrentRecoveryError,
@@ -44,7 +45,6 @@ from modulo.db.crud.run import (
     get_run_io,
     get_run_stats,
     request_cancellation,
-    update_run_status,
 )
 from modulo.db.crud.run import (
     list_runs as db_list_runs,
@@ -55,16 +55,15 @@ from modulo.db.models.run import Run
 from modulo.db.rls import set_rls_org
 from modulo.settings import Settings, get_settings
 
-_bg_executor_engine = create_async_engine(
-    str(get_settings().database_url),
-    pool_size=3,
-    max_overflow=6,
-    pool_pre_ping=True,
-)
-
 _log = logging.getLogger(__name__)
 
-_background_tasks: set[asyncio.Task[Any]] = set()
+_bg_worker: BackgroundPipelineWorker | None = None
+
+
+def set_background_worker(worker: BackgroundPipelineWorker) -> None:
+    global _bg_worker
+    _bg_worker = worker
+
 
 router = APIRouter(prefix="/api/v1/runs", tags=["runs"])
 
@@ -414,18 +413,10 @@ async def trigger_run(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="An unexpected error occurred.",
         ) from None
-    _settings_for_bg = get_settings()
-    executor = PipelineExecutor(
-        _bg_executor_engine,
-        checkpointer_conn_string=pg_connection_string(str(_settings_for_bg.database_url)),
-    )
-    _log.warning("TRIGGER_RUN scheduling background task for run %s", run_id)
-    try:
-        task = asyncio.ensure_future(_run_in_background(executor, run_id, org_id, req.input_payload))
-        _background_tasks.add(task)
-        task.add_done_callback(_background_tasks.discard)
-    except Exception as e:
-        _log.warning("TRIGGER_RUN failed to schedule task: %s", e)
+    if _bg_worker is not None:
+        _bg_worker.submit(run_id, org_id, req.input_payload)
+    else:
+        _log.warning("Background worker not initialized — run %s will not execute", run_id)
 
     return _build_run_response(run)
 
@@ -598,27 +589,6 @@ async def cancel_run(
             detail="An unexpected error occurred.",
         ) from None
     return {"status": "accepted"}
-
-
-async def _run_in_background(
-    executor: PipelineExecutor,
-    run_id: uuid.UUID,
-    org_id: uuid.UUID,
-    input_payload: dict[str, Any],
-) -> None:
-    _log.warning("BG_TASK starting for run %s", run_id)
-    try:
-        await executor.execute(run_id=run_id, org_id=org_id, input_payload=input_payload)
-        _log.warning("BG_TASK completed for run %s", run_id)
-    except Exception:
-        _log.exception("BG_TASK failed for run %s", run_id)
-        try:
-            factory = async_sessionmaker(_bg_executor_engine, expire_on_commit=False)
-            async with factory() as session, session.begin():
-                await set_rls_org(session, org_id)
-                await update_run_status(session, run_id, "failed", error_code="internal_error")
-        except Exception:
-            _log.exception("run.mark_failed_error", extra={"run_id": str(run_id)})
 
 
 # ---------------------------------------------------------------------------
