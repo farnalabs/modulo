@@ -54,10 +54,13 @@ def require_feature(feature_name: str) -> DependsParameter:
 
 
 def pg_connection_string(database_url: str) -> str:
-    """Strip SQLAlchemy+asyncpg prefix to get a psycopg-compatible URL."""
-    return database_url.replace("postgresql+asyncpg://", "postgresql://").replace(
+    """Strip SQLAlchemy prefix to get a psycopg-compatible URL with sslmode=disable."""
+    url = database_url.replace("postgresql+asyncpg://", "postgresql://").replace(
         "postgresql+psycopg://", "postgresql://"
     )
+    if "?" in url:
+        return url + "&sslmode=disable"
+    return url + "?sslmode=disable"
 
 
 _engine: AsyncEngine | None = None
