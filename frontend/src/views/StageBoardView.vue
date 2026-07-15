@@ -444,10 +444,14 @@ import { Button } from '@/components/ui/button'
 import EmptyState from '../components/shared/EmptyState.vue'
 
 async function fetchWithTimeout<T>(promise: Promise<T>, ms = 15000): Promise<T> {
-  const timeout = new Promise<never>((_, reject) =>
-    setTimeout(() => reject(new Error('Request timed out')), ms)
-  )
-  return Promise.race([promise, timeout])
+  const ctrl = new AbortController()
+  const timeout = setTimeout(() => ctrl.abort(), ms)
+  try {
+    const result = await promise
+    return result
+  } finally {
+    clearTimeout(timeout)
+  }
 }
 
 const selectedStageId = ref<string | null>(null)
@@ -553,6 +557,7 @@ async function fetchStages() {
     const { data } = await fetchWithTimeout(api.GET('/api/v1/stages'))
     return (data as any)?.items ?? []
   } catch (e) {
+    console.warn('Failed to fetch stages:', e)
     return []
   }
 }
@@ -562,6 +567,7 @@ async function fetchPipelines() {
     const { data } = await fetchWithTimeout(api.GET('/api/v1/pipelines'))
     return (data as any)?.items ?? []
   } catch (e) {
+    console.warn('Failed to fetch pipelines:', e)
     return []
   }
 }
@@ -571,6 +577,7 @@ async function fetchTeams() {
     const { data } = await fetchWithTimeout(api.GET('/api/v1/teams'))
     return (data as any)?.items ?? []
   } catch (e) {
+    console.warn('Failed to fetch teams:', e)
     return []
   }
 }
@@ -608,10 +615,10 @@ async function movePipeline(pipeline: any, direction: number) {
   const prevStageId = pipeline.stage_id
   movingPipelines.value[pipeline.id] = true
   try {
-    await api.PATCH('/api/v1/pipelines/{pipeline_id}', {
+    await fetchWithTimeout(api.PATCH('/api/v1/pipelines/{pipeline_id}', {
       params: { path: { pipeline_id: pipeline.id } },
       body: { stage_id: targetStage.id },
-    })
+    }))
     pipeline.stage_id = targetStage.id
   } catch (e) {
     pipeline.stage_id = prevStageId
@@ -625,14 +632,14 @@ async function createStage() {
   if (!createName.value.trim()) return
   createError.value = null
   try {
-    await api.POST('/api/v1/stages', {
+    await fetchWithTimeout(api.POST('/api/v1/stages', {
       body: {
         name: createName.value.trim(),
         description: createDescription.value.trim() || null,
         position: createPosition.value,
         visibility: createVisibility.value,
       },
-    })
+    }))
     showCreateDialog.value = false
     createName.value = ''
     createDescription.value = ''
@@ -674,10 +681,10 @@ async function saveEditingName() {
   if (existing && existing.name === name) return
   updatingStages.value[stageId] = true
   try {
-    const { data } = await api.PATCH('/api/v1/stages/{stage_id}', {
+    const { data } = await fetchWithTimeout(api.PATCH('/api/v1/stages/{stage_id}', {
       params: { path: { stage_id: stageId } },
       body: { name },
-    })
+    }))
     if (data) {
       const idx = stages.value.findIndex(s => s.id === stageId)
       if (idx !== -1) stages.value[idx] = data
@@ -708,10 +715,10 @@ async function saveEditingPosition() {
   if (existing && existing.position === position) return
   updatingStages.value[stageId] = true
   try {
-    const { data } = await api.PATCH('/api/v1/stages/{stage_id}', {
+    const { data } = await fetchWithTimeout(api.PATCH('/api/v1/stages/{stage_id}', {
       params: { path: { stage_id: stageId } },
       body: { position },
-    })
+    }))
     if (data) {
       const idx = stages.value.findIndex(s => s.id === stageId)
       if (idx !== -1) stages.value[idx] = data
@@ -743,14 +750,14 @@ async function moveStage(stage: any, direction: number) {
 
   updatingStages.value[stage.id] = true
   try {
-    await api.PATCH('/api/v1/stages/{stage_id}', {
+    await fetchWithTimeout(api.PATCH('/api/v1/stages/{stage_id}', {
       params: { path: { stage_id: stage.id } },
       body: { position: targetPos },
-    })
-    await api.PATCH('/api/v1/stages/{stage_id}', {
+    }))
+    await fetchWithTimeout(api.PATCH('/api/v1/stages/{stage_id}', {
       params: { path: { stage_id: target.id } },
       body: { position: myPos },
-    })
+    }))
   } catch (e) {
     stage.position = myPos
     target.position = targetPos
