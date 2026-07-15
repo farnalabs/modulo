@@ -87,6 +87,9 @@ class GitHubConnector(ConnectorBase):
       "milestone"       — create a milestone; data: {"repo": ..., "title": ..., "description": ..., "due_on": ...}
       "pr"              — create a pull request; data: {"repo": ..., "title": ..., "head": ..., "base": ...,
                            "body": ..., "draft": ..., "maintainer_can_modify": ...}
+      "pr_review"       — submit a PR review; data: {"repo": ..., "pull_number": ..., "event": "APPROVE"|
+                           "REQUEST_CHANGES"|"COMMENT", "body": ..., "comments": [{"path": ..., "position": ...,
+                           "body": ...}]}
       "pr_comment"      — review comment on a PR; data: {"repo": ..., "pull_number": ..., "body": ...}
       "pr_update"       — update a pull request; data: {"repo": ..., "pull_number": ..., "title": ...,
                            "body": ..., "state": ..., "base": ...}
@@ -469,6 +472,26 @@ class GitHubConnector(ConnectorBase):
                 if "maintainer_can_modify" in payload.data:
                     pr_body["maintainer_can_modify"] = payload.data["maintainer_can_modify"]
                 r = await self._call_api("POST", f"/repos/{owner_repo}/pulls", json=pr_body)
+                return await self._parse_json_object(r)
+            case "pr_review":
+                owner_repo = self._require_write_filter(payload.data, "repo", "pr_review")
+                pull_number = self._require_write_filter(payload.data, "pull_number", "pr_review")
+                event = self._require_write_filter(payload.data, "event", "pr_review")
+                if event not in ("APPROVE", "REQUEST_CHANGES", "COMMENT"):
+                    raise ValueError(
+                        f"GitHub pr_review 'event' must be one of APPROVE, REQUEST_CHANGES, COMMENT; got {event!r}"
+                    )
+                review_body: dict[str, Any] = {
+                    "event": event,
+                    "body": payload.data.get("body", ""),
+                }
+                if "comments" in payload.data:
+                    review_body["comments"] = payload.data["comments"]
+                r = await self._call_api(
+                    "POST",
+                    f"/repos/{owner_repo}/pulls/{pull_number}/reviews",
+                    json=review_body,
+                )
                 return await self._parse_json_object(r)
             case "pr_comment":
                 owner_repo = self._require_write_filter(payload.data, "repo", "pr_comment")

@@ -13,6 +13,7 @@ class Capability(StrEnum):
     WRITE = "write"
     GIT_PUSH = "git_push"
     CREATE_PR = "create_pr"
+    CODE_REVIEW = "code_review"
     TRIGGER_RUN = "trigger_run"
     GET_RUN_STATUS = "get_run_status"
     GET_RUN_LOGS = "get_run_logs"
@@ -90,6 +91,7 @@ class ConnectorType(StrEnum):
                         Capability.WRITE,
                         Capability.GIT_PUSH,
                         Capability.CREATE_PR,
+                        Capability.CODE_REVIEW,
                         Capability.TICKET_READ,
                         Capability.TICKET_WRITE,
                     },
