@@ -55,7 +55,6 @@ def _safe_float(value: object, default: float = 0.0) -> float:
         return default
 
 
-_ACTIVE_RUN_STATUSES = frozenset({"pending", "running", "awaiting_human", "claimed", "waiting_for_lock"})
 _TRACKED_STATUSES = ("running", "awaiting_human", "failed", "idle")
 
 _DASHBOARD_CACHE_TTL = 60  # seconds — dashboard summary cached to avoid repeated aggregate queries
@@ -68,7 +67,7 @@ async def _get_cached_dashboard(org_id: str) -> dict[str, Any] | None:
     if settings.redis_url:
         redis: Any = None
         try:
-            redis = Redis.from_url(settings.redis_url, decode_responses=True)
+            redis = Redis.from_url(settings.redis_url, decode_responses=True, socket_connect_timeout=2.0, socket_timeout=2.0)
             key = f"dashboard:summary:{org_id}"
             cached = await redis.get(key)
             if cached:
@@ -91,7 +90,7 @@ async def _set_cached_dashboard(org_id: str, data: dict[str, Any]) -> None:
     if settings.redis_url:
         redis: Any = None
         try:
-            redis = Redis.from_url(settings.redis_url, decode_responses=True)
+            redis = Redis.from_url(settings.redis_url, decode_responses=True, socket_connect_timeout=2.0, socket_timeout=2.0)
             key = f"dashboard:summary:{org_id}"
             await redis.setex(key, _DASHBOARD_CACHE_TTL, json.dumps(data, default=str))
             return
@@ -384,6 +383,7 @@ async def dashboard_summary(
                 )
                 mb_with_creds = int(mb_with_creds_result.scalar_one())
             except Exception:
+                _log.exception("dashboard.dashboard_summary.model_backend_count")
                 mb_with_creds = 0
 
             if mb_with_creds == 0:
