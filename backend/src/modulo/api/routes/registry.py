@@ -121,7 +121,6 @@ class RegisterPublisherRequest(BaseModel):
 # ---------------------------------------------------------------------------
 
 
-@router.get("/primitives", response_model=RegistryRankedListResponse)
 @handle_db_errors("registry.list_registry_primitives_endpoint")
 @router.get("/primitives", response_model=RegistryRankedListResponse)
 async def list_registry_primitives_endpoint(
@@ -169,7 +168,6 @@ async def list_registry_primitives_endpoint(
     return RegistryRankedListResponse(items=items, total=total)
 
 
-@router.get("/primitives/{slug:path}", response_model=PullResponse)
 @handle_db_errors("registry.get_registry_primitive_endpoint")
 @router.get("/primitives/{slug:path}", response_model=PullResponse)
 async def get_registry_primitive_endpoint(
@@ -219,11 +217,6 @@ async def get_registry_primitive_endpoint(
     )
 
 
-@router.post(
-    "/primitives",
-    response_model=RegistryEntryResponse,
-    status_code=status.HTTP_201_CREATED,
-)
 @handle_db_errors("registry.publish_primitive_endpoint")
 @router.post(
     "/primitives",
@@ -261,10 +254,6 @@ async def publish_primitive_endpoint(
     return RegistryEntryResponse.model_validate(entry)
 
 
-@router.post(
-    "/primitives/{slug:path}/download",
-    response_model=PullResponse,
-)
 @handle_db_errors("registry.download_registry_primitive_endpoint")
 @router.post(
     "/primitives/{slug:path}/download",
@@ -408,7 +397,6 @@ class VerifyResponseV2(BaseModel):
     trust_anchor_verified: bool = False
 
 
-@router.post("/publish", response_model=PublishResponseV2, status_code=status.HTTP_201_CREATED)
 @handle_db_errors("registry.publish_primitive_v2")
 @router.post("/publish", response_model=PublishResponseV2, status_code=status.HTTP_201_CREATED)
 async def publish_primitive_v2(
@@ -498,7 +486,6 @@ async def publish_primitive_v2(
     )
 
 
-@router.get("/pull/{slug:path}", response_model=PullResponseV2)
 @handle_db_errors("registry.pull_registry_primitive_v2")
 @router.get("/pull/{slug:path}", response_model=PullResponseV2)
 async def pull_registry_primitive_v2(
@@ -536,7 +523,6 @@ async def pull_registry_primitive_v2(
     )
 
 
-@router.get("/verify/{slug:path}", response_model=VerifyResponseV2)
 @handle_db_errors("registry.verify_registry_primitive_v2")
 @router.get("/verify/{slug:path}", response_model=VerifyResponseV2)
 async def verify_registry_primitive_v2(
@@ -653,7 +639,6 @@ async def verify_registry_primitive_v2(
 # ---------------------------------------------------------------------------
 
 
-@router.post("/publishers", status_code=status.HTTP_201_CREATED)
 @handle_db_errors("registry.register_publisher_endpoint")
 @router.post("/publishers", status_code=status.HTTP_201_CREATED)
 async def register_publisher_endpoint(
@@ -670,7 +655,6 @@ async def register_publisher_endpoint(
     return {"status": "registered", "fingerprint": pub.fingerprint, "author": pub.author}
 
 
-@router.post("/publishers/{fingerprint_hex}/revoke")
 @handle_db_errors("registry.revoke_publisher_endpoint")
 @router.post("/publishers/{fingerprint_hex}/revoke")
 async def revoke_publisher_endpoint(
@@ -684,7 +668,6 @@ async def revoke_publisher_endpoint(
     return {"status": "revoked", "fingerprint": fingerprint_hex}
 
 
-@router.get("/publishers")
 @handle_db_errors("registry.list_publishers_endpoint")
 @router.get("/publishers")
 async def list_publishers_endpoint() -> list[dict[str, str]]:

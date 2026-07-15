@@ -110,7 +110,6 @@ def _to_response(p: EnvironmentProfile) -> ProfileResponse:
     )
 
 
-@router.get("", response_model=ProfileListResponse)
 @handle_db_errors("environment_profiles.list_profiles")
 @router.get("", response_model=ProfileListResponse)
 async def list_profiles(
@@ -150,7 +149,6 @@ async def list_profiles(
     )
 
 
-@router.post("", response_model=ProfileResponse, status_code=status.HTTP_201_CREATED)
 @handle_db_errors("environment_profiles.create_profile")
 @router.post("", response_model=ProfileResponse, status_code=status.HTTP_201_CREATED)
 async def create_profile(
@@ -205,7 +203,6 @@ async def create_profile(
     return _to_response(profile)
 
 
-@router.get("/{profile_id}", response_model=ProfileResponse)
 @handle_db_errors("environment_profiles.get_profile")
 @router.get("/{profile_id}", response_model=ProfileResponse)
 async def get_profile(
@@ -239,7 +236,6 @@ async def get_profile(
     return _to_response(profile)
 
 
-@router.put("/{profile_id}", response_model=ProfileResponse)
 @handle_db_errors("environment_profiles.update_profile")
 @router.put("/{profile_id}", response_model=ProfileResponse)
 async def update_profile(
@@ -286,7 +282,6 @@ async def update_profile(
     return _to_response(profile)
 
 
-@router.delete("/{profile_id}", status_code=status.HTTP_204_NO_CONTENT)
 @handle_db_errors("environment_profiles.delete_profile")
 @router.delete("/{profile_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_profile(

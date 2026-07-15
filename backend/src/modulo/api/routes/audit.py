@@ -40,7 +40,6 @@ class BatchDetailRequest(BaseModel):
     event_ids: list[str]
 
 
-@router.get("", response_model=dict[str, object])
 @handle_db_errors("audit.list_audit_events_endpoint")
 @router.get("", response_model=dict[str, object])
 async def list_audit_events_endpoint(
@@ -148,7 +147,6 @@ async def batch_detail_endpoint(
     return result
 
 
-@router.get("/verify", response_model=dict[str, object])
 @handle_db_errors("audit.verify_chain_endpoint")
 @router.get("/verify", response_model=dict[str, object])
 async def verify_chain_endpoint(

@@ -135,14 +135,12 @@ async def _check_migrations() -> CheckResult:
         return CheckResult(status="degraded", detail=f"migration check failed: {exc}")
 
 
-@router.get("/healthz")
 @handle_db_errors("health.liveness")
 @router.get("/healthz")
 async def liveness() -> dict[str, str]:
     return {"status": "ok"}
 
 
-@router.get("/healthz/ready")
 @handle_db_errors("health.readiness")
 @router.get("/healthz/ready")
 async def readiness(response: Response) -> ReadinessResponse:

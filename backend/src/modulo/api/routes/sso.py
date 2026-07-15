@@ -47,7 +47,6 @@ class SsoProvidersResponse(BaseModel):
     saml: bool
 
 
-@router.get("/sso/providers", response_model=SsoProvidersResponse)
 @handle_db_errors("sso.sso_providers")
 @router.get("/sso/providers", response_model=SsoProvidersResponse)
 async def sso_providers(
@@ -81,7 +80,6 @@ async def sso_providers(
 # ---------------------------------------------------------------------------
 
 
-@router.get("/oidc/{provider}/login")
 @handle_db_errors("sso.oidc_login")
 @router.get("/oidc/{provider}/login")
 async def oidc_login(
@@ -110,7 +108,6 @@ async def oidc_login(
     return Response(status_code=status.HTTP_307_TEMPORARY_REDIRECT, headers={"Location": auth_url})
 
 
-@router.get("/oidc/{provider}/callback")
 @handle_db_errors("sso.oidc_callback")
 @router.get("/oidc/{provider}/callback")
 async def oidc_callback(
@@ -174,7 +171,6 @@ async def oidc_callback(
 # ---------------------------------------------------------------------------
 
 
-@router.get("/saml/login")
 @handle_db_errors("sso.saml_login")
 @router.get("/saml/login")
 async def saml_login(
@@ -216,7 +212,6 @@ async def saml_login(
     return Response(status_code=status.HTTP_307_TEMPORARY_REDIRECT, headers={"Location": auth_url})
 
 
-@router.post("/saml/acs")
 @handle_db_errors("sso.saml_acs")
 @router.post("/saml/acs")
 async def saml_acs(
@@ -272,7 +267,6 @@ async def saml_acs(
     return _redirect_to_frontend(tokens, settings)
 
 
-@router.get("/saml/metadata", response_class=PlainTextResponse)
 @handle_db_errors("sso.saml_metadata")
 @router.get("/saml/metadata", response_class=PlainTextResponse)
 async def saml_metadata(
