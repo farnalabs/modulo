@@ -1092,7 +1092,6 @@ class PipelineExecutor:
         except Exception as exc:
             import traceback
 
-            _tb = "".join(traceback.format_exception(type(exc), exc, exc.__traceback__))
-            broker.publish("run_failed", {"error": type(exc).__name__, "detail": _tb[:2000]})
-            return "failed", type(exc).__name__, _tb[:2000], node_token_usage or None
-            return "failed", type(exc).__name__, None, None
+            _tb = "".join(traceback.format_exception(type(exc), exc, exc.__traceback__))[:5000]
+            broker.publish("run_failed", {"error": type(exc).__name__, "detail": _tb[:5000]})
+            return "failed", type(exc).__name__, _tb[:5000], node_token_usage or None
