@@ -5,18 +5,18 @@
     <div class="rounded-lg border bg-card p-4 shadow-sm">
       <div class="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
         <div>
-          <label for="settingsnotificationlogview-field-3" class="mb-1 block text-xs font-medium text-muted-foreground">Status</label>
-          <select id="settingsnotificationlogview-field-3"
-            v-model="filterStatus"
-            data-testid="settings-notification-log-status"
-            aria-label="Status"
-            class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring"
-          >
-            <option value="">{{ $t('views.AdminErrorsView.all_statuses') }}</option>
-            <option value="delivered">Delivered</option>
-            <option value="failed">Failed</option>
-            <option value="dead_lettered">{{ $t('views.AdminNotificationDeliveryLogView.dead_lettered') }}</option>
-          </select>
+          <label class="mb-1 block text-xs font-medium text-muted-foreground">Status</label>
+          <Select v-model="filterStatus">
+            <SelectTrigger class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring" aria-label="Status" data-testid="settings-notification-log-status">
+              <SelectValue :placeholder="$t('views.AdminErrorsView.all_statuses')" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="">{{ $t('views.AdminErrorsView.all_statuses') }}</SelectItem>
+              <SelectItem value="delivered">Delivered</SelectItem>
+              <SelectItem value="failed">Failed</SelectItem>
+              <SelectItem value="dead_lettered">{{ $t('views.AdminNotificationDeliveryLogView.dead_lettered') }}</SelectItem>
+            </SelectContent>
+          </Select>
         </div>
         <div>
           <label for="settingsnotificationlogview-field-2" class="mb-1 block text-xs font-medium text-muted-foreground">From</label>
@@ -142,6 +142,13 @@ import PageHeader from '../components/shared/PageHeader.vue'
 import LoadingSpinner from '../components/shared/LoadingSpinner.vue'
 import ErrorAlert from '../components/shared/ErrorAlert.vue'
 import { Button } from '@/components/ui/button'
+import {
+  Select,
+  SelectTrigger,
+  SelectContent,
+  SelectItem,
+  SelectValue,
+} from '@/components/ui/select'
 
 const cursorStack = ref<(string | null)[]>([])
 const currentCursor = ref<string | null>(null)

@@ -40,25 +40,26 @@
 
     <div>
       <label for="nodecategoryeditor-field-2" class="mb-1 block text-sm font-medium">Icon</label>
-      <select id="nodecategoryeditor-field-2"
-        v-model="form.icon"
-        aria-label="Icon"
-        class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-      >
-        <option value="">None</option>
-        <option value="bot">Bot</option>
-        <option value="database">Database</option>
-        <option value="globe">Globe</option>
-        <option value="mail">Mail</option>
-        <option value="message-circle">{{ $t('components.NodeCategoryEditor.message_circle') }}</option>
-        <option value="refresh-cw">Refresh</option>
-        <option value="search">Search</option>
-        <option value="settings">Settings</option>
-        <option value="sliders">Sliders</option>
-        <option value="terminal">Terminal</option>
-        <option value="upload">Upload</option>
-        <option value="zap">Zap</option>
-      </select>
+      <Select v-model="form.icon">
+        <SelectTrigger class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring" aria-label="Icon">
+          <SelectValue placeholder="None" />
+        </SelectTrigger>
+        <SelectContent>
+          <SelectItem value="">None</SelectItem>
+          <SelectItem value="bot">Bot</SelectItem>
+          <SelectItem value="database">Database</SelectItem>
+          <SelectItem value="globe">Globe</SelectItem>
+          <SelectItem value="mail">Mail</SelectItem>
+          <SelectItem value="message-circle">{{ $t('components.NodeCategoryEditor.message_circle') }}</SelectItem>
+          <SelectItem value="refresh-cw">Refresh</SelectItem>
+          <SelectItem value="search">Search</SelectItem>
+          <SelectItem value="settings">Settings</SelectItem>
+          <SelectItem value="sliders">Sliders</SelectItem>
+          <SelectItem value="terminal">Terminal</SelectItem>
+          <SelectItem value="upload">Upload</SelectItem>
+          <SelectItem value="zap">Zap</SelectItem>
+        </SelectContent>
+      </Select>
     </div>
 
     <div>
@@ -102,6 +103,7 @@ import { ref, reactive, computed, watch } from "vue";
 import { api } from "../lib/api/client";
 import { formatApiError } from "../lib/api/formatError";
 import { Button } from '@/components/ui/button';
+import { Select, SelectTrigger, SelectContent, SelectItem, SelectValue } from '@/components/ui/select';
 
 export interface NodeCategoryForm {
   name: string;

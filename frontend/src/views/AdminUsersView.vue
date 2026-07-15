@@ -196,6 +196,13 @@ import FormDialog from '../components/shared/FormDialog.vue'
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '../components/ui/dialog'
 import TableActions from '../components/shared/TableActions.vue'
 import { formatDateShort } from '../lib/formatDate'
+import {
+  Select,
+  SelectTrigger,
+  SelectContent,
+  SelectItem,
+  SelectValue,
+} from '@/components/ui/select'
 
 interface UserItem {
   id: string

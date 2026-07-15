@@ -165,7 +165,9 @@ export default {
       "move_to_folder": "Move to Folder",
       "no_folder": "No folder",
       "folder_name": "Folder name",
-      "delete_folder_confirm": "Delete this folder? Pipelines in it will not be deleted."
+      "delete_folder_confirm": "Delete this folder? Pipelines in it will not be deleted.",
+      "uncategorised": "Uncategorised",
+      "pipelines": "pipelines"
     },
     "SettingsRateLimitsView": {
       "rate_limits": "Rate Limits",

@@ -219,20 +219,15 @@
 
     <div>
       <label for="ssoproviderform-field-1" class="mb-1 block text-sm font-medium">{{ $t('components.SsoProviderForm.default_role') }}</label>
-      <select id="ssoproviderform-field-1"
-        :value="data.default_role"
-        :aria-label="$t('components.SsoProviderForm.default_role')"
-        class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-        @change="
-          emitUpdate({
-            ...data,
-            default_role: ($event.target as HTMLSelectElement).value,
-          })
-        "
-      >
-        <option value="runner">{{ $t('components.SsoProviderForm.role_runner') }}</option>
-        <option value="operator">{{ $t('components.SsoProviderForm.role_operator') }}</option>
-      </select>
+      <Select :model-value="data.default_role" @update:model-value="(val) => emitUpdate({...data, default_role: val as string})">
+        <SelectTrigger class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring" :aria-label="$t('components.SsoProviderForm.default_role')">
+          <SelectValue :placeholder="$t('components.SsoProviderForm.default_role')" />
+        </SelectTrigger>
+        <SelectContent>
+          <SelectItem value="runner">{{ $t('components.SsoProviderForm.role_runner') }}</SelectItem>
+          <SelectItem value="operator">{{ $t('components.SsoProviderForm.role_operator') }}</SelectItem>
+        </SelectContent>
+      </Select>
     </div>
 
     <div v-if="error" class="text-sm text-destructive">{{ error }}</div>
@@ -257,6 +252,7 @@
 
 <script setup lang="ts">
 import { Button } from '@/components/ui/button'
+import { Select, SelectTrigger, SelectContent, SelectItem, SelectValue } from '@/components/ui/select'
 
 interface SsoFormState {
   provider_type: string;

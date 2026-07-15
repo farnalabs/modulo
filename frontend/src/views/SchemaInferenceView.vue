@@ -16,22 +16,21 @@
         <h2 class="mb-4 text-base font-semibold">{{ $t('views.SchemaInferenceView.source') }}</h2>
         <div class="space-y-4">
           <div>
-            <label for="schemainferenceview-field-3" class="mb-1 block text-sm font-medium">{{ $t('views.SchemaInferenceView.connector') }}</label>
-            <select id="schemainferenceview-field-3"
-              v-model="selectedConnectorId"
-              data-testid="schema-inference-connector"
-              aria-label="Connector"
-              class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-            >
-              <option value="" disabled>{{ $t('views.SchemaInferenceView.select_a_connector') }}</option>
-              <option
-                v-for="connector in connectors"
-                :key="connector.id"
-                :value="connector.id"
-              >
-                  {{ connector.name }} ({{ connector.connector_type_id }})
-              </option>
-            </select>
+            <label class="mb-1 block text-sm font-medium">{{ $t('views.SchemaInferenceView.connector') }}</label>
+            <Select v-model="selectedConnectorId">
+              <SelectTrigger class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring" aria-label="Connector" data-testid="schema-inference-connector">
+                <SelectValue :placeholder="$t('views.SchemaInferenceView.select_a_connector')" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem
+                  v-for="connector in connectors"
+                  :key="connector.id"
+                  :value="connector.id"
+                >
+                    {{ connector.name }} ({{ connector.connector_type_id }})
+                </SelectItem>
+              </SelectContent>
+            </Select>
             <p v-if="connectors.length === 0" class="mt-2 text-sm text-muted-foreground">
               {{ $t('views.SchemaInferenceView.no_connectors_available') }}
             </p>
@@ -176,6 +175,13 @@ import ErrorAlert from '../components/shared/ErrorAlert.vue'
 import PageHeader from '../components/shared/PageHeader.vue'
 import PageTabs from "../components/PageTabs.vue"
 import { Button } from '@/components/ui/button'
+import {
+  Select,
+  SelectTrigger,
+  SelectContent,
+  SelectItem,
+  SelectValue,
+} from '@/components/ui/select'
 
 type ConnectorItem = components['schemas']['ConnectorResponse']
 

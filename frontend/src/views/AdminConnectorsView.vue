@@ -35,19 +35,19 @@
             </div>
             <div>
               <label for="adminconnectorsview-field-6" class="mb-1 block text-sm font-medium">Type</label>
-              <select id="adminconnectorsview-field-6"
-                v-model="formData.connector_type"
-                class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm"
-                data-testid="admin-connectors-type-select"
-                aria-label="Type"
-              >
-                <option value="postgresql">PostgreSQL</option>
-                <option value="mysql">MySQL</option>
-                <option value="bigquery">BigQuery</option>
-                <option value="snowflake">Snowflake</option>
-                <option value="redshift">Redshift</option>
-                <option value="http">HTTP API</option>
-              </select>
+              <Select v-model="formData.connector_type">
+                <SelectTrigger data-testid="admin-connectors-type-select" aria-label="Type" class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm">
+                  <SelectValue placeholder="PostgreSQL" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="postgresql">PostgreSQL</SelectItem>
+                  <SelectItem value="mysql">MySQL</SelectItem>
+                  <SelectItem value="bigquery">BigQuery</SelectItem>
+                  <SelectItem value="snowflake">Snowflake</SelectItem>
+                  <SelectItem value="redshift">Redshift</SelectItem>
+                  <SelectItem value="http">HTTP API</SelectItem>
+                </SelectContent>
+              </Select>
             </div>
             <div>
               <label for="adminconnectorsview-field-5" class="mb-1 block text-sm font-medium">Description</label>
@@ -276,6 +276,7 @@ import ErrorAlert from '../components/shared/ErrorAlert.vue'
 import { usePlanStore } from '../stores/planStore'
 import FeatureGate from '../components/FeatureGate.vue'
 import { Button } from '@/components/ui/button'
+import { Select, SelectTrigger, SelectContent, SelectItem, SelectValue } from '@/components/ui/select'
 import TableActions from '../components/shared/TableActions.vue'
 
 const planStore = usePlanStore()

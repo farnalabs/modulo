@@ -9,18 +9,16 @@
         <div class="flex flex-col gap-1.5">
           <span class="text-xs font-medium text-muted-foreground">Run A</span>
           <div class="flex gap-2">
-            <select
-              data-testid="diff-recent-runs-a"
-              aria-label="Select run A"
-              class="w-72 rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-              @change="onSelectRunA"
-            >
-              <option v-if="loadingRuns" value="" disabled>Loading...</option>
-              <option v-else value="" disabled>Select recent run...</option>
-              <option v-for="run in recentRuns" :key="run.id" :value="run.id">
-                {{ run.pipeline_name }} — {{ run.status }} ({{ run.created_at }})
-              </option>
-            </select>
+            <Select v-model="runIdA">
+              <SelectTrigger data-testid="diff-recent-runs-a" aria-label="Select run A" class="w-72 rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
+                <SelectValue :placeholder="loadingRuns ? 'Loading...' : 'Select recent run...'" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem v-for="run in recentRuns" :key="run.id" :value="run.id">
+                  {{ run.pipeline_name }} — {{ run.status }} ({{ run.created_at }})
+                </SelectItem>
+              </SelectContent>
+            </Select>
             <input aria-label="Paste a run ID (or select from dropdown)"
               v-model="runIdA"
               data-testid="diff-run-id-a"
@@ -43,18 +41,16 @@
         <div class="flex flex-col gap-1.5">
           <span class="text-xs font-medium text-muted-foreground">Run B</span>
           <div class="flex gap-2">
-            <select
-              data-testid="diff-recent-runs-b"
-              aria-label="Select run B"
-              class="w-72 rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-              @change="onSelectRunB"
-            >
-              <option v-if="loadingRuns" value="" disabled>Loading...</option>
-              <option v-else value="" disabled>Select recent run...</option>
-              <option v-for="run in recentRuns" :key="run.id" :value="run.id">
-                {{ run.pipeline_name }} — {{ run.status }} ({{ run.created_at }})
-              </option>
-            </select>
+            <Select v-model="runIdB">
+              <SelectTrigger data-testid="diff-recent-runs-b" aria-label="Select run B" class="w-72 rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
+                <SelectValue :placeholder="loadingRuns ? 'Loading...' : 'Select recent run...'" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem v-for="run in recentRuns" :key="run.id" :value="run.id">
+                  {{ run.pipeline_name }} — {{ run.status }} ({{ run.created_at }})
+                </SelectItem>
+              </SelectContent>
+            </Select>
             <input aria-label="Paste a run ID (or select from dropdown)"
               v-model="runIdB"
               data-testid="diff-run-id-b"
@@ -153,6 +149,7 @@ import LoadingSpinner from '../components/shared/LoadingSpinner.vue'
 import ErrorAlert from '../components/shared/ErrorAlert.vue'
 import PageHeader from '../components/shared/PageHeader.vue'
 import { Button } from '@/components/ui/button'
+import { Select, SelectTrigger, SelectContent, SelectItem, SelectValue } from '@/components/ui/select'
 
 type NodeOutputDiffResponse = components['schemas']['NodeOutputDiffResponse']
 type NodeOutputDiffLine = components['schemas']['NodeOutputDiffLine']

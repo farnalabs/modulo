@@ -36,14 +36,15 @@
     </div>
 
     <div v-if="form.stage_type === 'modulo'">
-      <label for="stageconfigpanel-field-1" class="mb-1 block text-sm font-medium">Pipeline</label>
-      <select id="stageconfigpanel-field-1"
-        v-model="form.pipeline_id"
-        class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-      >
-        <option :value="null">Select a pipeline...</option>
-        <option v-for="p in pipelines" :key="p.id" :value="p.id">{{ p.name }}</option>
-      </select>
+      <span class="mb-1 block text-sm font-medium">Pipeline</span>
+      <Select v-model="form.pipeline_id">
+        <SelectTrigger class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring" aria-label="Pipeline">
+          <SelectValue placeholder="Select a pipeline..." />
+        </SelectTrigger>
+        <SelectContent>
+          <SelectItem v-for="p in pipelines" :key="p.id" :value="p.id">{{ p.name }}</SelectItem>
+        </SelectContent>
+      </Select>
     </div>
 
     <div v-if="form.stage_type === 'external'">
@@ -77,6 +78,7 @@ import { reactive, computed, watch } from 'vue'
 import { GraduationCap as GraduationCapIcon } from '@lucide/vue'
 import { Input } from '@/components/ui/input'
 import { Button } from '@/components/ui/button'
+import { Select, SelectTrigger, SelectContent, SelectItem, SelectValue } from '@/components/ui/select'
 import type { StageType, PipelineSummary } from '../../../types/lifecycleMap'
 
 interface FormModel {

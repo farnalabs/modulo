@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { ref } from "vue";
 import { Button } from "@/components/ui/button";
+import { Select, SelectTrigger, SelectContent, SelectItem, SelectValue } from "@/components/ui/select";
 import { useApi } from "../../../composables/useApi";
 import type { ParameterPort, ParameterPortType } from "../../../types/pipeline";
 
@@ -286,18 +287,19 @@ async function detectPlaceholders() {
           <label for="portdefinitionpanel-field-3" class="mb-1 block text-xs font-medium text-muted-foreground"
             >Type</label
           >
-          <select id="portdefinitionpanel-field-3"
-            v-model="form.type"
-            aria-label="Port type"
-            class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm"
-          >
-            <option value="string">String</option>
-            <option value="number">Number</option>
-            <option value="boolean">Boolean</option>
-            <option value="select">Select</option>
-            <option value="model_backend_ref">{{ $t('components.pipeline.composite.PortDefinitionPanel.model_backend_ref') }}</option>
-            <option value="schema_ref">{{ $t('components.pipeline.composite.PortDefinitionPanel.schema_ref') }}</option>
-          </select>
+          <Select v-model="form.type">
+            <SelectTrigger class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm" aria-label="Port type">
+              <SelectValue placeholder="Select type" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="string">String</SelectItem>
+              <SelectItem value="number">Number</SelectItem>
+              <SelectItem value="boolean">Boolean</SelectItem>
+              <SelectItem value="select">Select</SelectItem>
+              <SelectItem value="model_backend_ref">{{ $t('components.pipeline.composite.PortDefinitionPanel.model_backend_ref') }}</SelectItem>
+              <SelectItem value="schema_ref">{{ $t('components.pipeline.composite.PortDefinitionPanel.schema_ref') }}</SelectItem>
+            </SelectContent>
+          </Select>
         </div>
         <div class="flex items-center gap-2">
           <input aria-label="checkbox"

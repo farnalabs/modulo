@@ -167,58 +167,106 @@
           </div>
         </div>
 
-        <!-- Table view -->
+        <!-- Table / Tree view -->
         <div v-else class="card rounded-lg border border-border overflow-hidden">
-          <DataTable
-            :columns="tableColumns"
-            :rows="tableRows"
-            @row-click="openPipelineRow"
-          >
-            <template #cell-name="{ row }">
-              <span class="font-medium text-foreground">{{ pipelineRow(row).name }}</span>
-            </template>
-            <template #cell-folder_name="{ row }">
-              <span v-if="pipelineRow(row).folder_id && folderNameMap.has(pipelineRow(row).folder_id!)" class="flex items-center gap-1 text-muted-foreground text-sm">
-                <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 20h16a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.93a2 2 0 0 1-1.66-.9l-.82-1.2A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13c0 1.1.9 2 2 2Z"/></svg>
-                {{ folderNameMap.get(pipelineRow(row).folder_id!) }}
-              </span>
-              <span v-else class="text-muted-foreground/50 italic text-sm">{{ $t('views.PipelineListView.no_folder') }}</span>
-            </template>
-            <template #cell-description="{ row }">
-              <span v-if="pipelineRow(row).description" class="text-muted-foreground truncate block max-w-xs">{{ pipelineRow(row).description }}</span>
-              <span v-else class="text-muted-foreground/50 italic">{{ $t('views.PipelineListView.no_description') }}</span>
-            </template>
-            <template #cell-visibility="{ row }">
-              <span class="badge text-xs" :class="pipelineRow(row).visibility === 'org' ? 'badge-context-blue' : 'badge-context-purple'">
-                {{ pipelineRow(row).visibility === 'org' ? 'Org' : 'Team' }}
-              </span>
-            </template>
-            <template #cell-created_at="{ row }">
-              <span class="text-muted-foreground">{{ formatDate(pipelineRow(row).created_at) }}</span>
-            </template>
-            <template #cell-actions="{ row }">
-              <div class="flex justify-end">
-                <DropdownMenu>
-                  <DropdownMenuTrigger as-child>
-                    <button class="rounded p-1 hover:bg-accent" data-testid="pipeline-list-action-menu">
-                      <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="1"/><circle cx="12" cy="5" r="1"/><circle cx="12" cy="19" r="1"/></svg>
+          <table class="w-full text-left text-sm">
+            <thead class="bg-muted/50 text-xs font-medium uppercase text-muted-foreground">
+              <tr>
+                <th class="px-4 py-3">Name</th>
+                <th class="px-4 py-3">Description</th>
+                <th class="px-4 py-3">Visibility</th>
+                <th class="px-4 py-3">Created</th>
+                <th class="px-4 py-3 text-right">Actions</th>
+              </tr>
+            </thead>
+            <tbody class="divide-y">
+              <template v-for="(row, i) in treeRows" :key="i">
+                <tr v-if="row.type === 'folder'" class="bg-muted/20 hover:bg-muted/30 transition-colors" data-testid="pipeline-tree-folder-row">
+                  <td colspan="5" class="px-4 py-2">
+                    <button
+                      class="flex w-full items-center gap-2 text-sm font-medium text-foreground text-left"
+                      @click="toggleFolder((row.data as FolderItem).id)"
+                      :aria-expanded="expandedFolders.has((row.data as FolderItem).id)"
+                      data-testid="pipeline-tree-folder-toggle"
+                    >
+                      <svg
+                        xmlns="http://www.w3.org/2000/svg"
+                        width="14"
+                        height="14"
+                        viewBox="0 0 24 24"
+                        fill="none"
+                        stroke="currentColor"
+                        stroke-width="2"
+                        stroke-linecap="round"
+                        stroke-linejoin="round"
+                        :class="{ 'rotate-90': expandedFolders.has((row.data as FolderItem).id) }"
+                        class="transition-transform shrink-0"
+                      >
+                        <polyline points="9 18 15 12 9 6" />
+                      </svg>
+                      <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="shrink-0"><path d="M4 20h16a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.93a2 2 0 0 1-1.66-.9l-.82-1.2A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13c0 1.1.9 2 2 2Z"/></svg>
+                      {{ (row.data as FolderItem).name }}
+                      <span class="text-muted-foreground text-xs ml-auto">{{ pipelineFolderCount.get((row.data as FolderItem).id) || 0 }} {{ $t('views.PipelineListView.pipelines') }}</span>
                     </button>
-                  </DropdownMenuTrigger>
-                  <DropdownMenuContent align="end" class="w-40">
-                    <DropdownMenuItem @click="openRename(pipelineRow(row))">Rename</DropdownMenuItem>
-                    <DropdownMenuItem v-if="!pipelineRow(row).archived_at" @click="handleArchive(pipelineRow(row))">Archive</DropdownMenuItem>
-                    <DropdownMenuItem v-else @click="handleUnarchive(pipelineRow(row))">Unarchive</DropdownMenuItem>
-                    <DropdownMenuItem @click="openMoveToFolder(pipelineRow(row))">{{ $t('views.PipelineListView.move_to_folder') }}</DropdownMenuItem>
-                    <DropdownMenuItem v-if="planStore.featureEnabled('pipeline_delete')" @click="openDelete(pipelineRow(row))" class="text-destructive focus:text-destructive">Delete</DropdownMenuItem>
-                  </DropdownMenuContent>
-                </DropdownMenu>
-              </div>
-            </template>
-          </DataTable>
+                  </td>
+                </tr>
+
+                <tr v-else-if="row.type === 'uncategorised-header'" class="bg-muted/20">
+                  <td colspan="5" class="px-4 py-2">
+                    <span class="flex items-center gap-2 text-sm font-medium text-muted-foreground">
+                      <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="shrink-0"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>
+                      {{ $t('views.PipelineListView.uncategorised') }}
+                    </span>
+                  </td>
+                </tr>
+
+                <tr
+                  v-else-if="row.type === 'pipeline'"
+                  class="cursor-pointer transition-colors hover:bg-muted/30"
+                  @click="openPipeline(row.data as PipelineItem)"
+                  :data-testid="`pipeline-tree-row-${(row.data as PipelineItem).id}`"
+                >
+                  <td class="px-4 py-3" :style="{ paddingLeft: `${12 + (row.depth || 0) * 16}px` }">
+                    <span class="font-medium text-foreground">{{ (row.data as PipelineItem).name }}</span>
+                  </td>
+                  <td class="px-4 py-3">
+                    <span v-if="(row.data as PipelineItem).description" class="text-muted-foreground truncate block max-w-xs">{{ (row.data as PipelineItem).description }}</span>
+                    <span v-else class="text-muted-foreground/50 italic">{{ $t('views.PipelineListView.no_description') }}</span>
+                  </td>
+                  <td class="px-4 py-3">
+                    <span class="badge text-xs" :class="(row.data as PipelineItem).visibility === 'org' ? 'badge-context-blue' : 'badge-context-purple'">
+                      {{ (row.data as PipelineItem).visibility === 'org' ? 'Org' : 'Team' }}
+                    </span>
+                  </td>
+                  <td class="px-4 py-3">
+                    <span class="text-muted-foreground">{{ formatDate((row.data as PipelineItem).created_at) }}</span>
+                  </td>
+                  <td class="px-4 py-3">
+                    <div class="flex justify-end">
+                      <DropdownMenu>
+                        <DropdownMenuTrigger as-child>
+                          <button class="rounded p-1 hover:bg-accent" data-testid="pipeline-list-action-menu">
+                            <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="1"/><circle cx="12" cy="5" r="1"/><circle cx="12" cy="19" r="1"/></svg>
+                          </button>
+                        </DropdownMenuTrigger>
+                        <DropdownMenuContent align="end" class="w-40">
+                          <DropdownMenuItem @click.prevent.stop="openRename(row.data as PipelineItem)">Rename</DropdownMenuItem>
+                          <DropdownMenuItem v-if="!(row.data as PipelineItem).archived_at" @click.prevent.stop="handleArchive(row.data as PipelineItem)">Archive</DropdownMenuItem>
+                          <DropdownMenuItem v-else @click.prevent.stop="handleUnarchive(row.data as PipelineItem)">Unarchive</DropdownMenuItem>
+                          <DropdownMenuItem @click.prevent.stop="openMoveToFolder(row.data as PipelineItem)">{{ $t('views.PipelineListView.move_to_folder') }}</DropdownMenuItem>
+                          <DropdownMenuItem v-if="planStore.featureEnabled('pipeline_delete')" @click.prevent.stop="openDelete(row.data as PipelineItem)" class="text-destructive focus:text-destructive">Delete</DropdownMenuItem>
+                        </DropdownMenuContent>
+                      </DropdownMenu>
+                    </div>
+                  </td>
+                </tr>
+              </template>
+            </tbody>
+          </table>
         </div>
       </div>
 
-      <div v-if="totalPages > 1 && !loading" class="flex justify-center items-center gap-2 mt-8">
+      <div v-if="viewMode === 'card' && totalPages > 1 && !loading" class="flex justify-center items-center gap-2 mt-8">
         <button
           :disabled="page <= 1"
           class="px-4 py-2 text-sm border border-input bg-background rounded-lg disabled:opacity-30 hover:bg-accent transition-colors"
@@ -471,8 +519,7 @@ import { DropdownMenu, DropdownMenuTrigger, DropdownMenuContent, DropdownMenuIte
 import { api } from '../lib/api/client'
 import { useApi } from '../composables/useApi'
 import { formatDateShort } from '../lib/formatDate'
-import DataTable from '../components/ui/data-table/DataTable.vue'
-import type { Column, DataTableRow } from '../components/ui/data-table/DataTable.vue'
+
 
 interface PipelineItem {
   id: string
@@ -580,28 +627,67 @@ function setViewMode(mode: 'card' | 'table') {
   localStorage.setItem('pipeline-view-mode', mode)
 }
 
-const tableColumns: Column[] = [
-  { key: 'name', label: 'Name' },
-  { key: 'description', label: 'Description' },
-  { key: 'folder_name', label: 'Folder' },
-  { key: 'visibility', label: 'Visibility' },
-  { key: 'created_at', label: 'Created' },
-  { key: 'actions', label: '' },
-]
-
-const tableRows = computed(() =>
-  pagedPipelines.value.map(p => ({
-    ...p,
-  }))
-)
-
-function pipelineRow(row: DataTableRow): PipelineItem {
-  return row as unknown as PipelineItem
+interface TreeRow {
+  type: 'folder' | 'pipeline' | 'uncategorised-header'
+  depth: number
+  data: PipelineItem | FolderItem | null
 }
 
-function openPipelineRow(row: DataTableRow) {
-  openPipeline(pipelineRow(row))
+const expandedFolders = ref<Set<string>>(new Set())
+
+function toggleFolder(folderId: string) {
+  const next = new Set(expandedFolders.value)
+  if (next.has(folderId)) {
+    next.delete(folderId)
+  } else {
+    next.add(folderId)
+  }
+  expandedFolders.value = next
 }
+
+const pipelineFolderCount = computed(() => {
+  const count = new Map<string, number>()
+  for (const p of filteredPipelines.value) {
+    if (p.folder_id) {
+      count.set(p.folder_id, (count.get(p.folder_id) || 0) + 1)
+    }
+  }
+  return count
+})
+
+const treeRows = computed<TreeRow[]>(() => {
+  const rows: TreeRow[] = []
+  const sortedFolders = [...foldersList.value].sort((a, b) => a.name.localeCompare(b.name))
+
+  for (const folder of sortedFolders) {
+    const pipelineCount = pipelineFolderCount.value.get(folder.id) || 0
+    if (pipelineCount === 0) continue
+
+    rows.push({ type: 'folder', depth: 0, data: folder })
+
+    if (expandedFolders.value.has(folder.id)) {
+      const folderPipelines = filteredPipelines.value
+        .filter(p => p.folder_id === folder.id)
+        .sort((a, b) => a.name.localeCompare(b.name))
+      for (const p of folderPipelines) {
+        rows.push({ type: 'pipeline', depth: 1, data: p })
+      }
+    }
+  }
+
+  const uncategorised = filteredPipelines.value
+    .filter(p => !p.folder_id || !folderNameMap.value.has(p.folder_id))
+    .sort((a, b) => a.name.localeCompare(b.name))
+
+  if (uncategorised.length > 0) {
+    rows.push({ type: 'uncategorised-header', depth: 0, data: null })
+    for (const p of uncategorised) {
+      rows.push({ type: 'pipeline', depth: 1, data: p })
+    }
+  }
+
+  return rows
+})
 
 const filteredPipelines = computed(() => {
   const q = search.value.toLowerCase().trim()
