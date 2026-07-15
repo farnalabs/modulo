@@ -8,6 +8,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy.exc import ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from modulo.api.db_error_handling import handle_db_errors
 from modulo.api.dependencies import get_db_session
 from modulo.auth.dependencies import get_current_user
 from modulo.auth.jwt import AuthenticatedPrincipal
@@ -24,6 +25,8 @@ from modulo.db.crud.organisation import (
 )
 
 logger = logging.getLogger(__name__)
+
+_log = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/v1/admin/orgs", tags=["admin"])
 
@@ -49,6 +52,8 @@ class CreateOrgResponse(BaseModel):
     created_at: str
 
 
+@router.post("", response_model=CreateOrgResponse, status_code=status.HTTP_201_CREATED)
+@handle_db_errors("admin.orgs.admin_create_org")
 @router.post("", response_model=CreateOrgResponse, status_code=status.HTTP_201_CREATED)
 async def admin_create_org(
     req: CreateOrgRequest,
@@ -118,6 +123,8 @@ class ListOrgItem(BaseModel):
 
 
 @router.get("", response_model=list[ListOrgItem])
+@handle_db_errors("admin.orgs.admin_list_orgs")
+@router.get("", response_model=list[ListOrgItem])
 async def admin_list_orgs(
     current_user: AuthenticatedPrincipal = Depends(get_current_user),
     session: AsyncSession = Depends(get_db_session),
@@ -178,6 +185,8 @@ class CreateOrgUserResponse(BaseModel):
     created_at: str
 
 
+@router.post("/{org_id}/users", response_model=CreateOrgUserResponse, status_code=status.HTTP_201_CREATED)
+@handle_db_errors("admin.orgs.admin_create_org_user")
 @router.post("/{org_id}/users", response_model=CreateOrgUserResponse, status_code=status.HTTP_201_CREATED)
 async def admin_create_org_user(
     org_id: uuid.UUID,
@@ -277,6 +286,8 @@ async def admin_create_org_user(
 
 
 @router.delete("/{org_id}", status_code=status.HTTP_204_NO_CONTENT)
+@handle_db_errors("admin.orgs.admin_delete_org")
+@router.delete("/{org_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def admin_delete_org(
     org_id: uuid.UUID,
     current_user: AuthenticatedPrincipal = Depends(get_current_user),
@@ -329,6 +340,8 @@ class SetOrgLicenseRequest(BaseModel):
     license_key: str = Field(min_length=1)
 
 
+@router.get("/{org_id}/license", response_model=OrgLicenseResponse)
+@handle_db_errors("admin.orgs.admin_get_org_license")
 @router.get("/{org_id}/license", response_model=OrgLicenseResponse)
 async def admin_get_org_license(
     org_id: uuid.UUID,
@@ -390,6 +403,8 @@ async def admin_get_org_license(
     return OrgLicenseResponse(has_license=False)
 
 
+@router.put("/{org_id}/license", response_model=OrgLicenseResponse)
+@handle_db_errors("admin.orgs.admin_set_org_license")
 @router.put("/{org_id}/license", response_model=OrgLicenseResponse)
 async def admin_set_org_license(
     org_id: uuid.UUID,
@@ -472,6 +487,8 @@ async def admin_set_org_license(
     )
 
 
+@router.delete("/{org_id}/license", response_model=OrgLicenseResponse)
+@handle_db_errors("admin.orgs.admin_remove_org_license")
 @router.delete("/{org_id}/license", response_model=OrgLicenseResponse)
 async def admin_remove_org_license(
     org_id: uuid.UUID,

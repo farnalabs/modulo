@@ -21,6 +21,7 @@ from sqlalchemy import func, select
 from sqlalchemy.exc import ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from modulo.api.db_error_handling import handle_db_errors
 from modulo.api.dependencies import get_db_session
 from modulo.api.middleware.sensitive_mask import mask_config_json
 from modulo.auth.dependencies import get_current_tenant_user
@@ -36,6 +37,8 @@ _log = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/v1", tags=["triggers"])
 
 
+@router.get("/triggers", status_code=status.HTTP_200_OK)
+@handle_db_errors("triggers.list_triggers")
 @router.get("/triggers", status_code=status.HTTP_200_OK)
 async def list_triggers(
     pipeline_id: uuid.UUID | None = Query(None),
@@ -138,6 +141,8 @@ def _validated_next_fire(cron_expression: str | None, cron_timezone: str | None)
 
 
 @router.patch("/triggers/{trigger_id}/cron", status_code=status.HTTP_200_OK)
+@handle_db_errors("triggers.update_cron_config")
+@router.patch("/triggers/{trigger_id}/cron", status_code=status.HTTP_200_OK)
 async def update_cron_config(
     trigger_id: uuid.UUID,
     req: CronConfigUpdate,
@@ -221,6 +226,8 @@ async def update_cron_config(
 
 
 @router.get("/triggers/{trigger_id}/cron/preview", status_code=status.HTTP_200_OK)
+@handle_db_errors("triggers.preview_cron_schedule")
+@router.get("/triggers/{trigger_id}/cron/preview", status_code=status.HTTP_200_OK)
 async def preview_cron_schedule(
     trigger_id: uuid.UUID,
     count: int = Query(5, ge=1, le=50),
@@ -299,6 +306,8 @@ class PollingConfigUpdate(BaseModel):
     snapshot_id: str | None = None
 
 
+@router.patch("/triggers/{trigger_id}/polling", status_code=status.HTTP_200_OK)
+@handle_db_errors("triggers.update_polling_config")
 @router.patch("/triggers/{trigger_id}/polling", status_code=status.HTTP_200_OK)
 async def update_polling_config(
     trigger_id: uuid.UUID,
@@ -399,6 +408,8 @@ class PollingTestRequest(BaseModel):
 
 
 @router.post("/triggers/{trigger_id}/polling/test", status_code=status.HTTP_200_OK)
+@handle_db_errors("triggers.test_polling_condition")
+@router.post("/triggers/{trigger_id}/polling/test", status_code=status.HTTP_200_OK)
 async def test_polling_condition(
     trigger_id: uuid.UUID,
     req: PollingTestRequest,
@@ -474,6 +485,8 @@ class TriggerCreate(BaseModel):
 
 
 @router.post("/pipelines/{pipeline_id}/triggers", status_code=status.HTTP_201_CREATED)
+@handle_db_errors("triggers.create_trigger")
+@router.post("/pipelines/{pipeline_id}/triggers", status_code=status.HTTP_201_CREATED)
 async def create_trigger(
     pipeline_id: uuid.UUID,
     req: TriggerCreate,
@@ -548,6 +561,8 @@ class TriggerUpdate(BaseModel):
     cron_timezone: str | None = None
 
 
+@router.put("/triggers/{trigger_id}", status_code=status.HTTP_200_OK)
+@handle_db_errors("triggers.update_trigger")
 @router.put("/triggers/{trigger_id}", status_code=status.HTTP_200_OK)
 async def update_trigger(
     trigger_id: uuid.UUID,
@@ -630,6 +645,8 @@ async def update_trigger(
 
 
 @router.delete("/triggers/{trigger_id}", status_code=status.HTTP_204_NO_CONTENT)
+@handle_db_errors("triggers.delete_trigger")
+@router.delete("/triggers/{trigger_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_trigger(
     trigger_id: uuid.UUID,
     session: AsyncSession = Depends(get_db_session),
@@ -669,6 +686,8 @@ async def delete_trigger(
         ) from None
 
 
+@router.post("/triggers/{trigger_id}/toggle", status_code=status.HTTP_200_OK)
+@handle_db_errors("triggers.toggle_trigger")
 @router.post("/triggers/{trigger_id}/toggle", status_code=status.HTTP_200_OK)
 async def toggle_trigger(
     trigger_id: uuid.UUID,
@@ -717,6 +736,8 @@ class TestTriggerRequest(BaseModel):
     payload: dict[str, Any] = Field(default_factory=dict)
 
 
+@router.post("/triggers/{trigger_id}/test", status_code=status.HTTP_200_OK)
+@handle_db_errors("triggers.test_trigger")
 @router.post("/triggers/{trigger_id}/test", status_code=status.HTTP_200_OK)
 async def test_trigger(
     trigger_id: uuid.UUID,
@@ -808,6 +829,8 @@ async def test_trigger(
     }
 
 
+@router.get("/triggers/{trigger_id}/events", status_code=status.HTTP_200_OK)
+@handle_db_errors("triggers.list_trigger_events")
 @router.get("/triggers/{trigger_id}/events", status_code=status.HTTP_200_OK)
 async def list_trigger_events(
     trigger_id: uuid.UUID,

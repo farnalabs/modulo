@@ -12,6 +12,7 @@ from sqlalchemy.exc import ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 from starlette.responses import Response
 
+from modulo.api.db_error_handling import handle_db_errors
 from modulo.api.dependencies import get_db_session
 from modulo.auth.dependencies import get_current_user
 from modulo.auth.jwt import AuthenticatedPrincipal
@@ -21,6 +22,8 @@ from modulo.db.crud.organisation import get_organisation
 from modulo.settings import Settings, get_settings
 
 logger = logging.getLogger(__name__)
+
+_log = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/v1/admin/feature-flags", tags=["admin-feature-flags"])
 
@@ -104,6 +107,8 @@ async def _build_registry(
 
 
 @router.get("", response_model=None)
+@handle_db_errors("admin.feature_flags.list_feature_flags")
+@router.get("", response_model=None)
 async def list_feature_flags(
     settings: Settings = Depends(get_settings),
     session: AsyncSession = Depends(get_db_session),
@@ -175,6 +180,8 @@ async def list_feature_flags(
 
 
 @router.get("/{flag_name}", response_model=None)
+@handle_db_errors("admin.feature_flags.get_feature_flag")
+@router.get("/{flag_name}", response_model=None)
 async def get_feature_flag(
     flag_name: str,
     settings: Settings = Depends(get_settings),
@@ -238,6 +245,8 @@ class ToggleFlagRequest(BaseModel):
 
 
 @router.put("/{flag_name}", response_model=None)
+@handle_db_errors("admin.feature_flags.toggle_feature_flag")
+@router.put("/{flag_name}", response_model=None)
 async def toggle_feature_flag(
     flag_name: str,
     req: ToggleFlagRequest,
@@ -300,6 +309,8 @@ async def toggle_feature_flag(
 
 
 @router.get("/{flag_name}/org-override", response_model=None)
+@handle_db_errors("admin.feature_flags.get_org_flag_override")
+@router.get("/{flag_name}/org-override", response_model=None)
 async def get_org_flag_override(
     flag_name: str,
     current_user: AuthenticatedPrincipal = Depends(get_current_user),
@@ -350,6 +361,8 @@ async def get_org_flag_override(
         )
 
 
+@router.put("/{flag_name}/org-override", response_model=None)
+@handle_db_errors("admin.feature_flags.set_org_flag_override")
 @router.put("/{flag_name}/org-override", response_model=None)
 async def set_org_flag_override(
     flag_name: str,
@@ -407,6 +420,8 @@ async def set_org_flag_override(
         )
 
 
+@router.delete("/{flag_name}/org-override", response_model=None)
+@handle_db_errors("admin.feature_flags.clear_org_flag_override")
 @router.delete("/{flag_name}/org-override", response_model=None)
 async def clear_org_flag_override(
     flag_name: str,

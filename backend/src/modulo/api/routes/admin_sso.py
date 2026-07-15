@@ -11,6 +11,7 @@ from pydantic import BaseModel, Field, field_validator
 from sqlalchemy.exc import IntegrityError, ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from modulo.api.db_error_handling import handle_db_errors
 from modulo.api.dependencies import get_db_session, require_feature
 from modulo.api.middleware.sensitive_mask import SensitiveValue
 from modulo.auth.dependencies import get_current_tenant_user
@@ -121,6 +122,8 @@ def _require_admin(principal: TenantPrincipal) -> None:
 
 
 @router.get("/providers", response_model=list[SsoProviderResponse])
+@handle_db_errors("admin.sso.get_providers")
+@router.get("/providers", response_model=list[SsoProviderResponse])
 async def get_providers(
     _: object = require_feature("sso"),
     current_user: TenantPrincipal = Depends(get_current_tenant_user),
@@ -152,6 +155,8 @@ async def get_providers(
         ) from None
 
 
+@router.post("/providers", response_model=SsoProviderResponse, status_code=status.HTTP_201_CREATED)
+@handle_db_errors("admin.sso.create_provider_endpoint")
 @router.post("/providers", response_model=SsoProviderResponse, status_code=status.HTTP_201_CREATED)
 async def create_provider_endpoint(
     req: SsoProviderCreate,
@@ -211,6 +216,8 @@ async def create_provider_endpoint(
 
 
 @router.put("/providers/{provider_id}", response_model=SsoProviderResponse)
+@handle_db_errors("admin.sso.update_provider_endpoint")
+@router.put("/providers/{provider_id}", response_model=SsoProviderResponse)
 async def update_provider_endpoint(
     provider_id: uuid.UUID,
     req: SsoProviderUpdate,
@@ -269,6 +276,8 @@ async def update_provider_endpoint(
 
 
 @router.delete("/providers/{provider_id}", status_code=status.HTTP_204_NO_CONTENT)
+@handle_db_errors("admin.sso.delete_provider_endpoint")
+@router.delete("/providers/{provider_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_provider_endpoint(
     provider_id: uuid.UUID,
     _: object = require_feature("sso"),
@@ -310,6 +319,8 @@ async def delete_provider_endpoint(
         )
 
 
+@router.post("/providers/{provider_id}/test", response_model=SsoProviderTestResult)
+@handle_db_errors("admin.sso.test_provider_connection")
 @router.post("/providers/{provider_id}/test", response_model=SsoProviderTestResult)
 async def test_provider_connection(
     provider_id: uuid.UUID,
@@ -494,6 +505,8 @@ async def _test_saml_connection(provider: Any) -> SsoProviderTestResult:
 
 
 @router.put("/providers/{provider_id}/toggle", response_model=SsoProviderResponse)
+@handle_db_errors("admin.sso.toggle_provider_endpoint")
+@router.put("/providers/{provider_id}/toggle", response_model=SsoProviderResponse)
 async def toggle_provider_endpoint(
     provider_id: uuid.UUID,
     _: object = require_feature("sso"),
@@ -551,6 +564,8 @@ class GroupMappingsResponse(BaseModel):
 
 
 @router.put("/providers/{provider_id}/group-mappings", response_model=GroupMappingsResponse)
+@handle_db_errors("admin.sso.set_group_mappings_endpoint")
+@router.put("/providers/{provider_id}/group-mappings", response_model=GroupMappingsResponse)
 async def set_group_mappings_endpoint(
     provider_id: uuid.UUID,
     req: GroupMappingsRequest,
@@ -595,6 +610,8 @@ async def set_group_mappings_endpoint(
     return GroupMappingsResponse(mappings=[GroupMappingItem(**m) for m in provider.group_mappings])
 
 
+@router.get("/providers/{provider_id}/group-mappings", response_model=GroupMappingsResponse)
+@handle_db_errors("admin.sso.get_group_mappings_endpoint")
 @router.get("/providers/{provider_id}/group-mappings", response_model=GroupMappingsResponse)
 async def get_group_mappings_endpoint(
     provider_id: uuid.UUID,

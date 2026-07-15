@@ -12,6 +12,7 @@ from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError, ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from modulo.api.db_error_handling import handle_db_errors
 from modulo.api.dependencies import get_db_session
 from modulo.auth.dependencies import get_current_tenant_user
 from modulo.auth.jwt import TenantPrincipal
@@ -21,6 +22,8 @@ from modulo.db.models.pipeline import Pipeline
 from modulo.db.rls import set_rls_org, set_rls_user_context
 
 logger = logging.getLogger(__name__)
+
+_log = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/v1/onboarding", tags=["onboarding"])
 
@@ -127,6 +130,8 @@ class StarterPipelineResponse(BaseModel):
 
 
 @router.get("/status", response_model=OnboardingStatusResponse)
+@handle_db_errors("onboarding.get_onboarding_status")
+@router.get("/status", response_model=OnboardingStatusResponse)
 async def get_onboarding_status(
     session: AsyncSession = Depends(get_db_session),
     principal: TenantPrincipal = Depends(get_current_tenant_user),
@@ -187,6 +192,8 @@ async def get_onboarding_status(
 
 
 @router.post("/step", response_model=MarkStepResponse)
+@handle_db_errors("onboarding.mark_step_completed")
+@router.post("/step", response_model=MarkStepResponse)
 async def mark_step_completed(
     req: MarkStepRequest,
     session: AsyncSession = Depends(get_db_session),
@@ -227,6 +234,8 @@ async def mark_step_completed(
         ) from e
 
 
+@router.get("/step/{step_id}", response_model=OnboardingStepDataResponse)
+@handle_db_errors("onboarding.get_step_data")
 @router.get("/step/{step_id}", response_model=OnboardingStepDataResponse)
 async def get_step_data(
     step_id: str,
@@ -298,6 +307,8 @@ async def get_step_data(
         ) from e
 
 
+@router.post("/starter-pipeline", response_model=StarterPipelineResponse, status_code=status.HTTP_201_CREATED)
+@handle_db_errors("onboarding.create_starter_pipeline")
 @router.post("/starter-pipeline", response_model=StarterPipelineResponse, status_code=status.HTTP_201_CREATED)
 async def create_starter_pipeline(
     session: AsyncSession = Depends(get_db_session),

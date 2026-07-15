@@ -14,6 +14,7 @@ from sqlalchemy import select
 from sqlalchemy.exc import ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from modulo.api.db_error_handling import handle_db_errors
 from modulo.api.dependencies import get_db_session
 from modulo.api.models.error import (
     ErrorEventListResponse,
@@ -89,6 +90,8 @@ def _get_key_store(settings: Settings | None = None) -> SessionKeyStore:
 
 
 @router.post("/session-key", response_model=SessionKeyResponse, status_code=status.HTTP_201_CREATED)
+@handle_db_errors("errors.create_session_key")
+@router.post("/session-key", response_model=SessionKeyResponse, status_code=status.HTTP_201_CREATED)
 async def create_session_key(
     principal: TenantPrincipal = Depends(get_current_tenant_user),
 ) -> dict[str, Any]:
@@ -103,6 +106,8 @@ async def create_session_key(
     return {"key": key, "expires_in_seconds": 3600}
 
 
+@router.post("/ingest", response_model=ErrorIngestResponse, status_code=status.HTTP_201_CREATED)
+@handle_db_errors("errors.ingest_errors")
 @router.post("/ingest", response_model=ErrorIngestResponse, status_code=status.HTTP_201_CREATED)
 async def ingest_errors(
     request: Request,
@@ -182,6 +187,8 @@ async def ingest_errors(
     return {"results": [ErrorGroupResult(**r) for r in results]}
 
 
+@router.post("/ingest/public", response_model=ErrorIngestResponse, status_code=status.HTTP_201_CREATED)
+@handle_db_errors("errors.ingest_errors_public")
 @router.post("/ingest/public", response_model=ErrorIngestResponse, status_code=status.HTTP_201_CREATED)
 async def ingest_errors_public(
     request: Request,
@@ -334,6 +341,8 @@ async def _fetch_sample_event(session: AsyncSession, org_id: uuid.UUID, group: E
 
 
 @router.get("", response_model=ErrorListResponse)
+@handle_db_errors("errors.list_error_groups")
+@router.get("", response_model=ErrorListResponse)
 async def list_error_groups(
     status_filter: str | None = Query(None, alias="status"),
     level: str | None = Query(None),
@@ -411,6 +420,8 @@ async def list_error_groups(
 
 
 @router.get("/{error_id}", response_model=ErrorGroupDetail)
+@handle_db_errors("errors.get_error_group_detail")
+@router.get("/{error_id}", response_model=ErrorGroupDetail)
 async def get_error_group_detail(
     error_id: uuid.UUID,
     session: AsyncSession = Depends(get_db_session),
@@ -460,6 +471,8 @@ async def get_error_group_detail(
     }
 
 
+@router.patch("/{error_id}", response_model=ErrorGroupDetail)
+@handle_db_errors("errors.patch_error_group")
 @router.patch("/{error_id}", response_model=ErrorGroupDetail)
 async def patch_error_group(
     error_id: uuid.UUID,
@@ -519,6 +532,8 @@ async def patch_error_group(
     }
 
 
+@router.get("/{error_id}/events", response_model=ErrorEventListResponse)
+@handle_db_errors("errors.list_error_events")
 @router.get("/{error_id}/events", response_model=ErrorEventListResponse)
 async def list_error_events(
     error_id: uuid.UUID,

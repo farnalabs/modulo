@@ -12,6 +12,7 @@ from sqlalchemy import Date, case, cast, delete, func, select, text
 from sqlalchemy.exc import IntegrityError, ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from modulo.api.db_error_handling import handle_db_errors
 from modulo.api.dependencies import get_db_session, require_feature
 from modulo.auth.api_key import revoke_api_key
 from modulo.auth.dependencies import get_current_tenant_user
@@ -58,6 +59,8 @@ from modulo.db.rls import set_rls_org, set_rls_user_context
 
 logger = logging.getLogger(__name__)
 
+_log = logging.getLogger(__name__)
+
 router = APIRouter(prefix="/api/v1/admin", tags=["admin"])
 
 
@@ -77,6 +80,8 @@ class SearchResponse(BaseModel):
     total_by_type: dict[str, int]
 
 
+@router.get("/search", response_model=SearchResponse)
+@handle_db_errors("admin.global_search")
 @router.get("/search", response_model=SearchResponse)
 async def global_search(
     q: str = Query(min_length=1),
@@ -350,6 +355,8 @@ class CreateUserResponse(BaseModel):
 
 
 @router.post("/users", response_model=CreateUserResponse, status_code=status.HTTP_201_CREATED)
+@handle_db_errors("admin.admin_create_user")
+@router.post("/users", response_model=CreateUserResponse, status_code=status.HTTP_201_CREATED)
 async def admin_create_user(
     req: CreateUserRequest,
     current_user: TenantPrincipal = Depends(get_current_tenant_user),
@@ -566,6 +573,8 @@ class OrgProfileResponse(BaseModel):
 
 
 @router.get("/org", response_model=OrgProfileResponse)
+@handle_db_errors("admin.admin_get_org")
+@router.get("/org", response_model=OrgProfileResponse)
 async def admin_get_org(
     current_user: TenantPrincipal = Depends(get_current_tenant_user),
     session: AsyncSession = Depends(get_db_session),
@@ -612,6 +621,8 @@ async def admin_get_org(
     )
 
 
+@router.put("/org", response_model=OrgProfileResponse)
+@handle_db_errors("admin.admin_update_org")
 @router.put("/org", response_model=OrgProfileResponse)
 async def admin_update_org(
     req: UpdateOrgRequest,
@@ -676,6 +687,8 @@ async def admin_update_org(
 
 
 @router.post("/org/regenerate-api-key", status_code=status.HTTP_200_OK)
+@handle_db_errors("admin.admin_regenerate_api_key")
+@router.post("/org/regenerate-api-key", status_code=status.HTTP_200_OK)
 async def admin_regenerate_api_key(
     current_user: TenantPrincipal = Depends(get_current_tenant_user),
     session: AsyncSession = Depends(get_db_session),
@@ -739,6 +752,8 @@ class UserListResponse(BaseModel):
     page_size: int
 
 
+@router.get("/users", response_model=UserListResponse)
+@handle_db_errors("admin.admin_list_users")
 @router.get("/users", response_model=UserListResponse)
 async def admin_list_users(
     page: int = Query(1, ge=1),
@@ -862,6 +877,8 @@ async def _prevent_last_admin_lockout(
 
 
 @router.put("/users/{user_id}", response_model=UserListItem)
+@handle_db_errors("admin.admin_update_user")
+@router.put("/users/{user_id}", response_model=UserListItem)
 async def admin_update_user(
     user_id: uuid.UUID,
     req: UpdateUserRequest,
@@ -929,6 +946,8 @@ async def _get_org_role(session: AsyncSession, account_id: uuid.UUID, org_id: uu
     return membership.role if membership is not None else ""
 
 
+@router.post("/users/{user_id}/deactivate", response_model=UserListItem)
+@handle_db_errors("admin.admin_deactivate_user")
 @router.post("/users/{user_id}/deactivate", response_model=UserListItem)
 async def admin_deactivate_user(
     user_id: uuid.UUID,
@@ -1063,6 +1082,8 @@ async def admin_deactivate_user(
 
 
 @router.post("/users/{user_id}/reactivate", response_model=UserListItem)
+@handle_db_errors("admin.admin_reactivate_user")
+@router.post("/users/{user_id}/reactivate", response_model=UserListItem)
 async def admin_reactivate_user(
     user_id: uuid.UUID,
     current_user: TenantPrincipal = Depends(get_current_tenant_user),
@@ -1144,6 +1165,8 @@ class AdminResetPasswordResponse(BaseModel):
     temporary_password: str
 
 
+@router.post("/users/{user_id}/reset-password", response_model=AdminResetPasswordResponse)
+@handle_db_errors("admin.admin_reset_password")
 @router.post("/users/{user_id}/reset-password", response_model=AdminResetPasswordResponse)
 async def admin_reset_password(
     user_id: uuid.UUID,
@@ -1495,6 +1518,8 @@ class BillingOverviewResponse(BaseModel):
 
 
 @router.get("/billing/overview", response_model=BillingOverviewResponse)
+@handle_db_errors("admin.admin_billing_overview")
+@router.get("/billing/overview", response_model=BillingOverviewResponse)
 async def admin_billing_overview(
     current_user: TenantPrincipal = Depends(get_current_tenant_user),
     session: AsyncSession = Depends(get_db_session),
@@ -1594,6 +1619,12 @@ class DeletionRequestResponse(BaseModel):
     response_model=DeletionRequestResponse,
     status_code=status.HTTP_202_ACCEPTED,
 )
+@handle_db_errors("admin.request_org_deletion")
+@router.post(
+    "/org/deletion-request",
+    response_model=DeletionRequestResponse,
+    status_code=status.HTTP_202_ACCEPTED,
+)
 async def request_org_deletion(
     current_user: TenantPrincipal = Depends(get_current_tenant_user),
     session: AsyncSession = Depends(get_db_session),
@@ -1674,6 +1705,8 @@ class ConfirmDeletionResponse(BaseModel):
 
 
 @router.post("/org/deletion-confirm", response_model=ConfirmDeletionResponse)
+@handle_db_errors("admin.confirm_org_deletion")
+@router.post("/org/deletion-confirm", response_model=ConfirmDeletionResponse)
 async def confirm_org_deletion(
     req: ConfirmDeletionRequest,
     current_user: TenantPrincipal = Depends(get_current_tenant_user),
@@ -1729,6 +1762,8 @@ class OrgExportResponse(BaseModel):
 
 
 @router.patch("/org/deletion-cancel", response_model=CancelDeletionResponse)
+@handle_db_errors("admin.cancel_org_deletion")
+@router.patch("/org/deletion-cancel", response_model=CancelDeletionResponse)
 async def cancel_org_deletion(
     current_user: TenantPrincipal = Depends(get_current_tenant_user),
     session: AsyncSession = Depends(get_db_session),
@@ -1763,6 +1798,8 @@ async def cancel_org_deletion(
     return CancelDeletionResponse(**result)
 
 
+@router.get("/org/export", response_model=OrgExportResponse)
+@handle_db_errors("admin.export_org_data")
 @router.get("/org/export", response_model=OrgExportResponse)
 async def export_org_data(
     current_user: TenantPrincipal = Depends(get_current_tenant_user),
@@ -1809,6 +1846,8 @@ async def export_org_data(
     )
 
 
+@router.delete("/org", response_model=ConfirmDeletionResponse)
+@handle_db_errors("admin.delete_org_immediate")
 @router.delete("/org", response_model=ConfirmDeletionResponse)
 async def delete_org_immediate(
     current_user: TenantPrincipal = Depends(get_current_tenant_user),
@@ -1922,6 +1961,8 @@ class EvalDashboardResponse(BaseModel):
     recent_results: list[RecentEvalResult]
 
 
+@router.get("/evals/dashboard", response_model=EvalDashboardResponse)
+@handle_db_errors("admin.eval_dashboard")
 @router.get("/evals/dashboard", response_model=EvalDashboardResponse)
 async def eval_dashboard(
     current_user: TenantPrincipal = Depends(get_current_tenant_user),
@@ -2135,6 +2176,8 @@ class RegressionAlertsResponse(BaseModel):
 
 
 @router.get("/evals/regressions", response_model=RegressionAlertsResponse)
+@handle_db_errors("admin.eval_regressions")
+@router.get("/evals/regressions", response_model=RegressionAlertsResponse)
 async def eval_regressions(
     days: int = Query(default=7, ge=1, le=90, description="Lookback period in days"),
     threshold: float = Query(default=0.15, ge=0.0, le=1.0, description="Minimum drop fraction to trigger an alert"),
@@ -2226,6 +2269,8 @@ class OkrProgressResponse(BaseModel):
     breach: bool
 
 
+@router.get("/evals/okr-progress/{suite_id}", response_model=OkrProgressResponse)
+@handle_db_errors("admin.okr_progress")
 @router.get("/evals/okr-progress/{suite_id}", response_model=OkrProgressResponse)
 async def okr_progress(
     suite_id: str,
@@ -2343,6 +2388,8 @@ class PublisherListResponse(BaseModel):
 
 
 @router.get("/publishers", response_model=PublisherListResponse)
+@handle_db_errors("admin.admin_list_publishers")
+@router.get("/publishers", response_model=PublisherListResponse)
 async def admin_list_publishers(
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
@@ -2400,6 +2447,8 @@ async def admin_list_publishers(
     )
 
 
+@router.post("/publishers", response_model=PublisherResponse, status_code=status.HTTP_201_CREATED)
+@handle_db_errors("admin.admin_create_publisher")
 @router.post("/publishers", response_model=PublisherResponse, status_code=status.HTTP_201_CREATED)
 async def admin_create_publisher(
     req: PublisherCreateRequest,
@@ -2469,6 +2518,8 @@ async def admin_create_publisher(
     )
 
 
+@router.put("/publishers/{publisher_id}", response_model=PublisherResponse)
+@handle_db_errors("admin.admin_update_publisher")
 @router.put("/publishers/{publisher_id}", response_model=PublisherResponse)
 async def admin_update_publisher(
     publisher_id: uuid.UUID,
@@ -2555,6 +2606,8 @@ async def admin_update_publisher(
     )
 
 
+@router.delete("/publishers/{publisher_id}", status_code=status.HTTP_204_NO_CONTENT)
+@handle_db_errors("admin.admin_delete_publisher")
 @router.delete("/publishers/{publisher_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def admin_delete_publisher(
     publisher_id: uuid.UUID,
@@ -2907,6 +2960,8 @@ async def admin_update_retention(
 
 
 @router.get("/runs/storage", response_model=StorageInfoResponse)
+@handle_db_errors("admin.admin_get_storage")
+@router.get("/runs/storage", response_model=StorageInfoResponse)
 async def admin_get_storage(
     current_user: TenantPrincipal = Depends(get_current_tenant_user),
     session: AsyncSession = Depends(get_db_session),
@@ -2969,6 +3024,8 @@ class OverdueClaimsResponse(BaseModel):
     claims: list[OverdueClaimItem]
 
 
+@router.get("/hitl/overdue", response_model=OverdueClaimsResponse)
+@handle_db_errors("admin.admin_overdue_hitl_claims")
 @router.get("/hitl/overdue", response_model=OverdueClaimsResponse)
 async def admin_overdue_hitl_claims(
     current_user: TenantPrincipal = Depends(get_current_tenant_user),

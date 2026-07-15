@@ -15,6 +15,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy.exc import IntegrityError, ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from modulo.api.db_error_handling import handle_db_errors
 from modulo.api.dependencies import get_db_session
 from modulo.auth.dependencies import get_current_tenant_user
 from modulo.auth.jwt import TenantPrincipal
@@ -102,6 +103,8 @@ def _notification_to_response(n: Notification) -> NotificationResponse:
 
 
 @router.get("/dashboard", response_model=DashboardNotificationResponse)
+@handle_db_errors("in_app_notifications.get_dashboard")
+@router.get("/dashboard", response_model=DashboardNotificationResponse)
 async def get_dashboard(
     session: AsyncSession = Depends(get_db_session),
     principal: TenantPrincipal = Depends(get_current_tenant_user),
@@ -143,6 +146,8 @@ async def get_dashboard(
 
 
 @router.get("/unread-count", response_model=dict)
+@handle_db_errors("in_app_notifications.get_unread")
+@router.get("/unread-count", response_model=dict)
 async def get_unread(
     session: AsyncSession = Depends(get_db_session),
     principal: TenantPrincipal = Depends(get_current_tenant_user),
@@ -174,6 +179,8 @@ async def get_unread(
     return {"count": count}
 
 
+@router.get("", response_model=PaginatedNotificationsResponse)
+@handle_db_errors("in_app_notifications.list_notifications")
 @router.get("", response_model=PaginatedNotificationsResponse)
 async def list_notifications(
     session: AsyncSession = Depends(get_db_session),
@@ -234,6 +241,8 @@ async def list_notifications(
 
 
 @router.get("/{notification_id}", response_model=NotificationResponse)
+@handle_db_errors("in_app_notifications.get_notification_detail")
+@router.get("/{notification_id}", response_model=NotificationResponse)
 async def get_notification_detail(
     notification_id: uuid.UUID,
     session: AsyncSession = Depends(get_db_session),
@@ -268,6 +277,8 @@ async def get_notification_detail(
     return _notification_to_response(n)
 
 
+@router.post("/{notification_id}/review-later", status_code=status.HTTP_200_OK)
+@handle_db_errors("in_app_notifications.review_later_endpoint")
 @router.post("/{notification_id}/review-later", status_code=status.HTTP_200_OK)
 async def review_later_endpoint(
     notification_id: uuid.UUID,
@@ -318,6 +329,8 @@ async def review_later_endpoint(
     return {"status": "review_later"}
 
 
+@router.post("/{notification_id}/dismiss", status_code=status.HTTP_200_OK)
+@handle_db_errors("in_app_notifications.dismiss_endpoint")
 @router.post("/{notification_id}/dismiss", status_code=status.HTTP_200_OK)
 async def dismiss_endpoint(
     notification_id: uuid.UUID,
@@ -373,6 +386,8 @@ async def dismiss_endpoint(
 
 
 @router.get("/preferences", response_model=NotificationPreferencesResponse)
+@handle_db_errors("in_app_notifications.get_preferences")
+@router.get("/preferences", response_model=NotificationPreferencesResponse)
 async def get_preferences(
     session: AsyncSession = Depends(get_db_session),
     principal: TenantPrincipal = Depends(get_current_tenant_user),
@@ -383,6 +398,8 @@ async def get_preferences(
     )
 
 
+@router.put("/preferences", response_model=NotificationPreferencesResponse)
+@handle_db_errors("in_app_notifications.update_preferences")
 @router.put("/preferences", response_model=NotificationPreferencesResponse)
 async def update_preferences(
     req: NotificationPreferencesUpdate,

@@ -15,6 +15,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy.exc import IntegrityError, ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from modulo.api.db_error_handling import handle_db_errors
 from modulo.api.dependencies import get_db_session, require_feature
 from modulo.auth.dependencies import get_current_tenant_user
 from modulo.auth.jwt import TenantPrincipal
@@ -49,6 +50,8 @@ from modulo.db.rls import set_rls_org
 from modulo.settings import Settings, get_settings
 
 logger = logging.getLogger(__name__)
+
+_log = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/v1/schemas", tags=["schemas"])
 
@@ -132,6 +135,8 @@ class SchemaVersionListResponse(BaseModel):
 
 
 @router.get("", response_model=SchemaListResponse)
+@handle_db_errors("schemas.list_schemas_endpoint")
+@router.get("", response_model=SchemaListResponse)
 async def list_schemas_endpoint(
     page: int = Query(default=1, ge=1),
     page_size: int = Query(default=20, ge=1, le=100),
@@ -177,6 +182,8 @@ async def list_schemas_endpoint(
     )
 
 
+@router.post("", response_model=SchemaResponse, status_code=status.HTTP_201_CREATED)
+@handle_db_errors("schemas.create_schema_endpoint")
 @router.post("", response_model=SchemaResponse, status_code=status.HTTP_201_CREATED)
 async def create_schema_endpoint(
     req: SchemaCreate,
@@ -235,6 +242,8 @@ async def create_schema_endpoint(
 
 
 @router.get("/{schema_id}", response_model=SchemaResponse)
+@handle_db_errors("schemas.get_schema_endpoint")
+@router.get("/{schema_id}", response_model=SchemaResponse)
 async def get_schema_endpoint(
     schema_id: uuid.UUID,
     session: AsyncSession = Depends(get_db_session),
@@ -276,6 +285,8 @@ async def get_schema_endpoint(
     return SchemaResponse.model_validate(schema)
 
 
+@router.patch("/{schema_id}", response_model=SchemaResponse)
+@handle_db_errors("schemas.update_schema_endpoint")
 @router.patch("/{schema_id}", response_model=SchemaResponse)
 async def update_schema_endpoint(
     schema_id: uuid.UUID,
@@ -322,6 +333,8 @@ async def update_schema_endpoint(
 
 
 @router.patch("/{schema_id}/deprecate", response_model=SchemaResponse)
+@handle_db_errors("schemas.deprecate_schema_endpoint")
+@router.patch("/{schema_id}/deprecate", response_model=SchemaResponse)
 async def deprecate_schema_endpoint(
     schema_id: uuid.UUID,
     session: AsyncSession = Depends(get_db_session),
@@ -364,6 +377,8 @@ async def deprecate_schema_endpoint(
     return SchemaResponse.model_validate(schema)
 
 
+@router.delete("/{schema_id}", status_code=status.HTTP_204_NO_CONTENT)
+@handle_db_errors("schemas.delete_schema_endpoint")
 @router.delete("/{schema_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_schema_endpoint(
     schema_id: uuid.UUID,
@@ -596,6 +611,8 @@ class SchemaFieldListResponse(BaseModel):
 
 
 @router.get("/{schema_id}/fields", response_model=SchemaFieldListResponse)
+@handle_db_errors("schemas.list_schema_fields_endpoint")
+@router.get("/{schema_id}/fields", response_model=SchemaFieldListResponse)
 async def list_schema_fields_endpoint(
     schema_id: uuid.UUID,
     session: AsyncSession = Depends(get_db_session),
@@ -689,6 +706,8 @@ class SchemaInferResponse(BaseModel):
     suggestion_description: str | None = None
 
 
+@router.post("/infer", response_model=SchemaInferResponse)
+@handle_db_errors("schemas.infer_schema_endpoint")
 @router.post("/infer", response_model=SchemaInferResponse)
 async def infer_schema_endpoint(
     req: SchemaInferRequest,
@@ -900,6 +919,8 @@ class SchemaGenerateResponse(BaseModel):
 
 
 @router.post("/generate", response_model=SchemaGenerateResponse)
+@handle_db_errors("schemas.generate_schema_endpoint")
+@router.post("/generate", response_model=SchemaGenerateResponse)
 async def generate_schema_endpoint(
     req: SchemaGenerateRequest,
     session: AsyncSession = Depends(get_db_session),
@@ -1052,6 +1073,8 @@ class SchemaMigrationPlanRequest(BaseModel):
 
 
 @router.post("/migrate", response_model=SchemaMigrationResponse)
+@handle_db_errors("schemas.migrate_data_endpoint")
+@router.post("/migrate", response_model=SchemaMigrationResponse)
 async def migrate_data_endpoint(
     req: SchemaMigrationRequest,
     session: AsyncSession = Depends(get_db_session),
@@ -1158,6 +1181,8 @@ async def migrate_data_endpoint(
 
 
 @router.post("/migrate/plan", response_model=dict[str, Any])
+@handle_db_errors("schemas.migration_plan_endpoint")
+@router.post("/migrate/plan", response_model=dict[str, Any])
 async def migration_plan_endpoint(
     req: SchemaMigrationPlanRequest,
 ) -> dict[str, Any]:
@@ -1243,6 +1268,8 @@ def _find_json_location(raw: str, instance: dict[str, Any], error_path: str) -> 
 
 
 @router.post("/validate", response_model=SchemaValidateResponse)
+@handle_db_errors("schemas.validate_schema_endpoint")
+@router.post("/validate", response_model=SchemaValidateResponse)
 async def validate_schema_endpoint(
     req: SchemaValidateRequest,
 ) -> SchemaValidateResponse:
@@ -1295,6 +1322,8 @@ class SchemaImportResponse(BaseModel):
     fields: list[SchemaImportField]
 
 
+@router.post("/import", response_model=SchemaImportResponse)
+@handle_db_errors("schemas.import_schema_endpoint")
 @router.post("/import", response_model=SchemaImportResponse)
 async def import_schema_endpoint(
     req: SchemaImportRequest,

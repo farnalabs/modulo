@@ -10,6 +10,7 @@ from sqlalchemy import func, select
 from sqlalchemy.exc import ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from modulo.api.db_error_handling import handle_db_errors
 from modulo.api.dependencies import get_db_session
 from modulo.auth.dependencies import get_current_tenant_user
 from modulo.auth.jwt import TenantPrincipal
@@ -47,6 +48,8 @@ class TriggerEventListResponse(BaseModel):
     total: int
 
 
+@router.get("", response_model=TriggerEventListResponse)
+@handle_db_errors("admin.triggers.list_trigger_events")
 @router.get("", response_model=TriggerEventListResponse)
 async def list_trigger_events(
     trigger_type: str | None = Query(None),

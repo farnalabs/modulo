@@ -24,6 +24,7 @@ from sqlalchemy import update as sa_update
 from sqlalchemy.exc import IntegrityError, ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from modulo.api.db_error_handling import handle_db_errors
 from modulo.api.dependencies import get_db_session
 from modulo.auth.dependencies import get_current_tenant_user
 from modulo.auth.jwt import TenantPrincipal
@@ -41,6 +42,8 @@ from modulo.db.models.run import Run
 from modulo.db.rls import set_rls_org
 
 logger = logging.getLogger(__name__)
+
+_log = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/v1", tags=["feedback"])
 
@@ -87,6 +90,8 @@ def _serialise_record(
     }
 
 
+@router.post("/runs/{run_id}/feedback", status_code=status.HTTP_201_CREATED)
+@handle_db_errors("feedback.create_feedback")
 @router.post("/runs/{run_id}/feedback", status_code=status.HTTP_201_CREATED)
 async def create_feedback(
     run_id: uuid.UUID,
@@ -153,6 +158,8 @@ async def create_feedback(
 
 
 @router.get("/feedback", status_code=status.HTTP_200_OK)
+@handle_db_errors("feedback.list_feedback")
+@router.get("/feedback", status_code=status.HTTP_200_OK)
 async def list_feedback(
     status_filter: str | None = Query(None, alias="status"),
     pipeline_id: uuid.UUID | None = Query(None),
@@ -203,6 +210,8 @@ async def list_feedback(
     }
 
 
+@router.get("/feedback/inbox", status_code=status.HTTP_200_OK)
+@handle_db_errors("feedback.list_feedback_inbox")
 @router.get("/feedback/inbox", status_code=status.HTTP_200_OK)
 async def list_feedback_inbox(
     handler_type: str | None = Query(None, alias="type"),
@@ -282,6 +291,8 @@ async def list_feedback_inbox(
 
 
 @router.get("/feedback/proposals", status_code=status.HTTP_200_OK)
+@handle_db_errors("feedback.list_eval_proposals")
+@router.get("/feedback/proposals", status_code=status.HTTP_200_OK)
 async def list_eval_proposals(
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
@@ -345,6 +356,8 @@ async def list_eval_proposals(
 
 
 @router.get("/feedback/{record_id}", status_code=status.HTTP_200_OK)
+@handle_db_errors("feedback.get_feedback")
+@router.get("/feedback/{record_id}", status_code=status.HTTP_200_OK)
 async def get_feedback(
     record_id: uuid.UUID,
     session: AsyncSession = Depends(get_db_session),
@@ -385,6 +398,8 @@ async def get_feedback(
     return _serialise_record(record)
 
 
+@router.patch("/feedback/{record_id}/status", status_code=status.HTTP_200_OK)
+@handle_db_errors("feedback.update_feedback_status")
 @router.patch("/feedback/{record_id}/status", status_code=status.HTTP_200_OK)
 async def update_feedback_status(
     record_id: uuid.UUID,
@@ -437,6 +452,8 @@ async def update_feedback_status(
     }
 
 
+@router.post("/feedback/{record_id}/detect-gap", status_code=status.HTTP_200_OK)
+@handle_db_errors("feedback.detect_eval_gap")
 @router.post("/feedback/{record_id}/detect-gap", status_code=status.HTTP_200_OK)
 async def detect_eval_gap(
     record_id: uuid.UUID,
@@ -499,6 +516,8 @@ async def detect_eval_gap(
 
 
 @router.get("/feedback/inbox/{record_id}", status_code=status.HTTP_200_OK)
+@handle_db_errors("feedback.get_inbox_item")
+@router.get("/feedback/inbox/{record_id}", status_code=status.HTTP_200_OK)
 async def get_inbox_item(
     record_id: uuid.UUID,
     session: AsyncSession = Depends(get_db_session),
@@ -549,6 +568,8 @@ async def get_inbox_item(
     return _serialise_record(record, pipeline_name=pipeline_name)
 
 
+@router.post("/feedback/inbox/{record_id}/review", status_code=status.HTTP_200_OK)
+@handle_db_errors("feedback.review_feedback")
 @router.post("/feedback/inbox/{record_id}/review", status_code=status.HTTP_200_OK)
 async def review_feedback(
     record_id: uuid.UUID,
