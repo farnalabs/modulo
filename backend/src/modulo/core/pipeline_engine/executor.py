@@ -505,6 +505,9 @@ class PipelineExecutor:
         except asyncio.CancelledError:
             raise
         except Exception as exc:
+            import traceback
+
+            error_detail = "".join(traceback.format_exception(type(exc), exc, exc.__traceback__))[:2000]
             _log.exception("pipeline.resume_error", extra={"run_id": str(run_id)})
             final_status = "failed"
             error_code = type(exc).__name__
@@ -547,6 +550,7 @@ class PipelineExecutor:
                 run_id,
                 final_status,
                 error_code=error_code,
+                error_detail=error_detail,
                 total_tokens=total_tokens,
                 total_cost_usd=total_cost if node_token_usage else None,
                 node_token_usage=node_token_usage,
