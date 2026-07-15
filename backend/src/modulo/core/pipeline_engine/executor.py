@@ -464,6 +464,7 @@ class PipelineExecutor:
 
         final_status: str = "failed"
         error_code: str | None = None
+        error_detail: str | None = None
         node_token_usage: dict[str, Any] | None = None
         broker = get_registry().get_or_create(run_id)
         set_cancellation_check(self._check_db_cancellation(org_id, run_id))
