@@ -9,7 +9,7 @@ from decimal import Decimal
 from typing import Any, Literal
 
 from cryptography.fernet import Fernet
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, Field
 from sqlalchemy import select, text
 from sqlalchemy.exc import IntegrityError, ProgrammingError, SQLAlchemyError
@@ -312,7 +312,6 @@ async def _validate_run_input_basics(
 @router.post("", response_model=RunResponse, status_code=status.HTTP_202_ACCEPTED)
 async def trigger_run(
     req: TriggerRunRequest,
-    background_tasks: BackgroundTasks,
     session: AsyncSession = Depends(get_db_session),
     engine: AsyncEngine = Depends(_get_engine),
     principal: TenantPrincipal = Depends(get_current_tenant_user),
@@ -1102,11 +1101,6 @@ class NodeRecoverResponse(BaseModel):
     status: str
 
 
-@router.post(
-    "/{run_id}/nodes/{node_id}/recover",
-    response_model=NodeRecoverResponse,
-    status_code=status.HTTP_200_OK,
-)
 @handle_db_errors("runs.recover_run_node")
 @router.post(
     "/{run_id}/nodes/{node_id}/recover",

@@ -140,6 +140,7 @@ async def _verify_db_connectivity(settings: Settings) -> None:
             logger.warning(
                 "startup.db_connectivity_attempt_failed",
                 extra={"attempt": attempt, "error": str(exc)},
+                exc_info=True,
             )
             if attempt < 3:
                 await asyncio.sleep(attempt * 2)
@@ -608,18 +609,6 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
     logger.info("startup.redis_configured — Celery beat available for distributed scheduling")
     _scheduler_tasks: list[asyncio.Task[None]] = []
 
-    from modulo.api.mcp_server import set_background_worker as set_mcp_bg_worker
-    from modulo.api.routes.runs import set_background_worker as set_runs_bg_worker
-    from modulo.core.background_pipeline_worker import BackgroundPipelineWorker
-
-    _bg_worker = BackgroundPipelineWorker(
-        database_url=str(settings.database_url),
-        checkpointer_conn_string=pg_connection_string(settings.database_url),
-    )
-    await _bg_worker.start()
-    set_runs_bg_worker(_bg_worker)
-    set_mcp_bg_worker(_bg_worker)
-
     setup_otel(
         service_name=settings.modulo_otel_service_name,
         telemetry_enabled=settings.modulo_telemetry_enabled,
@@ -703,6 +692,22 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
 
     get_runtime_config_store()
 
+    # Start the background pipeline worker (after migrations and checkpointer init).
+    try:
+        from modulo.api.mcp_server import set_background_worker as set_mcp_bg_worker
+        from modulo.api.routes.runs import set_background_worker as set_runs_bg_worker
+        from modulo.core.background_pipeline_worker import BackgroundPipelineWorker
+
+        _bg_worker = BackgroundPipelineWorker(
+            database_url=str(settings.database_url),
+            checkpointer_conn_string=pg_connection_string(settings.database_url),
+        )
+        await _bg_worker.start()
+        set_runs_bg_worker(_bg_worker)
+        set_mcp_bg_worker(_bg_worker)
+    except Exception:
+        logger.warning("startup.background_worker_init_failed", exc_info=True)
+
     # Initialise the graceful shutdown manager with the configured timeout.
     # Two session factories exist:
     #   - modulo.db.session    (module-level, used by entrypoint.sh + ClaimExpiryJob)
@@ -764,7 +769,8 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
                 await st
     except asyncio.CancelledError:
         pass
-    await _bg_worker.stop()
+    with suppress(NameError):
+        await _bg_worker.stop()
     await _shutdown_manager.shutdown()
 
 
