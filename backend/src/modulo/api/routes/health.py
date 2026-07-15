@@ -94,7 +94,7 @@ async def _check_checkpointer() -> CheckResult:
     settings = get_settings()
     try:
         conn_string = pg_connection_string(settings.database_url)
-        conn = await asyncpg.connect(conn_string, timeout=5)
+        conn = await asyncpg.connect(conn_string, timeout=5, ssl=False)
         try:
             await conn.fetchrow("SELECT 1 FROM checkpoint_migrations LIMIT 1")
         except Exception as exc:
