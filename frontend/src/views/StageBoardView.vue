@@ -29,184 +29,194 @@
     <div class="rounded-lg border border-destructive/50 bg-destructive/10 p-4 text-destructive">{{ pageError }}</div>
   </div>
   <template v-else>
-    <div class="flex flex-wrap items-center gap-4">
-      <div class="flex items-center gap-2">
-        <label for="stageboardview-field-8" class="text-sm font-medium text-muted-foreground">Team</label>
-        <Select :model-value="teamFilter" @update:model-value="teamFilter = $event; applyFilters()">
-          <SelectTrigger class="w-auto min-w-[140px]" aria-label="Team" data-testid="stage-board-team-filter">
-            <SelectValue placeholder="All Teams" />
-          </SelectTrigger>
-          <SelectContent>
-            <SelectItem value="">All Teams</SelectItem>
-            <SelectItem v-for="t in teams" :key="t.id" :value="t.id">{{ t.name }}</SelectItem>
-          </SelectContent>
-        </Select>
-      </div>
-      <div class="flex items-center gap-2">
-        <label for="stageboardview-field-7" class="text-sm font-medium text-muted-foreground">Status</label>
-        <Select :model-value="statusFilter" @update:model-value="statusFilter = $event; applyFilters()">
-          <SelectTrigger class="w-auto min-w-[140px]" aria-label="Status" data-testid="stage-board-status-filter">
-            <SelectValue placeholder="All Statuses" />
-          </SelectTrigger>
-          <SelectContent>
-            <SelectItem value="">All Statuses</SelectItem>
-            <SelectItem value="running">Running</SelectItem>
-            <SelectItem value="idle">Idle</SelectItem>
-            <SelectItem value="failed">Failed</SelectItem>
-            <SelectItem value="complete">Complete</SelectItem>
-            <SelectItem value="awaiting_human">Awaiting Human</SelectItem>
-          </SelectContent>
-        </Select>
-      </div>
-      <div class="flex items-center gap-2">
-        <label for="stageboardview-field-6" class="text-sm font-medium text-muted-foreground">From</label>
-        <input id="stageboardview-field-6"
-          v-model="dateFrom"
-          type="date"
-          placeholder="YYYY-MM-DD"
-          data-testid="stage-board-date-from"
-          class="rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-          @change="applyFilters"
-        />
-      </div>
-      <div class="flex items-center gap-2">
-        <label for="stageboardview-field-5" class="text-sm font-medium text-muted-foreground">To</label>
-        <input id="stageboardview-field-5"
-          v-model="dateTo"
-          type="date"
-          placeholder="YYYY-MM-DD"
-          data-testid="stage-board-date-to"
-          class="rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-          @change="applyFilters"
-        />
-      </div>
+    <div v-if="stages.length === 0" class="flex items-center justify-center py-20">
+      <EmptyState title="No stages yet" description="Create stages to organise pipelines into development, testing, and production phases.">
+        <Button variant="default" data-testid="stage-board-create-btn" @click="showCreateDialog = true">
+          <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+          New Stage
+        </Button>
+      </EmptyState>
     </div>
-    <div class="overflow-x-auto pb-4">
-      <div class="flex gap-4" style="min-width: max-content">
-        <div
-          v-for="stage in filteredStages"
-          :key="stage.id"
-          class="w-72 shrink-0"
-        >
+    <template v-else>
+      <div class="flex flex-wrap items-center gap-4">
+        <div class="flex items-center gap-2">
+          <label for="stageboardview-field-8" class="text-sm font-medium text-muted-foreground">Team</label>
+          <Select :model-value="teamFilter" @update:model-value="teamFilter = $event; applyFilters()">
+            <SelectTrigger class="w-auto min-w-[140px]" aria-label="Team" data-testid="stage-board-team-filter">
+              <SelectValue placeholder="All Teams" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="">All Teams</SelectItem>
+              <SelectItem v-for="t in teams" :key="t.id" :value="t.id">{{ t.name }}</SelectItem>
+            </SelectContent>
+          </Select>
+        </div>
+        <div class="flex items-center gap-2">
+          <label for="stageboardview-field-7" class="text-sm font-medium text-muted-foreground">Status</label>
+          <Select :model-value="statusFilter" @update:model-value="statusFilter = $event; applyFilters()">
+            <SelectTrigger class="w-auto min-w-[140px]" aria-label="Status" data-testid="stage-board-status-filter">
+              <SelectValue placeholder="All Statuses" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="">All Statuses</SelectItem>
+              <SelectItem value="running">Running</SelectItem>
+              <SelectItem value="idle">Idle</SelectItem>
+              <SelectItem value="failed">Failed</SelectItem>
+              <SelectItem value="complete">Complete</SelectItem>
+              <SelectItem value="awaiting_human">Awaiting Human</SelectItem>
+            </SelectContent>
+          </Select>
+        </div>
+        <div class="flex items-center gap-2">
+          <label for="stageboardview-field-6" class="text-sm font-medium text-muted-foreground">From</label>
+          <input id="stageboardview-field-6"
+            v-model="dateFrom"
+            type="date"
+            placeholder="YYYY-MM-DD"
+            data-testid="stage-board-date-from"
+            class="rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            @change="applyFilters"
+          />
+        </div>
+        <div class="flex items-center gap-2">
+          <label for="stageboardview-field-5" class="text-sm font-medium text-muted-foreground">To</label>
+          <input id="stageboardview-field-5"
+            v-model="dateTo"
+            type="date"
+            placeholder="YYYY-MM-DD"
+            data-testid="stage-board-date-to"
+            class="rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            @change="applyFilters"
+          />
+        </div>
+      </div>
+      <div class="overflow-x-auto pb-4">
+        <div class="flex gap-4" style="min-width: max-content">
           <div
-            class="stage-column-header mb-3 cursor-pointer rounded-lg border bg-card p-3 transition-shadow hover:shadow-md"
-            :data-testid="'stage-board-column-' + stage.id"
-            role="button"
-            tabindex="0"
-            @click="selectedStageId = stage.id"
-            @keydown.enter="selectedStageId = stage.id"
-            @keydown.space.prevent="selectedStageId = stage.id"
+            v-for="stage in filteredStages"
+            :key="stage.id"
+            class="w-72 shrink-0"
           >
-            <div class="flex items-center justify-between">
-              <div class="flex items-center gap-2 min-w-0">
-                <span
-                  class="inline-block h-2.5 w-2.5 shrink-0 rounded-full"
-                  :class="stageStatusClass(stage)"
-                />
-                <template v-if="editingNameStageId === stage.id">
-                  <input
-                    v-model="editingNameValue"
-                    class="w-full rounded border border-input bg-background px-1 py-0.5 text-sm font-semibold"
-                    placeholder="Stage name"
-
-                    @click.stop
-                    @keydown.enter.prevent="saveEditingName"
-                    @keydown.escape.prevent="cancelEditingName"
-                    @blur="saveEditingName"
-                  />
-                </template>
-                <h3
-                  v-else
-                  role="button"
-                  tabindex="0"
-                  class="truncate cursor-pointer font-semibold hover:text-primary"
-                  @click.stop="startEditingName(stage)"
-                  @keydown.enter.prevent="startEditingName(stage)"
-                  @keydown.space.prevent="startEditingName(stage)"
-                  :title="'Click to rename'"
-                >{{ stage.name }}</h3>
-              </div>
-              <div class="flex items-center gap-1 shrink-0">
-                <div v-if="reorderMode" class="flex flex-col gap-0.5">
-                  <button
-                    :data-testid="'stage-board-move-up-' + stage.id"
-                    class="rounded p-0.5 text-muted-foreground hover:bg-accent hover:text-foreground disabled:opacity-30"
-                    :disabled="updatingStages[stage.id] || isFirstStage(stage)"
-                    @click.stop="moveStage(stage, -1)"
-                  >
-                    <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="18 15 12 9 6 15"/></svg>
-                  </button>
-                  <button
-                    :data-testid="'stage-board-move-down-' + stage.id"
-                    class="rounded p-0.5 text-muted-foreground hover:bg-accent hover:text-foreground disabled:opacity-30"
-                    :disabled="updatingStages[stage.id] || isLastStage(stage)"
-                    @click.stop="moveStage(stage, 1)"
-                  >
-                    <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"/></svg>
-                  </button>
-                </div>
-                <span class="rounded-full bg-muted px-2 py-0.5 text-xs tabular-nums text-muted-foreground">
-                  {{ pipelinesByStage(stage.id).length }}
-                </span>
-              </div>
-            </div>
-            <p v-if="stage.description" class="mt-1 truncate text-xs text-muted-foreground">{{ stage.description }}</p>
-          </div>
-          <div class="space-y-2">
             <div
-              v-for="pipeline in pipelinesByStage(stage.id)"
-              :key="pipeline.id"
-              :data-testid="'stage-board-card-' + pipeline.id"
-              class="card card-hover cursor-pointer px-3 py-2.5"
+              class="stage-column-header mb-3 cursor-pointer rounded-lg border bg-card p-3 transition-shadow hover:shadow-md"
+              :data-testid="'stage-board-column-' + stage.id"
               role="button"
               tabindex="0"
-              @click="selectedPipeline = pipeline"
-              @keydown.enter="selectedPipeline = pipeline"
-              @keydown.space.prevent="selectedPipeline = pipeline"
+              @click="selectedStageId = stage.id"
+              @keydown.enter="selectedStageId = stage.id"
+              @keydown.space.prevent="selectedStageId = stage.id"
             >
               <div class="flex items-center justify-between">
-                <span class="text-sm font-medium truncate flex-1">{{ pipeline.name }}</span>
-                <span
-                  class="ml-2 inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium capitalize"
-                  :class="statusBadgeClass(pipeline.status || 'idle')"
-                >
-                  {{ pipeline.status || 'idle' }}
-                </span>
+                <div class="flex items-center gap-2 min-w-0">
+                  <span
+                    class="inline-block h-2.5 w-2.5 shrink-0 rounded-full"
+                    :class="stageStatusClass(stage)"
+                  />
+                  <template v-if="editingNameStageId === stage.id">
+                    <input
+                      v-model="editingNameValue"
+                      class="w-full rounded border border-input bg-background px-1 py-0.5 text-sm font-semibold"
+                      placeholder="Stage name"
+
+                      @click.stop
+                      @keydown.enter.prevent="saveEditingName"
+                      @keydown.escape.prevent="cancelEditingName"
+                      @blur="saveEditingName"
+                    />
+                  </template>
+                  <h3
+                    v-else
+                    role="button"
+                    tabindex="0"
+                    class="truncate cursor-pointer font-semibold hover:text-primary"
+                    @click.stop="startEditingName(stage)"
+                    @keydown.enter.prevent="startEditingName(stage)"
+                    @keydown.space.prevent="startEditingName(stage)"
+                    :title="'Click to rename'"
+                  >{{ stage.name }}</h3>
+                </div>
+                <div class="flex items-center gap-1 shrink-0">
+                  <div v-if="reorderMode" class="flex flex-col gap-0.5">
+                    <button
+                      :data-testid="'stage-board-move-up-' + stage.id"
+                      class="rounded p-0.5 text-muted-foreground hover:bg-accent hover:text-foreground disabled:opacity-30"
+                      :disabled="updatingStages[stage.id] || isFirstStage(stage)"
+                      @click.stop="moveStage(stage, -1)"
+                    >
+                      <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="18 15 12 9 6 15"/></svg>
+                    </button>
+                    <button
+                      :data-testid="'stage-board-move-down-' + stage.id"
+                      class="rounded p-0.5 text-muted-foreground hover:bg-accent hover:text-foreground disabled:opacity-30"
+                      :disabled="updatingStages[stage.id] || isLastStage(stage)"
+                      @click.stop="moveStage(stage, 1)"
+                    >
+                      <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"/></svg>
+                    </button>
+                  </div>
+                  <span class="rounded-full bg-muted px-2 py-0.5 text-xs tabular-nums text-muted-foreground">
+                    {{ pipelinesByStage(stage.id).length }}
+                  </span>
+                </div>
               </div>
-              <div class="mt-1 flex items-center gap-3 text-xs text-muted-foreground">
-                <span>{{ pipeline.team_name || 'No team' }}</span>
-                <span v-if="pipeline.created_at">{{ formatDate(pipeline.created_at) }}</span>
-              </div>
-              <div class="mt-1.5 flex justify-end gap-1">
-                <button
-                  v-if="stage.position > 0"
-                  data-testid="stage-board-move-left"
-                  class="rounded p-1 text-muted-foreground hover:bg-accent hover:text-foreground disabled:opacity-30"
-                  title="Move to previous stage"
-                  :disabled="movingPipelines[pipeline.id]"
-                  @click.stop="movePipeline(pipeline, -1)"
-                >
-                  <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="15 18 9 12 15 6"/></svg>
-                </button>
-                <button
-                  v-if="stage.position < maxStagePosition"
-                  data-testid="stage-board-move-right"
-                  class="rounded p-1 text-muted-foreground hover:bg-accent hover:text-foreground disabled:opacity-30"
-                  title="Move to next stage"
-                  :disabled="movingPipelines[pipeline.id]"
-                  @click.stop="movePipeline(pipeline, 1)"
-                >
-                  <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="9 18 15 12 9 6"/></svg>
-                </button>
-              </div>
+              <p v-if="stage.description" class="mt-1 truncate text-xs text-muted-foreground">{{ stage.description }}</p>
             </div>
-            <div v-if="pipelinesByStage(stage.id).length === 0" class="rounded-lg border border-dashed bg-muted/30 px-3 py-6 text-center text-xs text-muted-foreground">
-              No pipelines
+            <div class="space-y-2">
+              <div
+                v-for="pipeline in pipelinesByStage(stage.id)"
+                :key="pipeline.id"
+                :data-testid="'stage-board-card-' + pipeline.id"
+                class="card card-hover cursor-pointer px-3 py-2.5"
+                role="button"
+                tabindex="0"
+                @click="selectedPipeline = pipeline"
+                @keydown.enter="selectedPipeline = pipeline"
+                @keydown.space.prevent="selectedPipeline = pipeline"
+              >
+                <div class="flex items-center justify-between">
+                  <span class="text-sm font-medium truncate flex-1">{{ pipeline.name }}</span>
+                  <span
+                    class="ml-2 inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium capitalize"
+                    :class="statusBadgeClass(pipeline.status || 'idle')"
+                  >
+                    {{ pipeline.status || 'idle' }}
+                  </span>
+                </div>
+                <div class="mt-1 flex items-center gap-3 text-xs text-muted-foreground">
+                  <span>{{ pipeline.team_name || 'No team' }}</span>
+                  <span v-if="pipeline.created_at">{{ formatDate(pipeline.created_at) }}</span>
+                </div>
+                <div class="mt-1.5 flex justify-end gap-1">
+                  <button
+                    v-if="stage.position > 0"
+                    data-testid="stage-board-move-left"
+                    class="rounded p-1 text-muted-foreground hover:bg-accent hover:text-foreground disabled:opacity-30"
+                    title="Move to previous stage"
+                    :disabled="movingPipelines[pipeline.id]"
+                    @click.stop="movePipeline(pipeline, -1)"
+                  >
+                    <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="15 18 9 12 15 6"/></svg>
+                  </button>
+                  <button
+                    v-if="stage.position < maxStagePosition"
+                    data-testid="stage-board-move-right"
+                    class="rounded p-1 text-muted-foreground hover:bg-accent hover:text-foreground disabled:opacity-30"
+                    title="Move to next stage"
+                    :disabled="movingPipelines[pipeline.id]"
+                    @click.stop="movePipeline(pipeline, 1)"
+                  >
+                    <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="9 18 15 12 9 6"/></svg>
+                  </button>
+                </div>
+              </div>
+              <div v-if="pipelinesByStage(stage.id).length === 0" class="rounded-lg border border-dashed bg-muted/30 px-3 py-6 text-center text-xs text-muted-foreground">
+                No pipelines
+              </div>
             </div>
           </div>
         </div>
       </div>
-    </div>
+    </template>
   </template>
   <div role="button" tabindex="0" @keydown.enter="($event.currentTarget as HTMLElement).click()" @keydown.space.prevent="($event.currentTarget as HTMLElement).click()" v-if="selectedStageId" class="fixed inset-0 z-50 flex items-start justify-end" @click.self="selectedStageId = null">
     <div class="h-full w-full max-w-md overflow-y-auto border-l bg-card p-6 shadow-lg">
@@ -431,6 +441,7 @@ import { api } from '../lib/api/client'
 import { formatDateShort } from '../lib/formatDate'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Button } from '@/components/ui/button'
+import EmptyState from '../components/shared/EmptyState.vue'
 
 async function fetchWithTimeout<T>(promise: Promise<T>, ms = 15000): Promise<T> {
   const timeout = new Promise<never>((_, reject) =>
