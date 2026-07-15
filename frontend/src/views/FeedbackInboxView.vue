@@ -15,16 +15,14 @@
     >
       <template #after>
         <div class="flex items-center gap-2">
-          <select
-            v-model="pipelineFilter"
-            data-testid="feedback-inbox-pipeline-select"
-            aria-label="Pipeline"
-            class="rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-            @change="loadFeedback"
-          >
-            <option value="">{{ $t('views.FeedbackInboxView.all_pipelines') }}</option>
-            <option v-for="p in pipelines" :key="p.id" :value="p.id">{{ p.name }}</option>
-          </select>
+          <Select v-model="pipelineFilter" @update:model-value="loadFeedback">
+            <SelectTrigger data-testid="feedback-inbox-pipeline-select" aria-label="Pipeline" class="rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
+              <SelectValue :placeholder="$t('views.FeedbackInboxView.all_pipelines')" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem v-for="p in pipelines" :key="p.id" :value="p.id">{{ p.name }}</SelectItem>
+            </SelectContent>
+          </Select>
           <input aria-label="date"
             v-model="dateFrom"
             type="date"
@@ -230,6 +228,7 @@ import {
   TooltipTrigger,
   TooltipContent,
 } from '../components/ui/tooltip'
+import { Select, SelectTrigger, SelectContent, SelectItem, SelectValue } from '@/components/ui/select'
 import { formatDateShortWithTime } from '../lib/formatDate'
 
 interface FeedbackRecordItem {

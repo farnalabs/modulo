@@ -103,22 +103,22 @@
         </div>
         <div>
           <label for="adminauditview-field-1" class="mb-1 block text-xs font-medium text-muted-foreground">{{ $t('views.AdminAuditView.target_type') }}</label>
-          <select id="adminauditview-field-1"
-            v-model="filterTargetType"
-            class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring"
-            data-testid="admin-audit-target-type"
-            aria-label="Target Type"
-          >
-            <option value="">{{ $t('views.AdminAuditView.all_targets') }}</option>
-            <option value="pipeline">{{ $t('views.AdminAuditView.optgroup_pipeline') }}</option>
-            <option value="run">{{ $t('views.AdminAuditView.optgroup_run') }}</option>
-            <option value="user">{{ $t('views.AdminAuditView.optgroup_user') }}</option>
-            <option value="team">{{ $t('views.AdminAuditView.optgroup_team') }}</option>
-            <option value="schema">{{ $t('views.AdminAuditView.optgroup_schema') }}</option>
-            <option value="connector">{{ $t('views.AdminAuditView.optgroup_connector') }}</option>
-            <option value="model_backend">{{ $t('views.AdminAuditView.optgroup_model_backend') }}</option>
-            <option value="sso_provider">{{ $t('views.AdminAuditView.optgroup_sso_provider') }}</option>
-          </select>
+          <Select v-model="filterTargetType">
+            <SelectTrigger data-testid="admin-audit-target-type" aria-label="Target Type" class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring">
+              <SelectValue :placeholder="$t('views.AdminAuditView.all_targets')" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="">{{ $t('views.AdminAuditView.all_targets') }}</SelectItem>
+              <SelectItem value="pipeline">{{ $t('views.AdminAuditView.optgroup_pipeline') }}</SelectItem>
+              <SelectItem value="run">{{ $t('views.AdminAuditView.optgroup_run') }}</SelectItem>
+              <SelectItem value="user">{{ $t('views.AdminAuditView.optgroup_user') }}</SelectItem>
+              <SelectItem value="team">{{ $t('views.AdminAuditView.optgroup_team') }}</SelectItem>
+              <SelectItem value="schema">{{ $t('views.AdminAuditView.optgroup_schema') }}</SelectItem>
+              <SelectItem value="connector">{{ $t('views.AdminAuditView.optgroup_connector') }}</SelectItem>
+              <SelectItem value="model_backend">{{ $t('views.AdminAuditView.optgroup_model_backend') }}</SelectItem>
+              <SelectItem value="sso_provider">{{ $t('views.AdminAuditView.optgroup_sso_provider') }}</SelectItem>
+            </SelectContent>
+          </Select>
         </div>
       </FilterBar>
       <div class="mt-3 flex items-center gap-2">
@@ -305,6 +305,7 @@ import { formatApiError } from '../lib/api/formatError'
 import { Button } from '@/components/ui/button'
 import { formatDateFilename } from '../lib/formatDate'
 import { shortId } from '../utils/format'
+import { Select, SelectTrigger, SelectContent, SelectItem, SelectValue } from '@/components/ui/select'
 
 const { t } = useI18n()
 import {

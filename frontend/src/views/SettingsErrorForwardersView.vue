@@ -101,18 +101,19 @@
                 />
               </div>
               <div>
-                <label for="settingserrorforwardersview-field-9" class="mb-1 block text-sm font-medium">Site</label>
-                <select id="settingserrorforwardersview-field-9"
-                  v-model="configs.datadog.site"
-                  aria-label="Site"
-                  class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-                >
-                  <option value="datadoghq.com">US (datadoghq.com)</option>
-                  <option value="datadoghq.eu">EU (datadoghq.eu)</option>
-                  <option value="us3.datadoghq.com">US3 (us3.datadoghq.com)</option>
-                  <option value="us5.datadoghq.com">US5 (us5.datadoghq.com)</option>
-                  <option value="ddog-gov.com">Gov (ddog-gov.com)</option>
-                </select>
+                <label class="mb-1 block text-sm font-medium">Site</label>
+                <Select v-model="configs.datadog.site">
+                  <SelectTrigger class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring" aria-label="Site">
+                    <SelectValue placeholder="Select site" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="datadoghq.com">US (datadoghq.com)</SelectItem>
+                    <SelectItem value="datadoghq.eu">EU (datadoghq.eu)</SelectItem>
+                    <SelectItem value="us3.datadoghq.com">US3 (us3.datadoghq.com)</SelectItem>
+                    <SelectItem value="us5.datadoghq.com">US5 (us5.datadoghq.com)</SelectItem>
+                    <SelectItem value="ddog-gov.com">Gov (ddog-gov.com)</SelectItem>
+                  </SelectContent>
+                </Select>
               </div>
             </template>
 
@@ -263,6 +264,13 @@ import PageHeader from '../components/shared/PageHeader.vue'
 import LoadingSpinner from '../components/shared/LoadingSpinner.vue'
 import ErrorAlert from '../components/shared/ErrorAlert.vue'
 import { Button } from '@/components/ui/button'
+import {
+  Select,
+  SelectTrigger,
+  SelectContent,
+  SelectItem,
+  SelectValue,
+} from '@/components/ui/select'
 
 interface ForwarderItem {
   forwarder_type: string

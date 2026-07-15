@@ -93,34 +93,30 @@
     >
       <form @submit.prevent="saveTrigger" class="space-y-4">
         <div>
-          <label for="settingstriggersview-field-15" class="mb-1 block text-sm font-medium">Pipeline</label>
-          <select id="settingstriggersview-field-15"
-            v-model="form.pipeline_id"
-            class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm"
-            data-testid="settings-triggers-form-pipeline"
-            aria-label="Pipeline"
-            required
-          >
-            <option value="" disabled>Select pipeline</option>
-            <option v-for="p in pipelines" :key="p.id" :value="p.id">{{ p.name }}</option>
-          </select>
+          <label class="mb-1 block text-sm font-medium">Pipeline</label>
+          <Select v-model="form.pipeline_id">
+            <SelectTrigger class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm" aria-label="Pipeline" data-testid="settings-triggers-form-pipeline">
+              <SelectValue placeholder="Select pipeline" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem v-for="p in pipelines" :key="p.id" :value="p.id">{{ p.name }}</SelectItem>
+            </SelectContent>
+          </Select>
         </div>
 
         <div v-if="!editingId">
-          <label for="settingstriggersview-field-14" class="mb-1 block text-sm font-medium">Trigger Type</label>
-          <select id="settingstriggersview-field-14"
-            v-model="form.trigger_type"
-            class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm"
-            data-testid="settings-triggers-form-type"
-            aria-label="Trigger type"
-            required
-          >
-            <option value="" disabled>Select type</option>
-            <option value="webhook">Webhook</option>
-            <option value="cron">Cron</option>
-            <option value="polling">Polling</option>
-            <option value="agent_signal">Agent Signal</option>
-          </select>
+          <label class="mb-1 block text-sm font-medium">Trigger Type</label>
+          <Select v-model="form.trigger_type">
+            <SelectTrigger class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm" aria-label="Trigger type" data-testid="settings-triggers-form-type">
+              <SelectValue placeholder="Select type" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="webhook">Webhook</SelectItem>
+              <SelectItem value="cron">Cron</SelectItem>
+              <SelectItem value="polling">Polling</SelectItem>
+              <SelectItem value="agent_signal">Agent Signal</SelectItem>
+            </SelectContent>
+          </Select>
         </div>
         <div v-else class="text-sm text-muted-foreground">
           Type: <span class="font-medium">{{ typeLabel(editingType) }}</span>
@@ -139,17 +135,17 @@
             />
           </div>
           <div>
-            <label for="settingstriggersview-field-12" class="mb-1 block text-sm font-medium">HTTP Method</label>
-            <select id="settingstriggersview-field-12"
-              v-model="form.webhook_method"
-              class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm"
-              data-testid="settings-triggers-form-webhook-method"
-              aria-label="HTTP method"
-            >
-              <option value="POST">POST</option>
-              <option value="GET">GET</option>
-              <option value="PUT">PUT</option>
-            </select>
+            <label class="mb-1 block text-sm font-medium">HTTP Method</label>
+            <Select v-model="form.webhook_method">
+              <SelectTrigger class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm" aria-label="HTTP method" data-testid="settings-triggers-form-webhook-method">
+                <SelectValue placeholder="Select method" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="POST">POST</SelectItem>
+                <SelectItem value="GET">GET</SelectItem>
+                <SelectItem value="PUT">PUT</SelectItem>
+              </SelectContent>
+            </Select>
           </div>
           <div>
             <label for="settingstriggersview-field-11" class="mb-1 block text-sm font-medium">Headers (JSON)</label>
@@ -245,16 +241,15 @@
         <!-- Agent Signal config -->
         <template v-if="form.trigger_type === 'agent_signal'">
           <div>
-            <label for="settingstriggersview-field-3" class="mb-1 block text-sm font-medium">Source Pipeline</label>
-            <select id="settingstriggersview-field-3"
-              v-model="form.signal_source_pipeline"
-              class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm"
-              data-testid="settings-triggers-form-signal-pipeline"
-              aria-label="Source pipeline"
-            >
-              <option value="" disabled>Select source pipeline</option>
-              <option v-for="p in pipelines" :key="p.id" :value="p.id">{{ p.name }}</option>
-            </select>
+            <label class="mb-1 block text-sm font-medium">Source Pipeline</label>
+            <Select v-model="form.signal_source_pipeline">
+              <SelectTrigger class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm" aria-label="Source pipeline" data-testid="settings-triggers-form-signal-pipeline">
+                <SelectValue placeholder="Select source pipeline" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem v-for="p in pipelines" :key="p.id" :value="p.id">{{ p.name }}</SelectItem>
+              </SelectContent>
+            </Select>
           </div>
           <div>
             <label for="settingstriggersview-field-2" class="mb-1 block text-sm font-medium">Source Node ID</label>
@@ -312,6 +307,13 @@ import TableActions from '../components/shared/TableActions.vue'
 import { usePlanStore } from '../stores/planStore'
 import FeatureGate from '../components/FeatureGate.vue'
 import { shortId } from '../utils/format'
+import {
+  Select,
+  SelectTrigger,
+  SelectContent,
+  SelectItem,
+  SelectValue,
+} from '@/components/ui/select'
 
 const planStore = usePlanStore()
 

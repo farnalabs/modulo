@@ -12,34 +12,33 @@
       <PageHeader :title="$t('views.ABTestModelsView.ab_test_models')" subtitle="Compare model backends side by side with weighted A/B testing — eval scores, costs, and token usage" />
 
       <div class="flex flex-wrap items-center gap-4">
-        <label for="abtestmodelsview-field-7" class="flex items-center gap-2 text-sm">
+        <label class="flex items-center gap-2 text-sm">
           <span class="text-muted-foreground">{{ $t('views.ABTestModelsView.pipeline') }}</span>
-          <select id="abtestmodelsview-field-7"
-            v-model="selectedPipelineId"
-            data-testid="ab-test-models-pipeline-select"
-            aria-label="Pipeline"
-            class="min-w-[280px] rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-          >
-            <option value="" disabled>{{ $t('views.ABTestModelsView.select_a_pipeline') }}</option>
-            <option v-for="p in pipelines" :key="p.id" :value="p.id">
-              {{ p.name }}
-            </option>
-          </select>
+          <Select v-model="selectedPipelineId">
+            <SelectTrigger class="min-w-[280px] rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring" aria-label="Pipeline" data-testid="ab-test-models-pipeline-select">
+              <SelectValue :placeholder="$t('views.ABTestModelsView.select_a_pipeline')" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem v-for="p in pipelines" :key="p.id" :value="p.id">
+                {{ p.name }}
+              </SelectItem>
+            </SelectContent>
+          </Select>
         </label>
 
-        <label for="abtestmodelsview-field-6" class="flex items-center gap-2 text-sm">
+        <label class="flex items-center gap-2 text-sm">
           <span class="text-muted-foreground">{{ $t('views.ABTestModelsView.existing_group') }}</span>
-          <select id="abtestmodelsview-field-6"
-            v-model="selectedGroupId"
-            data-testid="ab-test-models-group-select"
-            aria-label="Existing group"
-            class="min-w-[200px] rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-          >
-            <option value="">{{ $t('views.ABTestModelsView.new_group') }}</option>
-            <option v-for="g in filteredGroups" :key="g.id" :value="g.id">
-              {{ g.name }}
-            </option>
-          </select>
+          <Select v-model="selectedGroupId">
+            <SelectTrigger class="min-w-[200px] rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring" aria-label="Existing group" data-testid="ab-test-models-group-select">
+              <SelectValue :placeholder="$t('views.ABTestModelsView.new_group')" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="">{{ $t('views.ABTestModelsView.new_group') }}</SelectItem>
+              <SelectItem v-for="g in filteredGroups" :key="g.id" :value="g.id">
+                {{ g.name }}
+              </SelectItem>
+            </SelectContent>
+          </Select>
         </label>
       </div>
 
@@ -122,22 +121,21 @@
                   />
                 </div>
                 <div>
-                  <label for="abtestmodelsview-field-2" class="mb-1 block text-xs font-medium text-muted-foreground">{{ $t('views.ABTestModelsView.model_backend') }}</label>
-                  <select id="abtestmodelsview-field-2"
-                    v-model="v.modelBackendId"
-                    :data-testid="`ab-test-models-model-backend-${i}`"
-                    aria-label="Model backend"
-                    class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-                  >
-                    <option value="" disabled>{{ $t('views.ABTestModelsView.select_model') }}</option>
-                    <option
-                      v-for="mb in modelBackends"
-                      :key="mb.id"
-                      :value="mb.id"
-                    >
-                      {{ mb.display_name }} ({{ mb.provider }})
-                    </option>
-                  </select>
+                  <label class="mb-1 block text-xs font-medium text-muted-foreground">{{ $t('views.ABTestModelsView.model_backend') }}</label>
+                  <Select v-model="v.modelBackendId">
+                    <SelectTrigger class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring" aria-label="Model backend" :data-testid="`ab-test-models-model-backend-${i}`">
+                      <SelectValue :placeholder="$t('views.ABTestModelsView.select_model')" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem
+                        v-for="mb in modelBackends"
+                        :key="mb.id"
+                        :value="mb.id"
+                      >
+                        {{ mb.display_name }} ({{ mb.provider }})
+                      </SelectItem>
+                    </SelectContent>
+                  </Select>
                 </div>
                 <div>
                   <label for="abtestmodelsview-field-1" class="mb-1 block text-xs font-medium text-muted-foreground">
@@ -292,6 +290,13 @@ import { Button } from '@/components/ui/button'
 import EmptyState from '../components/shared/EmptyState.vue'
 import { shortId } from '../utils/format'
 import { formatApiError } from '../lib/api/formatError'
+import {
+  Select,
+  SelectTrigger,
+  SelectContent,
+  SelectItem,
+  SelectValue,
+} from '@/components/ui/select'
 
 type PipelineItem = components['schemas']['PipelineResponse']
 type VariantGroup = components['schemas']['VariantGroupResponse']

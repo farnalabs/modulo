@@ -9,14 +9,14 @@
           @update:search="search = $event; page = 1"
         >
           <template #after>
-            <select aria-label="Form control"
-              v-model="ownerFilter"
-              class="rounded-lg border border-input bg-background px-3 py-1.5 text-sm"
-              data-testid="lifecycle-map-list-owner-filter"
-            >
-              <option value="">All teams</option>
-              <option v-for="owner in uniqueOwners" :key="owner" :value="owner">{{ owner }}</option>
-            </select>
+            <Select v-model="ownerFilter">
+              <SelectTrigger aria-label="Form control" data-testid="lifecycle-map-list-owner-filter" class="rounded-lg border border-input bg-background px-3 py-1.5 text-sm">
+                <SelectValue placeholder="All teams" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem v-for="owner in uniqueOwners" :key="owner" :value="owner">{{ owner }}</SelectItem>
+              </SelectContent>
+            </Select>
           </template>
         </FilterBar>
           <Button
@@ -195,6 +195,7 @@ import type { LifecycleMapSummary } from '../../stores/lifecycleMaps'
 import { formatDateShort } from '../../lib/formatDate'
 import { useApi } from '../../composables/useApi'
 import { formatApiError } from '../../lib/api/formatError'
+import { Select, SelectTrigger, SelectContent, SelectItem, SelectValue } from '@/components/ui/select'
 
 const router = useRouter()
 const route = useRoute()
