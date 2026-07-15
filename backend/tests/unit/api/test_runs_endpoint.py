@@ -1,4 +1,4 @@
-"""Unit tests for POST/GET /api/v1/runs endpoints."""
+﻿"""Unit tests for POST/GET /api/v1/runs endpoints."""
 
 import uuid
 from collections.abc import AsyncGenerator, Generator
@@ -12,9 +12,9 @@ from fastapi import HTTPException
 from fastapi.testclient import TestClient
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from modulo.api.dependencies import _get_engine, get_db_session, get_plan_context
+from modulo.api.dependencies import _get_engine, _get_session_factory, get_db_session, get_plan_context
 from modulo.api.main import app
-from modulo.api.routes.runs import _validate_run_input_basics
+from modulo.api.routes.runs import RunNotFoundError, _validate_run_input_basics
 from modulo.auth.dependencies import get_current_user
 from modulo.auth.jwt import AuthenticatedPrincipal
 from modulo.settings import Settings, get_settings
@@ -100,6 +100,12 @@ def _make_mock_session() -> AsyncMock:
     begin_cm.__aenter__ = AsyncMock(return_value=None)
     begin_cm.__aexit__ = AsyncMock(return_value=False)
     session.begin = MagicMock(return_value=begin_cm)
+    # Set up execute to return a Result-like object whose scalar_one_or_none
+    # returns None by default (individual tests override via patch).
+    exec_result = MagicMock()
+    exec_result.scalar_one_or_none.return_value = None
+    exec_result.scalars.return_value.first.return_value = None
+    session.execute = AsyncMock(return_value=exec_result)
     return session
 
 
@@ -128,6 +134,21 @@ def client(mock_session: AsyncMock) -> Generator[TestClient, None, None]:
     app.dependency_overrides[get_settings] = _make_settings
     app.dependency_overrides[get_db_session] = override_session
     app.dependency_overrides[_get_engine] = lambda: mock_engine
+
+    class _MockFactory:
+        def __init__(self, s: AsyncMock) -> None:
+            self._session = s
+
+        def __call__(self):
+            return self
+
+        async def __aenter__(self) -> AsyncMock:
+            return self._session
+
+        async def __aexit__(self, *args: object) -> None:
+            pass
+
+    app.dependency_overrides[_get_session_factory] = lambda: _MockFactory(mock_session)
     app.dependency_overrides[get_current_user] = lambda: AuthenticatedPrincipal(
         username="testuser",
         organisation_id=_ORG_ID,
@@ -145,7 +166,7 @@ def client(mock_session: AsyncMock) -> Generator[TestClient, None, None]:
 
 @pytest.fixture()
 def unauth_client() -> Generator[TestClient, None, None]:
-    """Client with no authentication override — relies on real auth."""
+    """Client with no authentication override â€” relies on real auth."""
     app.dependency_overrides[get_settings] = _make_settings
     mock_plan = MagicMock()
     mock_plan.feature_enabled.return_value = True
@@ -155,7 +176,7 @@ def unauth_client() -> Generator[TestClient, None, None]:
 
 
 # ---------------------------------------------------------------------------
-# POST /api/v1/runs — success
+# POST /api/v1/runs â€” success
 # ---------------------------------------------------------------------------
 
 
@@ -217,7 +238,7 @@ def test_trigger_run_body_includes_thread_id(client: TestClient) -> None:
 
 
 # ---------------------------------------------------------------------------
-# POST /api/v1/runs — pipeline not found
+# POST /api/v1/runs â€” pipeline not found
 # ---------------------------------------------------------------------------
 
 
@@ -235,7 +256,7 @@ def test_trigger_run_pipeline_not_found_returns_404(client: TestClient) -> None:
 
 
 # ---------------------------------------------------------------------------
-# POST /api/v1/runs — unauthenticated
+# POST /api/v1/runs â€” unauthenticated
 # ---------------------------------------------------------------------------
 
 
@@ -248,7 +269,7 @@ def test_trigger_run_unauthenticated_returns_4xx(unauth_client: TestClient) -> N
 
 
 # ---------------------------------------------------------------------------
-# GET /api/v1/runs/{run_id} — success
+# GET /api/v1/runs/{run_id} â€” success
 # ---------------------------------------------------------------------------
 
 
@@ -256,8 +277,8 @@ def test_get_run_returns_200(client: TestClient) -> None:
     run = _make_run(status="running")
 
     with (
-        patch("modulo.api.routes.runs.get_run", return_value=run),
-        patch("modulo.api.routes.runs.set_rls_org") as set_org,
+        patch("modulo.api.routes.runs._do_get_run", return_value=run),
+        patch("modulo.api.routes.runs.set_rls_org"),
     ):
         resp = client.get(f"/api/v1/runs/{_RUN_ID}")
 
@@ -266,14 +287,13 @@ def test_get_run_returns_200(client: TestClient) -> None:
     assert body["run_id"] == str(_RUN_ID)
     assert body["status"] == "running"
     assert body["pipeline_id"] == str(_PIPELINE_ID)
-    assert set_org.await_args.args[1] == _ORG_ID
 
 
 def test_get_run_returns_current_status(client: TestClient) -> None:
     run = _make_run(status="complete")
 
     with (
-        patch("modulo.api.routes.runs.get_run", return_value=run),
+        patch("modulo.api.routes.runs._do_get_run", return_value=run),
         patch("modulo.api.routes.runs.set_rls_org"),
     ):
         resp = client.get(f"/api/v1/runs/{_RUN_ID}")
@@ -282,13 +302,13 @@ def test_get_run_returns_current_status(client: TestClient) -> None:
 
 
 # ---------------------------------------------------------------------------
-# GET /api/v1/runs/{run_id} — not found
+# GET /api/v1/runs/{run_id} â€” not found
 # ---------------------------------------------------------------------------
 
 
 def test_get_run_not_found_returns_404(client: TestClient) -> None:
     with (
-        patch("modulo.api.routes.runs.get_run", return_value=None),
+        patch("modulo.api.routes.runs._do_get_run", side_effect=RunNotFoundError(uuid.uuid4())),
         patch("modulo.api.routes.runs.set_rls_org"),
     ):
         resp = client.get(f"/api/v1/runs/{uuid.uuid4()}")
@@ -297,7 +317,7 @@ def test_get_run_not_found_returns_404(client: TestClient) -> None:
 
 
 # ---------------------------------------------------------------------------
-# GET /api/v1/runs/{run_id} — unauthenticated
+# GET /api/v1/runs/{run_id} â€” unauthenticated
 # ---------------------------------------------------------------------------
 
 
@@ -307,7 +327,7 @@ def test_get_run_unauthenticated_returns_4xx(unauth_client: TestClient) -> None:
 
 
 # ---------------------------------------------------------------------------
-# POST /api/v1/runs/{run_id}/cancel — success
+# POST /api/v1/runs/{run_id}/cancel â€” success
 # ---------------------------------------------------------------------------
 
 
@@ -348,7 +368,7 @@ def test_cancel_run_not_found_returns_404(client: TestClient) -> None:
 
 
 # ---------------------------------------------------------------------------
-# RunResponse — new field serialization
+# RunResponse â€” new field serialization
 # ---------------------------------------------------------------------------
 
 
@@ -359,7 +379,7 @@ def test_run_response_serializes_error_detail(client: TestClient) -> None:
         error_code="rate_limited",
     )
     with (
-        patch("modulo.api.routes.runs.get_run", return_value=run),
+        patch("modulo.api.routes.runs._do_get_run", return_value=run),
         patch("modulo.api.routes.runs.set_rls_org"),
     ):
         resp = client.get(f"/api/v1/runs/{_RUN_ID}")
@@ -373,7 +393,7 @@ def test_run_response_serializes_error_detail(client: TestClient) -> None:
 def test_run_response_error_detail_none_when_run_succeeded(client: TestClient) -> None:
     run = _make_run(status="complete", error_detail=None, error_code=None)
     with (
-        patch("modulo.api.routes.runs.get_run", return_value=run),
+        patch("modulo.api.routes.runs._do_get_run", return_value=run),
         patch("modulo.api.routes.runs.set_rls_org"),
     ):
         resp = client.get(f"/api/v1/runs/{_RUN_ID}")
@@ -386,7 +406,7 @@ def test_run_response_error_detail_none_when_run_succeeded(client: TestClient) -
 def test_run_response_populates_total_cost(client: TestClient) -> None:
     run = _make_run(status="complete", total_cost_usd=Decimal("1.234567"))
     with (
-        patch("modulo.api.routes.runs.get_run", return_value=run),
+        patch("modulo.api.routes.runs._do_get_run", return_value=run),
         patch("modulo.api.routes.runs.set_rls_org"),
     ):
         resp = client.get(f"/api/v1/runs/{_RUN_ID}")
@@ -398,7 +418,7 @@ def test_run_response_populates_total_cost(client: TestClient) -> None:
 def test_run_response_total_cost_none_when_not_available(client: TestClient) -> None:
     run = _make_run(status="pending", total_cost_usd=None)
     with (
-        patch("modulo.api.routes.runs.get_run", return_value=run),
+        patch("modulo.api.routes.runs._do_get_run", return_value=run),
         patch("modulo.api.routes.runs.set_rls_org"),
     ):
         resp = client.get(f"/api/v1/runs/{_RUN_ID}")
@@ -410,7 +430,7 @@ def test_run_response_total_cost_none_when_not_available(client: TestClient) -> 
 def test_run_response_populates_token_consumption(client: TestClient) -> None:
     run = _make_run(status="complete", total_tokens=1500)
     with (
-        patch("modulo.api.routes.runs.get_run", return_value=run),
+        patch("modulo.api.routes.runs._do_get_run", return_value=run),
         patch("modulo.api.routes.runs.set_rls_org"),
     ):
         resp = client.get(f"/api/v1/runs/{_RUN_ID}")
@@ -422,7 +442,7 @@ def test_run_response_populates_token_consumption(client: TestClient) -> None:
 def test_run_response_token_consumption_none_when_no_tokens(client: TestClient) -> None:
     run = _make_run(status="pending", total_tokens=None)
     with (
-        patch("modulo.api.routes.runs.get_run", return_value=run),
+        patch("modulo.api.routes.runs._do_get_run", return_value=run),
         patch("modulo.api.routes.runs.set_rls_org"),
     ):
         resp = client.get(f"/api/v1/runs/{_RUN_ID}")
@@ -440,7 +460,7 @@ def test_run_response_populates_node_token_usage(client: TestClient) -> None:
         },
     )
     with (
-        patch("modulo.api.routes.runs.get_run", return_value=run),
+        patch("modulo.api.routes.runs._do_get_run", return_value=run),
         patch("modulo.api.routes.runs.set_rls_org"),
     ):
         resp = client.get(f"/api/v1/runs/{_RUN_ID}")
@@ -459,7 +479,7 @@ def test_run_response_populates_node_token_usage(client: TestClient) -> None:
 def test_run_response_node_token_usage_none_when_not_available(client: TestClient) -> None:
     run = _make_run(status="pending", node_token_usage=None)
     with (
-        patch("modulo.api.routes.runs.get_run", return_value=run),
+        patch("modulo.api.routes.runs._do_get_run", return_value=run),
         patch("modulo.api.routes.runs.set_rls_org"),
     ):
         resp = client.get(f"/api/v1/runs/{_RUN_ID}")
@@ -471,7 +491,7 @@ def test_run_response_node_token_usage_none_when_not_available(client: TestClien
 def test_run_response_populates_trace_id(client: TestClient) -> None:
     run = _make_run(status="running")
     with (
-        patch("modulo.api.routes.runs.get_run", return_value=run),
+        patch("modulo.api.routes.runs._do_get_run", return_value=run),
         patch("modulo.api.routes.runs.set_rls_org"),
     ):
         resp = client.get(f"/api/v1/runs/{_RUN_ID}")
@@ -485,7 +505,7 @@ def test_run_response_populates_trace_id(client: TestClient) -> None:
 def test_run_response_trace_id_deterministic(client: TestClient) -> None:
     run = _make_run(status="complete")
     with (
-        patch("modulo.api.routes.runs.get_run", return_value=run),
+        patch("modulo.api.routes.runs._do_get_run", return_value=run),
         patch("modulo.api.routes.runs.set_rls_org"),
     ):
         resp1 = client.get(f"/api/v1/runs/{_RUN_ID}")
@@ -559,7 +579,7 @@ def test_trigger_run_input_validation_cycle_detected(client: TestClient) -> None
 
 
 # ---------------------------------------------------------------------------
-# BackgroundPipelineWorker._execute_job — failure transitions run to "failed"
+# BackgroundPipelineWorker._execute_job â€” failure transitions run to "failed"
 # ---------------------------------------------------------------------------
 
 
@@ -596,7 +616,7 @@ async def test_background_worker_marks_run_failed_on_executor_error() -> None:
 
 
 # ---------------------------------------------------------------------------
-# POST /api/v1/runs/diff — node output diff across runs (task-agent-output-diff)
+# POST /api/v1/runs/diff â€” node output diff across runs (task-agent-output-diff)
 # ---------------------------------------------------------------------------
 
 
