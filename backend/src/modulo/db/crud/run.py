@@ -14,6 +14,7 @@ from typing import Any
 from sqlalchemy import delete, func, select
 from sqlalchemy.exc import ProgrammingError
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 
 from modulo.db.crud.base import PageResult
 from modulo.db.crud.pagination import CursorPaginator
@@ -114,7 +115,7 @@ async def list_runs(
     page_size: int = 20,
     cursor: str | None = None,
 ) -> PageResult[Run]:
-    q = select(Run).join(Pipeline, Run.pipeline_id == Pipeline.id, isouter=False)
+    q = select(Run).options(selectinload(Run.pipeline)).join(Pipeline, Run.pipeline_id == Pipeline.id, isouter=False)
     count_q = select(func.count()).select_from(Run).join(Pipeline, Run.pipeline_id == Pipeline.id, isouter=False)
     if pipeline_id is not None:
         q = q.where(Run.pipeline_id == pipeline_id)
