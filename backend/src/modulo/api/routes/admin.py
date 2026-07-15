@@ -1279,7 +1279,7 @@ async def admin_list_teams(
                 description=t.description,
                 account_id=str(t.account_id),
                 member_count=member_counts.get(t.id, 0),
-                created_at=t.created_at.isoformat(),
+                created_at=t.created_at.isoformat() if t.created_at else "",
             )
             for t in result.items
         ],
