@@ -705,7 +705,8 @@ async def trigger_pipeline(
             pipeline = await get_pipeline(s, pid)
             if pipeline is None:
                 return {"error": "pipeline_not_found", "pipeline_id": pipeline_id}
-            snapshot = await create_snapshot_from_live_graph(s, pipeline_id=pid, account_id=None)
+            uid = _ctx_user_id_val()
+            snapshot = await create_snapshot_from_live_graph(s, pipeline_id=pid, account_id=uid)
             if snapshot is None:
                 return {"error": "snapshot_failed", "pipeline_id": pipeline_id}
             if not snapshot.graph_json or not snapshot.graph_json.get("nodes"):
@@ -851,7 +852,10 @@ async def get_run_evals(run_id: str) -> dict[str, Any]:
         from modulo.db.crud.eval_run import get_run_evals as db_get_run_evals
 
         org_id = _ctx_org_id_val()
-        rid = uuid.UUID(run_id)
+        try:
+            rid = uuid.UUID(run_id)
+        except ValueError:
+            return {"error": "invalid_id", "field": "run_id", "detail": f"Invalid UUID format: {run_id}"}
 
         async with _session(org_id) as s:
             run = await get_run(s, rid)
@@ -942,6 +946,15 @@ async def cancel_run(run_id: str) -> dict[str, Any]:
         except ValueError:
             return {"error": "invalid_id", "field": "run_id", "detail": f"Invalid UUID format: {run_id}"}
         async with _session(org_id) as s:
+            from modulo.db.crud.run import get_run
+
+            run = await get_run(s, rid)
+            if run is None:
+                return {"error": "run_not_found", "run_id": run_id}
+            _terminal_statuses = frozenset({"complete", "failed", "cancelled", "eval_failed"})
+            if run.status in _terminal_statuses:
+                detail = f"Run is already in terminal status: {run.status}"
+                return {"error": "cannot_cancel", "run_id": str(run_id), "detail": detail}
             run = await request_cancellation(s, rid)
         if run is None:
             return {"error": "run_not_found", "run_id": run_id}

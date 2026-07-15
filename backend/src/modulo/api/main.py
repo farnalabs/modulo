@@ -596,7 +596,10 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
         logger.warning("startup.default_license_key_in_use")
     from modulo.core.license import check_production_public_key
 
-    check_production_public_key(settings)
+    try:
+        check_production_public_key(settings)
+    except Exception:
+        logger.warning("startup.production_public_key_check_failed", exc_info=True)
 
     if settings.modulo_db.lower() == "sqlite":
         logger.warning("startup.sqlite_mode")
