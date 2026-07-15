@@ -471,18 +471,7 @@ class PipelineExecutor:
                 organisation_id=org_id,
                 fernet_key=_settings.fernet_key,
             ) as saver:
-                compiled = get_or_compile(
-                    pipeline_id,
-                    snapshot_id,
-                    lambda cp=saver: build_graph_from_json(
-                        graph_json,
-                        eval_definitions_by_node=resume_eval_defs_by_node,
-                        session_factory=self._session_factory,
-                        org_id=org_id,
-                        checkpointer=cp,
-                    ),
-                    checkpointer=saver,
-                )
+                compiled.checkpointer = saver
                 await compiled.aupdate_state(config, {"_hitl_decision": resume_data})
                 final_status, error_code, _, node_token_usage = await self._stream_graph(
                     compiled,
@@ -665,18 +654,7 @@ class PipelineExecutor:
                     organisation_id=org_id,
                     fernet_key=_settings.fernet_key,
                 ) as saver:
-                    compiled = get_or_compile(
-                        pipeline_id,
-                        snapshot_id,
-                        lambda: build_graph_from_json(
-                            graph_json,
-                            eval_definitions_by_node=eval_defs_by_node,
-                            session_factory=self._session_factory,
-                            org_id=org_id,
-                            checkpointer=saver,
-                        ),
-                        checkpointer=saver,
-                    )
+                    compiled.checkpointer = saver
                     final_status, error_code, error_detail, node_token_usage = await self._stream_graph(
                         compiled,
                         initial_state,
