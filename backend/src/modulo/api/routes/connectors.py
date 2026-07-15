@@ -48,8 +48,8 @@ class ConnectorCreate(BaseModel):
     name: str = Field(..., min_length=1, max_length=255)
     connector_type_id: str = Field(..., min_length=1, max_length=128)
     credentials: str = Field(..., min_length=1)
-    config_json: ClassVar[dict[str, Any]] = {}
-    allowed_operations: ClassVar[list[str]] = []
+    config_json: dict[str, Any] = Field(default_factory=dict)
+    allowed_operations: list[str] = Field(default_factory=list)
     visibility: str = Field(default="org")
     owner_team_id: uuid.UUID | None = None
     tier: Literal["native", "preview", "in_dev"] = Field(default="native")
