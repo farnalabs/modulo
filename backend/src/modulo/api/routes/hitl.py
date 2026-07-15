@@ -23,7 +23,6 @@ from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession
 from modulo.api.db_error_handling import handle_db_errors
 from modulo.api.dependencies import _get_engine, get_db_session, pg_connection_string
 from modulo.auth.dependencies import get_current_tenant_user
-from modulo.settings import get_settings
 from modulo.auth.jwt import TenantPrincipal
 from modulo.core.hitl_manager import (
     AlreadyClaimedError,
@@ -39,6 +38,7 @@ from modulo.db.crud.run import get_run, update_run_status
 from modulo.db.models.hitl_claim import HitlClaim
 from modulo.db.models.pipeline import Pipeline
 from modulo.db.rls import set_rls_org
+from modulo.settings import get_settings
 
 logger = logging.getLogger(__name__)
 
