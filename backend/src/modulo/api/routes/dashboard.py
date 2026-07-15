@@ -376,20 +376,15 @@ async def dashboard_summary(
             config_warnings: list[dict[str, Any]] = []
 
             try:
-                mb_with_creds_result = await session.execute(
-                    select(func.count())
-                    .select_from(ModelBackend)
-                    .where(
-                        ModelBackend.organisation_id == org_id,
-                        ModelBackend.credentials_ciphertext != b"",
-                    )
+                mb_count_result = await session.execute(
+                    select(func.count()).select_from(ModelBackend).where(ModelBackend.organisation_id == org_id)
                 )
-                mb_with_creds = int(mb_with_creds_result.scalar_one())
+                mb_count = int(mb_count_result.scalar_one())
             except Exception:
                 _log.exception("dashboard.dashboard_summary.model_backend_count")
-                mb_with_creds = 0
+                mb_count = 0
 
-            if mb_with_creds == 0:
+            if mb_count == 0:
                 config_warnings.append(
                     {
                         "type": "no_model_backends",
@@ -415,7 +410,7 @@ async def dashboard_summary(
                         )
                     )
                     default_provider_count = int(default_provider_result.scalar_one())
-                    if default_provider_count == 0 and mb_with_creds > 1:
+                    if default_provider_count == 0 and mb_count > 1:
                         config_warnings.append(
                             {
                                 "type": "remy_provider_not_configured",
