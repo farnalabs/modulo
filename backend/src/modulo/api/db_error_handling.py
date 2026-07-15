@@ -33,21 +33,25 @@ def handle_db_errors(
             except asyncio.CancelledError:
                 raise
             except IntegrityError:
+                _log.exception("%s.integrity_error", log_prefix)
                 raise HTTPException(
                     status_code=status.HTTP_409_CONFLICT,
                     detail="Resource conflict. The operation could not be completed.",
                 ) from None
             except ProgrammingError:
+                _log.exception("%s.programming_error", log_prefix)
                 raise HTTPException(
                     status_code=status.HTTP_501_NOT_IMPLEMENTED,
                     detail="Feature is not available. Run database migrations to enable it.",
                 ) from None
             except SQLAlchemyError:
+                _log.exception("%s.db_error", log_prefix)
                 raise HTTPException(
                     status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
                     detail="Database temporarily unavailable.",
                 ) from None
             except pydantic.ValidationError:
+                _log.exception("%s.validation_error", log_prefix)
                 raise HTTPException(
                     status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
                     detail="Data validation failed.",

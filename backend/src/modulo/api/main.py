@@ -19,6 +19,7 @@ from modulo.api.dependencies import (
 )
 from modulo.api.exception_handlers import (
     http_exception_handler,
+    unhandled_exception_handler,
     validation_exception_handler,
 )
 from modulo.api.mcp_server import build_mcp_asgi_app
@@ -1078,3 +1079,4 @@ app.mount("/mcp", build_mcp_asgi_app())
 
 app.add_exception_handler(StarletteHTTPException, http_exception_handler)  # type: ignore[arg-type]
 app.add_exception_handler(RequestValidationError, validation_exception_handler)  # type: ignore[arg-type]
+app.add_exception_handler(Exception, unhandled_exception_handler)  # type: ignore[arg-type]

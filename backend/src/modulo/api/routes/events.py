@@ -15,6 +15,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import StreamingResponse
 from starlette import status
 
+from modulo.api.db_error_handling import handle_db_errors
 from modulo.auth.dependencies import get_current_tenant_user
 from modulo.core.events.event_bus import get_event_bus
 from modulo.settings import Settings, get_settings
@@ -75,6 +76,12 @@ async def _untrack_connection(org_id: str, queue: asyncio.Queue[dict[str, Any]])
                 del _active_connections[org_id]
 
 
+@router.get(
+    "/api/v1/events",
+    operation_id="stream_events",
+    summary="Subscribe to org-scoped real-time resource-change events via SSE.",
+)
+@handle_db_errors("events.sse_event_stream")
 @router.get(
     "/api/v1/events",
     operation_id="stream_events",

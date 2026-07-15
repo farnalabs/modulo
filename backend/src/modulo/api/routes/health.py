@@ -2,6 +2,7 @@
 
 import asyncio
 import contextlib
+import logging
 import time
 from datetime import UTC, datetime
 from typing import Literal
@@ -14,8 +15,11 @@ from fastapi import APIRouter, Response
 from pydantic import BaseModel
 from sqlalchemy import text
 
+from modulo.api.db_error_handling import handle_db_errors
 from modulo.api.dependencies import get_or_create_engine, pg_connection_string
 from modulo.settings import get_settings
+
+_log = logging.getLogger(__name__)
 
 router = APIRouter(tags=["health"])
 
@@ -132,10 +136,14 @@ async def _check_migrations() -> CheckResult:
 
 
 @router.get("/healthz")
+@handle_db_errors("health.liveness")
+@router.get("/healthz")
 async def liveness() -> dict[str, str]:
     return {"status": "ok"}
 
 
+@router.get("/healthz/ready")
+@handle_db_errors("health.readiness")
 @router.get("/healthz/ready")
 async def readiness(response: Response) -> ReadinessResponse:
     db_check, redis_check, cp_check, mig_check = await asyncio.gather(

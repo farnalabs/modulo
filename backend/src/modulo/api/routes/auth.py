@@ -12,6 +12,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy.exc import IntegrityError, ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from modulo.api.db_error_handling import handle_db_errors
 from modulo.api.dependencies import get_db_session
 from modulo.api.middleware.rate_limiter import get_auth_rate_limiter
 from modulo.api.routes.remy import clear_all_session_approvals
@@ -83,6 +84,8 @@ class MeResponse(BaseModel):
     is_system_admin: bool = False
 
 
+@router.post("/login")
+@handle_db_errors("auth.login")
 @router.post("/login")
 async def login(
     req: LoginRequest,
@@ -182,6 +185,8 @@ async def login(
     return response
 
 
+@router.post("/refresh")
+@handle_db_errors("auth.refresh")
 @router.post("/refresh")
 async def refresh(
     req: RefreshRequest,
@@ -299,6 +304,8 @@ async def refresh(
 
 
 @router.post("/logout")
+@handle_db_errors("auth.logout")
+@router.post("/logout")
 async def logout(
     req: RefreshRequest,
     settings: Settings = Depends(get_settings),
@@ -362,6 +369,8 @@ async def logout(
 
 
 @router.post("/ws-token", response_model=WsTokenResponse)
+@handle_db_errors("auth.ws_token")
+@router.post("/ws-token", response_model=WsTokenResponse)
 async def ws_token(
     current_user: AuthenticatedPrincipal = Depends(get_current_user),
     settings: Settings = Depends(get_settings),
@@ -424,6 +433,8 @@ async def ws_token(
 
 
 @router.get("/me", response_model=MeResponse)
+@handle_db_errors("auth.me")
+@router.get("/me", response_model=MeResponse)
 async def me(
     current_user: AuthenticatedPrincipal = Depends(get_current_user),
     session: AsyncSession = Depends(get_db_session),
@@ -470,6 +481,8 @@ class CsrfTokenResponse(BaseModel):
     csrf_token: str
 
 
+@router.get("/csrf-token", response_model=CsrfTokenResponse)
+@handle_db_errors("auth.csrf_token")
 @router.get("/csrf-token", response_model=CsrfTokenResponse)
 async def csrf_token(
     current_user: AuthenticatedPrincipal = Depends(get_current_user),

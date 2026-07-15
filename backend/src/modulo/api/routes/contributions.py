@@ -8,6 +8,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy.exc import ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from modulo.api.db_error_handling import handle_db_errors
 from modulo.api.dependencies import get_db_session
 from modulo.api.routes.library import LibraryPrimitiveResponse
 from modulo.auth.dependencies import get_current_tenant_user
@@ -55,6 +56,8 @@ class ContributionStatusResponse(BaseModel):
     slug: str
 
 
+@router.post("", response_model=ContributeFixtureResponse, status_code=status.HTTP_201_CREATED)
+@handle_db_errors("contributions.create_contribution")
 @router.post("", response_model=ContributeFixtureResponse, status_code=status.HTTP_201_CREATED)
 async def create_contribution(
     req: ContributeFixtureRequest,
@@ -111,6 +114,8 @@ async def create_contribution(
 
 
 @router.post("/{primitive_id}/submit", response_model=ContributionStatusResponse)
+@handle_db_errors("contributions.submit_for_review")
+@router.post("/{primitive_id}/submit", response_model=ContributionStatusResponse)
 async def submit_for_review(
     primitive_id: uuid.UUID,
     session: AsyncSession = Depends(get_db_session),
@@ -156,6 +161,8 @@ async def submit_for_review(
     )
 
 
+@router.post("/{primitive_id}/publish", response_model=ContributionStatusResponse)
+@handle_db_errors("contributions.publish_contribution_endpoint")
 @router.post("/{primitive_id}/publish", response_model=ContributionStatusResponse)
 async def publish_contribution_endpoint(
     primitive_id: uuid.UUID,
@@ -227,6 +234,8 @@ class VersionListResponse(BaseModel):
 
 
 @router.post("/{primitive_id}/versions", response_model=ContributeFixtureResponse, status_code=status.HTTP_201_CREATED)
+@handle_db_errors("contributions.submit_contribution_version_endpoint")
+@router.post("/{primitive_id}/versions", response_model=ContributeFixtureResponse, status_code=status.HTTP_201_CREATED)
 async def submit_contribution_version_endpoint(
     primitive_id: uuid.UUID,
     req: ContributeFixtureRequest,
@@ -288,6 +297,8 @@ async def submit_contribution_version_endpoint(
 
 
 @router.get("/{primitive_id}/versions", response_model=VersionListResponse)
+@handle_db_errors("contributions.list_contribution_versions_endpoint")
+@router.get("/{primitive_id}/versions", response_model=VersionListResponse)
 async def list_contribution_versions_endpoint(
     primitive_id: uuid.UUID,
     session: AsyncSession = Depends(get_db_session),
@@ -337,6 +348,8 @@ async def list_contribution_versions_endpoint(
     )
 
 
+@router.get("", response_model=dict[str, object])
+@handle_db_errors("contributions.list_contributions_endpoint")
 @router.get("", response_model=dict[str, object])
 async def list_contributions_endpoint(
     page: int = Query(1, ge=1),

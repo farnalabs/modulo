@@ -8,6 +8,7 @@ from pydantic import BaseModel, Field, field_validator
 from sqlalchemy.exc import IntegrityError, ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from modulo.api.db_error_handling import handle_db_errors
 from modulo.api.dependencies import get_db_session, require_feature
 from modulo.auth.dependencies import get_current_tenant_user
 from modulo.auth.jwt import TenantPrincipal
@@ -115,6 +116,8 @@ def _require_admin(principal: TenantPrincipal) -> None:
 
 
 @router.get("", response_model=TeamListResponse)
+@handle_db_errors("teams.list_teams_endpoint")
+@router.get("", response_model=TeamListResponse)
 async def list_teams_endpoint(
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
@@ -165,6 +168,8 @@ async def list_teams_endpoint(
     )
 
 
+@router.post("", response_model=TeamResponse, status_code=status.HTTP_201_CREATED)
+@handle_db_errors("teams.create_team_endpoint")
 @router.post("", response_model=TeamResponse, status_code=status.HTTP_201_CREATED)
 async def create_team_endpoint(
     req: CreateTeamRequest,
@@ -255,6 +260,8 @@ async def create_team_endpoint(
 
 
 @router.get("/{team_id}", response_model=TeamResponse)
+@handle_db_errors("teams.get_team_endpoint")
+@router.get("/{team_id}", response_model=TeamResponse)
 async def get_team_endpoint(
     team_id: uuid.UUID,
     current_user: TenantPrincipal = Depends(get_current_tenant_user),
@@ -306,6 +313,8 @@ async def get_team_endpoint(
     )
 
 
+@router.patch("/{team_id}", response_model=TeamResponse)
+@handle_db_errors("teams.update_team_endpoint")
 @router.patch("/{team_id}", response_model=TeamResponse)
 async def update_team_endpoint(
     team_id: uuid.UUID,
@@ -402,6 +411,8 @@ async def update_team_endpoint(
     )
 
 
+@router.delete("/{team_id}", status_code=status.HTTP_204_NO_CONTENT)
+@handle_db_errors("teams.delete_team_endpoint")
 @router.delete("/{team_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_team_endpoint(
     team_id: uuid.UUID,
@@ -513,6 +524,8 @@ async def delete_team_endpoint(
 
 
 @router.get("/{team_id}/members", response_model=MembershipListResponse)
+@handle_db_errors("teams.list_members_endpoint")
+@router.get("/{team_id}/members", response_model=MembershipListResponse)
 async def list_members_endpoint(
     team_id: uuid.UUID,
     page: int = Query(1, ge=1),
@@ -575,6 +588,12 @@ async def list_members_endpoint(
     )
 
 
+@router.post(
+    "/{team_id}/members",
+    response_model=MembershipResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+@handle_db_errors("teams.add_member_endpoint")
 @router.post(
     "/{team_id}/members",
     response_model=MembershipResponse,
@@ -675,6 +694,11 @@ async def add_member_endpoint(
     "/{team_id}/members/{membership_id}",
     status_code=status.HTTP_204_NO_CONTENT,
 )
+@handle_db_errors("teams.remove_member_endpoint")
+@router.delete(
+    "/{team_id}/members/{membership_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+)
 async def remove_member_endpoint(
     team_id: uuid.UUID,
     membership_id: uuid.UUID,
@@ -739,6 +763,11 @@ async def remove_member_endpoint(
         ) from None
 
 
+@router.patch(
+    "/{team_id}/members/{membership_id}",
+    response_model=MembershipResponse,
+)
+@handle_db_errors("teams.change_member_role_endpoint")
 @router.patch(
     "/{team_id}/members/{membership_id}",
     response_model=MembershipResponse,

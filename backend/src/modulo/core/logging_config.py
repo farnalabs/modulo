@@ -12,10 +12,11 @@ import asyncio
 import logging
 import os
 import sys
+import time as _time
 import traceback as tb_module
 import uuid
 from contextvars import ContextVar
-from typing import Any
+from typing import Any, ClassVar
 
 from pythonjsonlogger.json import JsonFormatter
 from sqlalchemy.exc import ProgrammingError
@@ -100,20 +101,50 @@ def _log_async_emit_error(future: asyncio.Task[None]) -> None:
 
 
 class ErrorTrackingLogHandler(logging.Handler):
-    """Forward ERROR+ log records to ErrorIngestionService."""
+    """Forward ERROR+ log records to ErrorIngestionService.
+
+    Rate-limited: at most 1 write per 5 seconds per org_id.
+    Drops records when the pending-task count exceeds the backlog limit.
+    """
+
+    _last_write_time: ClassVar[dict[str, float]] = {}
 
     def __init__(self, level: int = logging.ERROR) -> None:
         super().__init__(level=level)
+        self._pending_tasks: int = 0
+        self._backlog_limit: int = 20
 
     def emit(self, record: logging.LogRecord) -> None:
         if record.levelno < self.level:
             return
+
+        org_id = org_id_var.get()
+        if org_id is None:
+            return
+
+        limit = getattr(self, "_backlog_limit", 20)
+        if self._pending_tasks >= limit:
+            _log = logging.getLogger(__name__)
+            _log.warning("ErrorTrackingLogHandler.backlog_full — dropping record")
+            return
+
+        now = _time()
+        last = self._last_write_time.get(org_id, 0.0)
+        if now - last < 5.0:
+            return
+        self._last_write_time[org_id] = now
+
         try:
             loop = asyncio.get_running_loop()
             task = loop.create_task(self._async_emit(record))
             task.add_done_callback(_log_async_emit_error)
+            task.add_done_callback(self._decrement_pending)
+            self._pending_tasks += 1
         except RuntimeError:
             pass
+
+    def _decrement_pending(self, _future: asyncio.Task[None]) -> None:
+        self._pending_tasks -= 1
 
     async def _async_emit(self, record: logging.LogRecord) -> None:
         """Async emit — creates a DB session and calls ErrorIngestionService."""

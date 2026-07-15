@@ -16,6 +16,7 @@ from sqlalchemy.exc import IntegrityError, ProgrammingError, SQLAlchemyError
 from sqlalchemy.exc import TimeoutError as SA_TimeoutError
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker, create_async_engine
 
+from modulo.api.db_error_handling import handle_db_errors
 from modulo.api.dependencies import (
     _get_engine,
     _get_session_factory,
@@ -144,6 +145,8 @@ async def _do_list_runs(
     }
 
 
+@router.get("")
+@handle_db_errors("runs.list_runs_endpoint")
 @router.get("")
 async def list_runs_endpoint(
     pipeline_id: uuid.UUID | None = Query(None),
@@ -294,6 +297,8 @@ async def _validate_run_input_basics(
 
 
 @router.post("", response_model=RunResponse, status_code=status.HTTP_202_ACCEPTED)
+@handle_db_errors("runs.trigger_run")
+@router.post("", response_model=RunResponse, status_code=status.HTTP_202_ACCEPTED)
 async def trigger_run(
     req: TriggerRunRequest,
     background_tasks: BackgroundTasks,
@@ -414,6 +419,8 @@ async def trigger_run(
 
 
 @router.get("/stats", response_model=dict[str, Any])
+@handle_db_errors("runs.get_run_stats_endpoint")
+@router.get("/stats", response_model=dict[str, Any])
 async def get_run_stats_endpoint(
     period: str = Query(default="30d", pattern=r"^(7d|30d|90d)$"),
     session: AsyncSession = Depends(get_db_session),
@@ -448,6 +455,8 @@ async def get_run_stats_endpoint(
 
 
 @router.get("/stats/heatmap", response_model=list[dict[str, Any]])
+@handle_db_errors("runs.get_run_heatmap_endpoint")
+@router.get("/stats/heatmap", response_model=list[dict[str, Any]])
 async def get_run_heatmap_endpoint(
     year: int = Query(default=2026, ge=2020, le=2100),
     session: AsyncSession = Depends(get_db_session),
@@ -481,6 +490,8 @@ async def get_run_heatmap_endpoint(
         ) from None
 
 
+@router.get("/{run_id}", response_model=RunResponse)
+@handle_db_errors("runs.get_run_status")
 @router.get("/{run_id}", response_model=RunResponse)
 async def get_run_status(
     run_id: uuid.UUID,
@@ -522,6 +533,8 @@ async def get_run_status(
     return _build_run_response(run)
 
 
+@router.post("/{run_id}/cancel", status_code=status.HTTP_202_ACCEPTED)
+@handle_db_errors("runs.cancel_run")
 @router.post("/{run_id}/cancel", status_code=status.HTTP_202_ACCEPTED)
 async def cancel_run(
     run_id: uuid.UUID,
@@ -655,6 +668,8 @@ class FixtureExportResponse(BaseModel):
 
 
 @router.get("/{run_id}/io", response_model=RunIOResponse)
+@handle_db_errors("runs.get_run_io_endpoint")
+@router.get("/{run_id}/io", response_model=RunIOResponse)
 async def get_run_io_endpoint(
     run_id: uuid.UUID,
     session: AsyncSession = Depends(get_db_session),
@@ -702,6 +717,8 @@ async def get_run_io_endpoint(
     return resp
 
 
+@router.get("/{run_id}/export-fixture", response_model=FixtureExportResponse)
+@handle_db_errors("runs.export_run_fixture")
 @router.get("/{run_id}/export-fixture", response_model=FixtureExportResponse)
 async def export_run_fixture(
     run_id: uuid.UUID,
@@ -776,6 +793,8 @@ async def export_run_fixture(
 
 
 @router.get("/{run_id}/workspace-lease")
+@handle_db_errors("runs.get_run_workspace_lease")
+@router.get("/{run_id}/workspace-lease")
 async def get_run_workspace_lease(
     run_id: uuid.UUID,
     session: AsyncSession = Depends(get_db_session),
@@ -830,6 +849,8 @@ async def get_run_workspace_lease(
     }
 
 
+@router.get("/{run_id}/workspace-events")
+@handle_db_errors("runs.get_run_workspace_events")
 @router.get("/{run_id}/workspace-events")
 async def get_run_workspace_events(
     run_id: uuid.UUID,
@@ -922,6 +943,8 @@ class NodeOutputResponse(BaseModel):
 
 
 @router.get("/{run_id}/nodes/{node_id}/output", response_model=NodeOutputResponse)
+@handle_db_errors("runs.get_run_node_output")
+@router.get("/{run_id}/nodes/{node_id}/output", response_model=NodeOutputResponse)
 async def get_run_node_output(
     run_id: uuid.UUID,
     node_id: str,
@@ -991,6 +1014,8 @@ class ObserveNodeResponse(BaseModel):
     human_observed_by: str | None = None
 
 
+@router.post("/{run_id}/nodes/{node_id}/observe", response_model=ObserveNodeResponse)
+@handle_db_errors("runs.observe_run_node")
 @router.post("/{run_id}/nodes/{node_id}/observe", response_model=ObserveNodeResponse)
 async def observe_run_node(
     run_id: uuid.UUID,
@@ -1102,6 +1127,12 @@ class NodeRecoverResponse(BaseModel):
     status: str
 
 
+@router.post(
+    "/{run_id}/nodes/{node_id}/recover",
+    response_model=NodeRecoverResponse,
+    status_code=status.HTTP_200_OK,
+)
+@handle_db_errors("runs.recover_run_node")
 @router.post(
     "/{run_id}/nodes/{node_id}/recover",
     response_model=NodeRecoverResponse,
@@ -1363,6 +1394,8 @@ def _lookup_agent_for_node(
 
 
 @router.post("/{run_id}/nodes/{node_id}/prompt/reveal", response_model=PromptRevealResponse)
+@handle_db_errors("runs.reveal_node_prompt")
+@router.post("/{run_id}/nodes/{node_id}/prompt/reveal", response_model=PromptRevealResponse)
 async def reveal_node_prompt(
     run_id: uuid.UUID,
     node_id: str,
@@ -1504,6 +1537,8 @@ class NodeOutputDiffResponse(BaseModel):
     has_diff: bool
 
 
+@router.post("/diff", response_model=NodeOutputDiffResponse)
+@handle_db_errors("runs.diff_node_output")
 @router.post("/diff", response_model=NodeOutputDiffResponse)
 async def diff_node_output(
     req: NodeOutputDiffRequest,

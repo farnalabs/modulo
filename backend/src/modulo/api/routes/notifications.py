@@ -17,6 +17,7 @@ from sqlalchemy import select
 from sqlalchemy.exc import ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from modulo.api.db_error_handling import handle_db_errors
 from modulo.api.dependencies import get_db_session
 from modulo.auth.dependencies import get_current_tenant_user
 from modulo.auth.jwt import TenantPrincipal
@@ -25,6 +26,8 @@ from modulo.db.rls import set_rls_org, set_rls_user_context
 from modulo.settings import Settings, get_settings
 
 logger = logging.getLogger(__name__)
+
+_log = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/v1/notifications", tags=["notifications"])
 
@@ -73,6 +76,8 @@ class NotificationEndpointResponse(BaseModel):
 
 
 @router.get("", response_model=list[NotificationEndpointResponse])
+@handle_db_errors("notifications.list_endpoints")
+@router.get("", response_model=list[NotificationEndpointResponse])
 async def list_endpoints(
     session: AsyncSession = Depends(get_db_session),
     principal: TenantPrincipal = Depends(get_current_tenant_user),
@@ -108,6 +113,8 @@ async def list_endpoints(
     return [_ep_to_response(ep) for ep in endpoints]
 
 
+@router.post("", response_model=NotificationEndpointResponse, status_code=status.HTTP_201_CREATED)
+@handle_db_errors("notifications.create_endpoint")
 @router.post("", response_model=NotificationEndpointResponse, status_code=status.HTTP_201_CREATED)
 async def create_endpoint(
     req: NotificationEndpointCreate,
@@ -173,6 +180,8 @@ async def create_endpoint(
 
 
 @router.get("/{endpoint_id}", response_model=NotificationEndpointResponse)
+@handle_db_errors("notifications.get_endpoint")
+@router.get("/{endpoint_id}", response_model=NotificationEndpointResponse)
 async def get_endpoint(
     endpoint_id: uuid.UUID,
     session: AsyncSession = Depends(get_db_session),
@@ -208,6 +217,8 @@ async def get_endpoint(
     return _ep_to_response(ep)
 
 
+@router.put("/{endpoint_id}", response_model=NotificationEndpointResponse)
+@handle_db_errors("notifications.update_endpoint")
 @router.put("/{endpoint_id}", response_model=NotificationEndpointResponse)
 async def update_endpoint(
     endpoint_id: uuid.UUID,
@@ -269,6 +280,8 @@ async def update_endpoint(
     return _ep_to_response(ep)
 
 
+@router.delete("/{endpoint_id}", status_code=status.HTTP_204_NO_CONTENT)
+@handle_db_errors("notifications.delete_endpoint")
 @router.delete("/{endpoint_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_endpoint(
     endpoint_id: uuid.UUID,
