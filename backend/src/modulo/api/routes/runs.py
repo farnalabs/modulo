@@ -64,6 +64,8 @@ _bg_executor_engine = create_async_engine(
 
 _log = logging.getLogger(__name__)
 
+_background_tasks: set[asyncio.Task[Any]] = set()
+
 router = APIRouter(prefix="/api/v1/runs", tags=["runs"])
 
 _TERMINAL_STATUSES = frozenset({"complete", "failed", "cancelled", "eval_failed"})
@@ -415,7 +417,9 @@ async def trigger_run(
         _bg_executor_engine,
         checkpointer_conn_string=pg_connection_string(str(_settings_for_bg.database_url)),
     )
-    asyncio.ensure_future(_run_in_background(executor, run_id, org_id, req.input_payload))
+    task = asyncio.ensure_future(_run_in_background(executor, run_id, org_id, req.input_payload))
+    _background_tasks.add(task)
+    task.add_done_callback(_background_tasks.discard)
 
     return _build_run_response(run)
 
