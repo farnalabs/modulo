@@ -54,6 +54,7 @@ class BackgroundPipelineWorker:
         self._consumer_task: asyncio.Task[None] | None = None
         self._running_jobs: set[asyncio.Task[None]] = set()
         self._started = False
+        self._semaphore: asyncio.Semaphore = asyncio.Semaphore(_POOL_SIZE)
 
     async def start(self) -> None:
         """Create the database engine and start the consumer loop.
@@ -145,8 +146,9 @@ class BackgroundPipelineWorker:
             try:
                 job = await self._queue.get()
                 backoff = 0.1
+                await self._semaphore.acquire()
                 task = asyncio.create_task(
-                    self._execute_job(job),
+                    self._execute_job_with_semaphore(job),
                     name=f"bg-pipeline-run-{job.run_id}",
                 )
                 self._running_jobs.add(task)
@@ -193,3 +195,17 @@ class BackgroundPipelineWorker:
                     )
             except Exception:
                 _log.exception("Background worker failed to mark run %s as failed", job.run_id)
+
+    async def _execute_job_with_semaphore(self, job: PipelineJob) -> None:
+        try:
+            await self._execute_job(job)
+        finally:
+            self._semaphore.release()
+
+    def info(self) -> dict[str, Any]:
+        return {
+            "started": self._started,
+            "queue_depth": self._queue.qsize(),
+            "in_flight": len(self._running_jobs),
+            "semaphore_available": self._semaphore._value if hasattr(self, "_semaphore") else None,
+        }
