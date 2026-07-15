@@ -133,7 +133,7 @@ routes:
     /runs/:id:
         name: run-detail
         breadcrumb: Run Detail
-        parent: /
+        parent: /runs
         product_map:
         sidebar_group: core
         sidebar_order: 8
