@@ -443,25 +443,14 @@ class PipelineExecutor:
                 token_budget=pipeline.token_budget,
             )
 
-        compiled = get_or_compile(
-            pipeline_id,
-            snapshot_id,
-            lambda: build_graph_from_json(
-                graph_json,
-                eval_definitions_by_node=resume_eval_defs_by_node,
-                session_factory=self._session_factory,
-                org_id=org_id,
-            ),
-        )
+        if not self._checkpointer_conn_string:
+            raise RuntimeError("Cannot resume without a checkpointer configured")
 
         config = {"configurable": {"thread_id": thread_id}}
         node_ids = {str(n["id"]) for n in graph_json.get("nodes", [])}
         node_token_budgets: dict[str, int] = {
             str(n["id"]): n["token_budget"] for n in graph_json.get("nodes", []) if n.get("token_budget") is not None
         }
-
-        if not self._checkpointer_conn_string:
-            raise RuntimeError("Cannot resume without a checkpointer configured")
 
         final_status: str = "failed"
         error_code: str | None = None
@@ -482,7 +471,17 @@ class PipelineExecutor:
                 organisation_id=org_id,
                 fernet_key=_settings.fernet_key,
             ) as saver:
-                compiled.checkpointer = saver
+                compiled = get_or_compile(
+                    pipeline_id,
+                    snapshot_id,
+                    lambda: build_graph_from_json(
+                        graph_json,
+                        eval_definitions_by_node=resume_eval_defs_by_node,
+                        session_factory=self._session_factory,
+                        org_id=org_id,
+                    ),
+                    checkpointer=saver,
+                )
                 await compiled.aupdate_state(config, {"_hitl_decision": resume_data})
                 final_status, error_code, _, node_token_usage = await self._stream_graph(
                     compiled,
