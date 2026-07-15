@@ -381,7 +381,7 @@ async def dashboard_summary(
                     .select_from(ModelBackend)
                     .where(
                         ModelBackend.organisation_id == org_id,
-                        ModelBackend.credentials_ciphertext.is_not(None),
+                        ModelBackend.credentials_ciphertext != b'',
                     )
                 )
                 mb_with_creds = int(mb_with_creds_result.scalar_one())
@@ -411,7 +411,7 @@ async def dashboard_summary(
                         .where(
                             ModelBackend.organisation_id == org_id,
                             ModelBackend.provider == default_provider,
-                            ModelBackend.credentials_ciphertext.is_not(None),
+                            ModelBackend.credentials_ciphertext != b'',
                         )
                     )
                     default_provider_count = int(default_provider_result.scalar_one())
