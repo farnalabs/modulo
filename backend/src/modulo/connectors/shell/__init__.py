@@ -129,15 +129,6 @@ class ShellConnector(ConnectorBase):
             raise ValueError("Runtime provider not configured")
         self._check_workspace_lease()
         provider_ref: str | None = q.filters.get("provider_ref")
-        if not provider_ref:
-            # Default provider ref for pipeline execution context
-            try:
-                result = await self._runtime_provider.execute_command(
-                    "/", "echo ok", timeout_seconds=10,
-                )
-                provider_ref = "/"
-            except Exception:
-                raise ValueError("provider_ref is required in query filters")
 
         match q.resource:
             case "file":
@@ -187,8 +178,6 @@ class ShellConnector(ConnectorBase):
             raise ValueError("Runtime provider not configured")
         self._check_workspace_lease()
         provider_ref: str | None = payload.data.get("provider_ref")
-        if not provider_ref:
-            provider_ref = "/"
 
         match payload.resource:
             case "command":

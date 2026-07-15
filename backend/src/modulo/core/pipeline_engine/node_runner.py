@@ -527,6 +527,10 @@ def make_connector_fn(
             filters.update({k: v for k, v in raw_input.items() if k not in data})
             data.update({k: v for k, v in raw_input.items() if k not in filters})
 
+        # Ensure provider_ref for shell connectors
+        if "provider_ref" not in filters and "provider_ref" not in data:
+            filters["provider_ref"] = "/"
+
         try:
             if op == "write":
                 payload = ConnectorPayload(resource=resource, data=data)
