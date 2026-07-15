@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 import uuid
 from datetime import datetime
 from typing import TYPE_CHECKING, Any
@@ -59,5 +57,5 @@ class Pipeline(OrgScoped):
     account_id: Mapped[uuid.UUID] = mapped_column(
         Uuid(), ForeignKey("accounts.id", ondelete="RESTRICT"), nullable=False
     )
-    organisation: Mapped[Organisation] = relationship()
-    creator: Mapped[Account] = relationship()
+    organisation: Mapped["Organisation"] = relationship()
+    creator: Mapped["Account"] = relationship()
