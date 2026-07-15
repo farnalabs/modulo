@@ -743,7 +743,7 @@ async def infer_schema_endpoint(
                     f"Supported types: {', '.join(sorted(supported_inference_types))}",
                 )
 
-            mbs = await list_model_backends(session, page_size=1)
+            mbs = await list_model_backends(session, org_id=principal.organisation_id, page_size=1)
             if not mbs.items:
                 raise HTTPException(
                     status_code=status.HTTP_400_BAD_REQUEST,
@@ -927,7 +927,7 @@ async def generate_schema_endpoint(
     try:
         async with session.begin():
             await set_rls_org(session, principal.organisation_id)
-            mbs = await list_model_backends(session, page_size=1)
+            mbs = await list_model_backends(session, org_id=principal.organisation_id, page_size=1)
             if not mbs.items:
                 raise HTTPException(
                     status_code=status.HTTP_400_BAD_REQUEST,

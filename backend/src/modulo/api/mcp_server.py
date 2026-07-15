@@ -2004,7 +2004,7 @@ async def infer_schema(
         async with _session(org_id) as s:
             from modulo.db.crud.model_backend import list_model_backends
 
-            mbs = await list_model_backends(s, page_size=1)
+            mbs = await list_model_backends(s, org_id=org_id, page_size=1)
             if not mbs.items:
                 return {"error": "no_backend", "detail": "No model backends configured; cannot perform inference"}
 
