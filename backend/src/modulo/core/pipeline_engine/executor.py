@@ -47,6 +47,7 @@ from modulo.core.model_backend_hub import ModelBackendHub
 from modulo.core.pipeline_engine.decorator import (
     RunCancelledError,
     set_cancellation_check,
+    set_connector_hub,
     set_model_backend_hub,
 )
 from modulo.core.pipeline_engine.event_broker import RunEventBroker, get_registry
@@ -330,6 +331,58 @@ class PipelineExecutor:
             raise
         except Exception:
             _log.warning("pipeline.model_backend_hub_init_failed", exc_info=True)
+        return hub
+
+    async def _init_connector_hub(self, org_id: uuid.UUID) -> Any | None:
+        """Load active ConnectorInstance rows for the org and initialise ConnectorHub.
+
+        Sets the hub on the current ContextVar so make_connector_fn can access it.
+        Returns the hub (or None if no connectors are configured).
+        """
+        hub: Any | None = None
+        try:
+            async with self._session_factory() as session, session.begin():
+                await set_rls_org(session, org_id)
+                from sqlalchemy import select
+
+                from modulo.db.models.connector_instance import ConnectorInstance
+
+                rows = (
+                    (
+                        await session.execute(
+                            select(ConnectorInstance).where(
+                                ConnectorInstance.organisation_id == org_id,
+                                ConnectorInstance.status == "active",
+                            )
+                        )
+                    )
+                    .scalars()
+                    .all()
+                )
+                if isinstance(rows, list) and rows:
+                    from modulo.core.connector_hub import ConnectorHub
+                    from modulo.core.pipeline_engine.decorator import set_connector_hub
+                    from modulo.core.runtime_provider import create_default_hub
+                    from modulo.core.secrets_backend import create_secrets_backend
+                    from modulo.settings import get_settings
+
+                    _settings = get_settings()
+                    secrets_backend = create_secrets_backend(
+                        fernet_key=_settings.fernet_key,
+                        session=session,
+                    )
+                    runtime_hub = create_default_hub()
+                    hub = ConnectorHub(
+                        secrets_backend=secrets_backend,
+                        runtime_provider=runtime_hub,
+                    )
+                    await hub.__aenter__()
+                    await hub.initialise(rows)
+                    set_connector_hub(hub)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            _log.warning("pipeline.connector_hub_init_failed", exc_info=True)
         return hub
 
     def _check_db_cancellation(
@@ -630,6 +683,8 @@ class PipelineExecutor:
 
         # Load model backends for this run's org — provides LLM access to agent nodes.
         model_backend_hub = await self._init_model_backend_hub(org_id)
+        # Load connector hub for this run's org — provides connector access to connector nodes.
+        connector_hub = await self._init_connector_hub(org_id)
 
         try:
             # Compile (or retrieve from cache) the StateGraph.
@@ -798,8 +853,11 @@ class PipelineExecutor:
             # Close broker after all post-stream work (suite checks, signals).
             set_cancellation_check(None)
             set_model_backend_hub(None)
+            set_connector_hub(None)
             if model_backend_hub is not None:
                 await model_backend_hub.__aexit__(None, None, None)
+            if connector_hub is not None:
+                await connector_hub.__aexit__(None, None, None)
             if final_status != "awaiting_human":
                 get_registry().close(run_id)
 
