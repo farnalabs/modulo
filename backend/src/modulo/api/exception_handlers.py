@@ -56,13 +56,4 @@ async def unhandled_exception_handler(request: Request, exc: Exception) -> JSONR
             request_id=rid,
         ).to_response()
     except Exception:
-        return JSONResponse(
-            status_code=500,
-            content={
-                "type": "urn:problem:modulo:internal_error",
-                "title": "Internal Error",
-                "detail": "An unexpected error occurred",
-                "status": 500,
-            },
-            headers={"X-Request-ID": rid or ""},
-        )
+        return ProblemDetail.fallback_internal_error(rid)
