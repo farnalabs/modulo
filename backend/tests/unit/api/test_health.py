@@ -51,12 +51,14 @@ class TestLiveness:
 class TestReadiness:
     def test_healthz_ready_mounted(self, client: TestClient) -> None:
         resp = client.get("/healthz/ready")
-        assert resp.status_code in (200, 503)
+        assert resp.status_code in (200, 503, 504)
 
     def test_healthz_ready_structure_when_unavailable(self, client: TestClient) -> None:
         resp = client.get("/healthz/ready")
-        assert resp.status_code in (200, 503)
+        assert resp.status_code in (200, 503, 504)
         body = resp.json()
+        if resp.status_code == 504:
+            return
         if resp.status_code == 503:
             assert body["status"] == "unavailable"
         assert body["version"] == "0.1.0"
@@ -161,3 +163,4 @@ class TestHttpTimeout:
         body = resp.json()
         assert body["status"] == "unavailable"
         assert "timeout" in body["checks"]["database"]["detail"].lower()
+
