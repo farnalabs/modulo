@@ -11,6 +11,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy.exc import IntegrityError, ProgrammingError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from modulo.api.db_error_handling import handle_db_errors
 from modulo.api.dependencies import get_db_session, get_or_create_engine, get_or_create_session_factory
 from modulo.auth.dependencies import get_current_tenant_user
 from modulo.auth.jwt import TenantPrincipal
@@ -61,6 +62,8 @@ def _validate_fernet_key(key: str, label: str) -> None:
 # ── Endpoints ──────────────────────────────────────────────────────────────
 
 
+@router.post("/rotate-key", response_model=RotateKeyResponse, status_code=status.HTTP_202_ACCEPTED)
+@handle_db_errors("admin.rotation.rotate_key")
 @router.post("/rotate-key", response_model=RotateKeyResponse, status_code=status.HTTP_202_ACCEPTED)
 async def rotate_key(
     req: RotateKeyRequest,
@@ -150,6 +153,8 @@ async def rotate_key(
         raise HTTPException(status_code=500, detail="Internal server error") from e
 
 
+@router.get("/status", response_model=RotationStatusResponse)
+@handle_db_errors("admin.rotation.rotation_status")
 @router.get("/status", response_model=RotationStatusResponse)
 async def rotation_status(
     current_user: TenantPrincipal = Depends(get_current_tenant_user),

@@ -18,6 +18,7 @@ from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError, ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from modulo.api.db_error_handling import handle_db_errors
 from modulo.api.dependencies import get_db_session
 from modulo.auth.dependencies import get_current_tenant_user
 from modulo.auth.jwt import TenantPrincipal
@@ -116,6 +117,8 @@ class EvalDefinitionListResponse(BaseModel):
 
 
 @router.post("/evals", response_model=dict[str, Any], status_code=status.HTTP_201_CREATED)
+@handle_db_errors("evals.create_eval_definition")
+@router.post("/evals", response_model=dict[str, Any], status_code=status.HTTP_201_CREATED)
 async def create_eval_definition(
     req: CreateEvalRequest,
     session: AsyncSession = Depends(get_db_session),
@@ -182,6 +185,8 @@ async def create_eval_definition(
 # ---------------------------------------------------------------------------
 
 
+@router.get("/evals", response_model=EvalDefinitionListResponse)
+@handle_db_errors("evals.list_eval_definitions")
 @router.get("/evals", response_model=EvalDefinitionListResponse)
 async def list_eval_definitions(
     page: int = Query(1, ge=1),
@@ -251,6 +256,8 @@ async def list_eval_definitions(
 # ---------------------------------------------------------------------------
 
 
+@router.get("/evals/coverage", status_code=status.HTTP_200_OK)
+@handle_db_errors("evals.eval_coverage")
 @router.get("/evals/coverage", status_code=status.HTTP_200_OK)
 async def eval_coverage(
     pipeline_id: uuid.UUID = Query(..., description="Pipeline ID"),
@@ -352,6 +359,8 @@ async def eval_coverage(
 
 
 @router.get("/evals/{eval_id}", response_model=dict[str, Any])
+@handle_db_errors("evals.get_eval_definition")
+@router.get("/evals/{eval_id}", response_model=dict[str, Any])
 async def get_eval_definition(
     eval_id: uuid.UUID,
     session: AsyncSession = Depends(get_db_session),
@@ -398,6 +407,8 @@ async def get_eval_definition(
     return _eval_def_to_dict(eval_def)
 
 
+@router.put("/evals/{eval_id}", response_model=dict[str, Any])
+@handle_db_errors("evals.update_eval_definition")
 @router.put("/evals/{eval_id}", response_model=dict[str, Any])
 async def update_eval_definition(
     eval_id: uuid.UUID,
@@ -456,6 +467,8 @@ async def update_eval_definition(
 
 
 @router.delete("/evals/{eval_id}", status_code=status.HTTP_204_NO_CONTENT)
+@handle_db_errors("evals.delete_eval_definition")
+@router.delete("/evals/{eval_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_eval_definition(
     eval_id: uuid.UUID,
     session: AsyncSession = Depends(get_db_session),
@@ -505,6 +518,8 @@ async def delete_eval_definition(
         ) from None
 
 
+@router.get("/runs/{run_id}/evals", response_model=dict[str, Any], status_code=status.HTTP_200_OK)
+@handle_db_errors("evals.list_run_evals")
 @router.get("/runs/{run_id}/evals", response_model=dict[str, Any], status_code=status.HTTP_200_OK)
 async def list_run_evals(
     run_id: uuid.UUID,
@@ -621,6 +636,8 @@ class CreateEvalFromRunRequest(BaseModel):
 # ---------------------------------------------------------------------------
 
 
+@router.post("/evals/compare", status_code=status.HTTP_200_OK)
+@handle_db_errors("evals.compare_evals")
 @router.post("/evals/compare", status_code=status.HTTP_200_OK)
 async def compare_evals(
     req: CompareEvalsRequest,
@@ -792,6 +809,8 @@ async def compare_evals(
 # ---------------------------------------------------------------------------
 
 
+@router.post("/evals/from-run", status_code=status.HTTP_201_CREATED)
+@handle_db_errors("evals.create_eval_from_run")
 @router.post("/evals/from-run", status_code=status.HTTP_201_CREATED)
 async def create_eval_from_run(
     req: CreateEvalFromRunRequest,

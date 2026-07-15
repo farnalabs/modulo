@@ -1,5 +1,6 @@
 import logging
 import os
+import threading
 from collections.abc import Awaitable, Callable
 from typing import Any
 
@@ -14,6 +15,9 @@ from modulo.version import get_version
 
 logger = logging.getLogger(__name__)
 
+_unhandled_exception_count: int = 0
+_unhandled_count_lock = threading.Lock()
+
 
 class CatchAllMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next: Callable[[Request], Awaitable[Response]]) -> Response:
@@ -22,10 +26,19 @@ class CatchAllMiddleware(BaseHTTPMiddleware):
         except HTTPException:
             raise
         except Exception:
+            global _unhandled_exception_count
+            with _unhandled_count_lock:
+                _unhandled_exception_count += 1
+
             rid = getattr(request.state, "request_id", None)
             logger.exception(
                 "middleware.unhandled_exception",
-                extra={"method": request.method, "path": str(request.url.path), "request_id": rid},
+                extra={
+                    "method": request.method,
+                    "path": str(request.url.path),
+                    "request_id": rid,
+                    "total_unhandled": _unhandled_exception_count,
+                },
             )
             try:
                 await _ingest_unhandled_error(request)
@@ -74,6 +87,13 @@ async def _ingest_unhandled_error(request: Request) -> None:
                 await service.ingest(session, org_id, event_data)
     except Exception:
         logger.exception("middleware.error_ingest_failed")
+
+
+def get_unhandled_exception_count() -> int:
+    """Expose the counter for observability / monitoring."""
+    global _unhandled_exception_count
+    with _unhandled_count_lock:
+        return _unhandled_exception_count
 
 
 def _make_500_response(request_id: str | None) -> JSONResponse:

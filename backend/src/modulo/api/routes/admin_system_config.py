@@ -9,12 +9,15 @@ from pydantic import BaseModel, Field
 from sqlalchemy.exc import IntegrityError, ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from modulo.api.db_error_handling import handle_db_errors
 from modulo.api.dependencies import get_db_session
 from modulo.auth.dependencies import get_current_user
 from modulo.auth.jwt import AuthenticatedPrincipal
 from modulo.db.crud.system_config import delete_config, list_config, set_config
 
 logger = logging.getLogger(__name__)
+
+_log = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/v1/system-admin/config", tags=["admin-system-config"])
 
@@ -25,6 +28,8 @@ class ConfigEntry(BaseModel):
     updated_at: str | None = None
 
 
+@router.get("")
+@handle_db_errors("admin.system_config.admin_list_config")
 @router.get("")
 async def admin_list_config(
     current_user: AuthenticatedPrincipal = Depends(get_current_user),
@@ -68,6 +73,8 @@ class SetConfigRequest(BaseModel):
 
 
 @router.put("/{key}")
+@handle_db_errors("admin.system_config.admin_set_config")
+@router.put("/{key}")
 async def admin_set_config(
     key: str,
     req: SetConfigRequest,
@@ -109,6 +116,8 @@ async def admin_set_config(
         raise HTTPException(status_code=500, detail="Internal server error") from None
 
 
+@router.delete("/{key}", status_code=status.HTTP_204_NO_CONTENT)
+@handle_db_errors("admin.system_config.admin_delete_config")
 @router.delete("/{key}", status_code=status.HTTP_204_NO_CONTENT)
 async def admin_delete_config(
     key: str,

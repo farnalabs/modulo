@@ -9,6 +9,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy.exc import IntegrityError, ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from modulo.api.db_error_handling import handle_db_errors
 from modulo.api.dependencies import get_db_session
 from modulo.auth.dependencies import get_current_tenant_user
 from modulo.auth.jwt import TenantPrincipal
@@ -100,6 +101,8 @@ def _variant_to_response(group: Any) -> dict[str, Any]:
 
 
 @router.post("", response_model=VariantGroupResponse, status_code=status.HTTP_201_CREATED)
+@handle_db_errors("variants.create_group")
+@router.post("", response_model=VariantGroupResponse, status_code=status.HTTP_201_CREATED)
 async def create_group(
     req: CreateVariantGroupRequest,
     session: AsyncSession = Depends(get_db_session),
@@ -147,6 +150,8 @@ async def create_group(
 
 
 @router.get("", response_model=list[VariantGroupResponse])
+@handle_db_errors("variants.list_groups")
+@router.get("", response_model=list[VariantGroupResponse])
 async def list_groups(
     pipeline_id: uuid.UUID | None = Query(None),
     page: int = Query(1, ge=1),
@@ -185,6 +190,8 @@ async def list_groups(
 
 
 @router.get("/{group_id}", response_model=VariantGroupResponse)
+@handle_db_errors("variants.get_group")
+@router.get("/{group_id}", response_model=VariantGroupResponse)
 async def get_group(
     group_id: uuid.UUID,
     session: AsyncSession = Depends(get_db_session),
@@ -222,6 +229,8 @@ async def get_group(
     return _variant_to_response(group)
 
 
+@router.put("/{group_id}", response_model=VariantGroupResponse)
+@handle_db_errors("variants.update_group")
 @router.put("/{group_id}", response_model=VariantGroupResponse)
 async def update_group(
     group_id: uuid.UUID,
@@ -271,6 +280,8 @@ async def update_group(
 
 
 @router.delete("/{group_id}", status_code=status.HTTP_204_NO_CONTENT)
+@handle_db_errors("variants.delete_group")
+@router.delete("/{group_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_group(
     group_id: uuid.UUID,
     session: AsyncSession = Depends(get_db_session),
@@ -308,6 +319,8 @@ async def delete_group(
     return
 
 
+@router.post("/{group_id}/run", response_model=RunVariantResponse)
+@handle_db_errors("variants.run_variant")
 @router.post("/{group_id}/run", response_model=RunVariantResponse)
 async def run_variant(
     group_id: uuid.UUID,
@@ -382,6 +395,8 @@ async def run_variant(
 
 
 @router.get("/{group_id}/coverage-gaps", response_model=list[CoverageGap])
+@handle_db_errors("variants.coverage_gaps")
+@router.get("/{group_id}/coverage-gaps", response_model=list[CoverageGap])
 async def coverage_gaps(
     group_id: uuid.UUID,
     session: AsyncSession = Depends(get_db_session),
@@ -423,6 +438,8 @@ async def coverage_gaps(
     return gaps
 
 
+@router.get("/{group_id}/prompt-diffs", response_model=list[PromptDiffEntry])
+@handle_db_errors("variants.prompt_diffs")
 @router.get("/{group_id}/prompt-diffs", response_model=list[PromptDiffEntry])
 async def prompt_diffs(
     group_id: uuid.UUID,

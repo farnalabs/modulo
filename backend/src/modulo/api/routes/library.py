@@ -13,6 +13,7 @@ from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError, ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from modulo.api.db_error_handling import handle_db_errors
 from modulo.api.dependencies import get_db_session
 from modulo.auth.dependencies import get_current_tenant_user, require_system_admin
 from modulo.auth.jwt import TenantPrincipal
@@ -270,6 +271,8 @@ _log = logging.getLogger(__name__)
 
 
 @router.get("", response_model=LibraryPrimitiveListResponse)
+@handle_db_errors("library.list_library_primitives_endpoint")
+@router.get("", response_model=LibraryPrimitiveListResponse)
 async def list_library_primitives_endpoint(
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
@@ -352,10 +355,14 @@ async def list_library_primitives_endpoint(
 
 
 @router.get("/ping")
+@handle_db_errors("library.ping")
+@router.get("/ping")
 async def ping() -> dict[str, bool]:
     return {"pong": True}
 
 
+@router.get("/{primitive_id}", response_model=LibraryPrimitiveResponse)
+@handle_db_errors("library.get_library_primitive_endpoint")
 @router.get("/{primitive_id}", response_model=LibraryPrimitiveResponse)
 async def get_library_primitive_endpoint(
     primitive_id: uuid.UUID,
@@ -396,6 +403,8 @@ async def get_library_primitive_endpoint(
 # ---------------------------------------------------------------------------
 
 
+@router.post("", response_model=LibraryPrimitiveResponse, status_code=status.HTTP_201_CREATED)
+@handle_db_errors("library.create_library_primitive_endpoint")
 @router.post("", response_model=LibraryPrimitiveResponse, status_code=status.HTTP_201_CREATED)
 async def create_library_primitive_endpoint(
     req: LibraryPrimitiveCreate,
@@ -463,6 +472,8 @@ async def create_library_primitive_endpoint(
 
 
 @router.patch("/{primitive_id}", response_model=LibraryPrimitiveResponse)
+@handle_db_errors("library.update_library_primitive_endpoint")
+@router.patch("/{primitive_id}", response_model=LibraryPrimitiveResponse)
 async def update_library_primitive_endpoint(
     primitive_id: uuid.UUID,
     req: LibraryPrimitiveUpdate,
@@ -499,6 +510,8 @@ async def update_library_primitive_endpoint(
     return LibraryPrimitiveResponse.model_validate(prim)
 
 
+@router.delete("/{primitive_id}", status_code=status.HTTP_204_NO_CONTENT)
+@handle_db_errors("library.delete_library_primitive_endpoint")
 @router.delete("/{primitive_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_library_primitive_endpoint(
     primitive_id: uuid.UUID,
@@ -538,6 +551,8 @@ async def delete_library_primitive_endpoint(
 # ---------------------------------------------------------------------------
 
 
+@router.post("/{primitive_id}/adapt", response_model=LibraryPrimitiveResponse)
+@handle_db_errors("library.copy_to_adapt_endpoint")
 @router.post("/{primitive_id}/adapt", response_model=LibraryPrimitiveResponse)
 async def copy_to_adapt_endpoint(
     primitive_id: uuid.UUID,
@@ -589,6 +604,8 @@ async def copy_to_adapt_endpoint(
 # ---------------------------------------------------------------------------
 
 
+@router.post("/export/{pipeline_id}")
+@handle_db_errors("library.export_pipeline_endpoint")
 @router.post("/export/{pipeline_id}")
 async def export_pipeline_endpoint(
     pipeline_id: uuid.UUID,
@@ -778,6 +795,8 @@ async def _analyse_bundle(
 
 
 @router.post("/import/upload-zip", response_model=ImportBundleResponse)
+@handle_db_errors("library.upload_zip_and_analyse_endpoint")
+@router.post("/import/upload-zip", response_model=ImportBundleResponse)
 async def upload_zip_and_analyse_endpoint(
     file: UploadFile = File(...),
     session: AsyncSession = Depends(get_db_session),
@@ -816,6 +835,8 @@ async def upload_zip_and_analyse_endpoint(
 
 
 @router.post("/import/analyse", response_model=ImportBundleResponse)
+@handle_db_errors("library.analyse_import_bundle_endpoint")
+@router.post("/import/analyse", response_model=ImportBundleResponse)
 async def analyse_import_bundle_endpoint(
     req: AnalyseBundleRequest,
     session: AsyncSession = Depends(get_db_session),
@@ -834,6 +855,8 @@ async def analyse_import_bundle_endpoint(
 # ---------------------------------------------------------------------------
 
 
+@router.post("/import/confirm", response_model=dict[str, Any])
+@handle_db_errors("library.confirm_import_endpoint")
 @router.post("/import/confirm", response_model=dict[str, Any])
 async def confirm_import_endpoint(
     req: ImportConfirmRequest,
@@ -906,6 +929,8 @@ async def confirm_import_endpoint(
 
 
 @router.get("/{primitive_id}/ratings", response_model=RatingListResponse)
+@handle_db_errors("library.list_ratings_endpoint")
+@router.get("/{primitive_id}/ratings", response_model=RatingListResponse)
 async def list_ratings_endpoint(
     primitive_id: uuid.UUID,
     page: int = Query(1, ge=1),
@@ -941,6 +966,8 @@ async def list_ratings_endpoint(
 
 
 @router.get("/{primitive_id}/ratings/aggregate", response_model=RatingAggregateResponse)
+@handle_db_errors("library.get_rating_aggregate_endpoint")
+@router.get("/{primitive_id}/ratings/aggregate", response_model=RatingAggregateResponse)
 async def get_rating_aggregate_endpoint(
     primitive_id: uuid.UUID,
     session: AsyncSession = Depends(get_db_session),
@@ -973,6 +1000,12 @@ async def get_rating_aggregate_endpoint(
     )
 
 
+@router.post(
+    "/{primitive_id}/ratings",
+    response_model=RatingResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+@handle_db_errors("library.submit_rating_endpoint")
 @router.post(
     "/{primitive_id}/ratings",
     response_model=RatingResponse,
@@ -1024,6 +1057,12 @@ async def submit_rating_endpoint(
     return RatingResponse.model_validate(rating)
 
 
+@router.post(
+    "/{primitive_id}/ratings/abuse",
+    response_model=AbuseReportResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+@handle_db_errors("library.submit_abuse_report_endpoint")
 @router.post(
     "/{primitive_id}/ratings/abuse",
     response_model=AbuseReportResponse,
@@ -1146,6 +1185,12 @@ def _build_pipeline_from_template(
     response_model=PipelineFromTemplateResponse,
     status_code=status.HTTP_201_CREATED,
 )
+@handle_db_errors("library.create_pipeline_from_template_endpoint")
+@router.post(
+    "/{primitive_id}/create-pipeline",
+    response_model=PipelineFromTemplateResponse,
+    status_code=status.HTTP_201_CREATED,
+)
 async def create_pipeline_from_template_endpoint(
     primitive_id: uuid.UUID,
     req: CreatePipelineFromTemplateRequest,
@@ -1257,6 +1302,8 @@ class CommunityContributionListResponse(BaseModel):
 
 
 @router.post("/community/contribute", response_model=LibraryPrimitiveResponse, status_code=status.HTTP_201_CREATED)
+@handle_db_errors("library.community_contribute_endpoint")
+@router.post("/community/contribute", response_model=LibraryPrimitiveResponse, status_code=status.HTTP_201_CREATED)
 async def community_contribute_endpoint(
     req: CommunityContributeRequest,
     session: AsyncSession = Depends(get_db_session),
@@ -1296,6 +1343,8 @@ async def community_contribute_endpoint(
     return LibraryPrimitiveResponse.model_validate(result)
 
 
+@router.get("/community/contributions", response_model=CommunityContributionListResponse)
+@handle_db_errors("library.list_community_contributions_endpoint")
 @router.get("/community/contributions", response_model=CommunityContributionListResponse)
 async def list_community_contributions_endpoint(
     contribution_status: str | None = Query(default=None),
@@ -1346,6 +1395,12 @@ async def list_community_contributions_endpoint(
     )
 
 
+@router.post(
+    "/admin/library/community/publish/{primitive_id}",
+    response_model=LibraryPrimitiveResponse,
+    status_code=status.HTTP_200_OK,
+)
+@handle_db_errors("library.admin_publish_contribution_endpoint")
 @router.post(
     "/admin/library/community/publish/{primitive_id}",
     response_model=LibraryPrimitiveResponse,

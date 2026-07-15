@@ -12,6 +12,7 @@ from sqlalchemy import func, select
 from sqlalchemy.exc import ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from modulo.api.db_error_handling import handle_db_errors
 from modulo.api.dependencies import get_db_session
 from modulo.api.models.error_notification_rule import (
     ErrorNotificationRuleCreate,
@@ -56,6 +57,8 @@ def _require_admin(principal: TenantPrincipal) -> None:
         )
 
 
+@router.get("", response_model=ErrorNotificationRuleListResponse)
+@handle_db_errors("error_notification_rules.list_notification_rules")
 @router.get("", response_model=ErrorNotificationRuleListResponse)
 async def list_notification_rules(
     limit: int = Query(20, ge=1, le=100),
@@ -112,6 +115,8 @@ async def list_notification_rules(
     }
 
 
+@router.post("", response_model=ErrorNotificationRuleResponse, status_code=status.HTTP_201_CREATED)
+@handle_db_errors("error_notification_rules.create_notification_rule")
 @router.post("", response_model=ErrorNotificationRuleResponse, status_code=status.HTTP_201_CREATED)
 async def create_notification_rule(
     req: ErrorNotificationRuleCreate,
@@ -177,6 +182,8 @@ async def create_notification_rule(
     return _serialize_rule(rule)
 
 
+@router.put("/{rule_id}", response_model=ErrorNotificationRuleResponse)
+@handle_db_errors("error_notification_rules.update_notification_rule")
 @router.put("/{rule_id}", response_model=ErrorNotificationRuleResponse)
 async def update_notification_rule(
     rule_id: uuid.UUID,
@@ -247,6 +254,8 @@ async def update_notification_rule(
     return _serialize_rule(rule)
 
 
+@router.delete("/{rule_id}", status_code=status.HTTP_204_NO_CONTENT)
+@handle_db_errors("error_notification_rules.delete_notification_rule")
 @router.delete("/{rule_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_notification_rule(
     rule_id: uuid.UUID,

@@ -16,6 +16,7 @@ from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError, ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from modulo.api.db_error_handling import handle_db_errors
 from modulo.api.dependencies import get_db_session
 from modulo.auth.dependencies import get_current_tenant_user
 from modulo.auth.jwt import TenantPrincipal
@@ -32,6 +33,8 @@ from modulo.db.rls import set_rls_org, set_rls_user_context
 from modulo.settings import Settings, get_settings
 
 logger = logging.getLogger(__name__)
+
+_log = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/v1/model-backends", tags=["model-backends"])
 
@@ -128,6 +131,8 @@ def _to_response(mb: Any) -> ModelBackendResponse:
     )
 
 
+@router.get("", response_model=ModelBackendListResponse)
+@handle_db_errors("model_backends.list_model_backends_endpoint")
 @router.get("", response_model=ModelBackendListResponse)
 async def list_model_backends_endpoint(
     page: int = Query(1, ge=1),
@@ -226,6 +231,8 @@ def _validate_provider(provider: str) -> None:
 
 
 @router.post("", response_model=ModelBackendResponse, status_code=status.HTTP_201_CREATED)
+@handle_db_errors("model_backends.create_model_backend_endpoint")
+@router.post("", response_model=ModelBackendResponse, status_code=status.HTTP_201_CREATED)
 async def create_model_backend_endpoint(
     req: ModelBackendCreate,
     session: AsyncSession = Depends(get_db_session),
@@ -300,6 +307,8 @@ async def create_model_backend_endpoint(
 
 
 @router.get("/{backend_id}", response_model=ModelBackendResponse)
+@handle_db_errors("model_backends.get_model_backend_endpoint")
+@router.get("/{backend_id}", response_model=ModelBackendResponse)
 async def get_model_backend_endpoint(
     backend_id: uuid.UUID,
     session: AsyncSession = Depends(get_db_session),
@@ -338,6 +347,8 @@ async def get_model_backend_endpoint(
     return _to_response(mb)
 
 
+@router.patch("/{backend_id}", response_model=ModelBackendResponse)
+@handle_db_errors("model_backends.update_model_backend_endpoint")
 @router.patch("/{backend_id}", response_model=ModelBackendResponse)
 async def update_model_backend_endpoint(
     backend_id: uuid.UUID,
@@ -385,6 +396,8 @@ async def update_model_backend_endpoint(
     return _to_response(mb)
 
 
+@router.delete("/{backend_id}", status_code=status.HTTP_204_NO_CONTENT)
+@handle_db_errors("model_backends.delete_model_backend_endpoint")
 @router.delete("/{backend_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_model_backend_endpoint(
     backend_id: uuid.UUID,

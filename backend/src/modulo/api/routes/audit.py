@@ -11,6 +11,7 @@ from pydantic import BaseModel
 from sqlalchemy.exc import ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from modulo.api.db_error_handling import handle_db_errors
 from modulo.api.dependencies import get_db_session, require_feature
 from modulo.auth.dependencies import get_current_tenant_user
 from modulo.auth.jwt import TenantPrincipal
@@ -39,6 +40,8 @@ class BatchDetailRequest(BaseModel):
     event_ids: list[str]
 
 
+@router.get("", response_model=dict[str, object])
+@handle_db_errors("audit.list_audit_events_endpoint")
 @router.get("", response_model=dict[str, object])
 async def list_audit_events_endpoint(
     cursor: str | None = Query(None, max_length=256, description="Cursor: JSON {c:created_at, i:id}"),
@@ -145,6 +148,8 @@ async def batch_detail_endpoint(
     return result
 
 
+@router.get("/verify", response_model=dict[str, object])
+@handle_db_errors("audit.verify_chain_endpoint")
 @router.get("/verify", response_model=dict[str, object])
 async def verify_chain_endpoint(
     session: AsyncSession = Depends(get_db_session),

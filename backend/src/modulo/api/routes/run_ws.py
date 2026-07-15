@@ -27,6 +27,7 @@ from jwt import InvalidTokenError as JWTError
 from sqlalchemy.exc import ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
+from modulo.api.db_error_handling import handle_db_errors
 from modulo.api.dependencies import _get_engine
 from modulo.auth.jwt import AuthenticatedPrincipal, decode_principal
 from modulo.auth.ws_token import WsTokenExpiredError, consume_ws_token
@@ -46,6 +47,8 @@ router = APIRouter(prefix="/api/v1/runs", tags=["runs-ws"])
 _TERMINAL_STATUSES = {"complete", "failed", "cancelled"}
 
 
+@router.websocket("/{run_id}/ws")
+@handle_db_errors("run_ws.run_websocket")
 @router.websocket("/{run_id}/ws")
 async def run_websocket(
     ws: WebSocket,

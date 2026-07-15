@@ -9,6 +9,7 @@ from pydantic import BaseModel
 from sqlalchemy.exc import ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from modulo.api.db_error_handling import handle_db_errors
 from modulo.api.dependencies import get_db_session, require_feature
 from modulo.auth.sso import (
     oidc_get_authorize_url,
@@ -47,6 +48,8 @@ class SsoProvidersResponse(BaseModel):
 
 
 @router.get("/sso/providers", response_model=SsoProvidersResponse)
+@handle_db_errors("sso.sso_providers")
+@router.get("/sso/providers", response_model=SsoProvidersResponse)
 async def sso_providers(
     _: object = require_feature("sso"),
     settings: Settings = Depends(get_settings),
@@ -79,6 +82,8 @@ async def sso_providers(
 
 
 @router.get("/oidc/{provider}/login")
+@handle_db_errors("sso.oidc_login")
+@router.get("/oidc/{provider}/login")
 async def oidc_login(
     provider: str,
     request: Request,
@@ -105,6 +110,8 @@ async def oidc_login(
     return Response(status_code=status.HTTP_307_TEMPORARY_REDIRECT, headers={"Location": auth_url})
 
 
+@router.get("/oidc/{provider}/callback")
+@handle_db_errors("sso.oidc_callback")
 @router.get("/oidc/{provider}/callback")
 async def oidc_callback(
     provider: str,
@@ -168,6 +175,8 @@ async def oidc_callback(
 
 
 @router.get("/saml/login")
+@handle_db_errors("sso.saml_login")
+@router.get("/saml/login")
 async def saml_login(
     request: Request,
     _: object = require_feature("sso"),
@@ -207,6 +216,8 @@ async def saml_login(
     return Response(status_code=status.HTTP_307_TEMPORARY_REDIRECT, headers={"Location": auth_url})
 
 
+@router.post("/saml/acs")
+@handle_db_errors("sso.saml_acs")
 @router.post("/saml/acs")
 async def saml_acs(
     request: Request,
@@ -261,6 +272,8 @@ async def saml_acs(
     return _redirect_to_frontend(tokens, settings)
 
 
+@router.get("/saml/metadata", response_class=PlainTextResponse)
+@handle_db_errors("sso.saml_metadata")
 @router.get("/saml/metadata", response_class=PlainTextResponse)
 async def saml_metadata(
     request: Request,

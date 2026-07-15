@@ -19,6 +19,7 @@ from sqlalchemy import select
 from sqlalchemy.exc import ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
+from modulo.api.db_error_handling import handle_db_errors
 from modulo.api.dependencies import _get_engine, get_db_session, get_or_create_engine, pg_connection_string
 from modulo.auth.dependencies import get_current_tenant_user
 from modulo.auth.jwt import TenantPrincipal
@@ -45,6 +46,8 @@ router = APIRouter(prefix="/api/v1/triggers", tags=["webhooks"])
 _trigger_engine = TriggerEngine()
 
 
+@router.post("/{trigger_id}/webhook", status_code=status.HTTP_202_ACCEPTED)
+@handle_db_errors("webhooks.receive_webhook")
 @router.post("/{trigger_id}/webhook", status_code=status.HTTP_202_ACCEPTED)
 async def receive_webhook(
     trigger_id: uuid.UUID,
@@ -157,6 +160,8 @@ async def receive_webhook(
 
 
 @router.post("/{trigger_id}/webhook/replay/{event_id}", status_code=status.HTTP_202_ACCEPTED)
+@handle_db_errors("webhooks.replay_webhook")
+@router.post("/{trigger_id}/webhook/replay/{event_id}", status_code=status.HTTP_202_ACCEPTED)
 async def replay_webhook(
     trigger_id: uuid.UUID,
     event_id: uuid.UUID,
@@ -238,6 +243,8 @@ async def replay_webhook(
     return {"run_id": str(run_id), "status": "accepted"}
 
 
+@router.post("/cleanup-expired", status_code=status.HTTP_200_OK)
+@handle_db_errors("webhooks.cleanup_expired")
 @router.post("/cleanup-expired", status_code=status.HTTP_200_OK)
 async def cleanup_expired(
     session: AsyncSession = Depends(get_db_session),
