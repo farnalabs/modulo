@@ -446,6 +446,16 @@ class PipelineExecutor:
         if not self._checkpointer_conn_string:
             raise RuntimeError("Cannot resume without a checkpointer configured")
 
+        compiled = get_or_compile(
+            pipeline_id,
+            snapshot_id,
+            lambda: build_graph_from_json(
+                graph_json,
+                session_factory=self._session_factory,
+                org_id=org_id,
+            ),
+        )
+
         config = {"configurable": {"thread_id": thread_id}}
         node_ids = {str(n["id"]) for n in graph_json.get("nodes", [])}
         node_token_budgets: dict[str, int] = {
