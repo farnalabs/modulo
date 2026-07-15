@@ -75,7 +75,6 @@ class NotificationEndpointResponse(BaseModel):
     team_id: str | None = None
 
 
-@router.get("", response_model=list[NotificationEndpointResponse])
 @handle_db_errors("notifications.list_endpoints")
 @router.get("", response_model=list[NotificationEndpointResponse])
 async def list_endpoints(
@@ -113,7 +112,6 @@ async def list_endpoints(
     return [_ep_to_response(ep) for ep in endpoints]
 
 
-@router.post("", response_model=NotificationEndpointResponse, status_code=status.HTTP_201_CREATED)
 @handle_db_errors("notifications.create_endpoint")
 @router.post("", response_model=NotificationEndpointResponse, status_code=status.HTTP_201_CREATED)
 async def create_endpoint(
@@ -179,7 +177,6 @@ async def create_endpoint(
     return _ep_to_response(ep)
 
 
-@router.get("/{endpoint_id}", response_model=NotificationEndpointResponse)
 @handle_db_errors("notifications.get_endpoint")
 @router.get("/{endpoint_id}", response_model=NotificationEndpointResponse)
 async def get_endpoint(
@@ -217,7 +214,6 @@ async def get_endpoint(
     return _ep_to_response(ep)
 
 
-@router.put("/{endpoint_id}", response_model=NotificationEndpointResponse)
 @handle_db_errors("notifications.update_endpoint")
 @router.put("/{endpoint_id}", response_model=NotificationEndpointResponse)
 async def update_endpoint(
@@ -280,7 +276,6 @@ async def update_endpoint(
     return _ep_to_response(ep)
 
 
-@router.delete("/{endpoint_id}", status_code=status.HTTP_204_NO_CONTENT)
 @handle_db_errors("notifications.delete_endpoint")
 @router.delete("/{endpoint_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_endpoint(

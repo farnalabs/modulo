@@ -129,7 +129,6 @@ class StarterPipelineResponse(BaseModel):
     name: str
 
 
-@router.get("/status", response_model=OnboardingStatusResponse)
 @handle_db_errors("onboarding.get_onboarding_status")
 @router.get("/status", response_model=OnboardingStatusResponse)
 async def get_onboarding_status(
@@ -191,7 +190,6 @@ async def get_onboarding_status(
     )
 
 
-@router.post("/step", response_model=MarkStepResponse)
 @handle_db_errors("onboarding.mark_step_completed")
 @router.post("/step", response_model=MarkStepResponse)
 async def mark_step_completed(
@@ -234,7 +232,6 @@ async def mark_step_completed(
         ) from e
 
 
-@router.get("/step/{step_id}", response_model=OnboardingStepDataResponse)
 @handle_db_errors("onboarding.get_step_data")
 @router.get("/step/{step_id}", response_model=OnboardingStepDataResponse)
 async def get_step_data(
@@ -307,7 +304,6 @@ async def get_step_data(
         ) from e
 
 
-@router.post("/starter-pipeline", response_model=StarterPipelineResponse, status_code=status.HTTP_201_CREATED)
 @handle_db_errors("onboarding.create_starter_pipeline")
 @router.post("/starter-pipeline", response_model=StarterPipelineResponse, status_code=status.HTTP_201_CREATED)
 async def create_starter_pipeline(

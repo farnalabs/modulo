@@ -115,7 +115,6 @@ def _sample_to_response(s: ScanSample) -> SampleResponse:
     )
 
 
-@router.get("", response_model=DeterminationResponse)
 @handle_db_errors("determination.run_determination")
 @router.get("", response_model=DeterminationResponse)
 async def run_determination(
@@ -186,7 +185,6 @@ async def run_determination(
         raise HTTPException(status_code=500, detail="Internal server error") from None
 
 
-@router.post("/draft", response_model=DraftResponse)
 @handle_db_errors("determination.create_determination_draft")
 @router.post("/draft", response_model=DraftResponse)
 async def create_determination_draft(

@@ -80,7 +80,6 @@ class LifecycleMapListResponse(BaseModel):
     page_size: int
 
 
-@router.get("", response_model=LifecycleMapListResponse)
 @handle_db_errors("lifecycle_maps.list_lifecycle_maps_endpoint")
 @router.get("", response_model=LifecycleMapListResponse)
 async def list_lifecycle_maps_endpoint(
@@ -128,7 +127,6 @@ async def list_lifecycle_maps_endpoint(
     )
 
 
-@router.post("", response_model=LifecycleMapResponse, status_code=status.HTTP_201_CREATED)
 @handle_db_errors("lifecycle_maps.create_lifecycle_map_endpoint")
 @router.post("", response_model=LifecycleMapResponse, status_code=status.HTTP_201_CREATED)
 async def create_lifecycle_map_endpoint(
@@ -172,7 +170,6 @@ async def create_lifecycle_map_endpoint(
     return LifecycleMapResponse.model_validate(lifecycle_map)
 
 
-@router.get("/{lifecycle_map_id}", response_model=LifecycleMapResponse)
 @handle_db_errors("lifecycle_maps.get_lifecycle_map_endpoint")
 @router.get("/{lifecycle_map_id}", response_model=LifecycleMapResponse)
 async def get_lifecycle_map_endpoint(
@@ -208,7 +205,6 @@ async def get_lifecycle_map_endpoint(
     return LifecycleMapResponse.model_validate(lifecycle_map)
 
 
-@router.put("/{lifecycle_map_id}", response_model=LifecycleMapResponse)
 @handle_db_errors("lifecycle_maps.update_lifecycle_map_endpoint")
 @router.put("/{lifecycle_map_id}", response_model=LifecycleMapResponse)
 async def update_lifecycle_map_endpoint(
@@ -249,7 +245,6 @@ async def update_lifecycle_map_endpoint(
     return LifecycleMapResponse.model_validate(lifecycle_map)
 
 
-@router.delete("/{lifecycle_map_id}", status_code=status.HTTP_204_NO_CONTENT)
 @handle_db_errors("lifecycle_maps.delete_lifecycle_map_endpoint")
 @router.delete("/{lifecycle_map_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_lifecycle_map_endpoint(

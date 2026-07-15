@@ -84,7 +84,6 @@ class MeResponse(BaseModel):
     is_system_admin: bool = False
 
 
-@router.post("/login")
 @handle_db_errors("auth.login")
 @router.post("/login")
 async def login(
@@ -185,7 +184,6 @@ async def login(
     return response
 
 
-@router.post("/refresh")
 @handle_db_errors("auth.refresh")
 @router.post("/refresh")
 async def refresh(
@@ -303,7 +301,6 @@ async def refresh(
     return response
 
 
-@router.post("/logout")
 @handle_db_errors("auth.logout")
 @router.post("/logout")
 async def logout(
@@ -368,7 +365,6 @@ async def logout(
     return response
 
 
-@router.post("/ws-token", response_model=WsTokenResponse)
 @handle_db_errors("auth.ws_token")
 @router.post("/ws-token", response_model=WsTokenResponse)
 async def ws_token(
@@ -432,7 +428,6 @@ async def ws_token(
         ) from None
 
 
-@router.get("/me", response_model=MeResponse)
 @handle_db_errors("auth.me")
 @router.get("/me", response_model=MeResponse)
 async def me(
@@ -481,7 +476,6 @@ class CsrfTokenResponse(BaseModel):
     csrf_token: str
 
 
-@router.get("/csrf-token", response_model=CsrfTokenResponse)
 @handle_db_errors("auth.csrf_token")
 @router.get("/csrf-token", response_model=CsrfTokenResponse)
 async def csrf_token(

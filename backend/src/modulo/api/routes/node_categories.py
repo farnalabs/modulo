@@ -67,7 +67,6 @@ class NodeCategoryListResponse(BaseModel):
     page_size: int
 
 
-@router.get("", response_model=NodeCategoryListResponse)
 @handle_db_errors("node_categories.list_node_categories_endpoint")
 @router.get("", response_model=NodeCategoryListResponse)
 async def list_node_categories_endpoint(
@@ -117,7 +116,6 @@ async def list_node_categories_endpoint(
     )
 
 
-@router.post("", response_model=NodeCategoryResponse, status_code=status.HTTP_201_CREATED)
 @handle_db_errors("node_categories.create_node_category_endpoint")
 @router.post("", response_model=NodeCategoryResponse, status_code=status.HTTP_201_CREATED)
 async def create_node_category_endpoint(
@@ -168,7 +166,6 @@ async def create_node_category_endpoint(
     return NodeCategoryResponse.model_validate(category)
 
 
-@router.get("/{category_id}", response_model=NodeCategoryResponse)
 @handle_db_errors("node_categories.get_node_category_endpoint")
 @router.get("/{category_id}", response_model=NodeCategoryResponse)
 async def get_node_category_endpoint(
@@ -212,7 +209,6 @@ async def get_node_category_endpoint(
     return NodeCategoryResponse.model_validate(category)
 
 
-@router.patch("/{category_id}", response_model=NodeCategoryResponse)
 @handle_db_errors("node_categories.update_node_category_endpoint")
 @router.patch("/{category_id}", response_model=NodeCategoryResponse)
 async def update_node_category_endpoint(
@@ -258,7 +254,6 @@ async def update_node_category_endpoint(
     return NodeCategoryResponse.model_validate(category)
 
 
-@router.delete("/{category_id}", status_code=status.HTTP_204_NO_CONTENT)
 @handle_db_errors("node_categories.delete_node_category_endpoint")
 @router.delete("/{category_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_node_category_endpoint(

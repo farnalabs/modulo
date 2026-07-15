@@ -68,7 +68,6 @@ def _require_admin(principal: TenantPrincipal) -> None:
         )
 
 
-@router.get("", response_model=CostReportResponse)
 @handle_db_errors("costs.get_costs")
 @router.get("", response_model=CostReportResponse)
 async def get_costs(
@@ -121,7 +120,6 @@ async def get_costs(
     )
 
 
-@router.get("/limits", response_model=SpendLimitResponse)
 @handle_db_errors("costs.get_spend_limits")
 @router.get("/limits", response_model=SpendLimitResponse)
 async def get_spend_limits(
@@ -176,7 +174,6 @@ async def get_spend_limits(
     )
 
 
-@router.put("/limits/org", response_model=dict[str, Any])
 @handle_db_errors("costs.set_org_spend_limit")
 @router.put("/limits/org", response_model=dict[str, Any])
 async def set_org_spend_limit(
@@ -226,7 +223,6 @@ async def set_org_spend_limit(
     }
 
 
-@router.put("/limits/teams/{team_id}", response_model=dict[str, Any])
 @handle_db_errors("costs.set_team_spend_limit")
 @router.put("/limits/teams/{team_id}", response_model=dict[str, Any])
 async def set_team_spend_limit(
@@ -292,7 +288,6 @@ class UpdateCostControlsRequest(BaseModel):
     billing_period: str | None = None
 
 
-@router.get("/controls", response_model=CostControlsResponse)
 @handle_db_errors("costs.get_cost_controls")
 @router.get("/controls", response_model=CostControlsResponse)
 async def get_cost_controls(
@@ -344,7 +339,6 @@ async def get_cost_controls(
     )
 
 
-@router.put("/controls", response_model=CostControlsResponse)
 @handle_db_errors("costs.update_cost_controls")
 @router.put("/controls", response_model=CostControlsResponse)
 async def update_cost_controls(
@@ -408,7 +402,6 @@ async def update_cost_controls(
 # ── Export ────────────────────────────────────────────────────────────────────
 
 
-@router.get("/export")
 @handle_db_errors("costs.export_costs")
 @router.get("/export")
 async def export_costs(
@@ -516,7 +509,6 @@ def _report_response(report: ScheduledReport) -> ReportResponse:
     )
 
 
-@router.post("/reports", response_model=ReportResponse, status_code=201)
 @handle_db_errors("costs.create_report")
 @router.post("/reports", response_model=ReportResponse, status_code=201)
 async def create_report(
@@ -568,7 +560,6 @@ async def create_report(
     return _report_response(report)
 
 
-@router.get("/reports", response_model=list[ReportResponse])
 @handle_db_errors("costs.list_reports")
 @router.get("/reports", response_model=list[ReportResponse])
 async def list_reports(
@@ -613,7 +604,6 @@ async def list_reports(
     return [_report_response(report) for report in reports]
 
 
-@router.delete("/reports/{report_id}", status_code=204)
 @handle_db_errors("costs.delete_report")
 @router.delete("/reports/{report_id}", status_code=204)
 async def delete_report(
@@ -674,7 +664,6 @@ class AnomalyResponse(BaseModel):
     dismissed: bool
 
 
-@router.get("/anomalies", response_model=list[AnomalyResponse])
 @handle_db_errors("costs.get_anomalies")
 @router.get("/anomalies", response_model=list[AnomalyResponse])
 async def get_anomalies(
@@ -789,7 +778,6 @@ async def get_anomalies(
         ) from None
 
 
-@router.get("/anomalies/dismiss/{anomaly_id}", status_code=204)
 @handle_db_errors("costs.dismiss_anomaly_endpoint")
 @router.get("/anomalies/dismiss/{anomaly_id}", status_code=204)
 async def dismiss_anomaly_endpoint(

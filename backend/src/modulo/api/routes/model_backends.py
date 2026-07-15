@@ -131,7 +131,6 @@ def _to_response(mb: Any) -> ModelBackendResponse:
     )
 
 
-@router.get("", response_model=ModelBackendListResponse)
 @handle_db_errors("model_backends.list_model_backends_endpoint")
 @router.get("", response_model=ModelBackendListResponse)
 async def list_model_backends_endpoint(
@@ -230,7 +229,6 @@ def _validate_provider(provider: str) -> None:
     )
 
 
-@router.post("", response_model=ModelBackendResponse, status_code=status.HTTP_201_CREATED)
 @handle_db_errors("model_backends.create_model_backend_endpoint")
 @router.post("", response_model=ModelBackendResponse, status_code=status.HTTP_201_CREATED)
 async def create_model_backend_endpoint(
@@ -306,7 +304,6 @@ async def create_model_backend_endpoint(
     return _to_response(mb)
 
 
-@router.get("/{backend_id}", response_model=ModelBackendResponse)
 @handle_db_errors("model_backends.get_model_backend_endpoint")
 @router.get("/{backend_id}", response_model=ModelBackendResponse)
 async def get_model_backend_endpoint(
@@ -347,7 +344,6 @@ async def get_model_backend_endpoint(
     return _to_response(mb)
 
 
-@router.patch("/{backend_id}", response_model=ModelBackendResponse)
 @handle_db_errors("model_backends.update_model_backend_endpoint")
 @router.patch("/{backend_id}", response_model=ModelBackendResponse)
 async def update_model_backend_endpoint(
@@ -396,7 +392,6 @@ async def update_model_backend_endpoint(
     return _to_response(mb)
 
 
-@router.delete("/{backend_id}", status_code=status.HTTP_204_NO_CONTENT)
 @handle_db_errors("model_backends.delete_model_backend_endpoint")
 @router.delete("/{backend_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_model_backend_endpoint(

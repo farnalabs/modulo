@@ -43,7 +43,6 @@ class TestEmailRequest(BaseModel):
     to: str = Field(min_length=1)
 
 
-@router.get("/{org_id}/email-settings", response_model=EmailSettingsResponse)
 @handle_db_errors("admin.email.admin_get_email_settings")
 @router.get("/{org_id}/email-settings", response_model=EmailSettingsResponse)
 async def admin_get_email_settings(
@@ -93,7 +92,6 @@ async def admin_get_email_settings(
     )
 
 
-@router.put("/{org_id}/email-settings", response_model=EmailSettingsResponse)
 @handle_db_errors("admin.email.admin_update_email_settings")
 @router.put("/{org_id}/email-settings", response_model=EmailSettingsResponse)
 async def admin_update_email_settings(
@@ -176,7 +174,6 @@ async def admin_update_email_settings(
     )
 
 
-@router.post("/{org_id}/email-settings/test", status_code=status.HTTP_200_OK)
 @handle_db_errors("admin.email.admin_test_email_settings")
 @router.post("/{org_id}/email-settings/test", status_code=status.HTTP_200_OK)
 async def admin_test_email_settings(
