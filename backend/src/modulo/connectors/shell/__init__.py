@@ -84,6 +84,19 @@ class ShellConnector(ConnectorBase):
                 "No active workspace lease. Shell access is only available inside a running pipeline.",
             )
 
+    async def _resolve_profile_from_hub(self) -> Any | None:
+        if self._environment_profile_id is None:
+            return None
+        try:
+            from modulo.db.crud.environment_profile import get_environment_profile
+            from modulo.db.session import AsyncSessionLocal
+
+            async with AsyncSessionLocal() as session:
+                return await get_environment_profile(session, self._environment_profile_id)
+        except Exception:
+            _log.exception("Failed to resolve environment profile from hub")
+            return None
+
     def _check_command_allowed(self, command: list[str]) -> None:
         if not self._allowed_commands:
             raise ConnectorPermissionError(
@@ -97,6 +110,17 @@ class ShellConnector(ConnectorBase):
             )
 
     async def query(self, q: ConnectorQuery) -> ConnectorResult:
+        if (
+            self._runtime_provider is None
+            and self._runtime_provider_hub is not None
+            and self._environment_profile_id is not None
+        ):
+            profile = await self._resolve_profile_from_hub()
+            if profile is not None:
+                provider = self._runtime_provider_hub.resolve(profile)
+                if provider is not None:
+                    self._runtime_provider = provider
+
         if self._runtime_provider is None:
             raise ValueError("Runtime provider not configured")
         self._check_workspace_lease()
@@ -137,6 +161,17 @@ class ShellConnector(ConnectorBase):
                 raise ValueError(f"Unsupported shell query resource: {q.resource!r}")
 
     async def write(self, payload: ConnectorPayload) -> dict[str, Any]:
+        if (
+            self._runtime_provider is None
+            and self._runtime_provider_hub is not None
+            and self._environment_profile_id is not None
+        ):
+            profile = await self._resolve_profile_from_hub()
+            if profile is not None:
+                provider = self._runtime_provider_hub.resolve(profile)
+                if provider is not None:
+                    self._runtime_provider = provider
+
         if self._runtime_provider is None:
             raise ValueError("Runtime provider not configured")
         self._check_workspace_lease()
