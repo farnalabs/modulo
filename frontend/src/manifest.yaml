@@ -51,7 +51,7 @@ routes:
     /pipelines:
         name: pipeline-list
         breadcrumb: Pipelines
-        parent: /library
+        parent: /
         product_map:
         sidebar_group: core
         sidebar_order: 3
