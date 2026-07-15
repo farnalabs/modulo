@@ -214,7 +214,18 @@ def build_graph_from_json(
 
         connector_binding = node_def.get("connector_binding")
 
-        if connector_binding:
+        if node_type == "agent" and node_def.get("agent_id"):
+            graph.add_node(
+                node_id,
+                make_node_fn(
+                    node_def,
+                    role=role,
+                    timeout=timeout,
+                    max_input_length=max_input_length,
+                    token_budget=token_budget,
+                ),
+            )
+        elif connector_binding:
             graph.add_node(
                 node_id,
                 make_connector_fn(node_def, timeout=timeout),
