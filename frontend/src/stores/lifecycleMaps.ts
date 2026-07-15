@@ -109,8 +109,14 @@ export const useLifecycleMapsStore = defineStore('lifecycleMaps', () => {
     isLoading.value = true
     error.value = null
     try {
-      const data = await get<LifecycleMapSummary[]>('/api/v1/lifecycle-maps')
-      maps.value = Array.isArray(data) ? data : []
+      const data = await get<LifecycleMapSummary[] | { items?: LifecycleMapSummary[] }>('/api/v1/lifecycle-maps')
+      if (Array.isArray(data)) {
+        maps.value = data
+      } else if (data && Array.isArray((data as any).items)) {
+        maps.value = (data as any).items as LifecycleMapSummary[]
+      } else {
+        maps.value = []
+      }
     } catch (e: unknown) {
       error.value = formatApiError(e)
       maps.value = []
