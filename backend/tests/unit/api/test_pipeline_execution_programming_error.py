@@ -14,7 +14,7 @@ import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy.exc import ProgrammingError, SQLAlchemyError
 
-from modulo.api.dependencies import _get_engine, get_db_session, get_plan_context
+from modulo.api.dependencies import _get_engine, _get_session_factory, get_db_session, get_plan_context
 from modulo.api.main import app
 from modulo.auth.dependencies import get_current_user
 from modulo.auth.jwt import AuthenticatedPrincipal
@@ -75,6 +75,24 @@ def _override_session(session) -> None:
         yield session
 
     app.dependency_overrides[get_db_session] = _get_session
+
+    # Also override the session factory so routes that create sessions from a
+    # factory (e.g. _do_list_runs via _get_session_factory) use the mock session
+    # instead of creating a real AsyncSession backed by a MagicMock engine.
+    class _MockFactory:
+        def __init__(self, s: AsyncMock) -> None:
+            self._session = s
+
+        def __call__(self):
+            return self
+
+        async def __aenter__(self) -> AsyncMock:
+            return self._session
+
+        async def __aexit__(self, *args: object) -> None:
+            pass
+
+    app.dependency_overrides[_get_session_factory] = lambda: _MockFactory(session)
 
 
 # ---------------------------------------------------------------------------
