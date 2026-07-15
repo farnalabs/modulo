@@ -417,9 +417,15 @@ async def trigger_run(
         _bg_executor_engine,
         checkpointer_conn_string=pg_connection_string(str(_settings_for_bg.database_url)),
     )
-    task = asyncio.ensure_future(_run_in_background(executor, run_id, org_id, req.input_payload))
-    _background_tasks.add(task)
-    task.add_done_callback(_background_tasks.discard)
+    import traceback as _tb
+    print(f"TRIGGER_RUN: scheduling background task for run {run_id}", flush=True)
+    try:
+        task = asyncio.ensure_future(_run_in_background(executor, run_id, org_id, req.input_payload))
+        _background_tasks.add(task)
+        task.add_done_callback(_background_tasks.discard)
+        print(f"TRIGGER_RUN: task scheduled for run {run_id}", flush=True)
+    except Exception as e:
+        print(f"TRIGGER_RUN ERROR: {e}\n{_tb.format_exc()}", flush=True)
 
     return _build_run_response(run)
 
@@ -600,9 +606,12 @@ async def _run_in_background(
     org_id: uuid.UUID,
     input_payload: dict[str, Any],
 ) -> None:
+    print(f"BG_TASK: starting for run {run_id}", flush=True)
     try:
         await executor.execute(run_id=run_id, org_id=org_id, input_payload=input_payload)
+        print(f"BG_TASK: completed for run {run_id}", flush=True)
     except Exception:
+        print(f"BG_TASK: failed for run {run_id}", flush=True)
         _log.exception("run.background_execution_error", extra={"run_id": str(run_id)})
         try:
             factory = async_sessionmaker(_bg_executor_engine, expire_on_commit=False)
