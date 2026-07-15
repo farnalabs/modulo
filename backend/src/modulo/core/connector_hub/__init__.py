@@ -115,6 +115,7 @@ class ConnectorHub:
         secrets_backend: SecretsBackend,
         org_id: str | None = None,
         runtime_provider: Any = None,
+        runtime_provider_hub: Any = None,
     ) -> None:
         self._secrets_backend = secrets_backend
         self._connectors: dict[uuid.UUID, ConnectorBase] = {}
@@ -122,6 +123,7 @@ class ConnectorHub:
         self._tracer = trace.get_tracer("modulo.connector_hub")
         self._org_id = org_id
         self._runtime_provider = runtime_provider
+        self._runtime_provider_hub = runtime_provider_hub
         self._initialised = False
         self._init_lock = asyncio.Lock()
 
@@ -167,6 +169,7 @@ class ConnectorHub:
                         ci.config_json,
                         creds,
                         runtime_provider=self._runtime_provider,
+                        runtime_provider_hub=self._runtime_provider_hub,
                     )
                     acl = ConnectorACL(
                         visibility=ci.visibility,
@@ -395,6 +398,7 @@ def _build_connector(
     config: dict[str, Any] | None,
     creds: dict[str, Any],
     runtime_provider: Any = None,
+    runtime_provider_hub: Any = None,
 ) -> ConnectorBase:
     config = config or {}
     match type_id:
@@ -420,7 +424,13 @@ def _build_connector(
             return GitLabConnector(token=_get_cred(creds, "token", type_id))
         case "shell":
             allowed = config.get("allowed_commands")
-            return ShellConnector(runtime_provider=runtime_provider, allowed_commands=allowed)
+            env_profile_id = config.get("environment_profile_id")
+            return ShellConnector(
+                runtime_provider=runtime_provider,
+                runtime_provider_hub=runtime_provider_hub,
+                environment_profile_id=env_profile_id,
+                allowed_commands=allowed,
+            )
         case "linear":
             return LinearConnector(api_key=_get_cred(creds, "api_key", type_id))
         case "jira":
