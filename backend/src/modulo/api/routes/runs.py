@@ -491,8 +491,6 @@ async def get_run_heatmap_endpoint(
 
 
 @router.get("/{run_id}", response_model=RunResponse)
-@handle_db_errors("runs.get_run_status")
-@router.get("/{run_id}", response_model=RunResponse)
 async def get_run_status(
     run_id: uuid.UUID,
     factory: async_sessionmaker[AsyncSession] = Depends(_get_session_factory),
