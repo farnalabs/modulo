@@ -652,10 +652,7 @@ class PipelineExecutor:
                 if n.get("token_budget") is not None
             }
 
-            # TODO(LangGraph 1.2.x compat): re-enable when LangGraph fixes TypeError
-            # with checkpointers during initial astream_events. The resume() path
-            # sets up its own checkpointer separately.
-            if False:
+            if self._checkpointer_conn_string:
                 from modulo.settings import get_settings
 
                 _settings = get_settings()
@@ -664,7 +661,18 @@ class PipelineExecutor:
                     organisation_id=org_id,
                     fernet_key=_settings.fernet_key,
                 ) as saver:
-                    compiled.checkpointer = saver
+                    compiled = get_or_compile(
+                        pipeline_id,
+                        snapshot_id,
+                        lambda: build_graph_from_json(
+                            graph_json,
+                            eval_definitions_by_node=eval_defs_by_node,
+                            session_factory=self._session_factory,
+                            org_id=org_id,
+                            checkpointer=saver,
+                        ),
+                        checkpointer=saver,
+                    )
                     final_status, error_code, error_detail, node_token_usage = await self._stream_graph(
                         compiled,
                         initial_state,
