@@ -705,6 +705,9 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
         await _bg_worker.start()
         set_runs_bg_worker(_bg_worker)
         set_mcp_bg_worker(_bg_worker)
+        from modulo.api.routes.health import set_worker_ref as set_health_bg_worker
+
+        set_health_bg_worker(_bg_worker)
     except Exception:
         logger.warning("startup.background_worker_init_failed", exc_info=True)
 
