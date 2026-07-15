@@ -27,6 +27,7 @@ from modulo.db.models.notification_delivery import NotificationDeliveryLog
 from modulo.db.models.notification_endpoint import NotificationEndpoint
 from modulo.db.models.oauth_client import OAuthClient
 from modulo.db.models.oauth_token import OAuthAuthorizationCode, OAuthTokenFamily
+from modulo.db.models.onboarding_progress import OnboardingProgress
 from modulo.db.models.org_membership import OrgMembership
 from modulo.db.models.organisation import Organisation
 from modulo.db.models.pipeline import Pipeline
@@ -93,6 +94,7 @@ __all__ = [
     "OAuthAuthorizationCode",
     "OAuthClient",
     "OAuthTokenFamily",
+    "OnboardingProgress",
     "OrgApiKey",
     "OrgDailyRunCount",
     "OrgMembership",
