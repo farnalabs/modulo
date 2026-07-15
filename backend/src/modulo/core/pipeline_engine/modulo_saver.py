@@ -328,10 +328,7 @@ class ModuloPostgresSaver(AsyncPostgresSaver):
                         if value.get("parent_checkpoint_id")
                         else None
                     ),
-                    (self._load_blobs(value["channel_values"]) if value.get("channel_values") else None),  # type: ignore[arg-type]
                     (self._load_writes(value["pending_writes"]) if value.get("pending_writes") else None),
-                    (self._load_writes(value["pending_sends"]) if value.get("pending_sends") else None),
-                    value["metadata"] if not isinstance(value["metadata"], dict) else None,
                 )
         return None
 
@@ -389,10 +386,7 @@ class ModuloPostgresSaver(AsyncPostgresSaver):
                         if value.get("parent_checkpoint_id")
                         else None
                     ),
-                    (self._load_blobs(value["channel_values"]) if value.get("channel_values") else None),  # type: ignore[arg-type]
                     (self._load_writes(value["pending_writes"]) if value.get("pending_writes") else None),
-                    (self._load_writes(value["pending_sends"]) if value.get("pending_sends") else None),
-                    value["metadata"] if not isinstance(value["metadata"], dict) else None,
                 )
 
     # ------------------------------------------------------------------
