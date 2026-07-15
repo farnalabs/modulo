@@ -1,5 +1,4 @@
 <template>
-  <BackLink to="/library" label="Back to Library" class="ml-6" />
   <div class="flex h-[calc(100vh-3.5rem)]">
     <div v-if="loading" class="flex flex-1 items-center justify-center">
       <div class="h-8 w-8 animate-spin rounded-full border-4 border-primary border-t-transparent" />
@@ -53,9 +52,31 @@
             </template>
           </div>
           <span class="mx-2 h-4 w-px bg-border" />
+          <Button
+            variant="default"
+            size="xs"
+            :disabled="savingGraph"
+            @click="saveGraph"
+            data-testid="pipeline-editor-save"
+          >
+            <svg v-if="savingGraph" class="mr-1 h-3 w-3 animate-spin" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"/><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"/></svg>
+            {{ savingGraph ? $t('views.PipelineEditorView.saving_graph') : $t('views.PipelineEditorView.save') }}
+          </Button>
+          <Button
+            variant="default"
+            size="xs"
+            class="border-indigo-300 bg-indigo-600 text-white hover:bg-indigo-500"
+            :disabled="running || flowNodes.length === 0"
+            :title="flowNodes.length === 0 ? $t('views.PipelineEditorView.no_nodes_to_run') : ''"
+            @click="openRunDialog"
+            data-testid="pipeline-editor-run"
+          >
+            <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="currentColor" class="mr-1"><polygon points="5 3 19 12 5 21 5 3"/></svg>
+            {{ running ? $t('views.PipelineEditorView.running') : $t('views.PipelineEditorView.run_pipeline') }}
+          </Button>
           <div class="relative" @click.stop>
             <button
-              class="rounded-md bg-indigo-600 px-3 py-1 text-xs font-medium text-white hover:bg-indigo-500"
+              class="rounded-md border border-input bg-background px-2 py-1 text-xs font-medium hover:bg-accent"
               @click="showSaveAsDropdown = !showSaveAsDropdown"
             >
               Save as template
@@ -99,6 +120,78 @@
           </button>
         </div>
 
+        <!-- Run dialog modal -->
+        <div role="button" tabindex="0" @keydown.enter="($event.currentTarget as HTMLElement).click()" @keydown.space.prevent="($event.currentTarget as HTMLElement).click()"
+          v-if="showRunDialog"
+          class="fixed inset-0 z-50 flex items-center justify-center bg-black/50"
+          @click.self="closeRunDialog"
+        >
+          <div class="bg-card border border-border rounded-xl shadow-xl w-full max-w-lg mx-4 p-6 space-y-4">
+            <div class="flex items-center justify-between">
+              <h2 class="text-base font-semibold text-foreground">{{ $t('views.PipelineEditorView.run_dialog_title') }}</h2>
+              <button
+                class="text-muted-foreground hover:text-foreground transition-colors"
+                @click="closeRunDialog"
+                aria-label="Close"
+              >
+                <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+              </button>
+            </div>
+
+            <p class="text-sm text-muted-foreground">
+              Run <span class="font-medium text-foreground">{{ pipeline?.name }}</span>
+            </p>
+
+            <div v-if="isWebhookTriggered" class="rounded-lg bg-muted border p-3 text-sm text-muted-foreground">
+              {{ $t('views.PipelineEditorView.webhook_triggered_info') }}
+            </div>
+
+            <div v-else class="space-y-2">
+              <label for="pipeline-editor-run-prompt" class="block text-sm font-medium text-foreground">Prompt</label>
+              <textarea id="pipeline-editor-run-prompt"
+                v-model="runPrompt"
+                :placeholder="$t('views.PipelineEditorView.run_prompt_placeholder')"
+                rows="4"
+                class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm resize-none focus:outline-none focus:ring-2 focus:ring-primary"
+                data-testid="pipeline-editor-run-prompt"
+              />
+            </div>
+
+            <div v-if="runError" class="rounded-lg bg-destructive/10 border border-destructive/30 p-3 text-sm text-destructive">
+              {{ runError }}
+            </div>
+
+            <div class="flex justify-end gap-2 pt-2">
+              <button
+                class="px-4 py-2 border border-input bg-background text-foreground text-sm font-medium rounded-lg hover:bg-accent transition-colors"
+                @click="closeRunDialog"
+              >
+                {{ $t('views.PipelineEditorView.cancel') }}
+              </button>
+              <Button
+                v-if="!isWebhookTriggered"
+                variant="default"
+                class="border-indigo-300 bg-indigo-600 text-white hover:bg-indigo-500"
+                :disabled="running"
+                @click="triggerRun"
+                data-testid="pipeline-editor-run-submit"
+              >
+                <svg
+                  v-if="running"
+                  class="animate-spin h-4 w-4 mr-1"
+                  xmlns="http://www.w3.org/2000/svg"
+                  fill="none"
+                  viewBox="0 0 24 24"
+                >
+                  <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4" />
+                  <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+                </svg>
+                {{ running ? $t('views.PipelineEditorView.running') : $t('views.PipelineEditorView.run_pipeline') }}
+              </Button>
+            </div>
+          </div>
+        </div>
+
         <VueFlow
           v-model:nodes="flowNodes"
           v-model:edges="flowEdges"
@@ -134,13 +227,13 @@
       <!-- Node Properties Panel -->
       <aside v-if="selectedNodeData && !selectedEdgeData" class="w-96 overflow-y-auto border-l bg-card p-4">
         <h2 class="mb-4 text-base font-semibold">{{ $t('views.PipelineEditorView.node_properties') }}</h2>
-        <dl class="space-y-3 text-sm">
+        <dl class="space-y-4 text-sm">
           <div>
-            <dt class="text-muted-foreground">ID</dt>
-            <dd class="font-mono text-xs">{{ shortId(selectedNodeData.id) }}</dd>
+            <dt class="text-muted-foreground text-xs uppercase tracking-wider">ID</dt>
+            <dd class="font-mono text-[10px] text-muted-foreground break-all select-all">{{ selectedNodeData.id }}</dd>
           </div>
           <div>
-            <dt class="text-muted-foreground">{{ $t('views.PipelineEditorView.type_label') }}</dt>
+            <dt class="text-muted-foreground text-xs uppercase tracking-wider">{{ $t('views.PipelineEditorView.type_label') }}</dt>
             <dd>
               <span
                 :class="selectedNodeData.node_type === 'manual'
@@ -152,20 +245,58 @@
             </dd>
           </div>
           <div>
-            <dt class="text-muted-foreground">{{ $t('views.PipelineEditorView.label_field') }}</dt>
+            <dt class="text-muted-foreground text-xs uppercase tracking-wider">{{ $t('views.PipelineEditorView.label_field') }}</dt>
             <dd>{{ selectedNodeData.label || '-' }}</dd>
           </div>
+
+          <!-- Manual node: Output Schema -->
           <div v-if="selectedNodeData.node_type === 'manual' && selectedNodeData.output_schema_id">
-            <dt class="text-muted-foreground">{{ $t('views.PipelineEditorView.output_schema') }}</dt>
-            <dd class="font-mono text-xs">{{ shortId(selectedNodeData.output_schema_id) }}</dd>
+            <dt class="text-muted-foreground text-xs uppercase tracking-wider">{{ $t('views.PipelineEditorView.output_schema') }}</dt>
+            <dd class="font-medium">{{ schemaName(selectedNodeData.output_schema_id) || shortId(selectedNodeData.output_schema_id) }}</dd>
           </div>
-          <div v-if="selectedNodeData.node_type === 'agent' && selectedNodeData.agent_id">
-            <dt class="text-muted-foreground">{{ $t('views.PipelineEditorView.agent') }}</dt>
-            <dd class="font-mono text-xs">{{ shortId(selectedNodeData.agent_id) }}</dd>
-          </div>
-          <div v-if="selectedNodeData.node_type === 'agent' && selectedNodeData.connector_binding">
-            <dt class="text-muted-foreground">{{ $t('views.PipelineEditorView.connector') }}</dt>
-            <dd class="font-mono text-xs">{{ selectedNodeData.connector_binding.type }}{{ selectedNodeData.connector_binding.instance_id ? ' / ' + shortId(selectedNodeData.connector_binding.instance_id) : '' }}</dd>
+
+          <!-- Agent node: Agent details -->
+          <template v-if="selectedNodeData.node_type === 'agent' && selectedNodeData.agent_id">
+            <div>
+              <dt class="text-muted-foreground text-xs uppercase tracking-wider">{{ $t('views.PipelineEditorView.agent') }}</dt>
+              <dd class="font-medium">{{ agentName(selectedNodeData.agent_id) || shortId(selectedNodeData.agent_id) }}</dd>
+              <router-link
+                v-if="selectedNodeData.agent_id"
+                :to="`/admin/agents/${selectedNodeData.agent_id}`"
+                class="mt-0.5 inline-flex items-center gap-1 text-xs text-indigo-500 hover:text-indigo-400"
+              >
+                {{ $t('views.PipelineEditorView.view_agent') }}
+                <svg xmlns="http://www.w3.org/2000/svg" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></svg>
+              </router-link>
+            </div>
+            <div v-if="agentModelBackendId(selectedNodeData.agent_id)">
+              <dt class="text-muted-foreground text-xs uppercase tracking-wider">{{ $t('views.PipelineEditorView.model_backend') }}</dt>
+              <dd class="font-medium">{{ agentModelBackendName(selectedNodeData.agent_id) || shortId(agentModelBackendId(selectedNodeData.agent_id)) }}</dd>
+            </div>
+            <div v-if="agentInputSchemaId(selectedNodeData.agent_id)">
+              <dt class="text-muted-foreground text-xs uppercase tracking-wider">{{ $t('views.PipelineEditorView.input_schema') }}</dt>
+              <dd class="font-medium">{{ schemaName(agentInputSchemaId(selectedNodeData.agent_id)) || shortId(agentInputSchemaId(selectedNodeData.agent_id)) }}</dd>
+            </div>
+            <div v-if="agentOutputSchemaId(selectedNodeData.agent_id)">
+              <dt class="text-muted-foreground text-xs uppercase tracking-wider">{{ $t('views.PipelineEditorView.output_schema') }}</dt>
+              <dd class="font-medium">{{ schemaName(agentOutputSchemaId(selectedNodeData.agent_id)) || shortId(agentOutputSchemaId(selectedNodeData.agent_id)) }}</dd>
+            </div>
+            <div v-if="selectedNodeData.connector_binding">
+              <dt class="text-muted-foreground text-xs uppercase tracking-wider">{{ $t('views.PipelineEditorView.connector') }}</dt>
+              <dd class="font-medium">{{ connectorName(selectedNodeData.connector_binding) }}</dd>
+            </div>
+          </template>
+
+          <!-- Lifecycle maps -->
+          <div v-if="linkedLifecycleMaps.length > 0">
+            <dt class="text-muted-foreground text-xs uppercase tracking-wider">Lifecycle Maps</dt>
+            <dd>
+              <div v-for="map in linkedLifecycleMaps" :key="map.id" class="flex items-center gap-1">
+                <router-link :to="`/lifecycle-maps/${map.id}`" class="text-xs text-indigo-500 hover:text-indigo-400">
+                  {{ map.name }}
+                </router-link>
+              </div>
+            </dd>
           </div>
         </dl>
 
@@ -573,7 +704,7 @@ import '@vue-flow/core/dist/theme-default.css'
 import { useDataFetch } from '../composables/useDataFetch'
 import { formatApiError } from '../lib/api/formatError'
 import { usePlanStore } from '../stores/planStore'
-import BackLink from '../components/BackLink.vue'
+
 import FormDialog from '../components/shared/FormDialog.vue'
 import { shortId } from '../utils/format'
 import { api } from '../lib/api/client'
@@ -630,6 +761,13 @@ const renaming = ref(false)
 const showDeleteConfirm = ref(false)
 const deleteError = ref<string | null>(null)
 
+const savingGraph = ref(false)
+const saveGraphError = ref<string | null>(null)
+const showRunDialog = ref(false)
+const runPrompt = ref('')
+const running = ref(false)
+const runError = ref<string | null>(null)
+
 const folders = ref<any[]>([])
 const linkedLifecycleMaps = ref<any[]>([])
 
@@ -678,6 +816,46 @@ const modelBackendName = computed(() => {
 function agentSchemaName(agent: any, dir: 'input' | 'output') {
   const s = schemas.value.find(s => s.id === agent[`${dir}_schema_id`])
   return s ? s.name : `${dir}_schema_id`
+}
+
+const isWebhookTriggered = computed(() => pipeline.value?.trigger_type === 'webhook')
+
+function agentName(agentId: string): string | undefined {
+  return agents.value.find((a: any) => a.id === agentId)?.name
+}
+
+function agentModelBackendId(agentId: string): string | undefined {
+  const agent = agents.value.find((a: any) => a.id === agentId)
+  return agent?.model_backend_id
+}
+
+function agentModelBackendName(agentId: string): string | undefined {
+  const agent = agents.value.find((a: any) => a.id === agentId)
+  if (!agent?.model_backend_id) return undefined
+  const mb = modelBackends.value.find((b: any) => b.id === agent.model_backend_id)
+  return mb?.display_name
+}
+
+function agentInputSchemaId(agentId: string): string | undefined {
+  const agent = agents.value.find((a: any) => a.id === agentId)
+  return agent?.input_schema_id
+}
+
+function agentOutputSchemaId(agentId: string): string | undefined {
+  const agent = agents.value.find((a: any) => a.id === agentId)
+  return agent?.output_schema_id
+}
+
+function schemaName(schemaId: string): string | undefined {
+  const s = schemas.value.find((s: any) => s.id === schemaId)
+  return s?.name
+}
+
+function connectorName(binding: any): string {
+  if (!binding) return '-'
+  const conn = connectors.value.find((c: any) => c.id === binding.instance_id)
+  if (conn) return `${conn.name} (${binding.type})`
+  return binding.instance_id ? `${binding.type} / ${shortId(binding.instance_id)}` : binding.type
 }
 
 const canConvert = computed(() => pickerAgentId.value && pickerConnectorId.value)
@@ -1064,6 +1242,80 @@ async function handleDelete() {
     router.push({ name: 'library' })
   } catch (e: unknown) {
     deleteError.value = formatApiError(e)
+  }
+}
+
+function openRunDialog() {
+  runPrompt.value = ''
+  runError.value = null
+  showRunDialog.value = true
+}
+
+function closeRunDialog() {
+  showRunDialog.value = false
+  runPrompt.value = ''
+  runError.value = null
+}
+
+async function saveGraph() {
+  savingGraph.value = true
+  saveGraphError.value = null
+  try {
+    await api.PATCH('/api/v1/pipelines/{pipeline_id}/graph', {
+      params: { path: { pipeline_id: pipelineId } },
+      body: {
+        nodes: rawNodes.value.map((n: any) => ({
+          id: n.id,
+          node_type: n.node_type || 'agent',
+          label: n.label || null,
+          agent_id: n.agent_id || null,
+          connector_binding: n.connector_binding || null,
+          output_schema_id: n.output_schema_id || null,
+          model_backend_id: n.model_backend_id || null,
+          role: n.role || null,
+          timeout_seconds: n.timeout_seconds || null,
+          position: n.position || null,
+        })),
+        edges: rawEdges.value.map((e: any) => ({
+          id: e.id,
+          source_node_id: e.source_node_id,
+          target_node_id: e.target_node_id,
+          edge_type: e.edge_type || 'normal',
+          condition_expression: e.condition_expression || null,
+          hitl_gate_config: e.hitl_gate_config || null,
+        })),
+      },
+    })
+  } catch (e: unknown) {
+    saveGraphError.value = formatApiError(e)
+  } finally {
+    savingGraph.value = false
+  }
+}
+
+async function triggerRun() {
+  if (!pipeline.value) return
+  running.value = true
+  runError.value = null
+  try {
+    await saveGraph()
+    if (saveGraphError.value) {
+      runError.value = `Failed to save graph: ${saveGraphError.value}`
+      return
+    }
+    const { data } = await api.POST('/api/v1/pipelines/{pipeline_id}/runs', {
+      params: { path: { pipeline_id: pipelineId } },
+      body: {
+        prompt: runPrompt.value.trim() || undefined,
+        payload: {},
+      },
+    })
+    showRunDialog.value = false
+    if (data) router.push({ name: 'run-detail', params: { id: (data as any).id } })
+  } catch (e: unknown) {
+    runError.value = formatApiError(e)
+  } finally {
+    running.value = false
   }
 }
 

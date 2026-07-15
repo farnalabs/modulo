@@ -518,7 +518,18 @@ export default {
       "model_backend_label": "Model Backend",
       "loading": "Loading...",
       "folder": "Folder",
-      "linked_in_lifecycle_maps": "In {count} lifecycle maps"
+      "linked_in_lifecycle_maps": "In {count} lifecycle maps",
+      "save": "Save",
+      "saving_graph": "Saving...",
+      "run_pipeline": "Run Pipeline",
+      "running": "Running...",
+      "run_dialog_title": "Run Pipeline",
+      "run_prompt_placeholder": "Enter a prompt for this run... (optional)",
+      "no_nodes_to_run": "Add nodes to the pipeline before running",
+      "webhook_triggered_info": "This pipeline is triggered by webhook events. It cannot be run manually.",
+      "view_agent": "View Agent",
+      "input_schema": "Input Schema",
+      "model_backend": "Model Backend"
     },
     "AdminPluginsView": {
       "manage_installed_modulo_plugins_and_extensions": "Manage installed Modulo plugins and extensions",
