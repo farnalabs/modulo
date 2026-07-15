@@ -70,7 +70,7 @@ def test_parameter_sets_has_required_columns() -> None:
         "created_at",
         "updated_at",
     } <= set(table.c.keys())
-    assert isinstance(table.c.values.type, JSON)
+    assert isinstance(table.c["values"].type, JSON)
     assert isinstance(table.c.schema_version.type, Integer)
     assert isinstance(table.c.parameter_schema_id.type, Uuid)
 
@@ -102,16 +102,18 @@ class TestParameterSchemaCRUD:
     """Mock-based CRUD tests following test_pipeline_folder.py pattern."""
 
     @pytest.fixture
-    def mock_session(self) -> AsyncMock:
-        session = AsyncMock(spec_set=["execute", "add", "flush", "delete"])
-        session.execute.return_value = MagicMock()
-        session.execute.return_value.scalar_one_or_none.return_value = None
-        session.execute.return_value.scalar_one.return_value = 0
-        session.execute.return_value.scalars.return_value.all.return_value = []
+    def mock_session(self):
+        session = MagicMock()
+        session.flush = AsyncMock()
+        result_mock = MagicMock()
+        result_mock.scalar_one_or_none.return_value = None
+        result_mock.scalar_one.return_value = 0
+        result_mock.scalars.return_value.all.return_value = []
+        session.execute = AsyncMock(return_value=result_mock)
         return session
 
     @pytest.mark.asyncio
-    async def test_create_schema(self, mock_session: AsyncMock) -> None:
+    async def test_create_schema(self, mock_session) -> None:
         from modulo.db.crud.parameter_schema import create_schema
 
         org_id = uuid.uuid4()
@@ -131,17 +133,16 @@ class TestParameterSchemaCRUD:
         assert schema.account_id == account_id
 
     @pytest.mark.asyncio
-    async def test_get_schema_none(self, mock_session: AsyncMock) -> None:
+    async def test_get_schema_none(self, mock_session) -> None:
         from modulo.db.crud.parameter_schema import get_schema
 
         result = await get_schema(mock_session, uuid.uuid4())
         assert result is None
 
     @pytest.mark.asyncio
-    async def test_list_schemas(self, mock_session: AsyncMock) -> None:
+    async def test_list_schemas(self, mock_session) -> None:
         from modulo.db.crud.parameter_schema import list_schemas
 
-        mock_session.execute.return_value.scalar_one.return_value = 0
         org_id = uuid.uuid4()
         result = await list_schemas(mock_session, org_id=org_id)
         assert result.total == 0
@@ -151,20 +152,20 @@ class TestParameterSchemaCRUD:
     async def test_delete_schema_not_found(self) -> None:
         from modulo.db.crud.parameter_schema import delete_schema
 
-        session = AsyncMock(spec_set=["execute", "add", "flush", "delete"])
-        mock_result = MagicMock()
-        mock_result.scalar_one.return_value = 0
-        mock_result.scalar_one_or_none.return_value = None
-        session.execute.return_value = mock_result
+        session = MagicMock()
+        session.flush = AsyncMock()
+        result_mock = MagicMock()
+        result_mock.scalar_one.return_value = 0
+        result_mock.scalar_one_or_none.return_value = None
+        session.execute = AsyncMock(return_value=result_mock)
 
         result = await delete_schema(session, uuid.uuid4())
         assert result is False
 
     @pytest.mark.asyncio
-    async def test_update_schema_version_mismatch(self, mock_session: AsyncMock) -> None:
+    async def test_update_schema_version_mismatch(self, mock_session) -> None:
         from modulo.db.crud.parameter_schema import update_schema
 
-        mock_session.execute.return_value.scalar_one_or_none.return_value = None
         result = await update_schema(mock_session, uuid.uuid4(), version=999)
         assert result is None
 
@@ -173,15 +174,17 @@ class TestParameterSetCRUD:
     """Mock-based CRUD tests for ParameterSet."""
 
     @pytest.fixture
-    def mock_session(self) -> AsyncMock:
-        session = AsyncMock(spec_set=["execute", "add", "flush", "delete"])
-        session.execute.return_value = MagicMock()
-        session.execute.return_value.scalar_one_or_none.return_value = None
-        session.execute.return_value.scalars.return_value.all.return_value = []
+    def mock_session(self):
+        session = MagicMock()
+        session.flush = AsyncMock()
+        result_mock = MagicMock()
+        result_mock.scalar_one_or_none.return_value = None
+        result_mock.scalars.return_value.all.return_value = []
+        session.execute = AsyncMock(return_value=result_mock)
         return session
 
     @pytest.mark.asyncio
-    async def test_create_set(self, mock_session: AsyncMock) -> None:
+    async def test_create_set(self, mock_session) -> None:
         from modulo.db.crud.parameter_set import create_set
 
         schema_id = uuid.uuid4()
@@ -204,14 +207,14 @@ class TestParameterSetCRUD:
         assert ps.account_id == account_id
 
     @pytest.mark.asyncio
-    async def test_get_set_none(self, mock_session: AsyncMock) -> None:
+    async def test_get_set_none(self, mock_session) -> None:
         from modulo.db.crud.parameter_set import get_set
 
         result = await get_set(mock_session, uuid.uuid4())
         assert result is None
 
     @pytest.mark.asyncio
-    async def test_list_sets(self, mock_session: AsyncMock) -> None:
+    async def test_list_sets(self, mock_session) -> None:
         from modulo.db.crud.parameter_set import list_sets
 
         result = await list_sets(
@@ -222,7 +225,7 @@ class TestParameterSetCRUD:
         assert result == []
 
     @pytest.mark.asyncio
-    async def test_delete_set_not_found(self, mock_session: AsyncMock) -> None:
+    async def test_delete_set_not_found(self, mock_session) -> None:
         from modulo.db.crud.parameter_set import delete_set
 
         mock_session.execute.return_value.scalar_one_or_none.return_value = None
