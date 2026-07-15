@@ -576,7 +576,7 @@ async def test_run_in_background_marks_run_failed_on_executor_error() -> None:
 
     with (
         patch("modulo.api.routes.runs.get_settings"),
-        patch("modulo.api.routes.runs.get_or_create_engine"),
+        patch("modulo.api.routes.runs.create_async_engine"),
         patch("modulo.api.routes.runs.async_sessionmaker") as mock_factory_cls,
         patch("modulo.api.routes.runs.update_run_status") as mock_update,
         patch("modulo.api.routes.runs.set_rls_org") as mock_rls,
