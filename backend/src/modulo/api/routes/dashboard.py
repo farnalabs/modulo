@@ -102,7 +102,6 @@ async def _set_cached_dashboard(org_id: str, data: dict[str, Any]) -> None:
     _in_memory_cache[org_id] = (_time.monotonic(), data)
 
 
-@router.get("/summary")
 @handle_db_errors("dashboard.dashboard_summary")
 @router.get("/summary")
 async def dashboard_summary(
@@ -461,7 +460,6 @@ async def dashboard_summary(
         ) from exc
 
 
-@router.get("/trends")
 @handle_db_errors("dashboard.dashboard_trends")
 @router.get("/trends")
 async def dashboard_trends(
@@ -679,7 +677,6 @@ async def dashboard_trends(
         ) from exc
 
 
-@router.get("/daily-run-counts")
 @handle_db_errors("dashboard.daily_run_counts")
 @router.get("/daily-run-counts")
 async def daily_run_counts(
