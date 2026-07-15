@@ -50,6 +50,7 @@ from modulo.db.crud.run import (
 )
 from modulo.db.models.agent import Agent
 from modulo.db.models.pipeline_snapshot import PipelineSnapshot
+from modulo.db.models.run import Run
 from modulo.db.rls import set_rls_org
 from modulo.settings import Settings, get_settings
 
@@ -58,6 +59,10 @@ _log = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/v1/runs", tags=["runs"])
 
 _TERMINAL_STATUSES = frozenset({"complete", "failed", "cancelled", "eval_failed"})
+
+
+class RunNotFoundError(KeyError):
+    """Raised when a run is not found."""
 
 
 async def _run_with_retry(fn, max_retries=2, base_delay=0.5):
@@ -74,6 +79,19 @@ async def _run_with_retry(fn, max_retries=2, base_delay=0.5):
             else:
                 _log.warning("route.db_retry_exhausted", extra={"error": str(exc)})
     raise last_exc
+
+
+async def _do_get_run(
+    factory: async_sessionmaker[AsyncSession],
+    principal: TenantPrincipal,
+    run_id: uuid.UUID,
+) -> Run:
+    async with factory() as session, session.begin():
+        await set_rls_org(session, principal.organisation_id)
+        run = await get_run(session, run_id)
+        if run is None:
+            raise RunNotFoundError(run_id)
+        return run
 
 
 async def _do_list_runs(
@@ -466,13 +484,11 @@ async def get_run_heatmap_endpoint(
 @router.get("/{run_id}", response_model=RunResponse)
 async def get_run_status(
     run_id: uuid.UUID,
-    session: AsyncSession = Depends(get_db_session),
+    factory: async_sessionmaker[AsyncSession] = Depends(_get_session_factory),
     principal: TenantPrincipal = Depends(get_current_tenant_user),
 ) -> RunResponse:
     try:
-        async with session.begin():
-            await set_rls_org(session, principal.organisation_id)
-            run = await get_run(session, run_id)
+        run = await _run_with_retry(lambda: _do_get_run(factory, principal, run_id))
     except IntegrityError:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
@@ -483,14 +499,17 @@ async def get_run_status(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. This feature requires a database update. Please contact support.",
         ) from None
-
     except SQLAlchemyError:
         _log.warning("route.db_error", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database temporarily unavailable.",
         ) from None
-
+    except RunNotFoundError:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Run not found",
+        ) from None
     except HTTPException:
         raise
     except Exception:
@@ -499,8 +518,6 @@ async def get_run_status(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="An unexpected error occurred.",
         ) from None
-    if run is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Run not found")
 
     return _build_run_response(run)
 
