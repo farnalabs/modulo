@@ -111,6 +111,7 @@ const LifecycleMapList = () => import('../views/lifecycle-map/LifecycleMapList.v
 const LifecycleMapView = () => import('../views/lifecycle-map/LifecycleMapView.vue')
 const EnvironmentProfileList = () => import('../views/environment-profiles/EnvironmentProfileList.vue')
 const EnvironmentProfileForm = () => import('../views/environment-profiles/EnvironmentProfileForm.vue')
+const ParameterSchemasView = () => import('../views/ParameterSchemasView.vue')
 
 const router = createRouter({
   history: createWebHistory(),
@@ -340,6 +341,11 @@ const router = createRouter({
       path: '/admin/run-retention',
       name: 'admin-run-retention',
       component: AdminRunRetentionView,
+    },
+    {
+      path: '/admin/parameter-schemas',
+      name: 'admin-parameter-schemas',
+      component: ParameterSchemasView,
     },
     {
       path: '/admin/plugins',
