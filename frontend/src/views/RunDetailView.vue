@@ -1,9 +1,13 @@
 <template>
-  <BackLink to="/" :label="$t('views.RunDetailView.back_to_dashboard')" />
     <div class="page-wide">
     <LoadingSpinner v-if="loading" />
     <ErrorAlert v-else-if="error" :message="error" />
     <template v-else-if="run">
+      <nav aria-label="Breadcrumb" class="mb-4 flex items-center gap-1 text-sm text-muted-foreground">
+        <router-link to="/runs" class="hover:text-foreground transition-colors">Runs</router-link>
+        <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="h-3.5 w-3.5"><polyline points="9 18 15 12 9 6"/></svg>
+        <span class="text-foreground font-medium">{{ run.pipeline_name || (run.run_number != null ? '#' + run.run_number : shortId(run.run_id)) }}</span>
+      </nav>
       <!-- Run Header -->
       <header class="flex flex-wrap items-center justify-between gap-4">
         <div>
@@ -38,6 +42,64 @@
           </button>
         </div>
       </header>
+
+      <!-- HITL Gate -->
+      <section v-if="run.status === 'awaiting_human' && pendingGates.length > 0" class="rounded-lg border bg-card p-6 mb-6">
+        <h2 class="text-base font-semibold tracking-tight mb-4">HITL Gate</h2>
+        <div v-for="gate in pendingGates" :key="gate.gate_id" class="space-y-3">
+          <div class="flex items-center gap-2 text-sm">
+            <span class="font-medium">Gate:</span>
+            <code class="rounded bg-muted px-1.5 py-0.5 font-mono text-xs">{{ gate.gate_id }}</code>
+          </div>
+          <div v-if="gate.claimed_by && !claimToken" class="rounded-lg bg-muted/50 p-3 text-sm text-muted-foreground">
+            Claimed by {{ gate.claimed_by }}
+          </div>
+          <div v-else-if="claimLoading" class="flex justify-center py-4">
+            <div class="h-5 w-5 animate-spin rounded-full border-2 border-primary border-t-transparent" />
+          </div>
+          <template v-else-if="claimToken">
+            <div class="space-y-3">
+              <textarea
+                v-model="hitlNotes"
+                rows="2"
+                data-testid="run-detail-hitl-notes"
+                class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                placeholder="Review notes (optional)"
+              />
+              <div class="flex gap-2">
+                <button
+                  :disabled="Boolean(actioning)"
+                  data-testid="run-detail-approve"
+                  class="flex-1 rounded-lg bg-success px-4 py-2 text-sm font-medium text-white hover:bg-success/90 disabled:opacity-50"
+                  @click="approveGate"
+                >
+                  {{ actioning === 'approve' ? 'Approving...' : 'Approve' }}
+                </button>
+                <button
+                  :disabled="Boolean(actioning)"
+                  data-testid="run-detail-reject"
+                  class="flex-1 rounded-lg bg-destructive px-4 py-2 text-sm font-medium text-destructive-foreground hover:bg-destructive/90 disabled:opacity-50"
+                  @click="rejectGate"
+                >
+                  {{ actioning === 'reject' ? 'Rejecting...' : 'Reject' }}
+                </button>
+              </div>
+            </div>
+          </template>
+          <button
+            v-else
+            :disabled="claimLoading"
+            class="w-full rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
+            data-testid="run-detail-claim-gate"
+            @click="claimGate(gate)"
+          >
+            {{ claimLoading ? 'Claiming...' : 'Claim Gate' }}
+          </button>
+          <div v-if="hitlMessage" class="text-sm" :class="hitlMessage.type === 'error' ? 'text-destructive' : 'text-success'">
+            {{ hitlMessage.text }}
+          </div>
+        </div>
+      </section>
 
       <!-- Timestamps -->
       <div v-if="runTimestamps" class="flex flex-wrap gap-x-6 gap-y-1 text-xs text-muted-foreground">
@@ -254,7 +316,6 @@ import { useI18n } from 'vue-i18n'
 import { api } from '../lib/api/client'
 import type { components } from '../lib/api/client'
 import PageHeader from '../components/shared/PageHeader.vue'
-import BackLink from '../components/BackLink.vue'
 import LoadingSpinner from '../components/shared/LoadingSpinner.vue'
 import ErrorAlert from '../components/shared/ErrorAlert.vue'
 import Dialog from '../components/ui/dialog/Dialog.vue'
@@ -313,6 +374,13 @@ const promptLoading = ref(new Set<string>())
 const revealedPrompts = ref<Record<string, null | { prompt: string; messages: { role: string; content: string }[]; tokenCount: number; promptAlwaysVisible: boolean }>>({})
 const selectedPrompt = ref<{ nodeName: string; prompt: string; tokenCount: number | null } | null>(null)
 const workspaceLease = ref<WorkspaceLeaseInfo | null>(null)
+const pendingGates = ref<components['schemas']['GateResponse'][]>([])
+const hitlLoading = ref(false)
+const claimToken = ref<string | null>(null)
+const claimLoading = ref(false)
+const actioning = ref<string | null>(null)
+const hitlNotes = ref('')
+const hitlMessage = ref<{ type: string; text: string } | null>(null)
 
 const shareSummary = computed(() => {
   const r = run.value
@@ -556,6 +624,89 @@ async function copyOutput() {
   }
 }
 
+async function claimGate(gate: components['schemas']['GateResponse']) {
+  claimLoading.value = true
+  hitlMessage.value = null
+  try {
+    const { data, error: err } = await api.POST('/api/v1/runs/{run_id}/hitl/{gate_id}/claim', {
+      params: { path: { run_id: gate.run_id, gate_id: gate.gate_id } },
+      body: { expiry_minutes: 15 },
+    })
+    if (err) {
+      hitlMessage.value = { type: 'error', text: `Claim failed: ${formatApiError(err)}` }
+    } else if (data) {
+      const d = data as components['schemas']['ClaimResponse']
+      claimToken.value = d.claim_token
+      hitlMessage.value = { type: 'success', text: 'Gate claimed. You can now approve or reject.' }
+      setTimeout(() => { hitlMessage.value = null }, 5000)
+    }
+  } catch (e: unknown) {
+    hitlMessage.value = { type: 'error', text: `Claim failed: ${formatApiError(e)}` }
+  } finally {
+    claimLoading.value = false
+  }
+}
+
+async function approveGate() {
+  if (!claimToken.value || pendingGates.value.length === 0) return
+  const gate = pendingGates.value[0]
+  actioning.value = 'approve'
+  hitlMessage.value = null
+  try {
+    const { error: err } = await api.POST('/api/v1/runs/{run_id}/hitl/{gate_id}/approve', {
+      params: { path: { run_id: gate.run_id, gate_id: gate.gate_id } },
+      body: { claim_token: claimToken.value, notes: hitlNotes.value || null },
+    })
+    if (err) {
+      hitlMessage.value = {
+        type: 'error',
+        text: `Approve failed: ${formatApiError(err)}`,
+      }
+    } else {
+      pendingGates.value = []
+      claimToken.value = null
+      hitlNotes.value = ''
+      if (run.value) run.value.status = 'running'
+      hitlMessage.value = { type: 'success', text: 'Gate approved. Pipeline resuming.' }
+      setTimeout(() => { hitlMessage.value = null }, 5000)
+    }
+  } catch (e: unknown) {
+    hitlMessage.value = { type: 'error', text: `Approve failed: ${formatApiError(e)}` }
+  } finally {
+    actioning.value = null
+  }
+}
+
+async function rejectGate() {
+  if (!claimToken.value || pendingGates.value.length === 0) return
+  const gate = pendingGates.value[0]
+  actioning.value = 'reject'
+  hitlMessage.value = null
+  try {
+    const { error: err } = await api.POST('/api/v1/runs/{run_id}/hitl/{gate_id}/reject', {
+      params: { path: { run_id: gate.run_id, gate_id: gate.gate_id } },
+      body: { claim_token: claimToken.value, reason: hitlNotes.value || 'Rejected by reviewer' },
+    })
+    if (err) {
+      hitlMessage.value = {
+        type: 'error',
+        text: `Reject failed: ${formatApiError(err)}`,
+      }
+    } else {
+      pendingGates.value = []
+      claimToken.value = null
+      hitlNotes.value = ''
+      if (run.value) run.value.status = 'running'
+      hitlMessage.value = { type: 'success', text: 'Gate rejected. Pipeline routed to reject target.' }
+      setTimeout(() => { hitlMessage.value = null }, 5000)
+    }
+  } catch (e: unknown) {
+    hitlMessage.value = { type: 'error', text: `Reject failed: ${formatApiError(e)}` }
+  } finally {
+    actioning.value = null
+  }
+}
+
 const nodeEntries = computed<NodeEntry[]>(() => {
   const r = run.value
   if (!r) return []
@@ -588,12 +739,34 @@ const nodeEntries = computed<NodeEntry[]>(() => {
   })
 })
 
+async function fetchHitlGates(runId: string) {
+  if (hitlLoading.value) return
+  hitlLoading.value = true
+  try {
+    const { data } = await api.GET('/api/v1/runs/{run_id}/hitl/pending', {
+      params: { path: { run_id: runId } },
+    })
+    if (data) {
+      pendingGates.value = ((data as any).gates || []) as components['schemas']['GateResponse'][]
+    }
+  } catch {
+    // silently fail
+  } finally {
+    hitlLoading.value = false
+  }
+}
+
 async function fetchRunData(runId: string) {
   try {
     const { data: runData } = await api.GET('/api/v1/runs/{run_id}', {
       params: { path: { run_id: runId } },
     })
-    if (runData) run.value = runData as unknown as RunResponse
+    if (runData) {
+      run.value = runData as unknown as RunResponse
+      if (run.value.status === 'awaiting_human') {
+        fetchHitlGates(runId)
+      }
+    }
     const { data: ioData } = await api.GET('/api/v1/runs/{run_id}/io', {
       params: { path: { run_id: runId } },
     })
@@ -639,7 +812,12 @@ const { loading, error } = useDataFetch<RunFetchResult>(
       const ioData = ioResp?.data
       const wsData = wsResp?.data
 
-      if (runData) run.value = runData as unknown as RunResponse
+      if (runData) {
+        run.value = runData as unknown as RunResponse
+        if (run.value.status === 'awaiting_human') {
+          fetchHitlGates(runId)
+        }
+      }
       if (ioData) runIO.value = ioData as unknown as RunIOResponse
       if (wsData) workspaceLease.value = wsData as unknown as WorkspaceLeaseInfo
 

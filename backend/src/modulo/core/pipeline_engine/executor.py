@@ -926,34 +926,32 @@ class PipelineExecutor:
         required_team_id = uuid.UUID(required_team_id_str) if required_team_id_str else None
 
         if pipeline_id is not None and org_id is not None:
-            try:
-                mgr = HITLManager()
-                async with self._session_factory() as session, session.begin():
-                    await set_rls_org(session, org_id)
-                    await mgr.create_gate(
-                        session,
-                        run_id=run_id,
-                        gate_id=gate_id,
-                        pipeline_id=pipeline_id,
-                        org_id=org_id,
-                        required_team_id=required_team_id,
-                    )
-            except asyncio.CancelledError:
-                raise
-            except Exception:
-                _log.exception(
-                    "hitl_gate.create_failed",
-                    extra={"run_id": str(run_id), "gate_id": gate_id},
+            mgr = HITLManager()
+            async with self._session_factory() as session, session.begin():
+                await set_rls_org(session, org_id)
+                await mgr.create_gate(
+                    session,
+                    run_id=run_id,
+                    gate_id=gate_id,
+                    pipeline_id=pipeline_id,
+                    org_id=org_id,
+                    required_team_id=required_team_id,
                 )
+            broker.publish(
+                "hitl_awaiting",
+                {
+                    "gate_payload": gate_payload,
+                    "team_id": str(required_team_id) if required_team_id else None,
+                },
+            )
+            return "awaiting_human", None, None, None
 
-        broker.publish(
-            "hitl_awaiting",
-            {
-                "gate_payload": gate_payload,
-                "team_id": str(required_team_id) if required_team_id else None,
-            },
+        _log.warning(
+            "hitl_gate.cannot_create",
+            extra={"run_id": str(run_id), "pipeline_id": str(pipeline_id), "org_id": str(org_id)},
         )
-        return "awaiting_human", None, None, None
+        broker.publish("run_failed", {"error": "gate_creation_failed", "detail": "Pipeline or org ID is None"})
+        return "failed", "configuration_error", "Missing pipeline_id or org_id for HITL gate creation", None
 
     async def _stream_graph(
         self,
