@@ -1,7 +1,7 @@
-"""Unit tests for model_backend CRUD tier filtering.
+﻿"""Unit tests for model_backend CRUD tier filtering.
 
 Tests the default-behaviour, None-handling, empty-list, and explicit-filter
-code paths in the function.  No DB — uses mock sessions.
+code paths in the function.  No DB â€” uses mock sessions.
 """
 
 import uuid
@@ -38,7 +38,7 @@ async def test_default_excludes_in_dev() -> None:
     session = _mock_session()
     session.execute = _mock_execute(count=2)
 
-    result = await list_model_backends(session, org_id=_ORG_ID)
+    result = await list_model_backends(session)
 
     assert result.total == 2
     assert len(result.items) == 2
@@ -78,3 +78,4 @@ async def test_excluded_tiers_preview() -> None:
     result = await list_model_backends(session, org_id=_ORG_ID, excluded_tiers=["preview"])
 
     assert result.total == 3
+
