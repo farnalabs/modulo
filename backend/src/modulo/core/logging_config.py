@@ -202,9 +202,9 @@ class ErrorTrackingLogHandler(logging.Handler):
 
             service = ErrorIngestionService()
             async with factory() as session:
-                await set_rls_org(session, org_uuid)
                 try:
                     async with session.begin():
+                        await set_rls_org(session, org_uuid)
                         await service.ingest(session, org_uuid, event_data)
                 except ProgrammingError:
                     logging.getLogger(__name__).exception("Database unavailable while forwarding a log event")
