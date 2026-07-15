@@ -21,18 +21,18 @@
         </div>
         <div>
           <label for="adminnotificationdeliverylogview-field-3" class="mb-1 block text-xs font-medium text-muted-foreground">{{ $t('views.AdminAuditView.event_type') }}</label>
-          <select id="adminnotificationdeliverylogview-field-3"
-            v-model="filterEventType"
-            data-testid="admin-notification-log-event-type"
-            aria-label="Event Type"
-            class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring"
-          >
-            <option value="">{{ $t('views.AdminNotificationDeliveryLogView.all_types') }}</option>
-            <option value="hitl_awaiting">{{ $t('views.AdminNotificationDeliveryLogView.hitl_awaiting') }}</option>
-            <option value="run_failed">{{ $t('views.AdminNotificationDeliveryLogView.run_failed') }}</option>
-            <option value="claim_expired">{{ $t('views.AdminNotificationDeliveryLogView.claim_expired') }}</option>
-            <option value="hitl_overdue">{{ $t('views.AdminNotificationDeliveryLogView.hitl_overdue') }}</option>
-          </select>
+          <Select v-model="filterEventType">
+            <SelectTrigger data-testid="admin-notification-log-event-type" aria-label="Event Type" class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring">
+              <SelectValue :placeholder="$t('views.AdminNotificationDeliveryLogView.all_types')" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="">{{ $t('views.AdminNotificationDeliveryLogView.all_types') }}</SelectItem>
+              <SelectItem value="hitl_awaiting">{{ $t('views.AdminNotificationDeliveryLogView.hitl_awaiting') }}</SelectItem>
+              <SelectItem value="run_failed">{{ $t('views.AdminNotificationDeliveryLogView.run_failed') }}</SelectItem>
+              <SelectItem value="claim_expired">{{ $t('views.AdminNotificationDeliveryLogView.claim_expired') }}</SelectItem>
+              <SelectItem value="hitl_overdue">{{ $t('views.AdminNotificationDeliveryLogView.hitl_overdue') }}</SelectItem>
+            </SelectContent>
+          </Select>
         </div>
         <div>
           <label for="adminnotificationdeliverylogview-field-2" class="mb-1 block text-xs font-medium text-muted-foreground">From</label>
