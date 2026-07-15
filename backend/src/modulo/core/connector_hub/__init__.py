@@ -151,12 +151,30 @@ class ConnectorHub:
                 return
             for ci in instances:
                 try:
-                    raw_str = await asyncio.wait_for(
-                        self._secrets_backend.get_secret(str(ci.id)),
-                        timeout=30.0,
-                    )
+                    try:
+                        raw_str = await asyncio.wait_for(
+                            self._secrets_backend.get_secret(str(ci.id)),
+                            timeout=30.0,
+                        )
+                    except KeyError:
+                        # Fall back to credentials_ciphertext column
+                        ciphertext = getattr(ci, "credentials_ciphertext", None)
+                        if ciphertext and isinstance(ciphertext, bytes) and ciphertext != b"":
+                            try:
+                                from cryptography.fernet import Fernet
+                                from modulo.settings import get_settings
+
+                                _settings = get_settings()
+                                f = Fernet(_settings.fernet_key.encode())
+                                plaintext = f.decrypt(ciphertext)
+                                raw_str = json.dumps({"api_key": plaintext.decode()})
+                            except Exception:
+                                logger.warning("Failed to decrypt credentials_ciphertext for connector %s", ci.id)
+                                raise ConnectorDecryptError(ci.id) from None
+                        else:
+                            raw_str = "{}"
                     if raw_str is None:
-                        raise ConnectorDecryptError(ci.id)
+                        raw_str = "{}"
                     try:
                         parsed = json.loads(raw_str)
                     except json.JSONDecodeError as exc:
