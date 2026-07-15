@@ -692,6 +692,9 @@ class PipelineExecutor:
         except asyncio.CancelledError:
             raise
         except Exception as exc:
+            import traceback
+            print(f"EXECUTOR_ERROR run={run_id} type={type(exc).__name__} msg={exc}", flush=True)
+            traceback.print_exc()
             _log.exception("pipeline.execution_error", extra={"run_id": str(run_id)})
             final_status = "failed"
             error_code = type(exc).__name__
@@ -1086,6 +1089,9 @@ class PipelineExecutor:
         except asyncio.CancelledError:
             raise
         except Exception as exc:
+            import traceback
+            print(f"STREAM_ERROR run={run_id} type={type(exc).__name__} msg={exc}", flush=True)
+            traceback.print_exc()
             _log.exception("pipeline.stream_error", extra={"run_id": str(run_id)})
             broker.publish("run_failed", {"error": type(exc).__name__})
             return "failed", type(exc).__name__, None, None
