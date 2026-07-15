@@ -160,11 +160,7 @@ async def _check_auto_completion(
 ) -> set[str]:
     auto_completed: set[str] = set()
 
-    login_result = await session.execute(
-        select(OnboardingProgress).where(OnboardingProgress.organisation_id == org_id).limit(1)
-    )
-    if login_result.scalar_one_or_none() is not None:
-        auto_completed.add("login")
+    auto_completed.add("login")
 
     model_backend_result = await session.execute(
         select(ModelBackend).where(ModelBackend.organisation_id == org_id).limit(1)

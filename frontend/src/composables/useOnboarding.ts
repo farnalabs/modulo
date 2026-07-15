@@ -40,6 +40,10 @@ export const useOnboardingStore = defineStore('onboarding', () => {
       }
       if (!data) { error.value = 'No response from server'; return }
       actions.value = (data as any).actions ?? []
+      const loginAction = actions.value.find(a => a.id === 'login')
+      if (loginAction && !loginAction.completed) {
+        loginAction.completed = true
+      }
       progressPct.value = (data as any).progress_pct ?? 0
       isFirstRun.value = (data as any).is_first_run ?? true
       dismissed.value = (data as any).dismissed ?? false
