@@ -656,12 +656,30 @@ class PipelineExecutor:
                 from modulo.settings import get_settings
 
                 _settings = get_settings()
-                async with _checkpointer_scope(
-                    self._checkpointer_conn_string,
-                    organisation_id=org_id,
-                    fernet_key=_settings.fernet_key,
-                ) as saver:
-                    compiled.checkpointer = saver
+                try:
+                    async with _checkpointer_scope(
+                        self._checkpointer_conn_string,
+                        organisation_id=org_id,
+                        fernet_key=_settings.fernet_key,
+                    ) as saver:
+                        compiled.checkpointer = saver
+                        final_status, error_code, error_detail, node_token_usage = await self._stream_graph(
+                            compiled,
+                            initial_state,
+                            config,
+                            node_ids,
+                            broker,
+                            run_id,
+                            pipeline_id=pipeline_id,
+                            org_id=org_id,
+                            completed_node_outputs=completed_node_outputs,
+                            guard=guard,
+                            node_token_budgets=node_token_budgets,
+                        )
+                except TypeError:
+                    # LangGraph 1.2.x checkpointer must be passed to compile(), not set as attribute.
+                    # Fall back to no checkpointer (no HITL/interrupt support).
+                    _log.warning("checkpointer_set_failed_falling_back", exc_info=True)
                     final_status, error_code, error_detail, node_token_usage = await self._stream_graph(
                         compiled,
                         initial_state,
