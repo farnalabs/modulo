@@ -143,7 +143,9 @@ async def list_model_backends_endpoint(
         async with session.begin():
             await set_rls_org(session, principal.organisation_id)
             await set_rls_user_context(session, principal.account_id, principal.org_role)
-            result = await list_model_backends(session, page=page, page_size=page_size)
+            result = await list_model_backends(
+                session, org_id=principal.organisation_id, page=page, page_size=page_size
+            )
     except IntegrityError:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
