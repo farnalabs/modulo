@@ -10,6 +10,7 @@ from pydantic import BaseModel
 from sqlalchemy.exc import IntegrityError, ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from modulo.api.db_error_handling import handle_db_errors
 from modulo.api.dependencies import get_db_session
 from modulo.auth.dependencies import get_current_user
 from modulo.connectors.base import ConnectorType
@@ -24,6 +25,8 @@ from modulo.determination.scanner import ScanSample, run_scan
 from modulo.settings import Settings, get_settings
 
 logger = logging.getLogger(__name__)
+
+_log = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/v1/determination", tags=["determination"])
 
@@ -113,6 +116,8 @@ def _sample_to_response(s: ScanSample) -> SampleResponse:
 
 
 @router.get("", response_model=DeterminationResponse)
+@handle_db_errors("determination.run_determination")
+@router.get("", response_model=DeterminationResponse)
 async def run_determination(
     session: AsyncSession = Depends(get_db_session),
     _: str = Depends(get_current_user),
@@ -181,6 +186,8 @@ async def run_determination(
         raise HTTPException(status_code=500, detail="Internal server error") from None
 
 
+@router.post("/draft", response_model=DraftResponse)
+@handle_db_errors("determination.create_determination_draft")
 @router.post("/draft", response_model=DraftResponse)
 async def create_determination_draft(
     session: AsyncSession = Depends(get_db_session),

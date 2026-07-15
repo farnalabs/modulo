@@ -17,6 +17,8 @@ from modulo.core.plugin_registry import PluginHealth, PluginManifest, get_plugin
 
 logger = logging.getLogger(__name__)
 
+_log = logging.getLogger(__name__)
+
 router = APIRouter(prefix="/api/v1/plugins", tags=["plugins"])
 
 

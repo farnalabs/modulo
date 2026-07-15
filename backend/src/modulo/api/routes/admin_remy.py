@@ -12,6 +12,7 @@ from sqlalchemy import or_, select
 from sqlalchemy.exc import ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from modulo.api.db_error_handling import handle_db_errors
 from modulo.api.dependencies import get_db_session
 from modulo.auth.dependencies import get_current_tenant_user
 from modulo.auth.jwt import TenantPrincipal
@@ -53,6 +54,8 @@ _PROVIDER_LABELS: dict[str, str] = {
     "llamacpp": "llama.cpp",
     "custom": "Custom",
 }
+
+_log = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/v1/admin/remy", tags=["admin-remy"])
 
@@ -144,6 +147,8 @@ class ContextSourceModeUpdate(BaseModel):
 
 
 @router.get("/config", response_model=RemyConfigResponse)
+@handle_db_errors("admin.remy.get_remy_config")
+@router.get("/config", response_model=RemyConfigResponse)
 async def get_remy_config(
     session: AsyncSession = Depends(get_db_session),
     principal: TenantPrincipal = Depends(get_current_tenant_user),
@@ -189,6 +194,8 @@ async def get_remy_config(
 
 
 @router.get("/available-providers", response_model=AvailableProvidersResponse)
+@handle_db_errors("admin.remy.get_available_providers")
+@router.get("/available-providers", response_model=AvailableProvidersResponse)
 async def get_available_providers(
     principal: TenantPrincipal = Depends(get_current_tenant_user),
 ) -> AvailableProvidersResponse:
@@ -218,6 +225,8 @@ async def get_available_providers(
         ) from None
 
 
+@router.put("/config", response_model=RemyConfigResponse)
+@handle_db_errors("admin.remy.update_remy_config")
 @router.put("/config", response_model=RemyConfigResponse)
 async def update_remy_config(
     req: RemyConfigUpdate,
@@ -326,6 +335,8 @@ def _skill_to_response(skill: RemySkill) -> SkillResponse:
 
 
 @router.get("/skills", response_model=list[SkillResponse])
+@handle_db_errors("admin.remy.list_org_skills")
+@router.get("/skills", response_model=list[SkillResponse])
 async def list_org_skills(
     session: AsyncSession = Depends(get_db_session),
     principal: TenantPrincipal = Depends(get_current_tenant_user),
@@ -364,6 +375,8 @@ async def list_org_skills(
         ) from None
 
 
+@router.post("/skills", response_model=SkillResponse, status_code=status.HTTP_201_CREATED)
+@handle_db_errors("admin.remy.create_org_skill")
 @router.post("/skills", response_model=SkillResponse, status_code=status.HTTP_201_CREATED)
 async def create_org_skill(
     req: SkillCreate,
@@ -407,6 +420,8 @@ async def create_org_skill(
         ) from None
 
 
+@router.put("/skills/{skill_id}", response_model=SkillResponse)
+@handle_db_errors("admin.remy.update_org_skill")
 @router.put("/skills/{skill_id}", response_model=SkillResponse)
 async def update_org_skill(
     skill_id: uuid.UUID,
@@ -452,6 +467,8 @@ async def update_org_skill(
 
 
 @router.delete("/skills/{skill_id}", status_code=status.HTTP_204_NO_CONTENT)
+@handle_db_errors("admin.remy.delete_org_skill")
+@router.delete("/skills/{skill_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_org_skill(
     skill_id: uuid.UUID,
     session: AsyncSession = Depends(get_db_session),
@@ -486,6 +503,8 @@ async def delete_org_skill(
 # ── Org-level Context Sources ─────────────────────────────────────────
 
 
+@router.get("/context-sources")
+@handle_db_errors("admin.remy.get_org_context_sources")
 @router.get("/context-sources")
 async def get_org_context_sources(
     session: AsyncSession = Depends(get_db_session),
@@ -529,6 +548,8 @@ async def get_org_context_sources(
 
 
 @router.put("/context-sources/{source_key}")
+@handle_db_errors("admin.remy.set_org_context_source")
+@router.put("/context-sources/{source_key}")
 async def set_org_context_source(
     source_key: str,
     req: ContextSourceModeUpdate,
@@ -565,6 +586,8 @@ async def set_org_context_source(
         ) from None
 
 
+@router.delete("/context-sources", status_code=status.HTTP_200_OK)
+@handle_db_errors("admin.remy.reset_org_context_sources")
 @router.delete("/context-sources", status_code=status.HTTP_200_OK)
 async def reset_org_context_sources(
     session: AsyncSession = Depends(get_db_session),

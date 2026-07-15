@@ -15,6 +15,7 @@ from sqlalchemy import select
 from sqlalchemy.exc import ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from modulo.api.db_error_handling import handle_db_errors
 from modulo.api.dependencies import get_db_session
 from modulo.auth.dependencies import get_current_user
 from modulo.auth.jwt import AuthenticatedPrincipal
@@ -32,6 +33,8 @@ from modulo.db.rls import set_rls_org, set_rls_user_context
 from modulo.settings import Settings, get_settings
 
 logger = logging.getLogger(__name__)
+
+_log = logging.getLogger(__name__)
 
 router = APIRouter(tags=["viewmodel"])
 
@@ -171,6 +174,8 @@ class ViewModelCurrent(BaseModel):
 
 
 @router.get("/api/v1/license", response_model=LicenseInfo)
+@handle_db_errors("viewmodel.license_info")
+@router.get("/api/v1/license", response_model=LicenseInfo)
 async def license_info(
     settings: Settings = Depends(get_settings),
 ) -> LicenseInfo:
@@ -192,6 +197,8 @@ async def license_info(
         ) from None
 
 
+@router.get("/api/v1/me", response_model=MeResponse)
+@handle_db_errors("viewmodel.me")
 @router.get("/api/v1/me", response_model=MeResponse)
 async def me(
     current_user: AuthenticatedPrincipal = Depends(get_current_user),
@@ -236,6 +243,8 @@ async def me(
     )
 
 
+@router.get("/api/v1/viewmodel/current", response_model=ViewModelCurrent)
+@handle_db_errors("viewmodel.viewmodel_current")
 @router.get("/api/v1/viewmodel/current", response_model=ViewModelCurrent)
 async def viewmodel_current(
     session: AsyncSession = Depends(get_db_session),
@@ -393,6 +402,8 @@ async def viewmodel_current(
     )
 
 
+@router.get("/api/v1/viewmodel/views", response_model=ViewModelViewsResponse)
+@handle_db_errors("viewmodel.viewmodel_list_views")
 @router.get("/api/v1/viewmodel/views", response_model=ViewModelViewsResponse)
 async def viewmodel_list_views(
     session: AsyncSession = Depends(get_db_session),

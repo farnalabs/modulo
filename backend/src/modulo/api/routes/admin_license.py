@@ -9,6 +9,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy.exc import ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from modulo.api.db_error_handling import handle_db_errors
 from modulo.api.dependencies import get_db_session
 from modulo.auth.dependencies import get_current_tenant_user
 from modulo.auth.jwt import TenantPrincipal
@@ -23,6 +24,8 @@ from modulo.db.models.organisation import Organisation
 from modulo.settings import Settings, get_settings
 
 logger = logging.getLogger(__name__)
+
+_log = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/v1/admin/license", tags=["admin-license"])
 
@@ -102,6 +105,8 @@ def _resolve_effective_license(settings: Settings, org: Organisation | None = No
 
 
 @router.get("", response_model=LicenseStatusResponse)
+@handle_db_errors("admin.license.get_license_status")
+@router.get("", response_model=LicenseStatusResponse)
 async def get_license_status(
     settings: Settings = Depends(get_settings),
     current_user: TenantPrincipal = Depends(get_current_tenant_user),
@@ -138,6 +143,8 @@ async def get_license_status(
         ) from None
 
 
+@router.post("", response_model=LicenseUploadResponse, status_code=status.HTTP_200_OK)
+@handle_db_errors("admin.license.upload_license")
 @router.post("", response_model=LicenseUploadResponse, status_code=status.HTTP_200_OK)
 async def upload_license(
     req: LicenseUploadRequest,
