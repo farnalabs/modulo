@@ -143,6 +143,7 @@
             <label for="lifecyclemaplist-field-2" class="mb-1 block text-sm font-medium">Name</label>
             <input id="lifecyclemaplist-field-2"
               v-model="newName"
+              @keydown.space.stop
               class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm"
               placeholder="My Delivery Lifecycle"
             />
@@ -151,6 +152,7 @@
             <label for="lifecyclemaplist-field-1" class="mb-1 block text-sm font-medium">Description</label>
             <textarea id="lifecyclemaplist-field-1"
               v-model="newDescription"
+              @keydown.space.stop
               class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm"
               rows="3"
               placeholder="Optional description"
