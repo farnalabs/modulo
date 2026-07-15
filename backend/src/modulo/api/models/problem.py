@@ -81,6 +81,24 @@ class ProblemDetail(BaseModel):
             headers=merged,
         )
 
+    @staticmethod
+    def fallback_internal_error(request_id: str | None = None) -> JSONResponse:
+        """Build a 500 response when even ProblemDetail construction fails.
+
+        This is a safety net so that an exception in the exception handler
+        itself still produces a valid HTTP response.
+        """
+        return JSONResponse(
+            status_code=500,
+            content={
+                "type": "urn:problem:modulo:internal_error",
+                "title": "Internal Error",
+                "detail": "An unexpected error occurred",
+                "status": 500,
+            },
+            headers={"X-Request-ID": request_id or ""},
+        )
+
 
 class ProblemException(HTTPException):
     """Raise this anywhere to produce a structured ProblemDetail response."""

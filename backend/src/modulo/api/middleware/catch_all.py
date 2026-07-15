@@ -106,13 +106,4 @@ def _make_500_response(request_id: str | None) -> JSONResponse:
         ).to_response()
     except Exception:
         logger.exception("middleware.error_response_failed")
-        return JSONResponse(
-            status_code=500,
-            content={
-                "type": "urn:problem:modulo:internal_error",
-                "title": "Internal Error",
-                "detail": "An unexpected error occurred",
-                "status": 500,
-            },
-            headers={"X-Request-ID": request_id or ""},
-        )
+        return ProblemDetail.fallback_internal_error(request_id)

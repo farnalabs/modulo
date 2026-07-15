@@ -67,7 +67,9 @@ async def _get_cached_dashboard(org_id: str) -> dict[str, Any] | None:
     if settings.redis_url:
         redis: Any = None
         try:
-            redis = Redis.from_url(settings.redis_url, decode_responses=True, socket_connect_timeout=2.0, socket_timeout=2.0)
+            redis = Redis.from_url(
+                settings.redis_url, decode_responses=True, socket_connect_timeout=2.0, socket_timeout=2.0
+            )
             key = f"dashboard:summary:{org_id}"
             cached = await redis.get(key)
             if cached:
@@ -90,7 +92,9 @@ async def _set_cached_dashboard(org_id: str, data: dict[str, Any]) -> None:
     if settings.redis_url:
         redis: Any = None
         try:
-            redis = Redis.from_url(settings.redis_url, decode_responses=True, socket_connect_timeout=2.0, socket_timeout=2.0)
+            redis = Redis.from_url(
+                settings.redis_url, decode_responses=True, socket_connect_timeout=2.0, socket_timeout=2.0
+            )
             key = f"dashboard:summary:{org_id}"
             await redis.setex(key, _DASHBOARD_CACHE_TTL, json.dumps(data, default=str))
             return
