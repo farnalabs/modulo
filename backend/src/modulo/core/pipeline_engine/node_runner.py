@@ -479,6 +479,71 @@ def make_manual_node_fn(
     return _manual_node
 
 
+def make_connector_fn(
+    node_def: dict[str, Any],
+    *,
+    timeout: float | None = None,
+) -> Any:
+    """
+    Return a decorated async node function that resolves a connector
+    from the ConnectorHub and executes a connector action (query/write).
+
+    The node_def must have a 'connector_binding' dict with:
+      - instance_id: uuid of the ConnectorInstance
+      - type: connector type (e.g. 'shell')
+      - operation: 'query' or 'write' (optional, default 'query')
+      - input: dict of input parameters (optional)
+    """
+    node_id: str = str(node_def["id"])
+    binding = node_def.get("connector_binding") or {}
+    op: str = binding.get("operation", "query")
+
+    @cancellable_node(timeout=timeout)
+    async def _connector_node(state: dict[str, Any]) -> dict[str, Any]:
+        from modulo.core.pipeline_engine.decorator import get_connector_hub
+
+        hub = get_connector_hub()
+        if hub is None:
+            # No ConnectorHub available — return stub
+            return {"artifacts": [{"node_id": node_id, "status": "executed", "output": {"note": "no connector hub"}}]}
+
+        instance_id_str = binding.get("instance_id")
+        if not instance_id_str:
+            return {"artifacts": [{"node_id": node_id, "status": "failed", "error": "no connector instance_id"}]}
+
+        import uuid as _uuid
+
+        try:
+            connector = await hub.get(_uuid.UUID(str(instance_id_str)))
+        except Exception:
+            return {"artifacts": [{"node_id": node_id, "status": "failed", "error": "connector not found"}]}
+
+        run_context = state.get("run_context") or {}
+        raw_input = run_context.get("input", {})
+        # Build filter / data from input payload
+        filters = dict(binding.get("filters", {}))
+        data = dict(binding.get("data", {}))
+        if raw_input:
+            filters.update(raw_input.get("filters", {}))
+            data.update(raw_input.get("data", {}))
+
+        try:
+            if op == "write":
+                result = await connector.write(data, filters=filters)
+            else:
+                result = await connector.query(filters)
+        except Exception as exc:
+            return {"artifacts": [{"node_id": node_id, "status": "failed", "error": str(exc)}]}
+
+        return {
+            "artifacts": [{"node_id": node_id, "status": "completed", "output": result}],
+            "output": result,
+        }
+
+    _connector_node.__name__ = f"connector_{node_id}"
+    return _connector_node
+
+
 def _validate_against_schema(data: dict[str, Any], schema: dict[str, Any]) -> None:
     """Lightweight field-presence validation against a JSON schema.
 
