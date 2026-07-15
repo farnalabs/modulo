@@ -89,7 +89,11 @@ async def _do_get_run(
 ) -> Run:
     async with factory() as session, session.begin():
         await set_rls_org(session, principal.organisation_id)
-        run = await get_run(session, run_id)
+        from sqlalchemy import select
+        from sqlalchemy.orm import selectinload
+        from modulo.db.models.run import Run
+        stmt = select(Run).options(selectinload(Run.pipeline)).where(Run.id == run_id)
+        run = (await session.execute(stmt)).scalar_one_or_none()
         if run is None:
             raise RunNotFoundError(run_id)
         return run
@@ -531,8 +535,6 @@ async def get_run_status(
     return _build_run_response(run)
 
 
-@router.post("/{run_id}/cancel", status_code=status.HTTP_202_ACCEPTED)
-@handle_db_errors("runs.cancel_run")
 @router.post("/{run_id}/cancel", status_code=status.HTTP_202_ACCEPTED)
 async def cancel_run(
     run_id: uuid.UUID,
