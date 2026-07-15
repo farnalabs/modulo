@@ -84,8 +84,6 @@ class BackgroundPipelineWorker:
         """Submit a pipeline run for background execution.
 
         Never blocks — pushes to the internal queue immediately.
-        Returns True if the job was accepted, False if the worker is
-        shutting down and cannot accept new jobs.
         """
         if not self._started or (self._consumer_task and self._consumer_task.done()):
             _log.warning("Background worker not available — run %s rejected", run_id)
