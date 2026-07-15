@@ -415,7 +415,7 @@ async def trigger_run(
         _bg_executor_engine,
         checkpointer_conn_string=pg_connection_string(str(_settings_for_bg.database_url)),
     )
-    background_tasks.add_task(_run_in_background, executor, run_id, org_id, req.input_payload)
+    asyncio.ensure_future(_run_in_background(executor, run_id, org_id, req.input_payload))
 
     return _build_run_response(run)
 
