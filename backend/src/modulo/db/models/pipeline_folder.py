@@ -1,7 +1,5 @@
-from __future__ import annotations
-
 import uuid
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Optional
 
 from sqlalchemy import ForeignKey, Integer, String, Uuid
 from sqlalchemy.orm import Mapped, mapped_column, relationship
@@ -22,10 +20,10 @@ class PipelineFolder(OrgScoped):
         Uuid(), ForeignKey("accounts.id", ondelete="RESTRICT"), nullable=False
     )
 
-    parent: Mapped[PipelineFolder | None] = relationship(
+    parent: Mapped[Optional["PipelineFolder"]] = relationship(
         "PipelineFolder", remote_side="PipelineFolder.id", back_populates="children"
     )
-    children: Mapped[list[PipelineFolder]] = relationship(
+    children: Mapped[list["PipelineFolder"]] = relationship(
         "PipelineFolder", remote_side="PipelineFolder.parent_id", back_populates="parent"
     )
-    creator: Mapped[Account] = relationship()
+    creator: Mapped["Account"] = relationship()
