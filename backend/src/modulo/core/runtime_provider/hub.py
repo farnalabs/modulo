@@ -171,14 +171,24 @@ class RuntimeProviderHub:
                 f"No RuntimeProvider registered for profile type '{getattr(profile, 'provider_type', None)}'"
             )
 
+        profile_config = dict(getattr(profile, "config_json", {}) or {})
+        repo_url = profile_config.pop("repo_url", "")
+        repo_ref = profile_config.pop("repo_ref", "")
+        resource_limits = profile_config
+        labels: dict[str, str] = {}
+        if repo_url:
+            labels["repo_url"] = repo_url
+        if repo_ref:
+            labels["repo_ref"] = repo_ref
+
         spec = WorkspaceSpec(
             environment_profile_id=profile.id,
             organisation_id=profile.organisation_id,
             run_id=run_id,
             image_ref=profile.image_ref or "",
             capabilities=list(getattr(profile, "capabilities_json", [])),
-            resource_limits=dict(getattr(profile, "config_json", {})),
-            labels={},
+            resource_limits=resource_limits,
+            labels=labels,
         )
         workspace_ref = await provider.create_workspace(spec)
 

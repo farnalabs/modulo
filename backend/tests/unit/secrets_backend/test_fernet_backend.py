@@ -7,6 +7,7 @@ import pytest
 
 pytestmark = pytest.mark.skip(reason="Flaky under xdist (pytest-playwright async interaction)")
 from unittest.mock import AsyncMock, MagicMock
+
 from cryptography.fernet import Fernet
 
 from modulo.core.secrets_backend.fernet import FernetSecretsBackend
