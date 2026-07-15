@@ -2,6 +2,7 @@
 import { ref, computed } from "vue";
 import { Button } from "../../ui/button";
 import { Input } from "../../ui/input";
+import { Select, SelectTrigger, SelectContent, SelectItem, SelectValue } from "../../ui/select";
 import { Badge } from "../../ui/badge";
 
 interface EvalConfig {
@@ -128,44 +129,32 @@ const evalCount = computed(() => props.evalDefinitions.length);
           />
         </div>
         <div class="space-y-1">
-          <label for="outputvalidationtab-field-6" class="text-xs text-muted-foreground">Type</label>
-          <select id="outputvalidationtab-field-6"
-            :value="evalDef.type"
-            aria-label="Eval type"
-            class="bg-background border-input focus-visible:border-ring h-8 w-full rounded-lg border px-2.5 py-1 text-sm"
-            @change="
-              (e: Event) =>
-                updateEval(evalDef.id, {
-                  type: (e.target as HTMLSelectElement)
-                    .value as EvalConfig['type'],
-                })
-            "
-          >
-            <option value="regex">Regex</option>
-            <option value="json_schema">{{ $t('components.pipeline.composite.OutputValidationTab.json_schema') }}</option>
-            <option value="llm_judge">{{ $t('components.pipeline.composite.OutputValidationTab.llm_judge') }}</option>
-          </select>
+          <span class="text-xs text-muted-foreground">Type</span>
+          <Select :model-value="evalDef.type" @update:model-value="(val) => updateEval(evalDef.id, {type: val as EvalConfig['type']})">
+            <SelectTrigger class="bg-background border-input focus-visible:border-ring h-8 w-full rounded-lg border px-2.5 py-1 text-sm" aria-label="Eval type">
+              <SelectValue placeholder="Select type" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="regex">Regex</SelectItem>
+              <SelectItem value="json_schema">{{ $t('components.pipeline.composite.OutputValidationTab.json_schema') }}</SelectItem>
+              <SelectItem value="llm_judge">{{ $t('components.pipeline.composite.OutputValidationTab.llm_judge') }}</SelectItem>
+            </SelectContent>
+          </Select>
         </div>
       </div>
 
       <div class="space-y-1">
-        <label for="outputvalidationtab-field-5" class="text-xs text-muted-foreground">{{ $t('components.pipeline.composite.OutputValidationTab.failure_behaviour') }}</label>
-        <select id="outputvalidationtab-field-5"
-          :value="evalDef.failure_behaviour"
-          aria-label="Failure behaviour"
-          class="bg-background border-input focus-visible:border-ring h-8 w-full rounded-lg border px-2.5 py-1 text-sm"
-          @change="
-            (e: Event) =>
-              updateEval(evalDef.id, {
-                failure_behaviour: (e.target as HTMLSelectElement)
-                  .value as EvalConfig['failure_behaviour'],
-              })
-          "
-        >
-          <option value="retry">Retry</option>
-          <option value="block">Block</option>
-          <option value="warn">Warn</option>
-        </select>
+        <span class="text-xs text-muted-foreground">{{ $t('components.pipeline.composite.OutputValidationTab.failure_behaviour') }}</span>
+        <Select :model-value="evalDef.failure_behaviour" @update:model-value="(val) => updateEval(evalDef.id, {failure_behaviour: val as EvalConfig['failure_behaviour']})">
+          <SelectTrigger class="bg-background border-input focus-visible:border-ring h-8 w-full rounded-lg border px-2.5 py-1 text-sm" aria-label="Failure behaviour">
+            <SelectValue placeholder="Select behaviour" />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="retry">Retry</SelectItem>
+            <SelectItem value="block">Block</SelectItem>
+            <SelectItem value="warn">Warn</SelectItem>
+          </SelectContent>
+        </Select>
       </div>
 
       <template v-if="evalDef.type === 'regex'">

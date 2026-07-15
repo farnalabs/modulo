@@ -45,16 +45,16 @@
               </div>
               <div>
                 <label for="adminenvironmentprofilesview-field-6" class="mb-1 block text-sm font-medium">Provider Type</label>
-                <select id="adminenvironmentprofilesview-field-6"
-                  v-model="formData.provider_type"
-                  aria-label="Provider type"
-                  class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm"
-                  data-testid="admin-envprofiles-provider-select"
-                >
-                  <option value="e2b">E2B</option>
-                  <option value="docker">Docker</option>
-                  <option value="custom">Custom / None</option>
-                </select>
+                <Select v-model="formData.provider_type">
+                  <SelectTrigger data-testid="admin-envprofiles-provider-select" aria-label="Provider type" class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm">
+                    <SelectValue placeholder="E2B" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="e2b">E2B</SelectItem>
+                    <SelectItem value="docker">Docker</SelectItem>
+                    <SelectItem value="custom">Custom / None</SelectItem>
+                  </SelectContent>
+                </Select>
               </div>
               <div v-if="formData.provider_type === 'custom'">
                 <label for="adminenvironmentprofilesview-field-5" class="mb-1 block text-sm font-medium">Image Reference</label>
@@ -292,6 +292,7 @@ import LoadingSpinner from '../components/shared/LoadingSpinner.vue'
 import ErrorAlert from '../components/shared/ErrorAlert.vue'
 import FeatureGate from '../components/FeatureGate.vue'
 import { Button } from '@/components/ui/button'
+import { Select, SelectTrigger, SelectContent, SelectItem, SelectValue } from '@/components/ui/select'
 import TableActions from '../components/shared/TableActions.vue'
 import { formatDateShort } from '../lib/formatDate'
 

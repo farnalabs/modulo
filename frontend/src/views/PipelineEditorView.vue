@@ -337,15 +337,16 @@
           <div>
             <dt class="text-muted-foreground">{{ $t('views.PipelineEditorView.type_label') }}</dt>
             <dd>
-              <select
-                v-model="edgeForm.edge_type"
-                aria-label="Edge type"
-                class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm"
-              >
-                <option value="normal">Normal</option>
-                <option value="reject">Reject</option>
-                <option value="conditional">Conditional</option>
-              </select>
+              <Select v-model="edgeForm.edge_type">
+                <SelectTrigger aria-label="Edge type" class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm">
+                  <SelectValue placeholder="Normal" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="normal">Normal</SelectItem>
+                  <SelectItem value="reject">Reject</SelectItem>
+                  <SelectItem value="conditional">Conditional</SelectItem>
+                </SelectContent>
+              </Select>
             </dd>
           </div>
           <div>
@@ -416,15 +417,16 @@
 
           <div>
             <label for="pipelineeditorview-field-11" class="mb-1 block text-xs font-medium text-muted-foreground">Condition Type</label>
-            <select id="pipelineeditorview-field-11"
-              v-model="edgeForm.condition_type"
-              aria-label="Condition type"
-              class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm"
-            >
-              <option value="none">None (always gate)</option>
-              <option value="jmespath">JMESPath Expression</option>
-              <option value="eval">Eval Reference</option>
-            </select>
+            <Select v-model="edgeForm.condition_type">
+              <SelectTrigger aria-label="Condition type" class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm">
+                <SelectValue placeholder="None (always gate)" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="none">None (always gate)</SelectItem>
+                <SelectItem value="jmespath">JMESPath Expression</SelectItem>
+                <SelectItem value="eval">Eval Reference</SelectItem>
+              </SelectContent>
+            </Select>
           </div>
 
           <div v-if="edgeForm.condition_type === 'jmespath'">
@@ -462,18 +464,19 @@
               </div>
               <div class="flex-1">
                 <label for="pipelineeditorview-field-7" class="mb-1 block text-xs font-medium text-muted-foreground">Operator</label>
-                <select id="pipelineeditorview-field-7"
-                  v-model="edgeForm.eval_operator"
-                  aria-label="Operator"
-                  class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm"
-                >
-                  <option value="lt">lt (score &lt; threshold)</option>
-                  <option value="gt">gt (score &gt; threshold)</option>
-                  <option value="lte">lte (score &le; threshold)</option>
-                  <option value="gte">gte (score &ge; threshold)</option>
-                  <option value="eq">eq (score == threshold)</option>
-                  <option value="neq">neq (score != threshold)</option>
-                </select>
+                <Select v-model="edgeForm.eval_operator">
+                  <SelectTrigger aria-label="Operator" class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm">
+                    <SelectValue placeholder="lt (score &lt; threshold)" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="lt">lt (score &lt; threshold)</SelectItem>
+                    <SelectItem value="gt">gt (score &gt; threshold)</SelectItem>
+                    <SelectItem value="lte">lte (score &le; threshold)</SelectItem>
+                    <SelectItem value="gte">gte (score &ge; threshold)</SelectItem>
+                    <SelectItem value="eq">eq (score == threshold)</SelectItem>
+                    <SelectItem value="neq">neq (score != threshold)</SelectItem>
+                  </SelectContent>
+                </Select>
               </div>
             </div>
             <p class="mt-1 text-[10px] text-muted-foreground">
@@ -515,28 +518,27 @@
       <div class="space-y-4">
           <div>
             <label for="pipelineeditorview-field-6" class="mb-1 block text-sm font-medium">{{ $t('views.PipelineEditorView.agent') }}</label>
-            <select id="pipelineeditorview-field-6"
-              v-model="pickerAgentId"
-              data-testid="pipeline-editor-agent-select"
-              aria-label="Agent"
-              class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm"
-              @change="onAgentChange"
-            >
-              <option value="">{{ $t('views.PipelineEditorView.select_agent_placeholder') }}</option>
-              <option v-for="a in agents" :key="a.id" :value="a.id">{{ a.name }}</option>
-            </select>
+            <Select v-model="pickerAgentId" @update:model-value="onAgentChange">
+              <SelectTrigger data-testid="pipeline-editor-agent-select" aria-label="Agent" class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm">
+                <SelectValue :placeholder="$t('views.PipelineEditorView.select_agent_placeholder')" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="">{{ $t('views.PipelineEditorView.select_agent_placeholder') }}</SelectItem>
+                <SelectItem v-for="a in agents" :key="a.id" :value="a.id">{{ a.name }}</SelectItem>
+              </SelectContent>
+            </Select>
           </div>
           <div v-if="selectedAgent">
             <label for="pipelineeditorview-field-5" class="mb-1 block text-sm font-medium">{{ $t('views.PipelineEditorView.connector') }}</label>
-            <select id="pipelineeditorview-field-5"
-              v-model="pickerConnectorId"
-              data-testid="pipeline-editor-connector-select"
-              aria-label="Connector"
-              class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm"
-            >
-              <option value="">{{ $t('views.PipelineEditorView.select_connector_placeholder') }}</option>
-              <option v-for="c in eligibleConnectors" :key="c.id" :value="c.id">{{ c.name }} ({{ c.connector_type_id }})</option>
-            </select>
+            <Select v-model="pickerConnectorId">
+              <SelectTrigger data-testid="pipeline-editor-connector-select" aria-label="Connector" class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm">
+                <SelectValue :placeholder="$t('views.PipelineEditorView.select_connector_placeholder')" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="">{{ $t('views.PipelineEditorView.select_connector_placeholder') }}</SelectItem>
+                <SelectItem v-for="c in eligibleConnectors" :key="c.id" :value="c.id">{{ c.name }} ({{ c.connector_type_id }})</SelectItem>
+              </SelectContent>
+            </Select>
           </div>
           <div v-if="selectedAgent">
             <span class="mb-1 block text-sm font-medium">{{ $t('views.PipelineEditorView.model_backend_label') }}</span>
@@ -574,21 +576,21 @@
         </p>
         <div>
           <label for="pipelineeditorview-field-4" class="mb-1 block text-sm font-medium">{{ $t('views.PipelineEditorView.snapshot_label') }}</label>
-          <select id="pipelineeditorview-field-4"
-            v-model="revertSnapshotId"
-            data-testid="pipeline-editor-snapshot-select"
-            aria-label="Snapshot"
-            class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm"
-          >
-            <option value="">{{ $t('views.PipelineEditorView.select_snapshot_placeholder') }}</option>
-            <option
-              v-for="s in snapshots"
-              :key="s.id"
-              :value="s.id"
-            >
-              v{{ s.snapshot_version }}{{ s.tag ? ` — ${s.tag}` : '' }}
-            </option>
-          </select>
+          <Select v-model="revertSnapshotId">
+            <SelectTrigger data-testid="pipeline-editor-snapshot-select" aria-label="Snapshot" class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm">
+              <SelectValue :placeholder="$t('views.PipelineEditorView.select_snapshot_placeholder')" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="">{{ $t('views.PipelineEditorView.select_snapshot_placeholder') }}</SelectItem>
+              <SelectItem
+                v-for="s in snapshots"
+                :key="s.id"
+                :value="s.id"
+              >
+                v{{ s.snapshot_version }}{{ s.tag ? ` — ${s.tag}` : '' }}
+              </SelectItem>
+            </SelectContent>
+          </Select>
         </div>
 
         <div v-if="revertError" class="rounded-lg border border-destructive/50 bg-destructive/10 p-3 text-sm text-destructive">
@@ -711,6 +713,7 @@ import { shortId } from '../utils/format'
 import { api } from '../lib/api/client'
 import { useApi } from '../composables/useApi'
 import { Button } from '@/components/ui/button'
+import { Select, SelectTrigger, SelectContent, SelectItem, SelectValue } from '@/components/ui/select'
 
 function withTimeout<T>(factory: (signal: AbortSignal) => Promise<T>, ms = 15000): Promise<T> {
   const ctrl = new AbortController()
