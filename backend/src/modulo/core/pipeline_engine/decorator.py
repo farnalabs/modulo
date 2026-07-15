@@ -73,6 +73,7 @@ def set_connector_hub(hub: Any | None) -> None:
     """Set the ConnectorHub for the current run."""
     _connector_hub_cv.set(hub)
 
+
 # Canonical write-log key in LangGraph state.
 _RUN_CONTEXT_WRITE_LOG_KEY = "_run_context_write_log"
 
