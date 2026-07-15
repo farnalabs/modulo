@@ -406,7 +406,6 @@ class ModuloPostgresSaver(AsyncPostgresSaver):
         metadata: CheckpointMetadata,
         new_versions: dict[str, str | int | float | bool] | None = None,
     ) -> dict[str, Any]:
-        del new_versions
         thread_id = config["configurable"]["thread_id"]
         checkpoint_ns = config["configurable"].get("checkpoint_ns", "")
         checkpoint_id = config["configurable"].get("checkpoint_id")
@@ -417,7 +416,10 @@ class ModuloPostgresSaver(AsyncPostgresSaver):
             parent_checkpoint_id = parent_config["configurable"].get("checkpoint_id")
 
         if not checkpoint_id:
-            checkpoint_id = self.get_next_version()  # type: ignore[call-arg]
+            nv = new_versions or {}
+            channel = next(iter(nv.keys())) if nv else ""
+            current = nv.get(channel) if nv else None
+            checkpoint_id = self.get_next_version(current, channel)  # type: ignore[arg-type]
 
         encrypted_checkpoint = self._encrypt_checkpoint(checkpoint)
 
