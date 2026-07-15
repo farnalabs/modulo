@@ -320,48 +320,14 @@ async def trigger_run(
     Returns 202 immediately; execution happens in a background task.
     The run status can be polled via GET /api/v1/runs/{run_id}.
     """
-    try:
-        async with session.begin():
-            await set_rls_org(session, principal.organisation_id)
-            pipeline = await get_pipeline(session, req.pipeline_id)
-    except IntegrityError:
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail="A resource with this value already exists",
-        ) from None
-    except ProgrammingError:
-        raise HTTPException(
-            status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="Feature is not available. This feature requires a database update. Please contact support.",
-        ) from None
-
-    except SQLAlchemyError:
-        _log.warning("route.db_error", exc_info=True)
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Database temporarily unavailable.",
-        ) from None
-
-    except HTTPException:
-        raise
-    except Exception:
-        _log.exception("pipeline_execution.unexpected_error")
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="An unexpected error occurred.",
-        ) from None
-    if pipeline is None:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Pipeline {req.pipeline_id} not found",
-        )
-
     org_id = principal.organisation_id
 
     try:
-        # Create the run record inside a transaction.
         async with session.begin():
             await set_rls_org(session, org_id)
+            pipeline = await get_pipeline(session, req.pipeline_id)
+            if pipeline is None:
+                raise HTTPException(status_code=404, detail=f"Pipeline {req.pipeline_id} not found")
             snapshot = await create_snapshot_from_live_graph(
                 session,
                 pipeline_id=pipeline.id,
@@ -372,10 +338,7 @@ async def trigger_run(
                     status_code=status.HTTP_404_NOT_FOUND,
                     detail=f"Pipeline {req.pipeline_id} not found",
                 )
-
-            # Pre-run input health checks against entry agent.
             await _validate_run_input_basics(session, snapshot.graph_json, snapshot, req.input_payload)
-
             run = await create_run(
                 session,
                 org_id=org_id,
@@ -1473,8 +1436,8 @@ async def reveal_node_prompt(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Feature is temporarily unavailable. Please try again.",
         ) from None
-    except Exception as exc:
-        _log.error("prompt_reveal.error", extra={"error": str(exc)[:200]})
+    except Exception:
+        _log.exception("prompt_reveal.error")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="An unexpected error occurred while revealing the prompt.",
