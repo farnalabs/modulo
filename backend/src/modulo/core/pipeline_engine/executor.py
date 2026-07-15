@@ -652,7 +652,10 @@ class PipelineExecutor:
                 if n.get("token_budget") is not None
             }
 
-            if self._checkpointer_conn_string and False:
+            # TODO(LangGraph 1.2.x compat): re-enable when LangGraph fixes TypeError
+            # with checkpointers during initial astream_events. The resume() path
+            # sets up its own checkpointer separately.
+            if False:
                 from modulo.settings import get_settings
 
                 _settings = get_settings()
