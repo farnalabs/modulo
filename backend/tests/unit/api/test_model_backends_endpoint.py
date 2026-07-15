@@ -58,7 +58,7 @@ def _make_backend(credentials_ciphertext: bytes = b"encrypted") -> MagicMock:
 
 @pytest.fixture(autouse=True)
 def _patch_secrets_backend() -> Generator[None, None, None]:
-    with patch("modulo.api.routes.model_backends.create_secrets_backend"):
+    with patch("modulo.core.secrets_backend.create_secrets_backend"):
         yield
 
 
