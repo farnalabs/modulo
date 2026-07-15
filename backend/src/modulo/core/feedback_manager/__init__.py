@@ -22,6 +22,7 @@ from modulo.db.crud.run import create_run, get_run
 from modulo.db.models.feedback_record import FeedbackRecord
 from modulo.db.models.pipeline import Pipeline
 from modulo.db.models.run import Run
+
 logger = logging.getLogger(__name__)
 
 _VALID_FEEDBACK_HANDLER_TYPES = frozenset(
