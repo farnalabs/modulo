@@ -61,6 +61,7 @@ class CompositeTemplateCreate(BaseModel):
     parameter_ports_json: list[ParameterPort] = Field(default_factory=list)
     input_schema_id: uuid.UUID | None = None
     output_schema_id: uuid.UUID | None = None
+    parameter_schema_id: uuid.UUID | None = None
     version: str = "1.0.0"
 
 
@@ -71,6 +72,7 @@ class CompositeTemplateUpdate(BaseModel):
     parameter_ports_json: list[ParameterPort] | None = None
     input_schema_id: uuid.UUID | None = None
     output_schema_id: uuid.UUID | None = None
+    parameter_schema_id: uuid.UUID | None = None
     version: str | None = None
 
 
@@ -83,6 +85,7 @@ class CompositeTemplateResponse(BaseModel):
     parameter_ports_json: list[dict[str, Any]]
     input_schema_id: uuid.UUID | None
     output_schema_id: uuid.UUID | None
+    parameter_schema_id: uuid.UUID | None
     version: str
     created_by: uuid.UUID = Field(validation_alias="account_id")
     created_at: datetime
@@ -161,6 +164,7 @@ async def create_composite_template_endpoint(
                 parameter_ports_json=[p.model_dump() for p in req.parameter_ports_json],
                 input_schema_id=req.input_schema_id,
                 output_schema_id=req.output_schema_id,
+                parameter_schema_id=req.parameter_schema_id,
                 version=req.version,
             )
         return CompositeTemplateResponse.model_validate(template)
