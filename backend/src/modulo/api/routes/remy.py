@@ -342,6 +342,7 @@ async def _resolve_api_key(
             ModelBackend.organisation_id == org_id,
             ModelBackend.provider == provider,
             ModelBackend.status == "active",
+            ModelBackend.credentials_ciphertext != b'',
         )
     )
     backend = result.scalar_one_or_none()
