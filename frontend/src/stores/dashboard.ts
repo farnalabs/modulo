@@ -135,6 +135,18 @@ export const useDashboardStore = defineStore("dashboard", () => {
   const summaryError = ref<string | ProblemDetail | null>(null);
   const syncingIds = ref(new Set<string>());
   const unsubHandlers: (() => void)[] = [];
+  const fallbackPipelineCount = ref(0);
+
+  async function fetchFallbackPipelineCount(): Promise<void> {
+    try {
+      const { data } = await api.GET('/api/v1/pipelines', { params: { query: { page_size: 1 } } });
+      if (data && typeof data === 'object' && 'total' in data) {
+        fallbackPipelineCount.value = (data as any).total as number;
+      }
+    } catch {
+      /* ignore fallback errors */
+    }
+  }
 
   const totalSpend = computed(() => {
     if (!Array.isArray(summary.value?.trend)) return 0;
@@ -249,6 +261,8 @@ export const useDashboardStore = defineStore("dashboard", () => {
     totalSpend,
     fetchSummary,
     fetchTrends,
+    fetchFallbackPipelineCount,
+    fallbackPipelineCount,
     disposeHandlers,
   };
 });
