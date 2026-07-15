@@ -1,4 +1,6 @@
 ﻿"""Unit tests for PlanContext classes (CommunityTier, LicenseKeyTier, DbPlanContext, resolve_plan_context)."""
+import pytest
+
 
 from unittest.mock import AsyncMock, MagicMock, patch
 
