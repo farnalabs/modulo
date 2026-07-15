@@ -26,7 +26,7 @@ from typing import Any
 from jwt import InvalidTokenError as JWTError
 from mcp.server.fastmcp import FastMCP
 from sqlalchemy.exc import ProgrammingError, SQLAlchemyError
-from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from starlette.applications import Starlette
 from starlette.exceptions import HTTPException as StarletteHTTPException
 from starlette.middleware import Middleware
@@ -687,7 +687,7 @@ async def _run_in_background(
         _log.exception("run.background_execution_error", extra={"run_id": str(run_id)})
         try:
             settings = get_settings()
-            engine = get_or_create_engine(settings)
+            engine = create_async_engine(str(settings.database_url), pool_size=1)
             factory = async_sessionmaker(engine, expire_on_commit=False)
             async with factory() as session, session.begin():
                 await set_rls_org(session, org_id)
@@ -734,10 +734,11 @@ async def trigger_pipeline(
             run_id = run.id
             thread_id = run.langgraph_thread_id
 
-        engine = get_or_create_engine(get_settings())
+        _settings = get_settings()
+        _bg_engine = create_async_engine(str(_settings.database_url), pool_size=2, max_overflow=4)
         executor = PipelineExecutor(
-            engine,
-            checkpointer_conn_string=pg_connection_string(str(engine.url)),
+            _bg_engine,
+            checkpointer_conn_string=pg_connection_string(str(_settings.database_url)),
         )
         task = asyncio.create_task(_run_in_background(executor, run_id, org_id, payload))
         _background_tasks.add(task)

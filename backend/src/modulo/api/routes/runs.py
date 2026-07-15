@@ -14,13 +14,12 @@ from pydantic import BaseModel, Field
 from sqlalchemy import select, text
 from sqlalchemy.exc import IntegrityError, ProgrammingError, SQLAlchemyError
 from sqlalchemy.exc import TimeoutError as SA_TimeoutError
-from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
+from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker, create_async_engine
 
 from modulo.api.dependencies import (
     _get_engine,
     _get_session_factory,
     get_db_session,
-    get_or_create_engine,
     pg_connection_string,
 )
 from modulo.api.middleware.sensitive_mask import is_sensitive_key, mask_sensitive_value
@@ -154,22 +153,7 @@ async def list_runs_endpoint(
             detail="Feature is not available. This feature requires a database update. Please contact support.",
         ) from None
     except SQLAlchemyError:
-<<<<<<< HEAD
         _log.exception("route.db_error")
-=======
-        import sys
-        import traceback
-
-        print(
-            "DEBUG_ROUTE_DB_ERROR",
-            type(sys.exc_info()[1]).__name__,
-            str(sys.exc_info()[1])[:200],
-            flush=True,
-            file=sys.stderr,
-        )
-        traceback.print_exc(file=sys.stderr)
-        _log.warning("route.db_error", exc_info=True)
->>>>>>> tests/improve-tests-secrets
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database temporarily unavailable.",
@@ -395,9 +379,11 @@ async def trigger_run(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="An unexpected error occurred.",
         ) from None
+    _settings_for_bg = get_settings()
+    _bg_engine = create_async_engine(str(_settings_for_bg.database_url), pool_size=2, max_overflow=4)
     executor = PipelineExecutor(
-        engine,
-        checkpointer_conn_string=pg_connection_string(str(engine.url)),
+        _bg_engine,
+        checkpointer_conn_string=pg_connection_string(str(_settings_for_bg.database_url)),
     )
     background_tasks.add_task(_run_in_background, executor, run_id, org_id, req.input_payload)
 
@@ -585,7 +571,7 @@ async def _run_in_background(
         _log.exception("run.background_execution_error", extra={"run_id": str(run_id)})
         try:
             settings = get_settings()
-            engine = get_or_create_engine(settings)
+            engine = create_async_engine(str(settings.database_url), pool_size=1)
             factory = async_sessionmaker(engine, expire_on_commit=False)
             async with factory() as session, session.begin():
                 await set_rls_org(session, org_id)
