@@ -88,8 +88,8 @@ class ShellConnector(ConnectorBase):
         if self._environment_profile_id is None:
             return None
         try:
-            from modulo.db.crud.environment_profile import get_environment_profile
             from modulo.api.dependencies import get_or_create_engine, get_or_create_session_factory
+            from modulo.db.crud.environment_profile import get_environment_profile
             from modulo.settings import get_settings
 
             _settings = get_settings()

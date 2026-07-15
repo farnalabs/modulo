@@ -13,6 +13,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from modulo.db.models.agent import Agent
 from modulo.db.models.connector_instance import ConnectorInstance
 from modulo.db.models.model_backend import ModelBackend
+from modulo.db.models.parameter_schema import ParameterSchema
+from modulo.db.models.parameter_set import ParameterSet
 from modulo.db.models.pipeline import Pipeline
 from modulo.db.models.pipeline_edge import PipelineEdge
 from modulo.db.models.pipeline_snapshot import PipelineSnapshot
@@ -56,6 +58,7 @@ async def create_snapshot_from_live_graph(
         agents_by_id = {a.id: a for a in agents}
 
     # Enrich node_defs with agent data — token_budget, prompt_template, model_backend_id.
+    parameter_schema_ids: set[uuid.UUID] = set()
     for node in nodes:
         agent_id = node.get("agent_id")
         if agent_id is None:
@@ -68,6 +71,66 @@ async def create_snapshot_from_live_graph(
                 node["prompt_template"] = agent.prompt_template
             if agent.model_backend_id is not None:
                 node["model_backend_id"] = str(agent.model_backend_id)
+            if agent.parameter_schema_id is not None:
+                node["parameter_schema_id"] = str(agent.parameter_schema_id)
+                parameter_schema_ids.add(agent.parameter_schema_id)
+
+    # Resolve parameter values for nodes with parameter_schema_id.
+    parameter_bindings: dict[str, Any] = {}
+    if parameter_schema_ids:
+        schema_rows = (
+            (await session.execute(select(ParameterSchema).where(ParameterSchema.id.in_(parameter_schema_ids))))
+            .scalars()
+            .all()
+        )
+        schemas_by_id: dict[uuid.UUID, ParameterSchema] = {s.id: s for s in schema_rows}
+
+        # Collect all referenced parameter_set_ids from nodes.
+        set_ids: set[uuid.UUID] = set()
+        for node in nodes:
+            raw_set_id = node.get("parameter_set_id")
+            if raw_set_id is not None:
+                parsed = uuid.UUID(str(raw_set_id))
+                set_ids.add(parsed)
+
+        sets_by_id: dict[uuid.UUID, ParameterSet] = {}
+        if set_ids:
+            set_rows = (await session.execute(select(ParameterSet).where(ParameterSet.id.in_(set_ids)))).scalars().all()
+            sets_by_id = {s.id: s for s in set_rows}
+
+        for node in nodes:
+            raw_schema_id = node.get("parameter_schema_id")
+            if raw_schema_id is None:
+                continue
+            schema_id = uuid.UUID(str(raw_schema_id))
+            schema = schemas_by_id.get(schema_id)
+            if schema is None:
+                continue
+
+            # Resolution order: schema defaults → Parameter Set values → inline overrides.
+            resolved: dict[str, Any] = {}
+            for param in schema.parameters or []:
+                if isinstance(param, dict) and "name" in param:
+                    resolved[param["name"]] = param.get("default")
+
+            raw_set_id = node.get("parameter_set_id")
+            if raw_set_id is not None:
+                ps = sets_by_id.get(uuid.UUID(str(raw_set_id)))
+                if ps is not None and isinstance(ps.values, dict):
+                    resolved.update(ps.values)
+
+            overrides = node.get("parameter_overrides")
+            if isinstance(overrides, dict):
+                resolved.update(overrides)
+
+            node["_resolved_parameters"] = resolved
+
+            parameter_bindings[str(node["id"])] = {
+                "agent_id": str(node.get("agent_id")) if node.get("agent_id") else None,
+                "parameter_schema_id": str(schema_id),
+                "parameter_set_id": str(raw_set_id) if raw_set_id is not None else None,
+                "resolved_values": resolved,
+            }
 
     connector_ids = _ids(
         binding.get("instance_id") for node in nodes if (binding := node.get("connector_binding")) is not None
@@ -178,6 +241,7 @@ async def create_snapshot_from_live_graph(
         schema_pins_json=schema_pins,
         prompt_pins_json=prompt_pins,
         model_backend_pins_json=model_backend_pins,
+        parameter_bindings_json=parameter_bindings or None,
         run_context_defaults=copy.deepcopy(pipeline.run_context_defaults),
     )
     session.add(snapshot)

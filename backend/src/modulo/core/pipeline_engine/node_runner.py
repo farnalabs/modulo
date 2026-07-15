@@ -145,7 +145,16 @@ def make_node_fn(
 
         env = SandboxedEnvironment()
         template = env.from_string(prompt_template)
-        rendered_prompt = template.render(state=state, run_context=run_context, input=raw_input)
+        template_vars: dict[str, Any] = {
+            "state": state,
+            "run_context": run_context,
+            "input": raw_input,
+        }
+        # Inject resolved parameters as {{ parameter.<key> }}.
+        resolved = node_def.get("_resolved_parameters")
+        if isinstance(resolved, dict):
+            template_vars["parameter"] = resolved
+        rendered_prompt = template.render(**template_vars)
 
         # Get ModelBackendHub from ContextVar.
         from modulo.core.pipeline_engine.decorator import get_model_backend_hub
@@ -500,8 +509,8 @@ def make_connector_fn(
 
     @cancellable_node(timeout=timeout)
     async def _connector_node(state: dict[str, Any]) -> dict[str, Any]:
+        from modulo.connectors.base import ConnectorPayload, ConnectorQuery
         from modulo.core.pipeline_engine.decorator import get_connector_hub
-        from modulo.connectors.base import ConnectorQuery, ConnectorPayload
 
         hub = get_connector_hub()
         if hub is None:

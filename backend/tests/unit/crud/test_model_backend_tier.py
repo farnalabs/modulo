@@ -1,10 +1,9 @@
-﻿"""Unit tests for model_backend CRUD tier filtering.
+"""Unit tests for model_backend CRUD tier filtering.
 
 Tests the default-behaviour, None-handling, empty-list, and explicit-filter
 code paths in the function.  No DB â€” uses mock sessions.
 """
 
-import uuid
 from unittest.mock import AsyncMock, MagicMock
 
 from modulo.db.crud.model_backend import list_model_backends
@@ -29,8 +28,6 @@ def _mock_execute(*, count: int) -> MagicMock:
     scalars.scalars.return_value = [MagicMock(spec=ModelBackend) for _ in range(count)]
     m.side_effect = [scalar, scalars]
     return m
-
-
 
 
 async def test_default_excludes_in_dev() -> None:
@@ -77,4 +74,3 @@ async def test_excluded_tiers_preview() -> None:
     result = await list_model_backends(session, excluded_tiers=["preview"])
 
     assert result.total == 3
-

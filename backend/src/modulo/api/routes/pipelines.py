@@ -164,6 +164,8 @@ class PipelineGraphNode(BaseModel):
     composite_parameter_values: dict[str, Any] | None = None
     composite_input_mapping: dict[str, Any] | None = None
     composite_output_mapping: dict[str, Any] | None = None
+    parameter_set_id: uuid.UUID | None = None
+    parameter_overrides: dict[str, Any] | None = None
 
     @model_validator(mode="after")
     def validate_node_type(self) -> "PipelineGraphNode":
@@ -186,6 +188,8 @@ class PipelineGraphNode(BaseModel):
         elif self.node_type == "agent":
             if self.agent_id is None:
                 raise ValueError("Agent nodes require an agent")
+        if self.node_type != "agent" and self.parameter_set_id is not None:
+            raise ValueError("Only agent nodes can have parameter_set_id")
         return self
 
 
