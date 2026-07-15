@@ -477,8 +477,5 @@ onMounted(async () => {
     promises.push(planStore.fetchPlan());
   }
   await Promise.all(promises);
-  if (summary.value?.active_pipelines === 0) {
-    dashboardStore.fetchFallbackPipelineCount();
-  }
 })
 </script>
