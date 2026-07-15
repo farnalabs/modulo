@@ -8,7 +8,6 @@ import uuid
 from decimal import Decimal
 from typing import Any, Literal
 
-from cryptography.fernet import Fernet
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, Field
 from sqlalchemy import select, text
@@ -1259,6 +1258,8 @@ async def _get_checkpoint_state(
     fernet_key: str | None = None,
 ) -> dict[str, Any] | None:
     """Fetch the latest checkpoint state for a thread, decrypting if needed."""
+    from cryptography.fernet import Fernet
+
     result = await session.execute(
         text("""
             SELECT checkpoint, checkpoint_id
