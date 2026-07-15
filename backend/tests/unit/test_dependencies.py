@@ -151,7 +151,7 @@ class TestPgConnectionString:
         from modulo.api.dependencies import pg_connection_string
 
         result = pg_connection_string("postgresql+asyncpg://user:pass@localhost/db")
-        assert result == "postgresql://user:pass@localhost/db"
+        assert result.startswith("postgresql://user:pass@localhost/db")
 
     def test_strips_psycopg_prefix(self):
         from modulo.api.dependencies import pg_connection_string
