@@ -169,6 +169,7 @@ async def update_run_status(
     total_tokens: int | None = None,
     total_cost_usd: Decimal | None = None,
     node_token_usage: dict[str, Any] | None = None,
+    outputs_json: dict[str, Any] | None = None,
 ) -> Run | None:
     result = await session.execute(select(Run).where(Run.id == run_id).with_for_update())
     run = result.scalar_one_or_none()
@@ -189,6 +190,8 @@ async def update_run_status(
         run.total_cost_usd = total_cost_usd
     if node_token_usage is not None:
         run.node_token_usage = node_token_usage
+    if outputs_json is not None:
+        run.outputs_json = outputs_json
     await session.flush()
     return run
 
