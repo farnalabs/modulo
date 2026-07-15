@@ -18,7 +18,6 @@ from modulo.api.dependencies import get_db_session
 from modulo.auth.dependencies import get_current_tenant_user
 from modulo.auth.jwt import TenantPrincipal
 from modulo.core.remy.config_service import RemyConfigService
-from modulo.db.crud.pipeline import count_pipelines as _count_pipelines
 from modulo.db.models.daily_run_count import OrgDailyRunCount
 from modulo.db.models.eval_result import EvalResult
 from modulo.db.models.feedback_record import FeedbackRecord
@@ -27,7 +26,7 @@ from modulo.db.models.model_backend import ModelBackend
 from modulo.db.models.pipeline import Pipeline
 from modulo.db.models.run import Run
 from modulo.db.models.team import Team
-from modulo.db.rls import set_rls_org
+from modulo.db.rls import set_rls_org, set_rls_user_context
 from modulo.settings import get_settings
 
 _log = logging.getLogger(__name__)
@@ -118,12 +117,14 @@ async def dashboard_summary(
 
         async with session.begin():
             await set_rls_org(session, principal.organisation_id)
+            await set_rls_user_context(session, principal.account_id, principal.org_role)
 
             org_id = principal.organisation_id
 
             # --- Queries that can all run independently (no dependencies between them) ---
 
-            active_pipelines = await _count_pipelines(session, org_id=org_id, include_archived=False)
+            count_query = select(func.count()).select_from(Pipeline).where(Pipeline.archived_at.is_(None))
+            active_pipelines = (await session.execute(count_query)).scalar_one() or 0
 
             status_count_query = (
                 select(
