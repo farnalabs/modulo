@@ -52,19 +52,17 @@
               </div>
             </td>
             <td class="table-cell">
-              <select
-                v-model="u.org_role"
-                :data-testid="`admin-users-role-${u.id}`"
-                aria-label="User role"
-                class="text-xs border border-input bg-background rounded-md px-2 py-1"
-                @change="updateRole(u)"
-                @focus="captureRole(u.org_role)"
-              >
-                <option value="admin">Admin</option>
-                <option value="operator">Operator</option>
-                <option value="runner">Runner</option>
-                <option value="viewer">Viewer</option>
-              </select>
+              <Select :model-value="u.org_role" @update:model-value="updateRole(u, $event)">
+                <SelectTrigger class="text-xs border border-input bg-background rounded-md px-2 py-1" aria-label="User role" :data-testid="`admin-users-role-${u.id}`">
+                  <SelectValue placeholder="Select role" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="admin">Admin</SelectItem>
+                  <SelectItem value="operator">Operator</SelectItem>
+                  <SelectItem value="runner">Runner</SelectItem>
+                  <SelectItem value="viewer">Viewer</SelectItem>
+                </SelectContent>
+              </Select>
             </td>
             <td class="table-cell">
               <span v-if="u.is_active" class="inline-flex items-center gap-1.5 rounded-full bg-success/10 px-2.5 py-0.5 text-xs font-medium text-success">
@@ -267,16 +265,13 @@ function updateUserInList(data: UserItem) {
   if (idx !== -1) users.value[idx] = data
 }
 
-const selectedRole = ref<string>('')
-function captureRole(role: string) {
-  selectedRole.value = role
-}
-
-async function updateRole(u: UserItem) {
-  const prevRole = selectedRole.value
+async function updateRole(u: UserItem, newRole: string) {
+  const prevRole = u.org_role
+  if (prevRole === newRole) return
+  u.org_role = newRole
   actionLoading.value[u.id] = true
   try {
-    const data = await httpPut<UserItem>(`/api/v1/admin/users/${u.id}`, { org_role: u.org_role })
+    const data = await httpPut<UserItem>(`/api/v1/admin/users/${u.id}`, { org_role: newRole })
     updateUserInList(data)
     showFlash('success', `Role changed to ${data.org_role} for ${u.email}`)
   } catch (e) {
