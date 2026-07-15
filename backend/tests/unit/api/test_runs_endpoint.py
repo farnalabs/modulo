@@ -559,34 +559,39 @@ def test_trigger_run_input_validation_cycle_detected(client: TestClient) -> None
 
 
 # ---------------------------------------------------------------------------
-# _run_in_background — failure transitions run to "failed"
+# BackgroundPipelineWorker._execute_job — failure transitions run to "failed"
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
-async def test_run_in_background_marks_run_failed_on_executor_error() -> None:
-    executor = AsyncMock()
-    executor.execute = AsyncMock(side_effect=RuntimeError("executor blew up"))
+async def test_background_worker_marks_run_failed_on_executor_error() -> None:
+    mock_executor = AsyncMock()
+    mock_executor.execute = AsyncMock(side_effect=RuntimeError("executor blew up"))
     run_id = uuid.uuid4()
     org_id = _ORG_ID
     mock_session = _make_mock_session()
     mock_session.execute = AsyncMock()
 
-    from modulo.api.routes.runs import _run_in_background
+    from modulo.core.background_pipeline_worker import BackgroundPipelineWorker, PipelineJob
+    from modulo.db.crud.run import update_run_status
+    from modulo.db.rls import set_rls_org
+
+    worker = BackgroundPipelineWorker("sqlite+aiosqlite://", "sqlite+aiosqlite://")
+    worker._engine = AsyncMock()
 
     with (
-        patch("modulo.api.routes.runs.get_settings"),
-        patch("modulo.api.routes.runs.create_async_engine"),
-        patch("modulo.api.routes.runs.async_sessionmaker") as mock_factory_cls,
-        patch("modulo.api.routes.runs.update_run_status") as mock_update,
-        patch("modulo.api.routes.runs.set_rls_org") as mock_rls,
+        patch("modulo.core.background_pipeline_worker.PipelineExecutor", return_value=mock_executor),
+        patch("modulo.core.background_pipeline_worker.async_sessionmaker") as mock_factory_cls,
+        patch("modulo.core.background_pipeline_worker.update_run_status") as mock_update,
+        patch("modulo.core.background_pipeline_worker.set_rls_org") as mock_rls,
     ):
         mock_factory = MagicMock()
         mock_factory.return_value.__aenter__ = AsyncMock(return_value=mock_session)
         mock_factory.return_value.__aexit__ = AsyncMock(return_value=False)
         mock_factory_cls.return_value = mock_factory
 
-        await _run_in_background(executor, run_id, org_id, {})
+        job = PipelineJob(run_id=run_id, org_id=org_id, input_payload={})
+        await worker._execute_job(job)
 
         mock_rls.assert_awaited_once_with(mock_session, org_id)
         mock_update.assert_awaited_once_with(mock_session, run_id, "failed", error_code="internal_error")
