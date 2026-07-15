@@ -181,10 +181,7 @@ class BackgroundPipelineWorker:
             _log.info("Background worker completed run %s", job.run_id)
         except asyncio.CancelledError:
             _log.warning("Background worker run %s cancelled", job.run_id)
-        except Exception as worker_exc:
-            import traceback
-            print(f"BG_WORKER_ERROR run={job.run_id} type={type(worker_exc).__name__} msg={worker_exc}", flush=True)
-            traceback.print_exc()
+        except Exception:
             _log.exception("Background worker failed for run %s", job.run_id)
             try:
                 factory = async_sessionmaker(engine, expire_on_commit=False)

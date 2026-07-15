@@ -693,11 +693,11 @@ class PipelineExecutor:
             raise
         except Exception as exc:
             import traceback
-            print(f"EXECUTOR_ERROR run={run_id} type={type(exc).__name__} msg={exc}", flush=True)
-            traceback.print_exc()
+            _tb = "".join(traceback.format_exception(type(exc), exc, exc.__traceback__))[:2000]
             _log.exception("pipeline.execution_error", extra={"run_id": str(run_id)})
             final_status = "failed"
             error_code = type(exc).__name__
+            error_detail = _tb
 
         try:
             # Record audit events for block failures.
@@ -1090,8 +1090,7 @@ class PipelineExecutor:
             raise
         except Exception as exc:
             import traceback
-            print(f"STREAM_ERROR run={run_id} type={type(exc).__name__} msg={exc}", flush=True)
-            traceback.print_exc()
-            _log.exception("pipeline.stream_error", extra={"run_id": str(run_id)})
-            broker.publish("run_failed", {"error": type(exc).__name__})
+            _tb = "".join(traceback.format_exception(type(exc), exc, exc.__traceback__))
+            broker.publish("run_failed", {"error": type(exc).__name__, "detail": _tb[:2000]})
+            return "failed", type(exc).__name__, _tb[:2000], node_token_usage or None
             return "failed", type(exc).__name__, None, None
