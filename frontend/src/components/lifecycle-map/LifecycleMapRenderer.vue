@@ -97,7 +97,7 @@ function stageNodeClasses(data: Record<string, unknown>): Record<string, boolean
 
 const flowNodes = computed<Node<Record<string, unknown>>[]>(() => {
   if (!props.mapData) return []
-  const stages = props.mapData.stages
+  const stages = props.mapData.stages ?? []
   const cols = Math.ceil(Math.sqrt(stages.length))
   const spacingX = 300
   const spacingY = 160
@@ -124,7 +124,7 @@ const flowNodes = computed<Node<Record<string, unknown>>[]>(() => {
 
 const flowEdges = computed<Edge[]>(() => {
   if (!props.mapData) return []
-  return props.mapData.transitions.map((t: LifecycleMapTransition) => ({
+  return (props.mapData.transitions ?? []).map((t: LifecycleMapTransition) => ({
     id: t.id,
     source: t.source_stage_id,
     target: t.target_stage_id,

@@ -130,8 +130,13 @@ export const useLifecycleMapsStore = defineStore('lifecycleMaps', () => {
     detailError.value = null
     try {
       const data = await get<LifecycleMap>(`/api/v1/lifecycle-maps/${id}`)
+      if (!data) {
+        detailError.value = 'Lifecycle map not found'
+        currentMap.value = null
+        return
+      }
       currentMap.value = data
-      currentMapVersion.value = data.current_version
+      currentMapVersion.value = data.current_version ?? null
     } catch (e: unknown) {
       detailError.value = formatApiError(e)
       currentMap.value = null
@@ -145,10 +150,16 @@ export const useLifecycleMapsStore = defineStore('lifecycleMaps', () => {
     detailError.value = null
     try {
       const data = await get<LifecycleMap>(`/api/v1/lifecycle-maps/${id}/versions/${version}`)
+      if (!data) {
+        detailError.value = 'Lifecycle map version not found'
+        currentMap.value = null
+        return
+      }
       currentMap.value = data
       currentMapVersion.value = version
     } catch (e: unknown) {
       detailError.value = formatApiError(e)
+      currentMap.value = null
     } finally {
       isLoadingDetail.value = false
     }
