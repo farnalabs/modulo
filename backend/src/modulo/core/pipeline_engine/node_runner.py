@@ -559,6 +559,209 @@ def make_connector_fn(
     return _connector_node
 
 
+def make_sandbox_agent_fn(
+    node_def: dict[str, Any],
+    *,
+    timeout: float | None = None,
+) -> Any:
+    """Return a decorated async node function that dispatches work to an external
+    agent runtime in an E2B sandbox.
+
+    The node_def must have:
+      - agent_prompt: str — Jinja2 template rendered against state
+      - template_id: str — E2B sandbox template ID (default "base")
+      - agent_command: str — command to run inside the sandbox
+        (default: "claude --output-json /home/user/prompt.md")
+      - output_schema_json: dict | None — optional output schema validation
+      - timeout_seconds: int — max wall-clock time (default 600)
+      - context_files: dict[str, str] — optional files to write into the sandbox
+        keyed by path
+
+    The node creates an E2B sandbox, writes the rendered prompt + context files,
+    runs the external agent, reads structured output from /home/user/output.json,
+    and tears down the sandbox. Wall-clock time and exit code are captured
+    natively — even on failure.
+    """
+    node_id: str = str(node_def["id"])
+    agent_prompt_template: str = node_def.get("agent_prompt") or ""
+    template_id: str = node_def.get("template_id", "base")
+    agent_command: str = node_def.get(
+        "agent_command",
+        "claude --output-json /home/user/prompt.md",
+    )
+    output_schema_json: dict[str, Any] | None = node_def.get("output_schema_json")
+    sandbox_timeout: int = node_def.get("timeout_seconds", 600)
+    context_files: dict[str, str] = node_def.get("context_files") or {}
+
+    @cancellable_node(timeout=timeout or sandbox_timeout, role="sandbox_agent")
+    async def _sandbox_agent(state: dict[str, Any]) -> dict[str, Any]:
+        import base64
+        import json as _json
+        import time as _time
+
+        from e2b import AsyncSandbox
+        from jinja2.sandbox import SandboxedEnvironment
+
+        run_context: dict[str, Any] = state.get("run_context") or {}
+        raw_input: Any = run_context.get("input", {})
+
+        env = SandboxedEnvironment()
+        template = env.from_string(agent_prompt_template)
+        template_vars: dict[str, Any] = {
+            "state": state,
+            "run_context": run_context,
+            "input": raw_input,
+        }
+        resolved = node_def.get("_resolved_parameters")
+        if isinstance(resolved, dict):
+            template_vars["parameter"] = resolved
+        rendered_prompt = template.render(**template_vars)
+
+        start_time = _time.monotonic()
+        sandbox: AsyncSandbox | None = None
+
+        run_id: str = str(state.get("_run_id", ""))
+        pipeline_id: str = str(state.get("_pipeline_id", ""))
+        org_id: str = str(state.get("_org_id", ""))
+
+        try:
+            sandbox = await AsyncSandbox.create(template=template_id)
+
+            for path, content in context_files.items():
+                parent_dir = str(__import__("pathlib").Path(path).parent)
+                await sandbox.commands.run(f"mkdir -p {parent_dir}")
+                encoded = base64.b64encode(content.encode()).decode()
+                await sandbox.commands.run(
+                    f"echo '{encoded}' | base64 -d > {path}",
+                )
+
+            await sandbox.filesystem.write("/home/user/prompt.md", rendered_prompt)
+
+            cmd_result = await sandbox.commands.run(
+                agent_command,
+                env_vars={
+                    "MODULO_RUN_ID": run_id,
+                    "MODULO_PIPELINE_ID": pipeline_id,
+                    "MODULO_ORG_ID": org_id,
+                },
+            )
+
+            elapsed = _time.monotonic() - start_time
+            exit_code: int = getattr(cmd_result, "exit_code", -1)
+
+            raw_output: str = ""
+            output_json: Any = None
+            try:
+                raw_output = await sandbox.filesystem.read("/home/user/output.json")
+                output_json = _json.loads(raw_output)
+            except Exception:
+                _log.info(
+                    "sandbox_agent.no_output_json",
+                    extra={"node_id": node_id, "exit_code": exit_code},
+                )
+
+            if isinstance(output_schema_json, dict) and isinstance(output_json, dict):
+                try:
+                    _validate_against_schema(output_json, output_schema_json)
+                except ValueError:
+                    _log.exception(
+                        "sandbox_agent.schema_validation_failed",
+                        extra={"node_id": node_id},
+                    )
+                    elapsed = _time.monotonic() - start_time
+                    return {
+                        "artifacts": [
+                            {
+                                "node_id": node_id,
+                                "status": "failed",
+                                "output": {
+                                    "status": "failed",
+                                    "summary": "Output failed schema validation",
+                                    "exit_code": exit_code,
+                                    "wall_clock_time_ms": int(elapsed * 1000),
+                                    "output_json": output_json,
+                                },
+                            }
+                        ],
+                        "output": {
+                            "status": "failed",
+                            "summary": "Output failed schema validation",
+                            "wall_clock_time_ms": int(elapsed * 1000),
+                        },
+                    }
+
+            status: str = "completed" if exit_code == 0 else "failed"
+            result_summary: str = ""
+            changed_files: list[str] = []
+            pr_url: str = ""
+
+            if isinstance(output_json, dict):
+                result_summary = output_json.get("summary", "")
+                changed_files = output_json.get("changed_files", [])
+                pr_url = output_json.get("pr_url", "")
+
+            return {
+                "artifacts": [
+                    {
+                        "node_id": node_id,
+                        "status": status,
+                        "output": {
+                            "status": status,
+                            "summary": result_summary,
+                            "changed_files": changed_files,
+                            "pr_url": pr_url,
+                            "exit_code": exit_code,
+                            "wall_clock_time_ms": int(elapsed * 1000),
+                            "output_json": output_json,
+                        },
+                    }
+                ],
+                "output": {
+                    "status": status,
+                    "summary": result_summary,
+                    "wall_clock_time_ms": int(elapsed * 1000),
+                },
+            }
+
+        except Exception:
+            elapsed = _time.monotonic() - start_time
+            _log.exception(
+                "sandbox_agent.execution_failed",
+                extra={"node_id": node_id, "elapsed_ms": int(elapsed * 1000)},
+            )
+            return {
+                "artifacts": [
+                    {
+                        "node_id": node_id,
+                        "status": "failed",
+                        "output": {
+                            "status": "failed",
+                            "summary": "Sandbox agent execution failed",
+                            "exit_code": -1,
+                            "wall_clock_time_ms": int(elapsed * 1000),
+                        },
+                    }
+                ],
+                "output": {
+                    "status": "failed",
+                    "summary": "Sandbox agent execution failed",
+                    "wall_clock_time_ms": int(elapsed * 1000),
+                },
+            }
+        finally:
+            if sandbox is not None:
+                try:
+                    await sandbox.kill()
+                except Exception:
+                    _log.exception(
+                        "sandbox_agent.kill_failed",
+                        extra={"node_id": node_id},
+                    )
+
+    _sandbox_agent.__name__ = f"sandbox_agent_{node_id}"
+    return _sandbox_agent
+
+
 def _validate_against_schema(data: dict[str, Any], schema: dict[str, Any]) -> None:
     """Lightweight field-presence validation against a JSON schema.
 

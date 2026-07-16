@@ -141,7 +141,9 @@ The closest alternatives in each layer, and why Modulo makes a different bet:
 
 | Term | Definition |
 |---|---|
-| **Agent** | An atomic unit of work. Takes a defined input, applies a sandboxed prompt against a model backend, produces a defined output. |
+| **Agent** | An atomic unit of work. Dispatches to an external agent runtime (e.g. Claude Code in an E2B sandbox) with a prompt and context, receives structured output, and evaluates against the output contract. Modulo owns dispatch, auth, audit, cost tracking, and eval — the external agent runtime owns the tool-using execution loop. |
+| **Sandbox Agent** | A pipeline node type that creates an isolated E2B sandbox, runs an external AI agent (e.g. Claude Code) with a task prompt, collects structured output, and tears down the sandbox. All observable metrics (wall-clock time, exit code, output validity) are captured natively by Modulo — no follow-up step required. |
+| **Output Contract** | The expected structured JSON return value from a sandbox agent execution. Always includes: status, summary, changed_files, wall_clock_time_ms, exit_code. May include additional fields defined by the node's output schema. |
 | **Schema** | A versioned, reusable data structure definition. The schema is the "remainder" the user controls. |
 | **ModelBackend** | A configured, authenticated binding to a specific AI model provider (Claude, GPT-4o, Bedrock, Ollama, etc.). Per-org. Fernet-encrypted credentials. |
 | **ConnectorType** | Abstract capability category (e.g. `git-host`, `issue-tracker`). Defines the operations interface. |
@@ -614,6 +616,39 @@ OTel env var configuration follows the OTel specification:
 - Default: stdout JSON
 
 Every LLM call, every connector operation, and every trigger event emits a span.
+
+### 6.20 Agent Dispatch Model
+
+Modulo dispatches work to external agent runtimes in sandboxes, then evaluates the output. Modulo is the SDLC orchestration layer — it owns dispatch, auth, audit, cost tracking, eval gates, and HITL — not the agent loop itself.
+
+#### Sandbox templates vs agent runtimes
+
+Each E2B sandbox template (e.g. `claude-code-v1`, `opencode-v1`, `generic-python`) defines the agent runtime environment. The template pre-installs a specific agent CLI (Claude Code, opencode, etc.) plus supporting tools (git, GitHub/Jira CLIs). Modulo references templates by ID — it does not manage the runtime environment beyond provisioning and teardown.
+
+#### Output contract pattern
+
+Every sandbox agent execution returns structured JSON from a well-known path (`/home/user/output.json`):
+
+```json
+{
+  "status": "completed" | "failed",
+  "summary": "Description of what was done",
+  "changed_files": ["path/to/file1.py"],
+  "pr_url": "https://github.com/org/repo/pull/123",
+  "exit_code": 0,
+  "wall_clock_time_ms": 45000
+}
+```
+
+The output contract is validated at the pipeline level, not inside the sandbox. All observable metrics are captured natively by Modulo — no follow-up step required.
+
+#### Observability
+
+Wall-clock time and exit code are captured on every dispatch natively by the `sandbox_agent` node type. This requires no additional instrumentation — the node records `time.monotonic()` before sandbox creation and after output collection, always returning `wall_clock_time_ms` even on failure.
+
+#### Post-hoc eval as separate concern
+
+The agent's output is evaluated by a separate Modulo pipeline (code review, test coverage check, security scan). This keeps evaluation separate from execution and allows different evaluators to be composed independently.
 
 ---
 

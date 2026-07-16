@@ -752,3 +752,25 @@ The fix/pipelines-copy Worker touched files that were already modified by other 
 ### Ops / Database (Fly Postgres)
 
 - **Unmanaged Fly Postgres (`fly postgres create`) does NOT auto-restart on crash.** When PostgreSQL on a Flex Postgres machine crashes (e.g. OOM, disk full, segfault), the monitoring agent and `repmgrd` keep running but the `postgres` process stays down. There is no systemd unit to restart it. To recover: SSH into the DB machine (`fly ssh console --app <db-app>`) and run `su - postgres -c '/usr/lib/postgresql/17/bin/pg_ctl start -D /data/postgresql'`. Consider adding a cron job or health check that restarts PostgreSQL if the process is missing. For production-critical DBs, migrate to Managed Postgres (`fly mpg create`).
+
+### ADR 003 supersedes ADR 001 — Modulo dispatches, it doesn't run agents
+
+The original ADR 001 "Agent Execution Environment" assumed Modulo agents would
+run inside sandboxed environments (E2B, Docker) with shell access via
+ShellConnector. This was the wrong strategy: established agent runtimes (Claude
+Code, opencode, Cursor) are far better at tool-using execution loops. Modulo
+should not compete with them.
+
+ADR 003 establishes the **Agent Dispatch Model**:
+- Modulo dispatches work to external agent runtimes in E2B sandboxes
+- The `sandbox_agent` node type provisions a sandbox, writes prompt + context,
+  runs the agent, collects structured output, and tears down
+- Modulo owns: dispatch, auth, audit, cost tracking, eval gates, HITL
+- The external agent runtime owns: the tool-using loop, file operations, git
+- Wall-clock time and exit code are captured natively on every dispatch
+- ShellConnector is deprecated — Modulo agents don't run inside sandboxes
+- Post-hoc eval of agent output is a separate Modulo pipeline (code review, etc.)
+
+When creating new pipeline features, prefer the `sandbox_agent` node type for
+code-generation tasks. The `agent` node type (single-shot LLM call) remains
+valid for non-coding tasks (classification, summarization, analysis).

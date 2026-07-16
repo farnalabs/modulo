@@ -1,7 +1,7 @@
 ---
 id: feat-core-runtime-provider-core
 prd: 6
-adr: [docs/adr/001-agent-environment-primitive.md]
+adr: [docs/adr/003-agent-dispatch-model.md]
 bdd:
   - backend/tests/bdd/features/environments/environment_profiles.feature
   - backend/tests/bdd/features/workflows/binding.feature
@@ -26,9 +26,17 @@ unit-tests:
 depends-on: [feat-core-pipeline-execution]
 delivery-tasks: [task-runtime-provider-core]
 status: partial
+deprecated: true
 ---
 
 # Runtime Provider Core
+
+> **Deprecation notice (ADR 003, 2026-07-16)**: The RuntimeProvider/ShellConnector
+> abstraction was built for ADR 001's "Modulo agents run inside sandboxes" model.
+> ADR 003 supersedes this — Modulo now dispatches work to external agent runtimes
+> via the `sandbox_agent` node type. ShellConnector is deprecated.
+> E2BRuntimeProvider, WorkspaceLease, and EnvironmentProfile remain useful as
+> sandbox lifecycle primitives for the dispatch model.
 
 Agent execution environments: `RuntimeProvider` ABC, `RuntimeProviderHub` registry, `E2BRuntimeProvider` concrete backend, `EnvironmentProfile` and `WorkspaceLease` entities CRUD API, graph validator integration, and Alembic migration. Defined by `task-runtime-provider-core` in ADR-001 4.
 
