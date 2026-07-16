@@ -10,8 +10,8 @@ from sqlalchemy.exc import IntegrityError, ProgrammingError, SQLAlchemyError
 
 from modulo.api.dependencies import _get_engine, get_db_session, get_plan_context
 from modulo.api.main import app
-from modulo.auth.dependencies import get_current_user
-from modulo.auth.jwt import AuthenticatedPrincipal
+from modulo.auth.dependencies import get_current_tenant_user, get_current_user
+from modulo.auth.jwt import AuthenticatedPrincipal, TenantPrincipal
 from modulo.settings import Settings, get_settings
 
 _VALID_32 = "a" * 32
@@ -27,6 +27,7 @@ def _make_settings() -> Settings:
         secret_key=_VALID_32,
         fernet_key=_VALID_32,
         modulo_admin_password="testpass",
+        modulo_csrf_enabled=False,
     )
 
 
@@ -48,6 +49,8 @@ _AGENT_BODY = {
     "output_schema_version": "1.0",
     "prompt_template": "Hello",
     "model_backend_id": str(_BACKEND_ID),
+    "required_environment_capabilities": [],
+    "template_id": None,
 }
 
 
@@ -62,6 +65,12 @@ def client() -> Generator[TestClient, None, None]:
     app.dependency_overrides[get_db_session] = override_session
     app.dependency_overrides[_get_engine] = lambda: MagicMock()
     app.dependency_overrides[get_current_user] = lambda: AuthenticatedPrincipal(
+        username="testuser",
+        organisation_id=_ORG_ID,
+        account_id=uuid.UUID("00000000-0000-0000-0000-000000000002"),
+        org_role="admin",
+    )
+    app.dependency_overrides[get_current_tenant_user] = lambda: TenantPrincipal(
         username="testuser",
         organisation_id=_ORG_ID,
         account_id=uuid.UUID("00000000-0000-0000-0000-000000000002"),
@@ -115,7 +124,14 @@ def test_update_agent_programming_error_returns_501(client: TestClient) -> None:
         patch("modulo.api.routes.agents.get_agent", side_effect=ProgrammingError("statement", {}, "cause")),
         patch("modulo.api.routes.agents.set_rls_org"),
     ):
-        resp = client.patch(f"/api/v1/agents/{_AGENT_ID}", json={"name": "x"})
+        resp = client.patch(
+            f"/api/v1/agents/{_AGENT_ID}",
+            json={
+                "name": "x",
+                "required_environment_capabilities": [],
+                "template_id": None,
+            },
+        )
     assert resp.status_code == 501
 
 
