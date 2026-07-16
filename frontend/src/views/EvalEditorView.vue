@@ -389,9 +389,10 @@ async function loadNodes() {
       params: { path: { pipeline_id: selectedPipelineId.value } },
     })
     nodes.value = (data as any)?.nodes ?? []
-  } catch {
+  } catch (e) {
     nodes.value = []
     nodesError.value = t('views.EvalEditorView.failed_to_load_nodes')
+    console.warn('Failed to load nodes:', e)
   } finally {
     nodesLoading.value = false
   }
