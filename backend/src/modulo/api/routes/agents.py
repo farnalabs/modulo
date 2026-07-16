@@ -1,4 +1,4 @@
-"""Agent CRUD REST API."""
+﻿"""Agent CRUD REST API."""
 
 import difflib
 import json
@@ -57,7 +57,9 @@ class AgentCreate(BaseModel):
     max_input_length: int | None = Field(default=None, ge=0)
     library_id: uuid.UUID | None = None
     prompt_always_visible: bool = False
-    required_environment_capabilities: list[str] = Field(default_factory=list)
+    required_environment_capabilities: list[str]
+    template_id: str | None
+    agent_command: str | None = Field(default_factory=list)
 
 
 class AgentUpdate(BaseModel):
@@ -72,7 +74,9 @@ class AgentUpdate(BaseModel):
     token_budget: int | None = Field(default=None, ge=0)
     max_input_length: int | None = Field(default=None, ge=0)
     prompt_always_visible: bool | None = None
-    required_environment_capabilities: list[str] | None = None
+    required_environment_capabilities: list[str]
+    template_id: str | None
+    agent_command: str | None = None
 
 
 class AgentResponse(BaseModel):
@@ -96,6 +100,8 @@ class AgentResponse(BaseModel):
     library_id: uuid.UUID | None
     prompt_always_visible: bool
     required_environment_capabilities: list[str]
+    template_id: str | None
+    agent_command: str | None
     created_by: uuid.UUID = Field(validation_alias="account_id")
     created_at: datetime
     updated_at: datetime
@@ -179,9 +185,9 @@ def _validate_generic_agent(
     """Validate criteria for generic (non-library) agents.
 
     Library-sourced agents (those with a ``library_id``) inherit trust and
-    documentation from their source — they bypass generic-agent checks.
+    documentation from their source â€” they bypass generic-agent checks.
 
-    Generic user-defined agents are experimental per PRD §8.2 and must
+    Generic user-defined agents are experimental per PRD Â§8.2 and must
     satisfy the following criteria before they can execute in a pipeline:
       - An executable generic agent MUST have a ``description`` so other
         pipeline authors can understand its purpose.
@@ -190,7 +196,7 @@ def _validate_generic_agent(
       - Executable generic agents with *novel schema pairs* (no matching
         library primitive) SHOULD define at least one eval for quality
         assurance.  In alpha this is a logged advisory; in production it
-        becomes a hard requirement (see PRD §15 — "require eval rubric
+        becomes a hard requirement (see PRD Â§15 â€” "require eval rubric
         before production promotion").
     """
     if library_id is not None:
@@ -219,7 +225,7 @@ def _validate_generic_agent(
     if is_executable and not evals:
         _log.warning(
             "Generic executable agent '%s' has no eval definitions. "
-            "Per PRD §8.2, generic agents are experimental and require "
+            "Per PRD Â§8.2, generic agents are experimental and require "
             "an eval rubric before production promotion. "
             "Consider adding at least one eval before deploying this agent "
             "in a production pipeline.",
@@ -292,6 +298,8 @@ async def create_agent_endpoint(
                 input_schema_version=input_ver,
                 output_schema_id=req.output_schema_id,
                 output_schema_version=output_ver,
+                template_id=req.template_id,
+                agent_command=req.agent_command,
                 prompt_template=req.prompt_template,
                 model_backend_id=req.model_backend_id,
                 is_executable=req.is_executable,
