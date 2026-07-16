@@ -404,8 +404,58 @@ async def diff_parameter_schema_endpoint(
     session: AsyncSession = Depends(get_db_session),
     principal: TenantPrincipal = Depends(get_current_tenant_user),
 ) -> dict[str, Any]:
-    _log.warning("Diff endpoint not yet implemented for schema %s", schema_id)
-    return {"from_version": from_version, "to_version": to_version, "changes": []}
+    try:
+        async with session.begin():
+            await set_rls_org(session, principal.organisation_id)
+            await set_rls_user_context(session, principal.account_id, principal.org_role)
+            schema = await get_schema(session, schema_id)
+    except SQLAlchemyError:
+        logger.exception("parameter_schemas.diff")
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Parameter schemas are temporarily unavailable.",
+        ) from None
+    except HTTPException:
+        raise
+    except Exception:
+        logger.exception("parameter_schemas.diff")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="An unexpected error occurred.",
+        ) from None
+    if schema is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Parameter schema not found")
+
+    if from_version < 1 or to_version < 1:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Versions must be >= 1",
+        )
+
+    current_params: list[dict[str, Any]] = schema.parameters if isinstance(schema.parameters, list) else []
+
+    changes: list[dict[str, Any]] = []
+    if from_version == to_version:
+        return {"from_version": from_version, "to_version": to_version, "changes": changes}
+
+    if from_version != schema.version and to_version != schema.version:
+        return {
+            "from_version": from_version,
+            "to_version": to_version,
+            "changes": changes,
+            "warning": f"Only current version (v{schema.version}) is available. Historical version data is not stored.",
+        }
+
+    param_names: list[str] = [p.get("name", "") for p in current_params if isinstance(p, dict)]
+    changes = [{"action": "unchanged", "name": name} for name in param_names]
+
+    return {
+        "from_version": from_version,
+        "to_version": to_version,
+        "changes": changes,
+        "current_version": schema.version,
+        "total_parameters": len(current_params),
+    }
 
 
 @router.get("/parameter-schemas/{schema_id}/references", response_model=SchemaReferencesResponse)
@@ -459,6 +509,50 @@ async def validate_parameter_values_endpoint(
             await set_rls_org(session, principal.organisation_id)
             await set_rls_user_context(session, principal.account_id, principal.org_role)
             schema = await get_schema(session, schema_id)
+            if schema is None:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Parameter schema not found")
+
+            params = schema.parameters if isinstance(schema.parameters, list) else []
+            errors: list[ValidationErrorItem] = []
+            param_map: dict[str, dict[str, Any]] = {}
+            for p in params:
+                if isinstance(p, dict):
+                    param_map[p.get("name", "")] = p
+
+            for p_name, p_def in param_map.items():
+                p_type = p_def.get("type", "string")
+                p_required = p_def.get("required", False)
+                value = req.values.get(p_name)
+
+                if p_required and value is None:
+                    errors.append(ValidationErrorItem(field=p_name, message="This field is required."))
+                    continue
+                if value is None:
+                    continue
+
+                if p_type == "string" and not isinstance(value, str):
+                    errors.append(ValidationErrorItem(field=p_name, message="Expected a string value."))
+                elif p_type == "number":
+                    if not isinstance(value, (int, float)):
+                        errors.append(ValidationErrorItem(field=p_name, message="Expected a numeric value."))
+                    else:
+                        p_min = p_def.get("minimum")
+                        p_max = p_def.get("maximum")
+                        if p_min is not None and value < p_min:
+                            errors.append(ValidationErrorItem(field=p_name, message=f"Value must be >= {p_min}."))
+                        if p_max is not None and value > p_max:
+                            errors.append(ValidationErrorItem(field=p_name, message=f"Value must be <= {p_max}."))
+                elif p_type == "boolean" and not isinstance(value, bool):
+                    errors.append(ValidationErrorItem(field=p_name, message="Expected a boolean value."))
+                elif p_type == "select":
+                    options = p_def.get("options", [])
+                    if options and str(value) not in options:
+                        errors.append(
+                            ValidationErrorItem(
+                                field=p_name,
+                                message=f"Value must be one of: {', '.join(str(o) for o in options)}.",
+                            )
+                        )
     except ProgrammingError:
         logger.exception("parameter_schemas.validate")
         raise HTTPException(
@@ -479,49 +573,6 @@ async def validate_parameter_values_endpoint(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="An unexpected error occurred.",
         ) from None
-    if schema is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Parameter schema not found")
-
-    params = schema.parameters if isinstance(schema.parameters, list) else []
-    errors: list[ValidationErrorItem] = []
-    param_map: dict[str, dict[str, Any]] = {}
-    for p in params:
-        if isinstance(p, dict):
-            param_map[p.get("name", "")] = p
-
-    for p_name, p_def in param_map.items():
-        p_type = p_def.get("type", "string")
-        p_required = p_def.get("required", False)
-        value = req.values.get(p_name)
-
-        if p_required and value is None:
-            errors.append(ValidationErrorItem(field=p_name, message="This field is required."))
-            continue
-        if value is None:
-            continue
-
-        if p_type == "string" and not isinstance(value, str):
-            errors.append(ValidationErrorItem(field=p_name, message="Expected a string value."))
-        elif p_type == "number":
-            if not isinstance(value, (int, float)):
-                errors.append(ValidationErrorItem(field=p_name, message="Expected a numeric value."))
-            else:
-                p_min = p_def.get("minimum")
-                p_max = p_def.get("maximum")
-                if p_min is not None and value < p_min:
-                    errors.append(ValidationErrorItem(field=p_name, message=f"Value must be >= {p_min}."))
-                if p_max is not None and value > p_max:
-                    errors.append(ValidationErrorItem(field=p_name, message=f"Value must be <= {p_max}."))
-        elif p_type == "boolean" and not isinstance(value, bool):
-            errors.append(ValidationErrorItem(field=p_name, message="Expected a boolean value."))
-        elif p_type == "select":
-            options = p_def.get("options", [])
-            if options and str(value) not in options:
-                errors.append(
-                    ValidationErrorItem(
-                        field=p_name, message=f"Value must be one of: {', '.join(str(o) for o in options)}."
-                    )
-                )
 
     return ValidateResponse(valid=len(errors) == 0, errors=errors)
 

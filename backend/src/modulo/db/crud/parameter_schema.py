@@ -94,10 +94,12 @@ async def update_schema(
     version: int,
 ) -> ParameterSchema | None:
     result = await session.execute(
-        select(ParameterSchema).where(
+        select(ParameterSchema)
+        .where(
             ParameterSchema.id == schema_id,
             ParameterSchema.version == version,
         )
+        .with_for_update()
     )
     schema = result.scalar_one_or_none()
     if schema is None:
@@ -109,7 +111,6 @@ async def update_schema(
         updates["description"] = description
     if parameters is not None:
         updates["parameters"] = parameters
-    updates["version"] = ParameterSchema.version + 1
     apply_updates(schema, updates)
     schema.version += 1
     await session.flush()
