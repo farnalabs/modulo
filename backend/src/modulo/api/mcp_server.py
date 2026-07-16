@@ -1,4 +1,4 @@
-﻿"""Remote MCP server â€” thin adapter over the ViewModel API.
+"""Remote MCP server â€” thin adapter over the ViewModel API.
 
 Mounted at `/mcp` as a Starlette sub-application inside FastAPI.
 
