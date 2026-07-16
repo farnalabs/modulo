@@ -37,10 +37,8 @@ def _engine():
 async def _tables(_engine):
     # SQLite does not support ARRAY type - skip tables that use it
     from sqlalchemy import ARRAY
-    tables_to_create = [
-        t for t in Base.metadata.sorted_tables
-        if not any(isinstance(c.type, ARRAY) for c in t.columns)
-    ]
+
+    tables_to_create = [t for t in Base.metadata.sorted_tables if not any(isinstance(c.type, ARRAY) for c in t.columns)]
     async with _engine.begin() as conn:
         await conn.run_sync(lambda conn: Base.metadata.create_all(conn, tables=tables_to_create))
     yield
@@ -54,6 +52,7 @@ async def _tables(_engine):
 @pytest.fixture(autouse=True)
 async def _clear_data(_engine, _tables):
     from sqlalchemy import ARRAY
+
     async with _engine.begin() as conn:
         for table in reversed(Base.metadata.sorted_tables):
             if not any(isinstance(c.type, ARRAY) for c in table.columns):
@@ -134,5 +133,3 @@ class TestSqliteMultiBackend:
             )
             membership = result.scalar_one()
             assert membership.role == "admin"
-
-
