@@ -380,7 +380,34 @@
           </template>
 
 
-          <!-- Sandbox Agent: template and command -->
+          <!-- Sandbox Agent: template, command, env, context -->
+          <template v-if="selectedNodeData.node_type === 'sandbox_agent'">
+            <div v-if="selectedNodeData.template_id">
+              <dt class="text-muted-foreground text-xs uppercase tracking-wider">Template</dt>
+              <dd class="font-mono text-xs">{{ selectedNodeData.template_id }}</dd>
+            </div>
+            <div v-if="selectedNodeData.agent_command">
+              <dt class="text-muted-foreground text-xs uppercase tracking-wider">Command</dt>
+              <dd class="font-mono text-xs break-all">{{ selectedNodeData.agent_command }}</dd>
+            </div>
+            <div v-if="selectedNodeData.timeout_seconds">
+              <dt class="text-muted-foreground text-xs uppercase tracking-wider">Timeout</dt>
+              <dd>{{ selectedNodeData.timeout_seconds }}s</dd>
+            </div>
+            <div v-if="selectedNodeData.env_vars && Object.keys(selectedNodeData.env_vars).length > 0">
+              <dt class="text-muted-foreground text-xs uppercase tracking-wider">Env Vars</dt>
+              <dd class="font-mono text-[10px] break-all">{{ Object.keys(selectedNodeData.env_vars).join(', ') }}</dd>
+            </div>
+            <div v-if="selectedNodeData.context_files && Object.keys(selectedNodeData.context_files).length > 0">
+              <dt class="text-muted-foreground text-xs uppercase tracking-wider">Context Files</dt>
+              <dd><ul class="list-inside list-disc text-xs text-muted-foreground"><li v-for="(content, fpath) in selectedNodeData.context_files" :key="fpath">{{ fpath }} <span class="text-[10px] opacity-60">({{ content.length }} bytes)</span></li></ul></dd>
+            </div>
+            <div v-if="selectedNodeData.agent_prompt">
+              <dt class="text-muted-foreground text-xs uppercase tracking-wider">Prompt</dt>
+              <dd class="text-xs text-muted-foreground italic whitespace-pre-wrap max-h-32 overflow-y-auto">{{ selectedNodeData.agent_prompt.substring(0, 300) }}{{ selectedNodeData.agent_prompt.length > 300 ? '...' : '' }}</dd>
+            </div>
+          </template>
+
           <template v-if="selectedNodeData.node_type === 'sandbox_agent'">
             <div v-if="selectedNodeData.template_id">
               <dt class="text-muted-foreground text-xs uppercase tracking-wider">Template</dt>

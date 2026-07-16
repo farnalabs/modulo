@@ -170,6 +170,7 @@ class PipelineGraphNode(BaseModel):
     agent_command: str | None = None
     agent_prompt: str | None = None
     env_vars: dict[str, str] | None = None
+    context_files: dict[str, str] | None = None
 
     @model_validator(mode="after")
     def validate_node_type(self) -> "PipelineGraphNode":
