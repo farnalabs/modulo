@@ -639,7 +639,7 @@ def make_sandbox_agent_fn(
 
             cmd_result = await sandbox.commands.run(
                 agent_command,
-                env_vars={
+                envs={
                     "MODULO_RUN_ID": run_id,
                     "MODULO_PIPELINE_ID": pipeline_id,
                     "MODULO_ORG_ID": org_id,
