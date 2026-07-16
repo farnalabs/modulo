@@ -644,7 +644,8 @@ def make_sandbox_agent_fn(
                     "MODULO_PIPELINE_ID": pipeline_id,
                     "MODULO_ORG_ID": org_id,
                     "APP_MODULO_OPENCODE_API_KEY": __import__("os").environ.get("APP_MODULO_OPENCODE_API_KEY", ""),
-                    "GITHUB_TOKEN": __import__("os").environ.get("GITHUB_DOGFOOD_PAT_WR", "")
+                    "GITHUB_TOKEN": __import__("os").environ.get("GITHUB_DOGFOOD_PAT_ALL", "")
+                    or __import__("os").environ.get("GITHUB_DOGFOOD_PAT_WR", "")
                     or __import__("os").environ.get("GITHUB_TOKEN", ""),
                     **env_vars_extra,
                 },
