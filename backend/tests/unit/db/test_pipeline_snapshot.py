@@ -20,7 +20,9 @@ def _scalar_result(value: object) -> MagicMock:
 
 def _scalars_result(values: list[object]) -> MagicMock:
     result = MagicMock()
-    result.scalars.return_value = values
+    scalars_mock = MagicMock()
+    scalars_mock.all.return_value = values
+    result.scalars.return_value = scalars_mock
     return result
 
 
