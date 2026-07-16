@@ -1,4 +1,4 @@
-<template>
+﻿<template>
   <div class="flex h-[calc(100vh-3.5rem)]">
     <div v-if="loading" class="flex flex-1 items-center justify-center">
       <div class="h-8 w-8 animate-spin rounded-full border-4 border-primary border-t-transparent" />
@@ -241,7 +241,7 @@
                   ? 'badge badge-status-warning'
                   : 'badge badge-status-primary'"
               >
-                {{ selectedNodeData.node_type === 'manual' ? $t('views.PipelineEditorView.manual') : $t('views.PipelineEditorView.agent') }}
+                {{ selectedNodeData.node_type === 'manual' ? $t('views.PipelineEditorView.manual') : selectedNodeData.node_type === 'sandbox_agent' ? 'Sandbox Agent' : $t('views.PipelineEditorView.agent') }}
               </span>
             </dd>
           </div>
@@ -257,7 +257,7 @@
           </div>
 
           <!-- Agent node: Agent details -->
-          <template v-if="selectedNodeData.node_type === 'agent' && selectedNodeData.agent_id">
+          <template v-if="(selectedNodeData.node_type === 'agent' || selectedNodeData.node_type === 'sandbox_agent') && selectedNodeData.agent_id">
             <div>
               <dt class="text-muted-foreground text-xs uppercase tracking-wider">{{ $t('views.PipelineEditorView.agent') }}</dt>
               <dd class="font-medium">{{ agentName(selectedNodeData.agent_id) || shortId(selectedNodeData.agent_id) }}</dd>
@@ -366,7 +366,7 @@
                     <option :value="undefined"></option>
                     <option v-for="s in schemas" :key="s.id" :value="s.id">{{ s.name || s.id }}</option>
                   </select>
-                  <span v-else class="text-xs text-muted-foreground">—</span>
+                  <span v-else class="text-xs text-muted-foreground">â€”</span>
                 </div>
                 <button
                   class="mt-1 text-xs text-indigo-500 hover:text-indigo-400"
@@ -376,6 +376,27 @@
                   {{ $t('views.PipelineEditorView.save_as_new_set') }}
                 </button>
               </dd>
+            </div>
+          </template>
+
+
+          <!-- Sandbox Agent: template and command -->
+          <template v-if="selectedNodeData.node_type === 'sandbox_agent'">
+            <div v-if="selectedNodeData.template_id">
+              <dt class="text-muted-foreground text-xs uppercase tracking-wider">Template</dt>
+              <dd class="font-mono text-xs">{{ selectedNodeData.template_id }}</dd>
+            </div>
+            <div v-if="selectedNodeData.agent_command">
+              <dt class="text-muted-foreground text-xs uppercase tracking-wider">Command</dt>
+              <dd class="font-mono text-xs break-all">{{ selectedNodeData.agent_command }}</dd>
+            </div>
+            <div v-if="selectedNodeData.timeout_seconds">
+              <dt class="text-muted-foreground text-xs uppercase tracking-wider">Timeout</dt>
+              <dd>{{ selectedNodeData.timeout_seconds }}s</dd>
+            </div>
+            <div v-if="selectedNodeData.agent_prompt">
+              <dt class="text-muted-foreground text-xs uppercase tracking-wider">Prompt</dt>
+              <dd class="text-xs text-muted-foreground italic">{{ selectedNodeData.agent_prompt.substring(0, 200) }}{{ selectedNodeData.agent_prompt.length > 200 ? '...' : '' }}</dd>
             </div>
           </template>
 
@@ -678,7 +699,7 @@
                 :key="s.id"
                 :value="s.id"
               >
-                v{{ s.snapshot_version }}{{ s.tag ? ` — ${s.tag}` : '' }}
+                v{{ s.snapshot_version }}{{ s.tag ? ` â€” ${s.tag}` : '' }}
               </SelectItem>
             </SelectContent>
           </Select>
