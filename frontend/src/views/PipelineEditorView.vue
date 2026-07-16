@@ -1328,14 +1328,14 @@ function addNode() {
 
 function openAgentPicker() {
   convertError.value = null
-  pickerAgentId.value = ''
+  pickerAgentId.value = '__all__'
   pickerConnectorId.value = '__all__'
   showAgentPicker.value = true
 }
 
 function openRevertDialog() {
   revertError.value = null
-  revertSnapshotId.value = ''
+  revertSnapshotId.value = '__all__'
   showRevertDialog.value = true
 }
 
@@ -1401,7 +1401,7 @@ async function convertToAgent() {
 }
 
 async function revertToManual() {
-  if (!revertSnapshotId.value || revertSnapshotId.value === '__all__' || !selectedNodeData.value) return
+  if (revertSnapshotId.value === '__all__' || !selectedNodeData.value) return
   revertError.value = null
   revertLoading.value = true
   try {
