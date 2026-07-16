@@ -22,6 +22,7 @@ def _scalars_result(values: list[object]) -> MagicMock:
     result = MagicMock()
     scalars_mock = MagicMock()
     scalars_mock.all.return_value = values
+    scalars_mock.__iter__.return_value = iter(values)
     result.scalars.return_value = scalars_mock
     return result
 
@@ -137,3 +138,5 @@ async def test_live_graph_becomes_executable_snapshot_with_dependency_pins() -> 
     assert "credentials" not in repr(snapshot.model_backend_pins_json)
     session.add.assert_called_once_with(snapshot)
     session.flush.assert_awaited_once()
+
+
