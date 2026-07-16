@@ -45,7 +45,7 @@
           <SelectValue placeholder="None" />
         </SelectTrigger>
         <SelectContent>
-          <SelectItem value="">None</SelectItem>
+          <SelectItem value="__all__">None</SelectItem>
           <SelectItem value="bot">Bot</SelectItem>
           <SelectItem value="database">Database</SelectItem>
           <SelectItem value="globe">Globe</SelectItem>
@@ -138,7 +138,7 @@ const form = reactive<NodeCategoryForm>({
   name: "",
   description: "",
   color: "#6366f1",
-  icon: "",
+  icon: "__all__",
   sort_order: 0,
 });
 
@@ -151,7 +151,7 @@ watch(
       form.name = cat.name ?? "";
       form.description = cat.description ?? "";
       form.color = cat.color ?? "#6366f1";
-      form.icon = cat.icon ?? "";
+      form.icon = cat.icon ?? "__all__";
       form.sort_order = cat.sort_order ?? 0;
     }
   },
@@ -166,7 +166,7 @@ async function save() {
     name: form.name.trim(),
     description: form.description.trim() || null,
     color: form.color,
-    icon: form.icon || null,
+    icon: form.icon === '__all__' ? null : form.icon,
     sort_order: form.sort_order,
   };
 

@@ -128,7 +128,7 @@ describe('PipelineListView', () => {
       items: manyPipelines,
       total: 15,
       page: 1,
-      page_size: 100,
+      page_size: 10,
     }
     await router.push('/pipelines')
     await router.isReady()
@@ -139,6 +139,8 @@ describe('PipelineListView', () => {
       },
     })
     await flushPromises()
+    await nextTick()
+    wrapper.vm.viewMode = 'card'
     await nextTick()
     expect(wrapper.find('[data-testid="pipeline-list-prev-page"]').exists()).toBe(true)
     expect(wrapper.find('[data-testid="pipeline-list-next-page"]').exists()).toBe(true)

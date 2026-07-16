@@ -33,7 +33,7 @@
               <SelectValue :placeholder="$t('views.ABTestModelsView.new_group')" />
             </SelectTrigger>
             <SelectContent>
-              <SelectItem value="">{{ $t('views.ABTestModelsView.new_group') }}</SelectItem>
+              <SelectItem value="__all__">{{ $t('views.ABTestModelsView.new_group') }}</SelectItem>
               <SelectItem v-for="g in filteredGroups" :key="g.id" :value="g.id">
                 {{ g.name }}
               </SelectItem>
@@ -45,7 +45,7 @@
       <template v-if="selectedPipelineId">
         <section class="space-y-4 rounded-lg border bg-card p-6">
           <h2 class="text-base font-semibold tracking-tight">
-            {{ $t(selectedGroupId ? 'views.ABTestModelsView.edit_variant_group' : 'views.ABTestModelsView.new_variant_group') }}
+            {{ $t(selectedGroupId && selectedGroupId !== '__all__' ? 'views.ABTestModelsView.edit_variant_group' : 'views.ABTestModelsView.new_variant_group') }}
           </h2>
           <div class="grid gap-4 sm:grid-cols-2">
             <div>
@@ -70,7 +70,7 @@
             </div>
           </div>
 
-          <div v-if="!selectedGroupId && availableSnapshotId" class="text-xs text-muted-foreground">
+          <div v-if="(selectedGroupId === '__all__') && availableSnapshotId" class="text-xs text-muted-foreground">
             {{ $t('views.ABTestModelsView.using_snapshot') }} <code class="rounded bg-muted px-1.5 py-0.5 font-mono">v{{ snapshotVersion || shortId(availableSnapshotId) }}</code>
             <span v-if="availableSnapshotTag" class="ml-1">({{ availableSnapshotTag }})</span>
           </div>
@@ -335,7 +335,7 @@ const pipelines = ref<PipelineItem[]>([])
 const variantGroups = ref<VariantGroup[]>([])
 const modelBackends = ref<ModelBackend[]>([])
 const selectedPipelineId = ref<string>('')
-const selectedGroupId = ref<string>('')
+const selectedGroupId = ref<string>('__all__')
 const groupName = ref('')
 const groupDescription = ref('')
 const variants = ref<VariantForm[]>([])
@@ -516,7 +516,7 @@ async function saveGroup() {
   }))
 
   try {
-    if (selectedGroupId.value) {
+    if (selectedGroupId.value && selectedGroupId.value !== '__all__') {
       const { data, error: err } = await api.PUT('/api/v1/variant-groups/{group_id}', {
         params: { path: { group_id: selectedGroupId.value } },
         body: {
@@ -762,7 +762,7 @@ watch(selectedPipelineId, async (id) => {
 })
 
 watch(selectedGroupId, async (id) => {
-  if (id) {
+  if (id && id !== '__all__') {
     const group = variantGroups.value.find(g => g.id === id)
     if (group) {
       groupName.value = group.name

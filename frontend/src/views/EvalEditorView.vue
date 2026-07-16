@@ -24,7 +24,7 @@
               <SelectValue :placeholder="$t('views.EvalEditorView.select_a_pipeline')" />
             </SelectTrigger>
             <SelectContent>
-              <SelectItem value="">{{ $t('views.EvalEditorView.select_a_pipeline') }}</SelectItem>
+              <SelectItem value="__all__">{{ $t('views.EvalEditorView.select_a_pipeline') }}</SelectItem>
               <SelectItem v-for="p in pipelines" :key="p.id" :value="p.id">{{ p.name }}</SelectItem>
             </SelectContent>
           </Select>
@@ -37,7 +37,7 @@
               <SelectValue :placeholder="$t('views.EvalEditorView.all_pipeline_outputs')" />
             </SelectTrigger>
             <SelectContent>
-              <SelectItem value="">{{ $t('views.EvalEditorView.all_pipeline_outputs') }}</SelectItem>
+              <SelectItem value="__all__">{{ $t('views.EvalEditorView.all_pipeline_outputs') }}</SelectItem>
               <SelectItem v-for="n in nodes" :key="n.id" :value="n.id">{{ n.label || n.node_type || shortId(n.id) }}</SelectItem>
             </SelectContent>
           </Select>
@@ -308,7 +308,7 @@ interface EvalDefinition {
   created_by: string
 }
 
-const selectedPipelineId = ref('')
+const selectedPipelineId = ref('__all__')
 const nodes = ref<GraphNode[]>([])
 const nodesLoading = ref(false)
 
@@ -317,7 +317,7 @@ const evalsError = ref<string | null>(null)
 
 const form = reactive({
   name: '',
-  node_id: '',
+  node_id: '__all__',
   eval_type: 'llm_judge',
   config_json: '{}',
   pass_threshold: 0.8,
@@ -348,7 +348,7 @@ const configParseError = computed(() => {
 
 const canSave = computed(() => {
   return (
-    selectedPipelineId.value &&
+    selectedPipelineId.value && selectedPipelineId.value !== '__all__' &&
     form.name.trim() &&
     form.eval_type &&
     !configParseError.value
@@ -357,7 +357,7 @@ const canSave = computed(() => {
 
 function resetForm() {
   form.name = ''
-  form.node_id = ''
+  form.node_id = '__all__'
   form.eval_type = 'llm_judge'
   form.config_json = '{}'
   form.pass_threshold = 0.8
@@ -378,7 +378,7 @@ const { loading, error: pageError, data: pipelinesResp, load: loadAll } = useDat
 const pipelines = computed(() => (pipelinesResp.value as any) ?? [])
 
 async function loadNodes() {
-  if (!selectedPipelineId.value) {
+  if (!selectedPipelineId.value || selectedPipelineId.value === '__all__') {
     nodes.value = []
     return
   }
@@ -398,7 +398,7 @@ async function loadNodes() {
 }
 
 async function loadEvals() {
-  if (!selectedPipelineId.value) {
+  if (!selectedPipelineId.value || selectedPipelineId.value === '__all__') {
     evals.value = []
     return
   }
@@ -443,7 +443,7 @@ async function saveEval() {
 
   const body = {
     pipeline_id: selectedPipelineId.value,
-    node_id: form.node_id || null,
+    node_id: form.node_id === '__all__' ? null : form.node_id,
     name: form.name.trim(),
     eval_type: form.eval_type,
     config_json: configParsed,
@@ -474,7 +474,7 @@ async function saveEval() {
 function startEdit(ev: EvalDefinition) {
   editingEvalId.value = ev.id
   form.name = ev.name
-  form.node_id = ev.node_id ?? ''
+  form.node_id = ev.node_id ?? '__all__'
   form.eval_type = ev.eval_type
   form.config_json = JSON.stringify(ev.config_json, null, 2)
   form.pass_threshold = ev.pass_threshold ?? 0.8

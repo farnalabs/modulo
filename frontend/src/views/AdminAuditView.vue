@@ -108,7 +108,7 @@
               <SelectValue :placeholder="$t('views.AdminAuditView.all_targets')" />
             </SelectTrigger>
             <SelectContent>
-              <SelectItem value="">{{ $t('views.AdminAuditView.all_targets') }}</SelectItem>
+              <SelectItem value="__all__">{{ $t('views.AdminAuditView.all_targets') }}</SelectItem>
               <SelectItem value="pipeline">{{ $t('views.AdminAuditView.optgroup_pipeline') }}</SelectItem>
               <SelectItem value="run">{{ $t('views.AdminAuditView.optgroup_run') }}</SelectItem>
               <SelectItem value="user">{{ $t('views.AdminAuditView.optgroup_user') }}</SelectItem>
@@ -352,7 +352,7 @@ const filterEventType = ref('')
 const filterActor = ref('')
 const filterDateFrom = ref('')
 const filterDateTo = ref('')
-const filterTargetType = ref('')
+const filterTargetType = ref('__all__')
 
 const expandedId = ref<string | null>(null)
 const expandedEvent = ref<AuditEvent | null>(null)
@@ -425,7 +425,7 @@ function buildQuery() {
   if (filterActor.value) q.user_id = filterActor.value
   if (filterDateFrom.value) q.from_date = filterDateFrom.value
   if (filterDateTo.value) q.to_date = filterDateTo.value
-  if (filterTargetType.value) q.entity_type = filterTargetType.value
+  if (filterTargetType.value !== '__all__') q.entity_type = filterTargetType.value
   return q
 }
 
@@ -449,7 +449,7 @@ function resetFilters() {
   filterActor.value = ''
   filterDateFrom.value = ''
   filterDateTo.value = ''
-  filterTargetType.value = ''
+  filterTargetType.value = '__all__'
   currentPage.value = 1
   cursor.value = null
   loadEvents()

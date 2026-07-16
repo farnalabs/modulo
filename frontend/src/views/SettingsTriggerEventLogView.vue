@@ -11,7 +11,7 @@
               <SelectValue :placeholder="$t('views.AdminNotificationDeliveryLogView.all_types')" />
             </SelectTrigger>
             <SelectContent>
-              <SelectItem value="">{{ $t('views.AdminNotificationDeliveryLogView.all_types') }}</SelectItem>
+              <SelectItem value="__all__">{{ $t('views.AdminNotificationDeliveryLogView.all_types') }}</SelectItem>
               <SelectItem value="manual">Manual</SelectItem>
               <SelectItem value="webhook">Webhook</SelectItem>
               <SelectItem value="cron">Cron</SelectItem>
@@ -27,7 +27,7 @@
               <SelectValue :placeholder="$t('views.SettingsTriggerEventLogView.all_results')" />
             </SelectTrigger>
             <SelectContent>
-              <SelectItem value="">{{ $t('views.SettingsTriggerEventLogView.all_results') }}</SelectItem>
+              <SelectItem value="__all__">{{ $t('views.SettingsTriggerEventLogView.all_results') }}</SelectItem>
               <SelectItem value="accepted">Accepted</SelectItem>
               <SelectItem value="passed">Passed</SelectItem>
               <SelectItem value="condition_met">{{ $t('views.SettingsTriggerEventLogView.condition_met') }}</SelectItem>
@@ -177,8 +177,8 @@ const { loading, error, data: responseData, load: loadEvents } = useDataFetch(
   async () => {
     const params: Record<string, unknown> = { limit: 50 }
     if (currentCursor.value) params.cursor = currentCursor.value
-    if (filterTriggerType.value) params.trigger_type = filterTriggerType.value
-    if (filterResult.value) params.validation_result = filterResult.value
+    if (filterTriggerType.value !== '__all__') params.trigger_type = filterTriggerType.value
+    if (filterResult.value !== '__all__') params.validation_result = filterResult.value
     const res = await api.GET('/api/v1/admin/trigger-events', {
       params: { query: params as any },
     })
@@ -192,8 +192,8 @@ const { loading, error, data: responseData, load: loadEvents } = useDataFetch(
 const items = computed(() => (responseData.value as any)?.items ?? [])
 const total = computed(() => (responseData.value as any)?.total ?? 0)
 
-const filterTriggerType = ref('')
-const filterResult = ref('')
+const filterTriggerType = ref('__all__')
+const filterResult = ref('__all__')
 
 function formatTimestamp(ts: string | null): string {
   if (!ts) return '—'
@@ -246,8 +246,8 @@ function applyFilters() {
 }
 
 function resetFilters() {
-  filterTriggerType.value = ''
-  filterResult.value = ''
+  filterTriggerType.value = '__all__'
+  filterResult.value = '__all__'
   currentCursor.value = null
   cursorStack.value = []
   loadEvents()
