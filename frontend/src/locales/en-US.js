@@ -1509,7 +1509,10 @@ export default {
       "dismiss_this_notification": "Dismiss this notification?",
       "dismiss_for_everyone": "Dismiss for everyone",
       "dismiss_for_all_org_members": "Dismiss for all org members",
-      "dismiss_for_all_admins": "Dismiss for all admins"
+      "dismiss_for_all_admins": "Dismiss for all admins",
+      "dismiss_for_me": "Dismiss for me",
+      "dismiss_choice_description": "Choose whether to dismiss for yourself or for everyone who can see this notification.",
+      "dismiss": "Dismiss"
     },
     "SidebarNav": {
       "main_navigation": "Main navigation",

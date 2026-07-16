@@ -110,8 +110,7 @@ const sortedRows = computed(() => {
         <tr
           v-for="(row, index) in sortedRows"
           :key="index"
-          class="transition-colors hover:bg-muted/30"
-          :class="{ 'cursor-pointer': $attrs.onRowClick }"
+          class="transition-colors hover:bg-muted/30 cursor-pointer"
           role="button"
           tabindex="0"
           @click="emit('row-click', row)"

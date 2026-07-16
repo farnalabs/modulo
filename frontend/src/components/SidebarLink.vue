@@ -20,7 +20,7 @@ const props = defineProps<{
   to: string;
   icon: string;
   label: string;
-  labelKey: string;
+  labelKey?: string;
   exact?: boolean;
   preview?: boolean;
 }>();
