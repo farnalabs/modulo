@@ -614,7 +614,7 @@
                 <SelectValue :placeholder="$t('views.PipelineEditorView.select_agent_placeholder')" />
               </SelectTrigger>
               <SelectContent>
-                <SelectItem value="">{{ $t('views.PipelineEditorView.select_agent_placeholder') }}</SelectItem>
+                <SelectItem value="__all__">{{ $t('views.PipelineEditorView.select_agent_placeholder') }}</SelectItem>
                 <SelectItem v-for="a in agents" :key="a.id" :value="a.id">{{ a.name }}</SelectItem>
               </SelectContent>
             </Select>
@@ -626,7 +626,7 @@
                 <SelectValue :placeholder="$t('views.PipelineEditorView.select_connector_placeholder')" />
               </SelectTrigger>
               <SelectContent>
-                <SelectItem value="">{{ $t('views.PipelineEditorView.select_connector_placeholder') }}</SelectItem>
+                <SelectItem value="__all__">{{ $t('views.PipelineEditorView.select_connector_placeholder') }}</SelectItem>
                 <SelectItem v-for="c in eligibleConnectors" :key="c.id" :value="c.id">{{ c.name }} ({{ c.connector_type_id }})</SelectItem>
               </SelectContent>
             </Select>
@@ -672,7 +672,7 @@
               <SelectValue :placeholder="$t('views.PipelineEditorView.select_snapshot_placeholder')" />
             </SelectTrigger>
             <SelectContent>
-              <SelectItem value="">{{ $t('views.PipelineEditorView.select_snapshot_placeholder') }}</SelectItem>
+              <SelectItem value="__all__">{{ $t('views.PipelineEditorView.select_snapshot_placeholder') }}</SelectItem>
               <SelectItem
                 v-for="s in snapshots"
                 :key="s.id"
@@ -837,9 +837,9 @@ const snapshots = ref<any[]>([])
 const showAgentPicker = ref(false)
 const showRevertDialog = ref(false)
 const showSaveAsComposite = ref(false)
-const pickerAgentId = ref<string>('')
-const pickerConnectorId = ref<string>('')
-const revertSnapshotId = ref<string>('')
+const pickerAgentId = ref<string>('__all__')
+const pickerConnectorId = ref<string>('__all__')
+const revertSnapshotId = ref<string>('__all__')
 const convertError = ref<string | null>(null)
 const { get, post: postUntyped } = useApi()
 const revertError = ref<string | null>(null)
@@ -1051,7 +1051,7 @@ async function loadParamSchemas() {
   }
 }
 
-const canConvert = computed(() => pickerAgentId.value && pickerConnectorId.value)
+const canConvert = computed(() => pickerAgentId.value !== '__all__' && pickerConnectorId.value !== '__all__')
 
 function convertBackendNode(n: any): any {
   const nodeType = n.node_type === 'manual' ? 'manual' : 'agent'
@@ -1308,7 +1308,7 @@ function addNode() {
 function openAgentPicker() {
   convertError.value = null
   pickerAgentId.value = ''
-  pickerConnectorId.value = ''
+  pickerConnectorId.value = '__all__'
   showAgentPicker.value = true
 }
 
@@ -1351,7 +1351,7 @@ async function handleSaveAsComposite() {
 }
 
 function onAgentChange() {
-  pickerConnectorId.value = ''
+  pickerConnectorId.value = '__all__'
 }
 
 async function convertToAgent() {
@@ -1380,7 +1380,7 @@ async function convertToAgent() {
 }
 
 async function revertToManual() {
-  if (!revertSnapshotId.value || !selectedNodeData.value) return
+  if (!revertSnapshotId.value || revertSnapshotId.value === '__all__' || !selectedNodeData.value) return
   revertError.value = null
   revertLoading.value = true
   try {
