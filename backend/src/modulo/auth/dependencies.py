@@ -59,12 +59,20 @@ async def get_current_user(
 async def get_current_tenant_user(
     current_user: AuthenticatedPrincipal = Depends(get_current_user),
 ) -> TenantPrincipal:
-    """Require the tenant claims used by organisation-scoped API routes."""
+    """Require the tenant claims used by organisation-scoped API routes.
+
+    Also verifies the account and organisation still exist in the database.
+    Catches stale JWTs from deleted accounts/orgs — returns 401 with a clear
+    message instead of letting them surface as confusing 409 FK violations.
+    """
     if current_user.organisation_id is None or current_user.org_role is None:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Organisation membership required",
         )
+
+    await _verify_identity(current_user)
+
     return TenantPrincipal(
         username=current_user.username,
         organisation_id=current_user.organisation_id,
@@ -72,6 +80,67 @@ async def get_current_tenant_user(
         org_role=current_user.org_role,
         is_system_admin=current_user.is_system_admin,
     )
+
+
+async def _verify_identity(principal: AuthenticatedPrincipal) -> None:
+    """Verify the JWT's account and organisation still exist in the database.
+
+    Uses lazy imports to avoid a circular dependency:
+    ``auth.dependencies → api.dependencies → auth.dependencies``.
+
+    Silently fails on DB errors (connection issues, unit tests without a DB)
+    so that a transient DB blip never blocks the request — the caller will
+    still get a proper error from the actual DB operation.
+    """
+    try:
+        from sqlalchemy import text as _text
+
+        from modulo.api.dependencies import (
+            get_or_create_engine,
+            get_or_create_session_factory,
+        )
+        from modulo.settings import get_settings as _get_settings
+
+        engine = get_or_create_engine(_get_settings())
+        factory = get_or_create_session_factory(engine)
+        async with factory() as session, session.begin():
+            result = await session.execute(
+                _text("SELECT 1 FROM accounts WHERE id = :aid"),
+                {"aid": principal.account_id},
+            )
+            if result.scalar_one_or_none() is None:
+                _log.warning(
+                    "auth.account_not_found",
+                    extra={
+                        "account_id": str(principal.account_id),
+                        "username": principal.username,
+                    },
+                )
+                raise HTTPException(
+                    status_code=status.HTTP_401_UNAUTHORIZED,
+                    detail="Account not found. Please log in again.",
+                )
+
+            result = await session.execute(
+                _text("SELECT 1 FROM organisations WHERE id = :oid"),
+                {"oid": principal.organisation_id},
+            )
+            if result.scalar_one_or_none() is None:
+                _log.warning(
+                    "auth.org_not_found",
+                    extra={
+                        "org_id": str(principal.organisation_id),
+                        "username": principal.username,
+                    },
+                )
+                raise HTTPException(
+                    status_code=status.HTTP_401_UNAUTHORIZED,
+                    detail="Organisation not found. Please log in again.",
+                )
+    except HTTPException:
+        raise
+    except Exception:
+        _log.warning("auth.identity_verify_failed", exc_info=True)
 
 
 async def require_system_admin(
