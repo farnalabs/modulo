@@ -1,37 +1,53 @@
 <template>
-  <nav :aria-label="$t('components.SidebarNav.main_navigation')" class="flex-1 space-y-6 overflow-y-auto min-h-0">
-    <template v-for="group in visibleSidebarGroups" :key="group.id">
-      <SidebarGroup
-        :id="group.id"
-        :label="group.label"
-        :label-key="group.labelKey"
-        :collapsed="isGroupCollapsed(group.id, group.defaultCollapsed)"
-        :is-active="activeGroupIds.has(group.id)"
-        @toggle="toggleGroup(group.id, group.defaultCollapsed)"
-      >
-        <SidebarLink
-          v-for="item in group.items"
-          :key="item.to"
-          :to="item.to"
-          :icon="item.icon"
-          :label="item.label"
-          :label-key="item.labelKey"
-          :exact="item.exact"
-          :preview="item.preview"
-          @click="$emit('navigate')"
-        /></SidebarGroup>
-    </template>
-  </nav>
+  <OverlayScrollbarsComponent
+    defer
+    :options="osOptions"
+    class="flex-1 min-h-0"
+    element="nav"
+    :aria-label="$t('components.SidebarNav.main_navigation')"
+  >
+    <div class="space-y-6">
+      <template v-for="group in visibleSidebarGroups" :key="group.id">
+        <SidebarGroup
+          :id="group.id"
+          :label="group.label"
+          :label-key="group.labelKey"
+          :collapsed="isGroupCollapsed(group.id, group.defaultCollapsed)"
+          :is-active="activeGroupIds.has(group.id)"
+          @toggle="toggleGroup(group.id, group.defaultCollapsed)"
+        >
+          <SidebarLink
+            v-for="item in group.items"
+            :key="item.to"
+            :to="item.to"
+            :icon="item.icon"
+            :label="item.label"
+            :label-key="item.labelKey"
+            :exact="item.exact"
+            :preview="item.preview"
+            @click="$emit('navigate')"
+          /></SidebarGroup>
+      </template>
+    </div>
+  </OverlayScrollbarsComponent>
 </template>
 
 <script setup lang="ts">
 import { computed } from "vue";
 import { useRoute } from "vue-router";
+import { OverlayScrollbarsComponent } from "overlayscrollbars-vue";
 import SidebarLink from "./SidebarLink.vue";
 import SidebarGroup from "./SidebarGroup.vue";
 import { getNavGroups, canSeeItem } from "../config/navigation";
 import { useSidebar } from "../composables/useSidebar";
 import { usePlanStore } from "../stores/planStore";
+
+const osOptions = {
+  scrollbars: {
+    autoHide: "leave" as const,
+    autoHideDelay: 500,
+  },
+};
 
 const props = defineProps<{
   isSystemAdmin: boolean;

@@ -14,7 +14,7 @@
         </div>
 
         <div v-else-if="error" class="flex flex-col items-center justify-center h-32 gap-3">
-          <p class="text-destructive text-sm">{{ error.detail || error.message || 'Failed to load monitoring configuration' }}</p>
+          <p class="text-destructive text-sm">{{ error || 'Failed to load monitoring configuration' }}</p>
           <Button size="sm" variant="outline" @click="load()">Retry</Button>
         </div>
 

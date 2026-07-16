@@ -265,10 +265,10 @@ function updateUserInList(data: UserItem) {
   if (idx !== -1) users.value[idx] = data
 }
 
-async function updateRole(u: UserItem, newRole: string) {
+async function updateRole(u: UserItem, newRole: unknown) {
   const prevRole = u.org_role
-  if (prevRole === newRole) return
-  u.org_role = newRole
+  if (prevRole === String(newRole)) return
+  u.org_role = String(newRole)
   actionLoading.value[u.id] = true
   try {
     const data = await httpPut<UserItem>(`/api/v1/admin/users/${u.id}`, { org_role: newRole })
