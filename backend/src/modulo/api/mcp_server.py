@@ -232,7 +232,7 @@ class McpAuthMiddleware(BaseHTTPMiddleware):
 
         # Allow unauthenticated access to the OAuth protocol endpoints.
         # These endpoints manage their own auth via client_id + client_secret.
-        if clean in ("/mcp/oauth/authorize", "/mcp/oauth/token"):
+        if clean in ("/mcp/oauth/authorize", "/mcp/oauth/token", "/mcp/oauth/refresh"):
             resp2: Response = await call_next(request)
             return resp2
 
@@ -2625,6 +2625,7 @@ async def _oauth_token(request: Request) -> JSONResponse:
         InvalidGrantError,
         consume_authorization_code,
         create_oauth_access_token,
+        create_oauth_refresh_token,
         create_oauth_token_family,
         validate_client_secret,
     )
@@ -2670,10 +2671,19 @@ async def _oauth_token(request: Request) -> JSONResponse:
                 token_family=family_id,
                 token_sequence=sequence,
             )
+            refresh_token = create_oauth_refresh_token(
+                client_id,
+                settings.secret_key,
+                organisation_id=str(client.organisation_id),
+                scopes=scopes_list,
+                token_family=family_id,
+                token_sequence=sequence,
+            )
 
         return JSONResponse(
             {
                 "access_token": access_token,
+                "refresh_token": refresh_token,
                 "token_type": "Bearer",
                 "expires_in": 3600,
                 "scope": " ".join(scopes_list),
@@ -2709,6 +2719,88 @@ async def _oauth_token(request: Request) -> JSONResponse:
         )
     except Exception:
         _log.exception("mcp_oauth.token.unexpected_error", extra={"client_id": client_id})
+        return JSONResponse(
+            {"error": "server_error", "detail": "An unexpected error occurred"},
+            status_code=500,
+        )
+
+
+async def _oauth_refresh(request: Request) -> JSONResponse:
+    """POST /mcp/oauth/refresh — exchange refresh token for new access token.
+
+    Stateless validation of the refresh token JWT. The refresh token carries
+    all claims needed (client_id, org_id, scopes, token_family, token_sequence)
+    so a new access token can be issued without a DB round-trip.
+
+    The refresh token itself is rotated: a new refresh token is issued with
+    an incremented sequence, invalidating the old one if presented again.
+    """
+    try:
+        body = await request.json()
+    except json.JSONDecodeError:
+        return JSONResponse(
+            {"error": "invalid_request", "detail": "Request body must be JSON"},
+            status_code=400,
+        )
+
+    grant_type = body.get("grant_type", "")
+    if grant_type != "refresh_token":
+        return JSONResponse(
+            {"error": "unsupported_grant_type"},
+            status_code=400,
+        )
+
+    refresh_token_value = body.get("refresh_token", "")
+    if not refresh_token_value:
+        return JSONResponse(
+            {"error": "invalid_request", "detail": "refresh_token is required"},
+            status_code=400,
+        )
+
+    settings = get_settings()
+    try:
+        from modulo.auth.oauth import (
+            create_oauth_access_token,
+            create_oauth_refresh_token,
+            decode_oauth_refresh_token,
+        )
+
+        claims = decode_oauth_refresh_token(refresh_token_value, settings.secret_key)
+
+        new_sequence = claims.token_sequence + 1
+        new_access_token = create_oauth_access_token(
+            claims.client_id,
+            settings.secret_key,
+            organisation_id=str(claims.organisation_id),
+            scopes=claims.scopes,
+            token_family=claims.token_family,
+            token_sequence=new_sequence,
+        )
+        new_refresh_token = create_oauth_refresh_token(
+            claims.client_id,
+            settings.secret_key,
+            organisation_id=str(claims.organisation_id),
+            scopes=claims.scopes,
+            token_family=claims.token_family,
+            token_sequence=new_sequence,
+        )
+
+        return JSONResponse(
+            {
+                "access_token": new_access_token,
+                "refresh_token": new_refresh_token,
+                "token_type": "Bearer",
+                "expires_in": 3600,
+                "scope": " ".join(claims.scopes),
+            }
+        )
+    except (ValueError, JWTError) as exc:
+        return JSONResponse(
+            {"error": "invalid_grant", "detail": str(exc)},
+            status_code=400,
+        )
+    except Exception:
+        _log.exception("mcp_oauth.refresh.unexpected_error")
         return JSONResponse(
             {"error": "server_error", "detail": "An unexpected error occurred"},
             status_code=500,
@@ -2755,11 +2847,13 @@ def build_mcp_asgi_app() -> Starlette:
     # don't require a Bearer token (they use client_id + client_secret).
     oauth_authorize_route = Route("/oauth/authorize", _oauth_authorize, methods=["POST"])
     oauth_token_route = Route("/oauth/token", _oauth_token, methods=["POST"])
+    oauth_refresh_route = Route("/oauth/refresh", _oauth_refresh, methods=["POST"])
 
     all_routes = [
         health_route,
         oauth_authorize_route,
         oauth_token_route,
+        oauth_refresh_route,
         *list(inner.routes),
     ]
     return Starlette(
