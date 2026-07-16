@@ -629,12 +629,7 @@ def make_sandbox_agent_fn(
             sandbox = await AsyncSandbox.create(template=template_id)
 
             for path, content in context_files.items():
-                parent_dir = str(__import__("pathlib").Path(path).parent)
-                await sandbox.commands.run(f"mkdir -p {parent_dir}")
-                encoded = base64.b64encode(content.encode()).decode()
-                await sandbox.commands.run(
-                    f"echo '{encoded}' | base64 -d > {path}",
-                )
+                await sandbox.files.write(path, content)
 
             await sandbox.files.write("/home/user/prompt.md", rendered_prompt)
 
