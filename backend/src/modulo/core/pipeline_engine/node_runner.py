@@ -635,7 +635,7 @@ def make_sandbox_agent_fn(
                     f"echo '{encoded}' | base64 -d > {path}",
                 )
 
-            await sandbox.filesystem.write("/home/user/prompt.md", rendered_prompt)
+            await sandbox.files.write("/home/user/prompt.md", rendered_prompt)
 
             cmd_result = await sandbox.commands.run(
                 agent_command,
@@ -652,7 +652,7 @@ def make_sandbox_agent_fn(
             raw_output: str = ""
             output_json: Any = None
             try:
-                raw_output = await sandbox.filesystem.read("/home/user/output.json")
+                raw_output = await sandbox.files.read("/home/user/output.json")
                 output_json = _json.loads(raw_output)
             except Exception:
                 _log.info(
