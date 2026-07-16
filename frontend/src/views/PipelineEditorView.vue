@@ -1541,8 +1541,9 @@ async function updateMaxDuration() {
       signal,
     }))
     if (pipeline.value) pipeline.value.max_duration_seconds = val
+    saveGraphError.value = null
   } catch (e) {
-    console.warn('Failed to update max duration:', e)
+    saveGraphError.value = `Failed to update max duration: ${formatApiError(e)}`
   }
 }
 

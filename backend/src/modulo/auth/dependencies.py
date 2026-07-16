@@ -14,7 +14,6 @@ _log = logging.getLogger(__name__)
 _bearer = HTTPBearer()
 
 
-
 async def get_current_tenant_user_optional(
     credentials: HTTPAuthorizationCredentials | None = Depends(HTTPBearer(auto_error=False)),
     settings: Settings = Depends(get_settings),
@@ -24,6 +23,7 @@ async def get_current_tenant_user_optional(
         return None
     try:
         from modulo.auth.jwt import decode_principal
+
         principal = decode_principal(credentials.credentials, settings.secret_key)
         if principal.organisation_id is None or principal.org_role is None:
             return None
