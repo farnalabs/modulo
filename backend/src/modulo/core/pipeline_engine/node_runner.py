@@ -1,4 +1,4 @@
-﻿"""Factory that builds a cancellable LangGraph node function from a node definition.
+"""Factory that builds a cancellable LangGraph node function from a node definition.
 
 Node types:
   - standard (agent):  agent/connector node; runs the node body, then checks for
@@ -596,7 +596,6 @@ def make_sandbox_agent_fn(
 
     @cancellable_node(timeout=timeout or sandbox_timeout, role="sandbox_agent")
     async def _sandbox_agent(state: dict[str, Any]) -> dict[str, Any]:
-        import base64
         import json as _json
         import time as _time
 
@@ -631,6 +630,7 @@ def make_sandbox_agent_fn(
             for path, content in context_files.items():
                 if path.endswith(".b64"):
                     import base64 as _b64
+
                     content = _b64.b64decode(content).decode()
                     path = path[:-4]
                 await sandbox.files.write(path, content)
@@ -643,7 +643,8 @@ def make_sandbox_agent_fn(
                     "MODULO_RUN_ID": run_id,
                     "MODULO_PIPELINE_ID": pipeline_id,
                     "MODULO_ORG_ID": org_id,
-                    "GITHUB_TOKEN": __import__("os").environ.get("GITHUB_DOGFOOD_PAT_WR", "") or __import__("os").environ.get("GITHUB_TOKEN", ""),
+                    "GITHUB_TOKEN": __import__("os").environ.get("GITHUB_DOGFOOD_PAT_WR", "")
+                    or __import__("os").environ.get("GITHUB_TOKEN", ""),
                     **env_vars_extra,
                 },
             )

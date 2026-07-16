@@ -426,6 +426,7 @@ const { loading, error, data: loadResp, load: loadPrimitives } = useDataFetch<Li
     })
     if (search.value) params.set('search', search.value)
     if (section.value === 'community') params.set('source', 'community')
+    if (selectedTypes.value.length === 1) params.set('primitive_type', selectedTypes.value[0])
 
     const { data, error: err } = await api.GET('/api/v1/libraries', {
       params: { query: Object.fromEntries(params) as any },
@@ -441,7 +442,7 @@ const primitives = ref<LibraryPrimitive[]>([])
 watch([loadResp, section], ([d]) => {
   if (d) {
     primitives.value = section.value === 'native' ? d.items.filter(p => p.source !== 'community') : d.items
-    total.value = section.value === 'native' ? primitives.value.length : d.total
+    total.value = d.total
   }
 }, { immediate: true })
 
