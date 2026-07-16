@@ -1648,6 +1648,8 @@ async def create_agent(
     connector_type_refs: list[dict[str, Any]] | None = None,
     required_environment_capabilities: list[str] | None = None,
     is_executable: bool = True,
+    template_id: str | None = None,
+    agent_command: str | None = None,
 ) -> dict[str, Any]:
     try:
         if not await validate_current_auth():
@@ -1678,6 +1680,8 @@ async def create_agent(
                 model_backend_id=parsed_model_backend_id,
                 description=description,
                 connector_type_refs=connector_type_refs or [],
+                template_id=template_id,
+                agent_command=agent_command,
             )
 
         return {

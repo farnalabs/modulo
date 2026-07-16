@@ -1,4 +1,4 @@
-"""Org-scoped CRUD for Agent.
+﻿"""Org-scoped CRUD for Agent.
 
 All functions require RLS org context to be set by the caller.
 """
@@ -40,6 +40,8 @@ async def create_agent(
     token_budget: int | None = None,
     max_input_length: int | None = None,
     library_id: uuid.UUID | None = None,
+    template_id: str | None = None,
+    agent_command: str | None = None,
     prompt_always_visible: bool = False,
     required_environment_capabilities: list[str] | None = None,
 ) -> Agent:
@@ -62,6 +64,8 @@ async def create_agent(
         max_input_length=max_input_length,
         library_id=library_id,
         prompt_always_visible=prompt_always_visible,
+        template_id=template_id,
+        agent_command=agent_command,
         required_environment_capabilities=required_environment_capabilities or [],
     )
     session.add(agent)
@@ -254,7 +258,7 @@ async def get_eval_results_with_defs(
             )
         )
     except ProgrammingError:
-        _log.warning("EvalResult table not found — returning empty results", exc_info=True)
+        _log.warning("EvalResult table not found â€” returning empty results", exc_info=True)
         return [], {}
 
     eval_results: list[EvalResult] = list(er_result.scalars().all())
@@ -263,7 +267,7 @@ async def get_eval_results_with_defs(
     try:
         ed_result = await session.execute(select(EvalDefinition).where(EvalDefinition.id.in_(eval_def_ids)))
     except ProgrammingError:
-        _log.warning("EvalDefinition table not found — returning empty definitions", exc_info=True)
+        _log.warning("EvalDefinition table not found â€” returning empty definitions", exc_info=True)
         return [], {}
     definitions: dict[str, Any] = {}
     for ed in ed_result.scalars().all():

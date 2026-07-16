@@ -1,4 +1,4 @@
-import uuid
+﻿import uuid
 from typing import Any
 
 from sqlalchemy import JSON, Boolean, ForeignKey, ForeignKeyConstraint, Integer, String, Text, Uuid
@@ -34,6 +34,8 @@ class Agent(OrgScoped):
 
     is_executable: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
     prompt_always_visible: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    template_id: Mapped[str | None] = mapped_column(String(255), nullable=True, default=None)
+    agent_command: Mapped[str | None] = mapped_column(String(500), nullable=True, default=None)
     name: Mapped[str] = mapped_column(String(255), nullable=False)
     description: Mapped[str | None] = mapped_column(String(2000))
     input_schema_id: Mapped[uuid.UUID] = mapped_column(Uuid(), nullable=False)
