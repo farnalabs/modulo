@@ -1,4 +1,4 @@
-﻿"""Add template_id and agent_command to agents
+"""Add template_id and agent_command to agents
 
 Revision ID: 0017_agent_template_fields
 Revises: 0016_composite_parameter_schema
