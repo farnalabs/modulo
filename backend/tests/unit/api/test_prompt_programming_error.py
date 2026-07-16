@@ -125,6 +125,8 @@ class TestPromptOptimizeLLMErrorPaths:
         agent.organisation_id = uuid.UUID(_ORG_ID)
         agent.prompt_template = "You are {{name}}"
         agent.model_backend_id = uuid.uuid4()
+        agent.template_id = None
+        agent.agent_command = None
         agent.prompt_version_history = []
         return agent
 

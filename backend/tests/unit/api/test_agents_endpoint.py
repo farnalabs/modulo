@@ -48,6 +48,8 @@ def _make_agent() -> MagicMock:
     a.retry_policy = {}
     a.token_budget = None
     a.library_id = None
+    a.template_id = None
+    a.agent_command = None
     a.account_id = uuid.uuid4()
     a.required_environment_capabilities = []
     a.created_at = _NOW
