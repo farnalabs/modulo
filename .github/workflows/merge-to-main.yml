@@ -1,8 +1,6 @@
 name: Merge to Main
 
 on:
-  schedule:
-    - cron: '*/30 * * * *'
   workflow_dispatch:
 
 concurrency:
