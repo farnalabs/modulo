@@ -66,7 +66,7 @@ async def receive_webhook(
     """
     raw_body = await request.body()
     hmac_signature = request.headers.get("X-Modulo-Webhook-Secret")
-    modulo_timestamp = request.headers.get("X-Modulo-Timestamp")
+    modulo_timestamp = request.headers.get("X-Modulo-Timestamp") or str(int(__import__("time").time()))
 
     try:
         raw_payload: dict[str, Any] = await request.json()
