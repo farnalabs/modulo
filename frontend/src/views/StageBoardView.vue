@@ -551,50 +551,26 @@ function applyFilters() {
   // reactivity handles this via computed
 }
 
-async function fetchStages() {
-  try {
-    const { data } = await fetchWithTimeout((signal) => api.GET('/api/v1/stages', { signal }))
-    return (data as any)?.items ?? []
-  } catch (e) {
-    console.warn('Failed to fetch stages:', e)
-    return []
-  }
-}
-
-async function fetchPipelines() {
-  try {
-    const { data } = await fetchWithTimeout((signal) => api.GET('/api/v1/pipelines', { signal }))
-    return (data as any)?.items ?? []
-  } catch (e) {
-    console.warn('Failed to fetch pipelines:', e)
-    return []
-  }
-}
-
-async function fetchTeams() {
-  try {
-    const { data } = await fetchWithTimeout((signal) => api.GET('/api/v1/teams', { signal }))
-    return (data as any)?.items ?? []
-  } catch (e) {
-    console.warn('Failed to fetch teams:', e)
-    return []
-  }
-}
-
 const stages = ref<any[]>([])
 const allPipelines = ref<any[]>([])
 const teams = ref<any[]>([])
 
 const { loading, error: pageError } = useDataFetch(
   async () => {
-    const [stagesData, pipelinesData, teamsData] = await Promise.all([
-      fetchStages(),
-      fetchPipelines(),
-      fetchTeams(),
+    const [stagesResp, pipelinesResp, teamsResp] = await Promise.all([
+      fetchWithTimeout((signal) => api.GET('/api/v1/stages', { signal })).catch(() => ({ data: null })),
+      fetchWithTimeout((signal) => api.GET('/api/v1/pipelines', { signal })).catch(() => ({ data: null })),
+      fetchWithTimeout((signal) => api.GET('/api/v1/teams', { signal })).catch(() => ({ data: null })),
     ])
+    const stagesData = (stagesResp?.data as any)?.items ?? []
+    const pipelinesData = (pipelinesResp?.data as any)?.items ?? []
+    const teamsData = (teamsResp?.data as any)?.items ?? []
     stages.value = (stagesData as any[]).sort((a: any, b: any) => a.position - b.position)
     allPipelines.value = pipelinesData as any[]
     teams.value = teamsData as any[]
+    if (stagesResp?.data === null && pipelinesResp?.data === null) {
+      return { error: { detail: 'Failed to load board data. The server may be unavailable.' } }
+    }
     return { data: {} }
   },
   { initialValue: {} },

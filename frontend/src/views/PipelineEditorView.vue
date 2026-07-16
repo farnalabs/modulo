@@ -102,6 +102,19 @@
             <button v-if="planStore.featureEnabled('pipeline_delete')" class="rounded-md border border-destructive/50 bg-destructive/10 px-2 py-1 text-xs font-medium text-destructive hover:bg-destructive/20" @click="showDeleteConfirm = true">Delete</button>
           </div>
           <span class="mx-2 h-4 w-px bg-border" />
+          <div class="flex items-center gap-1">
+            <label for="pipeline-max-duration" class="text-[10px] text-muted-foreground whitespace-nowrap">Max Duration (s):</label>
+            <input id="pipeline-max-duration"
+              v-model.number="maxDurationInput"
+              type="number"
+              min="0"
+              placeholder="No limit"
+              class="w-20 rounded border border-input bg-background px-1.5 py-1 text-xs"
+              @change="updateMaxDuration"
+              data-testid="pipeline-editor-max-duration"
+            />
+          </div>
+          <span class="mx-2 h-4 w-px bg-border" />
           <button
             class="rounded-md border border-input bg-background px-2 py-1 text-xs font-medium hover:bg-accent flex items-center gap-1"
             @click="addNode"
@@ -916,6 +929,7 @@ const showRunDialog = ref(false)
 const runPrompt = ref('')
 const running = ref(false)
 const runError = ref<string | null>(null)
+const maxDurationInput = ref<number | undefined>(undefined)
 
 const folders = ref<any[]>([])
 const linkedLifecycleMaps = ref<any[]>([])
@@ -1458,6 +1472,7 @@ async function loadPipeline() {
       signal,
     }))
     pipeline.value = data as any
+    maxDurationInput.value = (data as any)?.max_duration_seconds ?? undefined
   } catch (e) {
     pageError.value = `Failed to load pipeline: ${formatApiError(e)}`
   }
@@ -1514,6 +1529,20 @@ async function handleDelete() {
     router.push({ name: 'library' })
   } catch (e: unknown) {
     deleteError.value = formatApiError(e)
+  }
+}
+
+async function updateMaxDuration() {
+  const val = maxDurationInput.value && maxDurationInput.value > 0 ? maxDurationInput.value : null
+  try {
+    await withTimeout((signal) => api.PATCH('/api/v1/pipelines/{pipeline_id}', {
+      params: { path: { pipeline_id: pipelineId } },
+      body: { max_duration_seconds: val },
+      signal,
+    }))
+    if (pipeline.value) pipeline.value.max_duration_seconds = val
+  } catch (e) {
+    console.warn('Failed to update max duration:', e)
   }
 }
 
