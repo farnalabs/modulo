@@ -41,7 +41,7 @@
       <div class="flex flex-wrap items-center gap-4">
         <div class="flex items-center gap-2">
           <label for="stageboardview-field-8" class="text-sm font-medium text-muted-foreground">Team</label>
-          <Select :model-value="teamFilter" @update:model-value="teamFilter = $event; applyFilters()">
+          <Select :model-value="teamFilter" @update:model-value="teamFilter = String($event); applyFilters()">
             <SelectTrigger class="w-auto min-w-[140px]" aria-label="Team" data-testid="stage-board-team-filter">
               <SelectValue placeholder="All Teams" />
             </SelectTrigger>
@@ -53,7 +53,7 @@
         </div>
         <div class="flex items-center gap-2">
           <label for="stageboardview-field-7" class="text-sm font-medium text-muted-foreground">Status</label>
-          <Select :model-value="statusFilter" @update:model-value="statusFilter = $event; applyFilters()">
+          <Select :model-value="statusFilter" @update:model-value="statusFilter = String($event); applyFilters()">
             <SelectTrigger class="w-auto min-w-[140px]" aria-label="Status" data-testid="stage-board-status-filter">
               <SelectValue placeholder="All Statuses" />
             </SelectTrigger>
@@ -353,7 +353,7 @@
         </div>
         <div>
           <label for="stageboardview-field-1" class="mb-1 block text-sm font-medium">Visibility</label>
-          <Select :model-value="createVisibility" @update:model-value="createVisibility = $event">
+          <Select :model-value="createVisibility" @update:model-value="createVisibility = String($event)">
             <SelectTrigger class="w-full" aria-label="Visibility" data-testid="stage-board-create-visibility">
               <SelectValue placeholder="Select visibility" />
             </SelectTrigger>

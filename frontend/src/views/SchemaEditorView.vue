@@ -343,7 +343,7 @@ import {
 
 const { t } = useI18n()
 
-type SchemaItem = components['schemas']['SchemaResponse']
+type SchemaItem = components['schemas']['modulo__api__routes__schemas__SchemaResponse']
 
 interface SchemaField {
   _key: number

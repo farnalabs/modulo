@@ -126,7 +126,7 @@
           <span class="mx-2 h-4 w-px bg-border" />
           <button
             class="rounded-md border border-input bg-background px-2 py-1 text-xs font-medium hover:bg-accent flex items-center gap-1"
-            @click="fitView"
+            @click="() => fitView()"
             title="Fit view"
           >
             <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="15 3 21 3 21 9"/><polyline points="9 21 3 21 3 15"/><line x1="21" y1="3" x2="14" y2="10"/><line x1="3" y1="21" x2="10" y2="14"/></svg>
@@ -289,11 +289,11 @@
             </div>
             <div v-if="agentInputSchemaId(selectedNodeData.agent_id)">
               <dt class="text-muted-foreground text-xs uppercase tracking-wider">{{ $t('views.PipelineEditorView.input_schema') }}</dt>
-              <dd class="font-medium">{{ schemaName(agentInputSchemaId(selectedNodeData.agent_id)) || shortId(agentInputSchemaId(selectedNodeData.agent_id)) }}</dd>
+              <dd class="font-medium">{{ schemaName(agentInputSchemaId(selectedNodeData.agent_id) ?? '') || shortId(agentInputSchemaId(selectedNodeData.agent_id) ?? '') }}</dd>
             </div>
             <div v-if="agentOutputSchemaId(selectedNodeData.agent_id)">
               <dt class="text-muted-foreground text-xs uppercase tracking-wider">{{ $t('views.PipelineEditorView.output_schema') }}</dt>
-              <dd class="font-medium">{{ schemaName(agentOutputSchemaId(selectedNodeData.agent_id)) || shortId(agentOutputSchemaId(selectedNodeData.agent_id)) }}</dd>
+              <dd class="font-medium">{{ schemaName(agentOutputSchemaId(selectedNodeData.agent_id) ?? '') || shortId(agentOutputSchemaId(selectedNodeData.agent_id) ?? '') }}</dd>
             </div>
             <div v-if="selectedNodeData.connector_binding">
               <dt class="text-muted-foreground text-xs uppercase tracking-wider">{{ $t('views.PipelineEditorView.connector') }}</dt>
@@ -1075,8 +1075,8 @@ async function saveAsNewParamSet() {
   const name = prompt('Name for new parameter set:')
   if (!name?.trim()) return
   try {
-    const resp = await api.POST('/api/v1/parameter-schemas/{id}/sets', {
-      params: { path: { id: schema.id } },
+    const resp = await api.POST('/api/v1/parameter-schemas/{schema_id}/sets', {
+      params: { path: { schema_id: schema.id } },
       body: { name: name.trim(), description: null, values: selectedNodeOverrides.value },
     })
     if (resp.error) {
@@ -1093,23 +1093,12 @@ async function loadParamSets() {
   const schema = agentParamSchema(selectedNodeData.value?.agent_id)
   if (!schema) return
   try {
-    const resp = await api.GET('/api/v1/parameter-schemas/{id}/sets', {
-      params: { path: { id: schema.id }, query: { page: 1, page_size: 100 } },
+    const resp = await api.GET('/api/v1/parameter-schemas/{schema_id}/sets', {
+      params: { path: { schema_id: schema.id } },
     })
     if (resp.data) paramSets.value = (resp.data as any) ?? []
   } catch (e) {
     console.warn('Failed to load param sets:', e)
-  }
-}
-
-async function loadParamSchemas() {
-  try {
-    const resp = await api.GET('/api/v1/parameter-schemas', {
-      params: { query: { page: 1, page_size: 100 } },
-    })
-    if (resp.data) paramSchemas.value = (resp.data as any)?.items ?? []
-  } catch (e) {
-    console.warn('Failed to load param schemas:', e)
   }
 }
 
@@ -1615,9 +1604,9 @@ async function triggerRun() {
       runError.value = `Failed to save graph: ${saveGraphError.value}`
       return
     }
-    const { data } = await withTimeout((signal) => api.POST('/api/v1/pipelines/{pipeline_id}/runs', {
-      params: { path: { pipeline_id: pipelineId } },
+    const { data } = await withTimeout((signal) => api.POST('/api/v1/runs', {
       body: {
+        pipeline_id: pipelineId,
         prompt: runPrompt.value.trim() || undefined,
         payload: {},
       },
