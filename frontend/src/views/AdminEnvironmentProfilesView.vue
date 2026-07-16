@@ -200,7 +200,7 @@
                   {{ providerLabel(profile) }}
                 </span>
               </td>
-              <td class="table-cell table-cell-numeric text-muted-foreground">{{ formatTimeout(profile.timeout_seconds) }}</td>
+              <td class="table-cell table-cell-numeric text-muted-foreground">{{ formatTimeout(profile.timeout_seconds ?? 0) }}</td>
               <td class="table-cell">
                 <span
                   class="inline-flex items-center gap-1.5 rounded-full px-2.5 py-0.5 text-xs font-medium"
@@ -296,7 +296,12 @@ import { Select, SelectTrigger, SelectContent, SelectItem, SelectValue } from '@
 import TableActions from '../components/shared/TableActions.vue'
 import { formatDateShort } from '../lib/formatDate'
 
-type ProfileItem = components['schemas']['ProfileResponse']
+type ProfileItem = components['schemas']['modulo__api__routes__environment_profiles__ProfileResponse'] & {
+  timeout_seconds?: number
+  is_active?: boolean
+  resource_limits?: { memory_mb?: number; cpu_cores?: number }
+  env_vars?: Record<string, string>
+}
 
 interface EnvVar {
   key: string
@@ -401,7 +406,7 @@ function openEditForm(profile: ProfileItem) {
   const provider = providerLabel(profile).toLowerCase()
   const memMb = profile.resource_limits?.memory_mb ?? 512
   const cpu = profile.resource_limits?.cpu_cores ?? 1
-  const persistence = profile.persistence_policy ?? {}
+  const persistence = (profile as any).persistence ?? (profile as any).persistence_policy ?? {}
   const envVars: EnvVar[] = persistence.env_vars
     ? Object.entries(persistence.env_vars as Record<string, string>).map(([k, v]) => ({ key: k, value: v }))
     : []

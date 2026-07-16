@@ -115,7 +115,7 @@ import PageHeader from '../components/shared/PageHeader.vue'
 import { Button } from '@/components/ui/button'
 import PageTabs from "../components/PageTabs.vue"
 
-type SchemaItem = components['schemas']['SchemaResponse']
+type SchemaItem = components['schemas']['modulo__api__routes__schemas__SchemaResponse']
 
 interface SchemaListResponse {
   items: SchemaItem[]

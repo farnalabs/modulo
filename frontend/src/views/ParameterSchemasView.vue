@@ -262,16 +262,16 @@
                     <div v-if="param.type === 'select'">
                       <label class="mb-1 block text-xs text-muted-foreground">{{ $t('views.ParameterSchemasView.param_options') }}</label>
                       <div class="space-y-1">
-                        <div v-for="(opt, oi) in (param.options || [])" :key="oi" class="flex items-center gap-1">
+                        <div v-for="(_, oi) in (param.options || [])" :key="oi" class="flex items-center gap-1">
                           <input
-                            v-model="param.options[oi]"
+                            v-model="(param.options ?? [])[oi]"
                             type="text"
                             class="flex-1 rounded-lg border border-input bg-background px-3 py-1.5 text-sm"
                             placeholder="Option value"
                           />
                           <button
                             class="rounded p-1 text-muted-foreground hover:text-destructive"
-                            @click="param.options.splice(oi, 1)"
+                            @click="(param.options ?? []).splice(oi, 1)"
                           >
                             <svg class="h-3 w-3" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>
                           </button>
@@ -656,11 +656,12 @@ interface SchemaItem {
   id: string
   organisation_id: string
   name: string
-  description?: string
+  description: string | null
   version: number
   parameters: ParameterDef[]
   created_at: string
   updated_at: string
+  account_id?: string
 }
 
 interface SchemaListResponse {
@@ -682,13 +683,6 @@ interface SetItem {
   updated_at: string
 }
 
-interface SetListResponse {
-  items: SetItem[]
-  total: number
-  page: number
-  page_size: number
-}
-
 interface ReferenceResponse {
   agents: Array<{ id: string; name?: string }>
   sets: Array<{ id: string; name?: string }>
@@ -702,7 +696,7 @@ interface ModelBackendItem {
 const { loading, error, data: schemasResp, load: loadSchemas } = useDataFetch<SchemaListResponse>(
   () => api.GET('/api/v1/parameter-schemas', {
     params: { query: { page: 1, page_size: 100 } },
-  }),
+  }).then(r => ({ data: r.data as unknown as SchemaListResponse, error: r.error })),
   { initialValue: { items: [], total: 0, page: 1, page_size: 100 } },
 )
 
@@ -794,8 +788,8 @@ async function saveSchema() {
     if (isNew.value) {
       resp = await api.POST('/api/v1/parameter-schemas', { body: payload as any })
     } else if (editingSchema.value) {
-      resp = await api.PUT('/api/v1/parameter-schemas/{id}', {
-        params: { path: { id: editingSchema.value.id } },
+      resp = await api.PUT('/api/v1/parameter-schemas/{schema_id}', {
+        params: { path: { schema_id: editingSchema.value.id } },
         body: { ...payload as any, version: editingSchema.value.version },
       })
     }
@@ -835,8 +829,8 @@ async function doDelete() {
   deleting.value = true
   deleteRefError.value = null
   try {
-    const resp = await api.DELETE('/api/v1/parameter-schemas/{id}', {
-      params: { path: { id: deleteConfirmId.value } },
+    const resp = await api.DELETE('/api/v1/parameter-schemas/{schema_id}', {
+      params: { path: { schema_id: deleteConfirmId.value } },
     })
     if (resp.error) {
       const msg = formatApiError(resp.error)
@@ -872,8 +866,8 @@ async function loadSets() {
   setsLoading.value = true
   setsError.value = null
   try {
-    const resp = await api.GET('/api/v1/parameter-schemas/{id}/sets', {
-      params: { path: { id: editingSchema.value.id }, query: { page: 1, page_size: 100 } },
+    const resp = await api.GET('/api/v1/parameter-schemas/{schema_id}/sets', {
+      params: { path: { schema_id: editingSchema.value.id } },
     })
     if (resp.error) {
       setsError.value = formatApiError(resp.error)
@@ -922,13 +916,13 @@ async function saveSet() {
     const payload = { name: setForm.value.name, description: setForm.value.description || null, values: setForm.value.values }
     let resp
     if (editingSetId.value) {
-      resp = await api.PUT('/api/v1/parameter-sets/{id}', {
-        params: { path: { id: editingSetId.value } },
+      resp = await api.PUT('/api/v1/parameter-schemas/{schema_id}/sets/{set_id}', {
+        params: { path: { schema_id: editingSchema.value.id, set_id: editingSetId.value } },
         body: { ...payload as any, version: sets.value.find(s => s.id === editingSetId.value)?.version ?? 1 },
       })
     } else {
-      resp = await api.POST('/api/v1/parameter-schemas/{id}/sets', {
-        params: { path: { id: editingSchema.value.id } },
+      resp = await api.POST('/api/v1/parameter-schemas/{schema_id}/sets', {
+        params: { path: { schema_id: editingSchema.value.id } },
         body: payload as any,
       })
     }
@@ -956,11 +950,11 @@ function confirmDeleteSet(set: SetItem) {
 }
 
 async function doDeleteSet() {
-  if (!deleteSetConfirmId.value) return
+  if (!deleteSetConfirmId.value || !editingSchema.value?.id) return
   deletingSet.value = true
   try {
-    const resp = await api.DELETE('/api/v1/parameter-sets/{id}', {
-      params: { path: { id: deleteSetConfirmId.value } },
+    const resp = await api.DELETE('/api/v1/parameter-schemas/{schema_id}/sets/{set_id}', {
+      params: { path: { schema_id: editingSchema.value.id, set_id: deleteSetConfirmId.value } },
     })
     if (resp.error) {
       console.warn('Failed to delete set:', resp.error)
@@ -985,8 +979,8 @@ async function loadReferences() {
   refsLoading.value = true
   refsError.value = null
   try {
-    const resp = await api.GET('/api/v1/parameter-schemas/{id}/references', {
-      params: { path: { id: editingSchema.value.id } },
+    const resp = await api.GET('/api/v1/parameter-schemas/{schema_id}/references', {
+      params: { path: { schema_id: editingSchema.value.id } },
     })
     if (resp.error) {
       refsError.value = formatApiError(resp.error)
@@ -1015,8 +1009,8 @@ async function doValidate() {
   validating.value = true
   validateResult.value = null
   try {
-    const resp = await api.POST('/api/v1/parameter-schemas/{id}/validate', {
-      params: { path: { id: editingSchema.value.id } },
+    const resp = await api.POST('/api/v1/parameter-schemas/{schema_id}/validate', {
+      params: { path: { schema_id: editingSchema.value.id } },
       body: { values: validateValues.value },
     })
     if (resp.error) {
