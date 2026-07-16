@@ -1,13 +1,6 @@
 name: Staging E2E
 
 on:
-  workflow_run:
-    workflows: [Staging Auto-Deploy]
-    types: [completed]
-  schedule:
-    - cron: '0 6 * * *'
-  push:
-    branches: [main]
   workflow_dispatch:
 
 concurrency:
