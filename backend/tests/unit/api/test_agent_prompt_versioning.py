@@ -212,6 +212,8 @@ class TestRollback:
         agent_after.created_by = _USER_ID
         agent_after.created_at = _NOW
         agent_after.updated_at = _NOW
+        agent_after.template_id = None
+        agent_after.agent_command = None
         agent_after.prompt_version_history = [
             {
                 "version": "v1",
