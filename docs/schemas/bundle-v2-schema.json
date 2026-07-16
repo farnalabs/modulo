@@ -1,0 +1,240 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://modulo.run/schemas/bundle-v2.json",
+  "title": "Modulo Workflow Bundle v2",
+  "description": "JSON Schema for validating Modulo v2 YAML workflow bundles",
+  "type": "object",
+  "required": ["modulo_workflow"],
+  "properties": {
+    "modulo_workflow": {
+      "type": "object",
+      "required": ["id", "name", "version", "agents"],
+      "properties": {
+        "id": {
+          "type": "string",
+          "format": "uuid",
+          "description": "Unique identifier for this workflow bundle"
+        },
+        "name": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256,
+          "description": "Human-readable name of the workflow"
+        },
+        "version": {
+          "type": "string",
+          "pattern": "^\\d+\\.\\d+\\.\\d+$",
+          "description": "Semantic version of the bundle"
+        },
+        "author": {
+          "type": "string",
+          "format": "email",
+          "description": "Email of the bundle author"
+        },
+        "owner_team": {
+          "oneOf": [
+            { "type": "null" },
+            { "type": "string", "minLength": 1 }
+          ],
+          "description": "Team name for ownership resolution on import"
+        },
+        "visibility": {
+          "type": "string",
+          "enum": ["org", "team", "private"],
+          "default": "org",
+          "description": "Visibility level after import"
+        },
+        "lifecycle_map_ref": {
+          "oneOf": [
+            { "type": "null" },
+            { "type": "string", "minLength": 1 }
+          ],
+          "description": "Reference to a lifecycle map entry"
+        },
+        "composite_template_refs": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "default": [],
+          "description": "Lifecycle template IDs this bundle participates in"
+        },
+        "partial": {
+          "type": "boolean",
+          "default": false,
+          "description": "If true, this is an incomplete bundle that needs assembly"
+        },
+        "requires": {
+          "type": "object",
+          "properties": {
+            "connector_types": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "minLength": 1
+              },
+              "description": "Connector type refs required by this workflow"
+            },
+            "abstract_schemas": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "minLength": 1
+              },
+              "description": "Abstract schema names required by this workflow"
+            }
+          },
+          "additionalProperties": false
+        },
+        "triggers": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["trigger_type"],
+            "properties": {
+              "trigger_type": {
+                "type": "string",
+                "enum": ["webhook", "cron", "polling", "agent_signal"]
+              },
+              "config": {
+                "type": "object",
+                "description": "Type-specific trigger configuration"
+              },
+              "active": {
+                "type": "boolean",
+                "default": true
+              }
+            },
+            "additionalProperties": false
+          }
+        },
+        "agents": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "object",
+            "required": ["id", "prompt_template"],
+            "properties": {
+              "id": {
+                "type": "string",
+                "minLength": 1,
+                "description": "Unique agent ID within this bundle"
+              },
+              "prompt_template": {
+                "type": "string",
+                "minLength": 1,
+                "description": "Jinja2 prompt template for the agent"
+              },
+              "input_schema": {
+                "type": "string",
+                "description": "Reference to a local or abstract schema"
+              },
+              "output_schema": {
+                "type": "string",
+                "description": "Reference to a local or abstract schema"
+              },
+              "template_id": {
+                "oneOf": [
+                  { "type": "null" },
+                  { "type": "string" }
+                ],
+                "default": null,
+                "description": "E2B sandbox template ID or Docker image ref"
+              },
+              "agent_command": {
+                "oneOf": [
+                  { "type": "null" },
+                  { "type": "string" }
+                ],
+                "default": null,
+                "description": "Shell command to execute inside the sandbox"
+              }
+            },
+            "additionalProperties": false,
+            "allOf": [
+              {
+                "description": "Agent IDs must be unique within the bundle",
+                "unevaluatedProperties": false
+              }
+            ]
+          },
+          "uniqueItemProperties": ["id"]
+        },
+        "edges": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["source", "target", "edge_type"],
+            "properties": {
+              "source": {
+                "type": "string",
+                "description": "Source agent ID"
+              },
+              "target": {
+                "type": "string",
+                "description": "Target agent ID"
+              },
+              "edge_type": {
+                "type": "string",
+                "enum": ["normal", "reject", "conditional"]
+              },
+              "hitl_gate_config": {
+                "oneOf": [
+                  { "type": "null" },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "label": { "type": "string" },
+                      "description": { "type": "string" },
+                      "reject_target": { "type": "string" },
+                      "claim_expiry_minutes": {
+                        "type": "integer",
+                        "minimum": 1
+                      },
+                      "human_only": { "type": "boolean" },
+                      "required_team_id": {
+                        "oneOf": [
+                          { "type": "null" },
+                          { "type": "string" }
+                        ]
+                      }
+                    },
+                    "additionalProperties": false
+                  }
+                ],
+                "default": null
+              }
+            },
+            "additionalProperties": false
+          }
+        },
+        "schemas": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "description": "Embedded JSON Schema definitions (structure is application-defined)"
+          }
+        }
+      },
+      "allOf": [
+        {
+          "description": "Partial bundles must not have triggers",
+          "if": {
+            "properties": { "partial": { "const": true } }
+          },
+          "then": {
+            "properties": {
+              "triggers": {
+                "maxItems": 0,
+                "description": "Partial bundles cannot have triggers"
+              }
+            }
+          }
+        }
+      ],
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": false
+}
