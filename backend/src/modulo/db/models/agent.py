@@ -1,4 +1,4 @@
-﻿import uuid
+import uuid
 from typing import Any
 
 from sqlalchemy import JSON, Boolean, ForeignKey, ForeignKeyConstraint, Integer, String, Text, Uuid

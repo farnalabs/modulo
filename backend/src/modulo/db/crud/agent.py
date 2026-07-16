@@ -1,4 +1,4 @@
-﻿"""Org-scoped CRUD for Agent.
+"""Org-scoped CRUD for Agent.
 
 All functions require RLS org context to be set by the caller.
 """

@@ -1,4 +1,4 @@
-﻿"""Agent CRUD REST API."""
+"""Agent CRUD REST API."""
 
 import difflib
 import json
