@@ -17,6 +17,7 @@ import uuid
 import zipfile
 from typing import Any
 
+import yaml
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -25,6 +26,7 @@ from modulo.db.crud.agent import create_agent
 from modulo.db.crud.library_primitive import create_library_primitive
 from modulo.db.crud.pipeline import create_pipeline
 from modulo.db.crud.schema import create_schema, create_schema_version
+from modulo.db.models.account import Account
 from modulo.db.models.agent import Agent
 from modulo.db.models.connector_instance import ConnectorInstance
 from modulo.db.models.model_backend import ModelBackend
@@ -32,10 +34,12 @@ from modulo.db.models.pipeline import Pipeline
 from modulo.db.models.pipeline_edge import PipelineEdge
 from modulo.db.models.schema import Schema, SchemaVersion
 from modulo.db.models.team import Team
+from modulo.db.models.trigger import Trigger
 
 logger = logging.getLogger(__name__)
 
 BUNDLE_FORMAT_VERSION = "1"
+BUNDLE_FORMAT_VERSION_V2 = "2"
 MANIFEST_FILENAME = "bundle.json"
 DEFAULT_SCHEMA_VERSION = "1.0"
 DEFAULT_NODE_TIMEOUT = 300
@@ -249,6 +253,202 @@ async def export_pipeline_bundle(
 
     logger.info("Exported pipeline %s with %d agents, %d edges", pipeline_id, len(agents_list), len(edges_list))
     return buf.getvalue()
+
+
+# ---------------------------------------------------------------------------
+# Export v2 — pipeline_id → YAML string
+# ---------------------------------------------------------------------------
+
+
+async def export_pipeline_bundle_v2(
+    session: AsyncSession,
+    pipeline_id: uuid.UUID,
+) -> str:
+    """Build a v2 YAML bundle from a pipeline per ADR 015.
+
+    Returns a YAML string with the v2 bundle format including triggers,
+    owner_team, visibility, lifecyle_map_ref, composite_template_refs,
+    and partial bundle support.
+    """
+    try:
+        stmt = select(Pipeline).where(Pipeline.id == pipeline_id)
+        pipeline = (await session.execute(stmt)).scalar_one_or_none()
+        if pipeline is None:
+            raise ValueError(f"Pipeline {pipeline_id} not found")
+
+        agent_ids: set[uuid.UUID] = set()
+        schema_ids: set[uuid.UUID] = set()
+        model_backend_ids: set[uuid.UUID] = set()
+
+        if pipeline.graph_nodes_json:
+            for node in pipeline.graph_nodes_json:
+                agent_id_str = node.get("agent_id")
+                if agent_id_str:
+                    try:
+                        agent_id = _safe_uuid(agent_id_str, "node.agent_id")
+                    except ValueError:
+                        logger.warning("Skipping node with invalid agent_id: %s", agent_id_str)
+                        continue
+                    agent_ids.add(agent_id)
+
+                schema_id_str = node.get("output_schema_id")
+                if schema_id_str:
+                    try:
+                        schema_ids.add(_safe_uuid(schema_id_str, "node.output_schema_id"))
+                    except ValueError:
+                        logger.warning("Skipping node with invalid output_schema_id: %s", schema_id_str)
+
+        agents_list: list[dict[str, Any]] = []
+        if agent_ids:
+            agent_result = await session.execute(select(Agent).where(Agent.id.in_(agent_ids)))
+            agents = list(agent_result.scalars())
+            for a in agents:
+                agent_entry: dict[str, Any] = {
+                    "id": str(a.id),
+                    "name": a.name,
+                    "description": a.description,
+                    "input_schema": str(a.input_schema_id) if a.input_schema_id else None,
+                    "output_schema": str(a.output_schema_id) if a.output_schema_id else None,
+                    "prompt_template": a.prompt_template,
+                    "template_id": a.template_id,
+                    "agent_command": a.agent_command,
+                    "connector_type_refs": list(a.connector_type_refs or []),
+                    "evals": list(a.evals or []),
+                    "retry_policy": dict(a.retry_policy or {}),
+                    "token_budget": a.token_budget,
+                }
+                agents_list.append(agent_entry)
+                if a.input_schema_id:
+                    schema_ids.add(a.input_schema_id)
+                if a.output_schema_id:
+                    schema_ids.add(a.output_schema_id)
+                if a.model_backend_id:
+                    model_backend_ids.add(a.model_backend_id)
+
+        schemas_list: list[dict[str, Any]] = []
+        if schema_ids:
+            schema_result = await session.execute(select(Schema).where(Schema.id.in_(schema_ids)))
+            schemas = list(schema_result.scalars())
+            for s in schemas:
+                latest_version = await _get_latest_published_version(session, s.id)
+                schemas_list.append(
+                    {
+                        "id": str(s.id),
+                        "name": s.name,
+                        "description": s.description,
+                        "abstract_name": s.abstract_name,
+                        "latest_version": latest_version.version if latest_version else None,
+                        "definition_json": latest_version.definition_json if latest_version else None,
+                    }
+                )
+
+        # Edges
+        edge_result = await session.execute(
+            select(PipelineEdge).where(PipelineEdge.pipeline_id == pipeline_id).order_by(PipelineEdge.created_at)
+        )
+        edges = list(edge_result.scalars())
+        edges_list = [
+            {
+                "source": str(e.source_node_id),
+                "target": str(e.target_node_id),
+                "edge_type": e.edge_type,
+                "hitl_gate_config": e.hitl_gate_config,
+            }
+            for e in edges
+        ]
+
+        # Triggers
+        try:
+            trig_stmt = select(Trigger).where(Trigger.pipeline_id == pipeline_id)
+            triggers = (await session.execute(trig_stmt)).scalars().all()
+            triggers_list = [
+                {
+                    "trigger_type": t.trigger_type,
+                    "config": dict(t.config_json or {}),
+                    "active": t.active,
+                }
+                for t in triggers
+            ]
+        except Exception:
+            triggers_list = []
+            logger.warning(
+                "Could not fetch triggers for v2 bundle export (table may not exist yet)",
+                exc_info=True,
+            )
+
+        # Owner team name
+        owner_team_name = None
+        if pipeline.owner_team_id:
+            try:
+                team_result = await session.execute(select(Team).where(Team.id == pipeline.owner_team_id))
+                team = team_result.scalar_one_or_none()
+                if team:
+                    owner_team_name = team.name
+            except Exception:
+                logger.warning("Could not resolve owner_team for v2 bundle export", exc_info=True)
+
+        # Creator email for author field
+        author = str(pipeline.account_id)
+        try:
+            acct_result = await session.execute(select(Account).where(Account.id == pipeline.account_id))
+            creator = acct_result.scalar_one_or_none()
+            if creator:
+                author = creator.email
+        except Exception:
+            logger.warning("Could not resolve creator email for v2 bundle export", exc_info=True)
+
+        # Collect required connector types from agent connector_type_refs
+        connector_type_refs_set: set[str] = set()
+        for a_entry in agents_list:
+            for ref in a_entry.get("connector_type_refs", []):
+                ctid = ref.get("connector_type_id", ref.get("type", ""))
+                if ctid:
+                    connector_type_refs_set.add(ctid)
+
+        # Collect abstract schema names
+        abstract_schema_names_set: set[str] = set()
+        for s_entry in schemas_list:
+            aname = s_entry.get("abstract_name")
+            if aname:
+                abstract_schema_names_set.add(aname)
+
+        bundle_id = str(pipeline.id)
+
+        bundle: dict[str, Any] = {
+            "modulo_workflow": {
+                "id": bundle_id,
+                "name": pipeline.name,
+                "version": "1.0.0",
+                "author": author,
+                "owner_team": owner_team_name,
+                "visibility": pipeline.visibility,
+                "lifecycle_map_ref": None,
+                "composite_template_refs": [],
+                "partial": False,
+                "requires": {
+                    "connector_types": sorted(connector_type_refs_set),
+                    "abstract_schemas": sorted(abstract_schema_names_set),
+                },
+                "triggers": triggers_list,
+                "agents": agents_list,
+                "edges": edges_list,
+                "schemas": schemas_list,
+            }
+        }
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        logger.error("export_pipeline_bundle_v2: failed while building bundle for pipeline %s", pipeline_id)
+        raise
+
+    yaml_str = yaml.safe_dump(bundle, default_flow_style=False, sort_keys=False, allow_unicode=True)
+    logger.info(
+        "Exported v2 bundle for pipeline %s with %d agents, %d edges",
+        pipeline_id,
+        len(agents_list),
+        len(edges_list),
+    )
+    return yaml_str
 
 
 # ---------------------------------------------------------------------------
