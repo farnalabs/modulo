@@ -117,7 +117,10 @@ def test_update_agent_programming_error_returns_501(client: TestClient) -> None:
         patch("modulo.api.routes.agents.get_agent", side_effect=ProgrammingError("statement", {}, "cause")),
         patch("modulo.api.routes.agents.set_rls_org"),
     ):
-        resp = client.patch(f"/api/v1/agents/{_AGENT_ID}", json={"name": "x"})
+        resp = client.patch(
+            f"/api/v1/agents/{_AGENT_ID}",
+            json={"name": "x", "required_environment_capabilities": [], "template_id": None},
+        )
     assert resp.status_code == 501
 
 
