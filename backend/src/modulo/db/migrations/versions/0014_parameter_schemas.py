@@ -57,6 +57,7 @@ def _create_parameter_schemas_table() -> None:
         sa.Column("updated_at", sa.DateTime(timezone=True), server_default=sa.text("now()"), nullable=False),
         sa.Column("account_id", sa.Uuid(), sa.ForeignKey("accounts.id", ondelete="RESTRICT"), nullable=False),
         sa.PrimaryKeyConstraint("id"),
+        sa.UniqueConstraint("organisation_id", "name", name="uq_parameter_schemas_org_name"),
     )
 
 
@@ -95,9 +96,16 @@ def _add_agent_column() -> None:
         sa.Column(
             "parameter_schema_id",
             sa.Uuid(),
-            sa.ForeignKey("parameter_schemas.id", ondelete="RESTRICT"),
             nullable=True,
         ),
+    )
+    op.create_foreign_key(
+        "fk_agents_parameter_schema_id",
+        "agents",
+        "parameter_schemas",
+        ["parameter_schema_id"],
+        ["id"],
+        ondelete="RESTRICT",
     )
 
 

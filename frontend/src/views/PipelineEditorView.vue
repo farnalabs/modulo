@@ -1034,9 +1034,9 @@ async function loadParamSets() {
     const resp = await api.GET('/api/v1/parameter-schemas/{id}/sets', {
       params: { path: { id: schema.id }, query: { page: 1, page_size: 100 } },
     })
-    if (resp.data) paramSets.value = (resp.data as any)?.items ?? []
-  } catch {
-    // non-critical
+    if (resp.data) paramSets.value = (resp.data as any) ?? []
+  } catch (e) {
+    console.warn('Failed to load param sets:', e)
   }
 }
 
@@ -1046,8 +1046,8 @@ async function loadParamSchemas() {
       params: { query: { page: 1, page_size: 100 } },
     })
     if (resp.data) paramSchemas.value = (resp.data as any)?.items ?? []
-  } catch {
-    // non-critical
+  } catch (e) {
+    console.warn('Failed to load param schemas:', e)
   }
 }
 

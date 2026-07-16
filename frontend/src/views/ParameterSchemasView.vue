@@ -879,7 +879,7 @@ async function loadSets() {
       setsError.value = formatApiError(resp.error)
       return
     }
-    sets.value = (resp.data as any)?.items ?? []
+    sets.value = (resp.data as any) ?? []
   } catch (err: any) {
     setsError.value = formatApiError(err)
   } finally {

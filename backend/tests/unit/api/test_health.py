@@ -163,4 +163,3 @@ class TestHttpTimeout:
         body = resp.json()
         assert body["status"] == "unavailable"
         assert "timeout" in body["checks"]["database"]["detail"].lower()
-

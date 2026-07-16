@@ -829,6 +829,7 @@ class GraphValidator:
         for node in nodes:
             node_id = _string_or_default(node.get("id"))
             raw_schema_id = node.get("parameter_schema_id")
+            schema_id: uuid.UUID | None = None
             if raw_schema_id is not None:
                 schema_id = try_parse_uuid(raw_schema_id)
                 if schema_id is None:
