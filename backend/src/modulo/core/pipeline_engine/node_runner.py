@@ -1,4 +1,4 @@
-"""Factory that builds a cancellable LangGraph node function from a node definition.
+﻿"""Factory that builds a cancellable LangGraph node function from a node definition.
 
 Node types:
   - standard (agent):  agent/connector node; runs the node body, then checks for
@@ -26,14 +26,14 @@ Autonomy integration:
   - ``notify_on_complete``:         gate auto-approves and records an artifact;
                                     no interrupt is raised.
   - ``fully_autonomous``:           gate is silently skipped.
-  - ``human_only`` on gate config:  overrides autonomy — always interrupts.
+  - ``human_only`` on gate config:  overrides autonomy â€” always interrupts.
 
-Conditional gating (§8.17):
+Conditional gating (Â§8.17):
   - ``condition`` on ``hitl_gate_config``:  JMESPath expression evaluated
     against the current state (upstream node output).  If falsy the gate is
     skipped.  If truthy or absent the gate proceeds to autonomy checks.
 
-Eval-before-interrupt (§8.17):
+Eval-before-interrupt (Â§8.17):
   - ``eval_definitions``:  list of ``EvalDefinition`` DTOs scoped to the
     upstream node.  Evaluated *after* the condition check but *before* the
     interrupt.  If any eval with ``failure_behaviour='block'`` fails, an
@@ -229,7 +229,7 @@ def make_hitl_gate_fn(
     required_team_id: str | None = hitl_gate_config.get("required_team_id")
 
     async def _hitl_gate(state: dict[str, Any]) -> dict[str, Any]:
-        # --- Resume check — always first so condition/evals aren't re-evaluated. ---
+        # --- Resume check â€” always first so condition/evals aren't re-evaluated. ---
         decision = state.get("_hitl_decision")
         if decision is not None:
             action = decision.get("action") if isinstance(decision, dict) else None
@@ -266,7 +266,7 @@ def make_hitl_gate_fn(
                 gate_result["output"] = decision["modified_output"]
             return gate_result
 
-        # --- Conditional gate (§8.17) — evaluate condition against state. ---
+        # --- Conditional gate (Â§8.17) â€” evaluate condition against state. ---
         if condition_expr:
             try:
                 compiled = jmespath.compile(condition_expr)
@@ -275,7 +275,7 @@ def make_hitl_gate_fn(
                 raise ValueError(f"Invalid HITL gate condition expression: {condition_expr}") from None
             result = compiled.search(state)
             if not _is_truthy(result):
-                # Condition falsy — skip the gate entirely.
+                # Condition falsy â€” skip the gate entirely.
                 return {
                     "artifacts": [
                         {
@@ -287,7 +287,7 @@ def make_hitl_gate_fn(
                     ],
                 }
 
-        # --- Eval-before-interrupt (§8.17) — run node-scoped evals. ---
+        # --- Eval-before-interrupt (Â§8.17) â€” run node-scoped evals. ---
         eval_results_by_name: dict[str, EvalResult] = {}
         if eval_definitions:
             engine = EvalEngine()
@@ -333,7 +333,7 @@ def make_hitl_gate_fn(
                 except Exception:
                     _log.exception("hitl_gate.persist_eval_failed")
 
-        # --- Eval-reference condition check (§8.17 v1) — evaluate condition
+        # --- Eval-reference condition check (Â§8.17 v1) â€” evaluate condition
         # against captured eval results. ---
         if eval_condition_raw is not None and eval_results_by_name:
             eval_name: str = eval_condition_raw.get("eval_name", "")
@@ -372,7 +372,7 @@ def make_hitl_gate_fn(
         autonomy = effective_autonomy_level(pipeline_default, run_context)
         human_only_effective: bool = human_only
 
-        # human_only overrides everything — always interrupt.
+        # human_only overrides everything â€” always interrupt.
         if human_only_effective:
             pass
         elif should_skip_hitl_gate(autonomy):
@@ -398,7 +398,7 @@ def make_hitl_gate_fn(
                 ],
             }
 
-        # First invocation — store config and interrupt.
+        # First invocation â€” store config and interrupt.
         hitl_gates: list[dict[str, Any]] = list(state.get("_hitl_gates") or [])
         hitl_gates.append(hitl_gate_config)
         state["_hitl_gates"] = hitl_gates
@@ -461,7 +461,7 @@ def make_manual_node_fn(
                 "manual_output": manual_output,
             }
 
-        # First invocation — record pending artifact and interrupt.
+        # First invocation â€” record pending artifact and interrupt.
         artifacts: list[dict[str, Any]] = list(state.get("artifacts") or [])
         artifacts.append({"node_id": node_id, "status": "awaiting_human"})
         state["artifacts"] = artifacts
@@ -568,19 +568,19 @@ def make_sandbox_agent_fn(
     agent runtime in an E2B sandbox.
 
     The node_def must have:
-      - agent_prompt: str — Jinja2 template rendered against state
-      - template_id: str — E2B sandbox template ID (default "base")
-      - agent_command: str — command to run inside the sandbox
+      - agent_prompt: str â€” Jinja2 template rendered against state
+      - template_id: str â€” E2B sandbox template ID (default "base")
+      - agent_command: str â€” command to run inside the sandbox
         (default: "claude --output-json /home/user/prompt.md")
-      - output_schema_json: dict | None — optional output schema validation
-      - timeout_seconds: int — max wall-clock time (default 600)
-      - context_files: dict[str, str] — optional files to write into the sandbox
+      - output_schema_json: dict | None â€” optional output schema validation
+      - timeout_seconds: int â€” max wall-clock time (default 600)
+      - context_files: dict[str, str] â€” optional files to write into the sandbox
         keyed by path
 
     The node creates an E2B sandbox, writes the rendered prompt + context files,
     runs the external agent, reads structured output from /home/user/output.json,
     and tears down the sandbox. Wall-clock time and exit code are captured
-    natively — even on failure.
+    natively â€” even on failure.
     """
     node_id: str = str(node_def["id"])
     agent_prompt_template: str = node_def.get("agent_prompt") or ""
@@ -725,6 +725,8 @@ def make_sandbox_agent_fn(
 
         except Exception:
             elapsed = _time.monotonic() - start_time
+            import traceback
+            print(f'SANDBOX_AGENT_ERROR: {traceback.format_exc()}', flush=True)
             _log.exception(
                 "sandbox_agent.execution_failed",
                 extra={"node_id": node_id, "elapsed_ms": int(elapsed * 1000)},
