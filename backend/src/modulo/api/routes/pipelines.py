@@ -1,4 +1,4 @@
-"""Pipeline CRUD REST API.
+﻿"""Pipeline CRUD REST API.
 
 Alpha: Graph replacement uses row-level locking (SELECT ... FOR UPDATE) in
 replace_pipeline_graph. No advisory lock is deployed; the row lock on the
@@ -152,7 +152,7 @@ class ConnectorBinding(BaseModel):
 
 class PipelineGraphNode(BaseModel):
     id: uuid.UUID
-    node_type: Literal["agent", "manual", "composite"] = "agent"
+    node_type: Literal["agent", "manual", "composite", "sandbox_agent"] = "agent"
     agent_id: uuid.UUID | None = None
     position: GraphPosition
     connector_binding: ConnectorBinding | None = None
@@ -166,6 +166,9 @@ class PipelineGraphNode(BaseModel):
     composite_output_mapping: dict[str, Any] | None = None
     parameter_set_id: uuid.UUID | None = None
     parameter_overrides: dict[str, Any] | None = None
+    template_id: str | None = None
+    agent_command: str | None = None
+    agent_prompt: str | None = None
 
     @model_validator(mode="after")
     def validate_node_type(self) -> "PipelineGraphNode":
@@ -766,7 +769,7 @@ async def clone_pipeline_endpoint(
             await set_rls_org(session, principal.organisation_id)
             await set_rls_user_context(session, principal.account_id, principal.org_role)
 
-            # Step 1 — validate source exists
+            # Step 1 â€” validate source exists
             _log.info("Step 1/4: verifying source pipeline %s exists", pipeline_id)
             source = await get_pipeline(session, pipeline_id)
             if source is None:
@@ -776,7 +779,7 @@ async def clone_pipeline_endpoint(
                     detail=f"pipeline_copy_failed: Source pipeline not found [pipeline_id: {pipeline_id}]",
                 )
 
-            # Step 2 — validate name availability
+            # Step 2 â€” validate name availability
             target_name = req.name or f"Copy of {source.name}"
             _log.info("Step 2/4: checking name '%s' is available", target_name)
             if not await check_pipeline_name_available(session, principal.organisation_id, target_name):
@@ -788,7 +791,7 @@ async def clone_pipeline_endpoint(
                     ),
                 )
 
-            # Step 3 — execute copy
+            # Step 3 â€” execute copy
             _log.info("Step 3/4: cloning pipeline %s -> '%s'", pipeline_id, target_name)
             cloned = await clone_pipeline(
                 session,
@@ -806,7 +809,7 @@ async def clone_pipeline_endpoint(
                     ),
                 )
 
-            # Step 4 — audit event
+            # Step 4 â€” audit event
             _log.info("Step 4/4: recording audit event for clone %s -> %s", pipeline_id, cloned.id)
             await append_audit_event(
                 session,
@@ -1322,7 +1325,7 @@ async def move_pipeline_to_folder_endpoint(
 
 
 # ---------------------------------------------------------------------------
-# Node conversion: manual ↔ agent
+# Node conversion: manual â†” agent
 # ---------------------------------------------------------------------------
 
 
