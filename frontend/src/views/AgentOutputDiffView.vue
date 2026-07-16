@@ -15,7 +15,7 @@
               </SelectTrigger>
               <SelectContent>
                 <SelectItem v-for="run in recentRuns" :key="run.id" :value="run.id">
-                  {{ run.pipeline_name }} — {{ run.status }} ({{ run.created_at }})
+                  {{ run.pipeline_name }} — <span class="capitalize">{{ run.status }}</span> ({{ run.created_at }})
                 </SelectItem>
               </SelectContent>
             </Select>
@@ -47,7 +47,7 @@
               </SelectTrigger>
               <SelectContent>
                 <SelectItem v-for="run in recentRuns" :key="run.id" :value="run.id">
-                  {{ run.pipeline_name }} — {{ run.status }} ({{ run.created_at }})
+                  {{ run.pipeline_name }} — <span class="capitalize">{{ run.status }}</span> ({{ run.created_at }})
                 </SelectItem>
               </SelectContent>
             </Select>
@@ -229,8 +229,9 @@ const { loading, error, mutate: compare } = useMutation(async () => {
 async function handleCompare() {
   try {
     await compare()
-  } catch {
+  } catch (e) {
     // useMutation exposes the error for the page-level alert.
+    console.warn('Compare failed', e)
   }
 }
 </script>

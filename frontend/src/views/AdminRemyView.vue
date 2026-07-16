@@ -275,7 +275,7 @@
       >
         <div class="space-y-4">
           <div>
-            <textarea aria-label="$t("
+            <textarea
               v-model="systemPrompt"
               rows="8"
               class="w-full rounded-lg border border-input bg-background px-3 py-2 font-mono text-sm"
@@ -310,7 +310,7 @@
 
         <div class="space-y-4">
           <div>
-            <textarea aria-label="$t("
+            <textarea
               v-model="guidance"
               rows="5"
               class="w-full rounded-lg border border-input bg-background px-3 py-2 font-mono text-sm"
