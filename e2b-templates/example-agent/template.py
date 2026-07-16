@@ -6,9 +6,10 @@ b = t.from_template("base")
 
 b.apt_install(["jq"])
 b.pip_install(["requests", "pyyaml"])
+b.npm_install(["@opencode-ai/cli"])
 b.copy("modulo-wrap.sh", "/home/user/modulo-wrap.sh")
-b.run_cmd("cp /home/user/modulo-wrap.sh /home/user/review.py")  # copy and we'll fix content later
+b.copy("review.py", "/home/user/review.py")
 b.run_cmd("chmod +x /home/user/modulo-wrap.sh")
 
-result = t.build(b, name="modulo-agent", tags=["modulo", "agent"])
+result = t.build(b, name="modulo-agent-lildax", tags=["modulo", "agent", "lildax"])
 print(f"Built: {result.template_id}")
