@@ -11,7 +11,7 @@
               <SelectValue :placeholder="$t('views.AdminErrorsView.all_statuses')" />
             </SelectTrigger>
             <SelectContent>
-              <SelectItem value="">{{ $t('views.AdminErrorsView.all_statuses') }}</SelectItem>
+              <SelectItem value="__all__">{{ $t('views.AdminErrorsView.all_statuses') }}</SelectItem>
               <SelectItem value="delivered">Delivered</SelectItem>
               <SelectItem value="failed">Failed</SelectItem>
               <SelectItem value="dead_lettered">{{ $t('views.AdminNotificationDeliveryLogView.dead_lettered') }}</SelectItem>
@@ -158,7 +158,7 @@ const { loading, error, data: responseData, load: loadDeliveries } = useDataFetc
   async () => {
     const params: Record<string, unknown> = { limit: 50 }
     if (currentCursor.value) params.cursor = currentCursor.value
-    if (filterStatus.value) params.status = filterStatus.value
+    if (filterStatus.value !== '__all__') params.status = filterStatus.value
     if (filterDateFrom.value) params.from = filterDateFrom.value
     if (filterDateTo.value) params.to = filterDateTo.value
     const res = await api.GET('/api/v1/admin/notifications/deliveries', {
@@ -174,7 +174,7 @@ const { loading, error, data: responseData, load: loadDeliveries } = useDataFetc
 const items = computed(() => (responseData.value as any)?.items ?? [])
 const total = computed(() => (responseData.value as any)?.total ?? 0)
 
-const filterStatus = ref('')
+const filterStatus = ref('__all__')
 const filterDateFrom = ref('')
 const filterDateTo = ref('')
 
@@ -218,7 +218,7 @@ function applyFilters() {
 }
 
 function resetFilters() {
-  filterStatus.value = ''
+  filterStatus.value = '__all__'
   filterDateFrom.value = ''
   filterDateTo.value = ''
   currentCursor.value = null
