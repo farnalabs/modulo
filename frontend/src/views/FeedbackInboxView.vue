@@ -163,7 +163,7 @@
 
                 <div>
                   <h3 class="mb-2 text-sm font-semibold text-muted-foreground uppercase tracking-wider">{{ $t('views.FeedbackInboxView.annotation_heading') }}</h3>
-                  <textarea aria-label="$t("
+                  <textarea
                     v-model="annotations[record.id]"
                     rows="3"
                     maxlength="2000"

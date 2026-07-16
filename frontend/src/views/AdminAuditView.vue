@@ -78,7 +78,7 @@
         @update:filter="(key, value) => { if (key === 'event_type') filterEventType = value }"
       >
         <template #after>
-          <input aria-label="$t("
+          <input
             v-model="filterActor"
             type="text"
             :placeholder="$t('views.AdminAuditView.actor_id')"

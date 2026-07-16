@@ -201,8 +201,8 @@ async function dismissAnomaly(id: string) {
   try {
     await (api as any).POST(`/api/v1/admin/costs/anomalies/dismiss/${id}`)
     await loadAnomalies()
-  } catch {
-    anomaliesError.value = 'Failed to dismiss anomaly'
+  } catch (e) {
+    anomaliesError.value = `Failed to dismiss anomaly: ${formatApiError(e)}`
   } finally {
     dismissLoading.value[id] = false
   }
