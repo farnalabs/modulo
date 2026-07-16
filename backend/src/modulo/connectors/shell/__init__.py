@@ -46,17 +46,6 @@ class ShellRuntimeProvider(Protocol):
     ) -> dict[str, Any]: ...
 
 
-warnings.warn(
-    "ShellConnector is deprecated. The Modulo agent execution environment model "
-    "(ADR 001) has been superseded by the Agent Dispatch Model (ADR 003). "
-    "Modulo no longer runs agents inside sandboxes — it dispatches work to external "
-    "agent runtimes via the sandbox_agent node type. "
-    "ShellConnector will be removed in a future release.",
-    DeprecationWarning,
-    stacklevel=2,
-)
-
-
 class ShellConnector(ConnectorBase):
     """Execute shell commands and manage files inside a workspace lease.
 
@@ -90,6 +79,11 @@ class ShellConnector(ConnectorBase):
         environment_profile_id: uuid.UUID | None = None,
         workspace_lease_id: uuid.UUID | None = None,
     ) -> None:
+        warnings.warn(
+            "ShellConnector is deprecated (ADR 003). Use sandbox_agent node type instead.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
         self._runtime_provider = runtime_provider
         self._allowed_commands = frozenset(allowed_commands or [])
         self._runtime_provider_hub = runtime_provider_hub
