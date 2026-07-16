@@ -1,4 +1,4 @@
-﻿from e2b import Template
+from e2b import Template
 import os
 
 t = Template(file_context_path=os.path.dirname(os.path.abspath(__file__)))
@@ -11,5 +11,5 @@ b.copy("modulo-wrap.sh", "/home/user/modulo-wrap.sh")
 b.copy("review.py", "/home/user/review.py")
 b.run_cmd("chmod +x /home/user/modulo-wrap.sh")
 
-result = t.build(b, name="modulo-agent-lildax", tags=["modulo", "agent", "lildax"])
+result = t.build(b, name="modulo-agent-lildax", tags=["modulo", "agent", "lildax", "default"])
 print(f"Built: {result.template_id}")
