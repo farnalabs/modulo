@@ -5,8 +5,9 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-
 from modulo.connectors.base import ConnectorPayload, ConnectorQuery
+
+pytestmark = pytest.mark.filterwarnings("ignore::DeprecationWarning")
 from modulo.connectors.shell import ShellConnector
 from modulo.core.runtime_provider import ExecResult, WorkspaceSpec
 from modulo.core.runtime_provider.docker import DockerRuntimeProvider
