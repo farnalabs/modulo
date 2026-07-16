@@ -97,11 +97,10 @@ sensitive data.
 - [x] Node not found returns 404
 - [x] Agent not found returns 404
 - [x] Auth required (401/403)
-- [ ] 422 validation errors for invalid input parameters
+- [x] 422 validation errors for invalid input parameters
 
 ## Known Gaps
 - No Agent editor UI toggle for prompt_always_visible
-- No website docs page for prompt-reveal API
 - 30-second TTL on revealed prompt DOM value is client-side only
   (PRD §8.9 calls for Redis-backed token mechanism — only the DOM timer exists)
 
@@ -137,3 +136,8 @@ sensitive data.
 - Added 2 unit tests (SQLAlchemyError→503, Exception→500) to
   `test_prompt_reveal_programming_error.py`. Updated product map Error Handling section
   with 3 new [x] checkboxes. All 30 prompt reveal tests pass.
+
+### 2026-07-16 — Cross-cutting QA (feat-pipelines-prompt-reveal, index 396)
+- **Finding 1 (MAJOR)**: Missing `asyncio.CancelledError` guard in `reveal_node_prompt` — inner `except Exception` intercepted CancelledError before decorator-level guard. Fixed: added `except asyncio.CancelledError: raise` before IntegrityError handler.
+- **Finding 2 (MINOR)**: Stale Known Gap "No website docs page" — docs stub already exists. Removed from Known Gaps.
+- **Finding 3 (MINOR)**: Unchecked behaviour `[ ] 422 validation` — FastAPI + decorator already handles this. Marked [x].

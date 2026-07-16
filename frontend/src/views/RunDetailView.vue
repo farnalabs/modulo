@@ -469,6 +469,7 @@ async function revealPrompt(nodeName: string) {
       },
     )
     if (err || !data) {
+      if (typeof err === 'object' && err !== null && 'name' in err && (err as Record<string, unknown>).name === 'AbortError') throw err
       revealedPrompts.value = { ...revealedPrompts.value, [nodeName]: null }
       const detail = (err as Record<string, unknown>)?.detail
       error.value = `${t('views.RunDetailView.prompt_reveal_error')} ${detail ? String(detail) : ''}`
