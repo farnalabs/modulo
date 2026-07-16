@@ -138,5 +138,3 @@ async def test_live_graph_becomes_executable_snapshot_with_dependency_pins() -> 
     assert "credentials" not in repr(snapshot.model_backend_pins_json)
     session.add.assert_called_once_with(snapshot)
     session.flush.assert_awaited_once()
-
-

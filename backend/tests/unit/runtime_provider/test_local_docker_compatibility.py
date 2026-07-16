@@ -5,6 +5,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+
 from modulo.connectors.base import ConnectorPayload, ConnectorQuery
 
 pytestmark = pytest.mark.filterwarnings("ignore::DeprecationWarning")

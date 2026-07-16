@@ -36,6 +36,7 @@ async def create_pipeline(
     node_timeout_seconds: int = 300,
     run_context_defaults: dict[str, Any] | None = None,
     default_autonomy_level: str = "manual_approval",
+    max_duration_seconds: int | None = None,
 ) -> Pipeline:
     pipeline = Pipeline(
         organisation_id=org_id,
@@ -49,6 +50,7 @@ async def create_pipeline(
         node_timeout_seconds=node_timeout_seconds,
         run_context_defaults=run_context_defaults or {},
         default_autonomy_level=default_autonomy_level,
+        max_duration_seconds=max_duration_seconds,
     )
     session.add(pipeline)
     await session.flush()

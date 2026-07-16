@@ -464,6 +464,7 @@ async def create_pipeline_endpoint(
                 node_timeout_seconds=req.node_timeout_seconds,
                 run_context_defaults=req.run_context_defaults,
                 default_autonomy_level=req.default_autonomy_level,
+                max_duration_seconds=req.max_duration_seconds,
             )
     except ProgrammingError:
         logger.exception("routes.pipelines")
