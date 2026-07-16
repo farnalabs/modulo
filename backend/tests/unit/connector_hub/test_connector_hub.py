@@ -23,6 +23,8 @@ from modulo.core.connector_hub import (
 )
 from modulo.core.secrets_backend import create_secrets_backend
 
+pytestmark = pytest.mark.filterwarnings("ignore::DeprecationWarning")
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------

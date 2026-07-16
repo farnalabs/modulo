@@ -64,6 +64,7 @@ class TestCreateCompositeTemplate:
                 parameter_ports_json=[],
                 input_schema_id=None,
                 output_schema_id=None,
+                parameter_schema_id=None,
                 version="1.0.0",
             )
             mock_session.add.assert_called_once()

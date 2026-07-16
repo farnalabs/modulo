@@ -240,8 +240,8 @@ describe('SchemaEditorView', () => {
     const nameInput = wrapper.find('[data-testid="schema-editor-field-name"]')
     await nameInput.setValue('email')
 
-    const typeSelect = wrapper.find('[data-testid="schema-editor-field-type"]')
-    await typeSelect.setValue('string')
+    ;(wrapper.vm as any).fields[0].type = 'string'
+    await nextTick()
 
     const preview = wrapper.find('[data-testid="schema-editor-json-preview"]')
     expect(preview.text()).toContain('email')

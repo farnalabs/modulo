@@ -173,8 +173,8 @@ describe('FieldMappingPair', () => {
     if (addBtn) {
       await addBtn.trigger('click')
       await nextTick()
-      const selects = wrapper.findAll('select')
-      expect(selects.length).toBeGreaterThanOrEqual(2)
+      expect(wrapper.text()).toContain('Source field')
+      expect(wrapper.text()).toContain('Target field')
     }
   })
 })

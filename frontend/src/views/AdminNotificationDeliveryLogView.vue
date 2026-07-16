@@ -11,7 +11,7 @@
               <SelectValue :placeholder="$t('views.AdminErrorsView.all_statuses')" />
             </SelectTrigger>
             <SelectContent>
-              <SelectItem value="">{{ $t('views.AdminErrorsView.all_statuses') }}</SelectItem>
+              <SelectItem value="__all__">{{ $t('views.AdminErrorsView.all_statuses') }}</SelectItem>
               <SelectItem value="delivered">Delivered</SelectItem>
               <SelectItem value="failed">Failed</SelectItem>
               <SelectItem value="dead_lettered">{{ $t('views.AdminNotificationDeliveryLogView.dead_lettered') }}</SelectItem>
@@ -26,7 +26,7 @@
               <SelectValue :placeholder="$t('views.AdminNotificationDeliveryLogView.all_types')" />
             </SelectTrigger>
             <SelectContent>
-              <SelectItem value="">{{ $t('views.AdminNotificationDeliveryLogView.all_types') }}</SelectItem>
+              <SelectItem value="__all__">{{ $t('views.AdminNotificationDeliveryLogView.all_types') }}</SelectItem>
               <SelectItem value="hitl_awaiting">{{ $t('views.AdminNotificationDeliveryLogView.hitl_awaiting') }}</SelectItem>
               <SelectItem value="run_failed">{{ $t('views.AdminNotificationDeliveryLogView.run_failed') }}</SelectItem>
               <SelectItem value="claim_expired">{{ $t('views.AdminNotificationDeliveryLogView.claim_expired') }}</SelectItem>
@@ -267,8 +267,8 @@ interface DeliveryLogPage {
 type DeliveryLogQuery = NonNullable<paths['/api/v1/admin/notifications/deliveries']['get']>['parameters']['query']
 
 const cursor = ref<string | null>(null)
-const filterStatus = ref('')
-const filterEventType = ref('')
+const filterStatus = ref('__all__')
+const filterEventType = ref('__all__')
 const filterDateFrom = ref('')
 const filterDateTo = ref('')
 
@@ -276,8 +276,8 @@ const { data: deliveriesData, loading, error, load: loadDeliveries } = useDataFe
   async () => {
     const params: DeliveryLogQuery = { limit: 50 }
     if (cursor.value) params.cursor = cursor.value
-    if (filterStatus.value) params.status = filterStatus.value
-    if (filterEventType.value) params.event_type = filterEventType.value
+    if (filterStatus.value !== '__all__') params.status = filterStatus.value
+    if (filterEventType.value !== '__all__') params.event_type = filterEventType.value
     if (filterDateFrom.value) params.from = filterDateFrom.value
     if (filterDateTo.value) params.to = filterDateTo.value
     const response = await api.GET('/api/v1/admin/notifications/deliveries', { params: { query: params } })
@@ -347,8 +347,8 @@ function applyFilters() {
 }
 
 function resetFilters() {
-  filterStatus.value = ''
-  filterEventType.value = ''
+  filterStatus.value = '__all__'
+  filterEventType.value = '__all__'
   filterDateFrom.value = ''
   filterDateTo.value = ''
   cursor.value = null
@@ -358,7 +358,7 @@ function resetFilters() {
 
 function showDeadLettered() {
   filterStatus.value = 'dead_lettered'
-  filterEventType.value = ''
+  filterEventType.value = '__all__'
   filterDateFrom.value = ''
   filterDateTo.value = ''
   cursor.value = null

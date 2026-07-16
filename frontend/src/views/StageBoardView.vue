@@ -46,7 +46,7 @@
               <SelectValue placeholder="All Teams" />
             </SelectTrigger>
             <SelectContent>
-              <SelectItem value="">All Teams</SelectItem>
+              <SelectItem value="__all__">All Teams</SelectItem>
               <SelectItem v-for="t in teams" :key="t.id" :value="t.id">{{ t.name }}</SelectItem>
             </SelectContent>
           </Select>
@@ -58,7 +58,7 @@
               <SelectValue placeholder="All Statuses" />
             </SelectTrigger>
             <SelectContent>
-              <SelectItem value="">All Statuses</SelectItem>
+              <SelectItem value="__all__">All Statuses</SelectItem>
               <SelectItem value="running">Running</SelectItem>
               <SelectItem value="idle">Idle</SelectItem>
               <SelectItem value="failed">Failed</SelectItem>
@@ -456,8 +456,8 @@ async function fetchWithTimeout<T>(factory: (signal: AbortSignal) => Promise<T>,
 const selectedStageId = ref<string | null>(null)
 const selectedPipeline = ref<any | null>(null)
 
-const teamFilter = ref('')
-const statusFilter = ref('')
+const teamFilter = ref('__all__')
+const statusFilter = ref('__all__')
 const dateFrom = ref('')
 const dateTo = ref('')
 
@@ -525,14 +525,14 @@ function stageName(stageId: string | null | undefined): string {
 }
 
 const filteredStages = computed(() => {
-  if (!teamFilter.value) return stages.value
+  if (teamFilter.value === '__all__') return stages.value
   return stages.value.filter(s => s.owner_team_id === teamFilter.value)
 })
 
 const filteredPipelines = computed(() => {
   return allPipelines.value.filter(p => {
-    if (teamFilter.value && p.owner_team_id !== teamFilter.value) return false
-    if (statusFilter.value && p.status !== statusFilter.value) return false
+    if (teamFilter.value !== '__all__' && p.owner_team_id !== teamFilter.value) return false
+    if (statusFilter.value !== '__all__' && p.status !== statusFilter.value) return false
     if (dateFrom.value && p.created_at && new Date(p.created_at) < new Date(dateFrom.value)) return false
     if (dateTo.value && p.created_at && new Date(p.created_at) > new Date(dateTo.value + 'T23:59:59')) return false
     return true

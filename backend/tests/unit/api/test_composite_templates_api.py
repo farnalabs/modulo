@@ -33,6 +33,7 @@ def _make_settings() -> Settings:
 def _make_template(**overrides: object) -> MagicMock:
     t = MagicMock()
     t.id = overrides.get("id", _TEMPLATE_ID)
+    t.parameter_schema_id = overrides.get("parameter_schema_id")
     t.organisation_id = overrides.get("organisation_id", _ORG_ID)
     t.name = overrides.get("name", "Devil's Advocate")
     t.description = overrides.get("description")

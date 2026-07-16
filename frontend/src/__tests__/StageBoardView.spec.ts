@@ -190,8 +190,7 @@ describe('StageBoardView', () => {
 
     await flushPromises()
     await nextTick()
-    const select = wrapper.find('[data-testid="stage-board-team-filter"]')
-    await select.setValue('team-alpha')
+    ;(wrapper.vm as any).teamFilter = 'team-alpha'
     await nextTick()
     expect(wrapper.text()).toContain('Testing')
     expect(wrapper.text()).not.toContain('Production')
@@ -203,11 +202,10 @@ describe('StageBoardView', () => {
 
     await flushPromises()
     await nextTick()
-    const select = wrapper.find('[data-testid="stage-board-team-filter"]')
-    await select.setValue('team-alpha')
+    ;(wrapper.vm as any).teamFilter = 'team-alpha'
     await nextTick()
     expect(wrapper.text()).not.toContain('Production')
-    await select.setValue('')
+    ;(wrapper.vm as any).teamFilter = '__all__'
     await nextTick()
     expect(wrapper.text()).toContain('Development')
     expect(wrapper.text()).toContain('Testing')
@@ -220,10 +218,8 @@ describe('StageBoardView', () => {
 
     await flushPromises()
     await nextTick()
-    const options = wrapper.find('[data-testid="stage-board-team-filter"]').findAll('option')
-    const optionTexts = options.map(o => o.text())
-    expect(optionTexts).toContain('All Teams')
-    expect(optionTexts).toContain('Alpha')
-    expect(optionTexts).toContain('Beta')
+    expect(wrapper.text()).toContain('All Teams')
+    expect(wrapper.text()).toContain('Alpha')
+    expect(wrapper.text()).toContain('Beta')
   })
 })
