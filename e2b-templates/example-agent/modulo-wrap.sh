@@ -1,6 +1,25 @@
 ﻿#!/bin/bash
 set -euo pipefail
 
+# Set up opencode credentials from APP_MODULO_OPENCODE_API_KEY if available
+if [ -n "${APP_MODULO_OPENCODE_API_KEY:-}" ]; then
+    OPENCODE_AUTH_DIR="${HOME}/.local/share/opencode"
+    mkdir -p "${OPENCODE_AUTH_DIR}"
+    cat > "${OPENCODE_AUTH_DIR}/auth.json" << EOF
+{
+  "opencode": {
+    "type": "api",
+    "key": "${APP_MODULO_OPENCODE_API_KEY}"
+  },
+  "opencode-go": {
+    "type": "api",
+    "key": "${APP_MODULO_OPENCODE_API_KEY}"
+  }
+}
+EOF
+    echo "[modulo-wrap] OpenCode credentials written from APP_MODULO_OPENCODE_API_KEY"
+fi
+
 # modulo-wrap — Entrypoint wrapper for Modulo-compatible E2B agents
 # Reads the agent command from environment or uses default, then wraps
 # execution with telemetry capture and structured output contract.
