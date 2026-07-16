@@ -108,6 +108,21 @@
         <div><span class="font-medium text-foreground">{{ $t('views.RunDetailView.completed') }}</span> {{ runTimestamps.completed }}</div>
       </div>
 
+      <!-- Cancel button for running/pending runs -->
+      <div v-if="run.status === 'running' || run.status === 'pending'" class="my-4">
+        <button
+          :disabled="cancelling"
+          data-testid="run-detail-cancel"
+          class="inline-flex items-center gap-2 rounded-lg border border-destructive/50 bg-destructive/10 px-4 py-2 text-sm font-medium text-destructive hover:bg-destructive/20 disabled:opacity-50"
+          @click="cancelRun"
+        >
+          <svg v-if="cancelling" class="h-4 w-4 animate-spin" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"/><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"/></svg>
+          <svg v-else xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="8" y1="12" x2="16" y2="12"/></svg>
+          {{ cancelling ? 'Stopping...' : 'Stop Run' }}
+        </button>
+        <span v-if="cancelError" class="ml-3 text-xs text-destructive">{{ cancelError }}</span>
+      </div>
+
       <!-- Trace ID -->
       <div v-if="run.trace_id" class="flex items-center gap-2">
         <span class="text-xs text-muted-foreground">{{ $t('views.RunDetailView.otel_trace_id') }}</span>
@@ -374,6 +389,8 @@ const promptLoading = ref(new Set<string>())
 const revealedPrompts = ref<Record<string, null | { prompt: string; messages: { role: string; content: string }[]; tokenCount: number; promptAlwaysVisible: boolean }>>({})
 const selectedPrompt = ref<{ nodeName: string; prompt: string; tokenCount: number | null } | null>(null)
 const workspaceLease = ref<WorkspaceLeaseInfo | null>(null)
+const cancelling = ref(false)
+const cancelError = ref<string | null>(null)
 const pendingGates = ref<components['schemas']['GateResponse'][]>([])
 const hitlLoading = ref(false)
 const claimToken = ref<string | null>(null)
@@ -644,6 +661,31 @@ async function claimGate(gate: components['schemas']['GateResponse']) {
     hitlMessage.value = { type: 'error', text: `Claim failed: ${formatApiError(e)}` }
   } finally {
     claimLoading.value = false
+  }
+}
+
+async function cancelRun() {
+  const runId = route.params.id as string
+  if (!runId) return
+  cancelling.value = true
+  cancelError.value = null
+  try {
+    const { error: err } = await api.POST('/api/v1/runs/{run_id}/cancel', {
+      params: { path: { run_id: runId } },
+    })
+    if (err) {
+      cancelError.value = `Failed to cancel: ${formatApiError(err)}`
+    } else {
+      if (run.value) run.value.status = 'cancelled'
+      if (pollInterval.value) {
+        clearInterval(pollInterval.value)
+        pollInterval.value = null
+      }
+    }
+  } catch (e: unknown) {
+    cancelError.value = `Failed to cancel: ${formatApiError(e)}`
+  } finally {
+    cancelling.value = false
   }
 }
 

@@ -1,4 +1,4 @@
-﻿"""Pipeline CRUD REST API.
+"""Pipeline CRUD REST API.
 
 Alpha: Graph replacement uses row-level locking (SELECT ... FOR UPDATE) in
 replace_pipeline_graph. No advisory lock is deployed; the row lock on the
@@ -83,6 +83,7 @@ class PipelineCreate(BaseModel):
     node_timeout_seconds: int = Field(default=300, ge=1)
     run_context_defaults: dict[str, Any] = Field(default_factory=dict)
     default_autonomy_level: str = "manual_approval"
+    max_duration_seconds: int | None = Field(None, ge=1)
 
     @model_validator(mode="after")
     def _validate_team_visibility(self) -> "PipelineCreate":
@@ -101,6 +102,7 @@ class PipelineUpdate(BaseModel):
     node_timeout_seconds: int | None = Field(None, ge=1)
     run_context_defaults: dict[str, Any] | None = None
     default_autonomy_level: str | None = None
+    max_duration_seconds: int | None = Field(None, ge=1)
 
     @model_validator(mode="after")
     def _validate_team_visibility(self) -> "PipelineUpdate":
@@ -120,6 +122,7 @@ class PipelineResponse(BaseModel):
     node_timeout_seconds: int
     run_context_defaults: dict[str, Any]
     default_autonomy_level: str | None = None
+    max_duration_seconds: int | None = None
     snapshot_count: int = 0
     archived_at: datetime | None = None
     owner_team_id: uuid.UUID | None = None
