@@ -21,98 +21,6 @@
 
     <template v-else-if="summary">
 
-      <!-- Config warnings -->
-      <div v-if="summary.config_warnings && summary.config_warnings.length > 0" class="space-y-2">
-        <div
-          v-for="w in summary.config_warnings"
-          :key="w.type"
-          class="flex items-center justify-between gap-3 rounded-lg border border-warning/30 bg-warning/5 p-4 text-sm text-warning"
-        >
-          <div class="flex items-center gap-2">
-            <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="shrink-0"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
-            <span>{{ w.message }}</span>
-          </div>
-          <a
-            :href="w.action_url"
-            class="shrink-0 rounded-md bg-warning/15 px-3 py-1.5 text-xs font-semibold text-warning hover:bg-warning/25 transition-colors"
-          >
-            {{ w.action_label }}
-          </a>
-        </div>
-      </div>
-
-      <!-- Collapsible Welcome section -->
-      <div class="rounded-lg border bg-card p-4">
-        <button
-          @click="toggleWelcome"
-          class="flex w-full items-center justify-between gap-2 text-left"
-          :aria-expanded="welcomeExpanded"
-          aria-controls="welcome-content"
-        >
-          <h2 class="text-base font-semibold">{{ $t('views.DashboardView.welcome_to_modulo') }}</h2>
-          <svg
-            xmlns="http://www.w3.org/2000/svg"
-            width="20"
-            height="20"
-            viewBox="0 0 24 24"
-            fill="none"
-            stroke="currentColor"
-            stroke-width="2"
-            :class="{ 'rotate-180': welcomeExpanded }"
-            class="shrink-0 text-muted-foreground transition-transform duration-200"
-          >
-            <polyline points="6 9 12 15 18 9" />
-          </svg>
-        </button>
-        <div
-          v-if="welcomeExpanded"
-          id="welcome-content"
-          role="region"
-          :aria-label="$t('views.DashboardView.welcome_to_modulo')"
-          class="mt-4 space-y-4"
-        >
-          <p class="text-sm text-muted-foreground">{{ $t('views.DashboardView.welcome_subtitle') }}</p>
-          <div class="flex flex-wrap items-center gap-3">
-            <Button
-              @click="createStarterPipeline"
-              :disabled="creatingPipeline"
-              variant="default"
-              class="px-5 py-2.5"
-            >
-              <svg
-                v-if="creatingPipeline"
-                class="h-4 w-4 animate-spin"
-                xmlns="http://www.w3.org/2000/svg"
-                fill="none"
-                viewBox="0 0 24 24"
-              >
-                <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4" />
-                <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
-              </svg>
-              <svg v-else xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="5 3 19 12 5 21 5 3"/></svg>
-              {{ $t('views.DashboardView.map_your_sdlc') }}
-            </Button>
-            <a
-              href="/onboarding"
-              class="inline-flex items-center gap-2 rounded-lg border border-input bg-background px-4 py-2.5 text-sm font-medium hover:bg-accent transition-all"
-            >
-              <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
-              {{ $t('views.DashboardView.see_what_modulo_can_do') }}
-            </a>
-          </div>
-          <div v-if="pipelineError" class="rounded-md bg-destructive/10 px-3 py-2 text-sm text-destructive">
-            {{ pipelineError }}
-          </div>
-          <div class="flex flex-wrap items-center gap-3 text-sm">
-            <a href="/library" class="font-medium text-primary hover:underline">{{ $t('views.DashboardView.create_pipeline') }}</a>
-            <span class="text-muted-foreground">·</span>
-            <a href="/templates" class="font-medium text-primary hover:underline">{{ $t('views.DashboardView.browse_templates') }}</a>
-            <span class="text-muted-foreground">·</span>
-            <a href="/admin/model-backends" class="font-medium text-primary hover:underline">{{ $t('views.DashboardView.configure_ai_provider') }}</a>
-          </div>
-        </div>
-      </div>
-
       <!-- Row 1: Summary stat cards -->
       <div class="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
         <StatCard :label="$t('views.DashboardView.pipelines')" :value="summary.active_pipelines" color="primary" to="/pipelines">
@@ -121,7 +29,7 @@
         <StatCard :label="$t('views.DashboardView.total_runs')" :value="summary.total_runs" color="primary" to="/runs">
           <template #icon><line x1="12" y1="20" x2="12" y2="10"/><line x1="18" y1="20" x2="18" y2="4"/><line x1="6" y1="20" x2="6" y2="16"/></template>
         </StatCard>
-        <StatCard :label="$t('views.DashboardView.running')" :value="summary.run_counts_by_status?.running ?? 0" color="success" to="/runs">
+        <StatCard :label="$t('views.DashboardView.running')" :value="summary.run_counts_by_status?.running ?? 0" color="success" to="/runs?status=running">
           <template #icon><polyline points="23 6 13.5 15.5 8.5 10.5 1 18"/><polyline points="17 6 23 6 23 12"/></template>
         </StatCard>
         <StatCard :label="$t('views.DashboardView.awaiting_human')" :value="summary.run_counts_by_status?.awaiting_human ?? 0" color="warning" to="/stages">
@@ -303,9 +211,8 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted, watch } from 'vue'
+import { ref, computed, onMounted } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { Button } from '@/components/ui/button'
 import PageHeader from '../components/shared/PageHeader.vue'
 import DashboardNotificationsPanel from '../components/DashboardNotificationsPanel.vue'
 import { usePlanStore } from '../stores/planStore'
@@ -313,8 +220,6 @@ import { useDashboardStore } from '../stores/dashboard'
 import ErrorAlert from '../components/shared/ErrorAlert.vue'
 import Sparkline from '../components/shared/Sparkline.vue'
 import StatCard from '../components/StatCard.vue'
-import { useRouter } from 'vue-router'
-import { useApi } from '../composables/useApi'
 import {
   Tooltip,
   TooltipTrigger,
@@ -333,41 +238,6 @@ const summary = computed(() => dashboardStore.summary)
 const totalSpend = computed(() => dashboardStore.totalSpend)
 
 const isTeam = computed(() => planStore.isTeam)
-
-const router = useRouter()
-const { post } = useApi()
-
-const welcomeExpanded = ref(true)
-const userToggledWelcome = ref(false)
-const creatingPipeline = ref(false)
-const pipelineError = ref<string | null>(null)
-
-watch(summary, (s) => {
-  if (s && !userToggledWelcome.value) {
-    welcomeExpanded.value = s.total_runs === 0 && s.active_pipelines === 0
-  }
-})
-
-function toggleWelcome() {
-  userToggledWelcome.value = true
-  welcomeExpanded.value = !welcomeExpanded.value
-}
-
-async function createStarterPipeline() {
-  pipelineError.value = null
-  creatingPipeline.value = true
-  try {
-    const result = await post<{ pipeline_id: string; name: string }>('/api/v1/onboarding/starter-pipeline')
-    if (result.pipeline_id) {
-      router.push(`/pipelines/${result.pipeline_id}/editor`)
-    }
-  } catch (err: any) {
-    const msg = err?.detail || err?.message || t('views.DashboardView.failed_to_create_starter_pipeline')
-    pipelineError.value = msg
-  } finally {
-    creatingPipeline.value = false
-  }
-}
 
 const expandedTeam = ref<string | null>(null)
 
