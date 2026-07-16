@@ -463,9 +463,9 @@ async function toggleCircuitBreaker() {
   }
 }
 
-async function onCurrencyChange(value: string) {
+async function onCurrencyChange(value: unknown) {
   const prev = settings.value.currency
-  settings.value.currency = value as 'USD' | 'EUR' | 'GBP'
+  settings.value.currency = String(value) as 'USD' | 'EUR' | 'GBP'
   currencySaveError.value = null
   try {
     await (api as any).PUT('/api/v1/admin/costs/controls', { body: { currency: settings.value.currency } })
@@ -475,9 +475,9 @@ async function onCurrencyChange(value: string) {
   }
 }
 
-async function onBillingPeriodChange(value: string) {
+async function onBillingPeriodChange(value: unknown) {
   const prev = settings.value.billingPeriod
-  settings.value.billingPeriod = value as 'monthly' | 'quarterly' | 'annual'
+  settings.value.billingPeriod = String(value) as 'monthly' | 'quarterly' | 'annual'
   periodSaveError.value = null
   try {
     await (api as any).PUT('/api/v1/admin/costs/controls', { body: { billingPeriod: settings.value.billingPeriod } })

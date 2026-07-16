@@ -21,7 +21,7 @@
       v-for="filter in selectFilters"
       :key="filter.key"
       :model-value="(filterValues[filter.key] ?? '') || '__all__'"
-      @update:model-value="(val: string) => $emit('update:filter', filter.key, val === '__all__' ? '' : val)"
+      @update:model-value="(val) => $emit('update:filter', filter.key, val === '__all__' ? '' : String(val))"
     >
       <SelectTrigger
         class="w-auto min-w-[140px]"

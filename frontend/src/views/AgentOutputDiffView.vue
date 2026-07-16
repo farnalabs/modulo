@@ -174,19 +174,7 @@ const { loading: loadingRuns, data: summaryResp } = useDataFetch(
 
 const recentRuns = computed(() => ((summaryResp.value as any)?.recent_runs ?? []) as RecentRun[])
 
-function onSelectRunA(event: Event) {
-  const target = event.target as HTMLSelectElement
-  if (target.value) {
-    runIdA.value = target.value
-  }
-}
 
-function onSelectRunB(event: Event) {
-  const target = event.target as HTMLSelectElement
-  if (target.value) {
-    runIdB.value = target.value
-  }
-}
 
 const canCompare = computed(() => {
   return runIdA.value.trim() && nodeId.value.trim() && runIdB.value.trim()
