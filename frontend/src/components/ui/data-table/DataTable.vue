@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { ref, computed } from 'vue'
 import { cn } from '@/lib/utils'
 
 export interface Column {
@@ -13,7 +14,7 @@ export interface DataTableRow {
   [key: string]: unknown
 }
 
-withDefaults(defineProps<{
+const props = withDefaults(defineProps<{
   columns: Column[]
   rows: DataTableRow[]
   loading?: boolean
@@ -26,6 +27,47 @@ withDefaults(defineProps<{
 const emit = defineEmits<{
   'row-click': [row: DataTableRow]
 }>()
+
+const sortColumn = ref<string | null>(null)
+const sortDirection = ref<'asc' | 'desc'>('asc')
+
+function toggleSort(key: string) {
+  if (sortColumn.value === key) {
+    sortDirection.value = sortDirection.value === 'asc' ? 'desc' : 'asc'
+  } else {
+    sortColumn.value = key
+    sortDirection.value = 'asc'
+  }
+}
+
+function getSortIndicator(key: string): string {
+  if (sortColumn.value !== key) return ''
+  return sortDirection.value === 'asc' ? ' ▲' : ' ▼'
+}
+
+const sortedRows = computed(() => {
+  if (!sortColumn.value) return props.rows
+  const col = props.columns.find(c => c.key === sortColumn.value)
+  if (!col?.sortable) return props.rows
+
+  const key = sortColumn.value
+  const dir = sortDirection.value === 'asc' ? 1 : -1
+
+  return [...props.rows].sort((a, b) => {
+    const aVal = a[key]
+    const bVal = b[key]
+    if (aVal == null && bVal == null) return 0
+    if (aVal == null) return 1
+    if (bVal == null) return -1
+
+    if (typeof aVal === 'number' && typeof bVal === 'number') {
+      return (aVal - bVal) * dir
+    }
+    const aStr = String(aVal)
+    const bStr = String(bVal)
+    return aStr.localeCompare(bStr) * dir
+  })
+})
 </script>
 
 <template>
@@ -37,12 +79,14 @@ const emit = defineEmits<{
             v-for="col in columns"
             :key="col.key"
             :class="cn(
-              'px-4 py-3 text-xs font-medium uppercase tracking-wider text-muted-foreground text-left',
+              'px-4 py-3 text-xs font-medium uppercase tracking-wider text-left',
               col.numeric && 'text-right tabular-nums',
-              col.width && `w-[${col.width}]`,
+              col.sortable && 'cursor-pointer select-none hover:text-foreground',
+              sortColumn === col.key ? 'text-foreground' : 'text-muted-foreground',
             )"
+            @click="col.sortable && toggleSort(col.key)"
           >
-            {{ col.label }}
+            {{ col.label }}<span v-if="col.sortable" class="text-xs ml-0.5">{{ getSortIndicator(col.key) }}</span>
           </th>
         </tr>
       </thead>
@@ -64,7 +108,7 @@ const emit = defineEmits<{
       </tbody>
       <tbody v-else class="divide-y divide-border">
         <tr
-          v-for="(row, index) in rows"
+          v-for="(row, index) in sortedRows"
           :key="index"
           class="transition-colors hover:bg-muted/30"
           :class="{ 'cursor-pointer': $attrs.onRowClick }"

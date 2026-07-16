@@ -46,12 +46,12 @@
       <div class="table-wrapper">
         <DataTable
           :columns="[
-            { key: 'pipeline_name', label: $t('views.RunsListView.pipeline') },
-            { key: 'status', label: $t('views.RunsListView.status') },
-            { key: 'trigger_type', label: $t('views.RunsListView.trigger') },
-            { key: 'run_number', label: '#', numeric: true },
-            { key: 'created_at', label: $t('views.RunsListView.created') },
-            { key: 'total_cost_usd', label: $t('views.RunsListView.cost'), numeric: true },
+            { key: 'pipeline_name', label: $t('views.RunsListView.pipeline'), sortable: true },
+            { key: 'status', label: $t('views.RunsListView.status'), sortable: true },
+            { key: 'trigger_type', label: $t('views.RunsListView.trigger'), sortable: true },
+            { key: 'run_number', label: '#', numeric: true, sortable: true },
+            { key: 'created_at', label: $t('views.RunsListView.created'), sortable: true },
+            { key: 'total_cost_usd', label: $t('views.RunsListView.cost'), numeric: true, sortable: true },
           ]"
           :rows="runs"
           @row-click="(row: any) => navigateToDetail(row.run_id)"
