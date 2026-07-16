@@ -27,6 +27,7 @@ from modulo.core.pipeline_engine.node_runner import (
     make_hitl_gate_fn,
     make_manual_node_fn,
     make_node_fn,
+    make_sandbox_agent_fn,
 )
 
 # OrderedDict-based LRU cache. Accessing an entry moves it to the end;
@@ -209,12 +210,20 @@ def build_graph_from_json(
         max_input_length: int | None = node_def.get("max_input_length")
         token_budget: int | None = node_def.get("token_budget")
 
-        if node_type not in ("agent", "manual", "connector"):
+        if node_type not in ("agent", "manual", "connector", "sandbox_agent"):
             raise ValueError(f"Unknown node_type {node_type!r} for node {node_id!r}")
 
         connector_binding = node_def.get("connector_binding")
 
-        if node_type == "agent" and node_def.get("agent_id"):
+        if node_type == "sandbox_agent":
+            graph.add_node(
+                node_id,
+                make_sandbox_agent_fn(
+                    node_def,
+                    timeout=timeout,
+                ),
+            )
+        elif node_type == "agent" and node_def.get("agent_id"):
             graph.add_node(
                 node_id,
                 make_node_fn(

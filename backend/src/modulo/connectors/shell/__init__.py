@@ -1,5 +1,12 @@
 """ShellConnector — execute commands and manage files in a workspace via RuntimeProvider.
 
+.. deprecated::
+    ShellConnector is deprecated since ADR 003 (2026-07-16).  The Modulo agent
+    execution environment model (ADR 001) has been superseded by the Agent
+    Dispatch Model.  Modulo no longer runs agents inside sandboxes — it
+    dispatches work to external agent runtimes via the ``sandbox_agent`` node
+    type.  ShellConnector will be removed in a future release.
+
 Pass ``provider_ref`` in query.filters or payload.data to target the correct
 workspace.  The calling layer must ensure an active WorkspaceLease exists before
 invoking this connector (403 otherwise).
@@ -9,6 +16,7 @@ import base64
 import logging
 import shlex
 import uuid
+import warnings
 from pathlib import Path
 from typing import Any, Protocol
 
@@ -38,8 +46,27 @@ class ShellRuntimeProvider(Protocol):
     ) -> dict[str, Any]: ...
 
 
+warnings.warn(
+    "ShellConnector is deprecated. The Modulo agent execution environment model "
+    "(ADR 001) has been superseded by the Agent Dispatch Model (ADR 003). "
+    "Modulo no longer runs agents inside sandboxes — it dispatches work to external "
+    "agent runtimes via the sandbox_agent node type. "
+    "ShellConnector will be removed in a future release.",
+    DeprecationWarning,
+    stacklevel=2,
+)
+
+
 class ShellConnector(ConnectorBase):
     """Execute shell commands and manage files inside a workspace lease.
+
+    .. deprecated::
+        ShellConnector is deprecated since ADR 003 (2026-07-16).  The Modulo
+        agent execution environment model (ADR 001) has been superseded by the
+        Agent Dispatch Model (ADR 003).  Modulo no longer runs agents inside
+        sandboxes — it dispatches work to external agent runtimes via the
+        ``sandbox_agent`` node type.  ShellConnector will be removed in a
+        future release.
 
     Requires an active ``workspace_lease_id`` — 403 if not set.
     Command allowlist is enforced via ``allowed_commands``.
