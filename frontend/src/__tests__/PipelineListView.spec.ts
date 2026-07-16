@@ -140,8 +140,6 @@ describe('PipelineListView', () => {
     })
     await flushPromises()
     await nextTick()
-    wrapper.vm.viewMode = 'card'
-    await nextTick()
     expect(wrapper.find('[data-testid="pipeline-list-prev-page"]').exists()).toBe(true)
     expect(wrapper.find('[data-testid="pipeline-list-next-page"]').exists()).toBe(true)
   })

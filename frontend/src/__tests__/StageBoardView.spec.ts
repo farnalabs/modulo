@@ -190,7 +190,7 @@ describe('StageBoardView', () => {
 
     await flushPromises()
     await nextTick()
-    wrapper.vm.teamFilter = 'team-alpha'
+    ;(wrapper.vm as any).teamFilter = 'team-alpha'
     await nextTick()
     expect(wrapper.text()).toContain('Testing')
     expect(wrapper.text()).not.toContain('Production')
@@ -202,10 +202,10 @@ describe('StageBoardView', () => {
 
     await flushPromises()
     await nextTick()
-    wrapper.vm.teamFilter = 'team-alpha'
+    ;(wrapper.vm as any).teamFilter = 'team-alpha'
     await nextTick()
     expect(wrapper.text()).not.toContain('Production')
-    wrapper.vm.teamFilter = '__all__'
+    ;(wrapper.vm as any).teamFilter = '__all__'
     await nextTick()
     expect(wrapper.text()).toContain('Development')
     expect(wrapper.text()).toContain('Testing')
