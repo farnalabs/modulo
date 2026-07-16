@@ -149,7 +149,7 @@
           </Select>
         </div>
         <p v-if="createError" class="text-sm text-destructive">{{ createError }}</p>
-        <button type="submit" hidden>Create</button>
+        <button type="submit" hidden>{{ $t('common.create') }}</button>
       </form>
     </FormDialog>
 
@@ -385,7 +385,6 @@ async function createUser() {
     showFlash('success', `User ${email} created`)
     loadUsers()
   } catch (e: any) {
-    console.error('Create user failed:', e)
     createError.value = e instanceof Error ? e.message : 'Failed to create user'
   } finally {
     createLoading.value = false

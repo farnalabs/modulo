@@ -51,14 +51,14 @@
             {{ $t('views.SettingsObservabilityView.no_custom_headers_configured') }}
           </div>
           <div v-for="(header, index) in otlpHeaders" :key="index" class="mb-2 flex items-center gap-2">
-            <input aria-label="$t("
+            <input
               v-model="header.key"
               type="text"
               data-testid="settings-observability-header-key"
               class="flex-1 rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
               :placeholder="$t('views.SettingsObservabilityView.header_name')"
             />
-            <input aria-label="$t("
+            <input
               v-model="header.value"
               type="text"
               data-testid="settings-observability-header-value"
