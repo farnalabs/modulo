@@ -12,6 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.db.crud.base import apply_updates
 from modulo.db.models.parameter_set import ParameterSet
+from modulo.db.models.pipeline_snapshot import PipelineSnapshot
 
 
 async def create_set(
@@ -74,10 +75,12 @@ async def update_set(
     version: int,
 ) -> ParameterSet | None:
     result = await session.execute(
-        select(ParameterSet).where(
+        select(ParameterSet)
+        .where(
             ParameterSet.id == set_id,
             ParameterSet.version == version,
         )
+        .with_for_update()
     )
     ps = result.scalar_one_or_none()
     if ps is None:
@@ -111,4 +114,30 @@ async def get_set_references(
     session: AsyncSession,
     set_id: uuid.UUID,
 ) -> dict[str, list[uuid.UUID]]:
-    return {"pipeline_nodes": [], "snapshots": []}
+    set_id_str = str(set_id)
+    pipeline_nodes: list[uuid.UUID] = []
+    snapshots: list[uuid.UUID] = []
+
+    rows = (
+        (await session.execute(select(PipelineSnapshot).where(PipelineSnapshot.parameter_bindings_json.isnot(None))))
+        .scalars()
+        .all()
+    )
+
+    for snap in rows:
+        bindings = snap.parameter_bindings_json or {}
+        for node_id_str, binding in bindings.items():
+            if isinstance(binding, dict) and str(binding.get("parameter_set_id")) == set_id_str:
+                snapshots.append(snap.id)
+                pipeline_nodes.append(uuid.UUID(node_id_str))
+
+        if snap.id in snapshots:
+            continue
+        nodes = snap.graph_json.get("nodes", []) if isinstance(snap.graph_json, dict) else []
+        for node in nodes:
+            if isinstance(node, dict) and str(node.get("parameter_set_id")) == set_id_str:
+                snapshots.append(snap.id)
+                pipeline_nodes.append(uuid.UUID(str(node["id"])))
+                break
+
+    return {"pipeline_nodes": pipeline_nodes, "snapshots": snapshots}

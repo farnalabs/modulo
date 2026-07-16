@@ -1,4 +1,4 @@
-﻿"""Add parameter_schema_id to composite_templates.
+"""Add parameter_schema_id to composite_templates.
 
 Implements RFC Â§10 Phase 4: CompositeTemplate Parameter Schema.
 
@@ -53,4 +53,3 @@ def downgrade() -> None:
         type_="foreignkey",
     )
     op.drop_column("composite_templates", "parameter_schema_id")
-
