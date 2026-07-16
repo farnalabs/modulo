@@ -723,13 +723,25 @@ def make_sandbox_agent_fn(
                 },
             }
 
-        except Exception:
+        except asyncio.CancelledError:
+            raise
+        except Exception as _exc:
             elapsed = _time.monotonic() - start_time
-            import traceback
-            print(f'SANDBOX_AGENT_ERROR: {traceback.format_exc()}', flush=True)
+            import traceback as _tb
+
+            _exc_type = type(_exc).__name__
+            _exc_msg = str(_exc)[:500]
+            _exc_tb = _tb.format_exc()
+            print(f"SANDBOX_AGENT_ERROR type={_exc_type} msg={_exc_msg}", flush=True)
+            print(f"SANDBOX_AGENT_TRACEBACK:\n{_exc_tb}", flush=True)
             _log.exception(
                 "sandbox_agent.execution_failed",
-                extra={"node_id": node_id, "elapsed_ms": int(elapsed * 1000)},
+                extra={
+                    "node_id": node_id,
+                    "elapsed_ms": int(elapsed * 1000),
+                    "exc_type": _exc_type,
+                    "exc_msg": _exc_msg,
+                },
             )
             return {
                 "artifacts": [
@@ -739,6 +751,8 @@ def make_sandbox_agent_fn(
                         "output": {
                             "status": "failed",
                             "summary": "Sandbox agent execution failed",
+                            "error_type": _exc_type,
+                            "error_message": _exc_msg,
                             "exit_code": -1,
                             "wall_clock_time_ms": int(elapsed * 1000),
                         },
