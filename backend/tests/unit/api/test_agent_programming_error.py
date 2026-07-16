@@ -48,6 +48,8 @@ _AGENT_BODY = {
     "output_schema_version": "1.0",
     "prompt_template": "Hello",
     "model_backend_id": str(_BACKEND_ID),
+    "required_environment_capabilities": [],
+    "template_id": None,
 }
 
 
