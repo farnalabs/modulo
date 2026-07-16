@@ -21,7 +21,7 @@ from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
 from modulo.api.db_error_handling import handle_db_errors
 from modulo.api.dependencies import _get_engine, get_db_session, get_or_create_engine, pg_connection_string
-from modulo.auth.dependencies import get_current_tenant_user, get_current_tenant_user_optional
+from modulo.auth.dependencies import get_current_tenant_user_optional
 from modulo.auth.jwt import TenantPrincipal
 from modulo.core.pipeline_engine.executor import PipelineExecutor
 from modulo.core.trigger_engine import (
@@ -91,6 +91,7 @@ async def receive_webhook(
             org_id = principal.organisation_id if principal else None
             if org_id is None:
                 from modulo.db.models.pipeline import Pipeline
+
                 pipe = await session.execute(select(Pipeline).where(Pipeline.id == trigger.pipeline_id))
                 pipeline = pipe.scalar_one_or_none()
                 if pipeline:
@@ -197,6 +198,7 @@ async def replay_webhook(
             org_id = principal.organisation_id if principal else None
             if org_id is None:
                 from modulo.db.models.pipeline import Pipeline
+
                 pipe = await session.execute(select(Pipeline).where(Pipeline.id == trigger.pipeline_id))
                 pipeline = pipe.scalar_one_or_none()
                 if pipeline:
