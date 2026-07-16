@@ -1418,6 +1418,8 @@ async def reveal_node_prompt(
             token_count=token_count,
             prompt_always_visible=prompt_always_visible,
         )
+    except asyncio.CancelledError:
+        raise
     except IntegrityError:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
