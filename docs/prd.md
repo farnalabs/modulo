@@ -1386,6 +1386,25 @@ Missing ConnectorType instance: creates placeholder connector entry (`status: un
 #### Workflow Updates
 No automatic updates. V2 registry: "check for updates" compares local checksum to registry. Manual re-import with re-binding. Local customisations are not merged automatically.
 
+#### V2 Format (YAML)
+
+The v2 bundle format moves from ZIP+JSON to a single YAML file with expanded capabilities. The full specification is documented in ADR 015 (`docs/adr/015-bundle-format-v2.md`).
+
+**What's new in v2:**
+- **YAML instead of ZIP+JSON** — single file, human-readable, diffable in PRs
+- **Triggers** — bundles ship pre-configured webhook, cron, polling, and agent_signal triggers
+- **Team ownership** — `owner_team` field resolved by team name on import
+- **Visibility** — `org`, `team`, or `private` (defaults to `org` on import)
+- **Lifecycle map reference** — bundles declare which lifecycle stage they participate in
+- **Composite template refs** — multi-template workflow references
+- **Partial bundles** — incomplete pipelines (status: `partial: true`) for assembly
+- **Agent runtime config** — `template_id` and `agent_command` travel with agent definitions
+- **Ed25519 signature envelope** — optional publisher verification for community library
+
+**Migration path:** v1 ZIP+JSON bundles remain importable. Detection is by file extension (`.zip` → v1, `.yaml`/`.yml` → v2). A conversion script is provided at `docs/ops/bundle-migration-v1-to-v2.md`. v1 import emits a deprecation warning from v2.1 and is removed in v3.0.
+
+**Validation:** v2 bundles are validated against JSON Schema at `docs/schemas/bundle-v2-schema.json`.
+
 ### 8.16 Schema Inference (v1)
 
 Schema Inference reduces the primary friction in SDLC onboarding: teams have existing data in their tools (Jira tickets, Linear issues, GitHub PRs, Notion pages) but don't know what Modulo schemas to define because they've never needed to make their data shape explicit.
