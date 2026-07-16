@@ -28,10 +28,6 @@ jobs:
             fly-app: app-modulo
             fly-config: fly.toml
             host: app.modulo.run
-          - name: demo
-            fly-app: demo-modulo
-            fly-config: fly.demo.toml
-            host: demo.modulo.run
     steps:
       - uses: actions/checkout@v4
         with:
@@ -85,7 +81,7 @@ jobs:
           $expectedSha = git rev-parse HEAD
           $expectedSha7 = $expectedSha.Substring(0, 7)
           $allOk = $true
-          foreach ($url in @("https://app.modulo.run", "https://demo.modulo.run")) {
+          foreach ($url in @("https://app.modulo.run")) {
             $info = curl.exe -s -m 10 "$url/api/v1/deployment" 2>$null
             if ($info) {
               $deployInfo = $info | ConvertFrom-Json
