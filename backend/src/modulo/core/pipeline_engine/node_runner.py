@@ -629,6 +629,10 @@ def make_sandbox_agent_fn(
             sandbox = await AsyncSandbox.create(template=template_id)
 
             for path, content in context_files.items():
+                if path.endswith(".b64"):
+                    import base64 as _b64
+                    content = _b64.b64decode(content).decode()
+                    path = path[:-4]
                 await sandbox.files.write(path, content)
 
             await sandbox.files.write("/home/user/prompt.md", rendered_prompt)
