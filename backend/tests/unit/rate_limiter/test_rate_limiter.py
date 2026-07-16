@@ -8,6 +8,19 @@ import pytest
 from modulo.core.rate_limiter import RateLimiterRegistry, RedisSlidingWindowRateLimiter, TokenBucket
 
 
+@pytest.fixture
+def mock_redis():
+    client = MagicMock()
+    pipe = MagicMock()
+    pipe.zremrangebyscore = MagicMock(return_value=pipe)
+    pipe.zadd = MagicMock(return_value=pipe)
+    pipe.zcard = MagicMock(return_value=pipe)
+    pipe.expire = MagicMock(return_value=pipe)
+    pipe.execute = AsyncMock(return_value=(None, None, 1, True))
+    client.pipeline = MagicMock(return_value=pipe)
+    return client
+
+
 class TestTokenBucket:
     async def test_consume_allows_when_tokens_available(self):
         bucket = TokenBucket(max_requests=5, window_s=1)
@@ -39,34 +52,11 @@ class TestTokenBucket:
 
 
 class TestRedisSlidingWindowRateLimiter:
-    @pytest.fixture
-    def mock_redis(self):
-        client = MagicMock()
-        pipe = MagicMock()
-        pipe.zremrangebyscore = MagicMock(return_value=pipe)
-        pipe.zadd = MagicMock(return_value=pipe)
-        pipe.zcard = MagicMock(return_value=pipe)
-        pipe.expire = MagicMock(return_value=pipe)
-        pipe.execute = AsyncMock(return_value=(None, None, 1, True))
-        client.pipeline = MagicMock(return_value=pipe)
-        return client
-
-    async def test_check_allows_within_limit(self, mock_redis):
+    @pytest.mark.parametrize("zcard_value,expected", [(1, True), (5, True), (6, False)])
+    async def test_check_limit(self, mock_redis, zcard_value, expected):
+        mock_redis.pipeline.return_value.execute = AsyncMock(return_value=(None, None, zcard_value, True))
         limiter = RedisSlidingWindowRateLimiter(mock_redis)
-        assert await limiter.check("test-key", max_requests=5) is True
-
-    async def test_check_blocks_when_over_limit(self, mock_redis):
-        pipe = mock_redis.pipeline.return_value
-        pipe.zcard = MagicMock(return_value=pipe)
-        pipe.execute = AsyncMock(return_value=(None, None, 6, True))
-        limiter = RedisSlidingWindowRateLimiter(mock_redis)
-        assert await limiter.check("test-key", max_requests=5) is False
-
-    async def test_check_exact_limit(self, mock_redis):
-        pipe = mock_redis.pipeline.return_value
-        pipe.execute = AsyncMock(return_value=(None, None, 5, True))
-        limiter = RedisSlidingWindowRateLimiter(mock_redis)
-        assert await limiter.check("test-key", max_requests=5) is True
+        assert await limiter.check("test-key", max_requests=5) is expected
 
     async def test_uses_correct_redis_key(self, mock_redis):
         limiter = RedisSlidingWindowRateLimiter(mock_redis, prefix="rl:")
@@ -92,28 +82,12 @@ class TestRateLimiterRegistry:
         assert registry.has_redis is False
         assert await registry.check("k", max_requests=100) is True
 
-    async def test_uses_redis_when_available(self):
-        mock_redis = MagicMock()
-        pipe = MagicMock()
-        pipe.zremrangebyscore = MagicMock(return_value=pipe)
-        pipe.zadd = MagicMock(return_value=pipe)
-        pipe.zcard = MagicMock(return_value=pipe)
-        pipe.expire = MagicMock(return_value=pipe)
-        pipe.execute = AsyncMock(return_value=(None, None, 1, True))
-        mock_redis.pipeline = MagicMock(return_value=pipe)
+    async def test_uses_redis_when_available(self, mock_redis):
         registry = RateLimiterRegistry(redis_client=mock_redis)
         assert registry.has_redis is True
         assert await registry.check("k", max_requests=5) is True
-        pipe.execute.assert_awaited_once()
 
-    async def test_redis_blocks_over_limit(self):
-        mock_redis = MagicMock()
-        pipe = MagicMock()
-        pipe.zremrangebyscore = MagicMock(return_value=pipe)
-        pipe.zadd = MagicMock(return_value=pipe)
-        pipe.zcard = MagicMock(return_value=pipe)
-        pipe.expire = MagicMock(return_value=pipe)
-        pipe.execute = AsyncMock(return_value=(None, None, 6, True))
-        mock_redis.pipeline = MagicMock(return_value=pipe)
+    async def test_redis_blocks_over_limit(self, mock_redis):
+        mock_redis.pipeline.return_value.execute = AsyncMock(return_value=(None, None, 6, True))
         registry = RateLimiterRegistry(redis_client=mock_redis)
         assert await registry.check("k", max_requests=5) is False
