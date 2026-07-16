@@ -475,6 +475,99 @@ async def check_oauth_token_family_valid(
 
 
 # ---------------------------------------------------------------------------
+# Refresh token creation & validation (OAuth-specific, not user-level JWT)
+# ---------------------------------------------------------------------------
+
+_OAUTH_REFRESH_TOKEN_DAYS = 30
+
+
+@dataclass(frozen=True)
+class OAuthRefreshTokenClaims:
+    """Decoded claims from an OAuth refresh token JWT."""
+
+    client_id: str
+    organisation_id: uuid.UUID
+    scopes: list[str]
+    token_family: str
+    token_sequence: int
+
+
+def create_oauth_refresh_token(
+    client_id: str,
+    secret_key: str,
+    *,
+    organisation_id: str,
+    scopes: list[str],
+    token_family: str,
+    token_sequence: int,
+    expires_delta: timedelta = timedelta(days=_OAUTH_REFRESH_TOKEN_DAYS),
+) -> str:
+    """Issue a JWT refresh token for OAuth client credentials flow.
+
+    Token carries the same claims as the access token (client_id, org_id,
+    scopes, token_family, token_sequence) so that a new access token can
+    be issued without a DB round-trip. Token rotation is handled by
+    incrementing the sequence on each refresh.
+    """
+    now = datetime.now(UTC)
+    claims = {
+        "purpose": "oauth_refresh",
+        "sub": client_id,
+        "org_id": organisation_id,
+        "scopes": " ".join(scopes),
+        "token_family": token_family,
+        "token_sequence": token_sequence,
+        "iat": now,
+        "exp": now + expires_delta,
+    }
+    return str(jwt.encode(claims, secret_key, algorithm=_ALGORITHM))
+
+
+def decode_oauth_refresh_token(token: str, secret_key: str) -> OAuthRefreshTokenClaims:
+    """Decode and validate an OAuth refresh token JWT.
+
+    Returns parsed claims on success. Raises JWTError on any failure.
+    """
+    payload: dict[str, object] = jwt.decode(token, secret_key, algorithms=[_ALGORITHM])
+    purpose = payload.get("purpose")
+    if purpose != "oauth_refresh":
+        raise JWTError(f"Token purpose '{purpose}' is not 'oauth_refresh'")
+
+    client_id = payload.get("sub")
+    if not isinstance(client_id, str) or not client_id:
+        raise JWTError("Token missing or invalid 'sub' claim")
+
+    org_id_str = payload.get("org_id")
+    if not isinstance(org_id_str, str):
+        raise JWTError("Token missing or invalid 'org_id' claim")
+
+    scopes_str = payload.get("scopes")
+    if not isinstance(scopes_str, str):
+        scopes_str = ""
+
+    token_family = payload.get("token_family")
+    if not isinstance(token_family, str) or not token_family:
+        raise JWTError("Token missing 'token_family'")
+
+    token_sequence = payload.get("token_sequence")
+    if not isinstance(token_sequence, int):
+        raise JWTError("Token missing 'token_sequence'")
+
+    try:
+        parsed_org_id = uuid.UUID(org_id_str)
+    except ValueError as exc:
+        raise JWTError("Token contains malformed org_id") from exc
+
+    return OAuthRefreshTokenClaims(
+        client_id=client_id,
+        organisation_id=parsed_org_id,
+        scopes=scopes_str.split(),
+        token_family=token_family,
+        token_sequence=token_sequence,
+    )
+
+
+# ---------------------------------------------------------------------------
 # Scope helpers
 # ---------------------------------------------------------------------------
 
