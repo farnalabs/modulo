@@ -31,6 +31,7 @@ from modulo.core.library_service import (
 )
 from modulo.core.workflow_import_export import (
     export_pipeline_bundle,
+    export_pipeline_bundle_v2,
     extract_bundle_json_from_zip,
     get_existing_agent_names,
     get_existing_pipeline_names,
@@ -601,6 +602,7 @@ async def copy_to_adapt_endpoint(
 @router.post("/export/{pipeline_id}")
 async def export_pipeline_endpoint(
     pipeline_id: uuid.UUID,
+    format: str = Query("v1", regex="^(v1|v2)$"),
     session: AsyncSession = Depends(get_db_session),
     principal: TenantPrincipal = Depends(get_current_tenant_user),
 ) -> Response:
@@ -614,7 +616,10 @@ async def export_pipeline_endpoint(
                     status_code=status.HTTP_404_NOT_FOUND,
                     detail=f"Pipeline {pipeline_id} not found",
                 )
-            bundle_bytes = await export_pipeline_bundle(session, pipeline_id)
+            if format == "v2":
+                yaml_str = await export_pipeline_bundle_v2(session, pipeline_id)
+            else:
+                bundle_bytes = await export_pipeline_bundle(session, pipeline_id)
     except IntegrityError:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
@@ -632,6 +637,14 @@ async def export_pipeline_endpoint(
             detail="The library feature is temporarily unavailable due to a database issue. Please retry.",
         ) from None
     safe_name = "".join(c if c.isalnum() or c in "-_." else "_" for c in pipeline.name)
+    if format == "v2":
+        return Response(
+            content=yaml_str,
+            media_type="application/x-yaml",
+            headers={
+                "Content-Disposition": f'attachment; filename="{safe_name}.modulo.yaml"',
+            },
+        )
     return Response(
         content=bundle_bytes,
         media_type="application/zip",
