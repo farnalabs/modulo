@@ -119,7 +119,7 @@ The images will be built and published as a follow-up delivery (not part of this
 ### Adapt for real work
 
 5. User copies "Getting Started Agent" → "My Code Reviewer"
-6. Changes the prompt: `"Review this PR diff: {{ input.diff }}"`  
+6. Changes the prompt: `"Review this PR diff: {{ input.diff }}"`
 7. Changes `template_id` to their own E2B image
 8. Changes `output_schema_id` to a custom schema they defined: `ReviewResult`
 9. Done — the agent now runs their custom image with their prompt and returns structured data matching their schema
