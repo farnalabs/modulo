@@ -2,6 +2,7 @@ import { formatApiError } from '../lib/api/formatError'
 
 import { createRouter, createWebHistory } from 'vue-router'
 import { getAccessToken } from '../lib/api/client'
+import { usePlanStore } from '../stores/planStore'
 import manifest from '@/manifest.yaml'
 import LoginView from '../views/LoginView.vue'
 
@@ -31,9 +32,11 @@ interface ManifestEntry {
 
 const manifestRoutes = (manifest as { routes?: Record<string, ManifestEntry> })?.routes ?? {}
 const manifestByName = new Map<string, ManifestEntry & { path: string }>()
+const manifestPathToName = new Map<string, string>()
 for (const [path, entry] of Object.entries(manifestRoutes)) {
   if (entry?.name) {
     manifestByName.set(entry.name, { ...entry, path })
+    manifestPathToName.set(path, entry.name)
   }
 }
 
@@ -507,7 +510,7 @@ router.beforeEach((to) => {
         to.meta.requiredPermissions = entry.required_permissions ?? undefined
         to.meta.featureFlag = entry.feature_flag ?? undefined
         to.meta.parent = entry.parent
-          ? (manifestByName.get(entry.parent)?.name ?? entry.parent)
+          ? (manifestPathToName.get(entry.parent) ?? entry.parent)
           : undefined
       }
     }
@@ -519,10 +522,22 @@ router.beforeEach((to) => {
     if (to.name !== 'login' && !token) {
       return { name: 'login' }
     }
-    if (to.meta?.requiresSystemAdmin) {
+    if (to.meta?.requiresSystemAdmin || to.meta?.requiredRoles?.length || to.meta?.requiredTier) {
       const payload = decodeJwtPayload(token)
-      if (!payload?.is_system_admin) {
+      if (to.meta?.requiresSystemAdmin && !payload?.is_system_admin) {
         return { name: 'dashboard' }
+      }
+      if (to.meta?.requiredRoles?.length) {
+        const orgRole = payload?.org_role
+        if (typeof orgRole !== 'string' || !to.meta.requiredRoles.includes(orgRole)) {
+          return { name: 'dashboard' }
+        }
+      }
+      if (to.meta?.requiredTier) {
+        const planStore = usePlanStore()
+        if (Object.keys(planStore.features).length > 0 && !planStore.isAtMinimumTier(to.meta.requiredTier)) {
+          return { name: 'dashboard' }
+        }
       }
     }
   } catch (err) {
