@@ -29,16 +29,16 @@
         <StatCard :label="$t('views.DashboardView.total_runs')" :value="summary.total_runs" color="primary" to="/runs">
           <template #icon><line x1="12" y1="20" x2="12" y2="10"/><line x1="18" y1="20" x2="18" y2="4"/><line x1="6" y1="20" x2="6" y2="16"/></template>
         </StatCard>
-        <StatCard :label="$t('views.DashboardView.running')" :value="summary.run_counts_by_status?.running ?? 0" color="success" to="/runs?status=running">
+        <StatCard :label="$t('views.DashboardView.running')" :value="summary.run_counts_by_status?.running ?? 0" color="success" :to="`/runs?status=${RUN_STATUS.RUNNING}`">
           <template #icon><polyline points="23 6 13.5 15.5 8.5 10.5 1 18"/><polyline points="17 6 23 6 23 12"/></template>
         </StatCard>
-        <StatCard :label="$t('views.DashboardView.awaiting_human')" :value="summary.run_counts_by_status?.awaiting_human ?? 0" color="warning" to="/runs?status=waiting_on_human">
+        <StatCard :label="$t('views.DashboardView.awaiting_human')" :value="summary.run_counts_by_status?.awaiting_human ?? 0" color="warning" :to="`/runs?status=${RUN_STATUS.AWAITING_HUMAN}`">
           <template #icon><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></template>
         </StatCard>
       </div>
 
       <div class="grid gap-4 sm:grid-cols-2">
-        <StatCard :label="$t('views.DashboardView.failed')" :value="summary.run_counts_by_status?.failed ?? 0" color="destructive" to="/runs?status=failed">
+        <StatCard :label="$t('views.DashboardView.failed')" :value="summary.run_counts_by_status?.failed ?? 0" color="destructive" :to="`/runs?status=${RUN_STATUS.FAILED}`">
           <template #icon><circle cx="12" cy="12" r="10"/><line x1="15" y1="9" x2="9" y2="15"/><line x1="9" y1="9" x2="15" y2="15"/></template>
         </StatCard>
         <StatCard :label="$t('views.DashboardView.idle')" :value="summary.run_counts_by_status?.idle ?? 0" color="muted" to="/pipelines">
@@ -226,6 +226,7 @@ import {
   TooltipContent,
 } from '../components/ui/tooltip'
 import { runStatusBadgeClass, formatRunDate } from '../utils/runUtils'
+import { RUN_STATUS } from '../constants/filters'
 
 const { t } = useI18n()
 
