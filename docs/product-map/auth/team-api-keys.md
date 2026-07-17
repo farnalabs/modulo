@@ -167,7 +167,6 @@ Per-org, role-scoped API keys for CI/CD pipelines and external agents, with opti
 - **BDD coverage is incomplete.** Feature file at `backend/tests/bdd/features/auth/api_keys.feature` has 5 real scenarios (happy path, create, list, revoke, invalid, reject) but is missing scenarios for: admin role rejection, team-scoped key creation, MCP auth validation, role-scope enforcement, MCP config endpoint, not-found handling, unauthenticated access, soft-delete revocation.
 - **No team-scoped enforcement unit tests.** `test_api_key.py` does not test validation of team-scoped keys — no tests verify that a team-scoped key cannot access resources outside its team boundary.
 - **No RLS policy on `org_api_keys` table for team isolation.** When querying API keys via MCP, a team-scoped key could theoretically enumerate org-wide keys via the list endpoint — the list endpoint filters by `organisation_id` only, not by the requesting key's `team_id`.
-- **`update_api_key` endpoint now supports `expires_at` on update** — covered by `test_update_api_key_updates_expires_at` (unit) and `test_update_api_key_with_expires_at` (endpoint).
 
 ## QA History
 
