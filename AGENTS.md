@@ -54,13 +54,32 @@ git worktree remove .agents/worktrees/<branch-name>
 git branch -d <branch-name>
 ```
 
-**Gate script:** `..\..\..\..\devtools\harness\tools\gate.ps1` runs the local CI suite (migration-collision check, backend pytest unit + architecture tests, frontend vitest, vue-tsc type-check, frontend build, eslint, ruff), bumps the semver in both version files AND their lockfiles, and merges the worktree branch to local main on success — does NOT push to remote. From the worktree root:
+**PR-based delivery (standard):** Create a worktree branch, implement, commit, then push and create a PR:
 ```powershell
-..\..\..\..\devtools\harness\tools\gate.ps1 -Branch <branch-name>
+# From worktree root:
+git push origin <branch-name>
+gh pr create --title "feat(<scope>): <summary>" --fill
 ```
-Accepts `-Semver patch|minor|major` (default patch) and `-SkipTests` (migration-collision check still runs). There is no `-Fast` or `-Yes` parameter.
+GitHub CI (ci.yml) validates the PR automatically. The `merge-to-main.yml` workflow
+squash-merges when all checks pass and the threshold is met. Track with:
+```powershell
+..\..\..\..\devtools\harness\tools\wait-for-pr.ps1 -PRNumber <N> -WaitForCI
+```
 
-**Publish:** A Windows scheduled task runs `publish.ps1` every 4 hours — it tests local main and pushes to remote only if clean. Remote main should always be green, but Workers sometimes merge broken tests despite the gate (see AGENTS.md Lessons Learned — "Never use -SkipTests to bypass preexisting failures on main"). If you see a CI failure on main, fix it immediately — don't merge on top of it.
+**Legacy gate.ps1** (local-only skills only [`find-and-fix`, `explore-deployment`]):
+`..\..\..\..\devtools\harness\tools\gate.ps1 -Branch <branch-name>` runs local CI
+and merges to local main. Accepts `-Semver patch|minor|major` (default patch),
+`-SkipTests` (migration-collision check still runs), and `-PushAndPR` to skip
+local merge and push+create PR instead.
+
+**New scripts (PR-based flow):**
+- `create-pr.ps1` - push branch + create PR from any worktree
+- `wait-for-pr.ps1` - poll a PR until it is merged (or timeout)
+- `pr-flow-config.ps1` - shared configuration for the PR-based delivery flow
+
+**Publish:** The scheduled `publish.ps1` is now verify-only (no push). Pushing to
+remote is handled by the GitHub `merge-to-main.yml` workflow when PRs are merged.
+If you see a CI failure on main, fix it immediately - do not merge on top of it.
 
 ### Subagent pattern (mandatory)
 
