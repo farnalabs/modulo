@@ -142,8 +142,8 @@
 
           <div class="space-y-4">
             <div>
-              <label class="mb-1 block text-sm font-medium">{{ $t('views.ParameterSchemasView.name') }}</label>
-              <input
+              <label for="paramschema-name" class="mb-1 block text-sm font-medium">{{ $t('views.ParameterSchemasView.name') }}</label>
+              <input id="paramschema-name"
                 v-model="schemaForm.name"
                 type="text"
                 class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm"
@@ -152,8 +152,8 @@
               />
             </div>
             <div>
-              <label class="mb-1 block text-sm font-medium">{{ $t('views.ParameterSchemasView.description') }}</label>
-              <textarea
+              <label for="paramschema-description" class="mb-1 block text-sm font-medium">{{ $t('views.ParameterSchemasView.description') }}</label>
+              <textarea id="paramschema-description"
                 v-model="schemaForm.description"
                 class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm"
                 rows="2"
@@ -187,27 +187,30 @@
                   <div class="flex-1 space-y-3">
                     <div class="grid grid-cols-2 gap-3">
                       <div>
-                        <label class="mb-1 block text-xs text-muted-foreground">{{ $t('views.ParameterSchemasView.param_name') }}</label>
-                        <input
-                          v-model="param.name"
-                          type="text"
-                          class="w-full rounded-lg border border-input bg-background px-3 py-1.5 text-sm font-mono"
-                          placeholder="param_name"
-                        />
+                      <label :for="'paramschema-param-name-' + idx" class="mb-1 block text-xs text-muted-foreground">{{ $t('views.ParameterSchemasView.param_name') }}</label>
+                      <input
+                        :id="'paramschema-param-name-' + idx"
+                        v-model="param.name"
+                        type="text"
+                        class="w-full rounded-lg border border-input bg-background px-3 py-1.5 text-sm font-mono"
+                        placeholder="param_name"
+                      />
                       </div>
                       <div>
-                        <label class="mb-1 block text-xs text-muted-foreground">{{ $t('views.ParameterSchemasView.param_label') }}</label>
-                        <input
-                          v-model="param.label"
-                          type="text"
-                          class="w-full rounded-lg border border-input bg-background px-3 py-1.5 text-sm"
-                          placeholder="Display label"
-                        />
+                      <label :for="'paramschema-param-label-' + idx" class="mb-1 block text-xs text-muted-foreground">{{ $t('views.ParameterSchemasView.param_label') }}</label>
+                      <input
+                        :id="'paramschema-param-label-' + idx"
+                        v-model="param.label"
+                        type="text"
+                        class="w-full rounded-lg border border-input bg-background px-3 py-1.5 text-sm"
+                        placeholder="Display label"
+                      />
                       </div>
                     </div>
                     <div>
-                      <label class="mb-1 block text-xs text-muted-foreground">{{ $t('views.ParameterSchemasView.param_desc') }}</label>
+                      <label :for="'paramschema-param-desc-' + idx" class="mb-1 block text-xs text-muted-foreground">{{ $t('views.ParameterSchemasView.param_desc') }}</label>
                       <input
+                        :id="'paramschema-param-desc-' + idx"
                         v-model="param.description"
                         type="text"
                         class="w-full rounded-lg border border-input bg-background px-3 py-1.5 text-sm"
@@ -216,12 +219,13 @@
                     </div>
                     <div class="grid grid-cols-2 gap-3">
                       <div>
-                        <label class="mb-1 block text-xs text-muted-foreground">{{ $t('views.ParameterSchemasView.param_type') }}</label>
-                        <select
-                          v-model="param.type"
-                          class="w-full rounded-lg border border-input bg-background px-3 py-1.5 text-sm"
-                          @change="onParamTypeChange(param)"
-                        >
+                      <label :for="'paramschema-param-type-' + idx" class="mb-1 block text-xs text-muted-foreground">{{ $t('views.ParameterSchemasView.param_type') }}</label>
+                      <select
+                        :id="'paramschema-param-type-' + idx"
+                        v-model="param.type"
+                        class="w-full rounded-lg border border-input bg-background px-3 py-1.5 text-sm"
+                        @change="onParamTypeChange(param)"
+                      >
                           <option value="string">string</option>
                           <option value="number">number</option>
                           <option value="boolean">boolean</option>
@@ -243,24 +247,26 @@
                     </div>
                     <div v-if="param.type === 'number'" class="grid grid-cols-2 gap-3">
                       <div>
-                        <label class="mb-1 block text-xs text-muted-foreground">{{ $t('views.ParameterSchemasView.param_min') }}</label>
-                        <input
-                          v-model.number="param.minimum"
-                          type="number"
-                          class="w-full rounded-lg border border-input bg-background px-3 py-1.5 text-sm"
-                        />
+                      <label :for="'paramschema-param-min-' + idx" class="mb-1 block text-xs text-muted-foreground">{{ $t('views.ParameterSchemasView.param_min') }}</label>
+                      <input
+                        :id="'paramschema-param-min-' + idx"
+                        v-model.number="param.minimum"
+                        type="number"
+                        class="w-full rounded-lg border border-input bg-background px-3 py-1.5 text-sm"
+                      />
                       </div>
                       <div>
-                        <label class="mb-1 block text-xs text-muted-foreground">{{ $t('views.ParameterSchemasView.param_max') }}</label>
-                        <input
-                          v-model.number="param.maximum"
-                          type="number"
-                          class="w-full rounded-lg border border-input bg-background px-3 py-1.5 text-sm"
-                        />
+                      <label :for="'paramschema-param-max-' + idx" class="mb-1 block text-xs text-muted-foreground">{{ $t('views.ParameterSchemasView.param_max') }}</label>
+                      <input
+                        :id="'paramschema-param-max-' + idx"
+                        v-model.number="param.maximum"
+                        type="number"
+                        class="w-full rounded-lg border border-input bg-background px-3 py-1.5 text-sm"
+                      />
                       </div>
                     </div>
                     <div v-if="param.type === 'select'">
-                      <label class="mb-1 block text-xs text-muted-foreground">{{ $t('views.ParameterSchemasView.param_options') }}</label>
+                      <label :for="'paramschema-param-options-' + idx" class="mb-1 block text-xs text-muted-foreground">{{ $t('views.ParameterSchemasView.param_options') }}</label>
                       <div class="space-y-1">
                         <div v-for="(_, oi) in (param.options || [])" :key="oi" class="flex items-center gap-1">
                           <input
@@ -285,8 +291,9 @@
                       </div>
                     </div>
                     <div>
-                      <label class="mb-1 block text-xs text-muted-foreground">{{ $t('views.ParameterSchemasView.param_default') }}</label>
+                      <label :for="'paramschema-param-default-' + idx" class="mb-1 block text-xs text-muted-foreground">{{ $t('views.ParameterSchemasView.param_default') }}</label>
                       <input
+                        :id="'paramschema-param-default-' + idx"
                         v-if="param.type === 'string'"
                         v-model="param.default_value"
                         type="text"
@@ -389,23 +396,23 @@
 
             <div class="space-y-3">
               <div>
-                <label class="mb-1 block text-sm font-medium">{{ $t('views.ParameterSchemasView.name') }}</label>
-                <input
-                  v-model="setForm.name"
-                  type="text"
-                  class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm"
-                  placeholder="My parameter set"
-                  data-testid="paramschema-set-name"
-                />
+              <label for="paramschema-set-name" class="mb-1 block text-sm font-medium">{{ $t('views.ParameterSchemasView.name') }}</label>
+              <input id="paramschema-set-name"
+                v-model="setForm.name"
+                type="text"
+                class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm"
+                placeholder="My parameter set"
+                data-testid="paramschema-set-name"
+              />
               </div>
               <div>
-                <label class="mb-1 block text-sm font-medium">{{ $t('views.ParameterSchemasView.description') }}</label>
-                <input
-                  v-model="setForm.description"
-                  type="text"
-                  class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm"
-                  placeholder="Optional description"
-                />
+              <label for="paramschema-set-desc" class="mb-1 block text-sm font-medium">{{ $t('views.ParameterSchemasView.description') }}</label>
+              <input id="paramschema-set-desc"
+                v-model="setForm.description"
+                type="text"
+                class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm"
+                placeholder="Optional description"
+              />
               </div>
             </div>
 
@@ -416,22 +423,24 @@
                 :key="param.name"
                 class="space-y-1"
               >
-                <label class="block text-xs font-medium text-muted-foreground">
-                  {{ param.label || param.name }}
-                  <span v-if="param.required" class="text-destructive">*</span>
-                </label>
+              <label :for="'paramschema-set-value-' + param.name" class="block text-xs font-medium text-muted-foreground">
+                {{ param.label || param.name }}
+                <span v-if="param.required" class="text-destructive">*</span>
+              </label>
 
-                <textarea
-                  v-if="param.type === 'string' && param.multiline"
-                  v-model="setForm.values[param.name]"
-                  class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm"
-                  rows="3"
-                  :placeholder="param.placeholder || ''"
-                />
-                <input
-                  v-else-if="param.type === 'string'"
-                  v-model="setForm.values[param.name]"
-                  type="text"
+              <textarea
+                v-if="param.type === 'string' && param.multiline"
+                :id="'paramschema-set-value-' + param.name"
+                v-model="setForm.values[param.name]"
+                class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm"
+                rows="3"
+                :placeholder="param.placeholder || ''"
+              />
+              <input
+                v-else-if="param.type === 'string'"
+                :id="'paramschema-set-value-' + param.name"
+                v-model="setForm.values[param.name]"
+                type="text"
                   class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm"
                   :placeholder="param.placeholder || ''"
                 />
@@ -564,10 +573,11 @@
               :key="param.name"
               class="space-y-1"
             >
-              <label class="block text-xs font-medium text-muted-foreground">{{ param.label || param.name }}</label>
+              <label :for="'paramschema-validate-value-' + param.name" class="block text-xs font-medium text-muted-foreground">{{ param.label || param.name }}</label>
 
               <textarea
                 v-if="param.type === 'string' && param.multiline"
+                :id="'paramschema-validate-value-' + param.name"
                 v-model="validateValues[param.name]"
                 class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm"
                 rows="2"
@@ -736,7 +746,6 @@ function removeParameter(idx: number) {
 function startNewSchema() {
   editingSchema.value = null
   schemaForm.value = { name: '', description: '', parameters: [] }
-  isNew.value
   saveError.value = null
   saveSuccess.value = null
   activeEditorTab.value = 'schema'

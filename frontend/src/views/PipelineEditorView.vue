@@ -327,15 +327,17 @@
               <dt class="text-muted-foreground text-xs uppercase tracking-wider">{{ $t('views.PipelineEditorView.overrides') }}</dt>
               <dd class="space-y-2">
                 <div v-for="pkey in paramSetOverridesKeys" :key="pkey" class="flex flex-col gap-0.5">
-                  <label class="text-xs text-muted-foreground">{{ paramDefLabel(pkey) }}</label>
+                  <label :for="'pipelineeditorview-override-' + pkey" class="text-xs text-muted-foreground">{{ paramDefLabel(pkey) }}</label>
                   <textarea
                     v-if="paramDefByKey(pkey)?.type === 'string' && paramDefByKey(pkey)?.multiline"
+                    :id="'pipelineeditorview-override-' + pkey"
                     v-model="selectedNodeOverrides[pkey]"
                     class="w-full rounded-lg border border-input bg-background px-2 py-1 text-xs"
                     rows="2"
                   />
                   <input
                     v-else-if="paramDefByKey(pkey)?.type === 'string'"
+                    :id="'pipelineeditorview-override-' + pkey"
                     v-model="selectedNodeOverrides[pkey]"
                     type="text"
                     class="w-full rounded-lg border border-input bg-background px-2 py-1 text-xs"

@@ -5,9 +5,9 @@
     <div class="rounded-lg border bg-card p-4 shadow-sm">
       <div class="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
         <div>
-          <label class="mb-1 block text-xs font-medium text-muted-foreground">{{ $t('views.SettingsTriggerEventLogView.trigger_type') }}</label>
+          <label for="settingstriggereventlogview-trigger-type" class="mb-1 block text-xs font-medium text-muted-foreground">{{ $t('views.SettingsTriggerEventLogView.trigger_type') }}</label>
           <Select v-model="filterTriggerType">
-            <SelectTrigger class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring" aria-label="Trigger type" data-testid="settings-trigger-event-log-trigger-type">
+            <SelectTrigger id="settingstriggereventlogview-trigger-type" class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring" aria-label="Trigger type" data-testid="settings-trigger-event-log-trigger-type">
               <SelectValue :placeholder="$t('views.AdminNotificationDeliveryLogView.all_types')" />
             </SelectTrigger>
             <SelectContent>
@@ -21,9 +21,9 @@
           </Select>
         </div>
         <div>
-          <label class="mb-1 block text-xs font-medium text-muted-foreground">Result</label>
+          <label for="settingstriggereventlogview-result" class="mb-1 block text-xs font-medium text-muted-foreground">Result</label>
           <Select v-model="filterResult">
-            <SelectTrigger class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring" aria-label="Result" data-testid="settings-trigger-event-log-result">
+            <SelectTrigger id="settingstriggereventlogview-result" class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring" aria-label="Result" data-testid="settings-trigger-event-log-result">
               <SelectValue :placeholder="$t('views.SettingsTriggerEventLogView.all_results')" />
             </SelectTrigger>
             <SelectContent>

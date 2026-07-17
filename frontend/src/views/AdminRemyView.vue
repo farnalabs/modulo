@@ -234,9 +234,9 @@
       >
         <div class="space-y-4">
           <div>
-            <label class="mb-1 block text-sm font-medium">{{ $t('views.AdminRemyView.default_provider') }}</label>
+            <label for="adminremyview-field-12" class="mb-1 block text-sm font-medium">{{ $t('views.AdminRemyView.default_provider') }}</label>
             <Select v-model="modelConfig.defaultProvider">
-              <SelectTrigger class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm" aria-label="Default Provider" data-testid="remy-model-provider">
+              <SelectTrigger id="adminremyview-field-12" class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm" aria-label="Default Provider" data-testid="remy-model-provider">
                 <SelectValue placeholder="Select provider" />
               </SelectTrigger>
               <SelectContent>
@@ -382,9 +382,9 @@
       <!-- Tool Permissions -->
       <SectionCard title="Tool Permissions" description="Control which UI actions Remy can perform and whether approval is required.">
         <div class="mb-6">
-          <label class="mb-1 block text-sm font-medium">Permission Mode</label>
+          <label for="adminremyview-field-13" class="mb-1 block text-sm font-medium">Permission Mode</label>
           <Select v-model="toolPermMode" @update:model-value="applyModePreset">
-            <SelectTrigger class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm" aria-label="Permission Mode">
+            <SelectTrigger id="adminremyview-field-13" class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm" aria-label="Permission Mode">
               <SelectValue placeholder="Select mode" />
             </SelectTrigger>
             <SelectContent>
@@ -894,7 +894,7 @@ function toggleRole(role: string) {
 
 async function putConfig(body: Record<string, unknown>): Promise<string | null> {
   try {
-    const { error: err } = await (api.PUT as Function)('/api/v1/admin/remy/config', { body })
+    const { error: err } = await (api.PUT as (...args: unknown[]) => Promise<{ error?: unknown }>)('/api/v1/admin/remy/config', { body })
     return err ? formatApiError(err) : null
   } catch (e: unknown) {
     return formatApiError(e)
