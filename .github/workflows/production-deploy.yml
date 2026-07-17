@@ -37,7 +37,7 @@ jobs:
 
       - name: Log deploy reason
         shell: powershell
-        run: Write-Host "Production deploy reason: ${{ inputs.reason }}"
+        run: 'Write-Host "Production deploy reason: ${{ inputs.reason }}"'
 
       - name: Capture git metadata
         id: git
