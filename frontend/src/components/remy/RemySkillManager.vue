@@ -45,9 +45,10 @@
         class="remy-skill-input"
         :placeholder="$t('components.remy.RemySkillManager.triggers_commaseparated')"
       />
-      <textarea aria-label="$t("
+      <textarea
         v-model="form.body"
         class="remy-skill-textarea"
+        :aria-label="$t('components.remy.RemySkillManager.skill_body_markdown')"
         :placeholder="$t('components.remy.RemySkillManager.skill_body_markdown')"
         rows="4"
       />

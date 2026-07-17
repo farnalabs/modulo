@@ -1,4 +1,4 @@
-"""Tests for schema route error handling â€” ProgrammingError, SQLAlchemyError, IntegrityError."""
+"""Tests for schema route error handling — ProgrammingError, SQLAlchemyError, IntegrityError."""
 
 import uuid
 from collections.abc import AsyncGenerator, Generator

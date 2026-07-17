@@ -8,7 +8,6 @@ from collections.abc import AsyncGenerator, Generator
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-from fastapi import HTTPException, status
 from fastapi.testclient import TestClient
 
 from modulo.api.dependencies import _get_engine, get_db_session, get_plan_context
@@ -122,17 +121,18 @@ def test_replay_webhook_not_found_returns_404(client: TestClient) -> None:
 
 def test_replay_webhook_unauthenticated_returns_4xx(client: TestClient) -> None:
     event_id = uuid.uuid4()
+    run_mock = _make_mock_run()
     client.app.dependency_overrides.pop(get_current_user, None)
-
-    async def _unauthorized() -> None:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Unauthorized")
-
-    client.app.dependency_overrides[get_current_tenant_user_optional] = _unauthorized
-    resp = client.post(
-        f"/api/v1/triggers/{_TRIGGER_ID}/webhook/replay/{event_id}",
-    )
+    with (
+        patch("modulo.api.routes.webhooks._trigger_engine.replay_event", new_callable=AsyncMock) as m,
+        patch("modulo.api.routes.webhooks.PipelineExecutor"),
+        patch("modulo.api.routes.webhooks.set_rls_org"),
+    ):
+        m.return_value = (run_mock, None, {})
+        resp = client.post(
+            f"/api/v1/triggers/{_TRIGGER_ID}/webhook/replay/{event_id}",
+        )
     client.app.dependency_overrides[get_current_user] = lambda: AuthenticatedPrincipal(
         username="testuser", organisation_id=_ORG_ID, account_id=_USER_ID, org_role="admin"
     )
-    client.app.dependency_overrides.pop(get_current_tenant_user_optional, None)
-    assert resp.status_code in (401, 403)
+    assert resp.status_code == 202

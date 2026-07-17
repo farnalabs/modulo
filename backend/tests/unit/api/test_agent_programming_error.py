@@ -27,6 +27,7 @@ def _make_settings() -> Settings:
         secret_key=_VALID_32,
         fernet_key=_VALID_32,
         modulo_admin_password="testpass",
+        modulo_csrf_enabled=False,
     )
 
 
@@ -48,8 +49,8 @@ _AGENT_BODY = {
     "output_schema_version": "1.0",
     "prompt_template": "Hello",
     "model_backend_id": str(_BACKEND_ID),
-    "template_id": None,
     "required_environment_capabilities": [],
+    "template_id": None,
 }
 
 
@@ -125,7 +126,11 @@ def test_update_agent_programming_error_returns_501(client: TestClient) -> None:
     ):
         resp = client.patch(
             f"/api/v1/agents/{_AGENT_ID}",
-            json={"name": "x", "required_environment_capabilities": [], "template_id": None},
+            json={
+                "name": "x",
+                "required_environment_capabilities": [],
+                "template_id": None,
+            },
         )
     assert resp.status_code == 501
 

@@ -374,7 +374,11 @@ def test_cleanup_expired_programming_error(engine_client: TestClient) -> None:
             yield session
 
         engine_client.app.dependency_overrides[get_db_session] = override_session
+        engine_client.app.dependency_overrides[get_current_tenant_user_optional] = lambda: TenantPrincipal(
+            username="testuser", organisation_id=_ORG_ID, account_id=_USER_ID, org_role="admin"
+        )
         resp = engine_client.post("/api/v1/triggers/cleanup-expired")
+        engine_client.app.dependency_overrides.pop(get_current_tenant_user_optional, None)
 
     assert resp.status_code == 501
     assert "migrations" in resp.json()["detail"].lower()

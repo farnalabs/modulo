@@ -1,4 +1,4 @@
-"""BDD step definitions: View as team â€” non-admin rejection."""
+"""BDD step definitions: View as team — non-admin rejection."""
 
 import contextlib
 import uuid

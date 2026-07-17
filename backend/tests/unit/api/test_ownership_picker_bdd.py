@@ -11,8 +11,8 @@ from fastapi.testclient import TestClient
 
 from modulo.api.dependencies import _get_engine, get_db_session, get_plan_context
 from modulo.api.main import app
-from modulo.auth.dependencies import get_current_user
-from modulo.auth.jwt import AuthenticatedPrincipal
+from modulo.auth.dependencies import get_current_tenant_user, get_current_user
+from modulo.auth.jwt import AuthenticatedPrincipal, TenantPrincipal
 from modulo.settings import Settings, get_settings
 from tests.unit.api.mock_session import configure_mock_session
 
@@ -74,6 +74,12 @@ def client() -> Generator[TestClient, None, None]:
         account_id=_USER_ID,
         org_role="admin",
     )
+    app.dependency_overrides[get_current_tenant_user] = lambda: TenantPrincipal(
+        username="admin",
+        organisation_id=_ORG_ID,
+        account_id=_USER_ID,
+        org_role="admin",
+    )
     mock_plan = MagicMock()
     mock_plan.feature_enabled.return_value = True
     app.dependency_overrides[get_plan_context] = lambda: mock_plan
@@ -97,6 +103,12 @@ def member_client() -> Generator[TestClient, None, None]:
         account_id=_USER_ID,
         org_role="operator",
     )
+    app.dependency_overrides[get_current_tenant_user] = lambda: TenantPrincipal(
+        username="member",
+        organisation_id=_ORG_ID,
+        account_id=_USER_ID,
+        org_role="operator",
+    )
     mock_plan = MagicMock()
     mock_plan.feature_enabled.return_value = True
     app.dependency_overrides[get_plan_context] = lambda: mock_plan
@@ -115,6 +127,12 @@ def non_member_client() -> Generator[TestClient, None, None]:
     app.dependency_overrides[get_db_session] = override_session
     app.dependency_overrides[_get_engine] = lambda: MagicMock()
     app.dependency_overrides[get_current_user] = lambda: AuthenticatedPrincipal(
+        username="nonmember",
+        organisation_id=_ORG_ID,
+        account_id=_ALT_USER_ID,
+        org_role="operator",
+    )
+    app.dependency_overrides[get_current_tenant_user] = lambda: TenantPrincipal(
         username="nonmember",
         organisation_id=_ORG_ID,
         account_id=_ALT_USER_ID,
