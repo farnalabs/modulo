@@ -68,110 +68,80 @@
     </div>
 
     <!-- Create Folder Dialog -->
-    <div
-      v-if="showCreateDialog"
-      class="fixed inset-0 z-50 flex items-center justify-center bg-black/50"
-    >
-      <button
-        type="button"
-        class="absolute inset-0 cursor-default"
-        :aria-label="$t('common.close')"
-        @click="showCreateDialog = false"
-      ></button>
-      <div class="relative w-full max-w-md rounded-lg border bg-card p-6 shadow-lg" role="dialog" aria-modal="true">
-        <h3 class="mb-4 text-lg font-semibold">{{ $t('views.PipelineListView.new_folder') }}</h3>
+    <Dialog v-model:open="showCreateDialog">
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle>{{ $t('views.PipelineListView.new_folder') }}</DialogTitle>
+        </DialogHeader>
         <div class="space-y-4">
           <div>
-            <label for="folder-tree-new-name" class="mb-1 block text-sm font-medium">{{ $t('views.PipelineListView.folder_name') }}</label>
-            <input id="folder-tree-new-name"
-              v-model="newFolderName"
-              class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm"
-              :placeholder="$t('views.PipelineListView.folder_name')"
-              @keyup.enter="handleCreate"
-            />
+            <label class="mb-1 block text-sm font-medium">{{ $t('views.PipelineListView.folder_name') }}</label>
+            <Input id="folder-tree-new-name" v-model="newFolderName" placeholder="Folder name" @keyup.enter="handleCreate" />
           </div>
+
+          <!-- Parent folder selector -->
+          <div>
+            <label class="mb-1 block text-sm font-medium">Parent folder</label>
+            <Select v-model="newFolderParentId">
+              <SelectTrigger>
+                <SelectValue placeholder="No parent (root level)" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem :value="'null'">No parent (root level)</SelectItem>
+                <SelectItem v-for="f in allFolders" :key="f.id" :value="f.id">{{ f.name }}</SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
+
           <div v-if="createError" class="rounded-lg border border-destructive/50 bg-destructive/10 p-3 text-sm text-destructive">
             {{ createError }}
           </div>
-          <div class="flex justify-end gap-2">
-            <button class="rounded-lg border border-input bg-background px-4 py-2 text-sm hover:bg-accent" @click="showCreateDialog = false">
-              {{ $t('common.cancel') }}
-            </button>
-            <Button :disabled="!newFolderName.trim() || creating" @click="handleCreate">
-              {{ creating ? $t('common.saving') : $t('common.save') }}
-            </Button>
-          </div>
         </div>
-      </div>
-    </div>
+        <DialogFooter>
+          <Button variant="outline" @click="showCreateDialog = false">Cancel</Button>
+          <Button :disabled="!newFolderName.trim() || creating" :loading="creating" @click="handleCreate">Save</Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
 
     <!-- Rename Folder Dialog -->
-    <div
-      v-if="showRenameDialog"
-      class="fixed inset-0 z-50 flex items-center justify-center bg-black/50"
-    >
-      <button
-        type="button"
-        class="absolute inset-0 cursor-default"
-        :aria-label="$t('common.close')"
-        @click="showRenameDialog = false"
-      ></button>
-      <div class="relative w-full max-w-md rounded-lg border bg-card p-6 shadow-lg" role="dialog" aria-modal="true">
-        <h3 class="mb-4 text-lg font-semibold">{{ $t('views.PipelineListView.rename_folder') }}</h3>
+    <Dialog v-model:open="showRenameDialog">
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle>{{ $t('views.PipelineListView.rename_folder') }}</DialogTitle>
+        </DialogHeader>
         <div class="space-y-4">
           <div>
-            <label for="folder-tree-rename-name" class="mb-1 block text-sm font-medium">{{ $t('views.PipelineListView.folder_name') }}</label>
-            <input id="folder-tree-rename-name"
-              v-model="renameFolderName"
-              class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm"
-              :placeholder="$t('views.PipelineListView.folder_name')"
-              @keyup.enter="handleRename"
-            />
+            <label class="mb-1 block text-sm font-medium">{{ $t('views.PipelineListView.folder_name') }}</label>
+            <Input v-model="renameFolderName" placeholder="Folder name" @keyup.enter="handleRename" />
           </div>
           <div v-if="renameError" class="rounded-lg border border-destructive/50 bg-destructive/10 p-3 text-sm text-destructive">
             {{ renameError }}
           </div>
-          <div class="flex justify-end gap-2">
-            <button class="rounded-lg border border-input bg-background px-4 py-2 text-sm hover:bg-accent" @click="showRenameDialog = false">
-              {{ $t('common.cancel') }}
-            </button>
-            <Button :disabled="!renameFolderName.trim() || renaming" @click="handleRename">
-              {{ renaming ? $t('common.saving') : $t('common.save') }}
-            </Button>
-          </div>
         </div>
-      </div>
-    </div>
+        <DialogFooter>
+          <Button variant="outline" @click="showRenameDialog = false">Cancel</Button>
+          <Button :disabled="!renameFolderName.trim() || renaming" :loading="renaming" @click="handleRename">Save</Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
 
     <!-- Delete Confirmation Dialog -->
-    <div
-      v-if="showDeleteConfirm"
-      class="fixed inset-0 z-50 flex items-center justify-center bg-black/50"
-    >
-      <button
-        type="button"
-        class="absolute inset-0 cursor-default"
-        :aria-label="$t('common.close')"
-        @click="showDeleteConfirm = false"
-      ></button>
-      <div class="relative w-full max-w-md rounded-lg border bg-card p-6 shadow-lg" role="dialog" aria-modal="true">
-        <h3 class="mb-4 text-lg font-semibold text-destructive">{{ $t('views.PipelineListView.delete_folder') }}</h3>
-        <p class="mb-4 text-sm text-muted-foreground">
-          {{ $t('views.PipelineListView.delete_folder_confirm') }}
-        </p>
-        <div v-if="deleteError" class="mb-4 rounded-lg border border-destructive/50 bg-destructive/10 p-3 text-sm text-destructive">
+    <Dialog v-model:open="showDeleteConfirm">
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle class="text-destructive">{{ $t('views.PipelineListView.delete_folder') }}</DialogTitle>
+          <DialogDescription>{{ $t('views.PipelineListView.delete_folder_confirm') }}</DialogDescription>
+        </DialogHeader>
+        <div v-if="deleteError" class="rounded-lg border border-destructive/50 bg-destructive/10 p-3 text-sm text-destructive">
           {{ deleteError }}
         </div>
-        <div class="flex justify-end gap-2">
-          <button class="rounded-lg border border-input bg-background px-4 py-2 text-sm hover:bg-accent" @click="showDeleteConfirm = false">
-            {{ $t('common.cancel') }}
-          </button>
-          <button class="rounded-lg bg-destructive px-4 py-2 text-sm font-medium text-destructive-foreground hover:bg-destructive/90" :disabled="deleting" @click="handleDelete">
-            {{ $t('common.delete') }}
-          </button>
-        </div>
-      </div>
-    </div>
+        <DialogFooter>
+          <Button variant="outline" @click="showDeleteConfirm = false">Cancel</Button>
+          <Button variant="destructive" :disabled="deleting" :loading="deleting" @click="handleDelete">Delete</Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   </div>
 </template>
 
@@ -180,6 +150,9 @@ import { ref, computed, onMounted } from 'vue'
 import { useApi } from '@/composables/useApi'
 import { formatApiError } from '../../lib/api/formatError'
 import { Button } from '@/components/ui/button'
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
+import { Input } from '@/components/ui/input'
 
 interface FolderItem {
   id: string
@@ -211,6 +184,7 @@ const error = ref<string | null>(null)
 
 const showCreateDialog = ref(false)
 const newFolderName = ref('')
+const newFolderParentId = ref<string | null>(null)
 const createError = ref<string | null>(null)
 const creating = ref(false)
 
@@ -267,6 +241,7 @@ async function loadFolders() {
 
 function openCreateDialog() {
   newFolderName.value = ''
+  newFolderParentId.value = null
   createError.value = null
   showCreateDialog.value = true
 }
@@ -276,8 +251,13 @@ async function handleCreate() {
   creating.value = true
   createError.value = null
   try {
-    await post<FolderItem>('/api/v1/pipeline-folders', { name: newFolderName.value.trim() })
+    const body: Record<string, any> = { name: newFolderName.value.trim() }
+    if (newFolderParentId.value) {
+      body.parent_id = newFolderParentId.value
+    }
+    await post<FolderItem>('/api/v1/pipeline-folders', body)
     showCreateDialog.value = false
+    newFolderParentId.value = null
     emit('folders-changed')
     await loadFolders()
   } catch (e: unknown) {
