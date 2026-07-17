@@ -27,7 +27,6 @@
       @update:filter="handleFilterUpdate"
     >
       <template #after>
-        <Button variant="default" @click="applyFilters">Apply Filters</Button>
         <button class="rounded-lg border border-input bg-background px-4 py-2 text-sm font-medium hover:bg-accent" @click="resetFilters">Reset</button>
       </template>
     </FilterBar>
@@ -110,14 +109,13 @@
 <script setup lang="ts">
 import PageHeader from '../components/shared/PageHeader.vue'
 import FilterBar from '../components/shared/FilterBar.vue'
-import { ref, computed } from 'vue'
+import { ref, computed, watch } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import { fetchRuns, type RunListItem, type FetchRunsParams } from '../lib/api/runs'
 import { useDataFetch } from '../composables/useDataFetch'
 import LoadingSpinner from '../components/shared/LoadingSpinner.vue'
 import ErrorAlert from '../components/shared/ErrorAlert.vue'
 import { formatApiError } from '../lib/api/formatError'
-import { Button } from '@/components/ui/button'
 import { DataTable } from '../components/ui/data-table'
 import EmptyState from '../components/shared/EmptyState.vue'
 import { runStatusBadgeClass, formatRunDate } from '../utils/runUtils'
@@ -139,13 +137,23 @@ const { data: runsData, loading, error, load: loadRuns } = useDataFetch<{ items:
 const runs = computed(() => runsData.value?.items ?? [])
 const total = computed(() => runsData.value?.total ?? 0)
 
-const filterStatus = ref(route.query.status as string || '')
-const filterTriggerType = ref('')
-const filterSearch = ref('')
+const FILTER_STORAGE_KEY = 'runs-list-filters'
+
+const filterStatus = ref(route.query.status as string || localStorage.getItem(`${FILTER_STORAGE_KEY}.status`) || '')
+const filterTriggerType = ref(route.query.trigger_type as string || localStorage.getItem(`${FILTER_STORAGE_KEY}.trigger_type`) || '')
+const filterSearch = ref(route.query.search as string || localStorage.getItem(`${FILTER_STORAGE_KEY}.search`) || '')
+
+watch([filterStatus, filterTriggerType, filterSearch], ([status, triggerType, search]) => {
+  localStorage.setItem(`${FILTER_STORAGE_KEY}.status`, status)
+  localStorage.setItem(`${FILTER_STORAGE_KEY}.trigger_type`, triggerType)
+  localStorage.setItem(`${FILTER_STORAGE_KEY}.search`, search)
+})
 
 function handleFilterUpdate(key: string, value: string) {
   if (key === 'status') filterStatus.value = value
   else if (key === 'trigger_type') filterTriggerType.value = value
+  page.value = 1
+  loadRuns()
 }
 
 function buildParams(): FetchRunsParams {
@@ -156,15 +164,13 @@ function buildParams(): FetchRunsParams {
   return params
 }
 
-function applyFilters() {
-  page.value = 1
-  loadRuns()
-}
-
 function resetFilters() {
   filterStatus.value = ''
   filterTriggerType.value = ''
   filterSearch.value = ''
+  localStorage.removeItem(`${FILTER_STORAGE_KEY}.status`)
+  localStorage.removeItem(`${FILTER_STORAGE_KEY}.trigger_type`)
+  localStorage.removeItem(`${FILTER_STORAGE_KEY}.search`)
   page.value = 1
   loadRuns()
 }
