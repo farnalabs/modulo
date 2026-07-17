@@ -1,19 +1,42 @@
 {
+  "version": 2,
   "description": "Common JSON output schemas for pipeline agent_command scripts.",
   "schemas": {
     "basic_result": {
-      "description": "Minimal output shared by all pipelines.",
+      "description": "Minimal output shared by all pipelines with cost tracking.",
       "type": "object",
       "required": ["status", "summary"],
       "properties": {
         "status": {
           "type": "string",
-          "enum": ["success", "failed", "skipped", "partial_failure", "issues_found"],
+          "enum": ["completed", "failed", "skipped", "partial_failure", "issues_found"],
           "description": "Overall pipeline outcome."
         },
         "summary": {
           "type": "string",
+          "maxLength": 2000,
           "description": "Human-readable one-line summary of what happened."
+        },
+        "wall_clock_ms": {
+          "type": "integer",
+          "description": "Wall-clock time of the opencode call in milliseconds."
+        },
+        "cost_estimate_usd": {
+          "type": "number",
+          "description": "Estimated cost based on ~100 tokens/sec at DeepSeek V4 Flash pricing."
+        },
+        "usage": {
+          "type": "object",
+          "properties": {
+            "model": {"type": "string"},
+            "wall_clock_ms": {"type": "integer"},
+            "cost_estimate_usd": {"type": "number"}
+          },
+          "description": "Model usage summary."
+        },
+        "output_json": {
+          "type": "object",
+          "description": "Extended output data specific to each pipeline."
         }
       }
     },

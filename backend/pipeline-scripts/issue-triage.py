@@ -6,30 +6,21 @@ priority, and required labels, then applies the suggested labels and
 assigns to the appropriate team member based on Modulo's delivery plan.
 
 Environment Variables:
-    GITHUB_TOKEN        — GitHub PAT for issue access and label management
-    GITHUB_REPO         — Repository full name (e.g. "farnalabs/modulo")
-    GITHUB_ISSUE_NUMBER — Issue number to triage
-    OPENCODE_API_KEY    — API key for the opencode CLI
+    GITHUB_TOKEN                 — GitHub PAT for issue access and label management
+    GITHUB_REPO                  — Repository full name (e.g. "farnalabs/modulo")
+    GITHUB_ISSUE_NUMBER          — Issue number to triage
+    APP_MODULO_OPENCODE_API_KEY  — API key for the opencode CLI
 
 Output:
-    Writes status, summary (issue, assigned labels, priority), and issue_url
-    to /tmp/output.json
+    Writes status, summary, wall_clock_ms, issue details, and labels to output.json
 """
 
 import json
 import os
 import subprocess
-import sys
-import tempfile
-from pathlib import Path
+import time
 
-REQUIRED_ENV_VARS = [
-    "GITHUB_TOKEN",
-    "GITHUB_REPO",
-    "GITHUB_ISSUE_NUMBER",
-    "OPENCODE_API_KEY",
-]
-
+from _common import check_env, exit_completed, exit_failed, setup_opencode_auth
 
 CATEGORIES = {
     "bug": ["bug", "needs-reproduction"],
@@ -48,56 +39,42 @@ PRIORITY_LABELS = {
 }
 
 
-def check_env() -> dict[str, str]:
-    missing = [k for k in REQUIRED_ENV_VARS if k not in os.environ]
+def check_env_extra():
+    missing = [k for k in ["GITHUB_REPO", "GITHUB_ISSUE_NUMBER"] if k not in os.environ]
     if missing:
-        print(f"Missing required env vars: {', '.join(missing)}", file=sys.stderr)
-        sys.exit(1)
-    return {
-        "github_token": os.environ["GITHUB_TOKEN"],
-        "github_repo": os.environ["GITHUB_REPO"],
-        "issue_number": os.environ["GITHUB_ISSUE_NUMBER"],
-        "opencode_api_key": os.environ["OPENCODE_API_KEY"],
-    }
+        exit_failed(f"Missing required env vars: {', '.join(missing)}")
+    return os.environ["GITHUB_REPO"], os.environ["GITHUB_ISSUE_NUMBER"]
 
 
-def get_issue_details(repo_full_name: str, issue_number: str, github_token: str) -> dict:
-    result = subprocess.run(
-        [
-            "gh",
-            "issue",
-            "view",
-            issue_number,
-            "--repo",
-            repo_full_name,
-            "--json",
-            "title,body,labels,author",
-        ],
-        env={**os.environ, "GH_TOKEN": github_token},
+def get_issue_details(repo_full_name, issue_number, token):
+    r = subprocess.run(
+        ["gh", "issue", "view", issue_number, "--repo", repo_full_name, "--json", "title,body,labels,author"],
+        env={**os.environ, "GH_TOKEN": token},
         capture_output=True,
         text=True,
-        check=True,
     )
-    return json.loads(result.stdout)
+    if r.returncode != 0:
+        exit_failed(f"Failed to get issue details: {r.stderr[:200]}")
+    return json.loads(r.stdout)
 
 
-def classify_issue(issue: dict, repo_path: Path) -> dict:
+def classify_issue(issue):
     prompt = json.dumps(
         {
             "task": "triage_issue",
             "title": issue["title"],
             "body": issue.get("body", "")[:2000],
-            "existing_labels": [l["name"] for l in issue.get("labels", [])],
+            "existing_labels": [label["name"] for label in issue.get("labels", [])],
         }
     )
 
     result = subprocess.run(
         ["opencode", "evaluate", "--prompt", prompt],
-        cwd=repo_path,
         capture_output=True,
         text=True,
         timeout=120,
     )
+
     if result.returncode != 0:
         return {
             "category": "question",
@@ -117,72 +94,47 @@ def classify_issue(issue: dict, repo_path: Path) -> dict:
         }
 
 
-def apply_labels(
-    repo_full_name: str,
-    issue_number: str,
-    classification: dict,
-    github_token: str,
-) -> list[str]:
+def apply_labels(repo_full_name, issue_number, classification, token):
     labels = CATEGORIES.get(classification["category"], ["needs-triage"])
     priority_label = PRIORITY_LABELS.get(classification["priority"], "priority:medium")
     labels.append(priority_label)
 
-    label_args = ["--add-label", ",".join(labels)]
-    subprocess.run(
-        [
-            "gh",
-            "issue",
-            "edit",
-            issue_number,
-            "--repo",
-            repo_full_name,
-            *label_args,
-        ],
-        env={**os.environ, "GH_TOKEN": github_token},
+    r = subprocess.run(
+        ["gh", "issue", "edit", issue_number, "--repo", repo_full_name, "--add-label", ",".join(labels)],
+        env={**os.environ, "GH_TOKEN": token},
         capture_output=True,
-        check=True,
     )
+    if r.returncode != 0:
+        exit_failed(f"Failed to apply labels: {r.stderr[:200]}")
     return labels
 
 
-def write_output(status: str, summary: str, extra: dict | None = None) -> None:
-    output = {"status": status, "summary": summary}
-    if extra:
-        output.update(extra)
-    output_path = Path("/tmp/output.json")
-    output_path.write_text(json.dumps(output, indent=2))
-    print(f"Output written to {output_path}")
+def main():
+    token, api_key = check_env()
+    model = setup_opencode_auth(api_key)
+    github_repo, issue_number = check_env_extra()
 
+    issue = get_issue_details(github_repo, issue_number, token)
 
-def main() -> None:
-    env = check_env()
+    start = time.time()
+    classification = classify_issue(issue)
+    wall_clock_ms = int((time.time() - start) * 1000)
 
-    with tempfile.TemporaryDirectory(prefix="issue-triage-") as tmpdir:
-        repo_path = Path(tmpdir) / "repo"
+    labels = apply_labels(github_repo, issue_number, classification, token)
 
-        issue = get_issue_details(env["github_repo"], env["issue_number"], env["github_token"])
-        classification = classify_issue(issue, repo_path)
-        labels = apply_labels(
-            env["github_repo"],
-            env["issue_number"],
-            classification,
-            env["github_token"],
-        )
-
-        write_output(
-            status="success",
-            summary=(
-                f"Triaged issue #{env['issue_number']}: {classification['category']} ({classification['priority']})"
-            ),
-            extra={
-                "issue_number": int(env["issue_number"]),
-                "issue_title": issue["title"],
-                "category": classification["category"],
-                "priority": classification["priority"],
-                "labels_applied": labels,
-                "confidence": classification.get("confidence", "unknown"),
-            },
-        )
+    exit_completed(
+        summary=f"Triaged issue #{issue_number}: {classification['category']} ({classification['priority']})",
+        extra={
+            "issue_number": int(issue_number),
+            "issue_title": issue["title"],
+            "category": classification["category"],
+            "priority": classification["priority"],
+            "labels_applied": labels,
+            "confidence": classification.get("confidence", "unknown"),
+            "wall_clock_ms": wall_clock_ms,
+            "usage": {"model": model, "wall_clock_ms": wall_clock_ms},
+        },
+    )
 
 
 if __name__ == "__main__":
