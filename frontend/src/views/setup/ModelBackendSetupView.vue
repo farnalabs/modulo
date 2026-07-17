@@ -57,7 +57,7 @@ const { loading, error, mutate: submit } = useMutation(async () => {
   if (!apiKey.value.trim()) return
   try {
     const resp = await post<{ status: string; backend_id: string; name: string }>(
-      `/model-backends/${backendId}/complete-setup`,
+      `/api/v1/model-backends/${backendId}/complete-setup`,
       { token, api_key: apiKey.value }
     )
     backendName.value = resp.name
