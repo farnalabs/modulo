@@ -70,10 +70,10 @@
           >
             Archive
           </button>
-          <div class="ml-auto flex items-center gap-2">
-            <span class="text-xs text-muted-foreground">{{ $t('views.AdminErrorDetailView.assign_to') }}</span>
-            <Select v-model="assigneeId" @update:model-value="updateAssignee">
-              <SelectTrigger aria-label="Assign to" class="rounded-lg border border-input bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring">
+            <div class="ml-auto flex items-center gap-2">
+            <label for="assignee-select" class="text-xs text-muted-foreground">{{ $t('views.AdminErrorDetailView.assign_to') }}</label>
+            <Select v-model="assigneeId" aria-label="Assign to" @update:model-value="updateAssignee">
+              <SelectTrigger id="assignee-select" aria-label="Assign to" class="rounded-lg border border-input bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring">
                 <SelectValue placeholder="Unassigned" />
               </SelectTrigger>
               <SelectContent>
