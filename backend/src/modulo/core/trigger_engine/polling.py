@@ -143,7 +143,7 @@ def evaluate_condition(
 
 
 # ---------------------------------------------------------------------------
-# Celery task â€” fire one polling trigger
+# Celery task — fire one polling trigger
 # ---------------------------------------------------------------------------
 
 
@@ -190,7 +190,7 @@ async def fire_polling_trigger(
     poll_query: str,
     condition_expression: str | None,
 ) -> dict[str, Any]:
-    """Fire a polling trigger â€” runs the connector query and evaluates the condition.
+    """Fire a polling trigger — runs the connector query and evaluates the condition.
 
     Shared between Celery beat tasks and the in-process asyncio scheduler.
     Opens its own DB connection so it can be called from both sync (Celery)
@@ -321,7 +321,7 @@ async def fire_polling_trigger(
             return {"status": "error", "reason": "condition_eval_failed", "error": str(exc)}
 
         if not condition_met:
-            # Log no_match â€” condition not satisfied this cycle
+            # Log no_match — condition not satisfied this cycle
             await _log_poll_event(
                 session,
                 trigger=trigger,
@@ -329,7 +329,7 @@ async def fire_polling_trigger(
                 result="no_match",
             )
             # Update next_fire_at on no-match (separate function avoids setting
-            # last_fired_at which would be semantically misleading â€” the trigger
+            # last_fired_at which would be semantically misleading — the trigger
             # didn't actually fire).
             await _update_next_fire_no_last(session, trigger)
             return {"status": "no_match"}
@@ -366,7 +366,7 @@ async def fire_polling_trigger(
             input_payload=input_payload,
         )
 
-        # Log TriggerEvent â€” condition_met
+        # Log TriggerEvent — condition_met
         event = await _log_poll_event(
             session,
             trigger=trigger,
@@ -405,7 +405,7 @@ async def _update_next_fire(session: AsyncSession, trigger: Trigger) -> None:
 
 async def _update_next_fire_no_last(session: AsyncSession, trigger: Trigger) -> None:
     """Advance next_fire_at without touching last_fired_at.
-    Used when the condition was NOT met â€” the trigger didn't actually fire."""
+    Used when the condition was NOT met — the trigger didn't actually fire."""
     config = trigger.config_json or {}
     interval = max(int(config.get("poll_interval_seconds") or 60), 1)
     now = datetime.datetime.now(datetime.UTC)
@@ -660,5 +660,5 @@ async def _log_poll_event(
     return event
 
 
-# Backward-compatible alias â€” tests import the old private name.
+# Backward-compatible alias — tests import the old private name.
 _fire_polling_trigger = fire_polling_trigger

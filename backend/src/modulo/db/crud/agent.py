@@ -258,7 +258,7 @@ async def get_eval_results_with_defs(
             )
         )
     except ProgrammingError:
-        _log.warning("EvalResult table not found â€” returning empty results", exc_info=True)
+        _log.warning("EvalResult table not found — returning empty results", exc_info=True)
         return [], {}
 
     eval_results: list[EvalResult] = list(er_result.scalars().all())
@@ -267,7 +267,7 @@ async def get_eval_results_with_defs(
     try:
         ed_result = await session.execute(select(EvalDefinition).where(EvalDefinition.id.in_(eval_def_ids)))
     except ProgrammingError:
-        _log.warning("EvalDefinition table not found â€” returning empty definitions", exc_info=True)
+        _log.warning("EvalDefinition table not found — returning empty definitions", exc_info=True)
         return [], {}
     definitions: dict[str, Any] = {}
     for ed in ed_result.scalars().all():

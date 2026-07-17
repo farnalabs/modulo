@@ -166,7 +166,7 @@ def client(mock_session: AsyncMock) -> Generator[TestClient, None, None]:
 
 @pytest.fixture()
 def unauth_client() -> Generator[TestClient, None, None]:
-    """Client with no authentication override â€” relies on real auth."""
+    """Client with no authentication override — relies on real auth."""
     app.dependency_overrides[get_settings] = _make_settings
     mock_plan = MagicMock()
     mock_plan.feature_enabled.return_value = True
@@ -176,7 +176,7 @@ def unauth_client() -> Generator[TestClient, None, None]:
 
 
 # ---------------------------------------------------------------------------
-# POST /api/v1/runs â€” success
+# POST /api/v1/runs — success
 # ---------------------------------------------------------------------------
 
 
@@ -238,7 +238,7 @@ def test_trigger_run_body_includes_thread_id(client: TestClient) -> None:
 
 
 # ---------------------------------------------------------------------------
-# POST /api/v1/runs â€” pipeline not found
+# POST /api/v1/runs — pipeline not found
 # ---------------------------------------------------------------------------
 
 
@@ -256,7 +256,7 @@ def test_trigger_run_pipeline_not_found_returns_404(client: TestClient) -> None:
 
 
 # ---------------------------------------------------------------------------
-# POST /api/v1/runs â€” unauthenticated
+# POST /api/v1/runs — unauthenticated
 # ---------------------------------------------------------------------------
 
 
@@ -269,7 +269,7 @@ def test_trigger_run_unauthenticated_returns_4xx(unauth_client: TestClient) -> N
 
 
 # ---------------------------------------------------------------------------
-# GET /api/v1/runs/{run_id} â€” success
+# GET /api/v1/runs/{run_id} — success
 # ---------------------------------------------------------------------------
 
 
@@ -302,7 +302,7 @@ def test_get_run_returns_current_status(client: TestClient) -> None:
 
 
 # ---------------------------------------------------------------------------
-# GET /api/v1/runs/{run_id} â€” not found
+# GET /api/v1/runs/{run_id} — not found
 # ---------------------------------------------------------------------------
 
 
@@ -317,7 +317,7 @@ def test_get_run_not_found_returns_404(client: TestClient) -> None:
 
 
 # ---------------------------------------------------------------------------
-# GET /api/v1/runs/{run_id} â€” unauthenticated
+# GET /api/v1/runs/{run_id} — unauthenticated
 # ---------------------------------------------------------------------------
 
 
@@ -327,7 +327,7 @@ def test_get_run_unauthenticated_returns_4xx(unauth_client: TestClient) -> None:
 
 
 # ---------------------------------------------------------------------------
-# POST /api/v1/runs/{run_id}/cancel â€” success
+# POST /api/v1/runs/{run_id}/cancel — success
 # ---------------------------------------------------------------------------
 
 
@@ -368,7 +368,7 @@ def test_cancel_run_not_found_returns_404(client: TestClient) -> None:
 
 
 # ---------------------------------------------------------------------------
-# RunResponse â€” new field serialization
+# RunResponse — new field serialization
 # ---------------------------------------------------------------------------
 
 
@@ -579,7 +579,7 @@ def test_trigger_run_input_validation_cycle_detected(client: TestClient) -> None
 
 
 # ---------------------------------------------------------------------------
-# BackgroundPipelineWorker._execute_job â€” failure transitions run to "failed"
+# BackgroundPipelineWorker._execute_job — failure transitions run to "failed"
 # ---------------------------------------------------------------------------
 
 
@@ -616,7 +616,7 @@ async def test_background_worker_marks_run_failed_on_executor_error() -> None:
 
 
 # ---------------------------------------------------------------------------
-# POST /api/v1/runs/diff â€” node output diff across runs (task-agent-output-diff)
+# POST /api/v1/runs/diff — node output diff across runs (task-agent-output-diff)
 # ---------------------------------------------------------------------------
 
 

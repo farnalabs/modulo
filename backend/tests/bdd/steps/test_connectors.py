@@ -10,7 +10,7 @@ from pytest_bdd import given, parsers, scenarios, then, when
 from modulo.connectors.base import HealthResult
 
 # ---------------------------------------------------------------------------
-# Connector Health feature (active â€” 3 scenarios)
+# Connector Health feature (active — 3 scenarios)
 # ---------------------------------------------------------------------------
 with contextlib.suppress(FileNotFoundError, OSError):
     scenarios("../features/connectors/connector_health.feature")
@@ -29,7 +29,7 @@ def ctx():
 
 
 # ============================================================================
-# Connector Health â€” healthy
+# Connector Health — healthy
 # ============================================================================
 
 
@@ -65,7 +65,7 @@ def response_ok_true(request):
 
 
 # ============================================================================
-# Connector Health â€” unreachable
+# Connector Health — unreachable
 # ============================================================================
 
 
@@ -91,7 +91,7 @@ def response_detail_describes_error(request):
 
 
 # ============================================================================
-# Connector Health â€” encryption at rest
+# Connector Health — encryption at rest
 # ============================================================================
 
 
@@ -116,7 +116,7 @@ def connector_with_api_key(api_key, ctx):
 
 @when("I inspect the database directly")
 def inspect_database(ctx):
-    """Simulate reading the stored ciphertext â€” not the decrypted value."""
+    """Simulate reading the stored ciphertext — not the decrypted value."""
     ci = ctx.get("connector_instance")
     assert ci is not None
     # The raw database column is bytes; we confirm it's the ciphertext
@@ -135,7 +135,7 @@ def api_key_not_plaintext(ctx):
 
 
 # ============================================================================
-# Helper â€” patch connector health
+# Helper — patch connector health
 # ============================================================================
 
 
@@ -176,7 +176,7 @@ def _make_mock_connector_instance(ctx) -> MagicMock:
 
 
 # ============================================================================
-# Cleanup â€” stop all patchers after each scenario
+# Cleanup — stop all patchers after each scenario
 # ============================================================================
 
 
@@ -268,7 +268,7 @@ def _infer_resp(status_code, **kwargs):
     parsers.parse("I POST /api/schemas/infer with the connector instance"),
 )
 def step_infer_schema(request, ctx):
-    """POST /api/v1/schemas/infer â€” simulated response."""
+    """POST /api/v1/schemas/infer — simulated response."""
     if ctx.get("connector_not_found"):
         request.node._resp = _infer_resp(404, detail="Connector instance not found")
         return
@@ -342,7 +342,7 @@ def step_migration_plan_has_fields(ctx):
 
 
 # ============================================================================
-# connectors/github_connector.feature â€” 5 scenarios
+# connectors/github_connector.feature — 5 scenarios
 # ============================================================================
 with contextlib.suppress(FileNotFoundError, OSError):
     scenarios("../features/connectors/github_connector.feature")
@@ -978,7 +978,7 @@ def step_health_result_is_ok(ctx):
 
 
 # ============================================================================
-# connectors/slack_connector.feature  â€”  14 scenarios
+# connectors/slack_connector.feature  —  14 scenarios
 # ============================================================================
 with contextlib.suppress(FileNotFoundError, OSError):
     scenarios("../features/connectors/slack_connector.feature")
@@ -1301,7 +1301,7 @@ def step_slack_non_json_response(ctx):
 
 
 # ============================================================================
-# connectors/gitlab_issues.feature  â€”  23 scenarios
+# connectors/gitlab_issues.feature  —  23 scenarios
 # ============================================================================
 with contextlib.suppress(FileNotFoundError, OSError):
     scenarios("../features/connectors/gitlab_issues.feature")
@@ -1745,7 +1745,7 @@ def step_records_contain_issue_fields(ctx):
 
 
 # ============================================================================
-# connectors/gitea_connector.feature  â€”  6 scenarios
+# connectors/gitea_connector.feature  —  6 scenarios
 # ============================================================================
 with contextlib.suppress(FileNotFoundError, OSError):
     scenarios("../features/connectors/gitea_connector.feature")
@@ -1902,7 +1902,7 @@ def step_gitea_create_issue(resource, title, ctx):
 
 
 # ============================================================================
-# connectors/monday.feature  â€”  13 scenarios
+# connectors/monday.feature  —  13 scenarios
 # ============================================================================
 with contextlib.suppress(FileNotFoundError, OSError):
     scenarios("../features/connectors/monday.feature")
@@ -2320,7 +2320,7 @@ def step_monday_users_metadata(ctx):
 
 
 # ============================================================================
-# connectors/trello.feature  â€”  8+ scenarios
+# connectors/trello.feature  —  8+ scenarios
 # ============================================================================
 with contextlib.suppress(FileNotFoundError, OSError):
     scenarios("../features/connectors/trello.feature")
@@ -2643,14 +2643,14 @@ def step_trello_card_fields(ctx):
 # ============================================================================
 
 # ============================================================================
-# connectors/asana.feature  â€”  11 scenarios
+# connectors/asana.feature  —  11 scenarios
 # ============================================================================
 with contextlib.suppress(FileNotFoundError, OSError):
     scenarios("../features/connectors/asana.feature")
 
 
 # ============================================================================
-# connectors/shortcut.feature  â€”  10 scenarios
+# connectors/shortcut.feature  —  10 scenarios
 # ============================================================================
 with contextlib.suppress(FileNotFoundError, OSError):
     scenarios("../features/connectors/shortcut.feature")
