@@ -17,6 +17,21 @@ from modulo.db.models.pipeline_folder import PipelineFolder
 
 _log = logging.getLogger(__name__)
 
+_MAX_FOLDER_DEPTH = 8
+
+
+async def _compute_folder_depth(session: AsyncSession, folder_id: uuid.UUID | None) -> int:
+    """Compute the nesting depth of a folder by walking parent_id chain."""
+    depth = 0
+    current_id = folder_id
+    while current_id is not None:
+        depth += 1
+        if depth > _MAX_FOLDER_DEPTH:
+            return depth
+        result = await session.execute(select(PipelineFolder.parent_id).where(PipelineFolder.id == current_id))
+        current_id = result.scalar_one_or_none()
+    return depth
+
 
 async def create_folder(
     session: AsyncSession,
@@ -26,6 +41,10 @@ async def create_folder(
     account_id: uuid.UUID,
     parent_id: uuid.UUID | None = None,
 ) -> PipelineFolder:
+    if parent_id is not None:
+        depth = await _compute_folder_depth(session, parent_id)
+        if depth > _MAX_FOLDER_DEPTH:
+            raise ValueError(f"Folder nesting depth would exceed {_MAX_FOLDER_DEPTH} levels")
     folder = PipelineFolder(
         organisation_id=org_id,
         name=name,
