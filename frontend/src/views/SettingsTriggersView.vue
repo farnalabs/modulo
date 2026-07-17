@@ -93,9 +93,9 @@
     >
       <form @submit.prevent="saveTrigger" class="space-y-4">
         <div>
-          <label class="mb-1 block text-sm font-medium">Pipeline</label>
+          <label for="settingstriggersview-pipeline" class="mb-1 block text-sm font-medium">Pipeline</label>
           <Select v-model="form.pipeline_id">
-            <SelectTrigger class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm" aria-label="Pipeline" data-testid="settings-triggers-form-pipeline">
+            <SelectTrigger id="settingstriggersview-pipeline" class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm" aria-label="Pipeline" data-testid="settings-triggers-form-pipeline">
               <SelectValue placeholder="Select pipeline" />
             </SelectTrigger>
             <SelectContent>
@@ -105,9 +105,9 @@
         </div>
 
         <div v-if="!editingId">
-          <label class="mb-1 block text-sm font-medium">Trigger Type</label>
+          <label for="settingstriggersview-trigger-type" class="mb-1 block text-sm font-medium">Trigger Type</label>
           <Select v-model="form.trigger_type">
-            <SelectTrigger class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm" aria-label="Trigger type" data-testid="settings-triggers-form-type">
+            <SelectTrigger id="settingstriggersview-trigger-type" class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm" aria-label="Trigger type" data-testid="settings-triggers-form-type">
               <SelectValue placeholder="Select type" />
             </SelectTrigger>
             <SelectContent>
@@ -135,9 +135,9 @@
             />
           </div>
           <div>
-            <label class="mb-1 block text-sm font-medium">HTTP Method</label>
+            <label for="settingstriggersview-http-method" class="mb-1 block text-sm font-medium">HTTP Method</label>
             <Select v-model="form.webhook_method">
-              <SelectTrigger class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm" aria-label="HTTP method" data-testid="settings-triggers-form-webhook-method">
+              <SelectTrigger id="settingstriggersview-http-method" class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm" aria-label="HTTP method" data-testid="settings-triggers-form-webhook-method">
                 <SelectValue placeholder="Select method" />
               </SelectTrigger>
               <SelectContent>
@@ -241,9 +241,9 @@
         <!-- Agent Signal config -->
         <template v-if="form.trigger_type === 'agent_signal'">
           <div>
-            <label class="mb-1 block text-sm font-medium">Source Pipeline</label>
+            <label for="settingstriggersview-source-pipeline" class="mb-1 block text-sm font-medium">Source Pipeline</label>
             <Select v-model="form.signal_source_pipeline">
-              <SelectTrigger class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm" aria-label="Source pipeline" data-testid="settings-triggers-form-signal-pipeline">
+              <SelectTrigger id="settingstriggersview-source-pipeline" class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm" aria-label="Source pipeline" data-testid="settings-triggers-form-signal-pipeline">
                 <SelectValue placeholder="Select source pipeline" />
               </SelectTrigger>
               <SelectContent>

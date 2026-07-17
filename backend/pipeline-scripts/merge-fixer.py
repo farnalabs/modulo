@@ -136,7 +136,7 @@ def main():
             return
 
         conflict_files = [line.split(":")[-1].strip() for line in conflict_signals if "both modified:" in line]
-        print(f"Resolving conflicts in: {conflict_files}")  # noqa: T201
+        print(f"Resolving conflicts in: {conflict_files}")
 
         merge_result = run_merge_skill(repo_path, conflict_files)
 

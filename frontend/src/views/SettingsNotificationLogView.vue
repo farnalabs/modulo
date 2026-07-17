@@ -5,9 +5,9 @@
     <div class="rounded-lg border bg-card p-4 shadow-sm">
       <div class="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
         <div>
-          <label class="mb-1 block text-xs font-medium text-muted-foreground">Status</label>
+          <label for="settingsnotificationlogview-status" class="mb-1 block text-xs font-medium text-muted-foreground">Status</label>
           <Select v-model="filterStatus">
-            <SelectTrigger class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring" aria-label="Status" data-testid="settings-notification-log-status">
+            <SelectTrigger id="settingsnotificationlogview-status" class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring" aria-label="Status" data-testid="settings-notification-log-status">
               <SelectValue :placeholder="$t('views.AdminErrorsView.all_statuses')" />
             </SelectTrigger>
             <SelectContent>

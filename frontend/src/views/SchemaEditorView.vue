@@ -196,9 +196,9 @@
                             />
                           </div>
                           <div>
-                            <label class="mb-1 block text-xs text-muted-foreground">{{ $t('views.SchemaEditorView.field_type') }}</label>
+                            <label for="schemaeditorview-field-type" class="mb-1 block text-xs text-muted-foreground">{{ $t('views.SchemaEditorView.field_type') }}</label>
                             <Select v-model="field.type">
-                              <SelectTrigger class="w-full rounded-lg border border-input bg-background px-2.5 py-1.5 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring" aria-label="Field type" data-testid="schema-editor-field-type">
+                              <SelectTrigger id="schemaeditorview-field-type" class="w-full rounded-lg border border-input bg-background px-2.5 py-1.5 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring" aria-label="Field type" data-testid="schema-editor-field-type">
                                 <SelectValue placeholder="Select type" />
                               </SelectTrigger>
                               <SelectContent>

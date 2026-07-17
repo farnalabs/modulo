@@ -60,12 +60,12 @@ def fetch_merge_queue(repo_full_name, token):
 
 def validate_pr(pr, token):
     if pr.get("mergeable") == "CONFLICTING":
-        print(f"PR #{pr['number']} has conflicts — skipping")  # noqa: T201
+        print(f"PR #{pr['number']} has conflicts — skipping")
         return False
     reviews = pr.get("reviews", [])
     approved = any(r.get("state") == "APPROVED" for r in reviews)
     if not approved:
-        print(f"PR #{pr['number']} is not approved — skipping")  # noqa: T201
+        print(f"PR #{pr['number']} is not approved — skipping")
     return approved
 
 
@@ -129,7 +129,7 @@ def main():
     results = []
     for pr in batch:
         branch = pr["headRefName"]
-        print(f"Processing PR #{pr['number']} ({branch}): {pr['title']}")  # noqa: T201
+        print(f"Processing PR #{pr['number']} ({branch}): {pr['title']}")
 
         with tempfile.TemporaryDirectory(prefix=f"merge-queue-{pr['number']}-") as tmpdir:
             owner, repo = github_repo.split("/")

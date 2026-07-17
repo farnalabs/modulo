@@ -12,7 +12,7 @@ interface WebVitalEvent {
 }
 
 const VITALS_API = '/api/v1/metrics/web-vitals'
-let _buffer: WebVitalEvent[] = []
+const _buffer: WebVitalEvent[] = []
 let _flushTimer: ReturnType<typeof setTimeout> | null = null
 let _enabled = false
 
