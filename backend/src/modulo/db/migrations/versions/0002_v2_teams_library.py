@@ -146,7 +146,7 @@ def _create_tables() -> None:
             "source IN ('local', 'registry', 'modulo', 'community')", name="ck_library_primitives_source"
         ),
         sa.CheckConstraint(
-            "primitive_type IN ('schema', 'workflow', 'agent', 'integration', 'test_fixture', 'pipeline_template', 'composite', 'lifecycle_map')",  # noqa: E501
+            "primitive_type IN ('schema', 'workflow', 'agent', 'integration', 'test_fixture', 'pipeline_template', 'composite', 'lifecycle_map')",
             name="ck_library_primitives_type",
         ),
         sa.CheckConstraint("visibility IN ('org', 'team', 'community')", name="ck_library_primitives_visibility"),
@@ -162,7 +162,7 @@ def _create_tables() -> None:
             "average_rating IS NULL OR average_rating BETWEEN 1 AND 5", name="ck_library_primitives_rating"
         ),
         sa.CheckConstraint(
-            "(source = 'local' AND source_url IS NULL AND checksum IS NULL AND ed25519_signature IS NULL AND verified IS NULL AND download_count IS NULL AND average_rating IS NULL AND review_count IS NULL) OR (source = 'modulo' AND source_url IS NULL AND checksum IS NULL AND ed25519_signature IS NULL AND verified IS NULL AND download_count IS NULL AND average_rating IS NULL AND review_count IS NULL) OR (source = 'community' AND source_url IS NULL AND checksum IS NULL AND ed25519_signature IS NULL AND download_count IS NULL AND average_rating IS NULL AND review_count IS NULL) OR (source = 'registry' AND owner_team_id IS NULL AND visibility = 'org' AND forked_from IS NULL AND source_url IS NOT NULL AND checksum IS NOT NULL AND ed25519_signature IS NOT NULL AND verified IS NOT NULL AND download_count IS NOT NULL AND average_rating IS NOT NULL AND review_count IS NOT NULL)",  # noqa: E501
+            "(source = 'local' AND source_url IS NULL AND checksum IS NULL AND ed25519_signature IS NULL AND verified IS NULL AND download_count IS NULL AND average_rating IS NULL AND review_count IS NULL) OR (source = 'modulo' AND source_url IS NULL AND checksum IS NULL AND ed25519_signature IS NULL AND verified IS NULL AND download_count IS NULL AND average_rating IS NULL AND review_count IS NULL) OR (source = 'community' AND source_url IS NULL AND checksum IS NULL AND ed25519_signature IS NULL AND download_count IS NULL AND average_rating IS NULL AND review_count IS NULL) OR (source = 'registry' AND owner_team_id IS NULL AND visibility = 'org' AND forked_from IS NULL AND source_url IS NOT NULL AND checksum IS NOT NULL AND ed25519_signature IS NOT NULL AND verified IS NOT NULL AND download_count IS NOT NULL AND average_rating IS NOT NULL AND review_count IS NOT NULL)",
             name="ck_library_primitives_source_fields",
         ),
         sa.ForeignKeyConstraint(["account_id"], ["accounts.id"], ondelete="SET NULL"),

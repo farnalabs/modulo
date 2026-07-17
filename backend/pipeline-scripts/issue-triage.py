@@ -87,7 +87,7 @@ def classify_issue(issue: dict, repo_path: Path) -> dict:
             "task": "triage_issue",
             "title": issue["title"],
             "body": issue.get("body", "")[:2000],
-            "existing_labels": [l["name"] for l in issue.get("labels", [])],
+            "existing_labels": [label["name"] for label in issue.get("labels", [])],
         }
     )
 

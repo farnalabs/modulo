@@ -96,14 +96,6 @@ def set_model_backend_hub(hub: Any | None) -> None:
     _model_backend_hub_cv.set(hub)
 
 
-def get_connector_hub() -> Any | None:
-    return _connector_hub_cv.get()
-
-
-def set_connector_hub(hub: Any | None) -> None:
-    _connector_hub_cv.set(hub)
-
-
 def set_cancellation_check(
     fn: Callable[[], Awaitable[bool]] | None,
 ) -> None:

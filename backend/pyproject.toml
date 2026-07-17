@@ -189,6 +189,10 @@ ignore = [
 "scripts/generate_remy_primer.py" = ["ASYNC240"]
 "deploy/*" = ["T20"]
 "tests/bdd/check-bdd-coverage.py" = ["N999"]
+"pipeline-scripts/**" = ["S", "T201", "E402", "RET"]
+"tests/unit/runtime_provider/*" = ["E402"]
+"tests/unit/secrets_backend/*" = ["E402"]
+"src/modulo/db/migrations/**" = ["RUF002", "RUF003", "E501"]
 
 [tool.mypy]
 strict = true
@@ -309,5 +313,3 @@ dev = [
     "pytest-recording>=0.13.0",
     "celery[redis]>=5.4.0",
 ]
-
-
