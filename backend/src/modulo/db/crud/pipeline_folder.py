@@ -26,7 +26,7 @@ async def _compute_folder_depth(session: AsyncSession, folder_id: uuid.UUID | No
     current_id = folder_id
     while current_id is not None:
         depth += 1
-        if depth > _MAX_FOLDER_DEPTH:
+        if depth >= _MAX_FOLDER_DEPTH:
             return depth
         result = await session.execute(select(PipelineFolder.parent_id).where(PipelineFolder.id == current_id))
         current_id = result.scalar_one_or_none()

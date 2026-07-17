@@ -252,7 +252,7 @@ async function handleCreate() {
   createError.value = null
   try {
     const body: Record<string, any> = { name: newFolderName.value.trim() }
-    if (newFolderParentId.value) {
+    if (newFolderParentId.value && newFolderParentId.value !== 'null') {
       body.parent_id = newFolderParentId.value
     }
     await post<FolderItem>('/api/v1/pipeline-folders', body)
