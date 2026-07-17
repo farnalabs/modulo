@@ -1,0 +1,240 @@
+name: Deploy Pipeline
+
+on:
+  workflow_run:
+    workflows: ["CI"]
+    types:
+      - completed
+    branches:
+      - main
+      - staging-queue
+  workflow_dispatch:
+
+concurrency:
+  group: deploy-pipeline-${{ github.event.workflow_run.head_branch || github.ref_name }}
+  cancel-in-progress: true
+
+jobs:
+  check-context:
+    name: Check CI result and context
+    runs-on: ubuntu-latest
+    outputs:
+      branch: ${{ steps.context.outputs.branch }}
+      is_main: ${{ steps.context.outputs.is_main }}
+      ci_passed: ${{ steps.context.outputs.ci_passed }}
+      head_sha: ${{ steps.context.outputs.head_sha }}
+    steps:
+      - name: Determine context
+        id: context
+        shell: pwsh
+        run: |
+          if ("${{ github.event_name }}" -eq "workflow_run") {
+            $conclusion = "${{ github.event.workflow_run.conclusion }}"
+            $branch = "${{ github.event.workflow_run.head_branch }}"
+            $sha = "${{ github.event.workflow_run.head_sha }}"
+            if ($conclusion -eq "success") {
+              echo "ci_passed=true" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
+            } else {
+              echo "ci_passed=false" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
+            }
+            echo "branch=$branch" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
+            echo "head_sha=$sha" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
+            if ($branch -eq "main") { echo "is_main=true" } else { echo "is_main=false" }
+          } else {
+            echo "ci_passed=true" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
+            echo "branch=${{ github.ref_name }}" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
+            echo "head_sha=${{ github.sha }}" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
+            if ("${{ github.ref_name }}" -eq "main") { echo "is_main=true" } else { echo "is_main=false" }
+          } | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
+
+  deploy-staging:
+    name: Deploy to staging
+    needs: [check-context]
+    if: needs.check-context.outputs.ci_passed == 'true'
+    runs-on: [self-hosted, windows, docker]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.check-context.outputs.head_sha }}
+          fetch-depth: 1
+
+      - uses: superfly/flyctl-actions/setup-flyctl@master
+
+      - name: Capture git metadata
+        id: git
+        uses: ./.github/actions/capture-git-metadata
+
+      - name: Deploy to staging-modulo
+        shell: pwsh
+        run: |
+          fly deploy --app staging-modulo --config fly.staging.toml `
+            --build-arg "GIT_SHA=${{ steps.git.outputs.git-sha }}" `
+            --build-arg "GIT_BRANCH=${{ steps.git.outputs.git-branch }}" `
+            --build-arg "GIT_COMMIT_TIMESTAMP=${{ steps.git.outputs.git-commit-timestamp }}" `
+            --build-arg "GIT_COMMIT_MESSAGE=${{ steps.git.outputs.git-commit-message }}" `
+            --build-arg "BUILD_TIMESTAMP=${{ steps.git.outputs.build-timestamp }}"
+
+      - name: Verify deployment
+        uses: ./.github/actions/verify-deployment
+        with:
+          url: https://staging.modulo.run
+
+      - name: Check deployed SHA
+        shell: pwsh
+        run: |
+          $expectedSha = "${{ needs.check-context.outputs.head_sha }}".Substring(0, 7)
+          $info = curl.exe -s -m 10 "https://staging.modulo.run/api/v1/deployment" 2>$null
+          if (-not $info) { Write-Host "No deployment info"; exit 1 }
+          $deployInfo = $info | ConvertFrom-Json
+          $deployedSha = if ($deployInfo.git_sha) { $deployInfo.git_sha.Substring(0, 7) } else { "?" }
+          if ($deployedSha -ne $expectedSha) {
+            Write-Host "SHA MISMATCH: deployed=$deployedSha expected=$expectedSha"
+            exit 1
+          }
+          Write-Host "staging.modulo.run SHA match: $deployedSha"
+
+  staging-e2e:
+    name: Staging E2E (smoke + WCAG + regression)
+    needs: [check-context, deploy-staging]
+    if: needs.check-context.outputs.ci_passed == 'true'
+    runs-on: [self-hosted, windows, docker]
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.check-context.outputs.head_sha }}
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Wait for staging health
+        shell: pwsh
+        timeout-minutes: 5
+        run: |
+          Write-Host "Waiting for staging.modulo.run ..."
+          for ($i=0; $i -lt 60; $i++) {
+            try {
+              $r = curl.exe -s -f "https://staging.modulo.run/healthz" 2>$null
+              if ($LASTEXITCODE -eq 0) { Write-Host "Staging ready after ${i}s"; exit 0 }
+            } catch {}
+            Start-Sleep -Seconds 5
+          }
+          exit 1
+
+      - name: Install frontend deps
+        run: npm ci
+
+      - name: Install Playwright browsers
+        run: npx playwright install chromium
+
+      - name: Run @smoke Playwright tests against staging
+        id: smoke-tests
+        run: npm run test:e2e:smoke -- --reporter=line
+        timeout-minutes: 10
+        env:
+          E2E_TARGET: staging
+          E2E_NO_WEBSERVER: "true"
+        continue-on-error: true
+
+      - name: Run WCAG audit on staging
+        id: wcag-tests
+        run: npx playwright test staging-wcag --output=test-results/wcag
+        env:
+          E2E_TARGET: staging
+          E2E_NO_WEBSERVER: "true"
+        continue-on-error: true
+
+      - name: Run Playwright E2E regression suite against staging
+        id: regression-tests
+        run: npm run test:e2e:staging -- --reporter=line
+        timeout-minutes: 30
+        env:
+          E2E_TARGET: staging
+          E2E_NO_WEBSERVER: "true"
+        continue-on-error: true
+
+      - name: Fail on test failure
+        if: steps.smoke-tests.outcome == 'failure' || steps.wcag-tests.outcome == 'failure' || steps.regression-tests.outcome == 'failure'
+        shell: pwsh
+        run: |
+          Write-Host "::error::One or more staging suites failed."
+          exit 1
+
+  deploy-production:
+    name: Deploy to app.modulo.run
+    needs: [check-context, deploy-staging, staging-e2e]
+    if: needs.check-context.outputs.is_main == 'true' && needs.check-context.outputs.ci_passed == 'true'
+    runs-on: [self-hosted, windows, docker]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.check-context.outputs.head_sha }}
+          fetch-depth: 1
+
+      - uses: superfly/flyctl-actions/setup-flyctl@master
+
+      - name: Capture git metadata
+        id: git
+        uses: ./.github/actions/capture-git-metadata
+
+      - name: Deploy to app-modulo
+        shell: pwsh
+        run: |
+          fly deploy --app app-modulo --config fly.toml `
+            --build-arg "GIT_SHA=${{ steps.git.outputs.git-sha }}" `
+            --build-arg "GIT_BRANCH=${{ steps.git.outputs.git-branch }}" `
+            --build-arg "GIT_COMMIT_TIMESTAMP=${{ steps.git.outputs.git-commit-timestamp }}" `
+            --build-arg "GIT_COMMIT_MESSAGE=${{ steps.git.outputs.git-commit-message }}" `
+            --build-arg "BUILD_TIMESTAMP=${{ steps.git.outputs.build-timestamp }}"
+
+      - name: Verify deployment
+        uses: ./.github/actions/verify-deployment
+        with:
+          url: https://app.modulo.run
+
+      - name: Check deployed SHA
+        shell: pwsh
+        run: |
+          $expectedSha = "${{ needs.check-context.outputs.head_sha }}".Substring(0, 7)
+          $info = curl.exe -s -m 10 "https://app.modulo.run/api/v1/deployment" 2>$null
+          if (-not $info) { Write-Host "No deployment info"; exit 1 }
+          $deployInfo = $info | ConvertFrom-Json
+          $deployedSha = if ($deployInfo.git_sha) { $deployInfo.git_sha.Substring(0, 7) } else { "?" }
+          if ($deployedSha -ne $expectedSha) {
+            Write-Host "SHA MISMATCH: deployed=$deployedSha expected=$expectedSha"
+            exit 1
+          }
+          Write-Host "app.modulo.run SHA match: $deployedSha"
+
+  notify-deploy-failure:
+    name: Notify Modulo fixer on deploy failure
+    if: failure()
+    needs: [check-context, deploy-staging, staging-e2e, deploy-production]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Send webhook
+        shell: pwsh
+        env:
+          WEBHOOK_URL: ${{ secrets.MODULO_MERGE_FIXER_WEBHOOK_URL }}
+          HMAC_SECRET: ${{ secrets.MODULO_MERGE_FIXER_HMAC_SECRET }}
+        run: |
+          if (-not $env:WEBHOOK_URL) { Write-Host "No webhook URL configured"; exit 0 }
+          $body = @{
+            repository = "${{ github.repository }}"
+            run_id = "${{ github.run_id }}"
+            phase = "deploy"
+            branch = "${{ needs.check-context.outputs.branch }}"
+            run_url = "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          } | ConvertTo-Json -Compress
+          $ts = [DateTimeOffset]::UtcNow.ToUnixTimeSeconds()
+          $payload = "$ts.$body"
+          $hmac = [System.Security.Cryptography.HMACSHA256]::new([Text.Encoding]::UTF8.GetBytes($env:HMAC_SECRET))
+          $hash = $hmac.ComputeHash([Text.Encoding]::UTF8.GetBytes($payload))
+          $sig = "sha256=" + ($hash | ForEach-Object { $_.ToString("x2") }) -join ''
+          $headers = @{ "Content-Type" = "application/json"; "X-Modulo-Webhook-Secret" = $sig; "X-Modulo-Timestamp" = "$ts" }
+          Invoke-RestMethod -Uri $env:WEBHOOK_URL -Method Post -Body $body -Headers $headers -ContentType "application/json"
+          Write-Host "Modulo fixer notified of deploy failure"
