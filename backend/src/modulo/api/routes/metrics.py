@@ -36,7 +36,7 @@ class WebVitalBatchItem(BaseModel):
 
 
 class WebVitalBatchRequest(BaseModel):
-    events: list[WebVitalBatchItem]
+    events: list[WebVitalBatchItem] = Field(..., max_length=1000)
 
 
 class WebVitalSummaryItem(BaseModel):
@@ -84,13 +84,13 @@ async def ingest_web_vitals(
                 )
                 session.add(wv)
     except SQLAlchemyError:
-        _log.exception("Failed to ingest web vitals")
+        _log.exception("Failed to ingest web vitals", extra={"org_id": str(current_user.organisation_id)})
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database temporarily unavailable.",
         ) from None
     except Exception:
-        _log.exception("Failed to ingest web vitals")
+        _log.exception("Failed to ingest web vitals", extra={"org_id": str(current_user.organisation_id)})
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="An unexpected error occurred.",
@@ -137,13 +137,13 @@ async def get_web_vitals_summary(
                 for row in result.all()
             ]
     except SQLAlchemyError:
-        _log.exception("Failed to fetch web vitals summary")
+        _log.exception("Failed to fetch web vitals summary", extra={"org_id": str(current_user.organisation_id)})
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database temporarily unavailable.",
         ) from None
     except Exception:
-        _log.exception("Failed to fetch web vitals summary")
+        _log.exception("Failed to fetch web vitals summary", extra={"org_id": str(current_user.organisation_id)})
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="An unexpected error occurred.",
@@ -188,13 +188,13 @@ async def get_web_vitals_timeseries(
                 for row in result.all()
             ]
     except SQLAlchemyError:
-        _log.exception("Failed to fetch web vitals timeseries")
+        _log.exception("Failed to fetch web vitals timeseries", extra={"org_id": str(current_user.organisation_id)})
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database temporarily unavailable.",
         ) from None
     except Exception:
-        _log.exception("Failed to fetch web vitals timeseries")
+        _log.exception("Failed to fetch web vitals timeseries", extra={"org_id": str(current_user.organisation_id)})
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="An unexpected error occurred.",
