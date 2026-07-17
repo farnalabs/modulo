@@ -599,7 +599,7 @@ def make_sandbox_agent_fn(
         import json as _json
         import time as _time
 
-        from e2b import AsyncSandbox
+        from e2b import AsyncSandbox  # type: ignore[import-untyped]
         from jinja2.sandbox import SandboxedEnvironment
 
         run_context: dict[str, Any] = state.get("run_context") or {}
@@ -737,8 +737,8 @@ def make_sandbox_agent_fn(
             _exc_type = type(_exc).__name__
             _exc_msg = str(_exc)[:500]
             _exc_tb = _tb.format_exc()
-            _log.warning(f"SANDBOX_AGENT_ERROR type={_exc_type} msg={_exc_msg}", flush=True)
-            _log.warning(f"SANDBOX_AGENT_TRACEBACK:\n{_exc_tb}", flush=True)
+            _log.warning(f"SANDBOX_AGENT_ERROR type={_exc_type} msg={_exc_msg}")
+            _log.warning(f"SANDBOX_AGENT_TRACEBACK:\n{_exc_tb}")
             _log.exception(
                 "sandbox_agent.execution_failed",
                 extra={

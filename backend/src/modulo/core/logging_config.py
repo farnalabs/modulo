@@ -128,7 +128,7 @@ class ErrorTrackingLogHandler(logging.Handler):
             _log.warning("ErrorTrackingLogHandler.backlog_full — dropping record")
             return
 
-        now = _time()
+        now = _time.time()
         last = self._last_write_time.get(org_id, 0.0)
         if now - last < 5.0:
             return

@@ -931,10 +931,11 @@ class PipelineExecutor:
             result_result = await session.execute(result_stmt)
             eval_results = result_result.scalars().all()
 
-            threshold = next(
+            threshold_raw = next(
                 (d.pass_threshold for d in defs_in_suite if d.pass_threshold is not None),
                 None,
             )
+            threshold = float(threshold_raw) if threshold_raw is not None else None
 
             suite_result_raw = evaluate_suite(
                 eval_results=[

@@ -59,7 +59,7 @@ class AgentCreate(BaseModel):
     prompt_always_visible: bool = False
     required_environment_capabilities: list[str]
     template_id: str | None
-    agent_command: str | None = Field(default_factory=list)
+    agent_command: str | None = Field(default=None)
 
 
 class AgentUpdate(BaseModel):
