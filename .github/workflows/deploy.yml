@@ -212,7 +212,7 @@ jobs:
 
   notify-deploy-failure:
     name: Notify Modulo fixer on deploy failure
-    if: failure()
+    if: always() && (needs.deploy-staging.result == 'failure' || needs.staging-e2e.result == 'failure' || needs.deploy-production.result == 'failure')
     needs: [check-context, deploy-staging, staging-e2e, deploy-production]
     runs-on: ubuntu-latest
     steps:
