@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, Field
@@ -70,7 +70,7 @@ async def ingest_web_vitals(
             await set_rls_org(session, current_user.organisation_id)
             await set_rls_user_context(session, current_user.account_id, current_user.org_role)
 
-            now = datetime.utcnow()
+            now = datetime.now(UTC)
             for event in req.events:
                 wv = WebVitalEvent(
                     organisation_id=current_user.organisation_id,
@@ -89,6 +89,12 @@ async def ingest_web_vitals(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database temporarily unavailable.",
         ) from None
+    except Exception:
+        _log.exception("Failed to ingest web vitals")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="An unexpected error occurred.",
+        ) from None
 
 
 @router.get("/web-vitals/summary")
@@ -98,7 +104,7 @@ async def get_web_vitals_summary(
     session: AsyncSession = Depends(get_db_session),
 ) -> list[WebVitalSummaryItem]:
     """Get summary statistics for web vitals over the given period."""
-    cutoff = datetime.utcnow() - timedelta(days=days)
+    cutoff = datetime.now(UTC) - timedelta(days=days)
 
     try:
         async with session.begin():
@@ -112,43 +118,35 @@ async def get_web_vitals_summary(
                     sa_func.min(WebVitalEvent.metric_value),
                     sa_func.max(WebVitalEvent.metric_value),
                     sa_func.count(WebVitalEvent.id),
+                    sa_func.count(WebVitalEvent.id).filter(WebVitalEvent.metric_rating == "good"),
                 )
                 .where(WebVitalEvent.recorded_at >= cutoff)
                 .group_by(WebVitalEvent.metric_name)
             )
             result = await session.execute(stmt)
-            rows = result.all()
 
-            summaries: list[WebVitalSummaryItem] = []
-            for row in rows:
-                name = row[0]
-                total = row[4]
-                good_stmt = (
-                    select(sa_func.count(WebVitalEvent.id))
-                    .where(WebVitalEvent.metric_name == name)
-                    .where(WebVitalEvent.recorded_at >= cutoff)
-                    .where(WebVitalEvent.metric_rating == "good")
+            return [
+                WebVitalSummaryItem(
+                    metric_name=row[0],
+                    avg_value=round(float(row[1] or 0), 2),
+                    min_value=round(float(row[2] or 0), 2),
+                    max_value=round(float(row[3] or 0), 2),
+                    count=row[4],
+                    good_pct=round(row[5] / row[4] * 100, 1) if row[4] > 0 else None,
                 )
-                good_result = await session.execute(good_stmt)
-                good_count = good_result.scalar() or 0
-
-                summaries.append(
-                    WebVitalSummaryItem(
-                        metric_name=name,
-                        avg_value=round(float(row[1] or 0), 2),
-                        min_value=round(float(row[2] or 0), 2),
-                        max_value=round(float(row[3] or 0), 2),
-                        count=total,
-                        good_pct=round(good_count / total * 100, 1) if total > 0 else None,
-                    )
-                )
-
-            return summaries
+                for row in result.all()
+            ]
     except SQLAlchemyError:
         _log.exception("Failed to fetch web vitals summary")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database temporarily unavailable.",
+        ) from None
+    except Exception:
+        _log.exception("Failed to fetch web vitals summary")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="An unexpected error occurred.",
         ) from None
 
 
@@ -160,7 +158,7 @@ async def get_web_vitals_timeseries(
     session: AsyncSession = Depends(get_db_session),
 ) -> list[WebVitalTimeSeriesPoint]:
     """Get daily-averaged time series for a specific metric."""
-    cutoff = datetime.utcnow() - timedelta(days=days)
+    cutoff = datetime.now(UTC) - timedelta(days=days)
 
     try:
         async with session.begin():
@@ -194,4 +192,10 @@ async def get_web_vitals_timeseries(
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database temporarily unavailable.",
+        ) from None
+    except Exception:
+        _log.exception("Failed to fetch web vitals timeseries")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="An unexpected error occurred.",
         ) from None
