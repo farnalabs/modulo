@@ -1,5 +1,4 @@
 import { onMounted, onUnmounted } from 'vue'
-import { useRouter } from 'vue-router'
 import { usePlanStore } from '../stores/planStore'
 import type { MetricType } from 'web-vitals'
 
