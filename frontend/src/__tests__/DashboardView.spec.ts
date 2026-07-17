@@ -231,13 +231,13 @@ describe('DashboardView', () => {
     expect(errorEl.exists()).toBe(true)
   })
 
-  it('shows empty state CTA for fresh orgs', async () => {
+  it('shows empty state messages for fresh orgs', async () => {
     setupEmptyMocks()
     const wrapper = mount(DashboardView)
     await flushPromises()
-    expect(wrapper.text()).toContain('Welcome to Modulo')
-    expect(wrapper.text()).toContain('Create Pipeline')
-    expect(wrapper.text()).toContain('Browse Templates')
+    expect(wrapper.text()).toContain('No runs yet')
+    expect(wrapper.text()).toContain('No data yet')
+    expect(wrapper.text()).toContain('Run a Pipeline')
   })
 
   it('shows no eval data for null pass rate', async () => {
