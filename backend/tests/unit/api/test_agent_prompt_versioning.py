@@ -218,6 +218,9 @@ class TestRollback:
         agent_after.retry_policy = {}
         agent_after.token_budget = None
         agent_after.library_id = None
+        agent_after.required_environment_capabilities = []
+        agent_after.template_id = None
+        agent_after.agent_command = None
         agent_after.created_by = _USER_ID
         agent_after.created_at = _NOW
         agent_after.updated_at = _NOW
