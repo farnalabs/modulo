@@ -5,6 +5,7 @@ import difflib
 import json
 import logging
 import uuid
+from collections.abc import Awaitable, Callable
 from decimal import Decimal
 from typing import Any, Literal
 
@@ -73,9 +74,13 @@ class RunNotFoundError(KeyError):
     """Raised when a run is not found."""
 
 
-async def _run_with_retry(fn, max_retries=2, base_delay=0.5):
+async def _run_with_retry[R](
+    fn: Callable[[], Awaitable[R]],
+    max_retries: int = 2,
+    base_delay: float = 0.5,
+) -> R:
     """Execute fn with retry on transient connection errors."""
-    last_exc = None
+    last_exc: BaseException | None = None
     for attempt in range(max_retries + 1):
         try:
             return await fn()
@@ -86,7 +91,9 @@ async def _run_with_retry(fn, max_retries=2, base_delay=0.5):
                 await asyncio.sleep(base_delay * (2**attempt))
             else:
                 _log.warning("route.db_retry_exhausted", extra={"error": str(exc)})
-    raise last_exc
+    if last_exc is not None:
+        raise last_exc
+    raise RuntimeError("Retry exhausted without exception")
 
 
 async def _do_get_run(
@@ -111,12 +118,12 @@ async def _do_get_run(
 async def _do_list_runs(
     factory: async_sessionmaker[AsyncSession],
     user: TenantPrincipal,
-    pipeline_id,
-    run_status,
-    trigger_type,
-    search,
-    page,
-    page_size,
+    pipeline_id: uuid.UUID | None,
+    run_status: str | None,
+    trigger_type: str | None,
+    search: str | None,
+    page: int,
+    page_size: int,
 ) -> dict[str, Any]:
     async with factory() as session, session.begin():
         await set_rls_org(session, user.organisation_id)

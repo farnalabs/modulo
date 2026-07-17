@@ -307,7 +307,7 @@ class ModuloPostgresSaver(AsyncPostgresSaver):
 
             async for value in cur:
                 checkpoint = self._decrypt_checkpoint(value["checkpoint"])
-                return CheckpointTuple(  # type: ignore[call-arg]
+                return CheckpointTuple(
                     {
                         "configurable": {
                             "thread_id": thread_id,
@@ -365,7 +365,7 @@ class ModuloPostgresSaver(AsyncPostgresSaver):
             await cur.execute(self.SELECT_SQL + " " + where, args, binary=True)
             async for value in cur:
                 checkpoint = self._decrypt_checkpoint(value["checkpoint"])
-                yield CheckpointTuple(  # type: ignore[call-arg]
+                yield CheckpointTuple(
                     {
                         "configurable": {
                             "thread_id": thread_id,

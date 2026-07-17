@@ -146,7 +146,7 @@ async def create_snapshot_from_live_graph(
     schemas: list[Schema] = []
     if schema_ids:
         schemas = list((await session.execute(select(Schema).where(Schema.id.in_(schema_ids)))).scalars())
-    schemas_by_id = {schema.id: schema for schema in schemas}
+    schema_models_by_id: dict[uuid.UUID, Schema] = {schema.id: schema for schema in schemas}
 
     backend_ids = {agent.model_backend_id for agent in agents if agent.model_backend_id is not None}
     backends: list[ModelBackend] = []
@@ -191,12 +191,12 @@ async def create_snapshot_from_live_graph(
             if key in seen_schema_pins:
                 continue
             seen_schema_pins.add(key)
-            schema = schemas_by_id.get(schema_id)
+            schema_model = schema_models_by_id.get(schema_id)
             schema_pins.append(
                 {
                     "schema_id": str(schema_id),
                     "version": version,
-                    "abstract_name": schema.abstract_name if schema is not None else None,
+                    "abstract_name": schema_model.abstract_name if schema_model is not None else None,
                 }
             )
 
