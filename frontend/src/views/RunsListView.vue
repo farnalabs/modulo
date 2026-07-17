@@ -123,7 +123,7 @@ import { runStatusBadgeClass, formatRunDate } from '../utils/runUtils'
 const router = useRouter()
 const route = useRoute()
 
-const pageSize = ref(20)
+const pageSize = 20
 const page = ref(1)
 
 const { data: runsData, loading, error, load: loadRuns } = useDataFetch<{ items: RunListItem[]; total: number }>(
@@ -157,7 +157,7 @@ function handleFilterUpdate(key: string, value: string) {
 }
 
 function buildParams(): FetchRunsParams {
-  const params: FetchRunsParams = { page: page.value, page_size: pageSize.value }
+  const params: FetchRunsParams = { page: page.value, page_size: pageSize }
   if (filterStatus.value) params.status = filterStatus.value
   if (filterTriggerType.value) params.trigger_type = filterTriggerType.value
   if (filterSearch.value) params.search = filterSearch.value
@@ -176,7 +176,7 @@ function resetFilters() {
 }
 
 function nextPage() {
-  if (page.value * pageSize.value >= total.value) return
+  if (page.value * pageSize >= total.value) return
   page.value++
   loadRuns()
 }
