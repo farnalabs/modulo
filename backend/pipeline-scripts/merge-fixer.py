@@ -6,82 +6,52 @@ branch, rebases onto main, resolves conflicts automatically using the
 commits the resolved merge, and pushes back to the PR branch.
 
 Environment Variables:
-    GITHUB_TOKEN      — GitHub PAT for cloning and pushing
-    GITHUB_REPO       — Repository full name (e.g. "farnalabs/modulo")
-    GITHUB_PR_NUMBER  — Pull request number with merge conflicts
-    OPENCODE_API_KEY  — API key for the opencode CLI
+    GITHUB_TOKEN                 — GitHub PAT for cloning and pushing
+    GITHUB_REPO                  — Repository full name (e.g. "farnalabs/modulo")
+    GITHUB_PR_NUMBER             — Pull request number with merge conflicts
+    APP_MODULO_OPENCODE_API_KEY  — API key for the opencode CLI
 
 Output:
-    Writes status, summary, conflict_files, and pr_url to /tmp/output.json
+    Writes status, summary, wall_clock_ms, conflict_files, and commit_sha to output.json
 """
 
-import json
 import os
 import subprocess
-import sys
 import tempfile
+import time
 from pathlib import Path
 
-REQUIRED_ENV_VARS = [
-    "GITHUB_TOKEN",
-    "GITHUB_REPO",
-    "GITHUB_PR_NUMBER",
-    "OPENCODE_API_KEY",
-]
+from _common import check_env, exit_completed, exit_failed, get_git_url, run_git, safe_clone, setup_opencode_auth
 
 
-def check_env() -> dict[str, str]:
-    missing = [k for k in REQUIRED_ENV_VARS if k not in os.environ]
+def check_env_extra():
+    missing = [k for k in ["GITHUB_REPO", "GITHUB_PR_NUMBER"] if k not in os.environ]
     if missing:
-        print(f"Missing required env vars: {', '.join(missing)}", file=sys.stderr)
-        sys.exit(1)
-    return {
-        "github_token": os.environ["GITHUB_TOKEN"],
-        "github_repo": os.environ["GITHUB_REPO"],
-        "pr_number": os.environ["GITHUB_PR_NUMBER"],
-        "opencode_api_key": os.environ["OPENCODE_API_KEY"],
-    }
+        exit_failed(f"Missing required env vars: {', '.join(missing)}")
+    return os.environ["GITHUB_REPO"], os.environ["GITHUB_PR_NUMBER"]
 
 
-def clone_and_checkout_pr(repo_url: str, work_dir: Path, pr_number: str, github_token: str) -> Path:
-    clone_path = work_dir / "repo"
-    subprocess.run(
-        ["git", "clone", repo_url, str(clone_path)],
-        check=True,
-        capture_output=True,
-        text=True,
-    )
-    remote_url = f"https://x-access-token:{github_token}@github.com/{os.environ['GITHUB_REPO']}.git"
-    subprocess.run(
-        ["git", "remote", "set-url", "origin", remote_url],
-        cwd=clone_path,
-        check=True,
-        capture_output=True,
-    )
-    subprocess.run(
-        ["git", "fetch", "origin"],
-        cwd=clone_path,
-        check=True,
-        capture_output=True,
-    )
-    head_branch = subprocess.run(
+def get_head_branch(repo_path, pr_number, token):
+    r = subprocess.run(
         ["gh", "pr", "view", pr_number, "--json", "headRefName", "--jq", ".headRefName"],
-        cwd=clone_path,
-        env={**os.environ, "GH_TOKEN": github_token},
+        cwd=repo_path,
+        env={**os.environ, "GH_TOKEN": token},
         capture_output=True,
         text=True,
-        check=True,
-    ).stdout.strip()
-    subprocess.run(
-        ["git", "checkout", head_branch],
-        cwd=clone_path,
-        check=True,
-        capture_output=True,
     )
-    return clone_path
+    if r.returncode != 0:
+        exit_failed(f"Failed to get PR head branch: {r.stderr[:200]}")
+    return r.stdout.strip()
 
 
-def attempt_rebase(repo_path: Path) -> list[str]:
+def get_branch_name(repo_path):
+    r = run_git(["rev-parse", "--abbrev-ref", "HEAD"], cwd=repo_path)
+    if r.returncode != 0:
+        exit_failed("Failed to get branch name")
+    return r.stdout.strip()
+
+
+def attempt_rebase(repo_path):
     result = subprocess.run(
         ["git", "rebase", "main"],
         cwd=repo_path,
@@ -89,16 +59,15 @@ def attempt_rebase(repo_path: Path) -> list[str]:
         text=True,
     )
     if result.returncode == 0:
-        return []
+        return [], True
 
     conflict_lines = [line for line in result.stdout.splitlines() if "both modified:" in line or "CONFLICT" in line]
-    return conflict_lines
+    return conflict_lines, False
 
 
-def run_merge_skill(repo_path: Path, conflict_files: list[str]) -> dict:
+def run_merge_skill(repo_path, conflict_files):
     if not conflict_files:
         return {"returncode": 0, "stdout": "No conflicts to resolve.", "stderr": ""}
-
     paths = " ".join(conflict_files)
     result = subprocess.run(
         ["opencode", "merge", paths],
@@ -107,111 +76,90 @@ def run_merge_skill(repo_path: Path, conflict_files: list[str]) -> dict:
         text=True,
         timeout=600,
     )
-    return {
-        "returncode": result.returncode,
-        "stdout": result.stdout,
-        "stderr": result.stderr,
-    }
+    return {"returncode": result.returncode, "stdout": result.stdout, "stderr": result.stderr}
 
 
-def commit_and_push(repo_path: Path, branch_name: str) -> str:
-    subprocess.run(
-        ["git", "add", "-A"],
-        cwd=repo_path,
-        check=True,
-        capture_output=True,
-    )
-    subprocess.run(
-        ["git", "rebase", "--continue"],
-        cwd=repo_path,
-        check=True,
-        capture_output=True,
-    )
+def commit_and_push(repo_path, branch_name, repo_full_name, token, rebase_was_started):
+    run_git(["add", "-A"], cwd=repo_path)
 
-    subprocess.run(
-        ["git", "push", "origin", branch_name, "--force-with-lease"],
-        cwd=repo_path,
-        check=True,
-        capture_output=True,
-    )
+    if rebase_was_started:
+        r = run_git(["rebase", "--continue"], cwd=repo_path)
+        if r.returncode != 0:
+            exit_failed(f"Rebase continue failed: {r.stderr[:200]}")
+    else:
+        r = run_git(["diff", "--cached", "--quiet"], cwd=repo_path)
+        if r.returncode != 0:
+            run_git(["commit", "-m", "fix: merge conflict resolution"], cwd=repo_path)
 
-    commit_result = subprocess.run(
-        ["git", "rev-parse", "HEAD"],
-        cwd=repo_path,
-        capture_output=True,
-        text=True,
-        check=True,
-    )
-    return commit_result.stdout.strip()
+    owner, repo = repo_full_name.split("/")
+    run_git(["remote", "set-url", "origin", get_git_url(token, owner, repo)], cwd=repo_path)
+    r = run_git(["push", "origin", branch_name, "--force-with-lease"], cwd=repo_path, timeout=120)
+    if r.returncode != 0:
+        exit_failed(f"Push failed: {r.stderr[:200]}")
+
+    r = run_git(["rev-parse", "HEAD"], cwd=repo_path)
+    return r.stdout.strip()
 
 
-def write_output(status: str, summary: str, extra: dict | None = None) -> None:
-    output = {"status": status, "summary": summary}
-    if extra:
-        output.update(extra)
-    output_path = Path("/tmp/output.json")
-    output_path.write_text(json.dumps(output, indent=2))
-    print(f"Output written to {output_path}")
-
-
-def main() -> None:
-    env = check_env()
+def main():
+    token, api_key = check_env()
+    model = setup_opencode_auth(api_key)
+    github_repo, pr_number = check_env_extra()
 
     with tempfile.TemporaryDirectory(prefix="merge-fixer-") as tmpdir:
-        work_dir = Path(tmpdir)
-        repo_url = f"https://github.com/{env['github_repo']}.git"
-        repo_path = clone_and_checkout_pr(
-            repo_url,
-            work_dir,
-            env["pr_number"],
-            env["github_token"],
-        )
+        owner, repo = github_repo.split("/")
+        repo_path = safe_clone(token, get_git_url(token, owner, repo), Path(tmpdir) / "repo")
 
-        branch_name = subprocess.run(
-            ["git", "rev-parse", "--abbrev-ref", "HEAD"],
-            cwd=repo_path,
-            capture_output=True,
-            text=True,
-            check=True,
-        ).stdout.strip()
+        run_git(["fetch", "origin"], cwd=repo_path, timeout=60)
+        head_branch = get_head_branch(repo_path, pr_number, token)
+        r = run_git(["checkout", head_branch], cwd=repo_path)
+        if r.returncode != 0:
+            exit_failed(f"Checkout {head_branch} failed: {r.stderr[:200]}")
 
-        conflict_signals = attempt_rebase(repo_path)
+        branch_name = get_branch_name(repo_path)
 
-        if not conflict_signals:
-            commit_sha = commit_and_push(repo_path, branch_name)
-            write_output(
-                status="success",
+        start = time.time()
+        conflict_signals, rebase_ok = attempt_rebase(repo_path)
+        wall_clock_ms = int((time.time() - start) * 1000)
+
+        if rebase_ok:
+            commit_sha = commit_and_push(repo_path, branch_name, github_repo, token, rebase_was_started=False)
+            exit_completed(
                 summary="Rebased cleanly with no conflicts",
                 extra={
                     "commit_sha": commit_sha,
                     "branch": branch_name,
                     "conflict_files": [],
+                    "wall_clock_ms": wall_clock_ms,
                 },
             )
             return
 
         conflict_files = [line.split(":")[-1].strip() for line in conflict_signals if "both modified:" in line]
-        print(f"Resolving conflicts in: {conflict_files}")
+        print(f"Resolving conflicts in: {conflict_files}")  # noqa: T201
 
         merge_result = run_merge_skill(repo_path, conflict_files)
 
         if merge_result["returncode"] != 0:
-            write_output(
-                status="failed",
-                summary="Merge skill could not resolve all conflicts",
-                extra={"conflict_files": conflict_files, "stderr": merge_result["stderr"]},
+            exit_failed(
+                "Merge skill could not resolve all conflicts",
+                extra={
+                    "conflict_files": conflict_files,
+                    "stderr": merge_result["stderr"],
+                    "wall_clock_ms": wall_clock_ms,
+                },
             )
-            sys.exit(1)
 
-        commit_sha = commit_and_push(repo_path, branch_name)
+        commit_sha = commit_and_push(repo_path, branch_name, github_repo, token, rebase_was_started=True)
 
-        write_output(
-            status="success",
-            summary=f"Merge conflicts resolved in PR #{env['pr_number']}",
+        exit_completed(
+            summary=f"Merge conflicts resolved in PR #{pr_number}",
             extra={
                 "commit_sha": commit_sha,
                 "branch": branch_name,
                 "conflict_files": conflict_files,
+                "wall_clock_ms": wall_clock_ms,
+                "usage": {"model": model, "wall_clock_ms": wall_clock_ms},
             },
         )
 
