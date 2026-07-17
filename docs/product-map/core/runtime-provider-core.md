@@ -13,7 +13,7 @@ code:
   - backend/src/modulo/api/routes/environment_profiles.py
   - backend/src/modulo/api/routes/environments.py
   - backend/src/modulo/core/graph_validator/__init__.py
-  - backend/src/modulo/db/migrations/versions/0013_environment_profiles_workspace_leases.py
+  - backend/src/modulo/db/migrations/versions/0013_add_local_provider_type.py
   - backend/src/modulo/connectors/shell/__init__.py
 unit-tests:
   - backend/tests/unit/core/runtime_provider/test_abc.py

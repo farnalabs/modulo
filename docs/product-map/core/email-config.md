@@ -28,8 +28,30 @@ Organisation-level SMTP email configuration for sending transactional emails. Se
 - [ ] Email templates configuration
 - [ ] Per-organisation email branding
 
-## Known Gaps
+## Error Handling
 
-- **No BDD coverage** — No `.feature` files for email configuration (GET/PUT settings, test email, password clearing). Should be added under `tests/bdd/features/notifications/email.feature`.
-- **Email templates not implemented** — No per-organisation email template system. Both unchecked behaviours require a template rendering pipeline (stored templates, variable substitution, HTML inlining).
-- **Per-organisation email branding not implemented** — No support for org-level from-name, logo, or footer customisation in outgoing emails.
+- [x] Missing DB table returns 501 Not Implemented
+- [x] DB errors return 503 Service Unavailable
+- [x] SMTP not configured returns 422 on test-send
+- [x] Invalid SMTP host/port returns 422 validation error
+- [x] SMTP connection failure during test returns descriptive error with failure reason
+- [x] Password clear when no password stored returns 200 (idempotent)
+- [ ] SMTP auth failure during test — may leak credentials in error message
+
+## Edge Cases
+
+- [x] Empty SMTP host returns 422
+- [x] Invalid port number returns 422
+- [x] Missing email settings returns 501 (ProgrammingError for missing DB table)
+- [ ] SMTP server unreachable during test — timeout not configurable
+- [ ] Large SMTP password — no length limit enforced
+- [ ] Concurrent PUT of email settings — last-write-wins on `settings_json`
+
+## Security
+
+- [x] Admin-only access (org admin role required)
+- [x] SMTP password stored in settings_json — masked in GET responses
+- [ ] No encryption for SMTP password at rest (stored in plain JSON column)
+- [ ] Test-send endpoint could be abused for SMTP relay enumeration
+
+## Known Gaps

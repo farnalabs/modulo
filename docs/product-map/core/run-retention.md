@@ -1,6 +1,6 @@
 ---
 id: feat-core-run-retention
-prd: N/A
+prd: 7.10
 delivery-tasks: []
 bdd:
   - backend/tests/bdd/features/operations/run_retention.feature
@@ -41,12 +41,30 @@ Routes live in `backend/src/modulo/api/routes/admin.py` (not `admin_run_retentio
 
 - [x] AdminRunRetentionView.vue — admin configuration UI
 
+## Error Handling
+
+- [x] All 5 admin route functions have complete error-handling chain: `asyncio.CancelledError` re-raise guard, `IntegrityError` → 409, `ProgrammingError` → 501, `SQLAlchemyError` → 503, `Exception` → 500 with `logger.exception`
+- [x] Background cleanup loop catches and logs exceptions to prevent crash termination
+- [x] Batch deletion with locking prevents concurrent cleanup contention
+- [ ] Background cleanup loop failures silently logged — no alerting
+
+## Edge Cases
+
+- [x] Active runs are preserved (not deleted)
+- [x] Batch size caps deletion at 500 per cycle
+- [x] Configurable retention period per org
+- [x] `eval_failed` status included in terminal state list (fixed per QA history)
+- [ ] Background loop runs without any org context — global deletion, not org-scoped
+- [ ] Concurrent admin retention config changes while cleanup is running
+- [ ] Retention period set to 0 (delete immediately) — not validated
+
+## Security
+
+- [x] Admin-only routes (operator role required)
+- [ ] Background cleanup bypasses RLS — runs as system, not as any org
+- [ ] No audit logging for auto-deleted runs
+
 ## Known Gaps
-
-- **PRD section**: Run retention has no dedicated PRD section. Reference `7.11` pointed to "GitHub Connector OAuth Scopes", which was incorrect. Removed.
-- **Background loop lacks org scope**: `_run_retention_loop` in `main.py` calls `batch_delete_old_terminal_runs` without any RLS org context — it deletes runs across all orgs. Should accept an org list or be documented as a global admin-only job.
-
-## Resolved Gaps
 
 - [x] ~~**`batch_delete_old_terminal_runs` missing `eval_failed`**: The CRUD function now includes `eval_failed` (`["complete", "failed", "eval_failed", "cancelled"]`). Docstring was stale — fixed in this round.~~
 - [x] ~~**`completed_at` vs `created_at`**: Both `cleanup_old_runs` and `batch_delete_old_terminal_runs` use `Run.created_at`. `purge_runs` uses `Run.completed_at` but that is a separate manual-purge function.~~
