@@ -68,11 +68,6 @@ jobs:
         run: ../.github/scripts/coverage-thresholds.ps1
         env:
           DATABASE_URL: "postgresql+asyncpg://unused:unused@localhost/unused"
-      - name: Schemathesis API fuzz testing
-        shell: pwsh
-        run: uv run --no-sync pytest tests/integration/test_schemathesis.py -x --timeout=120
-        env:
-          DATABASE_URL: "postgresql+asyncpg://unused:unused@localhost/unused"
       - uses: actions/upload-artifact@v4
         if: always()
         with:
@@ -192,6 +187,20 @@ jobs:
             if ($?) { Write-Host "Postgres ready"; break }
             Start-Sleep -Seconds 2
           }
+      - name: Start Redis
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Continue'
+          docker rm -f modulo-ci-redis 2>$null
+          docker run -d --name modulo-ci-redis `
+            -p 6379:6379 `
+            redis:7-alpine
+          Write-Host "Waiting for Redis..."
+          for ($i=0; $i -lt 30; $i++) {
+            $ok = docker exec modulo-ci-redis redis-cli ping 2>$null
+            if ($?) { Write-Host "Redis ready"; break }
+            Start-Sleep -Seconds 2
+          }
       - name: Install backend deps
         working-directory: backend
         run: uv sync --frozen
@@ -201,12 +210,20 @@ jobs:
         env:
           DATABASE_URL: "postgresql+asyncpg://modulo_test:modulo_test@localhost:5433/modulo_test"
           TESTCONTAINERS_RYUK_DISABLED: "true"
-      - name: Stop Postgres
+      - name: Schemathesis API fuzz testing
+        shell: pwsh
+        run: uv run --no-sync pytest tests/integration/test_schemathesis.py -x --timeout=120
+        env:
+          DATABASE_URL: "postgresql+asyncpg://modulo_test:modulo_test@localhost:5433/modulo_test"
+          REDIS_URL: "redis://localhost:6379/0"
+          TESTCONTAINERS_RYUK_DISABLED: "true"
+      - name: Stop containers
         if: always()
         shell: powershell
         run: |
           $ErrorActionPreference = 'Continue'
           docker rm -f modulo-ci-pg 2>$null
+          docker rm -f modulo-ci-redis 2>$null
 
   bdd-e2e:
     name: BDD / E2E Tests
