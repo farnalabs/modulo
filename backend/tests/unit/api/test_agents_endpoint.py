@@ -10,8 +10,8 @@ from fastapi.testclient import TestClient
 
 from modulo.api.dependencies import _get_engine, get_db_session, get_plan_context
 from modulo.api.main import app
-from modulo.auth.dependencies import get_current_user
-from modulo.auth.jwt import AuthenticatedPrincipal
+from modulo.auth.dependencies import get_current_user, get_current_tenant_user
+from modulo.auth.jwt import AuthenticatedPrincipal, TenantPrincipal
 from modulo.settings import Settings, get_settings
 
 _VALID_32 = "a" * 32
@@ -52,6 +52,8 @@ def _make_agent() -> MagicMock:
     a.agent_command = None
     a.account_id = uuid.uuid4()
     a.required_environment_capabilities = []
+    a.template_id = None
+    a.agent_command = None
     a.created_at = _NOW
     a.updated_at = _NOW
     return a
@@ -77,8 +79,8 @@ _AGENT_BODY = {
     "output_schema_version": "1.0",
     "prompt_template": "Hello",
     "model_backend_id": str(_BACKEND_ID),
-    "template_id": None,
     "required_environment_capabilities": [],
+    "template_id": None,
 }
 
 
@@ -93,6 +95,12 @@ def client() -> Generator[TestClient, None, None]:
     app.dependency_overrides[get_db_session] = override_session
     app.dependency_overrides[_get_engine] = lambda: MagicMock()
     app.dependency_overrides[get_current_user] = lambda: AuthenticatedPrincipal(
+        username="testuser",
+        organisation_id=_ORG_ID,
+        account_id=uuid.UUID("00000000-0000-0000-0000-000000000002"),
+        org_role="admin",
+    )
+    app.dependency_overrides[get_current_tenant_user] = lambda: TenantPrincipal(
         username="testuser",
         organisation_id=_ORG_ID,
         account_id=uuid.UUID("00000000-0000-0000-0000-000000000002"),
@@ -162,10 +170,7 @@ def test_update_agent_returns_200(client: TestClient) -> None:
         patch("modulo.api.routes.agents.update_agent", return_value=agent),
         patch("modulo.api.routes.agents.set_rls_org"),
     ):
-        resp = client.patch(
-            f"/api/v1/agents/{_AGENT_ID}",
-            json={"name": "Updated", "required_environment_capabilities": [], "template_id": None},
-        )
+        resp = client.patch(f"/api/v1/agents/{_AGENT_ID}", json={"name": "Updated", **_PATCH_REQUIRED})
     assert resp.status_code == 200
     assert resp.json()["name"] == "Updated"
 
@@ -176,10 +181,7 @@ def test_update_agent_not_found_returns_404(client: TestClient) -> None:
         patch("modulo.api.routes.agents.update_agent", return_value=None),
         patch("modulo.api.routes.agents.set_rls_org"),
     ):
-        resp = client.patch(
-            f"/api/v1/agents/{uuid.uuid4()}",
-            json={"name": "x", "required_environment_capabilities": [], "template_id": None},
-        )
+        resp = client.patch(f"/api/v1/agents/{uuid.uuid4()}", json={"name": "x", **_PATCH_REQUIRED})
     assert resp.status_code == 404
 
 
@@ -239,10 +241,7 @@ def test_update_agent_max_input_length(client: TestClient) -> None:
         patch("modulo.api.routes.agents.update_agent", return_value=agent),
         patch("modulo.api.routes.agents.set_rls_org"),
     ):
-        resp = client.patch(
-            f"/api/v1/agents/{_AGENT_ID}",
-            json={"max_input_length": 10000, **_PATCH_REQUIRED},
-        )
+        resp = client.patch(f"/api/v1/agents/{_AGENT_ID}", json={"max_input_length": 10000, **_PATCH_REQUIRED})
     assert resp.status_code == 200
     assert resp.json()["max_input_length"] == 10000
 
@@ -296,10 +295,7 @@ def test_update_generic_agent_clearing_description_returns_422(client: TestClien
         patch("modulo.api.routes.agents.get_agent", return_value=agent),
         patch("modulo.api.routes.agents.set_rls_org"),
     ):
-        resp = client.patch(
-            f"/api/v1/agents/{_AGENT_ID}",
-            json={"description": "", **_PATCH_REQUIRED},
-        )
+        resp = client.patch(f"/api/v1/agents/{_AGENT_ID}", json={"description": "", **_PATCH_REQUIRED})
     assert resp.status_code == 422
     assert "description" in resp.json()["detail"].lower()
 
@@ -313,10 +309,7 @@ def test_update_library_agent_clearing_description_succeeds(client: TestClient) 
         patch("modulo.api.routes.agents.update_agent", return_value=agent),
         patch("modulo.api.routes.agents.set_rls_org"),
     ):
-        resp = client.patch(
-            f"/api/v1/agents/{_AGENT_ID}",
-            json={"description": "", **_PATCH_REQUIRED},
-        )
+        resp = client.patch(f"/api/v1/agents/{_AGENT_ID}", json={"description": "", **_PATCH_REQUIRED})
     assert resp.status_code == 200
 
 

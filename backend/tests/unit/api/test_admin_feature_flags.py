@@ -215,7 +215,7 @@ class TestProgrammingError:
 
 
 # ---------------------------------------------------------------------------
-# PUT /api/v1/admin/feature-flags/{flag_name} â€” toggle
+# PUT /api/v1/admin/feature-flags/{flag_name} — toggle
 # ---------------------------------------------------------------------------
 
 

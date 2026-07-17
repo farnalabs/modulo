@@ -1,4 +1,4 @@
-"""Unit tests for api/dependencies.py â€” engine creation, session management, plan context."""
+"""Unit tests for api/dependencies.py — engine creation, session management, plan context."""
 
 from unittest.mock import AsyncMock, MagicMock, patch
 
