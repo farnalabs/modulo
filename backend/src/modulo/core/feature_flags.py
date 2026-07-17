@@ -209,7 +209,7 @@ _KNOWN_FLAGS: list[FeatureFlag] = [
     ),
     FeatureFlag(
         name="error_forwarders",
-        description="External error tracking and alerting integrations",
+        description="Dispatch errors to external services via webhooks",
         tier="team",
     ),
     FeatureFlag(
