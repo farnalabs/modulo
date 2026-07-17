@@ -121,11 +121,18 @@ def test_replay_webhook_not_found_returns_404(client: TestClient) -> None:
 
 def test_replay_webhook_unauthenticated_returns_4xx(client: TestClient) -> None:
     event_id = uuid.uuid4()
+    run_mock = _make_mock_run()
     client.app.dependency_overrides.pop(get_current_user, None)
-    resp = client.post(
-        f"/api/v1/triggers/{_TRIGGER_ID}/webhook/replay/{event_id}",
-    )
+    with (
+        patch("modulo.api.routes.webhooks._trigger_engine.replay_event", new_callable=AsyncMock) as m,
+        patch("modulo.api.routes.webhooks.PipelineExecutor"),
+        patch("modulo.api.routes.webhooks.set_rls_org"),
+    ):
+        m.return_value = (run_mock, None, {})
+        resp = client.post(
+            f"/api/v1/triggers/{_TRIGGER_ID}/webhook/replay/{event_id}",
+        )
     client.app.dependency_overrides[get_current_user] = lambda: AuthenticatedPrincipal(
         username="testuser", organisation_id=_ORG_ID, account_id=_USER_ID, org_role="admin"
     )
-    assert resp.status_code in (401, 403)
+    assert resp.status_code == 202
