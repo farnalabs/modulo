@@ -84,6 +84,7 @@ class PipelineCreate(BaseModel):
     run_context_defaults: dict[str, Any] = Field(default_factory=dict)
     default_autonomy_level: str = "manual_approval"
     max_duration_seconds: int | None = Field(None, ge=1)
+    folder_id: uuid.UUID | None = None
 
     @model_validator(mode="after")
     def _validate_team_visibility(self) -> "PipelineCreate":
@@ -465,6 +466,7 @@ async def create_pipeline_endpoint(
                 run_context_defaults=req.run_context_defaults,
                 default_autonomy_level=req.default_autonomy_level,
                 max_duration_seconds=req.max_duration_seconds,
+                folder_id=req.folder_id,
             )
     except ProgrammingError:
         logger.exception("routes.pipelines")

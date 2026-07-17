@@ -459,6 +459,7 @@ async def create_pipeline(
     lock_wait_timeout_seconds: int = 300,
     node_timeout_seconds: int = 300,
     default_autonomy_level: str = "manual_approval",
+    folder_id: str | None = None,
 ) -> dict[str, Any]:
     try:
         if not await validate_current_auth():
@@ -468,6 +469,13 @@ async def create_pipeline(
 
         org_id = _ctx_org_id_val()
         account_id = _ctx_user_id_val()
+
+        parsed_folder_id: uuid.UUID | None = None
+        if folder_id is not None:
+            try:
+                parsed_folder_id = uuid.UUID(folder_id)
+            except ValueError:
+                return {"error": "invalid_folder_id", "detail": f"Invalid folder_id UUID: {folder_id}"}
 
         async with _session(org_id) as s:
             pipeline = await create_pipeline(
@@ -481,6 +489,7 @@ async def create_pipeline(
                 lock_wait_timeout_seconds=lock_wait_timeout_seconds,
                 node_timeout_seconds=node_timeout_seconds,
                 default_autonomy_level=default_autonomy_level,
+                folder_id=parsed_folder_id,
             )
 
         return {
