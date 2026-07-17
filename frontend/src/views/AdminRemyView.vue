@@ -3,7 +3,47 @@
   <div data-theme="agent" class="page-wide">
     <PageHeader :title="$t('views.AdminRemyView.remy_configuration')" :subtitle="$t('views.AdminRemyView.configure_remy_ai_assistant_behaviour_access_and_skills')" />
 
-    <LoadingSpinner v-if="loading" />
+    <template v-if="loading">
+      <div class="rounded-xl border border-border bg-card p-6 space-y-4">
+        <div class="h-5 w-48 animate-pulse rounded bg-muted" />
+        <div class="h-3 w-96 animate-pulse rounded bg-muted" />
+        <div class="grid grid-cols-2 gap-3 sm:grid-cols-3 md:grid-cols-5 mt-4">
+          <div v-for="n in 5" :key="n" class="flex flex-col items-center gap-2 rounded-lg border border-border p-4">
+            <div class="h-10 w-10 animate-pulse rounded-full bg-muted" />
+            <div class="h-4 w-20 animate-pulse rounded bg-muted" />
+            <div class="h-3 w-16 animate-pulse rounded bg-muted" />
+          </div>
+        </div>
+      </div>
+
+      <div class="rounded-xl border border-border bg-card p-6 space-y-4 mt-6">
+        <div class="h-5 w-40 animate-pulse rounded bg-muted" />
+        <div class="h-3 w-80 animate-pulse rounded bg-muted" />
+        <div class="h-24 w-full animate-pulse rounded bg-muted mt-4" />
+      </div>
+
+      <div class="rounded-xl border border-border bg-card p-6 space-y-4 mt-6">
+        <div class="h-5 w-36 animate-pulse rounded bg-muted" />
+        <div class="h-3 w-72 animate-pulse rounded bg-muted" />
+        <div class="space-y-3 mt-4">
+          <div v-for="n in 3" :key="n" class="h-12 w-full animate-pulse rounded bg-muted" />
+        </div>
+      </div>
+
+      <div class="rounded-xl border border-border bg-card p-6 space-y-4 mt-6">
+        <div class="h-5 w-36 animate-pulse rounded bg-muted" />
+        <div class="h-3 w-64 animate-pulse rounded bg-muted" />
+        <div class="h-32 w-full animate-pulse rounded bg-muted mt-4" />
+      </div>
+
+      <div class="rounded-xl border border-border bg-card p-6 space-y-4 mt-6">
+        <div class="h-5 w-28 animate-pulse rounded bg-muted" />
+        <div class="h-3 w-56 animate-pulse rounded bg-muted" />
+        <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3 mt-4">
+          <div v-for="n in 6" :key="n" class="h-20 w-full animate-pulse rounded bg-muted" />
+        </div>
+      </div>
+    </template>
     <template v-else>
       <TooltipProvider>
       <!-- Configured Providers -->
@@ -723,7 +763,6 @@ import { ref, reactive, computed, watch, onUnmounted } from 'vue'
 import { api } from '../lib/api/client'
 import { useDataFetch } from '../composables/useDataFetch'
 import { formatApiError } from '../lib/api/formatError'
-import LoadingSpinner from '../components/shared/LoadingSpinner.vue'
 import FeatureGate from '../components/FeatureGate.vue'
 import RemySkillDialog from '../components/remy/RemySkillDialog.vue'
 import AccessEntitySelector from '../components/remy/AccessEntitySelector.vue'
