@@ -330,8 +330,8 @@ def _parse_oidc_providers(settings: Settings) -> list[dict[str, str]]:
         return []
     try:
         entries = json.loads(settings.modulo_oidc_providers)
-    except (json.JSONDecodeError, TypeError):
-        _log.warning("sso.oidc_invalid_json")
+    except (json.JSONDecodeError, TypeError) as exc:
+        _log.warning("sso.oidc_invalid_json", extra={"error": str(exc)})
         return []
     if not isinstance(entries, list):
         _log.warning("sso.oidc_not_array", extra={"type": type(entries).__name__})
@@ -424,7 +424,8 @@ def _decode_id_token_claims(id_token: str) -> dict[str, object]:
         padded = parts[1] + "=" * pad
         decoded = json.loads(base64.urlsafe_b64decode(padded))
         return _require_json_object(decoded, "OIDC ID token claims")
-    except (ValueError, json.JSONDecodeError):
+    except (ValueError, json.JSONDecodeError) as exc:
+        _log.warning("sso.id_token_decode_failed", extra={"error": str(exc)})
         return {}
 
 
@@ -505,6 +506,7 @@ async def saml_process_response(
         decoded = base64.b64decode(saml_response).decode()
         root = ET.fromstring(decoded)
     except (binascii.Error, ET.ParseError, UnicodeDecodeError, ValueError) as exc:
+        _log.warning("sso.saml_decode_failed", extra={"error": str(exc)})
         raise ValueError(str(exc)) from None
 
     try:
@@ -545,8 +547,8 @@ async def saml_process_response(
                             "sso.saml_clock_skew",
                             extra={"issue_instant": issue_instant_str, "now": now_utc.isoformat()},
                         )
-                except ValueError:
-                    _log.warning("sso.saml_unparseable_issue_instant", extra={"issue_instant": issue_instant_str})
+                except ValueError as exc:
+                    _log.warning("sso.saml_unparseable_issue_instant", extra={"issue_instant": issue_instant_str, "error": str(exc)})
 
         subject = assertion.find(".//saml:Subject/saml:NameID", ns)
         name_id = subject.text.strip() if subject is not None and subject.text else ""
