@@ -2,7 +2,7 @@
   <OverlayScrollbarsComponent
     defer
     :options="osOptions"
-    class="flex-1 min-h-0"
+    class="flex-1 min-h-0 relative"
     element="nav"
     :aria-label="$t('components.SidebarNav.main_navigation')"
   >
@@ -29,6 +29,7 @@
           /></SidebarGroup>
       </template>
     </div>
+    <div class="pointer-events-none absolute bottom-0 left-0 right-0 h-6 bg-gradient-to-t from-background to-transparent" aria-hidden="true" />
   </OverlayScrollbarsComponent>
 </template>
 
@@ -44,8 +45,9 @@ import { usePlanStore } from "../stores/planStore";
 
 const osOptions = {
   scrollbars: {
-    autoHide: "leave" as const,
-    autoHideDelay: 500,
+    autoHide: "never" as const,
+    autoHideDelay: 0,
+    clickScroll: true,
   },
 };
 
