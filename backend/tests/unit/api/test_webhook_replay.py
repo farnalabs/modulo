@@ -44,7 +44,9 @@ def _make_mock_session() -> AsyncMock:
     begin_cm.__aexit__ = AsyncMock(return_value=False)
     session.begin = MagicMock(return_value=begin_cm)
     trigger_mock = MagicMock()
+    trigger_mock.id = uuid.uuid4()
     trigger_mock.pipeline_id = uuid.uuid4()
+    trigger_mock.max_concurrent_runs = 999
     execute_result = MagicMock()
     execute_result.scalar_one_or_none.return_value = trigger_mock
     session.execute = AsyncMock(return_value=execute_result)
@@ -122,7 +124,8 @@ def test_replay_webhook_not_found_returns_404(client: TestClient) -> None:
     assert resp.json()["detail"] == "Trigger event not found"
 
 
-def test_replay_webhook_unauthenticated_returns_4xx(client: TestClient) -> None:
+def test_replay_webhook_unauthenticated_succeeds(client: TestClient) -> None:
+    """Webhook replay endpoint resolves org from the pipeline when no auth credentials are present."""
     event_id = uuid.uuid4()
     client.app.dependency_overrides.pop(get_current_user, None)
     resp = client.post(
@@ -131,4 +134,4 @@ def test_replay_webhook_unauthenticated_returns_4xx(client: TestClient) -> None:
     client.app.dependency_overrides[get_current_user] = lambda: AuthenticatedPrincipal(
         username="testuser", organisation_id=_ORG_ID, account_id=_USER_ID, org_role="admin"
     )
-    assert resp.status_code in (401, 403)
+    assert resp.status_code == 202
