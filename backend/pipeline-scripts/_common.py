@@ -93,7 +93,7 @@ def call_opencode(prompt, model, timeout=180):
             e = json.loads(line)
             if e.get("type") == "text":
                 full += e["part"].get("text", "")
-        except:
+        except Exception:
             pass
     return full, elapsed
 

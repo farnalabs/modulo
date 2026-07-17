@@ -101,9 +101,9 @@
                 />
               </div>
               <div>
-                <label class="mb-1 block text-sm font-medium">Site</label>
-                <Select v-model="configs.datadog.site">
-                  <SelectTrigger class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring" aria-label="Site">
+                <label for="settingserrorforwardersview-datadog-site" class="mb-1 block text-sm font-medium">Site</label>
+                <Select v-model="configs.datadog.site" aria-label="Site">
+                  <SelectTrigger id="settingserrorforwardersview-datadog-site" class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring" aria-label="Site">
                     <SelectValue placeholder="Select site" />
                   </SelectTrigger>
                   <SelectContent>
