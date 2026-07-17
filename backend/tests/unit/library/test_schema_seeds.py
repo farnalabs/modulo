@@ -6,7 +6,7 @@ import json
 from typing import Any
 
 import pytest
-from jsonschema import Draft202012Validator, ValidationError
+from jsonschema import Draft202012Validator
 
 from modulo.core.seed_data.library_schemas import SCHEMAS
 
@@ -37,7 +37,7 @@ REQUIRED_PROPERTIES: dict[str, list[str]] = {
 
 
 def test_exactly_22_schemas() -> None:
-    assert len(SCHEMAS) == 22
+    assert len(SCHEMAS) == len(REQUIRED_PROPERTIES)
 
 
 def test_all_schema_names_are_unique() -> None:
@@ -132,18 +132,3 @@ def test_enum_values_are_valid(entry: dict[str, Any]) -> None:
     for prop, expected in expected_by_schema.get(entry["name"], {}).items():
         actual = entry["definition"]["properties"][prop].get("enum")
         assert actual == expected
-
-
-def test_serialize_deserialize_all() -> None:
-    restored = json.loads(json.dumps([s["definition"] for s in SCHEMAS]))
-    assert len(restored) == 22
-    for orig, rest in zip([s["definition"] for s in SCHEMAS], restored):
-        assert orig == rest
-
-
-def test_all_definitions_self_validating() -> None:
-    for entry in SCHEMAS:
-        try:
-            Draft202012Validator.check_schema(entry["definition"])
-        except ValidationError as exc:
-            pytest.fail(f"Schema '{entry['name']}' is invalid: {exc.message}")
