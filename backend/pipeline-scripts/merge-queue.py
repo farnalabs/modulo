@@ -6,45 +6,34 @@ applies `gate.ps1` to merge them sequentially, handles conflicts via the
 Merge Fixer pipeline, and updates PR status checks.
 
 Environment Variables:
-    GITHUB_TOKEN      — GitHub PAT for cloning, PR access, and status updates
-    GITHUB_REPO       — Repository full name (e.g. "farnalabs/modulo")
-    MAX_BATCH         — Maximum number of PRs to process in one run (default: 3)
-    OPENCODE_API_KEY  — API key for the opencode CLI
+    GITHUB_TOKEN                 — GitHub PAT for cloning, PR access, and status updates
+    GITHUB_REPO                  — Repository full name (e.g. "farnalabs/modulo")
+    MAX_BATCH                    — Maximum number of PRs to process in one run (default: 3)
+    APP_MODULO_OPENCODE_API_KEY  — API key for the opencode CLI
 
 Output:
-    Writes status, summary (PRs processed, merged, failed), and per-PR details
-    to /tmp/output.json
+    Writes status, summary, wall_clock_ms, and per-PR results to output.json
 """
 
 import json
 import os
 import subprocess
-import sys
 import tempfile
+import time
 from pathlib import Path
 
-REQUIRED_ENV_VARS = [
-    "GITHUB_TOKEN",
-    "GITHUB_REPO",
-    "OPENCODE_API_KEY",
-]
+from _common import check_env, exit_completed, exit_failed, get_git_url, safe_clone, setup_opencode_auth
 
 
-def check_env() -> dict[str, str]:
-    missing = [k for k in REQUIRED_ENV_VARS if k not in os.environ]
+def check_env_extra():
+    missing = [k for k in ["GITHUB_REPO"] if k not in os.environ]
     if missing:
-        print(f"Missing required env vars: {', '.join(missing)}", file=sys.stderr)
-        sys.exit(1)
-    return {
-        "github_token": os.environ["GITHUB_TOKEN"],
-        "github_repo": os.environ["GITHUB_REPO"],
-        "opencode_api_key": os.environ["OPENCODE_API_KEY"],
-        "max_batch": int(os.environ.get("MAX_BATCH", "3")),
-    }
+        exit_failed(f"Missing required env vars: {', '.join(missing)}")
+    return os.environ["GITHUB_REPO"], int(os.environ.get("MAX_BATCH", "3"))
 
 
-def fetch_merge_queue(repo_full_name: str, github_token: str) -> list[dict]:
-    result = subprocess.run(
+def fetch_merge_queue(repo_full_name, token):
+    r = subprocess.run(
         [
             "gh",
             "pr",
@@ -60,33 +49,40 @@ def fetch_merge_queue(repo_full_name: str, github_token: str) -> list[dict]:
             "--limit",
             "10",
         ],
-        env={**os.environ, "GH_TOKEN": github_token},
+        env={**os.environ, "GH_TOKEN": token},
         capture_output=True,
         text=True,
-        check=True,
     )
-    return json.loads(result.stdout)
+    if r.returncode != 0:
+        exit_failed(f"Fetch merge queue failed: {r.stderr[:200]}")
+    return json.loads(r.stdout)
 
 
-def validate_pr(pr: dict, github_token: str) -> bool:
+def validate_pr(pr, token):
     if pr.get("mergeable") == "CONFLICTING":
-        print(f"PR #{pr['number']} has conflicts — skipping")
+        print(f"PR #{pr['number']} has conflicts — skipping")  # noqa: T201
         return False
-
     reviews = pr.get("reviews", [])
     approved = any(r.get("state") == "APPROVED" for r in reviews)
-
     if not approved:
-        print(f"PR #{pr['number']} is not approved — skipping")
-
+        print(f"PR #{pr['number']} is not approved — skipping")  # noqa: T201
     return approved
 
 
-def run_gate(repo_path: Path, branch: str) -> dict:
-    gate_script = repo_path / ".." / ".." / ".." / ".." / "devtools" / "harness" / "tools" / "gate.ps1"
-    if not gate_script.exists():
-        gate_script = Path("C:/Users/dunca/Modulo/Repos/devtools/harness/tools/gate.ps1")
+def resolve_gate_script(repo_path):
+    gate = repo_path / ".." / ".." / ".." / ".." / "devtools" / "harness" / "tools" / "gate.ps1"
+    if gate.exists():
+        return gate
+    gate2 = repo_path / ".." / ".." / ".." / ".." / ".." / "devtools" / "harness" / "tools" / "gate.ps1"
+    if gate2.exists():
+        return gate2
+    exit_failed(f"gate.ps1 not found (tried {gate} and {gate2})")
+    return None
 
+
+def run_gate_script(repo_path, branch):
+    gate_script = resolve_gate_script(repo_path)
+    start = time.time()
     result = subprocess.run(
         ["powershell", "-File", str(gate_script), "-Branch", branch, "-SkipBump"],
         cwd=repo_path,
@@ -94,103 +90,58 @@ def run_gate(repo_path: Path, branch: str) -> dict:
         text=True,
         timeout=600,
     )
+    wall_clock_ms = int((time.time() - start) * 1000)
     return {
         "returncode": result.returncode,
         "stdout": result.stdout,
         "stderr": result.stderr,
+        "wall_clock_ms": wall_clock_ms,
     }
 
 
-def update_pr_status(
-    repo_full_name: str,
-    pr_number: str,
-    state: str,
-    description: str,
-    github_token: str,
-) -> None:
+def update_pr_status(repo_full_name, pr_number, state, token):
     subprocess.run(
-        [
-            "gh",
-            "pr",
-            "edit",
-            pr_number,
-            "--repo",
-            repo_full_name,
-            "--add-label",
-            f"merged-by-queue:{state}",
-        ],
-        env={**os.environ, "GH_TOKEN": github_token},
+        ["gh", "pr", "edit", pr_number, "--repo", repo_full_name, "--add-label", f"merged-by-queue:{state}"],
+        env={**os.environ, "GH_TOKEN": token},
         capture_output=True,
     )
 
 
-def write_output(status: str, summary: str, extra: dict | None = None) -> None:
-    output = {"status": status, "summary": summary}
-    if extra:
-        output.update(extra)
-    output_path = Path("/tmp/output.json")
-    output_path.write_text(json.dumps(output, indent=2))
-    print(f"Output written to {output_path}")
+def main():
+    token, api_key = check_env()
+    model = setup_opencode_auth(api_key)
+    github_repo, max_batch = check_env_extra()
 
-
-def main() -> None:
-    env = check_env()
-
-    prs = fetch_merge_queue(env["github_repo"], env["github_token"])
+    prs = fetch_merge_queue(github_repo, token)
     if not prs:
-        write_output(status="success", summary="No PRs in merge queue")
-        return
+        exit_completed(summary="No PRs in merge queue")
 
-    valid_prs = [p for p in prs if validate_pr(p, env["github_token"])]
-    batch = valid_prs[: env["max_batch"]]
+    valid_prs = [p for p in prs if validate_pr(p, token)]
+    batch = valid_prs[:max_batch]
 
     if not batch:
-        write_output(
-            status="skipped",
+        exit_completed(
             summary=f"{len(prs)} PRs in queue but none validated (approval/conflicts)",
             extra={"total_queued": len(prs), "validated": 0},
         )
-        return
 
+    total_start = time.time()
     results = []
     for pr in batch:
         branch = pr["headRefName"]
-        print(f"Processing PR #{pr['number']} ({branch}): {pr['title']}")
+        print(f"Processing PR #{pr['number']} ({branch}): {pr['title']}")  # noqa: T201
 
         with tempfile.TemporaryDirectory(prefix=f"merge-queue-{pr['number']}-") as tmpdir:
-            subprocess.run(
-                ["git", "clone", f"https://github.com/{env['github_repo']}.git", str(Path(tmpdir) / "repo")],
-                check=True,
-                capture_output=True,
-                text=True,
-            )
-            repo_path = Path(tmpdir) / "repo"
+            owner, repo = github_repo.split("/")
+            repo_path = safe_clone(token, get_git_url(token, owner, repo), Path(tmpdir) / "repo")
 
-            gate_result = run_gate(repo_path, branch)
+            gate_result = run_gate_script(repo_path, branch)
 
             if gate_result["returncode"] == 0:
-                update_pr_status(
-                    env["github_repo"],
-                    str(pr["number"]),
-                    "success",
-                    "Merged by Merge Queue",
-                    env["github_token"],
-                )
-                results.append(
-                    {
-                        "pr_number": pr["number"],
-                        "branch": branch,
-                        "status": "merged",
-                    }
-                )
+                update_pr_status(github_repo, str(pr["number"]), "success", token)
+                results.append({"pr_number": pr["number"], "branch": branch, "status": "merged"})
             else:
-                update_pr_status(
-                    env["github_repo"],
-                    str(pr["number"]),
-                    "failure",
-                    "Gate failed — check logs",
-                    env["github_token"],
-                )
+                update_pr_status(github_repo, str(pr["number"]), "failure", token)
                 results.append(
                     {
                         "pr_number": pr["number"],
@@ -200,15 +151,17 @@ def main() -> None:
                     }
                 )
 
+    total_wall_clock_ms = int((time.time() - total_start) * 1000)
     merged = sum(1 for r in results if r["status"] == "merged")
     failed = sum(1 for r in results if r["status"] == "failed")
 
-    write_output(
-        status="success" if failed == 0 else "partial_failure",
+    exit_completed(
         summary=f"Processed {len(results)} PRs: {merged} merged, {failed} failed",
         extra={
             "batch_size": len(batch),
             "results": results,
+            "wall_clock_ms": total_wall_clock_ms,
+            "usage": {"model": model, "wall_clock_ms": total_wall_clock_ms},
         },
     )
 

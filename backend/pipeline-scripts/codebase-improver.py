@@ -6,106 +6,58 @@ environment, calls opencode to apply improvements, commits the result,
 pushes to a branch, and creates a pull request.
 
 Environment Variables:
-    GITHUB_TOKEN      — GitHub PAT for cloning and PR creation
-    GITHUB_REPO       — Repository full name (e.g. "farnalabs/modulo")
-    OPENCODE_API_KEY  — API key for the opencode CLI
-    TARGET_PATH       — Subdirectory to improve within the repo (optional)
+    GITHUB_TOKEN            — GitHub PAT for cloning and PR creation
+    GITHUB_REPO             — Repository full name (e.g. "farnalabs/modulo")
+    APP_MODULO_OPENCODE_API_KEY — API key for the opencode CLI
+    TARGET_PATH             — Subdirectory to improve within the repo (optional)
 
 Output:
-    Writes status, summary, and pull_request_url to /tmp/output.json
+    Writes status, summary, wall_clock_ms, and pull_request_url to output.json
 """
 
-import json
 import os
 import subprocess
-import sys
 import tempfile
+import time
 from pathlib import Path
 
-REQUIRED_ENV_VARS = [
-    "GITHUB_TOKEN",
-    "GITHUB_REPO",
-    "OPENCODE_API_KEY",
-]
+from _common import check_env, exit_completed, exit_failed, get_git_url, run_git, safe_clone, setup_opencode_auth
 
 
-def check_env() -> dict[str, str]:
-    missing = [k for k in REQUIRED_ENV_VARS if k not in os.environ]
+def check_env_extra():
+    missing = [k for k in ["GITHUB_REPO"] if k not in os.environ]
     if missing:
-        print(f"Missing required env vars: {', '.join(missing)}", file=sys.stderr)
-        sys.exit(1)
-
-    target_path = os.environ.get("TARGET_PATH", ".")
-    return {
-        "github_token": os.environ["GITHUB_TOKEN"],
-        "github_repo": os.environ["GITHUB_REPO"],
-        "opencode_api_key": os.environ["OPENCODE_API_KEY"],
-        "target_path": target_path,
-    }
+        exit_failed(f"Missing required env vars: {', '.join(missing)}")
+    return os.environ["GITHUB_REPO"], os.environ.get("TARGET_PATH", ".")
 
 
-def clone_repo(repo_url: str, work_dir: Path) -> Path:
-    clone_path = work_dir / "repo"
-    subprocess.run(
-        ["git", "clone", repo_url, str(clone_path)],
-        check=True,
-        capture_output=True,
-        text=True,
-    )
-    return clone_path
-
-
-def run_improve_codebase(repo_path: Path, target_path: str) -> dict:
-    result = subprocess.run(
+def run_improve_codebase(repo_path, target_path):
+    return subprocess.run(
         ["opencode", "improve-codebase", target_path],
         cwd=repo_path,
         capture_output=True,
         text=True,
         timeout=600,
     )
-    return {
-        "returncode": result.returncode,
-        "stdout": result.stdout,
-        "stderr": result.stderr,
-    }
 
 
-def commit_and_push(repo_path: Path, branch_name: str, github_token: str) -> None:
-    subprocess.run(
-        ["git", "checkout", "-b", branch_name],
-        cwd=repo_path,
-        check=True,
-        capture_output=True,
-    )
-    subprocess.run(
-        ["git", "add", "-A"],
-        cwd=repo_path,
-        check=True,
-        capture_output=True,
-    )
-    subprocess.run(
-        ["git", "commit", "-m", "feat: codebase improvement sweep"],
-        cwd=repo_path,
-        check=True,
-        capture_output=True,
-    )
-    remote_url = f"https://x-access-token:{github_token}@github.com/{os.environ['GITHUB_REPO']}.git"
-    subprocess.run(
-        ["git", "remote", "set-url", "origin", remote_url],
-        cwd=repo_path,
-        check=True,
-        capture_output=True,
-    )
-    subprocess.run(
-        ["git", "push", "origin", branch_name],
-        cwd=repo_path,
-        check=True,
-        capture_output=True,
-    )
+def commit_and_push(repo_path, branch_name, repo_full_name, token):
+    run_git(["checkout", "-b", branch_name], cwd=repo_path)
+    if run_git(["checkout", "-b", branch_name], cwd=repo_path).returncode != 0:
+        run_git(["checkout", branch_name], cwd=repo_path)
+    run_git(["add", "-A"], cwd=repo_path)
+    r = run_git(["diff", "--cached", "--quiet"], cwd=repo_path)
+    if r.returncode != 0:
+        run_git(["commit", "-m", "feat: codebase improvement sweep"], cwd=repo_path)
+    owner, repo = repo_full_name.split("/")
+    run_git(["remote", "set-url", "origin", get_git_url(token, owner, repo)], cwd=repo_path)
+    r = run_git(["push", "origin", branch_name], cwd=repo_path)
+    if r.returncode != 0:
+        exit_failed(f"Push failed: {r.stderr[:200]}")
 
 
-def create_pr(repo_full_name: str, branch_name: str, github_token: str) -> str:
-    result = subprocess.run(
+def create_pr(repo_full_name, branch_name, token):
+    r = subprocess.run(
         [
             "gh",
             "pr",
@@ -119,56 +71,48 @@ def create_pr(repo_full_name: str, branch_name: str, github_token: str) -> str:
             "--title",
             "Codebase Improvement Sweep",
             "--body",
-            (
-                "Automated codebase improvement via the improve-codebase skill.\n"
-                f"Branch: {branch_name}\n"
-                "Review and merge at your convenience."
-            ),
+            f"Automated codebase improvement via the improve-codebase skill.\nBranch: {branch_name}\n",
         ],
-        env={**os.environ, "GH_TOKEN": github_token},
+        env={**os.environ, "GH_TOKEN": token},
         capture_output=True,
         text=True,
-        check=True,
     )
-    return result.stdout.strip()
+    if r.returncode != 0:
+        exit_failed(f"PR creation failed: {r.stderr[:200]}")
+    return r.stdout.strip()
 
 
-def write_output(status: str, summary: str, extra: dict | None = None) -> None:
-    output = {"status": status, "summary": summary}
-    if extra:
-        output.update(extra)
-    output_path = Path("/tmp/output.json")
-    output_path.write_text(json.dumps(output, indent=2))
-    print(f"Output written to {output_path}")
-
-
-def main() -> None:
-    env = check_env()
+def main():
+    token, api_key = check_env()
+    model = setup_opencode_auth(api_key)
+    github_repo, target_path = check_env_extra()
 
     with tempfile.TemporaryDirectory(prefix="codebase-improver-") as tmpdir:
-        work_dir = Path(tmpdir)
-        repo_url = f"https://github.com/{env['github_repo']}.git"
-        repo_path = clone_repo(repo_url, work_dir)
+        owner, repo = github_repo.split("/")
+        repo_path = safe_clone(token, get_git_url(token, owner, repo), Path(tmpdir) / "repo")
 
-        print(f"Running improve-codebase on target: {env['target_path']}")
-        result = run_improve_codebase(repo_path, env["target_path"])
+        start = time.time()
+        result = run_improve_codebase(repo_path, target_path)
+        wall_clock_ms = int((time.time() - start) * 1000)
 
         if result["returncode"] != 0:
-            write_output(
-                status="failed",
-                summary="opencode improve-codebase returned non-zero exit code",
-                extra={"stderr": result["stderr"]},
+            exit_failed(
+                "opencode improve-codebase returned non-zero exit code",
+                extra={"stderr": result["stderr"], "wall_clock_ms": wall_clock_ms},
             )
-            sys.exit(1)
 
-        branch_name = f"improve-codebase/{env['target_path'].replace('/', '-')}"
-        commit_and_push(repo_path, branch_name, env["github_token"])
-        pr_url = create_pr(env["github_repo"], branch_name, env["github_token"])
+        branch_name = f"improve-codebase/{target_path.replace('/', '-')}"
+        commit_and_push(repo_path, branch_name, github_repo, token)
+        pr_url = create_pr(github_repo, branch_name, token)
 
-        write_output(
-            status="success",
-            summary=f"Codebase improvement completed for {env['target_path']}",
-            extra={"pull_request_url": pr_url, "branch": branch_name},
+        exit_completed(
+            summary=f"Codebase improvement completed for {target_path}",
+            extra={
+                "pull_request_url": pr_url,
+                "branch": branch_name,
+                "wall_clock_ms": wall_clock_ms,
+                "usage": {"model": model, "wall_clock_ms": wall_clock_ms},
+            },
         )
 
 
