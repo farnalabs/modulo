@@ -27,9 +27,8 @@ unit-tests:
   - backend/tests/unit/db/test_repositories_locks.py
   - backend/tests/unit/db/test_rls.py
   - backend/tests/unit/db/test_rls_multibackend.py
-  - backend/tests/unit/db/test_migration_0025.py
-  - backend/tests/unit/db/test_migration_0026.py
-  - backend/tests/unit/db/test_migration_0049.py
+  - backend/tests/unit/db/test_migration_remy_tables.py
+  - backend/tests/unit/db/test_migration_team_visibility_rls.py
   - backend/tests/unit/test_engine_pool_config.py
   - backend/tests/integration/conftest.py
   - backend/tests/integration/crud/conftest.py

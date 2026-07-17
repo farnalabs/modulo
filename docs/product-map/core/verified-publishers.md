@@ -5,7 +5,7 @@ delivery-tasks: [task-nv8-verified-publishers]
 code:
   - backend/src/modulo/db/models/publisher.py
   - backend/src/modulo/db/crud/publisher.py
-  - backend/src/modulo/db/migrations/versions/0032_publishers.py
+  - backend/src/modulo/db/migrations/versions/0005_v2_features_system.py
   - backend/src/modulo/db/models/library_primitive.py
   - backend/src/modulo/api/routes/admin.py
   - backend/src/modulo/api/routes/registry.py

@@ -27,6 +27,29 @@ The determination endpoint scans a team's connected tools (GitHub, GitLab, Jira,
 - [x] Integration with Jira/Linear connectors for issue tracking analysis
 - [x] Pipeline draft generation from inferred workflow
 
+## Error Handling
+
+- [x] Both routes catch `ProgrammingError` → 501 with migration hint
+- [x] Both routes catch `SQLAlchemyError` → 503
+- [x] Both routes catch `IntegrityError` → 409
+- [x] Both routes catch `HTTPException` → re-raise
+- [x] Both routes catch `Exception` → 500 with `logger.exception`
+- [ ] No connector-specific error handling — connector failures (rate limits, auth expiry) propagate as 500
+
+## Edge Cases
+
+- [x] No connectors configured returns empty scan results (not error)
+- [x] Connector returns empty data (no repos, no issues) handled gracefully
+- [ ] Large org with many repos/issues — no pagination or streaming for connector data
+- [ ] Connector auth expired mid-scan — partial results with error not handled
+
+## Security
+
+- [x] Both routes require authentication (401 for unauthenticated)
+- [x] Both routes require operator role (403 for non-admin)
+- [ ] No rate limiting on expensive scan/draft endpoints
+- [ ] No input size validation on pipeline draft payload
+
 ## Known Gaps
 
 - **No BDD coverage** — No .feature files for determination endpoints.

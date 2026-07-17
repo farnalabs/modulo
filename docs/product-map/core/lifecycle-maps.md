@@ -36,8 +36,28 @@ work without acting as a pipeline execution engine.
 - [ ] Graduation changes a stage to a linked Modulo pipeline through a dedicated API operation
 - [ ] Lifecycle maps can be exported, imported, and shared as library primitives
 
-## Known Gaps
+## Error Handling
 
-- Lifecycle Maps are specified after the roadmap sections in the PRD; the section number is valid but the PRD ordering should be normalised separately.
-- The version-history, graduation, and library BDD scenarios currently cover only base map storage; their full named workflows are not implemented.
-- The feature remains partial while the PRD's analytics and dogfooding delivery tasks are incomplete.
+- [x] Map CRUD routes catch `ProgrammingError` → 501
+- [x] Map CRUD routes catch `SQLAlchemyError` → 503
+- [x] Map CRUD routes catch `IntegrityError` → 409
+- [x] Map CRUD routes catch `Exception` → 500 with logging
+- [x] Missing map ID returns 404
+- [ ] No error handling for invalid graph structure in map content
+
+## Edge Cases
+
+- [x] Empty map content (no stages or transitions) — stored and returned
+- [x] Team visibility without owner_team_id — rejected on create
+- [x] Map with single stage — displayed correctly
+- [ ] Map with circular stage transitions — no cycle detection
+- [ ] Concurrent map content update while version history is being read
+
+## Security
+
+- [x] Auth required for all map endpoints
+- [x] Org-scoped — cross-org access returns 404
+- [x] Team visibility enforces team membership for access
+- [ ] No audit logging for map operations
+
+## Known Gaps

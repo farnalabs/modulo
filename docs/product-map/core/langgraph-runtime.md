@@ -56,8 +56,29 @@ LangGraph-based pipeline runtime — StateGraph compilation, execution, snapshot
 - [x] §6.5 Alembic `upgrade head` before `AsyncPostgresSaver.setup()` on startup
 - [x] §6.5 Async drivers only in async path — `asyncpg` for Postgres, `aiosqlite` for SQLite
 
-## Known Gaps
+## Error Handling
 
-- **AsyncSqliteSaver not implemented** — only `ModuloPostgresSaver` exists. The `AsyncSqliteSaver` variant mentioned in §6.5 is a future item. SQLite dev-only mode uses LangGraph's built-in `SqliteSaver` via `AsyncSqliteSaver` from `langgraph.checkpoint.sqlite.aio`, but no Modulo wrapper with org_id isolation exists for it.
-- **No per-run checkpoint cleanup** — checkpoint tables (`checkpoints`, `checkpoint_blobs`, `checkpoint_writes`) grow unbounded. A nightly retention job should remove checkpoints for completed runs older than the configured retention period.
-- **`set_rls_org` called outside `session.begin()` in `_do_db_cancellation_check`** — the method creates its own `async with self._session_factory() as session:` without `session.begin()`, but calls `set_rls_org(session, org_id)` which requires an active transaction. This works only because `set_rls_org` calls `_ensure_active_transaction()` which will fail if autobegin is disabled.
+- [x] Graph compilation errors caught and surface as run-failure with detail
+- [x] Checkpoint persistence errors caught and logged
+- [x] Node execution errors captured per-node in run state
+- [x] `CancelledError` propagation via `@cancellable_node` decorator
+- [x] `set_rls_org` called without `session.begin()` in `_do_db_cancellation_check` — relies on autobegin, will fail if disabled
+- [ ] No explicit `IntegrityError` or `SQLAlchemyError` routing in engine-level catch blocks
+
+## Edge Cases
+
+- [x] Empty pipeline graph (zero nodes) — rejected at validation stage
+- [x] Single-node pipeline — executes correctly
+- [x] Pipeline with all node types (agent, manual, sandbox_agent, router, trigger)
+- [x] LRU cache eviction on full cache — stale graphs gracefully recompiled
+- [ ] Concurrent checkpoint writes — no explicit isolation testing
+- [ ] State growth beyond memory limit — no enforced cap on `dict[str, Any]` state
+
+## Security
+
+- [x] RLS context set per-run — cross-org isolation enforced
+- [x] `run_context` write guard prevents non-context-setter agents from writing
+- [ ] No per-run credential isolation beyond ConnectorHub one-decrypt lifecycle
+- [ ] Checkpoint data may contain state from previous runs before LRU eviction
+
+## Known Gaps

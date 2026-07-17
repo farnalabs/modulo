@@ -55,14 +55,31 @@ Plan tier definitions and feature flag catalog governing which features are avai
 - [x] `seed_tier_catalog.py` seeds Community (rank 0) and Team (rank 1) tiers
 - [x] Seeds all feature flags assigned to known tiers
 
+## Error Handling
+
+- [x] IntegrityError → 409 Conflict
+- [x] ProgrammingError → 501 Not Implemented
+- [x] SQLAlchemyError → 503 Service Unavailable
+- [x] Exception → 500 with `logger.exception`
+- [x] `asyncio.CancelledError` guard before generic exception handlers
+- [ ] Seed script errors silently swallowed — no validation of seed output
+
+## Edge Cases
+
+- [x] Empty tier catalog returns empty list
+- [x] Unknown tier_id returns 404
+- [x] Unknown flag name returns 404
+- [ ] Tier rank conflict — two tiers with same rank produce undefined ordering
+- [ ] Feature flag `depends_on` circular reference — no cycle detection
+- [ ] Seed script idempotency — duplicate seed runs via `ON CONFLICT DO NOTHING`
+
+## Security
+
+- [x] Auth guard via `get_current_user` dependency
+- [x] All tier/flag routes require admin role
+- [ ] No audit logging for tier catalog reads
+
 ## QA History
-
-### 2026-07-12 — Round 3 QA
-
-- **Fixed (MAJOR):** Removed duplicate `admin_cost_controls` entry in `seed_tier_catalog.py` (appeared twice — same tier_id, description, and name). The duplicate would cause `ON CONFLICT DO NOTHING` to silently skip it on insert, so it was harmless at runtime but misleading.
-- **Fixed (MINOR):** No stale frontmatter found. All `code:`, `bdd:`, `unit-tests:` entries verified as accurate.
-
-## Known Gaps
 
 - No dedicated unit tests for `admin_tiers` route or `tier_catalog` CRUD. Tier catalog functions are tested indirectly through `test_feature_flag_registry.py` and `test_plan_context.py` (which mock `tier_catalog` functions).
 - No BDD feature files for tier catalog operations.
