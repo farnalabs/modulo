@@ -56,9 +56,30 @@ Compute structural diffs between two JSON Schema definitions and transform data 
 - [x] SQLAlchemyError returns 503
 - [x] Exception returns 500 with logging
 
-## Known Gaps
+## Error Handling
 
-- **No BDD scenarios for migration plan endpoint** — only migrate endpoint has BDD coverage
-- **Rename heuristic is type-only** — same-type fields may be falsely paired across unrelated additions/removals (e.g. two string fields added and removed in the same change set)
-- **No concurrency tests for MigrationRegistry** — lock tested only in basic coverage
-- **No performance tests** for large migration chains
+- [x] Missing source/target schema returns 404
+- [x] Schemas with no versions return 404
+- [x] ProgrammingError returns 501
+- [x] SQLAlchemyError returns 503
+- [x] Exception returns 500 with logging
+- [x] Rename conflicts (target field already exists) handled with warning — migration continues
+- [x] Empty/missing properties handled gracefully
+- [ ] Migration gap detection raises error — no degraded fallback for partial migration chains
+
+## Edge Cases
+
+- [x] Empty/missing properties in both source and target handled
+- [x] Same source and target schema — empty migration plan (no changes detected)
+- [x] Single-field schema — diff detected correctly
+- [ ] Large schemas (1000+ fields) — no performance testing for diff computation
+- [ ] Circular rename chains (A→B, B→A) — may produce unpredictable results
+- [ ] Non-existent version in migration chain gap detection
+
+## Security
+
+- [x] Auth required — 401 for unauthenticated access
+- [x] Schema access is org-scoped — cross-org schema returns 404
+- [ ] No audit logging for schema migration operations
+
+## Known Gaps

@@ -16,7 +16,6 @@ code:
   - frontend/src/components/SidebarFooter.vue
   - frontend/src/stores/planStore.ts
   - frontend/src/router/index.ts
-
 bdd:
   - backend/tests/bdd/features/licensing/feature_flag_inspection.feature
 depends-on: [feat-core-db-abstraction-core]

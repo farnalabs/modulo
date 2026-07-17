@@ -32,11 +32,31 @@ Deployment-wide key-value configuration management via the `SystemConfig` table.
 - [ ] Access controls beyond system-admin gate
 - [ ] Config value schema validation
 
+## Error Handling
+
+- [x] Missing DB table returns 501 Not Implemented
+- [x] Integrity errors return 409 Conflict
+- [x] SQLAlchemyError returns 503 Service Unavailable
+- [x] Delete nonexistent key returns 404
+- [x] Catch-all Exception→500 with logger.exception
+- [ ] Config value size limit not enforced — unbounded JSON values could cause DB issues
+
+## Edge Cases
+
+- [x] Empty config key returns 422
+- [x] GET after DELETE returns 404
+- [ ] Concurrent PUT of same key — last-write-wins, no conflict detection
+- [ ] Config key with special characters (dots, spaces) — stored as-is, no sanitisation
+- [ ] JSON config values with circular references — stored as serialised string only
+
+## Security
+
+- [x] System admin role required for all operations
+- [x] Config values are org-independent (deployment-wide scope)
+- [ ] No audit logging for config changes
+- [ ] Sensitive config values stored in plaintext — no masking in responses
+
 ## Known Gaps
-
-- BDD coverage is incomplete: missing scenarios for DELETE endpoint, 404 on nonexistent key, 501 on missing DB table, and 409 on integrity errors
-
-## QA History
 
 ### 2026-07-12 — Round 3 QA
 
