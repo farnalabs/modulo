@@ -223,6 +223,9 @@ class GraphValidator:
         # Validate loop-edge constraints.
         self._check_loop_edges(edges, node_ids, result)
 
+        # Validate LLM routing node configuration.
+        self._check_llm_routing(nodes, edges, node_ids, result)
+
         # Determine forwarding edges (exclude kickback + reject + loop from topology flow).
         flow_edges = [e for e in edges if e.get("type") not in _SKIPPED_EDGE_TYPES]
 
@@ -437,6 +440,78 @@ class GraphValidator:
                         "LOOP_INVALID_EXPRESSION",
                         f"Loop edge from '{source}': invalid JMESPath expression: {exc}",
                         node_id=source,
+                    )
+
+    @staticmethod
+    def _check_llm_routing(
+        nodes: list[dict[str, Any]],
+        edges: list[dict[str, Any]],
+        node_ids: set[str],
+        result: ValidationResult,
+    ) -> None:
+        """Validate LLM routing node configuration.
+
+        For each node with ``routing_mode: "llm"``:
+        1. Must have a non-empty ``routing_prompt``.
+        2. Outgoing non-reject edges must have ``routing_label`` values,
+           and those values must be unique.
+        3. ``default_target`` field must exist on the node def and
+           reference a valid node ID.
+        """
+        for node in nodes:
+            if node.get("routing_mode") != "llm":
+                continue
+            nid = _string_or_default(node.get("id"))
+
+            # 1. routing_prompt must be non-empty.
+            routing_prompt: object = node.get("routing_prompt")
+            if not isinstance(routing_prompt, str) or not routing_prompt.strip():
+                result.error(
+                    "LLM_ROUTING_MISSING_PROMPT",
+                    f"LLM routing node '{nid}' requires a non-empty routing_prompt",
+                    node_id=nid,
+                )
+
+            # 2. Outgoing non-reject edges must have unique routing_labels.
+            labels: list[str] = []
+            for edge in edges:
+                if str(edge.get("source", edge.get("source_node_id", ""))) != nid:
+                    continue
+                if edge.get("type", edge.get("edge_type", "")) == "reject":
+                    continue
+                label: object = edge.get("routing_label")
+                if not label or not str(label).strip():
+                    result.error(
+                        "LLM_ROUTING_MISSING_LABEL",
+                        f"Edge from LLM routing node '{nid}' is missing a routing_label",
+                        node_id=nid,
+                    )
+                    continue
+                label_str = str(label)
+                if label_str in labels:
+                    result.error(
+                        "LLM_ROUTING_DUPLICATE_LABEL",
+                        f"Edge from LLM routing node '{nid}' has duplicate routing_label '{label_str}'",
+                        node_id=nid,
+                    )
+                labels.append(label_str)
+
+            # 3. default_target must exist and reference a valid node.
+            #    Also used as the fallback target by _make_llm_router.
+            default_raw = node.get("default_target")
+            if default_raw is None:
+                result.error(
+                    "LLM_ROUTING_MISSING_DEFAULT",
+                    f"LLM routing node '{nid}' requires a default_target",
+                    node_id=nid,
+                )
+            else:
+                default_target = str(default_raw)
+                if default_target not in node_ids:
+                    result.error(
+                        "LLM_ROUTING_DEFAULT_NOT_FOUND",
+                        f"LLM routing node '{nid}' default_target '{default_target}' is not a node",
+                        node_id=nid,
                     )
 
     # ------------------------------------------------------------------
