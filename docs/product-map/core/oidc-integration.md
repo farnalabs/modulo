@@ -17,7 +17,6 @@ unit-tests:
   - backend/tests/unit/auth/test_oidc_verify.py
   - backend/tests/unit/auth/test_sso_oidc_bdd.py
   - backend/tests/unit/auth/test_sso_team_mapping_bdd.py
-
 status: partial
 ---
 

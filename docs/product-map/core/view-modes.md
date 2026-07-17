@@ -45,6 +45,31 @@ The UI supports Simple and Advanced view modes toggled via the sidebar. Simple m
 - [ ] Admin-customisable views (assign views to users/teams/roles)
 - [ ] Default Simple/Advanced seed on first setup
 
+## Error Handling
+
+- [x] `views.py` catches `ProgrammingError` → 501 with migration hint
+- [x] `views.py` catches `SQLAlchemyError` → 503
+- [x] `views.py` catches `HTTPException` → re-raise
+- [x] `views.py` catches `Exception` → 500 with `logger.exception`
+- [x] View mode toggle persists to localStorage — no server-side dependency for basic toggle
+- [ ] No fallback when `useSidebar` composable can't read/write localStorage (private browsing, quota exceeded)
+
+## Edge Cases
+
+- [x] No saved views for org returns empty list (not 404)
+- [x] View mode preference survives page refresh (localStorage persistence)
+- [x] Simple mode hides advanced sidebar groups correctly
+- [x] Empty view name on create returns 422
+- [ ] Tier gate not enforced end-to-end — feature flag constant exists but `view_modes` gate not verified
+- [ ] View CRUD routes missing `asyncio.CancelledError` guard — `except Exception` catches it as misleading 500 on Python < 3.12
+
+## Security
+
+- [x] Saved views CRUD requires authentication (401 for unauthenticated)
+- [x] Views are org-scoped — cross-org access returns 404
+- [x] View mode toggle is localStorage-only — no CSRF vector
+- [ ] Admin-only routes for view CRUD not verified in tests
+
 ## QA History
 
 ### 2026-07-12 — Round 3 QA

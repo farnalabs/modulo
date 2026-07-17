@@ -12,7 +12,7 @@ code:
   - backend/src/modulo/core/library_service/
   - backend/src/modulo/core/plugin_registry/
   - backend/src/modulo/api/routes/plugins.py
-  - backend/src/modulo/db/migrations/versions/0001_initial_schema.py
+  - backend/src/modulo/db/migrations/versions/0001_v2_identity_org.py
   - docs/plugin-api.md
 depends-on: [feat-core-contribute-primitive]
 bdd:

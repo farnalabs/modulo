@@ -46,11 +46,29 @@ In-app notification panel, SSE streaming, dashboard panel, dismiss/review-later 
 - [x] Admin view for delivery log
 - [x] Status tracking per notification
 
-## Known Gaps
+## Error Handling
 
-- **PRD misalignment**: `prd: 8.11` references the outbound webhook notifications section but this feature covers in-app notifications (dashboard panel, dismiss/review-later, SSE, delivery log). The PRD has no dedicated section for in-app notifications.
-- **All BDD steps are stubs**: All `given/when/then` step definitions in `test_in_app_notifications.py` are empty (`pass`). The 4 BDD feature files define 22 rich scenarios but none actually execute. Real implementations require a running backend + DB.
-- **No unit tests**: `unit-tests: []` is accurate — there are no unit tests for the in-app notification routes or CRUD functions. Existing `test_notifications_endpoint.py` and `test_delivery_log.py` test the outbound webhook admin endpoints, not in-app notifications.
-- **Notification preferences return 501**: `GET/PUT /preferences` both return 501 Not Implemented. The product map does not reference preferences.
-- **SSE push not wired in frontend**: `NotificationsPage.vue` uses REST polling (`useDataFetch`), not SSE/EventBus subscription. The SSE BDD scenarios describe real-time refresh but the frontend doesn't implement it.
-- **`expires_at` not exposed in response**: The `Notification` model has `expires_at` but `NotificationResponse` was missing the field (fixed in this QA).
+- [x] Notification CRUD routes catch `ProgrammingError` → 501
+- [x] Notification CRUD routes catch `SQLAlchemyError` → 503
+- [x] Notification CRUD routes catch `Exception` → 500 with logging
+- [x] Missing notification ID returns 404
+- [x] SSE connection errors handled gracefully — client reconnects
+- [ ] All BDD steps are stubs — no runtime error path verification exists
+
+## Edge Cases
+
+- [x] Empty notification list returns empty response
+- [x] Dismissing already-dismissed notification is idempotent
+- [x] Dismiss all with no notifications is no-op
+- [ ] SSE connection with no new notifications — no heartbeat mechanism
+- [ ] Notification preferences return 501 — not implemented
+- [ ] `expires_at` not exposed in response (fixed per QA history)
+
+## Security
+
+- [x] Auth required for all notification endpoints
+- [x] Notifications are user-scoped — users only see their own notifications
+- [x] Admin delivery log requires operator role
+- [ ] No rate limiting on SSE connections
+
+## Known Gaps

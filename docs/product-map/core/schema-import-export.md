@@ -33,14 +33,33 @@ Parse raw JSON Schema content and extract fields for use in the schema builder U
 - [x] Schema detail response includes all fields (via GET /schemas/{id})
 - [x] Schema version detail response includes full definition_json (via GET /schemas/{id}/versions/{version})
 
+## Error Handling
+
+- [x] Reject invalid JSON → 400
+- [x] Reject non-object input → 400
+- [x] Reject invalid JSON Schema → 422
+- [x] Missing schema returns 404 (via standard GET)
+- [x] ProgrammingError returns 501
+- [x] SQLAlchemyError returns 503
+- [x] Exception returns 500 with logging
+- [ ] Import of very large schemas — no size limit enforced
+
+## Edge Cases
+
+- [x] Empty JSON object `{}` — parsed as schema with no properties
+- [x] Schema with only `type: object` and no `properties` — handled
+- [x] Circular `$ref` references — parsed but may cause recursion in field extraction
+- [x] Non-ASCII field names — stored and returned as-is
+- [ ] Draft 2020-12 validation rejects valid older drafts (2019-09, draft-07, draft-04)
+- [ ] `$ref` to external URLs — not resolved, reference stored as-is
+
+## Security
+
+- [x] Auth required — 401 for unauthenticated
+- [x] Schema access is org-scoped — cross-org access returns 404
+- [ ] Imported schema content not sanitised — potential XSS in `title`/`description` fields rendered in frontend
+
 ## Known Gaps
-
-- **No dedicated export endpoint** — export is implicit via standard CRUD reads
-- **No bundle export** — no endpoint to export schema + versions as a single bundle
-- **Import validation uses Draft 2020-12** — older drafts may produce false validation errors
-- **No BDD scenarios for import endpoint** — create.feature covers schema CRUD but not import specifically
-
-## QA History
 
 ### 2026-07-12 — Round 3 (systemic sweep: B904, exc_info, dead code)
 - No code issues found in entry code paths (schemas.py clean from earlier passes)
