@@ -253,7 +253,7 @@ async def create_team_endpoint(
         name=team.name,
         description=team.description,
         account_id=str(team.account_id),
-        created_at=team.created_at.isoformat(),
+        created_at=team.created_at.isoformat() if team.created_at else "",
     )
 
 
@@ -306,7 +306,7 @@ async def get_team_endpoint(
         name=team.name,
         description=team.description,
         account_id=str(team.account_id),
-        created_at=team.created_at.isoformat(),
+        created_at=team.created_at.isoformat() if team.created_at else "",
     )
 
 
@@ -403,7 +403,7 @@ async def update_team_endpoint(
         name=team.name,
         description=team.description,
         account_id=str(team.account_id),
-        created_at=team.created_at.isoformat(),
+        created_at=team.created_at.isoformat() if team.created_at else "",
     )
 
 
@@ -572,7 +572,7 @@ async def list_members_endpoint(
                 team_id=str(m.team_id),
                 user_id=str(m.account_id),
                 role=m.role,
-                created_at=m.created_at.isoformat(),
+                created_at=m.created_at.isoformat() if m.created_at else "",
             )
             for m in result.items
         ],
@@ -675,7 +675,7 @@ async def add_member_endpoint(
         team_id=str(membership.team_id),
         user_id=str(membership.account_id),
         role=membership.role,
-        created_at=membership.created_at.isoformat(),
+        created_at=membership.created_at.isoformat() if membership.created_at else "",
     )
 
 
@@ -830,5 +830,5 @@ async def change_member_role_endpoint(
         team_id=str(membership.team_id),
         user_id=str(membership.account_id),
         role=membership.role,
-        created_at=membership.created_at.isoformat(),
+        created_at=membership.created_at.isoformat() if membership.created_at else "",
     )
