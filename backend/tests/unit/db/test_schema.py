@@ -70,6 +70,7 @@ def test_initial_schema_contains_required_tables() -> None:
         "variant_groups",
         "webhook_dedup_hashes",
         "webhook_payloads",
+        "web_vital_events",
         "workspace_leases",
     }
 
@@ -171,3 +172,4 @@ def test_visibility_and_trigger_outcome_constraints_are_complete() -> None:
         "rate_limited",
     ):
         assert outcome in trigger_checks
+
