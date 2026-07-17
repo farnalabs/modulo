@@ -558,7 +558,105 @@ Wait-Process -Name "uv" -ErrorAction SilentlyContinue  # doesn't block; just con
 
 ## Lessons Learned
 
-### Deployment: checkpointer init silently fails when pg_connection_string strips sslmode
+#
+## Pre-commit hooks (appended from root AGENTS.md)
+
+`pre-commit` (4.6.0) is installed as a global uv tool and configured in
+`Repos/modulo/.pre-commit-config.yaml`. The framework manages the hook at
+`Repos/modulo/.git/hooks/pre-commit` and runs every commit.
+
+**Hooks are split into two stages:**
+
+| Runs on every commit (default) | Runs in gate.ps1 only (`stages: [manual]`) |
+|---|---|
+| `ruff --fix` (staged .py) | `mypy --strict src/` |
+| `ruff-format` (staged .py) | `vue-tsc type-check` |
+| `bandit -r backend/src/` | `pip-audit` (deps scan) |
+| `semgrep --config=.semgrep/` | `generate-api-types` |
+| `gitleaks` (secret scan) | |
+| `import-linter` | |
+| `eslint` (staged .vue/.ts) | |
+| `check-migration-heads` (if migrations staged) | |
+| `graph-validate` (if product-map changed) | |
+| `pre-commit-checks.ps1` (pattern scan) | |
+| `check-merge-conflict` | |
+| `check-yaml` / `check-toml` / `check-json` | |
+| `end-of-file-fixer` | |
+| `trailing-whitespace` | |
+| `no-commit-to-branch main` | |
+
+The split keeps per-commit hooks fast (<5s typical). Heavy hooks (mypy,
+vue-tsc, pip-audit) run when you gate via `gate.ps1`, which calls
+`pre-commit run --all-files --hook-stage manual` as Phase 1d.
+
+Migration collision check (`check-migration-heads.ps1`) runs both in
+pre-commit (when migration files staged) and in gate.ps1 Phase 0 (even
+with `-SkipTests`). If blocked: renumber your migration to the next free
+sequential number and fix its `down_revision` to point at the current head.
+
+### Rebasing: only when another branch merged first — and how to resolve conflicts
+
+In general, **no pre-rebase is needed** — the worktree branch is based on
+main and the PR flow handles merging. If another PR merged first (changing
+shared files), rebase to catch up.
+
+If the rebase produces conflicts, resolve them inline:
+
+1. Read all three versions: base, main (ours), worktree (theirs)
+2. Understand the intent of each side's change
+3. Produce a merged version that satisfies both intents — never silently
+   discard either side
+4. `git add` the resolved file and `git rebase --continue`
+
+**Do not rely on `-X theirs` or `-X ours` strategy flags.** These silently
+drop one side's changes. Inspect each conflict and produce a correct merge
+of both intents.
+
+After a successful rebase (all conflicts resolved), push and create a PR:
+```powershell
+..\..\..\..\devtools\harness\tools\create-pr.ps1 -Branch <worktree-branch> -TaskId <id>
+..\..\..\..\devtools\harness\tools\wait-for-pr.ps1 -PRNumber <N> -WaitForCI
+```
+
+### Test suites
+
+**Backend** — from `Repos/modulo/backend/`:
+```
+pytest tests/unit/ --tb=short -q --timeout=120
+```
+The backend suite takes ~35-40 min (14700+ tests). Frontend — from `Repos/modulo/frontend/`:
+```
+npm run test:unit
+```
+(478 tests, ~4 min). Both must pass before reporting "tests pass" or proceeding with any merge.
+
+### Frontend worktrees and node_modules
+
+`git worktree add` creates a new working tree with no installed dependencies.
+Frontend Workers cannot reliably run `npm run lint`, `npx vue-tsc`, or `npm test`
+inside worktrees. Workers implement and commit without frontend tooling;
+verification happens via GitHub CI on the PR.
+
+### Systemic patterns: apply as bulk sweeps, not per-feature QA
+
+When a pattern appears in multiple QA findings across different areas, stop
+iterating per-feature and write a systemic sweep instead. Run it as a Worker
+sub-agent in a single worktree branch, apply the pattern to all matching files,
+and merge once. This is faster, more complete, and cheaper in CI.
+
+### Test rot: fix it once across all files
+
+When a recurring test-rot pattern is identified (e.g. `created_by` ? `account_id`,
+`MagicMock` ? `AsyncMock`), fix it once across all test files as a standalone
+sweep rather than discovering it N times.
+
+### Parallel Workers and overlapping files
+
+When using `/distribute` with parallel Workers, check if any two groups'
+file footprints overlap. If they do, merge the groups or accept that the
+Conductor will resolve the conflict. When resolving, never silently discard
+either side's changes.
+## Deployment: checkpointer init silently fails when pg_connection_string strips sslmode
 
 `pg_connection_string()` had `.split("?")[0]` which stripped `?sslmode=require` from Fly.io's DATABASE_URL. psycopg's `AsyncConnection.connect()` needs SSL on Fly.io Postgres, so without sslmode the connection fails silently (exception is caught and logged as a warning). This means the `checkpoint_migrations` table is never created, which causes the health check to fail, which blocks bluegreen deployments.
 
