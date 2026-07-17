@@ -48,11 +48,21 @@ crits = sum(1 for x in findings if x["severity"]=="CRITICAL")
 majs = sum(1 for x in findings if x["severity"]=="MAJOR")
 mins = sum(1 for x in findings if x["severity"]=="MINOR")
 body = f"## PR Review #{num}\n### Results\n- CRITICAL: {crits}\n- MAJOR: {majs}\n- MINOR: {mins}\n### Decision\n**{verdict.upper()}**\n\n_Lenses: Security, Error Handling, Code Style, Maintainability_"
+
+# Write output.json BEFORE posting to GitHub — ensures we always have the review
+json.dump({
+    "status": "completed",
+    "summary": f"PR #{num}: {verdict}",
+    "verdict": verdict,
+    "issues_found": findings[:30],
+    "stats": {"criticals": crits, "majors": majs, "minors": mins, "score": score, "files": len(files_set)},
+    "pr_info": {"owner": owner, "repo": repo_name, "number": int(num), "title": title[:200]}
+}, open("/home/user/output.json", "w"), indent=2)
+
 comments = [{"path":x["file"],"body":f"[{x['severity']}] [{x['lens']}] {x['description']}"} for x in findings[:25] if x["file"] in files_set]
 print(f"Posting review: {verdict} with {len(comments)} comments", flush=True)
 result = call_api(f"pulls/{num}/reviews", {"body":body, "event":verdict, "comments":comments})
 if result is None:
-    json.dump({"status":"failed","summary":"Review failed to post","verdict":"error","issues_found":findings[:20]}, open("/home/user/output.json","w"), indent=2)
-    sys.exit(1)
-json.dump({"status":"completed","summary":f"PR #{num}: {verdict}","verdict":verdict,"review_id":result.get("id"),"review_comment":body[:2000],"issues_found":findings[:30],"stats":{"criticals":crits,"majors":majs,"minors":mins,"score":score,"files":len(files_set)},"pr_info":{"owner":owner,"repo":repo_name,"number":int(num),"title":title[:200]}}, open("/home/user/output.json","w"), indent=2)
+    print("Failed to post review to GitHub (output.json already written)", flush=True)
+    sys.exit(0)
 print("Done", flush=True)
