@@ -49,6 +49,7 @@ def _make_agent(history: list | None = None) -> MagicMock:
     a.retry_policy = {}
     a.token_budget = None
     a.library_id = None
+    a.required_environment_capabilities = []
     a.template_id = None
     a.agent_command = None
     a.created_by = _USER_ID
@@ -217,6 +218,7 @@ class TestRollback:
         agent_after.retry_policy = {}
         agent_after.token_budget = None
         agent_after.library_id = None
+        agent_after.required_environment_capabilities = []
         agent_after.template_id = None
         agent_after.agent_command = None
         agent_after.created_by = _USER_ID
