@@ -139,7 +139,7 @@ async def list_teams_endpoint(
             detail="Feature is not available. Run database migrations to enable it.",
         ) from None
     except SQLAlchemyError:
-        _log.warning("list_teams SQLAlchemyError", extra={"org_id": str(current_user.organisation_id)})
+        _log.exception("list_teams SQLAlchemyError", extra={"org_id": str(current_user.organisation_id)})
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database temporarily unavailable. Please try again.",
@@ -157,7 +157,7 @@ async def list_teams_endpoint(
                 name=t.name,
                 description=t.description,
                 account_id=str(t.account_id),
-                created_at=t.created_at.isoformat(),
+                created_at=t.created_at.isoformat() if t.created_at else "",
             )
             for t in result.items
         ],
@@ -204,7 +204,7 @@ async def create_team_endpoint(
             detail="Feature is not available. Run database migrations to enable it.",
         ) from None
     except SQLAlchemyError:
-        _log.warning("create_team SQLAlchemyError", extra={"org_id": str(current_user.organisation_id)})
+        _log.exception("create_team SQLAlchemyError", extra={"org_id": str(current_user.organisation_id)})
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database temporarily unavailable. Please try again.",
@@ -243,7 +243,7 @@ async def create_team_endpoint(
             extra={"org_id": str(current_user.organisation_id), "team_id": str(team.id)},
         )
     except SQLAlchemyError:
-        _log.warning(
+        _log.exception(
             "create_team audit event SQLAlchemyError — team was created",
             extra={"org_id": str(current_user.organisation_id), "team_id": str(team.id)},
         )
@@ -280,7 +280,7 @@ async def get_team_endpoint(
             detail="Feature is not available. Run database migrations to enable it.",
         ) from None
     except SQLAlchemyError:
-        _log.warning(
+        _log.exception(
             "get_team SQLAlchemyError", extra={"org_id": str(current_user.organisation_id), "team_id": str(team_id)}
         )
         raise HTTPException(
@@ -347,7 +347,7 @@ async def update_team_endpoint(
             detail="Feature is not available. Run database migrations to enable it.",
         ) from None
     except SQLAlchemyError:
-        _log.warning(
+        _log.exception(
             "update_team SQLAlchemyError", extra={"org_id": str(current_user.organisation_id), "team_id": str(team_id)}
         )
         raise HTTPException(
@@ -393,7 +393,7 @@ async def update_team_endpoint(
             extra={"org_id": str(current_user.organisation_id), "team_id": str(team_id)},
         )
     except SQLAlchemyError:
-        _log.warning(
+        _log.exception(
             "update_team audit event SQLAlchemyError — team was updated",
             extra={"org_id": str(current_user.organisation_id), "team_id": str(team_id)},
         )
@@ -466,7 +466,7 @@ async def delete_team_endpoint(
             detail="Feature is not available. Run database migrations to enable it.",
         ) from None
     except SQLAlchemyError:
-        _log.warning(
+        _log.exception(
             "delete_team SQLAlchemyError", extra={"org_id": str(current_user.organisation_id), "team_id": str(team_id)}
         )
         raise HTTPException(
@@ -512,7 +512,7 @@ async def delete_team_endpoint(
             extra={"org_id": str(current_user.organisation_id), "team_id": str(team_id)},
         )
     except SQLAlchemyError:
-        _log.warning(
+        _log.exception(
             "delete_team audit event SQLAlchemyError — team was deleted",
             extra={"org_id": str(current_user.organisation_id), "team_id": str(team_id)},
         )
@@ -546,7 +546,7 @@ async def list_members_endpoint(
             detail="Feature is not available. Run database migrations to enable it.",
         ) from None
     except SQLAlchemyError:
-        _log.warning(
+        _log.exception(
             "list_members SQLAlchemyError", extra={"org_id": str(current_user.organisation_id), "team_id": str(team_id)}
         )
         raise HTTPException(
@@ -652,7 +652,7 @@ async def add_member_endpoint(
             detail="Feature is not available. Run database migrations to enable it.",
         ) from None
     except SQLAlchemyError:
-        _log.warning(
+        _log.exception(
             "add_member SQLAlchemyError", extra={"org_id": str(current_user.organisation_id), "team_id": str(team_id)}
         )
         raise HTTPException(
@@ -719,7 +719,7 @@ async def remove_member_endpoint(
             detail="Feature is not available. Run database migrations to enable it.",
         ) from None
     except SQLAlchemyError:
-        _log.warning(
+        _log.exception(
             "remove_member SQLAlchemyError",
             extra={
                 "org_id": str(current_user.organisation_id),
@@ -797,7 +797,7 @@ async def change_member_role_endpoint(
             detail="Feature is not available. Run database migrations to enable it.",
         ) from None
     except SQLAlchemyError:
-        _log.warning(
+        _log.exception(
             "change_member_role SQLAlchemyError",
             extra={
                 "org_id": str(current_user.organisation_id),
