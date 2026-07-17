@@ -44,7 +44,12 @@ To update a pipeline script on `app.modulo.run`:
 ## Convention
 
 - All scripts follow the same scaffold pattern and must remain syntactically valid Python
-- All scripts write their result to `/tmp/output.json` — the pipeline graph's output validation schema consumes this file
+- All scripts write their result to `/home/user/output.json` — the pipeline graph's output validation schema consumes this file
 - Environment variables for each pipeline are documented in the script's module docstring and the pipeline's configuration on `app.modulo.run`
-- Scripts should remain independent with no shared imports (self-contained per pipeline)
-- If a common utility pattern emerges, extract it to `backend/pipeline-scripts/_common.py`
+- Shared utilities (env checks, git operations, opencode invocation, output writing) live in `_common.py` — all scripts import from it via `from _common import *`
+
+### Cost Tracking
+
+Every pipeline run captures `wall_clock_ms` (wall-clock time of the opencode call)
+and estimates `cost_estimate_usd` based on ~100 tokens/sec at DeepSeek V4 Flash pricing
+($1.50/1M tokens blended). The cost estimate is included in the output JSON.

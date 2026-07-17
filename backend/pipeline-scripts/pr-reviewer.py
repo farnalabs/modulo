@@ -5,94 +5,53 @@ diff against main, invokes opencode's multi-lens QA skill on the changed
 files, and posts review comments back to the PR.
 
 Environment Variables:
-    GITHUB_TOKEN      — GitHub PAT for cloning, PR access, and posting reviews
-    GITHUB_REPO       — Repository full name (e.g. "farnalabs/modulo")
-    GITHUB_PR_NUMBER  — Pull request number to review
-    OPENCODE_API_KEY  — API key for the opencode CLI
+    GITHUB_TOKEN                 — GitHub PAT for cloning, PR access, and posting reviews
+    GITHUB_REPO                  — Repository full name (e.g. "farnalabs/modulo")
+    GITHUB_PR_NUMBER             — Pull request number to review
+    APP_MODULO_OPENCODE_API_KEY  — API key for the opencode CLI
 
 Output:
-    Writes status, summary (number of findings, categories), and review_url
-    to /tmp/output.json
+    Writes status, summary, wall_clock_ms, and review_comment_url to output.json
 """
 
-import json
 import os
 import subprocess
-import sys
 import tempfile
+import time
 from pathlib import Path
 
-REQUIRED_ENV_VARS = [
-    "GITHUB_TOKEN",
-    "GITHUB_REPO",
-    "GITHUB_PR_NUMBER",
-    "OPENCODE_API_KEY",
-]
+from _common import check_env, exit_completed, exit_failed, get_git_url, run_git, safe_clone, setup_opencode_auth
 
 
-def check_env() -> dict[str, str]:
-    missing = [k for k in REQUIRED_ENV_VARS if k not in os.environ]
+def check_env_extra():
+    missing = [k for k in ["GITHUB_REPO", "GITHUB_PR_NUMBER"] if k not in os.environ]
     if missing:
-        print(f"Missing required env vars: {', '.join(missing)}", file=sys.stderr)
-        sys.exit(1)
-    return {
-        "github_token": os.environ["GITHUB_TOKEN"],
-        "github_repo": os.environ["GITHUB_REPO"],
-        "pr_number": os.environ["GITHUB_PR_NUMBER"],
-        "opencode_api_key": os.environ["OPENCODE_API_KEY"],
-    }
+        exit_failed(f"Missing required env vars: {', '.join(missing)}")
+    return os.environ["GITHUB_REPO"], os.environ["GITHUB_PR_NUMBER"]
 
 
-def clone_repo(repo_url: str, work_dir: Path) -> Path:
-    clone_path = work_dir / "repo"
-    subprocess.run(
-        ["git", "clone", repo_url, str(clone_path)],
-        check=True,
-        capture_output=True,
-        text=True,
-    )
-    return clone_path
-
-
-def fetch_pr_head(repo_path: Path, pr_number: str, github_token: str) -> None:
-    repo_full = os.environ["GITHUB_REPO"]
+def fetch_pr_head(repo_path, pr_number, token, repo_full_name):
     ref_spec = f"+refs/pull/{pr_number}/head:refs/remotes/origin/pr/{pr_number}"
-    remote_url = f"https://x-access-token:{github_token}@github.com/{repo_full}.git"
-    subprocess.run(
-        ["git", "remote", "set-url", "origin", remote_url],
-        cwd=repo_path,
-        check=True,
-        capture_output=True,
-    )
-    subprocess.run(
-        ["git", "fetch", "origin", ref_spec],
-        cwd=repo_path,
-        check=True,
-        capture_output=True,
-    )
-    subprocess.run(
-        ["git", "checkout", f"pr/{pr_number}"],
-        cwd=repo_path,
-        check=True,
-        capture_output=True,
-    )
+    owner, repo = repo_full_name.split("/")
+    run_git(["remote", "set-url", "origin", get_git_url(token, owner, repo)], cwd=repo_path)
+    r = run_git(["fetch", "origin", ref_spec], cwd=repo_path, timeout=60)
+    if r.returncode != 0:
+        exit_failed(f"Fetch PR head failed: {r.stderr[:200]}")
+    r = run_git(["checkout", f"pr/{pr_number}"], cwd=repo_path)
+    if r.returncode != 0:
+        exit_failed(f"Checkout PR ref failed: {r.stderr[:200]}")
 
 
-def get_changed_files(repo_path: Path) -> list[str]:
-    result = subprocess.run(
-        ["git", "diff", "--name-only", "origin/main...HEAD"],
-        cwd=repo_path,
-        capture_output=True,
-        text=True,
-        check=True,
-    )
-    return [f.strip() for f in result.stdout.splitlines() if f.strip()]
+def get_changed_files(repo_path):
+    r = run_git(["diff", "--name-only", "origin/main...HEAD"], cwd=repo_path)
+    if r.returncode != 0:
+        exit_failed(f"Diff failed: {r.stderr[:200]}")
+    return [f.strip() for f in r.stdout.splitlines() if f.strip()]
 
 
-def run_qa(repo_path: Path, changed_files: list[str]) -> dict:
+def run_qa(repo_path, changed_files):
     if not changed_files:
         return {"returncode": 0, "stdout": "No changed files to review.", "stderr": ""}
-
     paths = " ".join(changed_files)
     result = subprocess.run(
         ["opencode", "qa", paths],
@@ -101,85 +60,52 @@ def run_qa(repo_path: Path, changed_files: list[str]) -> dict:
         text=True,
         timeout=600,
     )
-    return {
-        "returncode": result.returncode,
-        "stdout": result.stdout,
-        "stderr": result.stderr,
-    }
+    return {"returncode": result.returncode, "stdout": result.stdout, "stderr": result.stderr}
 
 
-def post_review_comment(
-    repo_full_name: str,
-    pr_number: str,
-    qa_output: str,
-    github_token: str,
-) -> str:
+def post_review_comment(repo_full_name, pr_number, qa_output, token):
     body = (
         f"## Automated Code Review\n\nFindings from multi-lens QA on changed files:\n\n```\n{qa_output[:3000]}\n```\n"
     )
-    result = subprocess.run(
-        [
-            "gh",
-            "pr",
-            "comment",
-            pr_number,
-            "--repo",
-            repo_full_name,
-            "--body",
-            body,
-        ],
-        env={**os.environ, "GH_TOKEN": github_token},
+    r = subprocess.run(
+        ["gh", "pr", "comment", pr_number, "--repo", repo_full_name, "--body", body],
+        env={**os.environ, "GH_TOKEN": token},
         capture_output=True,
         text=True,
-        check=True,
     )
-    return result.stdout.strip()
+    if r.returncode != 0:
+        exit_failed(f"Post review comment failed: {r.stderr[:200]}")
+    return r.stdout.strip()
 
 
-def write_output(status: str, summary: str, extra: dict | None = None) -> None:
-    output = {"status": status, "summary": summary}
-    if extra:
-        output.update(extra)
-    output_path = Path("/tmp/output.json")
-    output_path.write_text(json.dumps(output, indent=2))
-    print(f"Output written to {output_path}")
-
-
-def main() -> None:
-    env = check_env()
+def main():
+    token, api_key = check_env()
+    model = setup_opencode_auth(api_key)
+    github_repo, pr_number = check_env_extra()
 
     with tempfile.TemporaryDirectory(prefix="pr-reviewer-") as tmpdir:
-        work_dir = Path(tmpdir)
-        repo_url = f"https://github.com/{env['github_repo']}.git"
-        repo_path = clone_repo(repo_url, work_dir)
+        owner, repo = github_repo.split("/")
+        repo_path = safe_clone(token, get_git_url(token, owner, repo), Path(tmpdir) / "repo")
 
-        fetch_pr_head(repo_path, env["pr_number"], env["github_token"])
+        fetch_pr_head(repo_path, pr_number, token, github_repo)
         changed_files = get_changed_files(repo_path)
 
         if not changed_files:
-            write_output(
-                status="skipped",
-                summary="No changed files detected for review",
-            )
-            return
+            exit_completed(summary="No changed files detected for review")
 
-        print(f"Reviewing {len(changed_files)} changed files")
+        start = time.time()
         result = run_qa(repo_path, changed_files)
+        wall_clock_ms = int((time.time() - start) * 1000)
 
-        comment_url = post_review_comment(
-            env["github_repo"],
-            env["pr_number"],
-            result["stdout"],
-            env["github_token"],
-        )
-
-        write_output(
-            status="success" if result["returncode"] == 0 else "issues_found",
-            summary=f"Reviewed {len(changed_files)} files in PR #{env['pr_number']}",
+        comment_url = post_review_comment(github_repo, pr_number, result["stdout"], token)
+        exit_completed(
+            summary=f"Reviewed {len(changed_files)} files in PR #{pr_number}",
             extra={
                 "changed_files_count": len(changed_files),
                 "review_comment_url": comment_url,
                 "files": changed_files,
+                "wall_clock_ms": wall_clock_ms,
+                "usage": {"model": model, "wall_clock_ms": wall_clock_ms},
             },
         )
 

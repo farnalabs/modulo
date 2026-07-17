@@ -5,75 +5,41 @@ Clones the PR branch, applies automated fixes via `opencode qa-iterate`,
 commits the fixes back to the PR branch, and notifies the PR.
 
 Environment Variables:
-    GITHUB_TOKEN      — GitHub PAT for cloning and pushing fixes
-    GITHUB_REPO       — Repository full name (e.g. "farnalabs/modulo")
-    GITHUB_PR_NUMBER  — Pull request number to fix
-    OPENCODE_API_KEY  — API key for the opencode CLI
+    GITHUB_TOKEN                 — GitHub PAT for cloning and pushing fixes
+    GITHUB_REPO                  — Repository full name (e.g. "farnalabs/modulo")
+    GITHUB_PR_NUMBER             — Pull request number to fix
+    APP_MODULO_OPENCODE_API_KEY  — API key for the opencode CLI
 
 Output:
-    Writes status, summary (files fixed, commit SHA), and pr_url
-    to /tmp/output.json
+    Writes status, summary, wall_clock_ms, commit_sha, and comment_url to output.json
 """
 
-import json
 import os
 import subprocess
-import sys
 import tempfile
+import time
 from pathlib import Path
 
-REQUIRED_ENV_VARS = [
-    "GITHUB_TOKEN",
-    "GITHUB_REPO",
-    "GITHUB_PR_NUMBER",
-    "OPENCODE_API_KEY",
-]
+from _common import check_env, exit_completed, exit_failed, get_git_url, run_git, safe_clone, setup_opencode_auth
 
 
-def check_env() -> dict[str, str]:
-    missing = [k for k in REQUIRED_ENV_VARS if k not in os.environ]
+def check_env_extra():
+    missing = [k for k in ["GITHUB_REPO", "GITHUB_PR_NUMBER"] if k not in os.environ]
     if missing:
-        print(f"Missing required env vars: {', '.join(missing)}", file=sys.stderr)
-        sys.exit(1)
-    return {
-        "github_token": os.environ["GITHUB_TOKEN"],
-        "github_repo": os.environ["GITHUB_REPO"],
-        "pr_number": os.environ["GITHUB_PR_NUMBER"],
-        "opencode_api_key": os.environ["OPENCODE_API_KEY"],
-    }
+        exit_failed(f"Missing required env vars: {', '.join(missing)}")
+    return os.environ["GITHUB_REPO"], os.environ["GITHUB_PR_NUMBER"]
 
 
-def clone_and_checkout_pr(repo_url: str, work_dir: Path, pr_number: str, github_token: str) -> Path:
-    clone_path = work_dir / "repo"
-    subprocess.run(
-        ["git", "clone", repo_url, str(clone_path)],
-        check=True,
-        capture_output=True,
-        text=True,
-    )
-    remote_url = f"https://x-access-token:{github_token}@github.com/{os.environ['GITHUB_REPO']}.git"
-    subprocess.run(
-        ["git", "remote", "set-url", "origin", remote_url],
-        cwd=clone_path,
-        check=True,
-        capture_output=True,
-    )
-    subprocess.run(
-        ["git", "fetch", "origin", f"+refs/pull/{pr_number}/head:refs/remotes/origin/pr/{pr_number}"],
-        cwd=clone_path,
-        check=True,
-        capture_output=True,
-    )
-    subprocess.run(
-        ["git", "checkout", f"pr/{pr_number}"],
-        cwd=clone_path,
-        check=True,
-        capture_output=True,
-    )
-    return clone_path
+def clone_and_checkout_pr(token, repo_path, pr_number, repo_full_name):
+    ref_spec = f"+refs/pull/{pr_number}/head:refs/remotes/origin/pr/{pr_number}"
+    run_git(["fetch", "origin", ref_spec], cwd=repo_path, timeout=60)
+    r = run_git(["checkout", f"pr/{pr_number}"], cwd=repo_path)
+    if r.returncode != 0:
+        exit_failed(f"Checkout PR ref failed: {r.stderr[:200]}")
+    return repo_path
 
 
-def run_fix_iteration(repo_path: Path) -> dict:
+def run_fix_iteration(repo_path):
     result = subprocess.run(
         ["opencode", "qa-iterate"],
         cwd=repo_path,
@@ -81,158 +47,99 @@ def run_fix_iteration(repo_path: Path) -> dict:
         text=True,
         timeout=900,
     )
-    return {
-        "returncode": result.returncode,
-        "stdout": result.stdout,
-        "stderr": result.stderr,
-    }
+    return {"returncode": result.returncode, "stdout": result.stdout, "stderr": result.stderr}
 
 
-def get_branch_name(repo_path: Path) -> str:
-    result = subprocess.run(
-        ["git", "rev-parse", "--abbrev-ref", "HEAD"],
-        cwd=repo_path,
-        capture_output=True,
-        text=True,
-        check=True,
-    )
-    return result.stdout.strip()
+def get_branch_name(repo_path):
+    r = run_git(["rev-parse", "--abbrev-ref", "HEAD"], cwd=repo_path)
+    if r.returncode != 0:
+        exit_failed("Failed to get branch name")
+    return r.stdout.strip()
 
 
-def commit_and_push_fixes(repo_path: Path, branch_name: str) -> str:
-    subprocess.run(
-        ["git", "add", "-A"],
-        cwd=repo_path,
-        check=True,
-        capture_output=True,
-    )
-    result = subprocess.run(
-        ["git", "diff", "--cached", "--quiet"],
-        cwd=repo_path,
-        capture_output=True,
-    )
-    if result.returncode == 0:
+def commit_and_push_fixes(repo_path, branch_name, repo_full_name, token):
+    run_git(["add", "-A"], cwd=repo_path)
+    r = run_git(["diff", "--cached", "--quiet"], cwd=repo_path)
+    if r.returncode == 0:
         return ""
 
-    subprocess.run(
-        ["git", "commit", "-m", "fix: automated PR fix agent patches"],
-        cwd=repo_path,
-        check=True,
-        capture_output=True,
-    )
-    commit_result = subprocess.run(
-        ["git", "rev-parse", "HEAD"],
-        cwd=repo_path,
-        capture_output=True,
-        text=True,
-        check=True,
-    )
-    commit_sha = commit_result.stdout.strip()
+    run_git(["commit", "-m", "fix: automated PR fix agent patches"], cwd=repo_path)
+    r = run_git(["rev-parse", "HEAD"], cwd=repo_path)
+    commit_sha = r.stdout.strip()
 
-    subprocess.run(
-        ["git", "push", "origin", branch_name],
-        cwd=repo_path,
-        check=True,
-        capture_output=True,
-    )
+    owner, repo = repo_full_name.split("/")
+    run_git(["remote", "set-url", "origin", get_git_url(token, owner, repo)], cwd=repo_path)
+    r = run_git(["push", "origin", branch_name], cwd=repo_path, timeout=120)
+    if r.returncode != 0:
+        exit_failed(f"Push failed: {r.stderr[:200]}")
 
     return commit_sha
 
 
-def post_fix_comment(
-    repo_full_name: str,
-    pr_number: str,
-    commit_sha: str,
-    github_token: str,
-) -> str:
+def post_fix_comment(repo_full_name, pr_number, commit_sha, token):
     body = (
         "## Automated Fixes Applied\n\n"
         f"Fix commit: `{commit_sha}`\n\n"
         "These fixes were applied automatically by the PR Fix Agent.\n"
         "Please review before merging."
     )
-    result = subprocess.run(
-        [
-            "gh",
-            "pr",
-            "comment",
-            pr_number,
-            "--repo",
-            repo_full_name,
-            "--body",
-            body,
-        ],
-        env={**os.environ, "GH_TOKEN": github_token},
+    r = subprocess.run(
+        ["gh", "pr", "comment", pr_number, "--repo", repo_full_name, "--body", body],
+        env={**os.environ, "GH_TOKEN": token},
         capture_output=True,
         text=True,
-        check=True,
     )
-    return result.stdout.strip()
+    if r.returncode != 0:
+        exit_failed(f"Post fix comment failed: {r.stderr[:200]}")
+    return r.stdout.strip()
 
 
-def write_output(status: str, summary: str, extra: dict | None = None) -> None:
-    output = {"status": status, "summary": summary}
-    if extra:
-        output.update(extra)
-    output_path = Path("/tmp/output.json")
-    output_path.write_text(json.dumps(output, indent=2))
-    print(f"Output written to {output_path}")
-
-
-def main() -> None:
-    env = check_env()
+def main():
+    token, api_key = check_env()
+    model = setup_opencode_auth(api_key)
+    github_repo, pr_number = check_env_extra()
 
     with tempfile.TemporaryDirectory(prefix="pr-fix-agent-") as tmpdir:
-        work_dir = Path(tmpdir)
-        repo_url = f"https://github.com/{env['github_repo']}.git"
-        repo_path = clone_and_checkout_pr(
-            repo_url,
-            work_dir,
-            env["pr_number"],
-            env["github_token"],
-        )
+        owner, repo = github_repo.split("/")
+        repo_path = safe_clone(token, get_git_url(token, owner, repo), Path(tmpdir) / "repo")
+        repo_path = clone_and_checkout_pr(token, repo_path, pr_number, github_repo)
 
         branch_name = get_branch_name(repo_path)
+
+        start = time.time()
         fix_result = run_fix_iteration(repo_path)
+        wall_clock_ms = int((time.time() - start) * 1000)
 
         if fix_result["returncode"] != 0:
             post_fix_comment(
-                env["github_repo"],
-                env["pr_number"],
+                github_repo,
+                pr_number,
                 f"Fix agent encountered errors:\n```\n{fix_result['stderr'][:1000]}\n```",
-                env["github_token"],
+                token,
             )
-            write_output(
-                status="failed",
-                summary="qa-iterate returned non-zero exit code",
-                extra={"stderr": fix_result["stderr"]},
+            exit_failed(
+                "qa-iterate returned non-zero exit code",
+                extra={"stderr": fix_result["stderr"], "wall_clock_ms": wall_clock_ms},
             )
-            sys.exit(1)
 
-        commit_sha = commit_and_push_fixes(repo_path, branch_name)
+        commit_sha = commit_and_push_fixes(repo_path, branch_name, github_repo, token)
 
         if not commit_sha:
-            write_output(
-                status="success",
+            exit_completed(
                 summary="No fixes needed — PR is already clean",
-                extra={"pr_number": env["pr_number"]},
+                extra={"pr_number": pr_number, "wall_clock_ms": wall_clock_ms},
             )
-            return
 
-        comment_url = post_fix_comment(
-            env["github_repo"],
-            env["pr_number"],
-            commit_sha,
-            env["github_token"],
-        )
+        comment_url = post_fix_comment(github_repo, pr_number, commit_sha, token)
 
-        write_output(
-            status="success",
-            summary=f"Fixed and pushed to PR #{env['pr_number']}",
+        exit_completed(
+            summary=f"Fixed and pushed to PR #{pr_number}",
             extra={
                 "commit_sha": commit_sha,
                 "branch": branch_name,
                 "comment_url": comment_url,
+                "wall_clock_ms": wall_clock_ms,
+                "usage": {"model": model, "wall_clock_ms": wall_clock_ms},
             },
         )
 
