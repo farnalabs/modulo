@@ -26,6 +26,8 @@
 
     <LoadingSpinner v-if="loading && !summary.length" />
 
+    <ErrorAlert v-else-if="error" :message="error" :on-retry="loadData" class="mb-6" />
+
     <template v-else-if="summary.length === 0">
       <EmptyState
         title="No data yet"
@@ -105,6 +107,7 @@ import { ref, onMounted } from 'vue'
 import PageHeader from '../components/shared/PageHeader.vue'
 import LoadingSpinner from '../components/shared/LoadingSpinner.vue'
 import EmptyState from '../components/shared/EmptyState.vue'
+import ErrorAlert from '../components/shared/ErrorAlert.vue'
 import { useApi } from '../composables/useApi'
 
 const { get } = useApi()
@@ -148,6 +151,7 @@ const METRIC_THRESHOLDS: Record<string, { good: number; poor: number }> = {
 }
 
 const loading = ref(false)
+const error = ref<string | null>(null)
 const summary = ref<SummaryItem[]>([])
 const timeSeriesData = ref<TimeSeriesData[]>([])
 const selectedDays = ref(7)
@@ -185,17 +189,32 @@ function barHeight(value: number, maxValue: number): number {
 
 async function loadData() {
   loading.value = true
+  error.value = null
   try {
-    const [summaryData, ...timeSeriesResults] = await Promise.all([
-      get<SummaryItem[]>(`/api/v1/metrics/web-vitals/summary?days=${selectedDays.value}`),
-      ...['CLS', 'FCP', 'INP', 'LCP', 'TTFB'].map(name =>
-        get<TimeSeriesPoint[]>(`/api/v1/metrics/web-vitals/timeseries?metric_name=${name}&days=${selectedDays.value}`)
-          .then(points => ({ metric_name: name, points, maxValue: Math.max(...points.map(p => p.avg_value), 1) }))
-      ),
+    const summaryPromise = get<SummaryItem[]>(`/api/v1/metrics/web-vitals/summary?days=${selectedDays.value}`)
+
+    const metricNames = ['CLS', 'FCP', 'INP', 'LCP', 'TTFB']
+    const timeseriesPromises = metricNames.map(name =>
+      get<TimeSeriesPoint[]>(`/api/v1/metrics/web-vitals/timeseries?metric_name=${name}&days=${selectedDays.value}`)
+        .then(points => ({ metric_name: name, points, maxValue: Math.max(...points.map(p => p.avg_value), 1) }))
+        .catch(() => ({ metric_name: name, points: [] as TimeSeriesPoint[], maxValue: 1 }))
+    )
+
+    const [summaryResult, ...tsResults] = await Promise.all([
+      summaryPromise.catch(() => null),
+      ...timeseriesPromises,
     ])
-    summary.value = summaryData || []
-    timeSeriesData.value = timeSeriesResults || []
+
+    if (summaryResult) {
+      summary.value = summaryResult
+    }
+    timeSeriesData.value = tsResults.filter(ts => ts.points.length > 0)
+
+    if (!summaryResult && tsResults.every(ts => ts.points.length === 0)) {
+      error.value = 'Failed to load web vitals data. The API may be unavailable.'
+    }
   } catch (e) {
+    error.value = 'Failed to load web vitals data. The API may be unavailable.'
     console.error('Failed to load web vitals data:', e)
   } finally {
     loading.value = false
