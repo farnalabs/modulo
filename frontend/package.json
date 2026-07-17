@@ -1,4 +1,4 @@
-{
+﻿{
     "name": "modulo-frontend",
     "version": "0.3.323",
     "private": true,
@@ -19,7 +19,7 @@
         "test:contrast": "playwright test wcag-contrast",
         "lint:fix": "npm run lint -- --fix",
         "type-check": "vue-tsc --noEmit",
-        "postinstall": "powershell -NoLogo -NoProfile -ExecutionPolicy Bypass -File scripts/reka-ui-patch.ps1 && powershell -NoLogo -NoProfile -ExecutionPolicy Bypass -File scripts/internationalized-date-patch.ps1"
+        "postinstall": "node scripts/reka-ui-patch.cjs && node scripts/internationalized-date-patch.cjs"
     },
     "optionalDependencies": {
         "@datadog/browser-logs": "^7.5.0",
