@@ -276,14 +276,21 @@ async def cleanup_expired(
     Acquires a Postgres advisory lock to prevent concurrent cleanup across workers.
     Safe to call from cron every 5 minutes.
     """
+    org_id = principal.organisation_id if principal else None
+    if org_id is None:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Authentication required",
+        )
+
     result: dict[str, int] = {"dedup_hashes_deleted": 0, "payloads_deleted": 0}
     try:
         async with session.begin():
-            await set_rls_org(session, principal.organisation_id)
+            await set_rls_org(session, org_id)
             result["dedup_hashes_deleted"] = await _trigger_engine.cleanup_expired_dedup_hashes(session)
         # Separate transaction for payloads
         async with session.begin():
-            await set_rls_org(session, principal.organisation_id)
+            await set_rls_org(session, org_id)
             result["payloads_deleted"] = await _trigger_engine.cleanup_expired_payloads(session)
     except ProgrammingError:
         raise HTTPException(

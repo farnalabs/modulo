@@ -10,8 +10,8 @@ from sqlalchemy.exc import SQLAlchemyError
 
 from modulo.api.dependencies import _get_engine, get_db_session, get_plan_context
 from modulo.api.main import app
-from modulo.auth.dependencies import get_current_user
-from modulo.auth.jwt import AuthenticatedPrincipal
+from modulo.auth.dependencies import get_current_user, get_current_tenant_user_optional
+from modulo.auth.jwt import AuthenticatedPrincipal, TenantPrincipal
 from modulo.settings import Settings, get_settings
 from tests.unit.api.mock_session import configure_mock_session
 
@@ -325,5 +325,9 @@ def test_cleanup_expired_sqlalchemy_error(engine_client: TestClient) -> None:
             yield session
 
         engine_client.app.dependency_overrides[get_db_session] = override_session
+        engine_client.app.dependency_overrides[get_current_tenant_user_optional] = lambda: TenantPrincipal(
+            username="testuser", organisation_id=_ORG_ID, account_id=_USER_ID, org_role="admin"
+        )
         resp = engine_client.post("/api/v1/triggers/cleanup-expired")
+        engine_client.app.dependency_overrides.pop(get_current_tenant_user_optional, None)
     assert resp.status_code == 503
