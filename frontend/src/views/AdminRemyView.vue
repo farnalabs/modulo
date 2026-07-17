@@ -71,7 +71,8 @@
                   class="flex h-10 w-10 items-center justify-center rounded-full text-lg font-bold"
                   :class="p.configured ? 'bg-success/20 text-success' : 'bg-muted text-muted-foreground'"
                 >
-                  {{ p.configured ? '?' : '?' }}
+                  <svg v-if="p.configured" xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
+                  <svg v-else xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
                 </span>
                 <span class="text-sm font-medium">{{ p.label }}</span>
                 <span class="text-xs" :class="p.configured ? 'text-success' : 'text-muted-foreground'">
@@ -119,7 +120,8 @@
                 class="flex h-8 w-8 items-center justify-center rounded-full text-sm font-bold"
                 :class="p.configured ? 'bg-success/20 text-success' : 'bg-muted text-muted-foreground'"
               >
-                {{ p.configured ? '?' : '?' }}
+                  <svg v-if="p.configured" xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
+                  <svg v-else xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
               </span>
               <span class="text-sm font-medium">{{ p.label }}</span>
             </div>
@@ -592,7 +594,7 @@
                     >
                       {{ trigger }}
                     </span>
-                    <span v-if="!skill.triggers?.length" class="text-xs text-muted-foreground">�</span>
+                    <span v-if="!skill.triggers?.length" class="text-xs text-muted-foreground">—</span>
                   </div>
                 </td>
                 <td class="table-cell">
@@ -892,7 +894,7 @@ function toggleRole(role: string) {
 
 async function putConfig(body: Record<string, unknown>): Promise<string | null> {
   try {
-    const { error: err } = await (api as any).PUT('/api/v1/admin/remy/config', { body })
+    const { error: err } = await (api.PUT as Function)('/api/v1/admin/remy/config', { body })
     return err ? formatApiError(err) : null
   } catch (e: unknown) {
     return formatApiError(e)
