@@ -157,7 +157,7 @@ async def _set_rls_org(session: AsyncSession, org_id: uuid.UUID) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Celery task â€” fire one scheduled report
+# Celery task — fire one scheduled report
 # ---------------------------------------------------------------------------
 
 celery_app_global: Any = None
@@ -176,7 +176,7 @@ def get_celery_app() -> Any:
 
 
 class ReportFireTask(Task):  # type: ignore[misc]  # Celery does not publish typed base classes
-    """Task that fires a single scheduled report â€” generates and delivers."""
+    """Task that fires a single scheduled report — generates and delivers."""
 
     name = "modulo.reports.fire_report"
     autoretry_for = (httpx.RequestError, DBAPIError, TimeoutError)
@@ -197,7 +197,7 @@ async def _fire_scheduled_report(
     report_id: uuid.UUID,
     org_id: uuid.UUID,
 ) -> dict[str, Any]:
-    """Core fire logic â€” runs inside asyncio.run() inside the Celery task."""
+    """Core fire logic — runs inside asyncio.run() inside the Celery task."""
     engine = _get_engine()
     factory = async_sessionmaker(engine, expire_on_commit=False, autobegin=False)
 
@@ -566,5 +566,5 @@ class DatabaseReportScheduler(Scheduler):  # type: ignore[misc]  # Celery does n
 
     @property
     def max_interval(self) -> int:
-        """Maximum sleep between ticks â€” 60 seconds."""
+        """Maximum sleep between ticks — 60 seconds."""
         return 60

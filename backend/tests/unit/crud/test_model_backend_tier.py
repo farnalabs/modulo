@@ -1,7 +1,7 @@
 """Unit tests for model_backend CRUD tier filtering.
 
 Tests the default-behaviour, None-handling, empty-list, and explicit-filter
-code paths in the function.  No DB â€” uses mock sessions.
+code paths in the function.  No DB — uses mock sessions.
 """
 
 import uuid
