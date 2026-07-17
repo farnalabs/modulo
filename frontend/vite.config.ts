@@ -36,6 +36,14 @@ export default defineConfig({
     exclude: ['tests/e2e/**', 'node_modules/**'],
     setupFiles: ['./src/__tests__/setup.ts'],
   },
+  css: {
+    postcss: {
+      plugins: {
+        tailwindcss: {},
+        autoprefixer: {},
+      },
+    },
+  },
   build: {
     rolldownOptions: {
       checks: { pluginTimings: false },
