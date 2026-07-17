@@ -94,11 +94,11 @@ export const useLifecycleMapsStore = defineStore('lifecycleMaps', () => {
   const detailError = ref<string | null>(null)
 
   const graduatedCount = computed(() =>
-    currentMap.value?.stages.filter((s) => s.graduated).length ?? 0
+    (currentMap.value?.stages ?? []).filter((s) => s.graduated).length
   )
 
   const manualCount = computed(() =>
-    currentMap.value?.stages.filter((s) => s.type === 'manual').length ?? 0
+    (currentMap.value?.stages ?? []).filter((s) => s.type === 'manual').length
   )
 
   const saving = ref(false)
