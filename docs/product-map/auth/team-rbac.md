@@ -52,7 +52,7 @@ Org-level and team-level role hierarchy with privilege cap, team membership mana
 - [x] A runner org member is capped at runner in any team
 - [x] An operator org member is capped at operator in any team
 - [x] An admin org member can hold any team role including operator (admin is org-only, so the effective max is operator at team scope)
-- [x] The privilege cap is enforced at the database level via a BEFORE INSERT OR UPDATE trigger (migration 0026)
+- [x] The privilege cap is enforced at the database level via a BEFORE INSERT OR UPDATE trigger (migration 0002_v2_teams_library.py)
 - [x] The trigger raises an exception when the team role exceeds the org role
 - [x] The privilege cap is also enforced in application code (REST layer) before the DB trigger fires
 - [x] Unknown roles in the trigger or application code default to a restrictive fallback (viewer)
@@ -205,7 +205,7 @@ Org-level and team-level role hierarchy with privilege cap, team membership mana
 ### Concurrency and data integrity
 - [x] Team name uniqueness is enforced at the database level (unique constraint)
 - [x] Team membership uniqueness is enforced at the database level (unique constraint)
-- [x] Privilege cap is enforced at the database level (migration 0026 trigger) — protects against application-level bypass
+- [x] Privilege cap is enforced at the database level (BEFORE INSERT OR UPDATE trigger in migration 0002_v2_teams_library.py) — protects against application-level bypass
 - [x] Role CHECK constraint prevents invalid role values at the column level (`ck_team_memberships_role`)
 - [x] Foreign key on team_id cascades on delete (team deletion removes memberships)
 - [x] Foreign key on user_id cascades on delete (user deletion removes memberships)
