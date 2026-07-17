@@ -254,7 +254,7 @@
     </aside>
 
     <main
-      class="flex-1 overflow-auto bg-background pt-14 md:pt-0"
+      class="flex-1 overflow-auto bg-background pt-14 md:pt-0 relative"
       :style="remyDockedStyle"
     >
       <OnboardingBanner />

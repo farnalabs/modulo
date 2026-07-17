@@ -562,13 +562,27 @@ select option {
   --os-track-bg-hover: transparent;
 }
 
-/* OverlayScrollbars — match sidebar design tokens */
-.os-host {
-  --os-handle-bg: hsl(var(--muted-foreground) / 0.25);
-  --os-handle-bg-hover: hsl(var(--muted-foreground) / 0.4);
-  --os-handle-bg-active: hsl(var(--muted-foreground) / 0.55);
-  --os-handle-border-radius: 4px;
-  --os-handle-size: 6px;
-  --os-track-bg: transparent;
-  --os-track-bg-hover: transparent;
+/* Custom scrollbar styling for the entire application */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: hsl(var(--muted-foreground) / 0.2);
+  border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: hsl(var(--muted-foreground) / 0.4);
+}
+
+/* Firefox support */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: hsl(var(--muted-foreground) / 0.2) transparent;
 }
