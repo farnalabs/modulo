@@ -59,6 +59,7 @@ from modulo.db.models.trigger import Trigger
 from modulo.db.models.trigger_event import TriggerEvent
 from modulo.db.models.variant_group import VariantGroup
 from modulo.db.models.view import SavedView
+from modulo.db.models.web_vital_event import WebVitalEvent
 from modulo.db.models.webhook import WebhookDedupHash, WebhookPayload
 from modulo.db.models.workspace_lease import WorkspaceLease
 
@@ -131,6 +132,7 @@ __all__ = [
     "Trigger",
     "TriggerEvent",
     "VariantGroup",
+    "WebVitalEvent",
     "WebhookDedupHash",
     "WebhookPayload",
     "WorkspaceLease",
