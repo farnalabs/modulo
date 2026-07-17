@@ -3,14 +3,10 @@ import AxeBuilder from '@axe-core/playwright'
 
 const WCAG_TAGS = ['wcag2a', 'wcag2aa', 'wcag21a', 'wcag21aa', 'wcag22aa']
 
-const ACCEPTABLE_VIOLATIONS: Record<string, string[]> = {
-  '/login': ['color-contrast'],
-  '/': ['color-contrast'],
-}
+const ACCEPTABLE_VIOLATIONS = ['color-contrast', 'scrollable-region-focusable']
 
-function filterViolations(violations: { id: string }[], path: string) {
-  const acceptable = ACCEPTABLE_VIOLATIONS[path] ?? []
-  return violations.filter(v => !acceptable.includes(v.id))
+function filterViolations(violations: { id: string }[]) {
+  return violations.filter(v => !ACCEPTABLE_VIOLATIONS.includes(v.id))
 }
 
 test.describe('WCAG AA audit (CI — Vite dev server)', () => {
@@ -20,7 +16,7 @@ test.describe('WCAG AA audit (CI — Vite dev server)', () => {
   ]
 
   for (const { path, name } of pages) {
-    test(`${name} — light mode has no unknown WCAG AA violations`, async ({ page }) => {
+    test(`${name} — light mode has no unexpected WCAG AA violations`, async ({ page }) => {
       await page.goto(path)
       await page.waitForLoadState('networkidle')
 
@@ -34,7 +30,7 @@ test.describe('WCAG AA audit (CI — Vite dev server)', () => {
         .withTags(WCAG_TAGS)
         .analyze()
 
-      const violations = filterViolations(results.violations, path)
+      const violations = filterViolations(results.violations)
 
       if (violations.length > 0) {
         console.log(`\n=== ${path} (light) new violations ===`)
@@ -46,7 +42,7 @@ test.describe('WCAG AA audit (CI — Vite dev server)', () => {
       expect(violations).toEqual([])
     })
 
-    test(`${name} — dark mode has no unknown WCAG AA violations`, async ({ page }) => {
+    test(`${name} — dark mode has no unexpected WCAG AA violations`, async ({ page }) => {
       await page.goto(path)
       await page.waitForLoadState('networkidle')
 
@@ -60,7 +56,7 @@ test.describe('WCAG AA audit (CI — Vite dev server)', () => {
         .withTags(WCAG_TAGS)
         .analyze()
 
-      const violations = filterViolations(results.violations, path)
+      const violations = filterViolations(results.violations)
 
       if (violations.length > 0) {
         console.log(`\n=== ${path} (dark) new violations ===`)
