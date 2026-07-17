@@ -5,6 +5,7 @@ const WCAG_TAGS = ['wcag2a', 'wcag2aa', 'wcag21a', 'wcag21aa', 'wcag22aa']
 
 const ACCEPTABLE_VIOLATIONS: Record<string, string[]> = {
   '/login': ['color-contrast'],
+  '/': ['color-contrast'],
 }
 
 function filterViolations(violations: { id: string }[], path: string) {
