@@ -49,6 +49,9 @@
         @select-folder="onSelectFolder"
         @folders-changed="loadPipelines"
       />
+      <p v-if="folderError" class="px-4 py-2 text-xs text-destructive">
+        Failed to load folders: {{ folderError }}
+      </p>
 
       <main role="button" tabindex="0" @keydown.enter="($event.currentTarget as HTMLElement).click()" @keydown.space.prevent="($event.currentTarget as HTMLElement).click()" class="flex-1 page-wide">
       <div v-if="loading" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
@@ -569,11 +572,14 @@ const { loading, error, data: pipelinesResp, load: loadPipelines } = useDataFetc
 const allPipelines = computed(() => pipelinesResp.value?.items ?? [])
 
 const foldersList = ref<FolderItem[]>([])
+const folderError = ref<string | null>(null)
 
 async function loadFolders() {
+  folderError.value = null
   try {
     foldersList.value = await get<FolderItem[]>('/api/v1/pipeline-folders')
   } catch (e) {
+    folderError.value = formatApiError(e)
     console.warn('Failed to load folders', e)
   }
 }
@@ -619,7 +625,10 @@ const page = ref(1)
 const pageSize = 12
 
 const viewMode = ref<'card' | 'table'>(
-  (localStorage.getItem('pipeline-view-mode') as 'card' | 'table') || 'table'
+  (() => {
+    const stored = localStorage.getItem('pipeline-view-mode')
+    return stored === 'card' || stored === 'table' ? stored : 'table'
+  })()
 )
 
 function setViewMode(mode: 'card' | 'table') {
