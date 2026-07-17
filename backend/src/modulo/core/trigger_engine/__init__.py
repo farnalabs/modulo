@@ -99,7 +99,9 @@ _ACTIVE_STATUSES = ("pending", "running", "awaiting_human", "claimed", "waiting_
 # ---------------------------------------------------------------------------
 
 
-def _sha256_hex(data: bytes) -> str:
+def _sha256_hex(data: bytes | None) -> str:
+    if not isinstance(data, bytes):
+        return ""
     return hashlib.sha256(data).hexdigest()
 
 
