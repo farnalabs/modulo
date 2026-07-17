@@ -313,6 +313,7 @@ async def get_org_flag_override(
     session: AsyncSession = Depends(get_db_session),
 ) -> Response | dict[str, Any]:
     _require_admin(current_user)
+    assert current_user.organisation_id is not None
     try:
         async with session.begin():
             org = await get_organisation(session, current_user.organisation_id)
@@ -366,6 +367,7 @@ async def set_org_flag_override(
     session: AsyncSession = Depends(get_db_session),
 ) -> Response | dict[str, Any]:
     _require_admin(current_user)
+    assert current_user.organisation_id is not None
     try:
         async with session.begin():
             org = await get_organisation(session, current_user.organisation_id)
@@ -423,6 +425,7 @@ async def clear_org_flag_override(
     session: AsyncSession = Depends(get_db_session),
 ) -> Response | dict[str, Any]:
     _require_admin(current_user)
+    assert current_user.organisation_id is not None
     try:
         async with session.begin():
             org = await get_organisation(session, current_user.organisation_id)

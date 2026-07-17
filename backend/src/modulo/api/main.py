@@ -785,7 +785,7 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
 async def _seed_tier_catalog(settings: object) -> None:
     from sqlalchemy.ext.asyncio import AsyncSession
 
-    from modulo.db.session import db_engine
+    from modulo.db.session import engine as db_engine
 
     async with AsyncSession(db_engine, autobegin=False) as session, session.begin():
         for tier in TIERS:
@@ -931,4 +931,4 @@ app.mount("/mcp", build_mcp_asgi_app())
 
 app.add_exception_handler(StarletteHTTPException, http_exception_handler)  # type: ignore[arg-type]
 app.add_exception_handler(RequestValidationError, validation_exception_handler)  # type: ignore[arg-type]
-app.add_exception_handler(Exception, unhandled_exception_handler)  # type: ignore[arg-type]
+app.add_exception_handler(Exception, unhandled_exception_handler)

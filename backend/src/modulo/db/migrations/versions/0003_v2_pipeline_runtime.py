@@ -186,7 +186,7 @@ def _create_tables() -> None:
         ),
         sa.CheckConstraint("cost_tracking IN ('enabled', 'disabled')", name="ck_model_backends_cost"),
         sa.CheckConstraint(
-            "provider IN ('ai21', 'anthropic', 'azure_openai', 'bedrock', 'cohere', 'custom', 'deepseek', 'fireworks', 'gemini', 'grok', 'groq', 'jan', 'llamacpp', 'lm_studio', 'localai', 'mistral', 'ollama', 'openai', 'opencode', 'openrouter', 'perplexity', 'qwen', 'replicate', 'tgi', 'togetherai', 'vertexai', 'vllm', 'watsonx')",  # noqa: E501
+            "provider IN ('ai21', 'anthropic', 'azure_openai', 'bedrock', 'cohere', 'custom', 'deepseek', 'fireworks', 'gemini', 'grok', 'groq', 'jan', 'llamacpp', 'lm_studio', 'localai', 'mistral', 'ollama', 'openai', 'opencode', 'openrouter', 'perplexity', 'qwen', 'replicate', 'tgi', 'togetherai', 'vertexai', 'vllm', 'watsonx')",
             name="ck_model_backends_provider",
         ),
         sa.CheckConstraint("visibility IN ('org', 'team')", name="ck_model_backends_visibility"),
@@ -588,7 +588,7 @@ def _create_tables() -> None:
             "updated_at", sa.DateTime(timezone=True), server_default=sa.text("CURRENT_TIMESTAMP"), nullable=False
         ),
         sa.CheckConstraint(
-            "status IN ('pending', 'running', 'awaiting_human', 'claimed', 'waiting_for_lock', 'complete', 'failed', 'cancelled', 'eval_failed')",  # noqa: E501
+            "status IN ('pending', 'running', 'awaiting_human', 'claimed', 'waiting_for_lock', 'complete', 'failed', 'cancelled', 'eval_failed')",
             name="ck_runs_status",
         ),
         sa.CheckConstraint(
@@ -865,7 +865,7 @@ def _create_tables() -> None:
             "updated_at", sa.DateTime(timezone=True), server_default=sa.text("CURRENT_TIMESTAMP"), nullable=False
         ),
         sa.CheckConstraint(
-            "validation_result IN ('accepted', 'passed', 'hmac_failed', 'schema_validation_failed', 'deduplicated', 'concurrency_limit_reached', 'flood_rejected', 'timestamp_expired', 'validation_failed', 'rate_limited', 'no_match', 'condition_met', 'poll_error', 'signal_fired')",  # noqa: E501
+            "validation_result IN ('accepted', 'passed', 'hmac_failed', 'schema_validation_failed', 'deduplicated', 'concurrency_limit_reached', 'flood_rejected', 'timestamp_expired', 'validation_failed', 'rate_limited', 'no_match', 'condition_met', 'poll_error', 'signal_fired')",
             name="ck_trigger_events_validation_result",
         ),
         sa.ForeignKeyConstraint(["organisation_id"], ["organisations.id"], ondelete="CASCADE"),

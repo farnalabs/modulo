@@ -813,18 +813,18 @@ class GraphValidator:
         # Fetch all referenced schemas.
         schemas: dict[uuid.UUID, ParameterSchema] = {}
         if schema_ids:
-            rows = (
+            schema_rows = (
                 (await session.execute(select(ParameterSchema).where(ParameterSchema.id.in_(schema_ids))))
                 .scalars()
                 .all()
             )
-            schemas = {s.id: s for s in rows}
+            schemas = {s.id: s for s in schema_rows}
 
         # Fetch all referenced sets.
         sets: dict[uuid.UUID, ParameterSet] = {}
         if set_ids:
-            rows = (await session.execute(select(ParameterSet).where(ParameterSet.id.in_(set_ids)))).scalars().all()
-            sets = {s.id: s for s in rows}
+            set_rows = (await session.execute(select(ParameterSet).where(ParameterSet.id.in_(set_ids)))).scalars().all()
+            sets = {s.id: s for s in set_rows}
 
         for node in nodes:
             node_id = _string_or_default(node.get("id"))
