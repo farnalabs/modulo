@@ -112,6 +112,7 @@ const LifecycleMapEditorView = () => import('../views/lifecycle-map/LifecycleMap
 const ModelBackendSetupView = () => import('../views/setup/ModelBackendSetupView.vue')
 const LifecycleMapList = () => import('../views/lifecycle-map/LifecycleMapList.vue')
 const LifecycleMapView = () => import('../views/lifecycle-map/LifecycleMapView.vue')
+const DevMetricsView = () => import('../views/DevMetricsView.vue')
 const EnvironmentProfileList = () => import('../views/environment-profiles/EnvironmentProfileList.vue')
 const EnvironmentProfileForm = () => import('../views/environment-profiles/EnvironmentProfileForm.vue')
 const ParameterSchemasView = () => import('../views/ParameterSchemasView.vue')
@@ -459,6 +460,16 @@ const router = createRouter({
       path: '/lifecycle-maps/new',
       name: 'lifecycle-map-new',
       redirect: '/lifecycle-maps',
+    },
+    {
+      path: '/dev/metrics',
+      name: 'dev-metrics',
+      component: DevMetricsView,
+      meta: {
+        title: 'Web Vitals',
+        testid: 'dev-metrics',
+        requiresSystemAdmin: true,
+      },
     },
     {
       path: '/environment-profiles',

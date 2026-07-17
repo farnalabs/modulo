@@ -11,6 +11,7 @@ import { getErrorTracker } from './lib/error-tracking'
 import { getAutoLoginConfig } from './config/runtime'
 import LoginView from './views/LoginView.vue'
 import AppLayout from './components/AppLayout.vue'
+import { useWebVitals } from './composables/useWebVitals'
 
 const router = useRouter()
 
@@ -19,6 +20,8 @@ const router = useRouter()
 const autoLogin = getAutoLoginConfig()
 const hasAutoLogin = !!autoLogin
 const isAuthenticated = ref(hasAutoLogin ? false : !!getAccessToken())
+
+useWebVitals()
 
 onAuthChange((token) => {
   isAuthenticated.value = !!token
