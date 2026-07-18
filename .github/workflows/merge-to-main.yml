@@ -1,26 +1,86 @@
 name: Merge Queue
 
 on:
+  schedule:
+    - cron: '0 */4 * * *'
   workflow_dispatch:
     inputs:
-      pr_number:
-        description: 'PR number to squash-merge'
-        required: true
-        type: number
+      force_prs:
+        description: 'Comma-separated PR numbers to force-merge (bypass author check)'
+        required: false
+        type: string
 
 permissions:
   contents: write
+  pull-requests: write
 
 concurrency:
   group: merge-queue
   cancel-in-progress: false
 
 jobs:
-  prepare-merge:
-    name: Test-merge PR #${{ inputs.pr_number }}
+  collect-prs:
+    name: Collect eligible PRs
+    runs-on: ubuntu-latest
+    outputs:
+      pr_numbers: ${{ steps.collect.outputs.pr_numbers }}
+      has_prs: ${{ steps.collect.outputs.has_prs }}
+    steps:
+      - name: Collect eligible PRs from trusted authors
+        id: collect
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          FORCE_PRS="${{ inputs.force_prs }}"
+
+          # If force PRs provided, use them directly
+          if [ -n "$FORCE_PRS" ]; then
+            echo "Force-merging PRs: $FORCE_PRS"
+            echo "pr_numbers=$FORCE_PRS" >> "$GITHUB_OUTPUT"
+            echo "has_prs=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          # Collect open PRs from trusted authors
+          ELIGIBLE=""
+          TRUSTED='"dunctait" "farnalabs" "dependabot[bot]"'
+
+          # Use gh to list PRs and jq to filter
+          while IFS=$'\t' read -r number author headRef mergeable; do
+            if echo "$TRUSTED" | grep -qi "$author"; then
+              if [ "$mergeable" != "CONFLICTING" ]; then
+                if [ -z "$ELIGIBLE" ]; then
+                  ELIGIBLE="$number"
+                else
+                  ELIGIBLE="$ELIGIBLE,$number"
+                fi
+                echo "  PR #$number ($author) — eligible"
+              else
+                echo "  PR #$number ($author) — skipping (merge conflicts)"
+              fi
+            else
+              echo "  PR #$number ($author) — skipping (untrusted author)"
+            fi
+          done < <(gh pr list --repo ${{ github.repository }} --state open --json number,author,headRefName,mergeable --jq '.[] | [.number, .author.login, .headRefName, .mergeable] | @tsv')
+
+          if [ -z "$ELIGIBLE" ]; then
+            echo "No eligible PRs to merge"
+            echo "has_prs=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "Eligible PRs: $ELIGIBLE"
+            echo "pr_numbers=$ELIGIBLE" >> "$GITHUB_OUTPUT"
+            echo "has_prs=true" >> "$GITHUB_OUTPUT"
+          fi
+
+  merge-batch:
+    name: Batch-merge PRs
+    needs: collect-prs
+    if: needs.collect-prs.outputs.has_prs == 'true'
     runs-on: ubuntu-latest
     outputs:
       merge_sha: ${{ steps.merge.outputs.merge_sha }}
+      merged_count: ${{ steps.merge.outputs.merged_count }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -31,55 +91,80 @@ jobs:
         run: |
           git config user.name "modulo-merge-bot"
           git config user.email "bot@modulo.run"
-      - name: Fetch and squash-merge PR
+      - name: Squash-merge all eligible PRs
         id: merge
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          PR_NUM=${{ inputs.pr_number }}
-          echo "Fetching PR #$PR_NUM..."
-          git fetch origin refs/pull/$PR_NUM/head:refs/heads/pr-$PR_NUM
-          echo "Creating squash merge..."
-          git merge --squash pr-$PR_NUM
-          git commit -m "squash! Merge PR #$PR_NUM"
+          IFS=',' read -ra PRS <<< "${{ needs.collect-prs.outputs.pr_numbers }}"
+          MERGED=0
+          SKIPPED=0
+
+          for PR_NUM in "${PRS[@]}"; do
+            echo "Processing PR #$PR_NUM..."
+            TITLE=$(gh pr view "$PR_NUM" --json title --jq '.title' 2>/dev/null || echo "Merge PR #$PR_NUM")
+            TITLE=$(echo "$TITLE" | tr -d '[:cntrl:]' | head -c 80)
+
+            if git fetch origin "refs/pull/$PR_NUM/head:refs/heads/pr-$PR_NUM" 2>/dev/null; then
+              if git merge --squash "pr-$PR_NUM" 2>/dev/null; then
+                git commit -m "squash! $TITLE" -m "Closes #$PR_NUM"
+                echo "  Merged: #$PR_NUM — $TITLE"
+                MERGED=$((MERGED + 1))
+              else
+                echo "  Conflict in #$PR_NUM — skipping"
+                git merge --abort 2>/dev/null || true
+                SKIPPED=$((SKIPPED + 1))
+              fi
+            else
+              echo "  Could not fetch #$PR_NUM — skipping"
+              SKIPPED=$((SKIPPED + 1))
+            fi
+          done
+
+          if [ "$MERGED" -eq 0 ]; then
+            echo "No PRs could be merged"
+            exit 1
+          fi
+
           MERGE_SHA=$(git rev-parse HEAD)
           echo "merge_sha=$MERGE_SHA" >> "$GITHUB_OUTPUT"
-          echo "Merge commit: $MERGE_SHA"
-      - name: Push merge to validation branch
-        shell: bash
-        run: |
-          git push origin ${{ steps.merge.outputs.merge_sha }}:refs/heads/merge-queue/pr-${{ inputs.pr_number }} --force
+          echo "merged_count=$MERGED" >> "$GITHUB_OUTPUT"
+          echo "Batch merge: $MERGE_SHA ($MERGED merged, $SKIPPED skipped)"
 
   ci:
-    name: Run CI on merge
-    needs: prepare-merge
+    name: Run CI on batch merge
+    needs: merge-batch
     uses: ./.github/workflows/ci.yml
 
-  push-to-main:
+  push-main:
     name: Push to main
-    needs: [prepare-merge, ci]
+    needs: [merge-batch, ci]
     if: success()
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-          ref: ${{ needs.prepare-merge.outputs.merge_sha }}
+          ref: ${{ needs.merge-batch.outputs.merge_sha }}
       - name: Push to main
         shell: bash
         run: |
-          git push origin ${{ needs.prepare-merge.outputs.merge_sha }}:main
-          echo "Pushed to main: ${{ needs.prepare-merge.outputs.merge_sha }}"
-      - name: Clean up validation branch
-        if: always()
+          git push origin ${{ needs.merge-batch.outputs.merge_sha }}:main
+          echo "Pushed to main: ${{ needs.merge-batch.outputs.merge_sha }}"
+      - name: Close merged PRs
         shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
-          git push origin --delete refs/heads/merge-queue/pr-${{ inputs.pr_number }} || true
+          IFS=',' read -ra PRS <<< "${{ needs.collect-prs.outputs.pr_numbers }}"
+          for PR_NUM in "${PRS[@]}"; do
+            gh pr close "$PR_NUM" --comment "Merged in batch via Merge Queue (commit ${{ needs.merge-batch.outputs.merge_sha }})" 2>/dev/null || true
+          done
 
   notify-fixer:
-    name: Notify auto-fixer on failure
-    needs: [prepare-merge, ci]
+    name: Notify auto-fixer on CI failure
+    needs: [merge-batch, ci]
     if: failure() && !cancelled()
     runs-on: ubuntu-latest
     steps:
@@ -88,6 +173,7 @@ jobs:
         env:
           WEBHOOK_URL: ${{ secrets.MODULO_MERGE_FIXER_WEBHOOK_URL }}
           HMAC_SECRET: ${{ secrets.MODULO_MERGE_FIXER_HMAC_SECRET }}
+          PR_NUMBERS: ${{ needs.collect-prs.outputs.pr_numbers }}
         run: |
           if [ -z "$WEBHOOK_URL" ]; then echo "No webhook URL configured"; exit 0; fi
           TIMESTAMP=$(date +%s)
@@ -95,7 +181,7 @@ jobs:
           {
             "repository": "${{ github.repository }}",
             "run_id": "${{ github.run_id }}",
-            "pr_number": ${{ inputs.pr_number }},
+            "pr_numbers": "$PR_NUMBERS",
             "event": "merge-queue",
             "phase": "ci",
             "run_url": "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
@@ -109,4 +195,4 @@ jobs:
             -H "X-Modulo-Timestamp: ${TIMESTAMP}" \
             -H "X-Modulo-Webhook-Secret: sha256=${HMAC}" \
             -d "$BODY"
-          echo "Modulo fixer notified of merge-queue failure"
+          echo "Modulo fixer notified of merge-queue CI failure"
