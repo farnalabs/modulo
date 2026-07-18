@@ -106,7 +106,7 @@ from modulo.core.events.event_bus import configure_event_bus
 from modulo.core.events.listeners import register_listeners
 from modulo.core.graceful_shutdown import ShutdownManager, ShutdownMiddleware
 from modulo.core.hitl_manager.expiry_job import ClaimExpiryJob
-from modulo.core.in_process_scheduler import dispose_scheduler_engine
+from modulo.core.in_process_scheduler import dispose_scheduler_engine, start_schedulers
 from modulo.core.logging_config import configure_logging
 from modulo.core.seed_data.catalog import FLAGS, TIERS
 from modulo.db.session import engine as db_engine
@@ -612,7 +612,7 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
             "caching, and session state. Provision Upstash Redis and set REDIS_URL in fly.toml."
         )
     logger.info("startup.redis_configured — Celery beat available for distributed scheduling")
-    _scheduler_tasks: list[asyncio.Task[None]] = []
+    _scheduler_tasks = await start_schedulers(engine=db_engine)
 
     setup_otel(
         service_name=settings.modulo_otel_service_name,
@@ -777,6 +777,7 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
                 await st
     except asyncio.CancelledError:
         pass
+    await dispose_scheduler_engine()
     with suppress(NameError):
         await _bg_worker.stop()
     await _shutdown_manager.shutdown()
