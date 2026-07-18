@@ -19,7 +19,7 @@ jobs:
     permissions:
       contents: write
       pull-requests: read
-    runs-on: ubuntu-latest
+    runs-on: ubicloud-standard-4
     outputs:
       has_conflicts: ${{ steps.resolve.outputs.has_conflicts }}
       conflict_prs: ${{ steps.resolve.outputs.conflict_prs }}
