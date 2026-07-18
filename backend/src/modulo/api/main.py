@@ -415,6 +415,7 @@ async def _seed_demo_data(settings: Settings) -> None:
         if existing_stages.scalar_one_or_none() is None:
             stage = Stage(
                 organisation_id=org_id,
+                account_id=demo_account.id,
                 name="Development",
                 description="Development stage for testing pipelines",
                 position=0,
