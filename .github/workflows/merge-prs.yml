@@ -170,6 +170,12 @@ jobs:
           git push origin merge-queue:refs/heads/merge-queue/active-$TIMESTAMP 2>&1
           echo "branch_ref=merge-queue/active-$TIMESTAMP" >> "$GITHUB_ENV"
 
+      - name: Initialize failure tracking
+        if: steps.merge.outputs.merged_count != '0'
+        shell: bash
+        run: |
+          echo "" > /tmp/failure_description.txt
+
       - name: Backend lint
         if: steps.merge.outputs.merged_count != '0'
         working-directory: backend
@@ -179,11 +185,23 @@ jobs:
           uv run --no-sync mypy src/modulo/
           uv run --no-sync bandit -r src/modulo/ -ll
 
+      - name: Capture failures
+        if: failure() && steps.merge.outputs.merged_count != '0'
+        shell: bash
+        run: |
+          echo "Backend lint failed" >> /tmp/failure_description.txt
+
       - name: Backend unit tests
         if: steps.merge.outputs.merged_count != '0'
         working-directory: backend
         run: |
           uv run --no-sync pytest tests/unit/ -x -q --timeout=120
+
+      - name: Capture test failures
+        if: failure() && steps.merge.outputs.merged_count != '0'
+        shell: bash
+        run: |
+          echo "Backend unit tests failed" >> /tmp/failure_description.txt
 
       - name: Frontend checks
         if: steps.merge.outputs.merged_count != '0'
@@ -194,6 +212,12 @@ jobs:
           npm run type-check
           npm run test:unit
           npm run build
+
+      - name: Capture frontend failures
+        if: failure() && steps.merge.outputs.merged_count != '0'
+        shell: bash
+        run: |
+          echo "Frontend checks failed" >> /tmp/failure_description.txt
 
       # If CI passed — merge source PRs
       - name: Merge source PRs via gh pr merge
@@ -252,6 +276,7 @@ jobs:
           if [ -z "$WEBHOOK_URL" ]; then echo "No webhook URL configured — skipping notification"; exit 0; fi
           MERGED=$(cat /tmp/merged_prs.txt 2>/dev/null || echo "")
           CONFLICTS=$(cat /tmp/conflict_prs.txt 2>/dev/null || echo "")
+          FAILURE_DESC=$(cat /tmp/failure_description.txt 2>/dev/null || echo "CI check failed")
           TIMESTAMP=$(date +%s)
           BODY=$(jq -n \
             --arg repo "${{ github.repository }}" \
@@ -259,8 +284,9 @@ jobs:
             --arg branchName "${{ env.branch_ref }}" \
             --arg merged_prs "$MERGED" \
             --arg conflict_prs "$CONFLICTS" \
+            --arg failure_description "$FAILURE_DESC" \
             --arg run_url "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}" \
-            '{repository: $repo, phase: $phase, branchName: $branchName, mergedPrs: $merged_prs, conflictPrs: $conflict_prs, runUrl: $run_url}')
+            '{repository: $repo, phase: $phase, branchName: $branchName, mergedPrs: $merged_prs, conflictPrs: $conflict_prs, failureDescription: $failure_description, runUrl: $run_url}')
           PAYLOAD="${TIMESTAMP}.${BODY}"
           HMAC=$(echo -n "$PAYLOAD" | openssl dgst -sha256 -hmac "$HMAC_SECRET" | sed 's/^.* //')
           curl -s -X POST "$WEBHOOK_URL" \
