@@ -163,7 +163,7 @@ class TestPgConnectionString:
         from modulo.api.dependencies import pg_connection_string
 
         result = pg_connection_string("postgresql+asyncpg://user:pass@localhost/db?sslmode=require")
-        assert result == "postgresql://user:pass@localhost/db?sslmode=require&sslmode=disable"
+        assert result == "postgresql://user:pass@localhost/db?sslmode=require"
 
     def test_noop_for_plain_postgresql(self):
         from modulo.api.dependencies import pg_connection_string

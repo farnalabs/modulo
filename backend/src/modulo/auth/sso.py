@@ -548,7 +548,10 @@ async def saml_process_response(
                             extra={"issue_instant": issue_instant_str, "now": now_utc.isoformat()},
                         )
                 except ValueError as exc:
-                    _log.warning("sso.saml_unparseable_issue_instant", extra={"issue_instant": issue_instant_str, "error": str(exc)})
+                    _log.warning(
+                        "sso.saml_unparseable_issue_instant",
+                        extra={"issue_instant": issue_instant_str, "error": str(exc)},
+                    )
 
         subject = assertion.find(".//saml:Subject/saml:NameID", ns)
         name_id = subject.text.strip() if subject is not None and subject.text else ""
