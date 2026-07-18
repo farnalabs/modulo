@@ -1,6 +1,9 @@
 name: Trigger PR Review Agent
 
 on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+    branches: [main]
   workflow_dispatch:
     inputs:
       pr_number:
@@ -21,14 +24,21 @@ jobs:
     name: Trigger Modulo PR Review
     runs-on: ubuntu-latest
     steps:
-      - name: Set PR details from inputs
+      - name: Set PR details
         id: pr-details
         shell: bash
         run: |
-          echo "pr_number=${{ inputs.pr_number }}" >> $GITHUB_OUTPUT
-          echo "repo=${{ github.repository }}" >> $GITHUB_OUTPUT
-          echo "head_sha=${{ inputs.head_sha }}" >> $GITHUB_OUTPUT
-          echo "head_branch=${{ inputs.head_branch }}" >> $GITHUB_OUTPUT
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            echo "pr_number=${{ github.event.pull_request.number }}" >> $GITHUB_OUTPUT
+            echo "repo=${{ github.repository }}" >> $GITHUB_OUTPUT
+            echo "head_sha=${{ github.event.pull_request.head.sha }}" >> $GITHUB_OUTPUT
+            echo "head_branch=${{ github.event.pull_request.head.ref }}" >> $GITHUB_OUTPUT
+          else
+            echo "pr_number=${{ inputs.pr_number }}" >> $GITHUB_OUTPUT
+            echo "repo=${{ github.repository }}" >> $GITHUB_OUTPUT
+            echo "head_sha=${{ inputs.head_sha }}" >> $GITHUB_OUTPUT
+            echo "head_branch=${{ inputs.head_branch }}" >> $GITHUB_OUTPUT
+          fi
 
       - name: Send webhook to Modulo PR Review Agent
         id: webhook
