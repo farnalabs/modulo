@@ -152,15 +152,14 @@ jobs:
         run: |
           if [ -z "$WEBHOOK_URL" ]; then echo "No webhook URL configured - skipping notification"; exit 0; fi
           TIMESTAMP=$(date +%s)
+          CONFLICT_LIST=$(echo "${{ steps.resolve.outputs.conflict_prs }}" | jq -R 'split(" ") | map(select(length > 0) | tonumber)')
           BODY=$(jq -n \
-            --arg repository "${{ github.repository }}" \
-            --arg run_id "${{ github.run_id }}" \
+            --arg repo "${{ github.repository }}" \
             --arg phase "merge-conflict" \
-            --arg merged_prs "${{ steps.resolve.outputs.merged_prs }}" \
-            --arg conflict_prs "${{ steps.resolve.outputs.conflict_prs }}" \
-            --arg branch "${{ env.branch_ref }}" \
+            --arg targetBranch "main" \
+            --argjson prs "$CONFLICT_LIST" \
             --arg run_url "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}" \
-            '{repository: $repository, run_id: $run_id, phase: $phase, merged_prs: $merged_prs, conflict_prs: $conflict_prs, branch: $branch, run_url: $run_url}')
+            '{repository: $repo, phase: $phase, targetBranch: $targetBranch, conflictPrs: $prs, run_url: $run_url}')
           PAYLOAD="${TIMESTAMP}.${BODY}"
           HMAC=$(echo -n "$PAYLOAD" | openssl dgst -sha256 -hmac "$HMAC_SECRET" | sed 's/^.* //')
           curl -s -X POST "$WEBHOOK_URL" \
@@ -241,13 +240,11 @@ jobs:
           if [ -z "$WEBHOOK_URL" ]; then echo "No webhook URL configured - skipping notification"; exit 0; fi
           TIMESTAMP=$(date +%s)
           BODY=$(jq -n \
-            --arg repository "${{ github.repository }}" \
-            --arg run_id "${{ github.run_id }}" \
+            --arg repo "${{ github.repository }}" \
             --arg phase "ci-failure" \
-            --arg merged_prs "${{ steps.resolve.outputs.merged_prs }}" \
-            --arg branch "${{ env.branch_ref }}" \
+            --arg branchName "merge-queue" \
             --arg run_url "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}" \
-            '{repository: $repository, run_id: $run_id, phase: $phase, merged_prs: $merged_prs, branch: $branch, run_url: $run_url}')
+            '{repository: $repo, phase: $phase, branchName: $branchName, run_url: $run_url}')
           PAYLOAD="${TIMESTAMP}.${BODY}"
           HMAC=$(echo -n "$PAYLOAD" | openssl dgst -sha256 -hmac "$HMAC_SECRET" | sed 's/^.* //')
           curl -s -X POST "$WEBHOOK_URL" \
