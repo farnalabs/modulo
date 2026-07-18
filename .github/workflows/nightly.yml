@@ -46,7 +46,7 @@ jobs:
         with:
           python-version: "3.12"
       - name: Start Postgres
-        shell: pwsh
+        shell: bash
         run: |
           $ErrorActionPreference = 'Continue'
           docker rm -f modulo-nightly-pg 2>$null
@@ -78,7 +78,7 @@ jobs:
           path: backend/coverage.xml
       - name: Stop Postgres
         if: always()
-        shell: pwsh
+        shell: bash
         run: |
           $ErrorActionPreference = 'Continue'
           docker rm -f modulo-nightly-pg 2>$null
@@ -96,7 +96,7 @@ jobs:
         with:
           node-version: "20"
       - name: Start Postgres
-        shell: pwsh
+        shell: bash
         run: |
           $ErrorActionPreference = 'Continue'
           docker rm -f modulo-nightly-bdd-pg 2>$null
@@ -113,7 +113,7 @@ jobs:
             Start-Sleep -Seconds 2
           }
       - name: Start Redis
-        shell: pwsh
+        shell: bash
         run: |
           $ErrorActionPreference = 'Continue'
           docker rm -f modulo-nightly-bdd-redis 2>$null
@@ -133,7 +133,7 @@ jobs:
         working-directory: backend
         run: uv run --no-sync playwright install --with-deps chromium
       - name: Pre-create alembic_version table
-        shell: pwsh
+        shell: bash
         run: |
           docker exec modulo-nightly-bdd-pg psql -U modulo -d modulo -c "CREATE TABLE IF NOT EXISTS alembic_version (version_num VARCHAR(255) NOT NULL PRIMARY KEY);"
       - name: Run migrations
@@ -163,7 +163,7 @@ jobs:
         shell: bash
         run: nohup npm run preview -- --port 4173 > /dev/null 2>&1 &
       - name: Wait for healthz
-        shell: pwsh
+        shell: bash
         run: |
           for ($i=0; $i -lt 60; $i++) {
             try {
@@ -178,7 +178,7 @@ jobs:
           Get-Process -Name "uv" -ErrorAction SilentlyContinue | Format-Table Id, ProcessName
           exit 1
       - name: Wait for frontend
-        shell: pwsh
+        shell: bash
         run: npx wait-on http://localhost:4173 --timeout 30000
       - name: Run BDD tests
         working-directory: backend
@@ -187,7 +187,7 @@ jobs:
           DATABASE_URL: "postgresql+asyncpg://modulo:modulo@localhost:5432/modulo"
       - name: Cleanup containers
         if: always()
-        shell: pwsh
+        shell: bash
         run: |
           $ErrorActionPreference = 'Continue'
           docker rm -f modulo-nightly-bdd-pg 2>$null
@@ -208,7 +208,7 @@ jobs:
           cache: npm
           cache-dependency-path: frontend/package-lock.json
       - name: Wait for staging health
-        shell: pwsh
+        shell: bash
         timeout-minutes: 5
         run: |
           Write-Host "Waiting for staging.modulo.run ..."
@@ -273,13 +273,13 @@ jobs:
             frontend/test-results/regression-junit.xml
       - name: Final cleanup
         if: always()
-        shell: pwsh
+        shell: bash
         run: |
           $ErrorActionPreference = 'Continue'
           Remove-Item -Path "$env:TEMP\ms-playwright" -Recurse -Force -ErrorAction SilentlyContinue
       - name: Fail job on test failure
         if: steps.smoke-tests.outcome == 'failure' || steps.wcag-tests.outcome == 'failure' || steps.regression-tests.outcome == 'failure'
-        shell: pwsh
+        shell: bash
         run: |
           Write-Host "::error::One or more staging suites failed. Check the uploaded artifacts for details."
           exit 1
@@ -338,7 +338,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Install gitleaks
-        shell: pwsh
+        shell: bash
         run: |
           $release = Invoke-RestMethod -Uri "https://api.github.com/repos/gitleaks/gitleaks/releases/latest"
           $asset = $release.assets | Where-Object { $_.name -match "windows.*x64" }
@@ -351,7 +351,7 @@ jobs:
           $dir = $exe.DirectoryName
           echo "$dir" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
       - name: Run gitleaks
-        shell: pwsh
+        shell: bash
         run: gitleaks detect --no-git --source . --verbose
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -366,7 +366,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - name: Validate product map graph
-        shell: pwsh
+        shell: bash
         run: |
           & tools\graph-validate.ps1 -CI
 
@@ -377,7 +377,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - name: Validate manifest.yaml
-        shell: pwsh
+        shell: bash
         run: |
           & tools\validate-manifest.ps1 -CI
 
@@ -397,7 +397,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Collect job outcomes
-        shell: pwsh
+        shell: bash
         run: |
           $results = @(
             @{ Job = "Backend Unit Tests";       Status = "${{ needs.backend-unit.result }}" }

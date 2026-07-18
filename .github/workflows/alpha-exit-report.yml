@@ -29,7 +29,7 @@ jobs:
 
       - name: Criterion #2 — Start Postgres
         if: ${{ !inputs.skip_bdd }}
-        shell: pwsh
+        shell: bash
         run: |
           $ErrorActionPreference = 'Continue'
           docker rm -f modulo-alpha-pg 2>$null
@@ -48,7 +48,7 @@ jobs:
 
       - name: Criterion #2 — Start Redis
         if: ${{ !inputs.skip_bdd }}
-        shell: pwsh
+        shell: bash
         run: |
           $ErrorActionPreference = 'Continue'
           docker rm -f modulo-alpha-redis 2>$null
@@ -89,7 +89,7 @@ jobs:
 
       - name: Criterion #2 — Report BDD result
         if: always() && !inputs.skip_bdd
-        shell: pwsh
+        shell: bash
         run: |
           if ("${{ steps.bdd.outcome }}" -eq "success") {
             Write-Host "::notice title=BDD Tests::All happy-path BDD scenarios green"
@@ -110,7 +110,7 @@ jobs:
 
       - name: Supplementary — Report lint result
         if: always() && !inputs.skip_bdd
-        shell: pwsh
+        shell: bash
         run: |
           if ("${{ steps.lint.outcome }}" -eq "success") {
             Write-Host "::notice title=Ruff Lint::ruff check passed"
@@ -120,14 +120,14 @@ jobs:
 
       - name: Criterion #2 — Cleanup containers
         if: always() && !inputs.skip_bdd
-        shell: pwsh
+        shell: bash
         run: |
           $ErrorActionPreference = 'Continue'
           docker rm -f modulo-alpha-pg 2>$null
           docker rm -f modulo-alpha-redis 2>$null
 
       - name: Run verification script
-        shell: pwsh
+        shell: bash
         run: |
           $script = Join-Path $env:GITHUB_WORKSPACE "scripts\verify-alpha-exit.ps1"
           $skipBDD = "${{ inputs.skip_bdd }}"
@@ -157,7 +157,7 @@ jobs:
 
       - name: Summary
         if: always()
-        shell: pwsh
+        shell: bash
         run: |
           Write-Host "========================================"
           Write-Host "Alpha Exit Verification Complete"
@@ -181,7 +181,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Print gate status
-        shell: pwsh
+        shell: bash
         run: |
           $result = "${{ needs.verify.result }}"
           Write-Host "Alpha Exit gate result: $result"

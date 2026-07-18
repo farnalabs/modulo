@@ -16,7 +16,7 @@ jobs:
         with:
           python-version: "3.12.4"
       - name: Start Postgres
-        shell: pwsh
+        shell: bash
         run: |
           $ErrorActionPreference = 'Continue'
           docker rm -f modulo-test-pg 2>$null
@@ -45,7 +45,7 @@ jobs:
           TESTCONTAINERS_RYUK_DISABLED: "true"
       - name: Stop Postgres
         if: always()
-        shell: pwsh
+        shell: bash
         run: |
           $ErrorActionPreference = 'Continue'
           docker rm -f modulo-test-pg 2>$null

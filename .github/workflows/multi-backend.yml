@@ -36,7 +36,7 @@ jobs:
         working-directory: backend
     steps:
       - name: Start MariaDB
-        shell: pwsh
+        shell: bash
         run: |
           $ErrorActionPreference = 'Continue'
           docker rm -f modulo-mariadb 2>$null
@@ -55,7 +55,7 @@ jobs:
           }
       - name: Stop MariaDB
         if: always()
-        shell: pwsh
+        shell: bash
         run: |
           $ErrorActionPreference = 'Continue'
           docker rm -f modulo-mariadb 2>$null

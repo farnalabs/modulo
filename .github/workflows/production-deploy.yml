@@ -36,7 +36,7 @@ jobs:
       - uses: superfly/flyctl-actions/setup-flyctl@master
 
       - name: Log deploy reason
-        shell: pwsh
+        shell: bash
         run: 'Write-Host "Production deploy reason: ${{ inputs.reason }}"'
 
       - name: Capture git metadata
@@ -45,7 +45,7 @@ jobs:
 
       - id: deploy
         name: Deploy to ${{ matrix.env.name }}.modulo.run
-        shell: pwsh
+        shell: bash
         run: |
           fly deploy --app ${{ matrix.env.fly-app }} --config ${{ matrix.env.fly-config }} `
             --build-arg "GIT_SHA=${{ steps.git.outputs.git-sha }}" `
@@ -61,7 +61,7 @@ jobs:
 
       - name: Rollback on verification failure
         if: failure() && steps.deploy.outcome == 'success'
-        shell: pwsh
+        shell: bash
         run: |
           Write-Host "Deploy succeeded but verification failed - rolling back ${{ matrix.env.fly-app }}"
           fly rollback --app ${{ matrix.env.fly-app }}
@@ -76,7 +76,7 @@ jobs:
           fetch-depth: 1
 
       - name: Verify deployed SHAs
-        shell: pwsh
+        shell: bash
         run: |
           $expectedSha = git rev-parse HEAD
           $expectedSha7 = $expectedSha.Substring(0, 7)

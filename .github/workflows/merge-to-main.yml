@@ -21,7 +21,7 @@ jobs:
         id: check
         env:
           GH_TOKEN: ${{ github.token }}
-        shell: pwsh
+        shell: bash
         run: |
           $prCount = 0
           $prs = gh pr list --state open --json number --jq 'length' 2>$null
@@ -72,12 +72,12 @@ jobs:
           fetch-depth: 0
           ref: main
       - name: Configure git
-        shell: pwsh
+        shell: bash
         run: |
           git config user.name "modulo-merge-bot"
           git config user.email "bot@modulo.run"
       - name: Squash-merge passing PRs
-        shell: pwsh
+        shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -107,7 +107,7 @@ jobs:
           if ($merged -eq 0 -and $conflicts -eq 0) { throw "No passing PRs to merge" }
           if ($merged -eq 0) { throw "All PRs had conflicts — cannot merge" }
       - name: Run full test suite
-        shell: pwsh
+        shell: bash
         run: |
           Write-Host "Starting Docker services..."
           docker compose -f docker-compose.local.yml up -d 2>&1
@@ -126,13 +126,13 @@ jobs:
           Pop-Location
       - name: Push to main
         if: success()
-        shell: pwsh
+        shell: bash
         run: |
           git push origin main
           Write-Host "Pushed all changes to main"
       - name: Notify Modulo merge-fixer on failure
         if: failure()
-        shell: pwsh
+        shell: bash
         env:
           WEBHOOK_URL: ${{ secrets.MODULO_MERGE_FIXER_WEBHOOK_URL }}
           HMAC_SECRET: ${{ secrets.MODULO_MERGE_FIXER_HMAC_SECRET }}
