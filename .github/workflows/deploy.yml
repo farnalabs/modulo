@@ -60,7 +60,7 @@ jobs:
         uses: ./.github/actions/capture-git-metadata
 
       - name: Deploy to staging-modulo
-        shell: bash
+        shell: pwsh
         run: |
           fly deploy --app staging-modulo --config fly.staging.toml `
             --build-arg "GIT_SHA=${{ steps.git.outputs.git-sha }}" `
@@ -75,7 +75,7 @@ jobs:
           url: https://staging.modulo.run
 
       - name: Check deployed SHA
-        shell: bash
+        shell: pwsh
         run: |
           $expectedSha = "${{ needs.check-context.outputs.head_sha }}".Substring(0, 7)
           $info = curl.exe -s -m 10 "https://staging.modulo.run/api/v1/deployment" 2>$null
@@ -107,7 +107,7 @@ jobs:
           cache-dependency-path: frontend/package-lock.json
 
       - name: Wait for staging health
-        shell: bash
+        shell: pwsh
         timeout-minutes: 5
         run: |
           Write-Host "Waiting for staging.modulo.run ..."
@@ -154,7 +154,7 @@ jobs:
 
       - name: Fail on test failure
         if: steps.smoke-tests.outcome == 'failure' || steps.wcag-tests.outcome == 'failure' || steps.regression-tests.outcome == 'failure'
-        shell: bash
+        shell: pwsh
         run: |
           Write-Host "::error::One or more staging suites failed."
           exit 1
@@ -177,7 +177,7 @@ jobs:
         uses: ./.github/actions/capture-git-metadata
 
       - name: Deploy to app-modulo
-        shell: bash
+        shell: pwsh
         run: |
           fly deploy --app app-modulo --config fly.toml `
             --build-arg "GIT_SHA=${{ steps.git.outputs.git-sha }}" `
@@ -192,7 +192,7 @@ jobs:
           url: https://app.modulo.run
 
       - name: Check deployed SHA
-        shell: bash
+        shell: pwsh
         run: |
           $expectedSha = "${{ needs.check-context.outputs.head_sha }}".Substring(0, 7)
           $info = curl.exe -s -m 10 "https://app.modulo.run/api/v1/deployment" 2>$null
@@ -212,7 +212,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Send webhook
-        shell: bash
+        shell: pwsh
         env:
           WEBHOOK_URL: ${{ secrets.MODULO_MERGE_FIXER_WEBHOOK_URL }}
           HMAC_SECRET: ${{ secrets.MODULO_MERGE_FIXER_HMAC_SECRET }}
