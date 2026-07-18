@@ -59,11 +59,11 @@
             </SelectTrigger>
             <SelectContent>
               <SelectItem value="__all__">All Statuses</SelectItem>
-              <SelectItem value="running">Running</SelectItem>
+              <SelectItem :value="RUN_STATUS.RUNNING">Running</SelectItem>
               <SelectItem value="idle">Idle</SelectItem>
-              <SelectItem value="failed">Failed</SelectItem>
-              <SelectItem value="complete">Complete</SelectItem>
-              <SelectItem value="awaiting_human">Awaiting Human</SelectItem>
+              <SelectItem :value="RUN_STATUS.FAILED">Failed</SelectItem>
+              <SelectItem :value="RUN_STATUS.COMPLETE">Complete</SelectItem>
+              <SelectItem :value="RUN_STATUS.AWAITING_HUMAN">Awaiting Human</SelectItem>
             </SelectContent>
           </Select>
         </div>
@@ -442,6 +442,7 @@ import { formatDateShort } from '../lib/formatDate'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Button } from '@/components/ui/button'
 import EmptyState from '../components/shared/EmptyState.vue'
+import { RUN_STATUS } from '../constants/filters'
 
 async function fetchWithTimeout<T>(factory: (signal: AbortSignal) => Promise<T>, ms = 15000): Promise<T> {
   const ctrl = new AbortController()
