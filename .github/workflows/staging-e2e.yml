@@ -10,7 +10,7 @@ concurrency:
 jobs:
   staging-suites:
     name: Smoke, WCAG, and regression
-    runs-on: ubuntu-latest
+    runs-on: ubicloud-standard-4
     defaults:
       run:
         working-directory: frontend

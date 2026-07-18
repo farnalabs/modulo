@@ -16,7 +16,7 @@ env:
 jobs:
   backend-unit:
     name: Backend Unit Tests
-    runs-on: ubuntu-latest
+    runs-on: ubicloud-standard-4
     continue-on-error: true
     defaults:
       run:
@@ -38,7 +38,7 @@ jobs:
 
   backend-integration:
     name: Backend Integration Tests
-    runs-on: ubuntu-latest
+    runs-on: ubicloud-standard-4
     continue-on-error: true
     steps:
       - uses: actions/checkout@v4
@@ -85,7 +85,7 @@ jobs:
 
   bdd-e2e:
     name: BDD / E2E Tests
-    runs-on: ubuntu-latest
+    runs-on: ubicloud-standard-4
     continue-on-error: true
     steps:
       - uses: actions/checkout@v4
@@ -195,7 +195,7 @@ jobs:
 
   staging-e2e:
     name: Staging E2E (Smoke + WCAG + Regression)
-    runs-on: ubuntu-latest
+    runs-on: ubicloud-standard-4
     continue-on-error: true
     defaults:
       run:
@@ -286,7 +286,7 @@ jobs:
 
   schemathesis:
     name: Schemathesis API Fuzz
-    runs-on: ubuntu-latest
+    runs-on: ubicloud-standard-4
     continue-on-error: true
     defaults:
       run:
@@ -303,7 +303,7 @@ jobs:
 
   frontend:
     name: Frontend Checks
-    runs-on: ubuntu-latest
+    runs-on: ubicloud-standard-4
     continue-on-error: true
     defaults:
       run:
@@ -333,7 +333,7 @@ jobs:
 
   security-audit:
     name: Security Audit
-    runs-on: ubuntu-latest
+    runs-on: ubicloud-standard-4
     continue-on-error: true
     steps:
       - uses: actions/checkout@v4
@@ -361,7 +361,7 @@ jobs:
 
   product-map:
     name: Product Map Validation
-    runs-on: ubuntu-latest
+    runs-on: ubicloud-standard-4
     continue-on-error: true
     steps:
       - uses: actions/checkout@v7
@@ -372,7 +372,7 @@ jobs:
 
   manifest-validate:
     name: Manifest Validation
-    runs-on: ubuntu-latest
+    runs-on: ubicloud-standard-4
     continue-on-error: true
     steps:
       - uses: actions/checkout@v7
@@ -394,7 +394,7 @@ jobs:
       - security-audit
       - product-map
       - manifest-validate
-    runs-on: ubuntu-latest
+    runs-on: ubicloud-standard-4
     steps:
       - name: Collect job outcomes
         shell: bash
