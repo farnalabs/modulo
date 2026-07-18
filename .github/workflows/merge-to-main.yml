@@ -65,7 +65,7 @@ jobs:
     name: Squash-merge and test
     needs: check-conditions
     if: needs.check-conditions.outputs.should_merge == 'true'
-    runs-on: [self-hosted, windows, docker]
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
         with:

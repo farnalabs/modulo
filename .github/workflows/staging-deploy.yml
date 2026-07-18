@@ -18,7 +18,7 @@ concurrency:
 jobs:
   deploy:
     name: Deploy to staging
-    runs-on: [self-hosted, windows, docker]
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
         with:
@@ -56,7 +56,7 @@ jobs:
   consistency:
     name: Verify staging SHA
     needs: deploy
-    runs-on: [self-hosted, windows, docker]
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
         with:

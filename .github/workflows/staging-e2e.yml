@@ -10,7 +10,7 @@ concurrency:
 jobs:
   staging-suites:
     name: Smoke, WCAG, and regression
-    runs-on: [self-hosted, windows, docker]
+    runs-on: ubuntu-latest
     defaults:
       run:
         working-directory: frontend

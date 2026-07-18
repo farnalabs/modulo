@@ -51,7 +51,7 @@ jobs:
     name: Deploy to staging
     needs: [check-context]
     if: needs.check-context.outputs.ci_passed == 'true'
-    runs-on: [self-hosted, windows, docker]
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
         with:
@@ -97,7 +97,7 @@ jobs:
     name: Staging E2E (smoke + WCAG + regression)
     needs: [check-context, deploy-staging]
     if: needs.check-context.outputs.ci_passed == 'true'
-    runs-on: [self-hosted, windows, docker]
+    runs-on: ubuntu-latest
     defaults:
       run:
         working-directory: frontend
@@ -168,7 +168,7 @@ jobs:
     name: Deploy to app.modulo.run
     needs: [check-context, deploy-staging, staging-e2e]
     if: needs.check-context.outputs.is_main == 'true' && needs.check-context.outputs.ci_passed == 'true'
-    runs-on: [self-hosted, windows, docker]
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
         with:

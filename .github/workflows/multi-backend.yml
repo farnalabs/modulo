@@ -10,7 +10,7 @@ concurrency:
 jobs:
   sqlite:
     name: sqlite
-    runs-on: self-hosted
+    runs-on: ubuntu-latest
     defaults:
       run:
         working-directory: backend
@@ -30,7 +30,7 @@ jobs:
 
   mariadb:
     name: mariadb
-    runs-on: self-hosted
+    runs-on: ubuntu-latest
     defaults:
       run:
         working-directory: backend

@@ -38,7 +38,7 @@ jobs:
 
   backend-integration:
     name: Backend Integration Tests
-    runs-on: self-hosted
+    runs-on: ubuntu-latest
     continue-on-error: true
     steps:
       - uses: actions/checkout@v4
@@ -85,7 +85,7 @@ jobs:
 
   bdd-e2e:
     name: BDD / E2E Tests
-    runs-on: self-hosted
+    runs-on: ubuntu-latest
     continue-on-error: true
     steps:
       - uses: actions/checkout@v4
@@ -149,8 +149,8 @@ jobs:
         run: npm run build
       - name: Start backend
         working-directory: backend
-        shell: cmd
-        run: start /b uv run --no-sync uvicorn modulo.api.main:app --host 0.0.0.0 --port 8000 > C:\actions-runner\_work\modulo\modulo\backend.log 2>&1
+        shell: bash
+        run: nohup uv run --no-sync uvicorn modulo.api.main:app --host 0.0.0.0 --port 8000 > backend.log 2>&1 &
         env:
           DATABASE_URL: "postgresql+asyncpg://modulo:modulo@localhost:5432/modulo"
           MODULO_PUBLIC_URL: "http://localhost:8000"
@@ -160,8 +160,8 @@ jobs:
           REDIS_URL: "redis://localhost:6379/0"
       - name: Serve frontend
         working-directory: frontend
-        shell: powershell
-        run: Start-Process -NoNewWindow -FilePath "cmd.exe" -ArgumentList "/c npm run preview -- --port 4173"
+        shell: bash
+        run: nohup npm run preview -- --port 4173 > /dev/null 2>&1 &
       - name: Wait for healthz
         shell: powershell
         run: |
@@ -173,7 +173,7 @@ jobs:
             Start-Sleep -Seconds 2
           }
           Write-Host "=== Backend log ==="
-          Get-Content "C:\actions-runner\_work\modulo\modulo\backend.log" -TotalCount 100 -ErrorAction SilentlyContinue
+          Get-Content "$env:GITHUB_WORKSPACE/backend/backend.log" -TotalCount 100 -ErrorAction SilentlyContinue
           Write-Host "=== Process check ==="
           Get-Process -Name "uv" -ErrorAction SilentlyContinue | Format-Table Id, ProcessName
           exit 1
@@ -195,7 +195,7 @@ jobs:
 
   staging-e2e:
     name: Staging E2E (Smoke + WCAG + Regression)
-    runs-on: [self-hosted, windows, docker]
+    runs-on: ubuntu-latest
     continue-on-error: true
     defaults:
       run:
@@ -286,7 +286,7 @@ jobs:
 
   schemathesis:
     name: Schemathesis API Fuzz
-    runs-on: self-hosted
+    runs-on: ubuntu-latest
     continue-on-error: true
     defaults:
       run:
@@ -333,7 +333,7 @@ jobs:
 
   security-audit:
     name: Security Audit
-    runs-on: self-hosted
+    runs-on: ubuntu-latest
     continue-on-error: true
     steps:
       - uses: actions/checkout@v4
@@ -361,7 +361,7 @@ jobs:
 
   product-map:
     name: Product Map Validation
-    runs-on: self-hosted
+    runs-on: ubuntu-latest
     continue-on-error: true
     steps:
       - uses: actions/checkout@v7
@@ -372,7 +372,7 @@ jobs:
 
   manifest-validate:
     name: Manifest Validation
-    runs-on: self-hosted
+    runs-on: ubuntu-latest
     continue-on-error: true
     steps:
       - uses: actions/checkout@v7
