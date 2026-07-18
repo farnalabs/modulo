@@ -104,7 +104,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - name: Validate product map graph
-        shell: powershell
+        shell: pwsh
         run: |
           & tools\graph-validate.ps1 -CI
 
@@ -114,7 +114,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - name: Validate manifest.yaml
-        shell: powershell
+        shell: pwsh
         run: |
           & tools\validate-manifest.ps1 -CI
 
@@ -128,7 +128,7 @@ jobs:
           path: .tool-cache/powershell
           key: pester-5.7.1-${{ runner.os }}-${{ runner.arch }}
       - name: Run PowerShell tests
-        shell: powershell
+        shell: pwsh
         run: |
           & tools\run-pester-tests.ps1
 
@@ -140,7 +140,7 @@ jobs:
         with:
           fetch-depth: 0
       - name: Install gitleaks
-        shell: powershell
+        shell: pwsh
         run: |
           $release = Invoke-RestMethod -Uri "https://api.github.com/repos/gitleaks/gitleaks/releases/latest"
           $asset = $release.assets | Where-Object { $_.name -match "windows.*x64" }
@@ -153,7 +153,7 @@ jobs:
           $dir = $exe.DirectoryName
           echo "$dir" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
       - name: Run gitleaks
-        shell: powershell
+        shell: pwsh
         run: gitleaks detect --no-git --source . --verbose
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -171,7 +171,7 @@ jobs:
         with:
           python-version: "3.12.4"
       - name: Start Postgres
-        shell: powershell
+        shell: pwsh
         run: |
           $ErrorActionPreference = 'Continue'
           docker rm -f modulo-ci-pg 2>$null
@@ -188,7 +188,7 @@ jobs:
             Start-Sleep -Seconds 2
           }
       - name: Start Redis
-        shell: powershell
+        shell: pwsh
         run: |
           $ErrorActionPreference = 'Continue'
           docker rm -f modulo-ci-redis 2>$null
@@ -219,7 +219,7 @@ jobs:
           TESTCONTAINERS_RYUK_DISABLED: "true"
       - name: Stop containers
         if: always()
-        shell: powershell
+        shell: pwsh
         run: |
           $ErrorActionPreference = 'Continue'
           docker rm -f modulo-ci-pg 2>$null
@@ -239,7 +239,7 @@ jobs:
         with:
           node-version: "20"
       - name: Start Postgres
-        shell: powershell
+        shell: pwsh
         run: |
           $ErrorActionPreference = 'Continue'
           docker rm -f modulo-ci-pg 2>$null
@@ -256,7 +256,7 @@ jobs:
             Start-Sleep -Seconds 2
           }
       - name: Start Redis
-        shell: powershell
+        shell: pwsh
         run: |
           $ErrorActionPreference = 'Continue'
           docker rm -f modulo-ci-redis 2>$null
@@ -276,7 +276,7 @@ jobs:
         working-directory: backend
         run: uv run --no-sync playwright install --with-deps chromium
       - name: Pre-create alembic_version table
-        shell: powershell
+        shell: pwsh
         run: |
           docker exec modulo-ci-pg psql -U modulo -d modulo -c "CREATE TABLE IF NOT EXISTS alembic_version (version_num VARCHAR(255) NOT NULL PRIMARY KEY);"
       - name: Run migrations
@@ -306,7 +306,7 @@ jobs:
         shell: bash
         run: nohup npm run preview -- --port 4173 > /dev/null 2>&1 &
       - name: Wait for healthz
-        shell: powershell
+        shell: pwsh
         run: |
           for ($i=0; $i -lt 60; $i++) {
             try {
@@ -321,7 +321,7 @@ jobs:
           Get-Process -Name "uv" -ErrorAction SilentlyContinue | Format-Table Id, ProcessName
           exit 1
       - name: Wait for frontend
-        shell: powershell
+        shell: pwsh
         run: npx wait-on http://localhost:4173 --timeout 30000
       - name: Run BDD tests
         working-directory: backend
@@ -330,7 +330,7 @@ jobs:
           DATABASE_URL: "postgresql+asyncpg://modulo:modulo@localhost:5432/modulo"
       - name: Cleanup containers
         if: always()
-        shell: powershell
+        shell: pwsh
         run: |
           $ErrorActionPreference = 'Continue'
           docker rm -f modulo-ci-pg 2>$null
@@ -428,7 +428,7 @@ jobs:
 
       - name: Enforce vulnerability scan results
         if: steps.scan-backend.outcome == 'failure' || steps.scan-frontend-dev.outcome == 'failure' || steps.scan-frontend.outcome == 'failure'
-        shell: powershell
+        shell: pwsh
         run: |
           Write-Host "::error::One or more container images contain critical vulnerabilities."
           exit 1
