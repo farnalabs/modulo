@@ -61,7 +61,7 @@ jobs:
           skipped=0
           failed=""
 
-          echo "$PR_LIST_JSON" | jq -c '.[]' | while IFS= read -r pr; do
+          while IFS= read -r pr; do
             NUM=$(echo "$pr" | jq -r '.number')
             TITLE=$(echo "$pr" | jq -r '.title')
             REF=$(echo "$pr" | jq -r '.headRefName')
@@ -141,7 +141,7 @@ jobs:
             # All tests passed — keep this merge
             merged=$((merged + 1))
             echo "PR #$NUM: ALL TESTS PASSED — merged."
-          done
+          done < <(echo "$PR_LIST_JSON" | jq -c '.[]')
 
           echo ""
           echo "============================================================"
