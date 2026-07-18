@@ -12,7 +12,7 @@ jobs:
 
   backend-lint:
     name: Lint (Backend)
-    runs-on: ubicloud-standard-4
+    runs-on: ubicloud-standard-2
     defaults:
       run:
         working-directory: backend
@@ -68,7 +68,7 @@ jobs:
 
   frontend:
     name: Frontend and WCAG
-    runs-on: ubicloud-standard-4
+    runs-on: ubicloud-standard-2
     defaults:
       run:
         working-directory: frontend
@@ -92,7 +92,7 @@ jobs:
 
   product-map-validate:
     name: Product map validation
-    runs-on: ubicloud-standard-4
+    runs-on: ubicloud-standard-2
     steps:
       - uses: actions/checkout@v7
       - uses: astral-sh/setup-uv@v7
@@ -111,7 +111,7 @@ jobs:
 
   manifest-validate:
     name: Manifest validation
-    runs-on: ubicloud-standard-4
+    runs-on: ubicloud-standard-2
     steps:
       - uses: actions/checkout@v7
       - uses: astral-sh/setup-uv@v7
@@ -131,7 +131,7 @@ jobs:
 
   gitleaks:
     name: Secret scan
-    runs-on: ubicloud-standard-4
+    runs-on: ubicloud-standard-2
     permissions:
       contents: read
       pull-requests: write
@@ -150,7 +150,7 @@ jobs:
   backend-integration:
     name: Integration tests
     if: github.event_name == 'push'
-    runs-on: ubicloud-standard-4
+    runs-on: ubicloud-standard-2
     needs: [backend-lint, backend-test, frontend, product-map-validate, manifest-validate, gitleaks]
     steps:
       - uses: actions/checkout@v4
@@ -210,7 +210,7 @@ jobs:
   bdd-e2e:
     name: BDD / E2E Tests
     if: github.event_name == 'push'
-    runs-on: ubicloud-standard-4
+    runs-on: ubicloud-standard-2
     needs: [backend-lint, backend-test, frontend, product-map-validate, manifest-validate, gitleaks]
     steps:
       - uses: actions/checkout@v4
@@ -313,7 +313,7 @@ jobs:
   docker-build:
     name: Docker build and scan
     if: github.event_name == 'push'
-    runs-on: ubicloud-standard-4
+    runs-on: ubicloud-standard-2
     needs: [backend-lint, backend-test, frontend, product-map-validate, manifest-validate, gitleaks]
     permissions:
       contents: read
@@ -410,7 +410,7 @@ jobs:
   security-audit:
     name: Security audit
     if: github.event_name == 'push'
-    runs-on: ubicloud-standard-4
+    runs-on: ubicloud-standard-2
     needs: [backend-lint, backend-test, frontend, product-map-validate, manifest-validate, gitleaks]
     steps:
       - uses: actions/checkout@v4
@@ -449,7 +449,7 @@ jobs:
     name: Notify Modulo fixer
     if: github.event_name == 'push' && (failure() || cancelled())
     needs: [backend-lint, backend-test, frontend, product-map-validate, manifest-validate, gitleaks, backend-integration, bdd-e2e, docker-build, security-audit]
-    runs-on: ubicloud-standard-4
+    runs-on: ubicloud-standard-2
     steps:
       - name: Send webhook to Modulo fixer
         shell: bash
@@ -482,7 +482,7 @@ jobs:
     name: Notify Modulo fixer
     if: github.event_name == 'pull_request' && (failure() || cancelled())
     needs: [backend-lint, backend-test, frontend, product-map-validate, manifest-validate, gitleaks]
-    runs-on: ubicloud-standard-4
+    runs-on: ubicloud-standard-2
     steps:
       - name: Send webhook to Modulo fixer
         shell: bash
