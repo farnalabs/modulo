@@ -10,7 +10,7 @@ concurrency:
 jobs:
   audit:
     continue-on-error: ${{ github.event_name != 'pull_request' }}
-    runs-on: ubuntu-latest
+    runs-on: ubicloud-standard-4
     steps:
       - uses: actions/checkout@v4
         with:
@@ -46,7 +46,7 @@ jobs:
           uv --directory backend run --no-sync semgrep --config=.semgrep/ --baseline-commit "$baseline" --error .
 
   container-scan:
-    runs-on: ubuntu-latest
+    runs-on: ubicloud-standard-4
     steps:
       - uses: actions/checkout@v4
 
