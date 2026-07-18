@@ -95,14 +95,14 @@
         </DialogHeader>
         <div class="space-y-4">
           <div>
-            <label class="mb-1 block text-sm font-medium">{{ $t('views.PipelineListView.folder_name') }}</label>
+            <label for="folder-tree-new-name" class="mb-1 block text-sm font-medium">{{ $t('views.PipelineListView.folder_name') }}</label>
             <Input id="folder-tree-new-name" v-model="newFolderName" placeholder="Folder name" @keyup.enter="handleCreate" />
           </div>
 
           <!-- Parent folder selector -->
           <div>
-            <label class="mb-1 block text-sm font-medium">Parent folder</label>
-            <Select v-model="newFolderParentId">
+            <label id="parent-folder-label" class="mb-1 block text-sm font-medium">Parent folder</label>
+            <Select v-model="newFolderParentId" aria-labelledby="parent-folder-label">
               <SelectTrigger>
                 <SelectValue placeholder="No parent (root level)" />
               </SelectTrigger>
@@ -132,8 +132,8 @@
         </DialogHeader>
         <div class="space-y-4">
           <div>
-            <label class="mb-1 block text-sm font-medium">{{ $t('views.PipelineListView.folder_name') }}</label>
-            <Input v-model="renameFolderName" placeholder="Folder name" @keyup.enter="handleRename" />
+            <label for="folder-tree-rename-name" class="mb-1 block text-sm font-medium">{{ $t('views.PipelineListView.folder_name') }}</label>
+            <Input id="folder-tree-rename-name" v-model="renameFolderName" placeholder="Folder name" @keyup.enter="handleRename" />
           </div>
           <div v-if="renameError" class="rounded-lg border border-destructive/50 bg-destructive/10 p-3 text-sm text-destructive">
             {{ renameError }}
