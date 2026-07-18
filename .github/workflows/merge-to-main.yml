@@ -16,6 +16,9 @@ env:
 jobs:
   merge:
     name: Merge queue → main
+    permissions:
+      contents: write
+      pull-requests: read
     runs-on: ubuntu-latest
     outputs:
       has_conflicts: ${{ steps.resolve.outputs.has_conflicts }}
@@ -183,6 +186,11 @@ jobs:
         shell: bash
         run: |
           set -e
+
+          echo "=== Installing backend dependencies ==="
+          cd backend
+          uv sync --frozen
+          cd ..
 
           echo "=== Backend Lint ==="
           cd backend
