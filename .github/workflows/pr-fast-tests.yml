@@ -10,7 +10,7 @@ concurrency:
 jobs:
   unit-tests:
     name: Unit Tests
-    runs-on: ubicloud-standard-4
+    runs-on: ubicloud-standard-2
     defaults:
       run:
         working-directory: backend
