@@ -133,7 +133,7 @@ jobs:
 
       - name: Enforce vulnerability scan results
         if: steps.scan-backend.outcome == 'failure' || steps.scan-frontend-dev.outcome == 'failure' || steps.scan-frontend.outcome == 'failure'
-        shell: pwsh
+        shell: bash
         run: |
           Write-Host "::error::One or more container images contain critical vulnerabilities."
           exit 1
@@ -148,7 +148,7 @@ jobs:
 
       - name: Publish scanned images to GHCR
         if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v'))
-        shell: pwsh
+        shell: bash
         env:
           BACKEND_TAGS: ${{ steps.meta-backend.outputs.tags }}
           FRONTEND_TAGS: ${{ steps.meta-frontend.outputs.tags }}
