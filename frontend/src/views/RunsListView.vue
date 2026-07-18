@@ -7,19 +7,19 @@
       :search-value="filterSearch"
       :filters="[
         { key: 'status', label: 'Status', options: [
-          { value: 'pending', label: 'Pending' },
-          { value: 'running', label: 'Running' },
-          { value: 'awaiting_human', label: 'Awaiting Human' },
-          { value: 'complete', label: 'Complete' },
-          { value: 'failed', label: 'Failed' },
-          { value: 'cancelled', label: 'Cancelled' },
-          { value: 'eval_failed', label: 'Eval Failed' },
+          { value: RUN_STATUS.PENDING, label: 'Pending' },
+          { value: RUN_STATUS.RUNNING, label: 'Running' },
+          { value: RUN_STATUS.AWAITING_HUMAN, label: 'Awaiting Human' },
+          { value: RUN_STATUS.COMPLETE, label: 'Complete' },
+          { value: RUN_STATUS.FAILED, label: 'Failed' },
+          { value: RUN_STATUS.CANCELLED, label: 'Cancelled' },
+          { value: RUN_STATUS.EVAL_FAILED, label: 'Eval Failed' },
         ]},
         { key: 'trigger_type', label: 'Trigger Type', options: [
-          { value: 'manual', label: 'Manual' },
-          { value: 'webhook', label: 'Webhook' },
-          { value: 'cron', label: 'Cron' },
-          { value: 'correction', label: 'Correction' },
+          { value: TRIGGER_TYPE.MANUAL, label: 'Manual' },
+          { value: TRIGGER_TYPE.WEBHOOK, label: 'Webhook' },
+          { value: TRIGGER_TYPE.CRON, label: 'Cron' },
+          { value: TRIGGER_TYPE.CORRECTION, label: 'Correction' },
         ]},
       ]"
       :filter-values="{ status: filterStatus, trigger_type: filterTriggerType }"
@@ -119,6 +119,7 @@ import { formatApiError } from '../lib/api/formatError'
 import { DataTable } from '../components/ui/data-table'
 import EmptyState from '../components/shared/EmptyState.vue'
 import { runStatusBadgeClass, formatRunDate } from '../utils/runUtils'
+import { RUN_STATUS, TRIGGER_TYPE } from '../constants/filters'
 
 const router = useRouter()
 const route = useRoute()
