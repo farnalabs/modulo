@@ -109,7 +109,7 @@ jobs:
           merged_prs=""
           conflict_prs=""
 
-          jq -c '.[]' /tmp/prs.json | while IFS= read -r pr; do
+          while IFS= read -r pr; do
             NUM=$(echo "$pr" | jq -r '.number')
             TITLE=$(echo "$pr" | jq -r '.title')
             REF=$(echo "$pr" | jq -r '.headRefName')
@@ -123,6 +123,8 @@ jobs:
             echo ""
             echo "=== PR #$NUM: $TITLE ==="
 
+            # Ensure clean working tree
+            git reset --hard HEAD 2>/dev/null || true
             git fetch origin "+refs/pull/$NUM/head:refs/heads/pr-$NUM" 2>&1
 
             echo "Attempting squash-merge into merge-queue..."
@@ -135,7 +137,7 @@ jobs:
               echo "MERGE CONFLICT in PR #$NUM — skipping."
               conflict_prs="$conflict_prs $NUM"
             fi
-          done
+          done < <(jq -c '.[]' /tmp/prs.json)
 
           merged_prs=$(echo "$merged_prs" | xargs)
           conflict_prs=$(echo "$conflict_prs" | xargs)
