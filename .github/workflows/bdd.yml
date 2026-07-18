@@ -9,7 +9,7 @@ concurrency:
 
 jobs:
   bdd:
-    runs-on: self-hosted
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v7
@@ -75,8 +75,8 @@ jobs:
         run: npm run build
       - name: Start backend
         working-directory: backend
-        shell: cmd
-        run: start /b uv run --no-sync uvicorn modulo.api.main:app --host 0.0.0.0 --port 8000 > C:\actions-runner\_work\modulo\modulo\backend.log 2>&1
+        shell: bash
+        run: nohup uv run --no-sync uvicorn modulo.api.main:app --host 0.0.0.0 --port 8000 > backend.log 2>&1 &
         env:
           DATABASE_URL: "postgresql+asyncpg://modulo:modulo@localhost:5432/modulo"
           SECRET_KEY: "ci-secret-key-for-github-actions-testing-only"
@@ -88,8 +88,8 @@ jobs:
           REDIS_URL: "redis://localhost:6379/0"
       - name: Serve frontend
         working-directory: frontend
-        shell: powershell
-        run: Start-Process -NoNewWindow -FilePath "cmd.exe" -ArgumentList "/c npm run preview -- --port 4173"
+        shell: bash
+        run: nohup npm run preview -- --port 4173 > /dev/null 2>&1 &
       - name: Wait for healthz
         shell: powershell
         run: |
@@ -101,7 +101,7 @@ jobs:
             Start-Sleep -Seconds 2
           }
           Write-Host "=== Backend log ==="
-          Get-Content "C:\actions-runner\_work\modulo\modulo\backend.log" -TotalCount 100 -ErrorAction SilentlyContinue
+          Get-Content "$env:GITHUB_WORKSPACE/backend/backend.log" -TotalCount 100 -ErrorAction SilentlyContinue
           Write-Host "=== Process check ==="
           Get-Process -Name "uv" -ErrorAction SilentlyContinue | Format-Table Id, ProcessName
           exit 1
