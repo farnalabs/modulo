@@ -101,9 +101,9 @@
 
           <!-- Parent folder selector -->
           <div>
-            <label id="parent-folder-label" class="mb-1 block text-sm font-medium">Parent folder</label>
-            <Select v-model="newFolderParentId" aria-labelledby="parent-folder-label">
-              <SelectTrigger>
+            <label for="folder-tree-parent" class="mb-1 block text-sm font-medium">Parent folder</label>
+            <Select v-model="newFolderParentId">
+              <SelectTrigger id="folder-tree-parent">
                 <SelectValue placeholder="No parent (root level)" />
               </SelectTrigger>
               <SelectContent>
