@@ -22,7 +22,7 @@ jobs:
           cache: npm
           cache-dependency-path: frontend/package-lock.json
       - name: Wait for staging health
-        shell: powershell
+        shell: pwsh
         timeout-minutes: 5
         run: |
           Write-Host "Waiting for staging.modulo.run ..."
@@ -87,13 +87,13 @@ jobs:
             frontend/test-results/regression-junit.xml
       - name: Final cleanup
         if: always()
-        shell: powershell
+        shell: pwsh
         run: |
           $ErrorActionPreference = 'Continue'
           Remove-Item -Path "$env:TEMP\ms-playwright" -Recurse -Force -ErrorAction SilentlyContinue
       - name: Fail job on test failure
         if: steps.smoke-tests.outcome == 'failure' || steps.wcag-tests.outcome == 'failure' || steps.regression-tests.outcome == 'failure'
-        shell: powershell
+        shell: pwsh
         run: |
           Write-Host "::error::One or more staging suites failed. Check the separate uploaded artifacts for details."
           exit 1

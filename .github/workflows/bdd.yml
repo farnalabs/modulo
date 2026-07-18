@@ -20,7 +20,7 @@ jobs:
         with:
           node-version: "20"
       - name: Start Postgres
-        shell: powershell
+        shell: pwsh
         run: |
           $ErrorActionPreference = 'Continue'
           docker rm -f modulo-bdd-pg 2>$null
@@ -37,7 +37,7 @@ jobs:
             Start-Sleep -Seconds 2
           }
       - name: Start Redis
-        shell: powershell
+        shell: pwsh
         run: |
           $ErrorActionPreference = 'Continue'
           docker rm -f modulo-bdd-redis 2>$null
@@ -57,7 +57,7 @@ jobs:
         working-directory: backend
         run: uv run --no-sync playwright install --with-deps chromium
       - name: Pre-create alembic_version table
-        shell: powershell
+        shell: pwsh
         run: |
           docker exec modulo-bdd-pg psql -U modulo -d modulo -c "CREATE TABLE IF NOT EXISTS alembic_version (version_num VARCHAR(255) NOT NULL PRIMARY KEY);"
       - name: Run migrations
@@ -91,7 +91,7 @@ jobs:
         shell: bash
         run: nohup npm run preview -- --port 4173 > /dev/null 2>&1 &
       - name: Wait for healthz
-        shell: powershell
+        shell: pwsh
         run: |
           for ($i=0; $i -lt 60; $i++) {
             try {
@@ -106,7 +106,7 @@ jobs:
           Get-Process -Name "uv" -ErrorAction SilentlyContinue | Format-Table Id, ProcessName
           exit 1
       - name: Wait for frontend
-        shell: powershell
+        shell: pwsh
         run: npx wait-on http://localhost:4173 --timeout 30000
       - name: Run BDD tests
         working-directory: backend
@@ -117,7 +117,7 @@ jobs:
           FERNET_KEY: "vK-xU7GqHLflg_GqzJ1FqWI7pHWoHSIyukf4wx-tMHI="
       - name: Cleanup containers
         if: always()
-        shell: powershell
+        shell: pwsh
         run: |
           $ErrorActionPreference = 'Continue'
           docker rm -f modulo-bdd-pg 2>$null
