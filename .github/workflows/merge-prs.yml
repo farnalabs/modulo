@@ -266,11 +266,11 @@ jobs:
           echo "branch_ref=merge-queue/failed-$TIMESTAMP" >> "$GITHUB_ENV"
           echo "Preserved merge-queue branch at merge-queue/failed-$TIMESTAMP"
 
-      - name: Notify fixer on CI failure
+      - name: Notify branch-fixer on CI failure
         if: failure() && steps.merge.outputs.merged_count != '0'
         env:
-          WEBHOOK_URL: ${{ secrets.MODULO_MERGE_FIXER_WEBHOOK_URL }}
-          HMAC_SECRET: ${{ secrets.MODULO_MERGE_FIXER_HMAC_SECRET }}
+          WEBHOOK_URL: ${{ secrets.MODULO_BRANCH_FIXER_WEBHOOK_URL }}
+          HMAC_SECRET: ${{ secrets.MODULO_BRANCH_FIXER_HMAC_SECRET }}
         shell: bash
         run: |
           if [ -z "$WEBHOOK_URL" ]; then echo "No webhook URL configured — skipping notification"; exit 0; fi
