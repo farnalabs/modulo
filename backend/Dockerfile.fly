@@ -80,6 +80,6 @@ COPY deploy/fly/entrypoint.sh /entrypoint.sh
 COPY deploy/fly/bootstrap_db.py /app/deploy/fly/bootstrap_db.py
 RUN chmod +x /entrypoint.sh
 
-EXPOSE 8080
+EXPOSE 8000
 
 CMD ["/entrypoint.sh"]
