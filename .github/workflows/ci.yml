@@ -1,6 +1,9 @@
 name: CI
 
 on:
+  pull_request:
+    branches: [main]
+  merge_group:
   workflow_dispatch:
 
 env:
@@ -149,7 +152,7 @@ jobs:
 
   backend-integration:
     name: Integration tests
-    if: github.event_name == 'push'
+    if: github.event_name == 'merge_group'
     runs-on: ubicloud-standard-2
     needs: [backend-lint, backend-test, frontend, product-map-validate, manifest-validate, gitleaks]
     steps:
@@ -209,7 +212,7 @@ jobs:
 
   bdd-e2e:
     name: BDD / E2E Tests
-    if: github.event_name == 'push'
+    if: github.event_name == 'merge_group'
     runs-on: ubicloud-standard-2
     needs: [backend-lint, backend-test, frontend, product-map-validate, manifest-validate, gitleaks]
     steps:
@@ -312,7 +315,7 @@ jobs:
 
   docker-build:
     name: Docker build and scan
-    if: github.event_name == 'push'
+    if: github.event_name == 'merge_group'
     runs-on: ubicloud-standard-2
     needs: [backend-lint, backend-test, frontend, product-map-validate, manifest-validate, gitleaks]
     permissions:
@@ -409,7 +412,7 @@ jobs:
 
   security-audit:
     name: Security audit
-    if: github.event_name == 'push'
+    if: github.event_name == 'merge_group'
     runs-on: ubicloud-standard-2
     needs: [backend-lint, backend-test, frontend, product-map-validate, manifest-validate, gitleaks]
     steps:
@@ -445,9 +448,9 @@ jobs:
 
   # ── Failure notifications ──────────────────────────────────────────────────
 
-  notify-push-failure:
-    name: Notify Modulo fixer
-    if: github.event_name == 'push' && (failure() || cancelled())
+  notify-merge-group-failure:
+    name: Notify Modulo fixer — queue CI failure
+    if: github.event_name == 'merge_group' && (failure() || cancelled())
     needs: [backend-lint, backend-test, frontend, product-map-validate, manifest-validate, gitleaks, backend-integration, bdd-e2e, docker-build, security-audit]
     runs-on: ubicloud-standard-2
     steps:
