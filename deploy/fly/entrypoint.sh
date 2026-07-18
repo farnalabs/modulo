@@ -60,7 +60,7 @@ echo "=== Admin user seeding handled by backend lifespan startup (_seed_modulo_u
 
 echo "=== Starting uvicorn ==="
 exec .venv/bin/uvicorn modulo.api.main:app \
-    --host 0.0.0.0 --port 8000 \
+    --host 0.0.0.0 --port ${PORT:-8000} \
     --proxy-headers \
     --timeout-keep-alive 30 \
     --timeout-graceful-shutdown 30 \

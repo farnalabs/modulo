@@ -8,11 +8,12 @@ primary_region = 'lhr'
   dockerfile = "backend/Dockerfile.fly"
 
 [http_service]
-  internal_port = 8080
+  internal_port = 8000  # must match entrypoint.sh
   force_https = true
   auto_stop_machines = false
   auto_start_machines = true
   min_machines_running = 2
+  max_machines_running = 5
   processes = ['app']
 
   [http_service.concurrency]
