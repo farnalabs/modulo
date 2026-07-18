@@ -23,24 +23,32 @@ jobs:
         id: context
         shell: bash
         run: |
-          if ("${{ github.event_name }}" -eq "workflow_run") {
-            $conclusion = "${{ github.event.workflow_run.conclusion }}"
-            $branch = "${{ github.event.workflow_run.head_branch }}"
-            $sha = "${{ github.event.workflow_run.head_sha }}"
-            if ($conclusion -eq "success") {
-              echo "ci_passed=true" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
-            } else {
-              echo "ci_passed=false" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
-            }
-            echo "branch=$branch" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
-            echo "head_sha=$sha" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
-            if ($branch -eq "main") { echo "is_main=true" } else { echo "is_main=false" }
-          } else {
-            echo "ci_passed=true" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
-            echo "branch=${{ github.ref_name }}" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
-            echo "head_sha=${{ github.sha }}" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
-            if ("${{ github.ref_name }}" -eq "main") { echo "is_main=true" } else { echo "is_main=false" }
-          } | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
+          if [ "${{ github.event_name }}" = "workflow_run" ]; then
+            CONCLUSION="${{ github.event.workflow_run.conclusion }}"
+            BRANCH="${{ github.event.workflow_run.head_branch }}"
+            SHA="${{ github.event.workflow_run.head_sha }}"
+            if [ "$CONCLUSION" = "success" ]; then
+              echo "ci_passed=true" >> "$GITHUB_OUTPUT"
+            else
+              echo "ci_passed=false" >> "$GITHUB_OUTPUT"
+            fi
+            echo "branch=$BRANCH" >> "$GITHUB_OUTPUT"
+            echo "head_sha=$SHA" >> "$GITHUB_OUTPUT"
+            if [ "$BRANCH" = "main" ]; then
+              echo "is_main=true" >> "$GITHUB_OUTPUT"
+            else
+              echo "is_main=false" >> "$GITHUB_OUTPUT"
+            fi
+          else
+            echo "ci_passed=true" >> "$GITHUB_OUTPUT"
+            echo "branch=${{ github.ref_name }}" >> "$GITHUB_OUTPUT"
+            echo "head_sha=${{ github.sha }}" >> "$GITHUB_OUTPUT"
+            if [ "${{ github.ref_name }}" = "main" ]; then
+              echo "is_main=true" >> "$GITHUB_OUTPUT"
+            else
+              echo "is_main=false" >> "$GITHUB_OUTPUT"
+            fi
+          fi
 
   deploy-staging:
     name: Deploy to staging
