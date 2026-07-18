@@ -455,7 +455,7 @@ jobs:
 
   notify-push-failure:
     name: Notify Modulo fixer
-    if: failure() && github.event_name == 'push'
+    if: github.event_name == 'push' && (failure() || cancelled())
     needs: [backend-lint, backend-test, frontend, product-map-validate, manifest-validate, gitleaks, backend-integration, bdd-e2e, docker-build, security-audit]
     runs-on: ubuntu-latest
     steps:
@@ -488,7 +488,7 @@ jobs:
 
   notify-pr-failure:
     name: Notify Modulo fixer
-    if: failure() && github.event_name == 'pull_request'
+    if: github.event_name == 'pull_request' && (failure() || cancelled())
     needs: [backend-lint, backend-test, frontend, product-map-validate, manifest-validate, gitleaks]
     runs-on: ubuntu-latest
     steps:
