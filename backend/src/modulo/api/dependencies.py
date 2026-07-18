@@ -54,10 +54,16 @@ def require_feature(feature_name: str) -> DependsParameter:
 
 
 def pg_connection_string(database_url: str) -> str:
-    """Strip SQLAlchemy prefix to get a psycopg-compatible URL with sslmode=disable."""
+    """Strip SQLAlchemy prefix to get a psycopg-compatible URL.
+
+    Preserves any existing sslmode parameter from the DATABASE_URL
+    (e.g. sslmode=require for Fly.io managed Postgres).
+    """
     url = database_url.replace("postgresql+asyncpg://", "postgresql://").replace(
         "postgresql+psycopg://", "postgresql://"
     )
+    if "sslmode" in url:
+        return url
     if "?" in url:
         return url + "&sslmode=disable"
     return url + "?sslmode=disable"
