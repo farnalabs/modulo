@@ -48,9 +48,13 @@ async def start_schedulers(
     """
     global _scheduler_engine
     settings = get_settings()
-    _scheduler_engine = engine if engine is not None else create_async_engine(
-        settings.database_url,
-        connect_args={"ssl": False, "statement_cache_size": 0} if settings.modulo_db == "postgres" else {},
+    _scheduler_engine = (
+        engine
+        if engine is not None
+        else create_async_engine(
+            settings.database_url,
+            connect_args={"ssl": False, "statement_cache_size": 0} if settings.modulo_db == "postgres" else {},
+        )
     )
     factory = async_sessionmaker(_scheduler_engine, expire_on_commit=False)
 
