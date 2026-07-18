@@ -475,12 +475,43 @@ jobs:
           echo "Modulo fixer notified"
 
   notify-pr-failure:
-    name: Notify on PR failure
+    name: Notify Modulo fixer
     if: failure() && github.event_name == 'pull_request'
     needs: [backend-lint, backend-test, frontend, product-map-validate, manifest-validate, gitleaks]
     runs-on: ubuntu-latest
     steps:
-      - name: Comment on PR
+      - name: Send webhook to Modulo fixer
         shell: bash
+        env:
+          WEBHOOK_URL: ${{ secrets.MODULO_MERGE_FIXER_WEBHOOK_URL }}
+          HMAC_SECRET: ${{ secrets.MODULO_MERGE_FIXER_HMAC_SECRET }}
         run: |
-          echo "::error::CI checks failed for this PR. Check the workflow run for details."
+          if [ -z "$WEBHOOK_URL" ]; then echo "No webhook URL configured"; exit 0; fi
+          TIMESTAMP=$(date +%s)
+          BODY=$(cat <<ENDJSON
+          {
+            "action": "check_run",
+            "repository": {"full_name": "${{ github.repository }}"},
+            "run_id": "${{ github.run_id }}",
+            "run_url": "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}",
+            "pull_request": {
+              "number": ${{ github.event.pull_request.number }},
+              "head": {
+                "sha": "${{ github.event.pull_request.head.sha }}",
+                "ref": "${{ github.event.pull_request.head.ref }}"
+              },
+              "base": {
+                "ref": "${{ github.event.pull_request.base.ref }}"
+              }
+            }
+          }
+          ENDJSON
+          )
+          PAYLOAD="${TIMESTAMP}.${BODY}"
+          HMAC=$(echo -n "$PAYLOAD" | openssl dgst -sha256 -hmac "$HMAC_SECRET" | sed 's/^.* //')
+          curl -s -X POST "$WEBHOOK_URL" \
+            -H "Content-Type: application/json" \
+            -H "X-Modulo-Timestamp: ${TIMESTAMP}" \
+            -H "X-Modulo-Webhook-Secret: sha256=${HMAC}" \
+            -d "$BODY"
+          echo "Modulo fixer notified of PR failure"
