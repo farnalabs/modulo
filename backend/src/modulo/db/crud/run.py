@@ -202,6 +202,8 @@ async def request_cancellation(session: AsyncSession, run_id: uuid.UUID) -> Run 
     if run is None:
         return None
     run.cancellation_requested = True
+    run.status = "cancelled"
+    run.completed_at = datetime.now(UTC)
     await session.flush()
     return run
 
