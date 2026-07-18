@@ -102,8 +102,8 @@ jobs:
             git fetch origin "+refs/pull/$NUM/head:refs/heads/pr-$NUM" 2>&1
 
             echo "Checking PR #$NUM state..."
-            PR_STATE=$(gh pr view "$NUM" --json state,merged 2>/dev/null)
-            if echo "$PR_STATE" | jq -e '.state == "CLOSED" or .merged == true' > /dev/null 2>&1; then
+            PR_STATE=$(gh pr view "$NUM" --json state,closed 2>/dev/null) || true
+            if echo "$PR_STATE" | jq -e '.state == "CLOSED" or .closed == true' > /dev/null 2>&1; then
               echo "PR #$NUM is already closed/merged. Skipping."
               continue
             fi
