@@ -48,7 +48,7 @@ jobs:
           git checkout -b merge-queue
           echo "merge-queue branch reset to main"
 
-      - name: Collect open PRs (oldest first)
+      - name: Collect open PRs (oldest first, approved only)
         id: collect
         env:
           GH_TOKEN: ${{ github.token }}
@@ -56,15 +56,48 @@ jobs:
         run: |
           echo "Fetching open PRs sorted by age..."
           gh pr list --state open --json number,title,headRefName,createdAt --limit 50 2>&1 | \
-            jq 'sort_by(.createdAt)' > /tmp/prs.json
-          PR_COUNT=$(jq 'length' /tmp/prs.json)
-          echo "Found $PR_COUNT open PR(s)"
-          echo "pr_count=$PR_COUNT" >> "$GITHUB_OUTPUT"
+            jq 'sort_by(.createdAt)' > /tmp/all_prs.json
+          ALL_COUNT=$(jq 'length' /tmp/all_prs.json)
+          echo "Found $ALL_COUNT open PR(s)"
 
-      - name: Exit early if no PRs
+          # Filter to only PRs approved by farnalabs or modulo-reviewbot
+          APPROVED_COUNT=0
+          echo "[]" > /tmp/prs.json
+
+          jq -c '.[]' /tmp/all_prs.json | while IFS= read -r pr; do
+            NUM=$(echo "$pr" | jq -r '.number')
+            TITLE=$(echo "$pr" | jq -r '.title')
+
+            echo -n "  PR #$NUM ($TITLE) — "
+
+            # Check for approval reviews
+            APPROVERS=$(gh pr view "$NUM" --json reviews --jq '.reviews[]? | select(.state == "APPROVED") | .author.login' 2>/dev/null | sort -u)
+
+            if echo "$APPROVERS" | grep -qE '^(farnalabs|modulo-reviewbot)$'; then
+              echo "approved by $APPROVERS"
+              echo "$pr" >> /tmp/approved_prs.json
+              APPROVED_COUNT=$((APPROVED_COUNT + 1))
+            else
+              echo "not approved yet — skipping"
+            fi
+          done
+
+          # Combine approved PRs into the prs.json file
+          if [ -f /tmp/approved_prs.json ]; then
+            jq -s '.' /tmp/approved_prs.json > /tmp/prs.json
+          fi
+
+          PR_COUNT=$(jq 'length' /tmp/prs.json)
+          echo "Approved PRs ready for queue: $PR_COUNT"
+          echo "pr_count=$PR_COUNT" >> "$GITHUB_OUTPUT"
+          echo "all_count=$ALL_COUNT" >> "$GITHUB_OUTPUT"
+
+      - name: Exit early if no approved PRs
         if: steps.collect.outputs.pr_count == '0'
         run: |
-          echo "No open PRs to process. Exiting."
+          echo "No approved PRs to process."
+          echo "Total open: ${{ steps.collect.outputs.all_count }}, approved: 0"
+          echo "PRs need an APPROVED review from farnalabs or modulo-reviewbot."
           exit 0
 
       - name: Merge PRs into merge-queue (oldest first)
