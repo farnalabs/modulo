@@ -7,9 +7,9 @@
 param([switch]$Fix,[switch]$CI)
 $ErrorActionPreference="Stop"
 $repoRoot=Resolve-Path (Join-Path $PSScriptRoot "..")
-$productMap=Join-Path $repoRoot "docs\product-map"
-$prdFile=Join-Path $repoRoot "docs\prd.md"
-$bddRoot=Join-Path $repoRoot "backend\tests\bdd\features"
+$productMap=Join-Path $repoRoot "docs/product-map"
+$prdFile=Join-Path $repoRoot "docs/prd.md"
+$bddRoot=Join-Path $repoRoot "backend/tests/bdd/features"
 $issues=@()
 . (Join-Path $PSScriptRoot "product-map-metadata.ps1")
 
