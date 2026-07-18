@@ -23,43 +23,38 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         shell: bash
         run: |
-          $prCount = 0
-          $prs = gh pr list --state open --json number --jq 'length' 2>$null
-          if ($prs) { $prCount = [int]$prs }
-          Write-Host "Open PRs: $prCount"
+          PR_COUNT=$(gh pr list --state open --json number --jq 'length' 2>/dev/null || echo 0)
+          echo "Open PRs: $PR_COUNT"
 
-          $passingCount = 0
-          if ($prCount -gt 0) {
-            $prUrls = gh pr list --state open --json url --jq '.[].url' 2>$null
-            foreach ($url in $prUrls) {
-              $checkInfo = gh pr view $url --json statusCheckRollup --jq '[.statusCheckRollup[]? | select(.conclusion == "SUCCESS" or .conclusion == "NEUTRAL")] | length' 2>$null
-              $totalInfo = gh pr view $url --json statusCheckRollup --jq '.statusCheckRollup | length' 2>$null
-              if ($checkInfo -and $totalInfo) {
-                $checks = [int]$checkInfo
-                $total = [int]$totalInfo
-                if ($checks -eq $total -and $total -gt 0) { $passingCount++ }
-              }
-            }
-          }
-          Write-Host "Passing PRs: $passingCount"
+          PASSING_COUNT=0
+          if [ "$PR_COUNT" -gt 0 ]; then
+            PR_URLS=$(gh pr list --state open --json url --jq '.[].url' 2>/dev/null)
+            for url in $PR_URLS; do
+              CHECK_INFO=$(gh pr view "$url" --json statusCheckRollup --jq '[.statusCheckRollup[]? | select(.conclusion == "SUCCESS" or .conclusion == "NEUTRAL")] | length' 2>/dev/null || echo 0)
+              TOTAL_INFO=$(gh pr view "$url" --json statusCheckRollup --jq '.statusCheckRollup | length' 2>/dev/null || echo 0)
+              if [ "$CHECK_INFO" -eq "$TOTAL_INFO" ] && [ "$TOTAL_INFO" -gt 0 ]; then
+                PASSING_COUNT=$((PASSING_COUNT + 1))
+              fi
+            done
+          fi
+          echo "Passing PRs: $PASSING_COUNT"
 
-          $lastMerge = git log -1 --format=%ct origin/main 2>$null
-          if (-not $lastMerge) { $lastMerge = "0" }
-          $now = [int][DateTimeOffset]::UtcNow.ToUnixTimeSeconds()
-          $hoursSince = [math]::Max(0, ($now - [int]$lastMerge) / 3600)
-          Write-Host "Hours since last merge: $([math]::Round($hoursSince, 1))"
+          LAST_MERGE=$(git log -1 --format=%ct origin/main 2>/dev/null || echo 0)
+          NOW=$(date +%s)
+          HOURS_SINCE=$(echo "scale=1; if(0 > ($NOW - $LAST_MERGE) / 3600) 0 else ($NOW - $LAST_MERGE) / 3600" | bc 2>/dev/null || echo 0)
+          echo "Hours since last merge: $HOURS_SINCE"
 
-          $shouldMerge = "false"
-          if ($passingCount -ge 6) {
-            $shouldMerge = "true"
-            Write-Host "Trigger: $passingCount passing PRs (threshold met)"
-          } elseif ($passingCount -gt 0 -and $hoursSince -ge 6) {
-            $shouldMerge = "true"
-            Write-Host "Trigger: $passingCount passing PRs, $([math]::Round($hoursSince, 1))h since last merge (timeout met)"
-          } else {
-            Write-Host "Conditions not met"
-          }
-          Add-Content -Path $env:GITHUB_OUTPUT -Value "should_merge=$shouldMerge"
+          SHOULD_MERGE="false"
+          if [ "$PASSING_COUNT" -ge 6 ]; then
+            SHOULD_MERGE="true"
+            echo "Trigger: $PASSING_COUNT passing PRs (threshold met)"
+          elif [ "$PASSING_COUNT" -gt 0 ] && [ "$(echo "$HOURS_SINCE >= 6" | bc)" -eq 1 ]; then
+            SHOULD_MERGE="true"
+            echo "Trigger: $PASSING_COUNT passing PRs, $HOURS_SINCE h since last merge (timeout met)"
+          else
+            echo "Conditions not met"
+          fi
+          echo "should_merge=$SHOULD_MERGE" >> "$GITHUB_OUTPUT"
 
   do-merge:
     name: Squash-merge and test
