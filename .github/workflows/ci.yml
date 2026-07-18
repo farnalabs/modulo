@@ -1,15 +1,7 @@
 name: CI
 
 on:
-  pull_request:
-    branches: [main, staging-queue]
-  push:
-    branches: [main, staging-queue]
   workflow_dispatch:
-
-concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
 
 env:
   SECRET_KEY: "ci-secret-key-for-github-actions-testing-only"
