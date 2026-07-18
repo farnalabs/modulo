@@ -2,147 +2,278 @@ name: Merge to Main
 
 on:
   workflow_dispatch:
+  schedule:
+    - cron: '0 */6 * * *'
 
 concurrency:
   group: merge-to-main
-  cancel-in-progress: false
+  cancel-in-progress: true
+
+env:
+  SECRET_KEY: "ci-secret-key-for-github-actions-testing-only"
+  FERNET_KEY: "vK-xU7GqHLflg_GqzJ1FqWI7pHWoHSIyukf4wx-tMHI="
 
 jobs:
-  check-conditions:
-    name: Check merge conditions
+  merge:
+    name: Merge queue → main
     runs-on: ubuntu-latest
     outputs:
-      should_merge: ${{ steps.check.outputs.should_merge }}
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-      - name: Count passing PRs and time since last merge
-        id: check
-        env:
-          GH_TOKEN: ${{ github.token }}
-        shell: bash
-        run: |
-          PR_COUNT=$(gh pr list --state open --json number --jq 'length' 2>/dev/null || echo 0)
-          echo "Open PRs: $PR_COUNT"
-
-          PASSING_COUNT=0
-          if [ "$PR_COUNT" -gt 0 ]; then
-            PR_URLS=$(gh pr list --state open --json url --jq '.[].url' 2>/dev/null)
-            for url in $PR_URLS; do
-              CHECK_INFO=$(gh pr view "$url" --json statusCheckRollup --jq '[.statusCheckRollup[]? | select(.conclusion == "SUCCESS" or .conclusion == "NEUTRAL")] | length' 2>/dev/null || echo 0)
-              TOTAL_INFO=$(gh pr view "$url" --json statusCheckRollup --jq '.statusCheckRollup | length' 2>/dev/null || echo 0)
-              if [ "$CHECK_INFO" -eq "$TOTAL_INFO" ] && [ "$TOTAL_INFO" -gt 0 ]; then
-                PASSING_COUNT=$((PASSING_COUNT + 1))
-              fi
-            done
-          fi
-          echo "Passing PRs: $PASSING_COUNT"
-
-          LAST_MERGE=$(git log -1 --format=%ct origin/main 2>/dev/null || echo 0)
-          NOW=$(date +%s)
-          HOURS_SINCE=$(echo "scale=1; if(0 > ($NOW - $LAST_MERGE) / 3600) 0 else ($NOW - $LAST_MERGE) / 3600" | bc 2>/dev/null || echo 0)
-          echo "Hours since last merge: $HOURS_SINCE"
-
-          SHOULD_MERGE="false"
-          if [ "$PASSING_COUNT" -ge 6 ]; then
-            SHOULD_MERGE="true"
-            echo "Trigger: $PASSING_COUNT passing PRs (threshold met)"
-          elif [ "$PASSING_COUNT" -gt 0 ] && [ "$(echo "$HOURS_SINCE >= 6" | bc)" -eq 1 ]; then
-            SHOULD_MERGE="true"
-            echo "Trigger: $PASSING_COUNT passing PRs, $HOURS_SINCE h since last merge (timeout met)"
-          else
-            echo "Conditions not met"
-          fi
-          echo "should_merge=$SHOULD_MERGE" >> "$GITHUB_OUTPUT"
-
-  do-merge:
-    name: Squash-merge and test
-    needs: check-conditions
-    if: needs.check-conditions.outputs.should_merge == 'true'
-    runs-on: ubuntu-latest
+      has_conflicts: ${{ steps.resolve.outputs.has_conflicts }}
+      conflict_prs: ${{ steps.resolve.outputs.conflict_prs }}
+      merged_prs: ${{ steps.resolve.outputs.merged_prs }}
+      ci_result: ${{ steps.ci.outputs.result }}
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
           ref: main
+
+      - uses: astral-sh/setup-uv@v7
+        with:
+          python-version: "3.12"
+          enable-cache: true
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
       - name: Configure git
-        shell: bash
         run: |
           git config user.name "modulo-merge-bot"
           git config user.email "bot@modulo.run"
-      - name: Squash-merge passing PRs
-        shell: bash
+
+      - name: Create merge-queue branch from main
+        run: |
+          git branch -D merge-queue 2>/dev/null || true
+          git checkout -b merge-queue
+          echo "merge-queue branch reset to main"
+
+      - name: Collect open PRs
+        id: prs
         env:
           GH_TOKEN: ${{ github.token }}
-        run: |
-          $prs = gh pr list --state open --json number,title --jq '.[]' 2>$null
-          if (-not $prs) { Write-Host "No open PRs"; exit 0 }
-          $merged = 0
-          $conflicts = 0
-          foreach ($pr in $prs) {
-            $num = $pr.number
-            $title = ($pr.title -replace '[<>:"/\\|?*]', '')[0..80] -join ''
-            $checks = gh pr view $num --json statusCheckRollup --jq '[.statusCheckRollup[]? | select(.conclusion == "SUCCESS" or .conclusion == "NEUTRAL")] | length' 2>$null
-            $total = gh pr view $num --json statusCheckRollup --jq '.statusCheckRollup | length' 2>$null
-            if ([int]$checks -ne [int]$total -or [int]$total -le 0) { continue }
-            Write-Host "Merging PR #$num: $title"
-            git fetch origin +refs/pull/$num/head:refs/heads/pr-$num 2>&1
-            git merge --squash pr-$num 2>$null
-            if ($LASTEXITCODE -eq 0) {
-              git commit -m "squash! Merge PR #$num: $title"
-              $merged++
-            } else {
-              Write-Host "Conflict in PR #$num — skipping"
-              git merge --abort 2>$null
-              $conflicts++
-            }
-          }
-          Write-Host "Merged $merged PR(s), $conflicts conflict(s)"
-          if ($merged -eq 0 -and $conflicts -eq 0) { throw "No passing PRs to merge" }
-          if ($merged -eq 0) { throw "All PRs had conflicts — cannot merge" }
-      - name: Run full test suite
         shell: bash
         run: |
-          Write-Host "Starting Docker services..."
-          docker compose -f docker-compose.local.yml up -d 2>&1
-          Write-Host "Running backend unit tests..."
-          Push-Location backend
-          uv run pytest tests/unit/ -x -q --timeout=60
-          if ($LASTEXITCODE -ne 0) { throw "Backend unit tests failed" }
-          Pop-Location
-          Write-Host "Running frontend checks..."
-          Push-Location frontend
-          npm ci 2>&1
-          npm run type-check
-          if ($LASTEXITCODE -ne 0) { throw "Frontend type check failed" }
-          npm run build
-          if ($LASTEXITCODE -ne 0) { throw "Frontend build failed" }
-          Pop-Location
-      - name: Push to main
-        if: success()
+          echo "Fetching open PRs..."
+          PR_LIST=$(gh pr list --state open --json number,title,headRefName 2>&1) || PR_LIST="[]"
+          PR_COUNT=$(echo "$PR_LIST" | jq 'length')
+          echo "Found $PR_COUNT open PR(s)"
+          echo "pr_list=$PR_LIST" >> "$GITHUB_OUTPUT"
+          echo "pr_count=$PR_COUNT" >> "$GITHUB_OUTPUT"
+          echo "$PR_LIST" | jq -c '.[]' | while IFS= read -r pr; do
+            NUM=$(echo "$pr" | jq -r '.number')
+            TITLE=$(echo "$pr" | jq -r '.title')
+            echo "  #$NUM: $TITLE"
+          done
+
+      - name: Exit early if no PRs
+        if: steps.prs.outputs.pr_count == '0'
+        run: |
+          echo "No open PRs to merge. Exiting."
+          exit 0
+
+      - name: Merge all PRs into merge-queue
+        id: resolve
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_LIST_JSON: ${{ steps.prs.outputs.pr_list }}
         shell: bash
         run: |
-          git push origin main
-          Write-Host "Pushed all changes to main"
-      - name: Notify Modulo merge-fixer on failure
-        if: failure()
+          merged=""
+          conflicts=""
+
+          echo "$PR_LIST_JSON" | jq -c '.[]' > /tmp/prs.json
+
+          while IFS= read -r pr; do
+            NUM=$(echo "$pr" | jq -r '.number')
+            TITLE=$(echo "$pr" | jq -r '.title')
+            REF=$(echo "$pr" | jq -r '.headRefName')
+
+            echo ""
+            echo "============================================================"
+            echo "Processing PR #$NUM: $TITLE"
+            echo "============================================================"
+
+            git fetch origin "+refs/pull/$NUM/head:refs/heads/pr-$NUM" 2>&1
+
+            echo "Checking PR #$NUM state..."
+            PR_STATE=$(gh pr view "$NUM" --json state,merged 2>/dev/null)
+            if echo "$PR_STATE" | jq -e '.state == "CLOSED" or .merged == true' > /dev/null 2>&1; then
+              echo "PR #$NUM is already closed/merged. Skipping."
+              continue
+            fi
+
+            echo "Attempting squash-merge into merge-queue..."
+            if git merge --squash "pr-$NUM" 2>&1; then
+              git commit -m "squash! Merge PR #$NUM: $TITLE" 2>&1
+              echo "PR #$NUM merged successfully."
+              merged="$merged $NUM"
+            else
+              echo "MERGE CONFLICT in PR #$NUM"
+              git merge --abort 2>/dev/null || true
+              conflicts="$conflicts $NUM"
+            fi
+          done < /tmp/prs.json
+
+          merged=$(echo "$merged" | xargs)
+          conflicts=$(echo "$conflicts" | xargs)
+          has_conflicts=$([ -z "$conflicts" ] && echo "false" || echo "true")
+
+          echo "merged_prs=$merged" >> "$GITHUB_OUTPUT"
+          echo "conflict_prs=$conflicts" >> "$GITHUB_OUTPUT"
+          echo "has_conflicts=$has_conflicts" >> "$GITHUB_OUTPUT"
+
+          echo ""
+          echo "=== Results ==="
+          echo "Merged successfully: $merged"
+          echo "Conflicts: $conflicts"
+          echo "Has conflicts: $has_conflicts"
+
+      - name: Preserve merge-queue branch on conflict
+        if: steps.resolve.outputs.has_conflicts == 'true'
         shell: bash
+        run: |
+          TIMESTAMP=$(date +%s)
+          git push origin merge-queue:refs/heads/merge-queue/conflict-$TIMESTAMP 2>&1
+          echo "Branch preserved at merge-queue/conflict-$TIMESTAMP"
+          echo "branch_ref=merge-queue/conflict-$TIMESTAMP" >> "$GITHUB_ENV"
+
+      - name: Notify Merge Fixer on conflict
+        if: steps.resolve.outputs.has_conflicts == 'true'
         env:
           WEBHOOK_URL: ${{ secrets.MODULO_MERGE_FIXER_WEBHOOK_URL }}
           HMAC_SECRET: ${{ secrets.MODULO_MERGE_FIXER_HMAC_SECRET }}
+        shell: bash
         run: |
-          if (-not $env:WEBHOOK_URL) { Write-Host "No webhook URL configured"; exit 0 }
-          $body = @{
-            repository = "${{ github.repository }}"
-            run_id = "${{ github.run_id }}"
-            run_url = "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
-          } | ConvertTo-Json -Compress
-          $ts = [DateTimeOffset]::UtcNow.ToUnixTimeSeconds()
-          $payload = "$ts.$body"
-          $hmac = [System.Security.Cryptography.HMACSHA256]::new([Text.Encoding]::UTF8.GetBytes($env:HMAC_SECRET))
-          $hash = $hmac.ComputeHash([Text.Encoding]::UTF8.GetBytes($payload))
-          $sig = "sha256=" + ($hash | ForEach-Object { $_.ToString("x2") }) -join ''
-          $headers = @{ "Content-Type" = "application/json"; "X-Modulo-Webhook-Secret" = $sig; "X-Modulo-Timestamp" = "$ts" }
-          Invoke-RestMethod -Uri $env:WEBHOOK_URL -Method Post -Body $body -Headers $headers -ContentType "application/json"
-          Write-Host "Modulo merge-fixer notified"
+          if [ -z "$WEBHOOK_URL" ]; then echo "No webhook URL configured - skipping notification"; exit 0; fi
+          TIMESTAMP=$(date +%s)
+          BODY=$(jq -n \
+            --arg repository "${{ github.repository }}" \
+            --arg run_id "${{ github.run_id }}" \
+            --arg phase "merge-conflict" \
+            --arg merged_prs "${{ steps.resolve.outputs.merged_prs }}" \
+            --arg conflict_prs "${{ steps.resolve.outputs.conflict_prs }}" \
+            --arg branch "${{ env.branch_ref }}" \
+            --arg run_url "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}" \
+            '{repository: $repository, run_id: $run_id, phase: $phase, merged_prs: $merged_prs, conflict_prs: $conflict_prs, branch: $branch, run_url: $run_url}')
+          PAYLOAD="${TIMESTAMP}.${BODY}"
+          HMAC=$(echo -n "$PAYLOAD" | openssl dgst -sha256 -hmac "$HMAC_SECRET" | sed 's/^.* //')
+          curl -s -X POST "$WEBHOOK_URL" \
+            -H "Content-Type: application/json" \
+            -H "X-Modulo-Timestamp: ${TIMESTAMP}" \
+            -H "X-Modulo-Webhook-Secret: sha256=${HMAC}" \
+            -d "$BODY"
+          echo "Merge Fixer notified of conflict"
+
+      - name: Fail on conflict
+        if: steps.resolve.outputs.has_conflicts == 'true'
+        shell: bash
+        run: |
+          echo "::error::Merge conflicts detected in PRs: ${{ steps.resolve.outputs.conflict_prs }}"
+          echo "::error::Branch preserved for agent resolution."
+          exit 1
+
+      # ── CI stage — only runs if all PRs merged cleanly ──────────────
+
+      - name: Run CI on merge-queue
+        id: ci
+        if: steps.resolve.outputs.has_conflicts == 'false'
+        shell: bash
+        run: |
+          set -e
+
+          echo "=== Backend Lint ==="
+          cd backend
+          uv run --no-sync ruff check . || exit 1
+          uv run --no-sync mypy src/modulo/ || exit 1
+          uv run --no-sync bandit -r src/modulo/ -ll || exit 1
+          cd ..
+          echo "Backend lint passed."
+
+          echo "=== Backend Unit Tests ==="
+          cd backend
+          uv run --no-sync pytest tests/unit/ -x -q --timeout=120 || exit 1
+          cd ..
+          echo "Backend unit tests passed."
+
+          echo "=== Frontend ==="
+          cd frontend
+          npm ci 2>&1 || exit 1
+          npm run lint -- --quiet 2>&1 || exit 1
+          npm run type-check 2>&1 || exit 1
+          npm run test:unit 2>&1 || exit 1
+          npm run build 2>&1 || exit 1
+          cd ..
+          echo "Frontend checks passed."
+
+          echo "result=passed" >> "$GITHUB_OUTPUT"
+          echo ""
+          echo "============================================================"
+          echo "ALL CHECKS PASSED ON MERGE-QUEUE"
+          echo "============================================================"
+
+      - name: Preserve merge-queue branch on CI failure
+        if: failure() && steps.resolve.outputs.has_conflicts == 'false'
+        shell: bash
+        run: |
+          TIMESTAMP=$(date +%s)
+          git push origin merge-queue:refs/heads/merge-queue/failed-$TIMESTAMP 2>&1
+          echo "Branch preserved at merge-queue/failed-$TIMESTAMP"
+          echo "branch_ref=merge-queue/failed-$TIMESTAMP" >> "$GITHUB_ENV"
+
+      - name: Notify Fix Agent on CI failure
+        if: failure() && steps.resolve.outputs.has_conflicts == 'false'
+        env:
+          WEBHOOK_URL: ${{ secrets.MODULO_MERGE_FIXER_WEBHOOK_URL }}
+          HMAC_SECRET: ${{ secrets.MODULO_MERGE_FIXER_HMAC_SECRET }}
+        shell: bash
+        run: |
+          if [ -z "$WEBHOOK_URL" ]; then echo "No webhook URL configured - skipping notification"; exit 0; fi
+          TIMESTAMP=$(date +%s)
+          BODY=$(jq -n \
+            --arg repository "${{ github.repository }}" \
+            --arg run_id "${{ github.run_id }}" \
+            --arg phase "ci-failure" \
+            --arg merged_prs "${{ steps.resolve.outputs.merged_prs }}" \
+            --arg branch "${{ env.branch_ref }}" \
+            --arg run_url "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}" \
+            '{repository: $repository, run_id: $run_id, phase: $phase, merged_prs: $merged_prs, branch: $branch, run_url: $run_url}')
+          PAYLOAD="${TIMESTAMP}.${BODY}"
+          HMAC=$(echo -n "$PAYLOAD" | openssl dgst -sha256 -hmac "$HMAC_SECRET" | sed 's/^.* //')
+          curl -s -X POST "$WEBHOOK_URL" \
+            -H "Content-Type: application/json" \
+            -H "X-Modulo-Timestamp: ${TIMESTAMP}" \
+            -H "X-Modulo-Webhook-Secret: sha256=${HMAC}" \
+            -d "$BODY"
+          echo "Fix Agent notified of CI failure"
+
+      - name: Fail on CI failure
+        if: failure() && steps.resolve.outputs.has_conflicts == 'false'
+        shell: bash
+        run: |
+          echo "::error::CI failed on merge-queue branch."
+          echo "::error::Branch preserved for agent investigation."
+          exit 1
+
+      # ── Merge stage — only if CI passed ─────────────────────────────
+
+      - name: Merge merge-queue into main
+        if: success() && steps.resolve.outputs.has_conflicts == 'false'
+        run: |
+          git checkout main
+          git merge merge-queue --ff-only
+          echo "Fast-forward merge complete."
+
+      - name: Push to main
+        if: success() && steps.resolve.outputs.has_conflicts == 'false'
+        run: |
+          git push origin main
+          echo "Pushed to main."
+
+      - name: Delete remote merge-queue branch
+        if: success() && steps.resolve.outputs.has_conflicts == 'false'
+        run: |
+          git push origin --delete merge-queue 2>/dev/null || true
+          echo "Cleaned up merge-queue branch."
