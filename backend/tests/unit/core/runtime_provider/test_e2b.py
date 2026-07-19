@@ -492,7 +492,7 @@ async def test_create_workspace_sandbox_constructor_raises() -> None:
     )
     with (
         patch("e2b.AsyncSandbox") as mock_cls,
-        pytest.raises(Exception),
+        pytest.raises(RuntimeError),
     ):
         mock_cls.create = AsyncMock(side_effect=RuntimeError("E2B API unavailable"))
         await provider.create_workspace(spec)
