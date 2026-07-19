@@ -1,4 +1,4 @@
-﻿<template>
+<template>
   <FeatureGate feature-name="admin_housekeeping" required-tier="community" show-disabled>
     <div class="page-wide">
       <PageHeader
@@ -12,7 +12,7 @@
             :disabled="loading"
             @click="scan"
           >
-            {{ loading ? 'Scanningâ€¦' : 'Refresh Scan' }}
+            {{ loading ? 'Scanning…' : 'Refresh Scan' }}
           </Button>
         </template>
       </PageHeader>
@@ -145,7 +145,7 @@
               data-testid="hk-confirm-cleanup"
               @click="doCleanup"
             >
-              {{ cleaningUp ? 'Cleaning upâ€¦' : `Delete ${selectedCount} items` }}
+              {{ cleaningUp ? 'Cleaning up…' : `Delete ${selectedCount} items` }}
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -321,7 +321,7 @@ async function doCleanup() {
   try {
     const items: CleanupItem[] = allCandidates.value
       .filter(c => selectedIds.value.has(c.id))
-      .map(c => ({ id: c.id, entity_type: c.entity_type || c.category }))
+      .map(c => ({ id: c.id, entity_type: c.category }))
 
     await post<CleanupResponse>('/api/v1/admin/housekeeping/cleanup', { items })
     showConfirm.value = false
