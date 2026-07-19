@@ -89,7 +89,7 @@ jobs:
         shell: pwsh
         run: |
           $expectedSha = "${{ needs.check-context.outputs.head_sha }}".Substring(0, 7)
-          $info = curl.exe -s -m 10 "https://staging.modulo.run/api/v1/deployment" 2>$null
+          $info = curl -s -m 10 "https://staging.modulo.run/api/v1/deployment" 2>$null
           if (-not $info) { Write-Host "No deployment info"; exit 1 }
           $deployInfo = $info | ConvertFrom-Json
           $deployedSha = if ($deployInfo.git_sha) { $deployInfo.git_sha.Substring(0, 7) } else { "?" }
@@ -124,7 +124,7 @@ jobs:
           Write-Host "Waiting for staging.modulo.run ..."
           for ($i=0; $i -lt 60; $i++) {
             try {
-              $r = curl.exe -s -f "https://staging.modulo.run/healthz" 2>$null
+              $r = curl -s -f "https://staging.modulo.run/healthz" 2>$null
               if ($LASTEXITCODE -eq 0) { Write-Host "Staging ready after ${i}s"; exit 0 }
             } catch {}
             Start-Sleep -Seconds 5
@@ -209,7 +209,7 @@ jobs:
         shell: pwsh
         run: |
           $expectedSha = "${{ needs.check-context.outputs.head_sha }}".Substring(0, 7)
-          $info = curl.exe -s -m 10 "https://app.modulo.run/api/v1/deployment" 2>$null
+          $info = curl -s -m 10 "https://app.modulo.run/api/v1/deployment" 2>$null
           if (-not $info) { Write-Host "No deployment info"; exit 1 }
           $deployInfo = $info | ConvertFrom-Json
           $deployedSha = if ($deployInfo.git_sha) { $deployInfo.git_sha.Substring(0, 7) } else { "?" }
