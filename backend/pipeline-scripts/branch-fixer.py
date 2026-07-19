@@ -98,7 +98,52 @@ def commit_and_push_fixes(repo_path, local_ref, repo_full_name, token):
     run_git(["remote", "set-url", "origin", get_git_url(token, owner, repo)], cwd=repo_path)
     run_git(["push", "origin", f"{local_ref}:{local_ref}"], cwd=repo_path, timeout=120)
 
+    # If this is a merge-queue failed branch, also push fixes to main
+    # so the next merge queue run starts from a clean base.
+    if local_ref.startswith("merge-queue/"):
+        _push_fixes_to_main(repo_path, commit_sha, local_ref, repo_full_name, token)
+
     return commit_sha
+
+
+def _push_fixes_to_main(repo_path, fix_commit_sha, local_ref, repo_full_name, token):
+    """Cherry-pick the fix commit from a merge-queue failed branch onto main and push."""
+    owner, repo = repo_full_name.split("/")
+    run_git(["remote", "set-url", "origin", get_git_url(token, owner, repo)], cwd=repo_path)
+
+    # Fetch latest main
+    r = run_git(["fetch", "origin", "main"], cwd=repo_path, timeout=60)
+    if r.returncode != 0:
+        print(f"branch-fixer: WARN could not fetch origin/main: {r.stderr[:200]}")
+        return
+
+    # Create a temp branch from origin/main for cherry-pick
+    r = run_git(["checkout", "-B", "push-to-main", "origin/main"], cwd=repo_path)
+    if r.returncode != 0:
+        print(f"branch-fixer: WARN could not checkout origin/main: {r.stderr[:200]}")
+        return
+
+    # Cherry-pick the fix commit
+    r = run_git(["cherry-pick", "--keep-redundant-commits", fix_commit_sha], cwd=repo_path, timeout=60)
+    if r.returncode != 0:
+        print(
+            f"branch-fixer: WARN cherry-pick to main failed (conflicts?). "
+            f"Fixes pushed to {local_ref} only. stderr: {r.stderr[:300]}"
+        )
+        run_git(["cherry-pick", "--abort"], cwd=repo_path)
+        run_git(["checkout", "-f", local_ref], cwd=repo_path)
+        return
+
+    # Push to main
+    r = run_git(["push", "origin", "push-to-main:main"], cwd=repo_path, timeout=120)
+    if r.returncode != 0:
+        print(f"branch-fixer: WARN push to main failed: {r.stderr[:200]}")
+    else:
+        print(f"branch-fixer: pushed fix commit {fix_commit_sha[:12]} to main")
+
+    # Clean up temp branch and return to the failed branch
+    run_git(["branch", "-D", "push-to-main"], cwd=repo_path)
+    run_git(["checkout", "-f", local_ref], cwd=repo_path)
 
 
 def post_fix_comment(repo_full_name, pr_number, commit_sha, token):
