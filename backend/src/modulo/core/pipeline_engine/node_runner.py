@@ -68,6 +68,10 @@ _log = logging.getLogger(__name__)
 
 _is_truthy = bool
 
+_MAX_ARTIFACT_LOG = 102400
+_MAX_OTEL_LOG_ATTR = 32768
+_MAX_ERROR_MSG = 500
+
 
 def _evaluate_eval_condition(score: float, threshold: float, operator: str) -> bool:
     """Evaluate an eval-reference condition using the given operator.
@@ -611,11 +615,13 @@ def make_sandbox_agent_fn(
 
     @cancellable_node(timeout=timeout or sandbox_timeout, role="sandbox_agent")
     async def _sandbox_agent(state: dict[str, Any]) -> dict[str, Any]:
-        import json as _json
+        import base64 as _b64
+        import os
         import time as _time
 
         from e2b import AsyncSandbox  # type: ignore[import-untyped]
         from jinja2.sandbox import SandboxedEnvironment
+        from opentelemetry import trace as _otel_trace
 
         run_context: dict[str, Any] = state.get("run_context") or {}
         raw_input: Any = run_context.get("input", {})
@@ -639,13 +645,14 @@ def make_sandbox_agent_fn(
         pipeline_id: str = str(state.get("_pipeline_id", ""))
         org_id: str = str(state.get("_org_id", ""))
 
+        _stdout_len = 0
+        _stderr_len = 0
+
         try:
             sandbox = await AsyncSandbox.create(template=template_id)
 
             for path, content in context_files.items():
                 if path.endswith(".b64"):
-                    import base64 as _b64
-
                     content = _b64.b64decode(content).decode()
                     path = path[:-4]
                 await sandbox.files.write(path, content)
@@ -658,26 +665,44 @@ def make_sandbox_agent_fn(
                     "MODULO_RUN_ID": run_id,
                     "MODULO_PIPELINE_ID": pipeline_id,
                     "MODULO_ORG_ID": org_id,
-                    "APP_MODULO_OPENCODE_API_KEY": __import__("os").environ.get("APP_MODULO_OPENCODE_API_KEY", ""),
-                    "GITHUB_TOKEN": __import__("os").environ.get("GITHUB_DOGFOOD_PAT_ALL", "")
-                    or __import__("os").environ.get("GITHUB_DOGFOOD_PAT_WR", "")
-                    or __import__("os").environ.get("GITHUB_TOKEN", ""),
+                    "APP_MODULO_OPENCODE_API_KEY": os.environ.get("APP_MODULO_OPENCODE_API_KEY", ""),
+                    "GITHUB_TOKEN": os.environ.get("GITHUB_DOGFOOD_PAT_ALL", "")
+                    or os.environ.get("GITHUB_DOGFOOD_PAT_WR", "")
+                    or os.environ.get("GITHUB_TOKEN", ""),
                     **env_vars_extra,
                 },
             )
 
             elapsed = _time.monotonic() - start_time
             exit_code: int = getattr(cmd_result, "exit_code", -1)
+            agent_stdout_raw: str = getattr(cmd_result, "stdout", "") or ""
+            agent_stderr_raw: str = getattr(cmd_result, "stderr", "") or ""
+            _stdout_len = len(agent_stdout_raw)
+            _stderr_len = len(agent_stderr_raw)
+            agent_stdout = agent_stdout_raw[:_MAX_ARTIFACT_LOG]
+            agent_stderr = agent_stderr_raw[:_MAX_ARTIFACT_LOG]
 
             raw_output: str = ""
             output_json: Any = None
             try:
                 raw_output = await sandbox.files.read("/home/user/output.json")
-                output_json = _json.loads(raw_output)
+                output_json = json.loads(raw_output)
             except Exception:
                 _log.info(
                     "sandbox_agent.no_output_json",
                     extra={"node_id": node_id, "exit_code": exit_code},
+                )
+
+            _span = _otel_trace.get_current_span()
+            if _span.is_recording():
+                _span.add_event(
+                    "sandbox.agent.output",
+                    {
+                        "stdout": agent_stdout[:_MAX_OTEL_LOG_ATTR],
+                        "stderr": agent_stderr[:_MAX_OTEL_LOG_ATTR],
+                        "stdout_length": _stdout_len,
+                        "stderr_length": _stderr_len,
+                    },
                 )
 
             if isinstance(output_schema_json, dict) and isinstance(output_json, dict):
@@ -700,6 +725,8 @@ def make_sandbox_agent_fn(
                                     "exit_code": exit_code,
                                     "wall_clock_time_ms": int(elapsed * 1000),
                                     "output_json": output_json,
+                                    "agent_stdout": agent_stdout,
+                                    "agent_stderr": agent_stderr,
                                 },
                             }
                         ],
@@ -707,6 +734,8 @@ def make_sandbox_agent_fn(
                             "status": "failed",
                             "summary": "Output failed schema validation",
                             "wall_clock_time_ms": int(elapsed * 1000),
+                            "agent_stdout": agent_stdout,
+                            "agent_stderr": agent_stderr,
                         },
                     }
 
@@ -733,6 +762,8 @@ def make_sandbox_agent_fn(
                             "exit_code": exit_code,
                             "wall_clock_time_ms": int(elapsed * 1000),
                             "output_json": output_json,
+                            "agent_stdout": agent_stdout,
+                            "agent_stderr": agent_stderr,
                         },
                     }
                 ],
@@ -740,6 +771,8 @@ def make_sandbox_agent_fn(
                     "status": status,
                     "summary": result_summary,
                     "wall_clock_time_ms": int(elapsed * 1000),
+                    "agent_stdout": agent_stdout,
+                    "agent_stderr": agent_stderr,
                 },
             }
 
@@ -750,10 +783,8 @@ def make_sandbox_agent_fn(
             import traceback as _tb
 
             _exc_type = type(_exc).__name__
-            _exc_msg = str(_exc)[:500]
+            _exc_msg = str(_exc)[:_MAX_ERROR_MSG]
             _exc_tb = _tb.format_exc()
-            _log.warning(f"SANDBOX_AGENT_ERROR type={_exc_type} msg={_exc_msg}")
-            _log.warning(f"SANDBOX_AGENT_TRACEBACK:\n{_exc_tb}")
             _log.exception(
                 "sandbox_agent.execution_failed",
                 extra={
@@ -763,6 +794,19 @@ def make_sandbox_agent_fn(
                     "exc_msg": _exc_msg,
                 },
             )
+            _span = _otel_trace.get_current_span()
+            if _span.is_recording():
+                _span.add_event(
+                    "sandbox.agent.output",
+                    {
+                        "stdout": locals().get("agent_stdout", "")[:_MAX_OTEL_LOG_ATTR],
+                        "stderr": locals().get("agent_stderr", "")[:_MAX_OTEL_LOG_ATTR],
+                        "stdout_length": _stdout_len,
+                        "stderr_length": _stderr_len,
+                    },
+                )
+            _exc_stdout = locals().get("agent_stdout", "")
+            _exc_stderr = locals().get("agent_stderr", "")
             return {
                 "artifacts": [
                     {
@@ -775,6 +819,8 @@ def make_sandbox_agent_fn(
                             "error_message": _exc_msg,
                             "exit_code": -1,
                             "wall_clock_time_ms": int(elapsed * 1000),
+                            "agent_stdout": _exc_stdout,
+                            "agent_stderr": _exc_stderr,
                         },
                     }
                 ],
@@ -782,6 +828,8 @@ def make_sandbox_agent_fn(
                     "status": "failed",
                     "summary": "Sandbox agent execution failed",
                     "wall_clock_time_ms": int(elapsed * 1000),
+                    "agent_stdout": _exc_stdout,
+                    "agent_stderr": _exc_stderr,
                 },
             }
         finally:
