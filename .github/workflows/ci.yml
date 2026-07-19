@@ -150,6 +150,9 @@ jobs:
 
   # ── Full jobs — run ONLY on push (not PRs) ─────────────────────────────────
 
+  # DISABLED for PRs: expensive CI (runs long, uses Docker/build minutes).
+  # Runs in merge queue (merge-prs.yml) instead. Trigger manually via
+  # workflow_dispatch when needed.
   backend-integration:
     name: Integration tests
     if: false
@@ -210,6 +213,9 @@ jobs:
           docker rm -f modulo-ci-pg 2>/dev/null || true
           docker rm -f modulo-ci-redis 2>/dev/null || true
 
+  # DISABLED for PRs: expensive CI (runs long, uses Docker/build minutes).
+  # Runs in merge queue (merge-prs.yml) instead. Trigger manually via
+  # workflow_dispatch when needed.
   bdd-e2e:
     name: BDD / E2E Tests
     if: false
@@ -313,6 +319,9 @@ jobs:
           docker rm -f modulo-ci-pg 2>/dev/null || true
           docker rm -f modulo-ci-redis 2>/dev/null || true
 
+  # DISABLED for PRs: expensive CI (runs long, uses Docker/build minutes).
+  # Runs in merge queue (merge-prs.yml) instead. Trigger manually via
+  # workflow_dispatch when needed.
   docker-build:
     name: Docker build and scan
     if: false
@@ -410,6 +419,9 @@ jobs:
           echo "::error::One or more container images contain critical vulnerabilities."
           exit 1
 
+  # DISABLED for PRs: expensive CI (runs long, uses Docker/build minutes).
+  # Runs in merge queue (merge-prs.yml) instead. Trigger manually via
+  # workflow_dispatch when needed.
   security-audit:
     name: Security audit
     if: false
@@ -448,6 +460,9 @@ jobs:
 
   # ── Failure notifications ──────────────────────────────────────────────────
 
+  # DISABLED for PRs: expensive CI (runs long, uses Docker/build minutes).
+  # Runs in merge queue (merge-prs.yml) instead. Trigger manually via
+  # workflow_dispatch when needed.
   notify-merge-group-failure:
     name: Notify Modulo fixer — queue CI failure
     if: false
