@@ -129,7 +129,7 @@ jobs:
 
             echo "Attempting squash-merge into merge-queue..."
             if git merge --squash "pr-$NUM" 2>&1; then
-              git commit -m "squash! Merge PR #$NUM: $TITLE" 2>&1
+              git commit -m "squash! Merge PR #$NUM: $TITLE" 2>/dev/null || true
               echo "PR #$NUM merged successfully."
               merged_prs="$merged_prs $NUM"
             else

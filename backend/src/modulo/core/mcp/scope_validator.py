@@ -50,7 +50,12 @@ _TOOL_SCOPE_REQUIREMENTS: dict[str, str] = {
     "list_eval_definitions": "runner",
     "list_triggers": "runner",
     "list_housekeeping": "runner",
-    "perform_housekeeping": "admin",
+    "perform_housekeeping": "operator",
+    "create_connector": "operator",
+    "create_trigger": "operator",
+    "delete_pipeline": "operator",
+    "create_agent": "operator",
+    "infer_schema": "operator",
 }
 
 TOOL_SCOPE_REQUIREMENTS: types.MappingProxyType[str, str] = types.MappingProxyType(_TOOL_SCOPE_REQUIREMENTS)

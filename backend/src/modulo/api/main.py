@@ -416,6 +416,7 @@ async def _seed_demo_data(settings: Settings) -> None:
         if existing_stages.scalar_one_or_none() is None:
             stage = Stage(
                 organisation_id=org_id,
+                account_id=demo_account.id,
                 name="Development",
                 description="Development stage for testing pipelines",
                 position=0,
@@ -714,6 +715,9 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
         from modulo.api.routes.health import set_worker_ref as set_health_bg_worker
 
         set_health_bg_worker(_bg_worker)
+        from modulo.core.in_process_scheduler import set_bg_worker as set_scheduler_bg_worker
+
+        set_scheduler_bg_worker(_bg_worker)
     except Exception:
         logger.warning("startup.background_worker_init_failed", exc_info=True)
 
