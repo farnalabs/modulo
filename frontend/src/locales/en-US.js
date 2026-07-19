@@ -562,6 +562,7 @@ export default {
       "status": "Status",
       "trigger": "Trigger",
       "created": "Created",
+      "last_run": "Last Run",
       "cost": "Cost",
       "no_runs_found": "No runs found",
     },
