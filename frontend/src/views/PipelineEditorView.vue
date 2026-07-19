@@ -234,6 +234,16 @@
             <div v-if="edgeProps.data?.hitl_gate_config" class="absolute -translate-y-4 translate-x-2">
               <span class="rounded bg-warning/20 px-1.5 py-0.5 text-[10px] font-medium text-warning">HITL</span>
             </div>
+            <div v-if="edgeProps.data?.edge_type === 'loop'" class="absolute translate-y-4 translate-x-2">
+              <span class="rounded bg-blue-100 px-1.5 py-0.5 text-[10px] font-medium text-blue-600 dark:bg-blue-900 dark:text-blue-300">
+                Loop{{ edgeProps.data?.max_iterations ? ` (${edgeProps.data.max_iterations})` : '' }}
+              </span>
+            </div>
+            <div v-if="edgeProps.data?.edge_type === 'llm'" class="absolute translate-y-4 translate-x-2">
+              <span class="rounded bg-purple-100 px-1.5 py-0.5 text-[10px] font-medium text-purple-600 dark:bg-purple-900 dark:text-purple-300">
+                LLM{{ edgeProps.data?.routing_label ? `: ${edgeProps.data.routing_label}` : '' }}
+              </span>
+            </div>
           </template>
         </VueFlow>
       </div>
@@ -499,6 +509,8 @@
                   <SelectItem value="normal">Normal</SelectItem>
                   <SelectItem value="reject">Reject</SelectItem>
                   <SelectItem value="conditional">Conditional</SelectItem>
+                  <SelectItem value="loop">Loop</SelectItem>
+                  <SelectItem value="llm">LLM Routing</SelectItem>
                 </SelectContent>
               </Select>
             </dd>
@@ -510,8 +522,32 @@
                 v-model="edgeForm.condition_expression"
                 class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm font-mono"
                 placeholder="JMESPath expression (e.g. score > `0.5`)"
-                :disabled="edgeForm.edge_type !== 'conditional'"
+                :disabled="edgeForm.edge_type !== 'conditional' && edgeForm.edge_type !== 'loop'"
               />
+            </dd>
+          </div>
+          <div v-if="edgeForm.edge_type === 'loop'">
+            <dt class="text-muted-foreground">Max Iterations</dt>
+            <dd>
+              <input
+                v-model.number="edgeForm.max_iterations"
+                type="number"
+                min="0"
+                class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm"
+                placeholder="0 = unlimited (RunawayGuard applies)"
+              />
+              <p class="mt-1 text-xs text-muted-foreground">Maximum number of times this loop can repeat before exiting. 0 means no limit.</p>
+            </dd>
+          </div>
+          <div v-if="edgeForm.edge_type === 'llm'">
+            <dt class="text-muted-foreground">Routing Label</dt>
+            <dd>
+              <input
+                v-model="edgeForm.routing_label"
+                class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm font-mono"
+                placeholder="e.g. retry, escalate, complete"
+              />
+              <p class="mt-1 text-xs text-muted-foreground">The LLM uses this label to select this path. Must be unique among outgoing edges.</p>
             </dd>
           </div>
         </dl>
@@ -949,6 +985,8 @@ const folderPath = computed(() => {
 const defaultEdgeForm = {
   edge_type: 'normal',
   condition_expression: '',
+  max_iterations: 0,
+  routing_label: '',
   hitl_enabled: false,
   label: '',
   description: '',
@@ -1121,15 +1159,25 @@ function convertBackendNode(n: any): any {
 }
 
 function convertBackendEdge(e: any, i: number): any {
+  const isLoop = e.edge_type === 'loop'
+  const isLlm = e.edge_type === 'llm'
   return {
     id: e.id || `edge-${i}`,
     source: e.source_node_id,
     target: e.target_node_id,
     type: 'smoothstep',
+    animated: isLoop,
+    style: isLoop
+      ? { stroke: '#3b82f6', strokeDasharray: '5,5' }
+      : isLlm
+        ? { stroke: '#8b5cf6' }
+        : { stroke: '#888' },
     data: {
       hitl_gate_config: e.hitl_gate_config || null,
       edge_type: e.edge_type || 'normal',
       condition_expression: e.condition_expression || null,
+      max_iterations: e.max_iterations || 0,
+      routing_label: e.routing_label || '',
     },
   }
 }
@@ -1218,6 +1266,8 @@ function onEdgeClick(event: any) {
 function populateEdgeForm(edge: any) {
   edgeForm.edge_type = edge.edge_type || 'normal'
   edgeForm.condition_expression = edge.condition_expression || ''
+  edgeForm.max_iterations = edge.max_iterations || 0
+  edgeForm.routing_label = edge.routing_label || ''
   const hc = edge.hitl_gate_config
   if (hc) {
     edgeForm.hitl_enabled = true
@@ -1285,6 +1335,8 @@ async function saveEdgeConfig() {
         target_node_id: e.target_node_id,
         edge_type: edgeForm.edge_type,
         condition_expression: edgeForm.condition_expression || null,
+        max_iterations: edgeForm.edge_type === 'loop' ? (edgeForm.max_iterations || 0) : undefined,
+        routing_label: edgeForm.edge_type === 'llm' ? (edgeForm.routing_label || undefined) : undefined,
         hitl_gate_config: buildHitlGateConfig(),
       }
     }
@@ -1584,6 +1636,8 @@ async function saveGraph() {
           target_node_id: e.target_node_id,
           edge_type: e.edge_type || 'normal',
           condition_expression: e.condition_expression || null,
+          max_iterations: e.edge_type === 'loop' ? (e.max_iterations || 0) : undefined,
+          routing_label: e.edge_type === 'llm' ? (e.routing_label || undefined) : undefined,
           hitl_gate_config: e.hitl_gate_config || null,
         })),
       },
