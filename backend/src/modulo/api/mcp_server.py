@@ -2180,7 +2180,7 @@ async def perform_housekeeping(items: list[dict[str, str]]) -> dict[str, Any]:
                 try:
                     async with s.begin_nested():
                         for eid in ids:
-                            obj = await s.get(model_cls, eid)
+                            obj = await s.get(model_cls, eid)  # type: ignore[func-returns-value]
                             if obj is not None:
                                 await s.delete(obj)
                                 deleted_count += 1

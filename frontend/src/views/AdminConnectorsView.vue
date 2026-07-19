@@ -312,8 +312,10 @@ const connectors = ref<ConnectorItem[]>([])
 const connectorTypes = ref<{id: string, display_name: string}[]>([])
 
 async function loadConnectorTypes() {
-  const { data } = await api.GET('/api/v1/connectors/types') as any
-  if (resp.data) connectorTypes.value = resp.data.items
+  const resp = await api.GET('/api/v1/connectors/types') as any
+  if (resp.data?.items) {
+    connectorTypes.value = resp.data.items as {id: string, display_name: string}[]
+  }
 }
 
 watch(data, response => {

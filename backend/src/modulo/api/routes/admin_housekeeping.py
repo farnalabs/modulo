@@ -140,7 +140,7 @@ async def perform_cleanup(
                     async with session.begin_nested():
                         for eid in ids:
                             try:
-                                obj = await session.get(model_cls, eid)
+                                obj = await session.get(model_cls, eid)  # type: ignore[func-returns-value]
                                 if obj is not None:
                                     await session.delete(obj)
                                     deleted_count += 1
