@@ -252,3 +252,15 @@ The Remy in-memory event registries (`_pending_ui_results`, `_pending_permission
 ### Route auth: admin-only routes must use `get_current_user`, not `get_current_tenant_user`
 
 - When a route checks admin permissions internally (via `_require_admin` or `is_system_admin`), use `Depends(get_current_user)` for the auth dependency â€” NOT `Depends(get_current_tenant_user)`. The tenant user dependency requires `organisation_id` and `org_role` to be non-None, which system admins may not have (they can be admin without org membership). Using `get_current_tenant_user` causes a 403 "Organisation membership required" before the admin check even runs. The `_require_admin` guard is the sole gate needed for system-admin routes. Found in the feature-flag org-override endpoints.
+
+### Background DB engines must mirror main engine's connect_args
+
+- When creating a secondary AsyncEngine for background/scheduler tasks via create_async_engine(url), always pass the same connect_args as the main engine in session.py:_build_engine(). The main engine sets {timeout: 10, ssl: False} for Postgres — without these, the secondary engine may silently fail to connect on deployed infrastructure (Fly Postgres). Found in cron_scheduler.py:_get_engine() where a bare engine was created without any connect_args, causing the in-process cron scheduler to fail silently for its entire lifetime.
+
+### Fire-and-forget asyncio tasks must track exceptions
+
+- Storing background asyncio.Task objects in a set with only an add_done_callback(discard) silently swallows all exceptions — failed tasks are removed from the set with no visibility. Always add a callback that calls task.exception() to surface failures, or wrap the task body in try/except with print(f'...', flush=True) to stdout (which Fly logs renders). Without this, background loops (cron scheduler, polling scheduler) can fail silently for the entire lifetime of the app with no indication in fly logs.
+
+### Background workers should accept an optional session factory
+
+- When a background task function needs DB access, accept an optional async_sessionmaker[AsyncSession] parameter from callers instead of creating its own engine from settings via _get_engine(). This prevents engine configuration drift between the main app and background workers, and ensures the background worker uses the same pool and connection settings that the app already verified works. The in-process scheduler (in_process_scheduler.py) already has a proven factory from the main db_engine — pass it through to fire_cron_trigger() rather than letting it create a separate engine.
