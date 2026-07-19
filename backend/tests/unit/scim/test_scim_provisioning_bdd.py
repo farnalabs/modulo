@@ -151,8 +151,6 @@ def _clear_overrides() -> object:
 
 
 class TestCreateScimUser:
-    """POST /scim/v2/Users — happy path."""
-
     def test_creates_user_and_returns_201(self, client: TestClient) -> None:
         mock_user = _make_mock_user()
 
@@ -170,7 +168,7 @@ class TestCreateScimUser:
         assert "urn:ietf:params:scim:schemas:core:2.0:User" in body["schemas"]
         assert body["userName"] == "jane@example.com"
         assert "id" in body
-        uuid.UUID(body["id"])  # must be valid UUID
+        uuid.UUID(body["id"])
 
 
 # ===========================================================================
@@ -179,8 +177,6 @@ class TestCreateScimUser:
 
 
 class TestGetScimUser:
-    """GET /scim/v2/Users/{user_id} — happy path."""
-
     def test_returns_user_200(self, client: TestClient) -> None:
         mock_user = _make_mock_user()
 
@@ -213,8 +209,6 @@ class TestGetScimUser:
 
 
 class TestReplaceScimUser:
-    """PUT /scim/v2/Users/{user_id} — happy path."""
-
     def test_replaces_user_returns_200(self, client: TestClient) -> None:
         updated = _make_mock_user(email="jane.updated@example.com")
 
@@ -238,8 +232,6 @@ class TestReplaceScimUser:
 
 
 class TestDeleteScimUser:
-    """DELETE /scim/v2/Users/{user_id} — happy path."""
-
     def test_deletes_user_returns_204(self, client: TestClient) -> None:
         with (
             patch("modulo.api.routes.scim.scim_delete_user_by_id", return_value=MagicMock()),
@@ -267,8 +259,6 @@ class TestDeleteScimUser:
 
 
 class TestJitProvisioning:
-    """JIT — user created with auth_provider=scim, no password."""
-
     def test_jit_creates_user_with_scim_provider(self, client: TestClient) -> None:
         mock_user = _make_mock_user(email="newcomer@example.com", auth_provider="scim", password_hash=None)
 
@@ -325,8 +315,6 @@ class TestJitProvisioning:
 
 
 class TestDeprovisionScimUser:
-    """PATCH /scim/v2/Users/{user_id} — deactivate user."""
-
     def test_deactivate_returns_200(self, client: TestClient) -> None:
         pre_user = _make_mock_user(active=True)
         deactivated = _make_mock_user(active=False)
@@ -366,8 +354,6 @@ class TestDeprovisionScimUser:
 
 
 class TestCreateScimGroup:
-    """POST /scim/v2/Groups — happy path."""
-
     def test_creates_group_returns_201(self, client: TestClient) -> None:
         mock_team = _make_mock_team()
 
@@ -432,8 +418,6 @@ class TestCreateScimGroup:
 
 
 class TestTeamSync:
-    """PATCH /scim/v2/Groups — add/remove members."""
-
     MOCK_TEAM = None
 
     @classmethod
@@ -513,31 +497,29 @@ class TestTeamSync:
 
 
 class TestScimAuth:
-    """Authentication edge cases."""
+    """Authentication edge cases — parametrized."""
 
-    def test_no_token_returns_401(self) -> None:
+    @pytest.mark.parametrize(
+        ("token_value", "expected_status"),
+        [
+            pytest.param("", 401, id="no_token_returns_401"),
+            pytest.param("wrong-token", 401, id="invalid_token_returns_401"),
+        ],
+    )
+    def test_auth_returns_401(self, token_value: str, expected_status: int) -> None:
         app.dependency_overrides[get_settings] = _make_settings
         app.dependency_overrides[get_db_session] = lambda: _make_mock_session()
         app.dependency_overrides[_get_engine] = lambda: MagicMock()
-        headers = {"X-CSRF-Token": "test-csrf-token"}
-        test_client = TestClient(app)
-        test_client.cookies.set("XSRF-TOKEN", "test-csrf-token")
-        resp = test_client.post(
-            "/scim/v2/Users",
-            json=_USER_CREATE_BODY,
-            headers=headers,
-        )
+        headers = {"Authorization": f"Bearer {token_value}"} if token_value else {}
+        if not token_value:
+            headers = {"X-CSRF-Token": "test-csrf-token"}
+            test_client = TestClient(app)
+            test_client.cookies.set("XSRF-TOKEN", "test-csrf-token")
+            resp = test_client.post("/scim/v2/Users", json=_USER_CREATE_BODY, headers=headers)
+        else:
+            resp = TestClient(app).post("/scim/v2/Users", json=_USER_CREATE_BODY, headers=headers)
         app.dependency_overrides.clear()
-        assert resp.status_code == 401
-
-    def test_invalid_token_returns_401(self) -> None:
-        app.dependency_overrides[get_settings] = _make_settings
-        app.dependency_overrides[get_db_session] = lambda: _make_mock_session()
-        app.dependency_overrides[_get_engine] = lambda: MagicMock()
-        headers = {"Authorization": "Bearer wrong-token"}
-        resp = TestClient(app).post("/scim/v2/Users", json=_USER_CREATE_BODY, headers=headers)
-        app.dependency_overrides.clear()
-        assert resp.status_code == 401
+        assert resp.status_code == expected_status
 
     def test_missing_scim_token_setting_returns_501(self) -> None:
         settings = Settings(
@@ -563,41 +545,59 @@ class TestScimAuth:
 
 
 class TestLicenseGate:
-    """Team license gating for SCIM endpoints."""
+    """Team license gating for SCIM endpoints — parametrized."""
 
-    def test_scim_blocked_without_team_license(self) -> None:
-        app.dependency_overrides[get_settings] = _make_no_license_settings
-        app.dependency_overrides[get_db_session] = lambda: _make_mock_session()
-        app.dependency_overrides[get_scim_principal] = lambda: ScimPrincipal(organisation_id=_ORG_ID)
-        app.dependency_overrides[get_scim_plan_context] = CommunityTier
-        resp = TestClient(app).get("/scim/v2/Users", headers={"Authorization": f"Bearer {_SCIM_TOKEN}"})
-        app.dependency_overrides.clear()
-        assert resp.status_code == 402
-
-    def test_scim_allowed_with_team_license(self) -> None:
-        mock_user_list = ([_make_mock_user()], 1)
-
-        app.dependency_overrides[get_settings] = _make_settings
+    @pytest.mark.parametrize(
+        ("settings_factory", "plan_context", "expected_status", "mock_list", "endpoint"),
+        [
+            pytest.param(
+                _make_no_license_settings,
+                CommunityTier,
+                402,
+                None,
+                lambda c: c.get("/scim/v2/Users", headers={"Authorization": f"Bearer {_SCIM_TOKEN}"}),
+                id="scim_blocked_without_team_license",
+            ),
+            pytest.param(
+                _make_settings,
+                _team_plan_context,
+                200,
+                ([_make_mock_user()], 1),
+                lambda c: c.get("/scim/v2/Users", headers={"Authorization": f"Bearer {_SCIM_TOKEN}"}),
+                id="scim_allowed_with_team_license",
+            ),
+            pytest.param(
+                _make_settings,
+                _team_plan_context,
+                200,
+                None,
+                lambda c: c.get("/scim/v2/ServiceProviderConfig", headers={"Authorization": f"Bearer {_SCIM_TOKEN}"}),
+                id="service_provider_config_allowed_with_license",
+            ),
+        ],
+    )
+    def test_license_gate(
+        self,
+        settings_factory: object,
+        plan_context: object,
+        expected_status: int,
+        mock_list: tuple | None,
+        endpoint: object,
+    ) -> None:
+        app.dependency_overrides[get_settings] = settings_factory
         app.dependency_overrides[get_db_session] = lambda: _make_mock_session()
         app.dependency_overrides[_get_engine] = lambda: MagicMock()
         app.dependency_overrides[get_scim_principal] = lambda: ScimPrincipal(organisation_id=_ORG_ID)
-        app.dependency_overrides[get_scim_plan_context] = _team_plan_context
+        app.dependency_overrides[get_scim_plan_context] = plan_context
 
-        with (
-            patch("modulo.api.routes.scim.scim_list_users", return_value=mock_user_list),
-            patch("modulo.api.routes.scim.set_rls_org"),
-        ):
-            headers = {"Authorization": f"Bearer {_SCIM_TOKEN}"}
-            resp = TestClient(app).get("/scim/v2/Users", headers=headers)
+        if mock_list:
+            with (
+                patch("modulo.api.routes.scim.scim_list_users", return_value=mock_list),
+                patch("modulo.api.routes.scim.set_rls_org"),
+            ):
+                resp = endpoint(TestClient(app))
+        else:
+            resp = endpoint(TestClient(app))
 
         app.dependency_overrides.clear()
-        assert resp.status_code == 200
-
-    def test_service_provider_config_allowed_with_license(self) -> None:
-        app.dependency_overrides[get_settings] = _make_settings
-        app.dependency_overrides[get_db_session] = lambda: _make_mock_session()
-        app.dependency_overrides[get_scim_principal] = lambda: ScimPrincipal(organisation_id=_ORG_ID)
-        app.dependency_overrides[get_scim_plan_context] = _team_plan_context
-        resp = TestClient(app).get("/scim/v2/ServiceProviderConfig", headers={"Authorization": f"Bearer {_SCIM_TOKEN}"})
-        app.dependency_overrides.clear()
-        assert resp.status_code == 200
+        assert resp.status_code == expected_status
