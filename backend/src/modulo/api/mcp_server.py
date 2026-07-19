@@ -1944,10 +1944,10 @@ async def create_agent(
     # Context retrieval tools
     # ---------------------------------------------------------------------------
 
+
 _doc_index: DocumentationIndex | None = None
 _doc_index_ts: float = 0.0
 _doc_index_ttl: float = 300.0  # 5 minutes
-
 
 
 def _get_doc_index() -> DocumentationIndex:
@@ -2380,11 +2380,6 @@ async def validate_payload(
         except Exception:
             _log.exception("validate_payload failed")
             return _tool_error("Failed to validate payload")
-
-    # ---------------------------------------------------------------------------
-    # Housekeeping tools
-    # ---------------------------------------------------------------------------
-    return _tool_error("Failed to validate payload")
 
 
 @mcp.tool(

@@ -32,7 +32,7 @@ jobs:
 
       - id: deploy
         name: Deploy to staging
-        shell: bash
+        shell: pwsh
         run: |
           fly deploy --app staging-modulo --config fly.staging.toml `
             --build-arg "GIT_SHA=${{ steps.git.outputs.git-sha }}" `
@@ -48,7 +48,7 @@ jobs:
 
       - name: Rollback on verification failure
         if: failure() && steps.deploy.outcome == 'success'
-        shell: bash
+        shell: pwsh
         run: |
           Write-Host "Deploy succeeded but verification failed - rolling back"
           fly rollback --app staging-modulo
@@ -63,11 +63,11 @@ jobs:
           fetch-depth: 1
 
       - name: Verify deployed SHA
-        shell: bash
+        shell: pwsh
         run: |
           $expectedSha = git rev-parse HEAD
           $expectedSha7 = $expectedSha.Substring(0, 7)
-          $info = curl -s -m 10 "https://staging.modulo.run/api/v1/deployment" 2>$null
+          $info = curl.exe -s -m 10 "https://staging.modulo.run/api/v1/deployment" 2>$null
           if (-not $info) {
             Write-Host "staging.modulo.run - no deployment info available"
             exit 1
