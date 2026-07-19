@@ -15,7 +15,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy.exc import IntegrityError, ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from modulo.api.db_error_handling import handle_db_errors
+from modulo.api.db_error_handling import handle_db_errors, with_db_retry
 from modulo.api.dependencies import get_db_session, require_feature
 from modulo.auth.dependencies import get_current_tenant_user
 from modulo.auth.jwt import TenantPrincipal
@@ -135,6 +135,7 @@ class SchemaVersionListResponse(BaseModel):
 
 
 @handle_db_errors("schemas.list_schemas_endpoint")
+@with_db_retry()
 @router.get("", response_model=SchemaListResponse)
 async def list_schemas_endpoint(
     page: int = Query(default=1, ge=1),
@@ -182,6 +183,7 @@ async def list_schemas_endpoint(
 
 
 @handle_db_errors("schemas.create_schema_endpoint")
+@with_db_retry()
 @router.post("", response_model=SchemaResponse, status_code=status.HTTP_201_CREATED)
 async def create_schema_endpoint(
     req: SchemaCreate,
@@ -240,6 +242,7 @@ async def create_schema_endpoint(
 
 
 @handle_db_errors("schemas.get_schema_endpoint")
+@with_db_retry()
 @router.get("/{schema_id}", response_model=SchemaResponse)
 async def get_schema_endpoint(
     schema_id: uuid.UUID,
@@ -283,6 +286,7 @@ async def get_schema_endpoint(
 
 
 @handle_db_errors("schemas.update_schema_endpoint")
+@with_db_retry()
 @router.patch("/{schema_id}", response_model=SchemaResponse)
 async def update_schema_endpoint(
     schema_id: uuid.UUID,
@@ -329,6 +333,7 @@ async def update_schema_endpoint(
 
 
 @handle_db_errors("schemas.deprecate_schema_endpoint")
+@with_db_retry()
 @router.patch("/{schema_id}/deprecate", response_model=SchemaResponse)
 async def deprecate_schema_endpoint(
     schema_id: uuid.UUID,
@@ -373,6 +378,7 @@ async def deprecate_schema_endpoint(
 
 
 @handle_db_errors("schemas.delete_schema_endpoint")
+@with_db_retry()
 @router.delete("/{schema_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_schema_endpoint(
     schema_id: uuid.UUID,
@@ -605,6 +611,7 @@ class SchemaFieldListResponse(BaseModel):
 
 
 @handle_db_errors("schemas.list_schema_fields_endpoint")
+@with_db_retry()
 @router.get("/{schema_id}/fields", response_model=SchemaFieldListResponse)
 async def list_schema_fields_endpoint(
     schema_id: uuid.UUID,
@@ -700,6 +707,7 @@ class SchemaInferResponse(BaseModel):
 
 
 @handle_db_errors("schemas.infer_schema_endpoint")
+@with_db_retry()
 @router.post("/infer", response_model=SchemaInferResponse)
 async def infer_schema_endpoint(
     req: SchemaInferRequest,
@@ -911,6 +919,7 @@ class SchemaGenerateResponse(BaseModel):
 
 
 @handle_db_errors("schemas.generate_schema_endpoint")
+@with_db_retry()
 @router.post("/generate", response_model=SchemaGenerateResponse)
 async def generate_schema_endpoint(
     req: SchemaGenerateRequest,
@@ -1064,6 +1073,7 @@ class SchemaMigrationPlanRequest(BaseModel):
 
 
 @handle_db_errors("schemas.migrate_data_endpoint")
+@with_db_retry()
 @router.post("/migrate", response_model=SchemaMigrationResponse)
 async def migrate_data_endpoint(
     req: SchemaMigrationRequest,

@@ -16,7 +16,7 @@ from sqlalchemy.exc import IntegrityError, OperationalError, ProgrammingError, S
 from sqlalchemy.exc import TimeoutError as SA_TimeoutError
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
-from modulo.api.db_error_handling import handle_db_errors
+from modulo.api.db_error_handling import handle_db_errors, with_db_retry
 from modulo.api.dependencies import (
     _get_engine,
     _get_session_factory,
@@ -395,6 +395,7 @@ async def trigger_run(
 
 
 @handle_db_errors("runs.get_run_stats_endpoint")
+@with_db_retry()
 @router.get("/stats", response_model=dict[str, Any])
 async def get_run_stats_endpoint(
     period: str = Query(default="30d", pattern=r"^(7d|30d|90d)$"),
@@ -430,6 +431,7 @@ async def get_run_stats_endpoint(
 
 
 @handle_db_errors("runs.get_run_heatmap_endpoint")
+@with_db_retry()
 @router.get("/stats/heatmap", response_model=list[dict[str, Any]])
 async def get_run_heatmap_endpoint(
     year: int = Query(default=2026, ge=2020, le=2100),
@@ -619,6 +621,7 @@ class FixtureExportResponse(BaseModel):
 
 
 @handle_db_errors("runs.get_run_io_endpoint")
+@with_db_retry()
 @router.get("/{run_id}/io", response_model=RunIOResponse)
 async def get_run_io_endpoint(
     run_id: uuid.UUID,
@@ -668,6 +671,7 @@ async def get_run_io_endpoint(
 
 
 @handle_db_errors("runs.export_run_fixture")
+@with_db_retry()
 @router.get("/{run_id}/export-fixture", response_model=FixtureExportResponse)
 async def export_run_fixture(
     run_id: uuid.UUID,
@@ -742,6 +746,7 @@ async def export_run_fixture(
 
 
 @handle_db_errors("runs.get_run_workspace_lease")
+@with_db_retry()
 @router.get("/{run_id}/workspace-lease")
 async def get_run_workspace_lease(
     run_id: uuid.UUID,
@@ -798,6 +803,7 @@ async def get_run_workspace_lease(
 
 
 @handle_db_errors("runs.get_run_workspace_events")
+@with_db_retry()
 @router.get("/{run_id}/workspace-events")
 async def get_run_workspace_events(
     run_id: uuid.UUID,
@@ -890,6 +896,7 @@ class NodeOutputResponse(BaseModel):
 
 
 @handle_db_errors("runs.get_run_node_output")
+@with_db_retry()
 @router.get("/{run_id}/nodes/{node_id}/output", response_model=NodeOutputResponse)
 async def get_run_node_output(
     run_id: uuid.UUID,
@@ -961,6 +968,7 @@ class ObserveNodeResponse(BaseModel):
 
 
 @handle_db_errors("runs.observe_run_node")
+@with_db_retry()
 @router.post("/{run_id}/nodes/{node_id}/observe", response_model=ObserveNodeResponse)
 async def observe_run_node(
     run_id: uuid.UUID,
@@ -1336,6 +1344,7 @@ def _lookup_agent_for_node(
 
 
 @handle_db_errors("runs.reveal_node_prompt")
+@with_db_retry()
 @router.post("/{run_id}/nodes/{node_id}/prompt/reveal", response_model=PromptRevealResponse)
 async def reveal_node_prompt(
     run_id: uuid.UUID,
@@ -1482,6 +1491,7 @@ class NodeOutputDiffResponse(BaseModel):
 
 
 @handle_db_errors("runs.diff_node_output")
+@with_db_retry()
 @router.post("/diff", response_model=NodeOutputDiffResponse)
 async def diff_node_output(
     req: NodeOutputDiffRequest,

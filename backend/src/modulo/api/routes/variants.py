@@ -9,7 +9,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy.exc import IntegrityError, ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from modulo.api.db_error_handling import handle_db_errors
+from modulo.api.db_error_handling import handle_db_errors, with_db_retry
 from modulo.api.dependencies import get_db_session
 from modulo.auth.dependencies import get_current_tenant_user
 from modulo.auth.jwt import TenantPrincipal
@@ -101,6 +101,7 @@ def _variant_to_response(group: Any) -> dict[str, Any]:
 
 
 @handle_db_errors("variants.create_group")
+@with_db_retry()
 @router.post("", response_model=VariantGroupResponse, status_code=status.HTTP_201_CREATED)
 async def create_group(
     req: CreateVariantGroupRequest,
@@ -149,6 +150,7 @@ async def create_group(
 
 
 @handle_db_errors("variants.list_groups")
+@with_db_retry()
 @router.get("", response_model=list[VariantGroupResponse])
 async def list_groups(
     pipeline_id: uuid.UUID | None = Query(None),
@@ -188,6 +190,7 @@ async def list_groups(
 
 
 @handle_db_errors("variants.get_group")
+@with_db_retry()
 @router.get("/{group_id}", response_model=VariantGroupResponse)
 async def get_group(
     group_id: uuid.UUID,
@@ -227,6 +230,7 @@ async def get_group(
 
 
 @handle_db_errors("variants.update_group")
+@with_db_retry()
 @router.put("/{group_id}", response_model=VariantGroupResponse)
 async def update_group(
     group_id: uuid.UUID,
@@ -276,6 +280,7 @@ async def update_group(
 
 
 @handle_db_errors("variants.delete_group")
+@with_db_retry()
 @router.delete("/{group_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_group(
     group_id: uuid.UUID,
@@ -315,6 +320,7 @@ async def delete_group(
 
 
 @handle_db_errors("variants.run_variant")
+@with_db_retry()
 @router.post("/{group_id}/run", response_model=RunVariantResponse)
 async def run_variant(
     group_id: uuid.UUID,
@@ -389,6 +395,7 @@ async def run_variant(
 
 
 @handle_db_errors("variants.coverage_gaps")
+@with_db_retry()
 @router.get("/{group_id}/coverage-gaps", response_model=list[CoverageGap])
 async def coverage_gaps(
     group_id: uuid.UUID,
@@ -432,6 +439,7 @@ async def coverage_gaps(
 
 
 @handle_db_errors("variants.prompt_diffs")
+@with_db_retry()
 @router.get("/{group_id}/prompt-diffs", response_model=list[PromptDiffEntry])
 async def prompt_diffs(
     group_id: uuid.UUID,

@@ -20,7 +20,7 @@ from sqlalchemy import select
 from sqlalchemy.exc import ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession
 
-from modulo.api.db_error_handling import handle_db_errors
+from modulo.api.db_error_handling import handle_db_errors, with_db_retry
 from modulo.api.dependencies import _get_engine, get_db_session, pg_connection_string
 from modulo.auth.dependencies import get_current_tenant_user
 from modulo.auth.jwt import TenantPrincipal
@@ -194,6 +194,7 @@ async def claim_gate(
     status_code=status.HTTP_200_OK,
 )
 @handle_db_errors("hitl.approve_gate")
+@with_db_retry()
 @router.post(
     "/runs/{run_id}/hitl/{gate_id}/approve",
     status_code=status.HTTP_200_OK,
@@ -281,6 +282,7 @@ async def approve_gate(
     status_code=status.HTTP_200_OK,
 )
 @handle_db_errors("hitl.approve_gate_with_modification")
+@with_db_retry()
 @router.post(
     "/runs/{run_id}/hitl/{gate_id}/approve-with-modification",
     status_code=status.HTTP_200_OK,
@@ -377,6 +379,7 @@ async def approve_gate_with_modification(
     status_code=status.HTTP_200_OK,
 )
 @handle_db_errors("hitl.reject_gate")
+@with_db_retry()
 @router.post(
     "/runs/{run_id}/hitl/{gate_id}/reject",
     status_code=status.HTTP_200_OK,
@@ -463,6 +466,7 @@ async def reject_gate(
     status_code=status.HTTP_200_OK,
 )
 @handle_db_errors("hitl.deliver_manual_output")
+@with_db_retry()
 @router.post(
     "/runs/{run_id}/hitl/{gate_id}/deliver-manual",
     status_code=status.HTTP_200_OK,
@@ -559,6 +563,7 @@ async def deliver_manual_output(
     status_code=status.HTTP_200_OK,
 )
 @handle_db_errors("hitl.submit_manual_output")
+@with_db_retry()
 @router.post(
     "/runs/{run_id}/manual/{gate_id}/submit",
     status_code=status.HTTP_200_OK,
@@ -645,6 +650,7 @@ async def submit_manual_output(
     response_model=PendingGatesResponse,
 )
 @handle_db_errors("hitl.list_run_pending_gates")
+@with_db_retry()
 @router.get(
     "/runs/{run_id}/hitl/pending",
     response_model=PendingGatesResponse,
@@ -702,6 +708,7 @@ async def list_run_pending_gates(
     response_model=PendingGatesResponse,
 )
 @handle_db_errors("hitl.list_org_pending_gates")
+@with_db_retry()
 @router.get(
     "/hitl/pending",
     response_model=PendingGatesResponse,

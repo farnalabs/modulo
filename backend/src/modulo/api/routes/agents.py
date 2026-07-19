@@ -14,7 +14,7 @@ from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError, ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from modulo.api.db_error_handling import handle_db_errors
+from modulo.api.db_error_handling import handle_db_errors, with_db_retry
 from modulo.api.dependencies import get_db_session
 from modulo.auth.dependencies import get_current_tenant_user
 from modulo.auth.jwt import TenantPrincipal
@@ -234,6 +234,7 @@ def _validate_generic_agent(
 
 
 @handle_db_errors("agents.list_agents_endpoint")
+@with_db_retry()
 @router.get("", response_model=AgentListResponse)
 async def list_agents_endpoint(
     page: int = Query(default=1, ge=1),
@@ -271,6 +272,7 @@ async def list_agents_endpoint(
 
 
 @handle_db_errors("agents.create_agent_endpoint")
+@with_db_retry()
 @router.post("", response_model=AgentResponse, status_code=status.HTTP_201_CREATED)
 async def create_agent_endpoint(
     req: AgentCreate,
@@ -339,6 +341,7 @@ async def create_agent_endpoint(
 
 
 @handle_db_errors("agents.get_agent_endpoint")
+@with_db_retry()
 @router.get("/{agent_id}", response_model=AgentResponse)
 async def get_agent_endpoint(
     agent_id: uuid.UUID,
@@ -372,6 +375,7 @@ async def get_agent_endpoint(
 
 
 @handle_db_errors("agents.update_agent_endpoint")
+@with_db_retry()
 @router.patch("/{agent_id}", response_model=AgentResponse)
 async def update_agent_endpoint(
     agent_id: uuid.UUID,
@@ -448,6 +452,7 @@ async def update_agent_endpoint(
 
 
 @handle_db_errors("agents.optimize_prompt")
+@with_db_retry()
 @router.post("/{agent_id}/prompts/{version}/optimize", response_model=PromptOptimizeResponse)
 async def optimize_prompt(
     agent_id: uuid.UUID,
@@ -584,6 +589,7 @@ async def optimize_prompt(
 
 
 @handle_db_errors("agents.apply_optimized_prompt")
+@with_db_retry()
 @router.post("/{agent_id}/prompts/{version}/apply", response_model=AgentResponse)
 async def apply_optimized_prompt(
     agent_id: uuid.UUID,
@@ -632,6 +638,7 @@ async def apply_optimized_prompt(
 
 
 @handle_db_errors("agents.list_prompt_versions")
+@with_db_retry()
 @router.get("/{agent_id}/prompts", response_model=list[PromptVersionListEntry])
 async def list_prompt_versions(
     agent_id: uuid.UUID,
@@ -676,6 +683,7 @@ async def list_prompt_versions(
 
 
 @handle_db_errors("agents.get_prompt_version_endpoint")
+@with_db_retry()
 @router.get("/{agent_id}/prompts/{version}", response_model=PromptVersionDetail)
 async def get_prompt_version_endpoint(
     agent_id: uuid.UUID,
@@ -717,6 +725,7 @@ async def get_prompt_version_endpoint(
 
 
 @handle_db_errors("agents.rollback_prompt")
+@with_db_retry()
 @router.put("/{agent_id}/prompts/rollback/{version}", response_model=PromptRollbackResponse)
 async def rollback_prompt(
     agent_id: uuid.UUID,
@@ -762,6 +771,7 @@ async def rollback_prompt(
 
 
 @handle_db_errors("agents.diff_prompt_versions")
+@with_db_retry()
 @router.post("/{agent_id}/prompts/diff", response_model=PromptDiffResponse)
 async def diff_prompt_versions(
     agent_id: uuid.UUID,
@@ -892,6 +902,7 @@ async def diff_prompt_versions(
 
 
 @handle_db_errors("agents.delete_agent_endpoint")
+@with_db_retry()
 @router.delete("/{agent_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_agent_endpoint(
     agent_id: uuid.UUID,

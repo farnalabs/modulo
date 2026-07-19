@@ -24,7 +24,7 @@ from sqlalchemy import update as sa_update
 from sqlalchemy.exc import IntegrityError, ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from modulo.api.db_error_handling import handle_db_errors
+from modulo.api.db_error_handling import handle_db_errors, with_db_retry
 from modulo.api.dependencies import get_db_session
 from modulo.auth.dependencies import get_current_tenant_user
 from modulo.auth.jwt import TenantPrincipal
@@ -91,6 +91,7 @@ def _serialise_record(
 
 
 @handle_db_errors("feedback.create_feedback")
+@with_db_retry()
 @router.post("/runs/{run_id}/feedback", status_code=status.HTTP_201_CREATED)
 async def create_feedback(
     run_id: uuid.UUID,
@@ -157,6 +158,7 @@ async def create_feedback(
 
 
 @handle_db_errors("feedback.list_feedback")
+@with_db_retry()
 @router.get("/feedback", status_code=status.HTTP_200_OK)
 async def list_feedback(
     status_filter: str | None = Query(None, alias="status"),
@@ -209,6 +211,7 @@ async def list_feedback(
 
 
 @handle_db_errors("feedback.list_feedback_inbox")
+@with_db_retry()
 @router.get("/feedback/inbox", status_code=status.HTTP_200_OK)
 async def list_feedback_inbox(
     handler_type: str | None = Query(None, alias="type"),
@@ -288,6 +291,7 @@ async def list_feedback_inbox(
 
 
 @handle_db_errors("feedback.list_eval_proposals")
+@with_db_retry()
 @router.get("/feedback/proposals", status_code=status.HTTP_200_OK)
 async def list_eval_proposals(
     page: int = Query(1, ge=1),
@@ -352,6 +356,7 @@ async def list_eval_proposals(
 
 
 @handle_db_errors("feedback.get_feedback")
+@with_db_retry()
 @router.get("/feedback/{record_id}", status_code=status.HTTP_200_OK)
 async def get_feedback(
     record_id: uuid.UUID,
@@ -394,6 +399,7 @@ async def get_feedback(
 
 
 @handle_db_errors("feedback.update_feedback_status")
+@with_db_retry()
 @router.patch("/feedback/{record_id}/status", status_code=status.HTTP_200_OK)
 async def update_feedback_status(
     record_id: uuid.UUID,
@@ -447,6 +453,7 @@ async def update_feedback_status(
 
 
 @handle_db_errors("feedback.detect_eval_gap")
+@with_db_retry()
 @router.post("/feedback/{record_id}/detect-gap", status_code=status.HTTP_200_OK)
 async def detect_eval_gap(
     record_id: uuid.UUID,
@@ -509,6 +516,7 @@ async def detect_eval_gap(
 
 
 @handle_db_errors("feedback.get_inbox_item")
+@with_db_retry()
 @router.get("/feedback/inbox/{record_id}", status_code=status.HTTP_200_OK)
 async def get_inbox_item(
     record_id: uuid.UUID,
@@ -561,6 +569,7 @@ async def get_inbox_item(
 
 
 @handle_db_errors("feedback.review_feedback")
+@with_db_retry()
 @router.post("/feedback/inbox/{record_id}/review", status_code=status.HTTP_200_OK)
 async def review_feedback(
     record_id: uuid.UUID,

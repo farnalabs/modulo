@@ -21,7 +21,7 @@ from sqlalchemy import func, select
 from sqlalchemy.exc import ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from modulo.api.db_error_handling import handle_db_errors
+from modulo.api.db_error_handling import handle_db_errors, with_db_retry
 from modulo.api.dependencies import get_db_session
 from modulo.api.middleware.sensitive_mask import mask_config_json
 from modulo.auth.dependencies import get_current_tenant_user
@@ -38,6 +38,7 @@ router = APIRouter(prefix="/api/v1", tags=["triggers"])
 
 
 @handle_db_errors("triggers.list_triggers")
+@with_db_retry()
 @router.get("/triggers", status_code=status.HTTP_200_OK)
 async def list_triggers(
     pipeline_id: uuid.UUID | None = Query(None),
@@ -140,6 +141,7 @@ def _validated_next_fire(cron_expression: str | None, cron_timezone: str | None)
 
 
 @handle_db_errors("triggers.update_cron_config")
+@with_db_retry()
 @router.patch("/triggers/{trigger_id}/cron", status_code=status.HTTP_200_OK)
 async def update_cron_config(
     trigger_id: uuid.UUID,
@@ -224,6 +226,7 @@ async def update_cron_config(
 
 
 @handle_db_errors("triggers.preview_cron_schedule")
+@with_db_retry()
 @router.get("/triggers/{trigger_id}/cron/preview", status_code=status.HTTP_200_OK)
 async def preview_cron_schedule(
     trigger_id: uuid.UUID,
@@ -304,6 +307,7 @@ class PollingConfigUpdate(BaseModel):
 
 
 @handle_db_errors("triggers.update_polling_config")
+@with_db_retry()
 @router.patch("/triggers/{trigger_id}/polling", status_code=status.HTTP_200_OK)
 async def update_polling_config(
     trigger_id: uuid.UUID,
@@ -404,6 +408,7 @@ class PollingTestRequest(BaseModel):
 
 
 @handle_db_errors("triggers.test_polling_condition")
+@with_db_retry()
 @router.post("/triggers/{trigger_id}/polling/test", status_code=status.HTTP_200_OK)
 async def test_polling_condition(
     trigger_id: uuid.UUID,
@@ -480,6 +485,7 @@ class TriggerCreate(BaseModel):
 
 
 @handle_db_errors("triggers.create_trigger")
+@with_db_retry()
 @router.post("/pipelines/{pipeline_id}/triggers", status_code=status.HTTP_201_CREATED)
 async def create_trigger(
     pipeline_id: uuid.UUID,
@@ -556,6 +562,7 @@ class TriggerUpdate(BaseModel):
 
 
 @handle_db_errors("triggers.update_trigger")
+@with_db_retry()
 @router.put("/triggers/{trigger_id}", status_code=status.HTTP_200_OK)
 async def update_trigger(
     trigger_id: uuid.UUID,
@@ -638,6 +645,7 @@ async def update_trigger(
 
 
 @handle_db_errors("triggers.delete_trigger")
+@with_db_retry()
 @router.delete("/triggers/{trigger_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_trigger(
     trigger_id: uuid.UUID,
@@ -679,6 +687,7 @@ async def delete_trigger(
 
 
 @handle_db_errors("triggers.toggle_trigger")
+@with_db_retry()
 @router.post("/triggers/{trigger_id}/toggle", status_code=status.HTTP_200_OK)
 async def toggle_trigger(
     trigger_id: uuid.UUID,
@@ -728,6 +737,7 @@ class TestTriggerRequest(BaseModel):
 
 
 @handle_db_errors("triggers.test_trigger")
+@with_db_retry()
 @router.post("/triggers/{trigger_id}/test", status_code=status.HTTP_200_OK)
 async def test_trigger(
     trigger_id: uuid.UUID,
@@ -820,6 +830,7 @@ async def test_trigger(
 
 
 @handle_db_errors("triggers.list_trigger_events")
+@with_db_retry()
 @router.get("/triggers/{trigger_id}/events", status_code=status.HTTP_200_OK)
 async def list_trigger_events(
     trigger_id: uuid.UUID,

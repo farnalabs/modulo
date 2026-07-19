@@ -18,7 +18,7 @@ from sqlalchemy import select
 from sqlalchemy.exc import ProgrammingError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from modulo.api.db_error_handling import handle_db_errors
+from modulo.api.db_error_handling import handle_db_errors, with_db_retry
 from modulo.api.dependencies import get_db_session
 from modulo.auth.dependencies import get_current_tenant_user
 from modulo.auth.jwt import TenantPrincipal
@@ -402,6 +402,7 @@ async def _resolve_graph_references(
 
 @router.get("", response_model=PipelineListResponse)
 @handle_db_errors("pipelines.list")
+@with_db_retry()
 async def list_pipelines_endpoint(
     page: int = Query(default=1, ge=1),
     page_size: int = Query(default=20, ge=1, le=100),
@@ -442,6 +443,7 @@ async def list_pipelines_endpoint(
 
 @router.post("", response_model=PipelineResponse, status_code=status.HTTP_201_CREATED)
 @handle_db_errors("pipelines.create")
+@with_db_retry()
 async def create_pipeline_endpoint(
     req: PipelineCreate,
     session: AsyncSession = Depends(get_db_session),
@@ -479,6 +481,7 @@ async def create_pipeline_endpoint(
 
 @router.get("/{pipeline_id}", response_model=PipelineResponse)
 @handle_db_errors("pipelines.get")
+@with_db_retry()
 async def get_pipeline_endpoint(
     pipeline_id: uuid.UUID,
     session: AsyncSession = Depends(get_db_session),
@@ -504,6 +507,7 @@ async def get_pipeline_endpoint(
 
 @router.get("/{pipeline_id}/graph", response_model=PipelineGraphResponse)
 @handle_db_errors("pipelines.get_graph")
+@with_db_retry()
 async def get_pipeline_graph_endpoint(
     pipeline_id: uuid.UUID,
     session: AsyncSession = Depends(get_db_session),
@@ -530,6 +534,7 @@ async def get_pipeline_graph_endpoint(
 
 @router.patch("/{pipeline_id}/graph", response_model=PipelineGraphResponse)
 @handle_db_errors("pipelines.replace_graph")
+@with_db_retry()
 async def replace_pipeline_graph_endpoint(
     pipeline_id: uuid.UUID,
     req: PipelineGraphUpdate,
@@ -623,6 +628,7 @@ async def replace_pipeline_graph_endpoint(
 
 @router.patch("/{pipeline_id}", response_model=PipelineResponse)
 @handle_db_errors("pipelines.update")
+@with_db_retry()
 async def update_pipeline_endpoint(
     pipeline_id: uuid.UUID,
     req: PipelineUpdate,
@@ -667,6 +673,7 @@ async def update_pipeline_endpoint(
 
 @router.delete("/{pipeline_id}", status_code=status.HTTP_204_NO_CONTENT)
 @handle_db_errors("pipelines.delete")
+@with_db_retry()
 async def delete_pipeline_endpoint(
     pipeline_id: uuid.UUID,
     session: AsyncSession = Depends(get_db_session),
@@ -691,6 +698,7 @@ async def delete_pipeline_endpoint(
 
 @router.post("/{pipeline_id}/archive", response_model=PipelineResponse)
 @handle_db_errors("pipelines.archive")
+@with_db_retry()
 async def archive_pipeline_endpoint(
     pipeline_id: uuid.UUID,
     session: AsyncSession = Depends(get_db_session),
@@ -714,6 +722,7 @@ async def archive_pipeline_endpoint(
 
 @router.post("/{pipeline_id}/unarchive", response_model=PipelineResponse)
 @handle_db_errors("pipelines.unarchive")
+@with_db_retry()
 async def unarchive_pipeline_endpoint(
     pipeline_id: uuid.UUID,
     session: AsyncSession = Depends(get_db_session),
@@ -751,6 +760,7 @@ class PipelineCloneRequest(BaseModel):
 
 @router.post("/{pipeline_id}/clone", response_model=PipelineResponse, status_code=status.HTTP_201_CREATED)
 @handle_db_errors("pipelines.clone")
+@with_db_retry()
 async def clone_pipeline_endpoint(
     pipeline_id: uuid.UUID,
     req: PipelineCloneRequest,
@@ -857,6 +867,7 @@ _PARAM_PATTERN = re.compile(r"\{\{parameter\.(\w+)\}\}")
 
 @router.post("/{pipeline_id}/save-as-composite", status_code=status.HTTP_201_CREATED)
 @handle_db_errors("pipelines.save_as_composite")
+@with_db_retry()
 async def save_as_composite_endpoint(
     pipeline_id: uuid.UUID,
     req: SaveAsCompositeRequest,
@@ -976,6 +987,7 @@ class QualityReportResponse(BaseModel):
     response_model=QualityReportResponse,
 )
 @handle_db_errors("pipelines.trigger_quality_report")
+@with_db_retry()
 async def trigger_quality_report(
     pipeline_id: uuid.UUID,
     session: AsyncSession = Depends(get_db_session),
@@ -1120,6 +1132,7 @@ def _snapshot_to_detail_response(s: Any) -> SnapshotDetailResponse:
 
 @router.get("/{pipeline_id}/snapshots", response_model=SnapshotListResponse)
 @handle_db_errors("pipelines.list_snapshots")
+@with_db_retry()
 async def list_snapshot_endpoint(
     pipeline_id: uuid.UUID,
     page: int = Query(default=1, ge=1),
@@ -1148,6 +1161,7 @@ async def list_snapshot_endpoint(
 
 @router.get("/{pipeline_id}/snapshots/{snapshot_id}", response_model=SnapshotDetailResponse)
 @handle_db_errors("pipelines.get_snapshot_detail")
+@with_db_retry()
 async def get_snapshot_detail_endpoint(
     pipeline_id: uuid.UUID,
     snapshot_id: uuid.UUID,
@@ -1174,6 +1188,7 @@ async def get_snapshot_detail_endpoint(
 
 @router.patch("/{pipeline_id}/snapshots/{snapshot_id}", response_model=SnapshotResponse)
 @handle_db_errors("pipelines.tag_snapshot")
+@with_db_retry()
 async def tag_snapshot_endpoint(
     pipeline_id: uuid.UUID,
     snapshot_id: uuid.UUID,
@@ -1201,6 +1216,7 @@ async def tag_snapshot_endpoint(
 
 @router.post("/{pipeline_id}/snapshots/{snapshot_id}/rollback", response_model=SnapshotResponse)
 @handle_db_errors("pipelines.rollback_snapshot")
+@with_db_retry()
 async def rollback_snapshot_endpoint(
     pipeline_id: uuid.UUID,
     snapshot_id: uuid.UUID,
@@ -1232,6 +1248,7 @@ async def rollback_snapshot_endpoint(
 
 @router.delete("/{pipeline_id}/snapshots/{snapshot_id}", status_code=status.HTTP_204_NO_CONTENT)
 @handle_db_errors("pipelines.delete_snapshot")
+@with_db_retry()
 async def delete_snapshot_endpoint(
     pipeline_id: uuid.UUID,
     snapshot_id: uuid.UUID,
@@ -1265,6 +1282,7 @@ async def delete_snapshot_endpoint(
 
 @router.post("/{pipeline_id}/snapshots/diff", response_model=SnapshotDiffResponse)
 @handle_db_errors("pipelines.diff_snapshots")
+@with_db_retry()
 async def diff_snapshot_endpoint(
     pipeline_id: uuid.UUID,
     req: SnapshotDiffQuery,
@@ -1303,6 +1321,7 @@ class PipelineFolderMoveRequest(BaseModel):
 
 @router.patch("/{pipeline_id}/folder", response_model=PipelineResponse)
 @handle_db_errors("pipelines.move_to_folder")
+@with_db_retry()
 async def move_pipeline_to_folder_endpoint(
     pipeline_id: uuid.UUID,
     req: PipelineFolderMoveRequest,
@@ -1346,6 +1365,7 @@ class ConvertToAgentRequest(BaseModel):
     response_model=PipelineGraphResponse,
 )
 @handle_db_errors("pipelines.convert_node_to_agent")
+@with_db_retry()
 async def convert_node_to_agent_endpoint(
     pipeline_id: uuid.UUID,
     node_id: uuid.UUID,
@@ -1456,6 +1476,7 @@ async def convert_node_to_agent_endpoint(
     response_model=PipelineGraphResponse,
 )
 @handle_db_errors("pipelines.revert_node_to_manual")
+@with_db_retry()
 async def revert_node_to_manual_endpoint(
     pipeline_id: uuid.UUID,
     node_id: uuid.UUID,

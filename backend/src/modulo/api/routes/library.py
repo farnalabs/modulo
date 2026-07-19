@@ -13,7 +13,7 @@ from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError, ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from modulo.api.db_error_handling import handle_db_errors
+from modulo.api.db_error_handling import handle_db_errors, with_db_retry
 from modulo.api.dependencies import get_db_session
 from modulo.auth.dependencies import get_current_tenant_user, require_system_admin
 from modulo.auth.jwt import TenantPrincipal
@@ -272,6 +272,7 @@ _log = logging.getLogger(__name__)
 
 
 @handle_db_errors("library.list_library_primitives_endpoint")
+@with_db_retry()
 @router.get("", response_model=LibraryPrimitiveListResponse)
 async def list_library_primitives_endpoint(
     page: int = Query(1, ge=1),
@@ -355,12 +356,14 @@ async def list_library_primitives_endpoint(
 
 
 @handle_db_errors("library.ping")
+@with_db_retry()
 @router.get("/ping")
 async def ping() -> dict[str, bool]:
     return {"pong": True}
 
 
 @handle_db_errors("library.get_library_primitive_endpoint")
+@with_db_retry()
 @router.get("/{primitive_id}", response_model=LibraryPrimitiveResponse)
 async def get_library_primitive_endpoint(
     primitive_id: uuid.UUID,
@@ -402,6 +405,7 @@ async def get_library_primitive_endpoint(
 
 
 @handle_db_errors("library.create_library_primitive_endpoint")
+@with_db_retry()
 @router.post("", response_model=LibraryPrimitiveResponse, status_code=status.HTTP_201_CREATED)
 async def create_library_primitive_endpoint(
     req: LibraryPrimitiveCreate,
@@ -469,6 +473,7 @@ async def create_library_primitive_endpoint(
 
 
 @handle_db_errors("library.update_library_primitive_endpoint")
+@with_db_retry()
 @router.patch("/{primitive_id}", response_model=LibraryPrimitiveResponse)
 async def update_library_primitive_endpoint(
     primitive_id: uuid.UUID,
@@ -507,6 +512,7 @@ async def update_library_primitive_endpoint(
 
 
 @handle_db_errors("library.delete_library_primitive_endpoint")
+@with_db_retry()
 @router.delete("/{primitive_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_library_primitive_endpoint(
     primitive_id: uuid.UUID,
@@ -599,6 +605,7 @@ async def copy_to_adapt_endpoint(
 
 
 @handle_db_errors("library.export_pipeline_endpoint")
+@with_db_retry()
 @router.post("/export/{pipeline_id}")
 async def export_pipeline_endpoint(
     pipeline_id: uuid.UUID,
@@ -859,6 +866,7 @@ async def analyse_import_bundle_endpoint(
 
 
 @handle_db_errors("library.confirm_import_endpoint")
+@with_db_retry()
 @router.post("/import/confirm", response_model=dict[str, Any])
 async def confirm_import_endpoint(
     req: ImportConfirmRequest,
@@ -931,6 +939,7 @@ async def confirm_import_endpoint(
 
 
 @handle_db_errors("library.list_ratings_endpoint")
+@with_db_retry()
 @router.get("/{primitive_id}/ratings", response_model=RatingListResponse)
 async def list_ratings_endpoint(
     primitive_id: uuid.UUID,
@@ -967,6 +976,7 @@ async def list_ratings_endpoint(
 
 
 @handle_db_errors("library.get_rating_aggregate_endpoint")
+@with_db_retry()
 @router.get("/{primitive_id}/ratings/aggregate", response_model=RatingAggregateResponse)
 async def get_rating_aggregate_endpoint(
     primitive_id: uuid.UUID,
