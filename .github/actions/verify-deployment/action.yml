@@ -25,8 +25,8 @@ runs:
         Write-Host "Waiting for $url ..."
         for ($i=0; $i -lt $maxRetries; $i++) {
           try {
-            $r = curl.exe -s --connect-timeout 5 --max-time 10 $url 2>&1
-            if ($LASTEXITCODE -eq 0) { Write-Host "Healthy after ${i}s"; exit 0 }
+            $r = curl -s -o /dev/null -w "%{http_code}" --connect-timeout 5 --max-time 10 $url 2>&1
+            if ($LASTEXITCODE -eq 0 -and $r -eq "200") { Write-Host "Healthy after ${i}s"; exit 0 }
           } catch {
             Write-Host "[$i/$maxRetries] $url - $_"
           }
@@ -40,7 +40,7 @@ runs:
       run: |
         $maxAttempts = [int]::Parse("${{ inputs.smoke-retries }}")
         for ($attempt=1; $attempt -le $maxAttempts; $attempt++) {
-          $resp = curl.exe -s -m 30 "${{ inputs.url }}/" 2>$null
+          $resp = curl -s -m 30 "${{ inputs.url }}/" 2>$null
           if ($resp -match '<title>Modulo') {
             Write-Host "${{ inputs.url }} - OK"
             exit 0
