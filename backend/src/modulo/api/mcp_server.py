@@ -494,6 +494,9 @@ async def create_pipeline(
         }
     except MCPAuthorizationError as exc:
         return {"error": "insufficient_scope", "detail": str(exc)}
+    except ProgrammingError:
+        _log.exception("create_pipeline failed")
+        return {"error": "migration_required", "detail": "Database migration required. Run `alembic upgrade head`."}
     except Exception:
         _log.exception("create_pipeline failed")
         return _tool_error("Failed to create pipeline")
@@ -546,6 +549,9 @@ async def list_runs(
         }
     except MCPAuthorizationError as exc:
         return {"error": "insufficient_scope", "detail": str(exc)}
+    except ProgrammingError:
+        _log.exception("list_runs failed")
+        return {"error": "migration_required", "detail": "Database migration required. Run `alembic upgrade head`."}
     except Exception:
         _log.exception("list_runs failed")
         return _tool_error("Failed to list runs")
@@ -603,6 +609,9 @@ async def update_pipeline_graph(
         }
     except MCPAuthorizationError as exc:
         return {"error": "insufficient_scope", "detail": str(exc)}
+    except ProgrammingError:
+        _log.exception("update_pipeline_graph failed")
+        return {"error": "migration_required", "detail": "Database migration required. Run `alembic upgrade head`."}
     except Exception:
         _log.exception("update_pipeline_graph failed")
         return _tool_error("Failed to update pipeline graph")
@@ -676,6 +685,9 @@ async def bind_connector_to_node(
         }
     except MCPAuthorizationError as exc:
         return {"error": "insufficient_scope", "detail": str(exc)}
+    except ProgrammingError:
+        _log.exception("bind_connector_to_node failed")
+        return {"error": "migration_required", "detail": "Database migration required. Run `alembic upgrade head`."}
     except Exception:
         _log.exception("bind_connector_to_node failed")
         return _tool_error("Failed to bind connector to node")
@@ -734,6 +746,9 @@ async def trigger_pipeline(
         }
     except MCPAuthorizationError as exc:
         return {"error": "insufficient_scope", "detail": str(exc)}
+    except ProgrammingError:
+        _log.exception("trigger_pipeline failed")
+        return {"error": "migration_required", "detail": "Database migration required. Run `alembic upgrade head`."}
     except Exception:
         _log.exception("trigger_pipeline failed")
         return _tool_error("Failed to trigger pipeline")
