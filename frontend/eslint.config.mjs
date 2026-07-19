@@ -17,8 +17,8 @@ export default withVueTs(
       // Preserve the legacy config contract; these are tracked by vue-tsc or are
       // intentionally used at API and test boundaries throughout the codebase.
       '@typescript-eslint/no-explicit-any': 'off',
-      '@typescript-eslint/ban-ts-comment': 'off',
-      '@typescript-eslint/no-this-alias': 'off',
+      '@typescript-eslint/ban-ts-comment': 'warn',
+      '@typescript-eslint/no-this-alias': 'warn',
       'vue/component-api-style': ['error', ['script-setup']],
       'vue/multi-word-component-names': ['error', {
         ignores: ['Badge', 'Button', 'Card', 'Dialog', 'Input', 'Select', 'Tabs', 'Tooltip', 'LogoMark', 'SidebarLink', 'OwnershipPicker', 'SsoProviderForm'],
