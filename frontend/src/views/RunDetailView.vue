@@ -170,6 +170,7 @@
               <th class="pb-2 pr-4 font-medium">{{ $t('views.RunDetailView.cost') }}</th>
               <th class="pb-2 pr-4 font-medium">{{ $t('views.RunDetailView.trace_id') }}</th>
               <th class="pb-2 pr-4 font-medium">{{ $t('views.RunDetailView.io') }}</th>
+              <th class="pb-2 pr-4 font-medium">Logs</th>
               <th class="pb-2 font-medium">{{ $t('views.RunDetailView.prompt') }}</th>
             </tr>
           </thead>
@@ -213,6 +214,17 @@
               </td>
               <td class="py-3">
                 <button
+                  v-if="node.hasLogs"
+                  data-testid="run-detail-toggle-logs"
+                  class="inline-flex items-center gap-1 rounded-md px-2 py-1 text-xs font-medium text-primary hover:bg-primary/10"
+                  @click="toggleNodeLogs(node.name)"
+                >
+                  {{ expandedLogs.has(node.name) ? 'Hide' : 'View' }}
+                </button>
+                <span v-else class="text-muted-foreground">&mdash;</span>
+              </td>
+              <td class="py-3">
+                <button
                   v-if="revealedPrompts[node.name]?.prompt"
                   data-testid="run-detail-show-prompt"
                   class="inline-flex items-center gap-1 rounded-md px-2 py-1 text-xs font-medium text-primary hover:bg-primary/10"
@@ -238,7 +250,7 @@
               :key="'io-' + node.name"
               v-show="expandedNodes.has(node.name)"
             >
-              <td colspan="9" class="space-y-3 px-0 pb-4 pt-1">
+              <td colspan="10" class="space-y-3 px-0 pb-4 pt-1">
                 <div class="rounded-lg border bg-muted p-4">
                   <h4 class="mb-2 text-xs font-semibold text-muted-foreground">{{ $t('views.RunDetailView.input') }}</h4>
                   <pre class="max-h-48 overflow-auto rounded bg-background p-3 text-xs leading-relaxed"><code>{{ node.io?.input ? formatJson(node.io.input) : '—' }}</code></pre>
@@ -246,6 +258,27 @@
                 <div class="rounded-lg border bg-muted p-4">
                   <h4 class="mb-2 text-xs font-semibold text-muted-foreground">{{ $t('views.RunDetailView.output') }}</h4>
                   <pre class="max-h-48 overflow-auto rounded bg-background p-3 text-xs leading-relaxed"><code>{{ node.io?.output ? formatJson(node.io.output) : '—' }}</code></pre>
+                </div>
+              </td>
+            </tr>
+
+            <!-- Expandable Log rows -->
+            <tr
+              v-for="node in nodeEntries"
+              :key="'log-' + node.name"
+              v-show="expandedLogs.has(node.name)"
+            >
+              <td colspan="10" class="space-y-3 px-0 pb-4 pt-1">
+                <div v-if="getNodeLog(node.name, 'agent_stdout')" class="rounded-lg border bg-muted p-4">
+                  <h4 class="mb-2 text-xs font-semibold text-muted-foreground">Agent Stdout</h4>
+                  <pre class="max-h-96 overflow-auto rounded bg-background p-3 text-xs leading-relaxed font-mono whitespace-pre-wrap"><code>{{ getNodeLog(node.name, 'agent_stdout') }}</code></pre>
+                </div>
+                <div v-if="getNodeLog(node.name, 'agent_stderr')" class="rounded-lg border bg-destructive/10 p-4">
+                  <h4 class="mb-2 text-xs font-semibold text-destructive">Agent Stderr</h4>
+                  <pre class="max-h-48 overflow-auto rounded bg-background p-3 text-xs leading-relaxed font-mono whitespace-pre-wrap"><code>{{ getNodeLog(node.name, 'agent_stderr') }}</code></pre>
+                </div>
+                <div v-if="!getNodeLog(node.name, 'agent_stdout') && !getNodeLog(node.name, 'agent_stderr')" class="text-center text-sm text-muted-foreground py-4">
+                  No agent logs for this node.
                 </div>
               </td>
             </tr>
@@ -366,6 +399,7 @@ interface NodeEntry {
   cost: number | null
   traceId: string | null
   io: { input: unknown; output: unknown } | null
+  hasLogs: boolean
 }
 
 interface WorkspaceLeaseInfo {
@@ -380,6 +414,7 @@ const { t, locale } = useI18n()
 const run = ref<RunResponse | null>(null)
 const runIO = ref<RunIOResponse | null>(null)
 const expandedNodes = ref(new Set<string>())
+const expandedLogs = ref(new Set<string>())
 const copied = ref(false)
 const shareCopied = ref(false)
 const promptCopied = ref(false)
@@ -431,6 +466,12 @@ async function copyShareSummary() {
 
 function toggleNodeIO(name: string) {
   const s = expandedNodes.value
+  if (s.has(name)) s.delete(name)
+  else s.add(name)
+}
+
+function toggleNodeLogs(name: string) {
+  const s = expandedLogs.value
   if (s.has(name)) s.delete(name)
   else s.add(name)
 }
@@ -523,6 +564,16 @@ async function copyPromptText() {
 
 function formatJson(value: unknown): string {
   return JSON.stringify(value, null, 2)
+}
+
+function getNodeLog(nodeName: string, field: string): string | null {
+  const outputs = runIO.value?.outputs_json as Record<string, unknown> | null ?? {}
+  const nodeOutput = outputs[nodeName] as Record<string, unknown> | undefined
+  if (!nodeOutput) return null
+  const outputValue = nodeOutput.output as Record<string, unknown> | undefined
+  if (!outputValue) return null
+  const val = outputValue[field]
+  return typeof val === 'string' && val.length > 0 ? val : null
 }
 
 const statusBadgeClass = computed(() => {
@@ -763,6 +814,8 @@ const nodeEntries = computed<NodeEntry[]>(() => {
   return Array.from(names).map(name => {
     const usage = ntu[name] as NodeTokenUsage | undefined
     const nodeOutput = outputs[name] as Record<string, unknown> | undefined
+    const outputValue = (nodeOutput?.output as Record<string, unknown>) ?? {}
+    const hasLogs = !!(outputValue.agent_stdout || outputValue.agent_stderr)
 
     return {
       name,
@@ -778,6 +831,7 @@ const nodeEntries = computed<NodeEntry[]>(() => {
             output: nodeOutput.output ?? null,
           }
         : null,
+      hasLogs,
     }
   })
 })
