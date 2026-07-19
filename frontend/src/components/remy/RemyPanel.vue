@@ -300,7 +300,6 @@ watch(
   },
   { immediate: true },
 );
-const chatRef = ref<InstanceType<typeof RemyChat> | null>(null);
 const showSidebar = ref(false);
 const activeTab = ref<"chat" | "skills" | "sessions" | "sources">("chat");
 
