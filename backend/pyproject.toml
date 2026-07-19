@@ -187,12 +187,14 @@ ignore = [
 "scripts/gen_seed_sql.py" = ["S608"]
 "src/modulo/api/mcp_server.py" = ["RET503"]
 "scripts/generate_remy_primer.py" = ["ASYNC240"]
+[tool.ruff.lint.per-file-ignores]
 "deploy/*" = ["T20"]
 "tests/bdd/check-bdd-coverage.py" = ["N999"]
 "pipeline-scripts/**" = ["S", "T201", "E402", "RET"]
 "tests/unit/runtime_provider/*" = ["E402"]
 "tests/unit/secrets_backend/*" = ["E402"]
 "src/modulo/db/migrations/**" = ["RUF002", "RUF003", "E501"]
+"src/modulo/api/mcp_server.py" = ["RET503"]
 
 [tool.mypy]
 strict = true
