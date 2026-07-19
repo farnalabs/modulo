@@ -2,7 +2,7 @@ name: Trigger PR Review Agent
 
 on:
   pull_request:
-    types: [opened, synchronize, reopened]
+    types: [opened, synchronize, reopened, labeled]
     branches: [main]
   workflow_dispatch:
     inputs:
@@ -40,7 +40,19 @@ jobs:
             echo "head_branch=${{ inputs.head_branch }}" >> $GITHUB_OUTPUT
           fi
 
+      - name: Check label trigger
+        id: check-label
+        shell: bash
+        run: |
+          if [ "${{ github.event.action }}" = "labeled" ] && [ "${{ github.event.label.name }}" != "needs-review" ]; then
+            echo "Skipping: labeled event with non-needs-review label '${{ github.event.label.name }}'"
+            echo "skip=true" >> $GITHUB_OUTPUT
+          else
+            echo "skip=false" >> $GITHUB_OUTPUT
+          fi
+
       - name: Send webhook to Modulo PR Review Agent
+        if: steps.check-label.outputs.skip != 'true'
         id: webhook
         env:
           MODULO_WEBHOOK_URL: ${{ secrets.MODULO_PR_REVIEW_WEBHOOK_URL }}
