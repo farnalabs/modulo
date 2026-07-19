@@ -445,6 +445,9 @@ async def list_pipelines_tool(
             "next_cursor": result.next_cursor,
             "has_more": result.has_more,
         }
+    except ProgrammingError:
+        _log.exception("list_pipelines_tool failed")
+        return {"error": "migration_required", "detail": "Database migration required. Run `alembic upgrade head`."}
     except Exception:
         _log.exception("list_pipelines_tool failed")
         return _tool_error("Failed to list pipelines")
@@ -802,6 +805,9 @@ async def get_run_status(run_id: str, detail: bool = False) -> dict[str, Any]:
                 )
             result["nodes"] = nodes
         return result
+    except ProgrammingError:
+        _log.exception("get_run_status failed")
+        return {"error": "migration_required", "detail": "Database migration required. Run `alembic upgrade head`."}
     except Exception:
         _log.exception("get_run_status failed")
         return _tool_error("Failed to get run status")
@@ -850,6 +856,9 @@ async def get_run_output(run_id: str, node_id: str) -> dict[str, Any]:
         }
     except MCPAuthorizationError as exc:
         return {"error": "insufficient_scope", "detail": str(exc)}
+    except ProgrammingError:
+        _log.exception("get_run_output failed")
+        return {"error": "migration_required", "detail": "Database migration required. Run `alembic upgrade head`."}
     except Exception:
         _log.exception("get_run_output failed")
         return _tool_error("Failed to get node output")
@@ -897,6 +906,9 @@ async def get_run_evals(run_id: str) -> dict[str, Any]:
         }
     except MCPAuthorizationError as exc:
         return {"error": "insufficient_scope", "detail": str(exc)}
+    except ProgrammingError:
+        _log.exception("get_run_evals failed")
+        return {"error": "migration_required", "detail": "Database migration required. Run `alembic upgrade head`."}
     except Exception:
         _log.exception("get_run_evals failed")
         return _tool_error("Failed to get run evals")
@@ -942,6 +954,9 @@ async def list_eval_definitions(
         }
     except MCPAuthorizationError as exc:
         return {"error": "insufficient_scope", "detail": str(exc)}
+    except ProgrammingError:
+        _log.exception("list_eval_definitions failed")
+        return {"error": "migration_required", "detail": "Database migration required. Run `alembic upgrade head`."}
     except Exception:
         _log.exception("list_eval_definitions failed")
         return _tool_error("Failed to list eval definitions")
@@ -976,6 +991,9 @@ async def cancel_run(run_id: str) -> dict[str, Any]:
         return {"run_id": run_id, "cancellation_requested": True}
     except MCPAuthorizationError as exc:
         return {"error": "insufficient_scope", "detail": str(exc)}
+    except ProgrammingError:
+        _log.exception("cancel_run failed")
+        return {"error": "migration_required", "detail": "Database migration required. Run `alembic upgrade head`."}
     except Exception:
         _log.exception("cancel_run failed")
         return _tool_error("Failed to cancel run")
@@ -1031,6 +1049,9 @@ async def list_pending_hitl(page: int = 1, page_size: int = 20) -> dict[str, Any
         }
     except MCPAuthorizationError as exc:
         return {"error": "insufficient_scope", "detail": str(exc)}
+    except ProgrammingError:
+        _log.exception("list_pending_hitl failed")
+        return {"error": "migration_required", "detail": "Database migration required. Run `alembic upgrade head`."}
     except Exception:
         _log.exception("list_pending_hitl failed")
         return _tool_error("Failed to list pending HITL gates")
@@ -1170,6 +1191,9 @@ async def review_hitl(
             return {"error": "claim_token_expired", "detail": "Re-claim the gate"}
         except GateAlreadyDecidedError:
             return {"error": "already_decided", "detail": "Gate already has a final decision"}
+        except ProgrammingError:
+            _log.exception("review_hitl failed")
+            return {"error": "migration_required", "detail": "Database migration required. Run `alembic upgrade head`."}
         except Exception:
             _log.exception("review_hitl failed")
             return _tool_error("Failed to process HITL action")
@@ -1208,6 +1232,9 @@ async def copy_library_primitive(
             )
         except LookupError:
             return {"error": "not_found", "primitive_id": primitive_id}
+        except ProgrammingError:
+            _log.exception("copy_library_primitive failed")
+            return {"error": "migration_required", "detail": "Database migration required. Run `alembic upgrade head`."}
         except Exception:
             _log.exception("copy_library_primitive failed")
             return _tool_error("Failed to copy library primitive")
@@ -1283,6 +1310,9 @@ async def search_library(
             "next_cursor": result.next_cursor,
             "has_more": result.has_more,
         }
+    except ProgrammingError:
+        _log.exception("search_library failed")
+        return {"error": "migration_required", "detail": "Database migration required. Run `alembic upgrade head`."}
     except Exception:
         _log.exception("search_library failed")
         return _tool_error("Failed to search library")
@@ -1401,6 +1431,9 @@ async def list_trigger_events(
         }
     except MCPAuthorizationError as exc:
         return {"error": "insufficient_scope", "detail": str(exc)}
+    except ProgrammingError:
+        _log.exception("list_trigger_events failed")
+        return {"error": "migration_required", "detail": "Database migration required. Run `alembic upgrade head`."}
     except Exception:
         _log.exception("list_trigger_events failed")
         return _tool_error("Failed to list trigger events")
@@ -1449,6 +1482,9 @@ async def list_triggers(
         }
     except MCPAuthorizationError as exc:
         return {"error": "insufficient_scope", "detail": str(exc)}
+    except ProgrammingError:
+        _log.exception("list_triggers failed")
+        return {"error": "migration_required", "detail": "Database migration required. Run `alembic upgrade head`."}
     except Exception:
         _log.exception("list_triggers failed")
         return _tool_error("Failed to list triggers")
@@ -1513,6 +1549,9 @@ async def create_model_backend(
         }
     except MCPAuthorizationError as exc:
         return {"error": "insufficient_scope", "detail": str(exc)}
+    except ProgrammingError:
+        _log.exception("create_model_backend failed")
+        return {"error": "migration_required", "detail": "Database migration required. Run `alembic upgrade head`."}
     except Exception:
         _log.exception("create_model_backend failed")
         return _tool_error("Failed to create model backend")
@@ -1566,6 +1605,9 @@ async def create_connector(
         }
     except MCPAuthorizationError as exc:
         return {"error": "insufficient_scope", "detail": str(exc)}
+    except ProgrammingError:
+        _log.exception("create_connector failed")
+        return {"error": "migration_required", "detail": "Database migration required. Run `alembic upgrade head`."}
     except Exception:
         _log.exception("create_connector failed")
         return _tool_error("Failed to create connector")
@@ -1616,6 +1658,9 @@ async def create_trigger(
         }
     except MCPAuthorizationError as exc:
         return {"error": "insufficient_scope", "detail": str(exc)}
+    except ProgrammingError:
+        _log.exception("create_trigger failed")
+        return {"error": "migration_required", "detail": "Database migration required. Run `alembic upgrade head`."}
     except Exception:
         _log.exception("create_trigger failed")
         return _tool_error("Failed to create trigger")
@@ -1647,6 +1692,9 @@ async def delete_pipeline(
         return {"status": "deleted", "pipeline_id": pipeline_id}
     except MCPAuthorizationError as exc:
         return {"error": "insufficient_scope", "detail": str(exc)}
+    except ProgrammingError:
+        _log.exception("delete_pipeline failed")
+        return {"error": "migration_required", "detail": "Database migration required. Run `alembic upgrade head`."}
     except Exception:
         _log.exception("delete_pipeline failed")
         return _tool_error("Failed to delete pipeline")
@@ -1708,6 +1756,9 @@ async def create_agent(
         }
     except MCPAuthorizationError as exc:
         return {"error": "insufficient_scope", "detail": str(exc)}
+    except ProgrammingError:
+        _log.exception("create_agent failed")
+        return {"error": "migration_required", "detail": "Database migration required. Run `alembic upgrade head`."}
     except Exception as e:
         _log.exception("create_agent failed")
         return {"error": "internal_error", "detail": f"Failed to create agent: {e}"}
@@ -1872,6 +1923,9 @@ async def get_integration_status() -> dict[str, Any]:
             "model_backends": backend_list,
             "trigger_count": trigger_count,
         }
+    except ProgrammingError:
+        _log.exception("get_integration_status failed")
+        return {"error": "migration_required", "detail": "Database migration required. Run `alembic upgrade head`."}
     except Exception:
         _log.exception("get_integration_status failed")
         return _tool_error("Failed to get integration status")
@@ -1929,6 +1983,9 @@ async def get_org_config(section: str | None = None) -> dict[str, Any]:
             lines.append(f"| {cfg.key} | {val_str} |")
 
         return {"results": "\n".join(lines), "count": len(filtered)}
+    except ProgrammingError:
+        _log.exception("get_org_config failed")
+        return {"error": "migration_required", "detail": "Database migration required. Run `alembic upgrade head`."}
     except Exception:
         _log.exception("get_org_config failed")
         return _tool_error("Failed to get org configuration")
@@ -1963,6 +2020,9 @@ async def get_available_features() -> dict[str, Any]:
             lines.append(f"| {flag.name} | {flag.tier} | {available} |")
 
         return {"results": "\n".join(lines), "tier": current_tier, "feature_count": len(all_flags)}
+    except ProgrammingError:
+        _log.exception("get_available_features failed")
+        return {"error": "migration_required", "detail": "Database migration required. Run `alembic upgrade head`."}
     except Exception:
         _log.exception("get_available_features failed")
         return _tool_error("Failed to get available features")
@@ -1999,6 +2059,9 @@ async def list_schemas(
             "next_cursor": result.next_cursor,
             "has_more": result.has_more,
         }
+    except ProgrammingError:
+        _log.exception("list_schemas failed")
+        return {"error": "migration_required", "detail": "Database migration required. Run `alembic upgrade head`."}
     except Exception:
         _log.exception("list_schemas failed")
         return _tool_error("Failed to list schemas")
@@ -2047,6 +2110,9 @@ async def infer_schema(
         return {"error": "insufficient_scope", "detail": str(exc)}
     except SchemaInferenceError as exc:
         return {"error": "inference_failed", "detail": str(exc)}
+    except ProgrammingError:
+        _log.exception("infer_schema failed")
+        return {"error": "migration_required", "detail": "Database migration required. Run `alembic upgrade head`."}
     except Exception:
         _log.exception("infer_schema failed")
         return _tool_error("Failed to infer schema")
@@ -2112,6 +2178,9 @@ async def validate_payload(
                 "valid": False,
                 "errors": [{"path": "(schema)", "message": f"Invalid schema definition: {exc.message}"}],
             }
+    except ProgrammingError:
+        _log.exception("validate_payload failed")
+        return {"error": "migration_required", "detail": "Database migration required. Run `alembic upgrade head`."}
     except Exception:
         _log.exception("validate_payload failed")
         return _tool_error("Failed to validate payload")
@@ -2153,6 +2222,9 @@ async def list_housekeeping(limit: int = 100) -> dict[str, Any]:
         }
     except MCPAuthorizationError as exc:
         return {"error": "insufficient_scope", "detail": str(exc)}
+    except ProgrammingError:
+        _log.exception("list_housekeeping failed")
+        return {"error": "migration_required", "detail": "Database migration required. Run `alembic upgrade head`."}
     except Exception:
         _log.exception("list_housekeeping failed")
         return _tool_error("Failed to list housekeeping candidates")
@@ -2209,6 +2281,9 @@ async def perform_housekeeping(items: list[dict[str, str]]) -> dict[str, Any]:
         return {"deleted_count": deleted_count, "errors": errors}
     except MCPAuthorizationError as exc:
         return {"error": "insufficient_scope", "detail": str(exc)}
+    except ProgrammingError:
+        _log.exception("perform_housekeeping failed")
+        return {"error": "migration_required", "detail": "Database migration required. Run `alembic upgrade head`."}
     except Exception:
         _log.exception("perform_housekeeping failed")
         return _tool_error("Failed to perform housekeeping")
