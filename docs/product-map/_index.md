@@ -197,3 +197,6 @@ status: covered | partial | gap    # auto-updated by graph-validate
 Run `..\..\harness\tools\graph-validate.ps1` to check graph integrity.
 Run `..\..\harness\tools\graph-query.ps1 --uncovered` to list entries needing attention.
 Run `..\..\harness\tools\graph-query.ps1 --impact feat-<id>` to see downstream dependents.
+
+### Admin
+- [feat-admin-housekeeping](admin/housekeeping.md) => PRD TBD
